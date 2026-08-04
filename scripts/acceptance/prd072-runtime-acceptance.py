@@ -38,8 +38,6 @@ GATEWAY_URL = "http://127.0.0.1:8000"
 CONSOLE_URL = "http://127.0.0.1:5173"
 ADMIN_TENANT_SLUG = "default"
 ADMIN_EMAIL = "admin@metahub.local"
-SECURITY_PASSWORD = "Prd072Security!2026"
-OTHER_PASSWORD = "Prd072Other!2026"
 
 # 证据键和递归值扫描共同阻断正文、凭据、文件名、规则与对象定位进入可提交制品。
 FORBIDDEN_EVIDENCE_KEYS = frozenset(
@@ -195,6 +193,9 @@ class RunSecrets:
     filenames: tuple[str, str, str, str] = field(repr=False)
     security_email: str = field(repr=False)
     other_email: str = field(repr=False)
+    # 两个临时账号是真实可登录身份；密码必须逐批随机且关闭 repr，避免中断后留下公开凭据。
+    security_password: str = field(repr=False)
+    other_password: str = field(repr=False)
 
     @classmethod
     def create(cls) -> RunSecrets:
@@ -215,6 +216,8 @@ class RunSecrets:
             filenames=("运行验收.txt", "运行验收.docx", "运行验收.pdf", "阻断验收.txt"),
             security_email=f"security-{suffix}@prd072.local",
             other_email=f"admin-{suffix}@prd072-other.local",
+            security_password=f"Prd072!{secrets.token_urlsafe(24)}Aa1",
+            other_password=f"Prd072!{secrets.token_urlsafe(24)}Bb2",
         )
 
     def sensitive_values(self, admin_password: str) -> tuple[bytes, ...]:
@@ -231,8 +234,8 @@ class RunSecrets:
             *(name.encode("utf-8") for name in self.filenames),
             self.security_email.encode("utf-8"),
             self.other_email.encode("utf-8"),
-            SECURITY_PASSWORD.encode("utf-8"),
-            OTHER_PASSWORD.encode("utf-8"),
+            self.security_password.encode("utf-8"),
+            self.other_password.encode("utf-8"),
             admin_password.encode("utf-8"),
         ]
         return tuple(value for value in values if value)
@@ -330,7 +333,7 @@ def _prepare_identities(database: Path, secrets_: RunSecrets) -> RuntimeIdentiti
                 default_tenant_id,
                 secrets_.security_email,
                 "PRD072 Security",
-                hash_password(SECURITY_PASSWORD),
+                hash_password(secrets_.security_password),
                 now,
                 now,
             ),
@@ -359,7 +362,7 @@ def _prepare_identities(database: Path, secrets_: RunSecrets) -> RuntimeIdentiti
                 other_tenant_id,
                 secrets_.other_email,
                 "PRD072 Other Admin",
-                hash_password(OTHER_PASSWORD),
+                hash_password(secrets_.other_password),
                 now,
                 now,
             ),
@@ -569,7 +572,7 @@ def _verify_http_boundaries(
             client,
             tenant_slug=ADMIN_TENANT_SLUG,
             email=secrets_.security_email,
-            password=SECURITY_PASSWORD,
+            password=secrets_.security_password,
             stage="security",
         )
         denied = client.post(
@@ -590,7 +593,7 @@ def _verify_http_boundaries(
             client,
             tenant_slug=other_slug,
             email=secrets_.other_email,
-            password=OTHER_PASSWORD,
+            password=secrets_.other_password,
             stage="other",
         )
         other_list = client.get(
@@ -715,29 +718,57 @@ def _verify_database_and_storage(
 
 
 def _cleanup_runtime_identities(database: Path, identities: RuntimeIdentities) -> dict[str, int]:
-    """禁用临时规则/用户并撤销其 Session，不删除不可变文件与 source event。"""
+    """禁用临时规则/用户并撤销其 Session，且回读数据库证明真实清理结果。"""
 
     connection = sqlite3.connect(database)
     now = _utc_now()
     try:
-        connection.execute(
-            "UPDATE dlp_rules SET status='disabled',updated_at=? WHERE dlp_rule_id=?",
+        rule_cursor = connection.execute(
+            "UPDATE dlp_rules SET status='disabled',updated_at=? "
+            "WHERE dlp_rule_id=? AND status='active'",
             (now, identities.dlp_rule_id),
         )
-        connection.execute(
-            "UPDATE users SET status='disabled',updated_at=? WHERE user_id IN (?,?)",
+        user_cursor = connection.execute(
+            "UPDATE users SET status='disabled',updated_at=? "
+            "WHERE user_id IN (?,?) AND status='active'",
             (now, identities.security_user_id, identities.other_user_id),
         )
-        cursor = connection.execute(
+        session_cursor = connection.execute(
             """
             UPDATE sessions SET status='revoked',revoked_at=?,updated_at=?
             WHERE user_id IN (?,?) AND status='active'
             """,
             (now, now, identities.security_user_id, identities.other_user_id),
         )
+        disabled_rule_count = connection.execute(
+            "SELECT COUNT(1) FROM dlp_rules WHERE dlp_rule_id=? AND status='disabled'",
+            (identities.dlp_rule_id,),
+        ).fetchone()[0]
+        disabled_user_count = connection.execute(
+            "SELECT COUNT(1) FROM users WHERE user_id IN (?,?) AND status='disabled'",
+            (identities.security_user_id, identities.other_user_id),
+        ).fetchone()[0]
+        active_session_count = connection.execute(
+            "SELECT COUNT(1) FROM sessions WHERE user_id IN (?,?) AND status='active'",
+            (identities.security_user_id, identities.other_user_id),
+        ).fetchone()[0]
+        # 固定计数会把错误 ID 或清理失效伪装成成功；必须同时校验 UPDATE 影响行和持久终态。
+        _require(rule_cursor.rowcount == 1, "cleanup", "rule_update_count_invalid")
+        _require(user_cursor.rowcount == 2, "cleanup", "user_update_count_invalid")
+        _require(disabled_rule_count == 1, "cleanup", "rule_terminal_state_invalid")
+        _require(disabled_user_count == 2, "cleanup", "user_terminal_state_invalid")
+        _require(active_session_count == 0, "cleanup", "session_terminal_state_invalid")
         connection.commit()
         # 清理证据只保留计数，不返回临时用户、规则或 Session 的可识别字段。
-        return {"disabled_rules": 1, "disabled_users": 2, "revoked_sessions": cursor.rowcount}
+        return {
+            "disabled_rules": rule_cursor.rowcount,
+            "disabled_users": user_cursor.rowcount,
+            "revoked_sessions": session_cursor.rowcount,
+        }
+    # 业务终态检查失败同样必须回滚，不能留下只完成一半的身份清理事务。
+    except AcceptanceFailure:
+        connection.rollback()
+        raise
     # 清理失败不能伪装成验收成功，也不能暴露 SQL 或身份明文。
     except sqlite3.Error:
         connection.rollback()
@@ -826,14 +857,21 @@ def run() -> Path:
     _require(config.database.is_file(), "database", "file_missing")
     _require(config.storage.is_dir(), "storage", "directory_missing")
     identities = _prepare_identities(config.database, secrets_)
-    http_evidence, session_token_canaries = _verify_http_boundaries(config, secrets_, identities)
-    database_evidence = _verify_database_and_storage(
-        config,
-        identities,
-        http_evidence,
-        secrets_,
-    )
-    cleanup = _cleanup_runtime_identities(config.database, identities)
+    try:
+        http_evidence, session_token_canaries = _verify_http_boundaries(
+            config,
+            secrets_,
+            identities,
+        )
+        database_evidence = _verify_database_and_storage(
+            config,
+            identities,
+            http_evidence,
+            secrets_,
+        )
+    finally:
+        # 身份一旦提交，后续 HTTP、数据库、日志或证据阶段的任何异常都必须先收敛临时权限。
+        cleanup = _cleanup_runtime_identities(config.database, identities)
     sensitive_values = secrets_.sensitive_values(config.admin_password) + session_token_canaries
     log_evidence = _scan_logs(config, sensitive_values)
     run_id = f"prd072_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{secrets_.suffix}"

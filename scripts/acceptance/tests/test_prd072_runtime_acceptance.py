@@ -98,6 +98,24 @@ def test_generated_docx_and_pdf_are_really_extractable() -> None:
     assert marker in (reader.pages[0].extract_text() or "")
 
 
+def test_temporary_identity_passwords_are_random_and_hidden() -> None:
+    """真实临时账号必须逐批使用随机凭据，并从 dataclass repr 与公开常量中消失。"""
+
+    first = RUNTIME.RunSecrets.create()
+    second = RUNTIME.RunSecrets.create()
+    assert first.security_password != second.security_password
+    assert first.other_password != second.other_password
+    assert first.security_password != first.other_password
+    assert len(first.security_password) >= 32
+    assert len(first.other_password) >= 32
+    assert first.security_password not in repr(first)
+    assert first.other_password not in repr(first)
+    assert first.security_password.encode() in first.sensitive_values("admin-unit-password")
+    assert first.other_password.encode() in first.sensitive_values("admin-unit-password")
+    assert not hasattr(RUNTIME, "SECURITY_PASSWORD")
+    assert not hasattr(RUNTIME, "OTHER_PASSWORD")
+
+
 def test_cleanup_revokes_real_sessions_table(tmp_path: Path) -> None:
     """临时身份清理必须更新生产认证使用的 ``sessions`` 表并提交终态。"""
 
@@ -144,6 +162,100 @@ def test_cleanup_revokes_real_sessions_table(tmp_path: Path) -> None:
     assert disabled_users == 2
     assert revoked_sessions == 2
     connection.close()
+
+
+def test_cleanup_rejects_missing_identity_instead_of_reporting_fixed_counts(
+    tmp_path: Path,
+) -> None:
+    """错误资源 ID 必须回滚并失败，不能仍返回一条规则和两个用户的固定成功计数。"""
+
+    database = tmp_path / "runtime.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE dlp_rules(dlp_rule_id TEXT PRIMARY KEY,status TEXT,updated_at TEXT);
+        CREATE TABLE users(user_id TEXT PRIMARY KEY,status TEXT,updated_at TEXT);
+        CREATE TABLE sessions(
+          session_id TEXT PRIMARY KEY,user_id TEXT,status TEXT,revoked_at TEXT,updated_at TEXT
+        );
+        INSERT INTO dlp_rules VALUES('dlp_real','active','2026-01-01T00:00:00Z');
+        INSERT INTO users VALUES('usr_real_a','active','2026-01-01T00:00:00Z');
+        INSERT INTO users VALUES('usr_real_b','active','2026-01-01T00:00:00Z');
+        """
+    )
+    connection.commit()
+    connection.close()
+    missing = RUNTIME.RuntimeIdentities(
+        default_tenant_id="tenant_default",
+        security_user_id="usr_missing_a",
+        other_tenant_id="tenant_other",
+        other_user_id="usr_missing_b",
+        dlp_rule_id="dlp_missing",
+    )
+
+    with pytest.raises(RUNTIME.AcceptanceFailure) as error:
+        RUNTIME._cleanup_runtime_identities(database, missing)
+    assert error.value.stage == "cleanup"
+    assert error.value.code == "rule_update_count_invalid"
+    connection = sqlite3.connect(database)
+    assert connection.execute("SELECT status FROM dlp_rules").fetchone()[0] == "active"
+    assert connection.execute("SELECT COUNT(*) FROM users WHERE status='active'").fetchone()[0] == 2
+    connection.close()
+
+
+def test_run_cleans_identities_when_http_verification_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """身份创建后的 HTTP 异常必须经过 finally 清理，且原固定失败坐标继续向上返回。"""
+
+    database = tmp_path / "runtime.db"
+    database.touch()
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    config = RUNTIME.RuntimeConfig(
+        database=database,
+        storage=storage,
+        control_log=tmp_path / "control.log",
+        gateway_log=tmp_path / "gateway.log",
+        console_log=tmp_path / "console.log",
+        artifact_root=tmp_path / "artifacts",
+        control_url=RUNTIME.CONTROL_URL,
+        gateway_url=RUNTIME.GATEWAY_URL,
+        console_url=RUNTIME.CONSOLE_URL,
+        admin_password="unit-admin-password",
+    )
+    identities = RUNTIME.RuntimeIdentities(
+        default_tenant_id="tenant_default",
+        security_user_id="usr_security",
+        other_tenant_id="tenant_other",
+        other_user_id="usr_other",
+        dlp_rule_id="dlp_unit",
+    )
+    cleanup_calls = []
+    monkeypatch.setattr(RUNTIME.RuntimeConfig, "from_environment", staticmethod(lambda: config))
+    monkeypatch.setattr(RUNTIME, "_prepare_identities", lambda *_args: identities)
+
+    def fail_http(*_args):
+        """模拟身份已创建后的固定 HTTP 失败，不携带正文或凭据。"""
+
+        raise RUNTIME.AcceptanceFailure("http.injected", "forced_failure")
+
+    def record_cleanup(path, actual_identities):
+        """记录 finally 清理调用，并返回不含身份标识的安全计数。"""
+
+        cleanup_calls.append((path, actual_identities))
+        # 测试替身只表达清理已执行；真实函数另由 SQLite 终态用例覆盖。
+        return {"disabled_rules": 1, "disabled_users": 2, "revoked_sessions": 0}
+
+    monkeypatch.setattr(RUNTIME, "_verify_http_boundaries", fail_http)
+    monkeypatch.setattr(RUNTIME, "_cleanup_runtime_identities", record_cleanup)
+
+    with pytest.raises(RUNTIME.AcceptanceFailure) as error:
+        RUNTIME.run()
+    assert error.value.stage == "http.injected"
+    assert error.value.code == "forced_failure"
+    assert cleanup_calls == [(database, identities)]
 
 
 def test_evidence_guard_rejects_sensitive_keys_and_values() -> None:
