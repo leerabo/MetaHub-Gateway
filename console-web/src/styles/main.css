@@ -1128,6 +1128,521 @@ h3 {
   font-size: 12px;
 }
 
+/* PAGE-101/PAGE-102 文件工作台：单层紧凑布局，文件名和链路 ID 必须在窄主栏内可换行。 */
+.files-panel {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.file-workspace {
+  min-width: 0;
+  color: #17202a;
+}
+
+.file-heading,
+.file-records-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.file-heading {
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.file-heading h2,
+.file-records-heading h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.file-heading p,
+.file-records-heading span {
+  margin: 5px 0 0;
+  color: #5e6975;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.file-heading > span {
+  flex: 0 0 auto;
+  border: 1px solid #b8c2cc;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: #46515d;
+  background: #f5f7f9;
+  font-size: 12px;
+}
+
+.file-upload-strip {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.4fr) minmax(0, 1.6fr);
+  gap: 10px 18px;
+  align-items: center;
+  min-width: 0;
+  padding: 14px 22px;
+  border-bottom: 1px solid #d8dee6;
+  background: #f8fafb;
+}
+
+.file-upload-strip.is-read-only > div,
+.file-upload-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.file-upload-copy strong,
+.file-upload-strip.is-read-only strong {
+  font-size: 14px;
+}
+
+.file-upload-copy span,
+.file-upload-strip.is-read-only span {
+  color: #66717d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-upload-form {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 1fr) minmax(126px, auto);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.file-picker,
+.file-upload-button,
+.file-status-filter button,
+.file-pager button {
+  min-height: 38px;
+  border: 1px solid #aeb8c3;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.file-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  color: #27313c;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-picker input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-picker:focus-within,
+.file-upload-button:focus-visible,
+.file-status-filter select:focus,
+.file-status-filter button:focus-visible,
+.file-pager button:focus-visible {
+  outline: 3px solid rgba(18, 111, 154, 0.26);
+  outline-offset: 2px;
+}
+
+.file-selection {
+  min-width: 0;
+  color: #44505c;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.file-upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border-color: #126f9a;
+  color: #fff;
+  background: #126f9a;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-upload-button > span:first-child {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.file-upload-button:disabled,
+.file-picker:has(input:disabled),
+.file-status-filter button:disabled,
+.file-pager button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.file-upload-live {
+  grid-column: 2;
+  min-height: 18px;
+  margin: 0;
+  color: #4e5a66;
+  font-size: 12px;
+}
+
+.file-feedback {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  align-items: center;
+  min-width: 0;
+  border-left: 3px solid #20734a;
+  padding: 7px 10px;
+  background: #eef8f2;
+  color: #205c3e;
+  font-size: 12px;
+}
+
+.file-feedback.is-error {
+  border-left-color: #b73737;
+  background: #fff2f2;
+  color: #842d2d;
+}
+
+.file-feedback code,
+.file-pager code,
+.file-row code {
+  min-width: 0;
+  color: inherit;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* 文件记录区：桌面使用同轨紧凑表格，状态、DLP 和病毒占位保持三个独立语义维度。 */
+.file-records {
+  min-width: 0;
+  padding: 16px 22px 20px;
+}
+
+.file-records-heading {
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.file-status-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: end;
+  justify-content: flex-end;
+}
+
+.file-status-filter label {
+  display: grid;
+  gap: 3px;
+  color: #586470;
+  font-size: 11px;
+}
+
+.file-status-filter select {
+  min-width: 116px;
+  min-height: 38px;
+  border: 1px solid #aeb8c3;
+  border-radius: 6px;
+  padding: 0 30px 0 10px;
+  color: #26313b;
+  background: #fff;
+}
+
+.file-status-filter button,
+.file-pager button {
+  padding: 0 12px;
+  color: #27313c;
+  background: #fff;
+  cursor: pointer;
+}
+
+.file-status-filter button[type="submit"] {
+  border-color: #126f9a;
+  color: #fff;
+  background: #126f9a;
+}
+
+.file-table {
+  min-width: 0;
+  border: 1px solid #d4dbe3;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.45fr)
+    minmax(0, 0.72fr)
+    minmax(0, 0.82fr)
+    minmax(0, 0.78fr)
+    minmax(0, 0.98fr)
+    minmax(0, 0.66fr)
+    minmax(0, 1.35fr);
+  min-width: 0;
+  border-bottom: 1px solid #e0e5ea;
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row > * {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 8px;
+  border-right: 1px solid #e5e9ed;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-row > *:last-child {
+  border-right: 0;
+}
+
+.file-row-head {
+  color: #53606c;
+  background: #f1f4f6;
+  font-weight: 650;
+}
+
+.file-name {
+  color: #1e2b36;
+  font-size: 13px;
+}
+
+.file-row b {
+  font-size: 11px;
+}
+
+.file-row small,
+.file-row time {
+  color: #65717d;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.file-state {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  max-width: 100%;
+  color: #38444f;
+  font-weight: 650;
+}
+
+.file-state i {
+  display: inline-grid;
+  flex: 0 0 18px;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e5e9ed;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.file-state.tone-ready,
+.file-state.tone-clean {
+  color: #17633e;
+}
+
+.file-state.tone-ready i,
+.file-state.tone-clean i {
+  background: #dff2e7;
+}
+
+.file-state.tone-blocked,
+.file-state.tone-failed,
+.file-state.tone-unavailable {
+  color: #972f2f;
+}
+
+.file-state.tone-blocked i,
+.file-state.tone-failed i,
+.file-state.tone-unavailable i {
+  background: #fae2e2;
+}
+
+.file-state.tone-processing,
+.file-state.tone-pending,
+.file-state.tone-matched,
+.file-state.tone-not-configured {
+  color: #76551b;
+}
+
+.file-state.tone-processing i,
+.file-state.tone-pending i,
+.file-state.tone-matched i,
+.file-state.tone-not-configured i {
+  background: #f6ebcf;
+}
+
+.file-failure-code {
+  color: #8b3434 !important;
+}
+
+.file-empty {
+  min-height: 92px;
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  padding: 16px;
+  color: #63707b;
+  text-align: center;
+}
+
+.file-empty.is-error {
+  border: 1px solid #efc2c2;
+  border-radius: 6px;
+  background: #fff5f5;
+  color: #842d2d;
+}
+
+.file-pager {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.file-pager code {
+  justify-self: center;
+  color: #5f6b76;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .file-heading,
+  .file-records-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .file-heading,
+  .file-upload-strip,
+  .file-records {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .file-heading > span {
+    align-self: flex-start;
+  }
+
+  .file-upload-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .file-upload-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .file-picker,
+  .file-upload-button {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .file-upload-live,
+  .file-feedback {
+    grid-column: 1;
+  }
+
+  .file-status-filter {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .file-status-filter label {
+    grid-column: 1 / -1;
+  }
+
+  .file-status-filter select,
+  .file-status-filter button {
+    width: 100%;
+  }
+
+  .file-row-head {
+    display: none;
+  }
+
+  .file-table {
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  .file-row:not(.file-row-head) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin-bottom: 10px;
+    border: 1px solid #d4dbe3;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .file-row:not(.file-row-head) > [data-label] {
+    display: grid;
+    grid-template-columns: minmax(102px, 0.72fr) minmax(0, 1.28fr);
+    gap: 8px;
+    align-items: start;
+    border-right: 0;
+    border-bottom: 1px solid #e4e8ec;
+  }
+
+  .file-row:not(.file-row-head) > [data-label]:last-child {
+    border-bottom: 0;
+  }
+
+  .file-row:not(.file-row-head) > [data-label]::before {
+    content: attr(data-label);
+    color: #65717d;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .file-state {
+    align-self: start;
+  }
+
+  .file-pager {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .file-pager code {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+}
+
 /* PAGE-093 企业 Chat：单一工作面，不使用嵌套卡片；正文区域保持有界并允许长内容安全换行。 */
 .enterprise-chat-shell {
   min-width: 0;

@@ -30,6 +30,7 @@ from .environments.routes import router as environments_router
 from .error_maps import install_provider_error_map_scheduler
 from .error_maps import router as error_maps_router
 from .feedback.routes import router as feedback_router
+from .files.routes import router as files_router
 from .finops.routes import router as finops_router
 from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
@@ -92,6 +93,7 @@ app.include_router(environments_router)
 app.include_router(enterprise_chat_router)
 app.include_router(error_maps_router)
 app.include_router(feedback_router)
+app.include_router(files_router)
 app.include_router(finops_router)
 app.include_router(tenant_router)
 app.include_router(user_preferences_router)

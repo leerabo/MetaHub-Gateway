@@ -45,6 +45,9 @@ export const PERMISSIONS = Object.freeze({
   // PAGE-098 会话风险读取与处置独立授权；manage 不隐含 read，POST 必须同时具备两项。
   SESSION_RISK_READ: "session_risk.read",
   SESSION_RISK_MANAGE: "session_risk.manage",
+  // PAGE-101/PAGE-102 读取与上传独立授权；write 不隐含 read，按钮投影不能替代 POST 后端校验。
+  FILE_READ: "file.read",
+  FILE_WRITE: "file.write",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

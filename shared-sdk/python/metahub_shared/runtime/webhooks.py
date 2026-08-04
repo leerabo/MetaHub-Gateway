@@ -79,6 +79,9 @@ WEBHOOK_EVENT_TYPES = {
     "security.session_high_risk",
     # 输出阻断只外发扫描/暴露/结算意图摘要，模型正文、命中片段和规则 pattern 永不进入事件。
     "security.output_blocked",
+    # 文件事件只外发处理状态与安全计数，文件名、正文、对象键、hash 和规则 ID 永不进入事件。
+    "file.uploaded",
+    "file.scanned",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -281,6 +284,9 @@ def build_webhook_event(
     elif event_type == "security.output_blocked":
         # PRD-071 只接受持久 blocked scan 可复核的固定摘要，不能复制模型输出或规则正文。
         _validate_output_blocked_payload(safe_payload)
+    elif event_type in {"file.uploaded", "file.scanned"}:
+        # PRD-072 两个阶段只接受 UploadedFile/FileExtract 的固定安全投影。
+        _validate_file_event_payload(event_type, safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -314,6 +320,8 @@ def build_webhook_event(
         "security.intent_detected",
         "security.session_high_risk",
         "security.output_blocked",
+        "file.uploaded",
+        "file.scanned",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -501,6 +509,19 @@ def build_webhook_event(
     elif event_type == "security.output_blocked":
         # 自动阻断事件没有用户 actor；scan、request、trace 和发生秒必须与 source row 一致。
         _validate_output_blocked_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type in {"file.uploaded", "file.scanned"}:
+        # 文件事件必须绑定同一个 file owner、可信 Session actor、原请求链路和 source event 秒。
+        _validate_file_event_envelope(
+            event_type,
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1054,6 +1075,192 @@ def _validate_output_blocked_envelope(
         or _to_iso(occurred_at) != payload["occurred_at"]
     ):
         # 自动事件没有用户 actor；任一 owner、链路或时间漂移均拒绝生成替代事件。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_file_event_payload(event_type: str, payload: dict[str, Any]) -> None:
+    """校验文件上传/扫描事件的 exact-key 安全摘要。
+
+    参数：canonical 文件事件类型和已通过通用敏感键扫描的 payload。返回值：无。
+    关键约束：事件不包含文件名、正文、对象键、指纹、规则 ID 或命中片段；blocked/failed
+    才能携带固定错误码，成功事件不能用空错误字段制造另一种 wire 形状。
+    """
+
+    uploaded_fields = {
+        "file_id",
+        "status",
+        "media_type",
+        "size_bytes",
+        "virus_scan_status",
+        "created_at",
+    }
+    scanned_fields = {
+        "file_id",
+        "status",
+        "media_type",
+        "size_bytes",
+        "virus_scan_status",
+        "dlp_scan_status",
+        "dlp_action",
+        "match_count",
+        "estimated_tokens",
+        "extractor_version",
+        "completed_at",
+        "error_code",
+    }
+    if event_type == "file.uploaded":
+        if set(payload) != uploaded_fields or payload.get("status") != "processing":
+            # uploaded 只能证明 owner 已创建，额外字段或终态会提前泄露扫描结果。
+            raise ValueError("webhook.payload_invalid")
+        event_time = payload.get("created_at")
+    elif event_type == "file.scanned":
+        status = payload.get("status")
+        if set(payload) != scanned_fields or status not in ("ready", "blocked", "failed"):
+            # scanned 必须是唯一终态 exact wire，processing 或字段漂移都不可签名外发。
+            raise ValueError("webhook.payload_invalid")
+        _validate_file_scanned_decision(payload)
+        event_time = payload.get("completed_at")
+    else:
+        # 此 helper 只接受两个冻结事件类型，未来新增类型必须显式设计字段集合。
+        raise ValueError("webhook.payload_invalid")
+
+    media_type = payload.get("media_type")
+    size_bytes = payload.get("size_bytes")
+    if (
+        not _is_prefixed_lower_hex_id(payload.get("file_id"), prefix="file_")
+        or media_type
+        not in (
+            "text/plain",
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        or type(size_bytes) is not int
+        or not 1 <= size_bytes <= 50 * 1024 * 1024
+        or payload.get("virus_scan_status") != "not_configured"
+        or not _is_canonical_utc_second(event_time)
+    ):
+        # bool 不能冒充文件字节数；无病毒引擎时状态必须诚实保持 not_configured。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_file_scanned_decision(payload: dict[str, Any]) -> None:
+    """校验终态文件事件的 DLP、Token、解析器和错误码组合。
+
+    该校验只使用可公开的枚举与计数，不接触文件正文或 DLP 规则内容。成功、阻断和失败
+    三类状态必须保持可区分，避免订阅方把失败文件误当已通过扫描。
+    """
+
+    status = payload["status"]
+    dlp_status = payload["dlp_scan_status"]
+    dlp_action = payload["dlp_action"]
+    match_count = payload["match_count"]
+    estimated_tokens = payload["estimated_tokens"]
+    extractor_by_media_type = {
+        "text/plain": "txt-v1",
+        "application/pdf": "pdf-v1",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx-v1",
+    }
+    if (
+        type(payload["media_type"]) is not str
+        or type(match_count) is not int
+        or not 0 <= match_count <= 100
+        or payload["extractor_version"]
+        != extractor_by_media_type.get(payload["media_type"])
+        or (
+            estimated_tokens is not None
+            and (type(estimated_tokens) is not int or estimated_tokens < 1)
+        )
+    ):
+        # bool/负计数、媒体与解析器漂移或零 Token 都会让订阅方误判处理事实。
+        raise ValueError("webhook.payload_invalid")
+
+    dlp_contract_valid = (
+        (dlp_status == "clean" and dlp_action is None and match_count == 0)
+        or (
+            dlp_status == "matched"
+            and dlp_action in ("allow", "log_only")
+            and match_count >= 1
+        )
+        or (dlp_status == "blocked" and dlp_action == "block" and match_count >= 1)
+        or (
+            dlp_status in ("pending", "unavailable")
+            and dlp_action is None
+            and match_count == 0
+        )
+    )
+    if not dlp_contract_valid:
+        # DLP 状态、动作与命中数必须成组自洽，不能由调用方自由拼装。
+        raise ValueError("webhook.payload_invalid")
+
+    if status == "ready":
+        if (
+            dlp_status not in ("clean", "matched")
+            or estimated_tokens is None
+            or payload["error_code"] is not None
+        ):
+            # ready 必须已经完成可解释扫描和 Token 估算，且不能夹带失败码。
+            raise ValueError("webhook.payload_invalid")
+        return
+    if status == "blocked":
+        if (
+            dlp_status != "blocked"
+            or estimated_tokens is None
+            or payload.get("error_code") != "file.dlp_blocked"
+        ):
+            # blocked 只接受 DLP 阻断终态，不能用其他失败码冒充策略决策。
+            raise ValueError("webhook.payload_invalid")
+        return
+
+    allowed_failure_codes = {
+        "file.structure_invalid",
+        "file.no_extractable_text",
+        "file.extract_limit_exceeded",
+        "file.parse_failed",
+        "file.dlp_unavailable",
+        "file.storage_unavailable",
+        "file.integrity_failed",
+    }
+    # failed 只能携带冻结错误目录，并与独立 blocked 状态保持互斥。
+    error_code = payload.get("error_code")
+    if (
+        type(error_code) is not str
+        or error_code not in allowed_failure_codes
+        or dlp_status == "blocked"
+    ):
+        # 未知失败码或 blocked/failed 混淆会误导订阅方，必须在签名前整体拒绝。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_file_event_envelope(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """绑定文件事件与 tenant、Session actor、file owner 和原始上传链路。
+
+    source_request_id 不进入外发 payload，但必须作为构造参数存在；数据库 source event trigger
+    会进一步把它与 UploadedFile 逐字绑定。Shared 层拒绝缺失身份，不能生成替代 request/trace。
+    """
+
+    time_field = "created_at" if event_type == "file.uploaded" else "completed_at"
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="fevt_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != payload["file_id"]
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or occurred_at.tzinfo is None
+        or _to_iso(occurred_at) != payload[time_field]
+    ):
+        # 任一 owner、actor、链路或 source event 时间漂移都在签名前失败关闭。
         raise ValueError("webhook.payload_invalid")
 
 

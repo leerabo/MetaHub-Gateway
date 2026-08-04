@@ -33,9 +33,10 @@ SENSITIVE_MESSAGE_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9._-]+"),
 )
 
-# httpx/httpcore 的自由文本会包含完整上游 URL；业务层已经按固定 error_code 记录安全归因，
-# 因此第三方请求日志必须整体丢弃，不能依赖不稳定的字符串格式尝试截取 Endpoint。
-UNSAFE_ENDPOINT_LOGGER_PREFIXES = ("httpx", "httpcore")
+# httpx/httpcore 的自由文本会包含完整上游 URL，pypdf 的告警则可能包含用户控制的 PDF token
+# 或正文。业务层已经按固定 error_code 记录安全归因，因此这些第三方日志必须整体丢弃，不能
+# 依赖不稳定的字符串格式尝试清洗 Endpoint 或文件内容。
+UNSAFE_THIRD_PARTY_LOGGER_PREFIXES = ("httpx", "httpcore", "pypdf")
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -139,36 +140,40 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(sanitize(payload), ensure_ascii=False, default=str)
 
 
-class DropUnsafeEndpointLoggerFilter(logging.Filter):
-    """丢弃可能携带 Provider/Webhook Endpoint 的第三方 HTTP 自由文本日志。
+class DropUnsafeThirdPartyLoggerFilter(logging.Filter):
+    """丢弃可能携带 Endpoint 或用户文件正文的第三方自由文本日志。
 
-    httpx/httpcore 的 INFO、WARNING、ERROR 都可能把完整 URL、path 或 query 组装进 message。
-    MetaHub Adapter 已单独记录固定错误类别、request_id 和 Provider ID，所以这里 Fail Closed，
-    不把第三方原文交给 formatter 或外部日志平台。
+    httpx/httpcore 可能把完整 URL、path 或 query 组装进 message，pypdf 的容错告警可能包含
+    用户控制的损坏对象或 CMap 行。MetaHub 已单独记录固定错误类别、request_id 和安全对象 ID，
+    所以这里 Fail Closed，不把第三方原文交给 formatter 或外部日志平台。
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """仅放行非 httpx/httpcore 记录，不读取或输出第三方 message 正文。"""
+        """仅放行安全命名空间记录，不读取或输出第三方 message 正文。"""
 
         return not any(
             record.name == prefix or record.name.startswith(f"{prefix}.")
-            for prefix in UNSAFE_ENDPOINT_LOGGER_PREFIXES
+            for prefix in UNSAFE_THIRD_PARTY_LOGGER_PREFIXES
         )
 
 
-def _install_endpoint_log_safety(root: logging.Logger) -> None:
-    """给全部 root handler 幂等安装 Endpoint 日志硬过滤，并收拢第三方传播路径。"""
+# 兼容 PRD-056 已公开的旧导入名；过滤边界现同时覆盖第三方 Endpoint 与文件解析器日志。
+DropUnsafeEndpointLoggerFilter = DropUnsafeThirdPartyLoggerFilter
+
+
+def _install_third_party_log_safety(root: logging.Logger) -> None:
+    """给全部 root handler 幂等安装第三方日志硬过滤，并收拢其传播路径。"""
 
     for handler in root.handlers:
         # 热重载和测试会重复初始化；同一 handler 只保留一个安全过滤器，避免状态无界增长。
-        if not any(isinstance(item, DropUnsafeEndpointLoggerFilter) for item in handler.filters):
-            handler.addFilter(DropUnsafeEndpointLoggerFilter())
-    for name in UNSAFE_ENDPOINT_LOGGER_PREFIXES:
+        if not any(isinstance(item, DropUnsafeThirdPartyLoggerFilter) for item in handler.filters):
+            handler.addFilter(DropUnsafeThirdPartyLoggerFilter())
+    for name in UNSAFE_THIRD_PARTY_LOGGER_PREFIXES:
         third_party = logging.getLogger(name)
-        # 第三方不应拥有绕过 root Filter 的私有 handler；WARNING 级别只用于减少构造低级日志开销，
-        # 真正安全边界仍是上面的 handler Filter，子 logger 即使显式改级别也会被拦截。
+        # 第三方不应拥有绕过 root Filter 的私有 handler；高于 CRITICAL 的继承级别同时保护后续
+        # 新增 handler 的部署配置，当前 root Filter 则阻断显式降低级别的子 logger。
         third_party.handlers.clear()
-        third_party.setLevel(logging.WARNING)
+        third_party.setLevel(logging.CRITICAL + 1)
         third_party.propagate = True
 
 
@@ -185,4 +190,4 @@ def configure_json_logging(level: str = "INFO") -> None:
         root.addHandler(handler)
     for handler in root.handlers:
         handler.setFormatter(JsonFormatter())
-    _install_endpoint_log_safety(root)
+    _install_third_party_log_safety(root)

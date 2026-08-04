@@ -428,6 +428,10 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # 都禁止浏览器/共享代理缓存，并阻止当前 URL 成为后续导航 Referer。
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Referrer-Policy"] = "no-referrer"
+    elif path == "/files" or path.startswith("/files/"):
+        # 文件响应会投影企业文档名和租户内安全状态；认证、权限、multipart、容量和未处理
+        # 异常都可能在业务路由设置 Header 之前结束，因此由最外层覆盖全部状态码。
+        response.headers["Cache-Control"] = "no-store, private"
     elif path == "/request-logs" or path.startswith("/request-logs/"):
         # RequestLog 详情和输出安全证据属于租户私有排障数据；权限拒绝、跨租户 404
         # 与完整性 503 都会在路由返回前重建 Response，因此必须由最外层覆盖所有状态码。

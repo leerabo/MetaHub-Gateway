@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
+from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
+
 from .logging import is_sensitive_key
 
 # PRD-002 只允许三类环境。这里不要放 staging、preprod 等别名，
@@ -67,6 +69,12 @@ DEFAULT_CONFIG: dict[str, str] = {
     # Prompt 模板正文必须使用显式独立根密钥；空默认值只让未启用模板的旧部署继续启动，
     # 任何模板发布、读取或调用都会在业务边界固定失败为暂时不可用。
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET": "",
+    # 文件正文使用第四个独立密钥域。dev/test 在 load 阶段注入公开开发值；生产缺失保持
+    # None，只让文件 API 503 失败关闭，不能拖垮健康、登录和其他控制面能力。
+    "METAHUB_FILE_ENCRYPTION_SECRET": "",
+    "METAHUB_FILE_STORAGE_ROOT": ".data/file-storage",
+    "METAHUB_FILE_MAX_UPLOAD_BYTES": "20971520",
+    "METAHUB_FILE_PARSE_CONCURRENCY": "2",
     # FinOps Usage spool 只保存经过白名单筛选的账务恢复数据。默认落在仓库本地数据目录，
     # 生产环境应显式改为 Gateway 服务账号独占的本地磁盘目录，不能指向网络共享。
     "METAHUB_FINOPS_USAGE_SPOOL_ROOT": ".data/finops-usage-spool",
@@ -260,6 +268,14 @@ class AppConfig(BaseModel):
     prompt_template_encryption_secret: str | None = Field(
         default=None, exclude=True, repr=False
     )
+    # 原文件、抽取正文和文件名使用独立根密钥；root 也可能泄露宿主结构，两者均不参与
+    # model_dump/repr。数值上限是部署级资源门禁，租户请求不能动态覆盖。
+    file_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
+    file_storage_root: str = Field(
+        default=".data/file-storage", exclude=True, repr=False
+    )
+    file_max_upload_bytes: int = 20_971_520
+    file_parse_concurrency: int = 2
     auth_token_secret: str = Field(exclude=True, repr=False)
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
@@ -485,6 +501,13 @@ def load_app_config(service_name: str) -> AppConfig:
     prompt_template_encryption_secret = _optional_value(
         values, "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET"
     )
+    configured_file_encryption_secret = _raw_optional_value(
+        values, "METAHUB_FILE_ENCRYPTION_SECRET"
+    )
+    # 本地默认值只保证开箱验收；生产缺失保持 None，由文件 API 固定返回 503。
+    file_encryption_secret = configured_file_encryption_secret or (
+        DEFAULT_FILE_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
+    )
     session_risk_enabled = _boolean(values, "METAHUB_SESSION_RISK_ENABLED")
     session_risk_hmac_version = _positive_int(
         values, "METAHUB_SESSION_RISK_HMAC_VERSION"
@@ -534,6 +557,16 @@ def load_app_config(service_name: str) -> AppConfig:
         environment=environment,
         encryption_secret=prompt_template_encryption_secret,
         auth_token_secret=auth_token_secret,
+    )
+    _validate_file_encryption_secret(
+        environment=environment,
+        encryption_secret=file_encryption_secret,
+        auth_token_secret=auth_token_secret,
+        cache_affinity_hmac_secret=cache_affinity_hmac_secret,
+        prompt_template_encryption_secret=prompt_template_encryption_secret,
+        provider_key_encryption_secret=_raw_optional_value(
+            values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"
+        ),
     )
     _validate_session_risk_hmac_config(
         enabled=session_risk_enabled,
@@ -648,6 +681,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "request_explanation_event_enabled": request_explanation_event_enabled,
             "request_log_query_event_enabled": request_log_query_event_enabled,
             "session_risk_enabled": session_risk_enabled,
+            "file_processing_enabled": file_encryption_secret is not None,
         },
         config_items=config_items,
         warnings=warnings,
@@ -662,6 +696,22 @@ def load_app_config(service_name: str) -> AppConfig:
         session_risk_previous_hmac_version=session_risk_previous_hmac_version,
         session_risk_previous_hmac_secret=session_risk_previous_hmac_secret,
         prompt_template_encryption_secret=prompt_template_encryption_secret,
+        file_encryption_secret=file_encryption_secret,
+        file_storage_root=_validated_file_storage_root(
+            _value(values, "METAHUB_FILE_STORAGE_ROOT")
+        ),
+        file_max_upload_bytes=_bounded_int(
+            values,
+            "METAHUB_FILE_MAX_UPLOAD_BYTES",
+            minimum=1_048_576,
+            maximum=52_428_800,
+        ),
+        file_parse_concurrency=_bounded_int(
+            values,
+            "METAHUB_FILE_PARSE_CONCURRENCY",
+            minimum=1,
+            maximum=8,
+        ),
         auth_token_secret=auth_token_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
         finops_usage_spool_root=_validated_local_spool_root(
@@ -952,6 +1002,39 @@ def _validated_local_spool_root(value: str) -> str:
     return str(normalized)
 
 
+def _validated_file_storage_root(value: str) -> str:
+    """校验并规范化只保存认证密文的本地文件对象根目录。
+
+    参数：配置文件或环境变量中的目录文本。返回：绝对规范路径字符串。约束：拒绝空值、
+    控制字符、UNC/网络共享和文件系统根目录；符号链接与 owner 在 Blob Store 每次操作复核。
+    """
+
+    raw = str(value or "").strip()
+    if (
+        not raw
+        or len(raw) > 1024
+        or any(ord(character) < 32 for character in raw)
+        or raw.startswith(("\\\\", "//"))
+    ):
+        # 路径错误不能回显部署目录，只报告固定配置字段和修复方向。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_FILE_STORAGE_ROOT must be a bounded local path.",
+            suggestion="Use a Control service-account-owned local encrypted data directory.",
+        )
+    candidate = Path(raw).expanduser()
+    absolute = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    normalized = Path(os.path.abspath(absolute))
+    if normalized == Path(normalized.anchor):
+        # 文件系统根无法形成服务账号独占边界，误配置还会扩大对象枚举范围。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_FILE_STORAGE_ROOT cannot be a filesystem root.",
+            suggestion="Choose a dedicated child directory for encrypted file objects.",
+        )
+    return str(normalized)
+
+
 def _read_environment(values: dict[str, ConfigValue]) -> EnvironmentName:
     """在 运行配置 内部复用 read environment 辅助逻辑，集中处理边界值和错误映射。
     
@@ -1116,6 +1199,9 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_SESSION_RISK_PREVIOUS_HMAC_VERSION",
         "METAHUB_SESSION_RISK_PREVIOUS_HMAC_SECRET",
         "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
+        "METAHUB_FILE_ENCRYPTION_SECRET",
+        "METAHUB_FILE_MAX_UPLOAD_BYTES",
+        "METAHUB_FILE_PARSE_CONCURRENCY",
         "METAHUB_AUTH_TOKEN_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_FINOPS_USAGE_SPOOL_ROOT",
@@ -1417,6 +1503,73 @@ def _validate_prompt_template_encryption_secret(
             code="infra.config_invalid",
             message="METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET must be replaced in prod.",
             suggestion="Configure the same independent production secret on Control and Gateway.",
+        )
+
+
+def _validate_file_encryption_secret(
+    *,
+    environment: EnvironmentName,
+    encryption_secret: str | None,
+    auth_token_secret: str,
+    cache_affinity_hmac_secret: str,
+    prompt_template_encryption_secret: str | None,
+    provider_key_encryption_secret: str | None,
+) -> None:
+    """校验文件根密钥强度、生产默认值和业务域隔离。
+
+    参数：环境、可选文件密钥及 Auth/Cache/Prompt/Provider 其他根密钥。返回：合法或生产
+    缺失时无返回值。缺失只使文件 API 503；显式弱值、空白、开发默认值或跨域复用会阻断启动。
+    """
+
+    # 生产缺失密钥只关闭文件能力，健康、登录和其他控制面模块仍需保持可用。
+    if encryption_secret is None:
+        return
+    try:
+        encoded = encryption_secret.encode("utf-8")
+    # 非 UTF-8 值会造成多副本派生不一致，必须在启动配置边界固定拒绝。
+    except UnicodeEncodeError:
+        # 错误信息只指出配置项，不回显候选密钥或编码失败位置。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_FILE_ENCRYPTION_SECRET is invalid.",
+            suggestion="Configure an independent high-entropy UTF-8 file secret.",
+        ) from None
+    if (
+        len(encoded) < 32
+        or len(encoded) > 512
+        or any(character.isspace() or ord(character) < 32 for character in encryption_secret)
+    ):
+        # 弱密钥不能等到第一次文件上传才发现，否则多副本会形成不一致可用性状态。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_FILE_ENCRYPTION_SECRET does not meet security requirements.",
+            suggestion="Use an independent 32-512 byte secret without whitespace or controls.",
+        )
+    other_secrets = (
+        auth_token_secret,
+        cache_affinity_hmac_secret,
+        prompt_template_encryption_secret,
+        provider_key_encryption_secret,
+    )
+    if any(
+        type(other) is str and hmac.compare_digest(encryption_secret, other)
+        for other in other_secrets
+    ):
+        # 分域派生不能弥补部署层根密钥物理复用，统一拒绝且不说明命中了哪个字段。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="File encryption secret must be isolated from other security domains.",
+            suggestion="Configure a dedicated METAHUB_FILE_ENCRYPTION_SECRET.",
+        )
+    if environment == "prod" and (
+        hmac.compare_digest(encryption_secret, DEFAULT_FILE_ENCRYPTION_SECRET)
+        or encryption_secret.startswith("replace-with-")
+    ):
+        # 仓库公开的默认/示例值不能在生产加密企业文件。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_FILE_ENCRYPTION_SECRET must be replaced in prod.",
+            suggestion="Configure a dedicated production file encryption secret.",
         )
 
 

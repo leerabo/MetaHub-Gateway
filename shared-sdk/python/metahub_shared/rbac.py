@@ -42,7 +42,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 权限目录版本只描述产品级目录结构，不可替代租户角色自身的 permission_revision。
 # PRD-070 新增高危会话读取与处置边界后提升目录版本；认证层会据此发现旧迁移并失败关闭，
 # 不能把 revision 6 的目录静默当成完整权限矩阵。
-CATALOG_REVISION: Final[int] = 7
+# PRD-072 增加文件读写独立权限后提升目录版本；认证层会拒绝仍停留 revision 7 的旧投影，
+# 不能把 Shared 默认矩阵当成运行时回退授权。
+CATALOG_REVISION: Final[int] = 8
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -199,6 +201,22 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "冻结或释放已识别会话及其关联 Virtual Key 风险覆盖层。",
         "critical",
     ),
+    # 文件读取和上传必须独立授权：业务用户上传并不意味着可管理 DLP，安全人员只读摘要
+    # 也不能隐式获得上传能力。原文/抽取正文仍由文件服务加密，不进入权限目录元数据。
+    PermissionDefinition(
+        "file.read",
+        "file",
+        "读取文件处理记录",
+        "读取当前租户文件名称、解析状态、DLP 摘要和 Token 预估。",
+        "read",
+    ),
+    PermissionDefinition(
+        "file.write",
+        "file",
+        "上传并解析文件",
+        "上传当前租户 PDF、DOCX 或 TXT，并执行解析、DLP 预扫描和加密存储。",
+        "write",
+    ),
     PermissionDefinition("system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"),
 )
 
@@ -215,8 +233,12 @@ _DEVELOPER = {
     "webhook.manage", "developer_portal.read", "debug_console.use",
     "config.transfer.read", "config.transfer.write", "chat.use",
     "prompt_template.read", "prompt_template.write", "prompt_template.use",
+    "file.read", "file.write",
 }
-_VIEWER = {"console.basic.read", "dashboard.read", "chat.use", "prompt_template.use"}
+_VIEWER = {
+    "console.basic.read", "dashboard.read", "chat.use", "prompt_template.use",
+    "file.read", "file.write",
+}
 _FINANCE = {
     "console.basic.read", "dashboard.read", "model.read", "model_price.read", "model_price.write",
     "billing.usage.read", "billing.usage.export", "billing.finops.read", "billing.finops.write",
@@ -231,6 +253,7 @@ _SECURITY = {
     "policy_template.read", "policy_template.apply",
     "intent_risk.classify",
     "session_risk.read", "session_risk.manage",
+    "file.read",
 }
 _OPS = {
     "console.basic.read", "dashboard.read", "environment.read", "environment.write", "project.read",

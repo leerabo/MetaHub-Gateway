@@ -27,6 +27,16 @@ import {
   sessionRiskPageOwner,
   sessionRiskReadIdentitySnapshot,
 } from "../features/session-risks/sessionRiskPageState.js";
+import {
+  bindFileInteractions,
+  fileUploadHasSelection,
+} from "../features/files/bindFiles.js";
+import {
+  createFilePageState,
+  filePageOwner,
+  fileReadIdentitySnapshot,
+  isFileAbortError,
+} from "../features/files/filePageState.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -234,6 +244,7 @@ import {
   listSessionRisks,
   shouldRetainSessionRiskIdempotencyKey,
 } from "../lib/sessionRisks.js";
+import { listFiles, uploadFile } from "../lib/files.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -506,6 +517,8 @@ const finOpsPageState = createFinOpsPageState();
 const costAnomalyPageState = createCostAnomalyPageState();
 // PAGE-098 的风险 DTO、cursor、双权限 owner 与幂等意图只驻留当前授权 Session 内存。
 const sessionRiskPageState = createSessionRiskPageState();
+// PAGE-101/PAGE-102 的文件名、安全摘要、私有 cursor 与上传 ticket 只属于当前授权 owner。
+const filePageState = createFilePageState();
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -626,6 +639,10 @@ if (app && globalThis.window) {
         // PAGE-098 的列表、cursor、Dialog 和未决幂等意图必须在 hash 离页时立即失效。
         sessionRiskPageState.clear();
       }
+      if (nextItemId !== "files") {
+        // 文件名、opaque cursor 和在途上传必须在 hash 离页时立即失效，不能等待后端导航返回。
+        filePageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -653,6 +670,7 @@ if (app && globalThis.window) {
       clearAuditExportSessionState();
       costAnomalyPageState.clear();
       sessionRiskPageState.clear();
+      filePageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -767,6 +785,7 @@ async function start() {
     clearAuditExportStateOnIdentityChange(authSession.context, context);
     clearCostAnomalyStateOnIdentityChange(authSession.context, context);
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
+    clearFileStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -836,6 +855,7 @@ async function performRefresh() {
     clearAuditExportStateOnIdentityChange(authSession.context, context);
     clearCostAnomalyStateOnIdentityChange(authSession.context, context);
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
+    clearFileStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -999,6 +1019,10 @@ async function performRefresh() {
   // PAGE-098 只属于后端确认的 read 导航；离页或降权立即 abort GET/POST 并销毁全部证据。
   if (consoleShellState?.activeNavigationItemId !== "session-risks") {
     sessionRiskPageState.clear();
+  }
+  // PAGE-101/PAGE-102 只属于后端确认的 files 导航；离页或撤权立即清除文件名和上传 owner。
+  if (consoleShellState?.activeNavigationItemId !== "files") {
+    filePageState.clear();
   }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
@@ -1173,6 +1197,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-101/PAGE-102 只有后端 files 导航与实时 file.read 同时成立时读取，其他页面零预取。
+  const filesState = await loadFilesState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   const budgetState = await loadBudgetState(virtualKeysState, consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
@@ -1294,6 +1323,7 @@ async function performRefresh() {
     finOpsState,
     costAnomaliesState,
     sessionRisksState,
+    filesState,
     budgetState,
     dlpState,
     webhookState,
@@ -1339,6 +1369,11 @@ if (app && globalThis.window) {
     if (publicInvitationRoute?.isPublicMode()) {
       return;
     }
+    // 未登录时登录表单本身就是唯一有效状态；后台重建 DOM 会清除用户正在输入的邮箱和密码，
+    // 还可能让浏览器密码管理器或辅助技术失去当前焦点，因此必须等 Session 建立后再刷新。
+    if (!authSession.token) {
+      return;
+    }
     // 慢环境中一轮完整读取可能超过 15 秒；后台刷新必须等待空闲，避免持续递增序号淘汰交互反馈。
     if (activeRefreshCount > 0) {
       return;
@@ -1353,6 +1388,10 @@ if (app && globalThis.window) {
     }
     // 会话风险处置结果未知时禁止定时刷新重建 Dialog；显式提交完成后再由同 owner 刷新列表。
     if (sessionRiskPageState.isActionBusy()) {
+      return;
+    }
+    // 在途上传或浏览器 file input 已选中文件时不重建 DOM，避免丢失不可恢复的用户选择或制造重复 POST。
+    if (filePageState.isUploadBusy() || fileUploadHasSelection()) {
       return;
     }
     // 死信重放/归档结果未知时不得由全页定时刷新重建操作 DOM。
@@ -1434,6 +1473,7 @@ function renderLogin(error, requestId) {
   clearAuditExportSessionState();
   costAnomalyPageState.clear();
   sessionRiskPageState.clear();
+  filePageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1768,6 +1808,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     finOpsPageState.clear();
     costAnomalyPageState.clear();
     sessionRiskPageState.clear();
+    filePageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -3933,6 +3974,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFinOpsInteractions(consoleShellState);
   bindCostAnomalyPageInteractions(consoleShellState);
   bindSessionRiskPageInteractions(consoleShellState);
+  bindFilesPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -4635,6 +4677,121 @@ function renderSessionRiskActionErrorDom(error) {
   const requestId = document.createElement("code");
   requestId.textContent = `request_id: ${String(error.requestId ?? "-")}`;
   container.append(code, message, requestId);
+}
+
+/** 构造当前文件 read owner，并绑定浏览器 hash，避免旧 DOM 在离页后发起 GET。 */
+function currentFileReadOwner(consoleShellState) {
+  const owner = filePageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "files")) return null;
+  return owner;
+}
+
+/** 构造当前文件 read+write owner；只读身份或后端导航漂移固定返回 null。 */
+function currentFileWriteOwner(consoleShellState) {
+  const owner = filePageOwner(authSession.context, consoleShellState, { requireWrite: true });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "files")) return null;
+  return owner;
+}
+
+/** 绑定文件上传、筛选和私有 cursor 翻页；按钮可见性不替代每次 owner 与后端 RBAC 校验。 */
+function bindFilesPageInteractions(consoleShellState) {
+  const readOwner = currentFileReadOwner(consoleShellState);
+  if (!readOwner || !filePageState.enter(readOwner)) return;
+  bindFileInteractions({
+    /** 状态筛选变化会销毁旧 cursor 和在途 GET，再读取 tenant-qualified 首屏。 */
+    async onFilter(status) {
+      filePageState.setStatus(status);
+      await refresh();
+    },
+    /** 清空筛选并回到全部状态首屏。 */
+    async onResetFilter() {
+      filePageState.resetStatus();
+      await refresh();
+    },
+    /** 上一页 cursor 只从私有栈恢复。 */
+    async onPreviousPage() {
+      if (filePageState.previousPage()) await refresh();
+    },
+    /** 下一页只使用最近一次 Control API 返回的签名 cursor。 */
+    async onNextPage() {
+      if (filePageState.nextPage()) await refresh();
+    },
+    /** 原生 File 仅在该调用栈内传给上传客户端，不写入状态机或日志。 */
+    async onUpload(file) {
+      await submitFileUpload(file, consoleShellState);
+    },
+  });
+}
+
+/**
+ * 提交一次文件上传并同步等待解析终态。
+ * POST ticket 同时绑定 tenant、用户、Session、权限 revision/fingerprint 和后端 files 导航。
+ */
+async function submitFileUpload(file, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentFileWriteOwner(consoleShellState);
+  // Token 或实时写 owner 任一缺失都必须先销毁旧文件名和 cursor，不能仅依赖上传按钮隐藏。
+  if (!token || !owner) {
+    filePageState.clear();
+    // Token 缺失属于登录边界；仅撤权时保留 Session 并由后续导航刷新收口。
+    if (!token) renderLogin();
+    return;
+  }
+  const operation = filePageState.beginUploadOperation(owner);
+  if (!operation) return;
+  let operationFinished = false;
+  // 单一收口函数防止成功、异常和 finally 三条路径重复结束后来上传 ticket。
+  const finishOperation = () => {
+    if (operationFinished) return;
+    operationFinished = true;
+    filePageState.finishUploadOperation(operation);
+  };
+  try {
+    const result = await uploadFile({
+      controlApiUrl,
+      token,
+      file,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentFileWriteOwner(consoleShellState);
+    if (!filePageState.acceptUpload(operation, result, currentOwner)) return;
+    // 显式结束 POST 后再刷新列表，避免上传 busy 门禁把本轮结果误当成仍未决。
+    finishOperation();
+    await refresh();
+  } catch (error) {
+    const currentOwner = currentFileWriteOwner(consoleShellState);
+    // owner 漂移或主动 Abort 的迟到错误必须静默丢弃，不能影响新租户页面。
+    if (!filePageState.isUploadOperationCurrent(operation, currentOwner) || isFileAbortError(error)) {
+      return;
+    }
+    // 401 是强认证边界，先清文件 DTO 与 Token，再渲染统一登录页。
+    if (error instanceof AuthApiError && error.status === 401) {
+      filePageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return;
+    }
+    // 只有 auth.permission_denied 表示撤权；file.dlp_blocked 同为 403，但它是可追踪业务终态。
+    if (
+      error instanceof AuthApiError
+      && error.status === 403
+      && error.code === "auth.permission_denied"
+    ) {
+      filePageState.clear();
+      finishOperation();
+      await refresh();
+      return;
+    }
+    filePageState.rejectUpload(operation, error, currentOwner);
+    // 解析/DLP/存储失败可能已经提交 failed/blocked owner，结束 POST 后权威刷新处理记录。
+    finishOperation();
+    await refresh();
+  } finally {
+    finishOperation();
+  }
 }
 /**
  * 绑定 FinOps 筛选、opaque cursor、详情和调整命令。
@@ -6576,6 +6733,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "session-risks") {
     // 导航偏好请求发出前销毁 PAGE-098 双请求 owner，避免旧风险事实回写新页面。
     sessionRiskPageState.clear();
+  }
+  if (itemId !== "files") {
+    // 导航偏好写入前取消文件 GET/POST 并销毁文件名与 cursor，迟到响应不得落入目标页面。
+    filePageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -11248,6 +11409,56 @@ async function loadSessionRisksState(consoleShellState, refreshId) {
     sessionRiskPageState.finishListOperation(operation);
   }
 }
+
+/**
+ * 只在后端授权 files 导航与实时 file.read 同时成立时读取文件记录。
+ * GET owner 绑定完整 Session、权限快照和 refresh 代次，其他页面不会预取文件名或处理摘要。
+ */
+async function loadFilesState(consoleShellState, refreshId) {
+  const owner = currentFileReadOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !filePageState.enter(owner)) return null;
+  const operation = filePageState.beginListOperation(owner, refreshId);
+  if (!operation) return null;
+  try {
+    const result = await listFiles({
+      controlApiUrl,
+      token: authSession.token,
+      ...filePageState.query(),
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentFileReadOwner(consoleShellState);
+    if (!filePageState.acceptPage(operation, result, currentOwner, refreshId)) return null;
+    return filePageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentFileReadOwner(consoleShellState);
+    if (
+      !filePageState.isListOperationCurrent(operation, currentOwner, refreshId)
+      || isFileAbortError(error)
+    ) return null;
+    // 列表 401 与上传一致地销毁文件名、cursor 和认证状态，避免下一登录复用旧事实。
+    if (error instanceof AuthApiError && error.status === 401) {
+      filePageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    if (
+      error instanceof AuthApiError
+      && error.status === 403
+      && error.code === "auth.permission_denied"
+    ) {
+      // GET 撤权先销毁文件名与 cursor，再异步重读 /auth/me 和后端导航，避免递归刷新当前调用栈。
+      filePageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    filePageState.rejectPage(operation, error, currentOwner, refreshId);
+    return filePageState.snapshot();
+  } finally {
+    filePageState.finishListOperation(operation);
+  }
+}
 /**
  * 清除预算页会话内快照。
  *
@@ -12222,6 +12433,16 @@ function clearCostAnomalyStateOnIdentityChange(previous, current) {
 function clearSessionRiskStateOnIdentityChange(previous, current) {
   if (sessionRiskReadIdentitySnapshot(previous) !== sessionRiskReadIdentitySnapshot(current)) {
     sessionRiskPageState.clear();
+  }
+}
+
+/**
+ * tenant、用户、Session、权限 revision 或授权指纹变化时销毁文件工作台全部内存。
+ * file.read 被撤销会使身份收敛为空；file.write 变化也会改变授权指纹并重新建立只读/读写投影。
+ */
+function clearFileStateOnIdentityChange(previous, current) {
+  if (fileReadIdentitySnapshot(previous) !== fileReadIdentitySnapshot(current)) {
+    filePageState.clear();
   }
 }
 /**

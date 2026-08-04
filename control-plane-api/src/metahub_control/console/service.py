@@ -75,6 +75,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "session-risks": "console.page_viewed",
     # PAGE-099 访问事件只证明打开页面，scan、规则、暴露计数和 request_id 均由专用读取接口承载。
     "output-safety": "console.page_viewed",
+    # PAGE-101/102 访问事件不携带文件名、文件 ID、DLP 命中、Token 数或处理结果。
+    "files": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -541,6 +543,18 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "管理企业 Prompt 模板、不可变版本、变量与适用项目。",
         "创建模板并发布首个版本后，可在企业 Chat 中按权限调用。",
         119,
+    ),
+    NavigationDefinition(
+        "files",
+        "文件处理",
+        "开发者",
+        "files",
+        # 导航以读取权限为最低门槛；file.write 仅决定上传控件与 POST 路由，不能让只读
+        # SecurityAdmin 因缺少写权限而失去审查租户文件安全状态的入口。
+        ("file.read",),
+        "上传文档并查看当前租户的文本抽取、安全预扫描与 Token 估算结果。",
+        "上传 TXT、DOCX 或 PDF 后，可在此查看处理状态与安全摘要。",
+        120,
     ),
     NavigationDefinition(
         "debug-console",

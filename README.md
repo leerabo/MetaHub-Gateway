@@ -86,6 +86,20 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近完成：
 
+- `PRD-072 - 文件上传与文本解析基础`：设计与两轮自审、Shared 文件合同、Control 文件 API、
+  PAGE-101/102、0064、RBAC revision 8、加密 Blob、TXT/DOCX/PDF 抽取、DLP 预扫描、Token 估算、
+  后端租户/权限/统一错误和安全 Webhook 均已完成。专项结果为 Shared `25 passed`、Control 与导航
+  `15 passed`（文件 API 13、导航 2）、迁移 `6 passed`、Console 最终聚焦 `18 passed`、Runtime 验收器
+  `6 passed`（含管理员密码只从环境注入并读取后移除）、Console lint `209 files passed`，中文注释、语法和
+  日志隔离门禁通过。正式 Runtime 为 `status=passed`：三格式 ready、DLP 403、权限 403、跨租户 404、
+  `64/0064`、数据库完整性/外键、认证密文对象和敏感明文零命中均通过；Windows UTF-16LE 日志另以
+  新的多编码 canary 规则实时复扫，三份日志命中为 0。Browser 在 `1280x720` 与 `390x844` 完成列表、
+  筛选、DLP/病毒/Token、SecurityAdmin 只读降级和注销清理，页面无横向溢出且正文、对象键、hash、
+  规则内容没有进入 DOM。详见
+  [PRD-072 设计](docs/prd/PRD-072-file-upload-text-extraction.md)、
+  [文件 API](docs/api/files.md)、
+  [PRD-072 测试记录](docs/testing/PRD-072-tests.md) 和
+  [正式制品](.artifacts/prd072-runtime/prd072_20260804T212908Z_922f8ab2ff200912)。
 - `PRD-071 - 输出侧安全检测与流式滑窗`：设计与两轮自审、Shared/Gateway/Control/Console、0063、
   DLP `scan_scope`、PAGE-099/PAGE-100、FinOps 争议投影、后端租户/RBAC/统一错误和 Webhook 均已完成。
   相关自动化为 Shared/Gateway `60 passed`、0063 `9 passed`、Control 相邻 `47 passed`、Console 相邻
@@ -113,9 +127,10 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 当前下一项：
 
 - Excel 的 `01_PRD总表`、`03_M2-M3扩展交付`、页面、API、数据对象、Webhook 与验收用例表已交叉确认：
-  下一条未完成项是 `PRD-072 | M2-企业增强 | P2 | 文件解析 | 文件上传与文本解析基础`，对应 PAGE-101/102、
-  `POST /files`、`GET /files/{id}`、UploadedFile/FileExtract、`file.uploaded/file.scanned` 与 TC-0143/0144。
-  PRD-072 尚未开始设计或编码；总体目标仍为 `all_108_prds_complete=false`。
+  PRD-072 已完成，下一条未完成项是
+  `PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`，对应 PAGE-103、
+  `POST /files/{id}/security-scan`、FileSecurityFinding、`file.prompt_injection_detected` 与 TC-0145/0146。
+  PRD-073 尚未开始设计或编码；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

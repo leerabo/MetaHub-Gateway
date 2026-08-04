@@ -17,6 +17,7 @@ import { renderPromptTemplates } from "../prompt-templates/renderPromptTemplates
 import { renderDlpPanel } from "../dlp/renderDlpPanel.js";
 import { renderIntentSecurity } from "../intent-security/renderIntentSecurity.js";
 import { renderSessionRisks } from "../session-risks/renderSessionRisks.js";
+import { renderFiles } from "../files/renderFiles.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -390,6 +391,14 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.sessionRisksState,
         options.authContext,
         options.consoleShellState,
+      );
+    case "files":
+      // PAGE-101/PAGE-102 只消费 strict 文件摘要；上传、tenant 与正文安全边界由 Control API 再次校验。
+      return renderFilesSection(
+        options.filesState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
       );
     case "output-safety":
       // PAGE-099 复用 RequestLog owner；真实 request_log.read 与 tenant 条件仍由每次 Control GET 强制执行。
@@ -772,6 +781,21 @@ function renderSessionRisksSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel session-risks-panel" aria-labelledby="session-risk-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/**
+ * 渲染 PAGE-101/PAGE-102 文件处理工作台。
+ * renderer 会再次核对后端导航和实时 file.read/file.write 投影；失败时返回零 DOM。
+ */
+function renderFilesSection(state, authContext, consoleShellState, i18n) {
+  const html = renderFiles(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel files-panel" aria-labelledby="files-title">
         ${html}
       </section>
     `

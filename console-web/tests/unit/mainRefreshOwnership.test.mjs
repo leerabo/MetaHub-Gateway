@@ -69,3 +69,16 @@ test("late current-user response is rejected before identity or storage writebac
   assert.ok(ownerGateIndex < storageWriteIndex);
   assert.ok(catchIndex < catchOwnerGateIndex && catchOwnerGateIndex < catchClearIndex);
 });
+
+
+test("background refresh leaves the unauthenticated login form intact", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const interval = sourceSection(source, "window.setInterval(() => {", "function renderLogin(");
+  const invitationGateIndex = interval.indexOf("publicInvitationRoute?.isPublicMode()");
+  const authGateIndex = interval.indexOf("if (!authSession.token)");
+  const refreshIndex = interval.indexOf("void refresh();");
+
+  // 登录页含密码草稿，必须在任何后台 refresh 之前返回，不能依赖 performRefresh 再重绘登录页。
+  assert.ok(invitationGateIndex >= 0);
+  assert.ok(invitationGateIndex < authGateIndex && authGateIndex < refreshIndex);
+});

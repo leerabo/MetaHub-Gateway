@@ -1,0 +1,45 @@
+{
+  "all_108_prds_complete": false,
+  "cleanup": {
+    "disabled_rules": 1,
+    "disabled_users": 2,
+    "revoked_sessions": 2
+  },
+  "completed_at": "2026-08-04T21:29:08Z",
+  "database": {
+    "encrypted_blob_count": 6,
+    "file_dlp_match_count": 1,
+    "file_event_count": 8,
+    "file_extract_count": 4,
+    "foreign_key_violations": 0,
+    "integrity_check": "ok",
+    "migration_count": 64,
+    "migration_max": "0064",
+    "uploaded_file_count": 4
+  },
+  "http": {
+    "blocked_file_id": "file_d6ecc44729ff4ab2a482d5235752f46b",
+    "error_codes": {
+      "cross_tenant": "file.not_found",
+      "dlp": "file.dlp_blocked",
+      "permission": "auth.permission_denied"
+    },
+    "ready_file_ids": [
+      "file_1ee6c65bbdd0492099dc4952340ad7f9",
+      "file_c34a20b5430f4eb3ac862d21363a0f5d",
+      "file_d9bb627271c943099c6f972a92e8c0cc"
+    ],
+    "service_http_status": {
+      "console": 200,
+      "control": 200,
+      "gateway": 200
+    }
+  },
+  "logs": {
+    "files_scanned": 3,
+    "sensitive_matches": 0
+  },
+  "run_id": "prd072_20260804T212908Z_922f8ab2ff200912",
+  "schema": "metahub.prd072.runtime-acceptance.v1",
+  "status": "passed"
+}

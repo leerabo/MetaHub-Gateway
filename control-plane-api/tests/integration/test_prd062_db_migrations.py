@@ -36,8 +36,8 @@ EXPECTED_VERSIONS = [f"{version:04d}" for version in range(1, 55)]
 
 # 配置迁移使用独立读写权限，不能由 Provider、Model 等普通领域 CRUD 权限推导。
 TRANSFER_CODES = frozenset({"config.transfer.read", "config.transfer.write"})
-# PRD-062 的 0054 历史态固定为 revision 2；PRD-070 后共享目录已升到 revision 7，
-# 因此专项测试显式排除 Chat、Prompt、策略模板、意图分类和会话风险权限，不能改写已发布迁移语义。
+# PRD-062 的 0054 历史态固定为 revision 2；PRD-072 后共享目录已升到 revision 8，
+# 因此专项测试显式排除 Chat、Prompt、策略模板、意图分类、会话风险和文件权限，不能改写已发布迁移语义。
 PRD062_LATER_PERMISSION_CODES = frozenset(
     {
         "chat.use",
@@ -49,6 +49,8 @@ PRD062_LATER_PERMISSION_CODES = frozenset(
         "intent_risk.classify",
         "session_risk.read",
         "session_risk.manage",
+        "file.read",
+        "file.write",
     }
 )
 PRD062_PERMISSION_CODES = frozenset(
@@ -214,9 +216,9 @@ def test_prd062_fresh_repeat_and_new_tenant_default_matrix(tmp_path: Path) -> No
     seed = apply_seed_data(database_url)
 
     connection = connect_database(database_url)
-    # 当前运行目录包含 PRD-066..070 的九项后续权限；数据库子集仍冻结 0054 的 50 项快照。
-    assert CATALOG_REVISION == 7
-    assert len(PERMISSION_CATALOG) == 59
+    # 当前运行目录包含 PRD-066..072 的十一项后续权限；数据库子集仍冻结 0054 的 50 项快照。
+    assert CATALOG_REVISION == 8
+    assert len(PERMISSION_CATALOG) == 61
     assert len(PRD062_PERMISSION_CODES) == 50
     assert {
         definition.code

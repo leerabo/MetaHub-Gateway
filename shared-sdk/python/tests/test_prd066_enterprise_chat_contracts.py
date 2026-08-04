@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from metahub_shared.rbac import (
     CATALOG_REVISION,
     PERMISSION_CODES,
@@ -14,7 +13,6 @@ from metahub_shared.rbac import (
 )
 from metahub_shared.runtime.config import ConfigError, load_app_config
 from metahub_shared.runtime.webhooks import build_webhook_event
-
 
 # 固定时间、Chat 对象和链路标识用于验证事件信封逐字绑定，不包含任何正文或凭据。
 COMPLETED_AT = datetime(2026, 8, 2, 1, 2, 3, tzinfo=UTC)
@@ -68,10 +66,10 @@ def _build_event(payload: dict[str, object]):
 def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     """验证权限目录边界：仅 Admin、Developer 和 Viewer 默认获得独立 chat.use。"""
 
-    # PRD-070 把产品目录提升到 revision 7；本回归只证明原 chat.use 与 Prompt 模板边界继续存在。
-    # 新会话风险权限由独立 PRD-070 测试覆盖，不能据此改变 Chat 的角色授权。
-    assert CATALOG_REVISION == 7
-    assert len(PERMISSION_CODES) == 59
+    # PRD-072 把产品目录提升到 revision 8；本回归只证明原 chat.use 与 Prompt 模板边界继续存在。
+    # 文件权限由独立 PRD-072 测试覆盖，不能据此改变 Chat 的角色授权。
+    assert CATALOG_REVISION == 8
+    assert len(PERMISSION_CODES) == 61
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["admin"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["developer"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
@@ -83,15 +81,16 @@ def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     assert "prompt_template.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.read" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.write" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
-    # Admin 因 0062 的新权限再次更新；Developer/Viewer 未获新权限，hash 必须继续等于 0059。
+    # PRD-072 为 Admin、Developer、Viewer 增加文件权限，hash 必须使用 revision 8 的完整矩阵；
+    # 本用例随后仍逐项冻结 Chat 与 Prompt 模板原有边界，避免目录升级掩盖越权。
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
-        "792e003e6c0a188c124ef71ce7ab31658e7ef43a6dadaf6b83c339dfff2caf7f"
+        "6826d92219b488c5d6553147fbf59bb5a1ff514e7cb1812be724bb352017a052"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["developer"]) == (
-        "2f89388b743145e7fded2d95cc1342c7d9acb289371bf8c70cf0accddda1a05c"
+        "d1cc4e0cad810c33e57ca2061a2345ef9a7843b26d8af80cb218d4dbf34fae87"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["viewer"]) == (
-        "3339f0ea3c2ff63e251ea82a0436dc79b4e604cce4535337d1a013ee05622086"
+        "519abd5f24d6c0612727f010fc1eae824b8c05ff0b8a4b0ca32f5ee9c2d3ddb5"
     )
 
 

@@ -1,0 +1,64 @@
+{
+  "schema": "metahub.prd072.browser-acceptance.v1",
+  "status": "passed",
+  "run_id": "prd072_20260804T212908Z_922f8ab2ff200912",
+  "completed_at": "2026-08-04T21:36:14.207Z",
+  "viewports": {
+    "desktop": {
+      "client_width": 1265,
+      "extracted_canary_in_dom": false,
+      "horizontal_overflow": false,
+      "inner_height": 720,
+      "inner_width": 1280,
+      "scroll_width": 1265,
+      "visible_rows": 4
+    },
+    "mobile": {
+      "client_width": 375,
+      "extracted_canary_in_dom": false,
+      "filter_value": "",
+      "horizontal_overflow": false,
+      "inner_height": 844,
+      "inner_width": 390,
+      "next_disabled": true,
+      "previous_disabled": true,
+      "scroll_width": 375,
+      "visible_control_overlaps": 0,
+      "visible_rows": 4
+    }
+  },
+  "interactions": {
+    "blocked_filter_rows": 1,
+    "reset_all_rows": 4,
+    "pagination_previous_disabled": true,
+    "pagination_next_disabled": true
+  },
+  "console": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "screenshots": [
+    {
+      "file": "desktop-1280x720.jpg",
+      "bytes": 67033,
+      "width": 1265,
+      "height": 712,
+      "sha256": "a2da12c512775ac1dec840eec95cbd32dd590bdd4079ef0d080a77d6cf647711"
+    },
+    {
+      "file": "mobile-upload-390x844.jpg",
+      "bytes": 26942,
+      "width": 375,
+      "height": 812,
+      "sha256": "fb95ec9718e6a6885a0759b0622423bf402cdb37f6b1e1dacc220df1f4d20a57"
+    },
+    {
+      "file": "mobile-records-390x844.jpg",
+      "bytes": 27530,
+      "width": 375,
+      "height": 812,
+      "sha256": "0dd027757c108a3963b50f9401e46b951a7eab625827588495fd8107f9c7d29b"
+    }
+  ],
+  "all_108_prds_complete": false
+}

@@ -1472,8 +1472,39 @@ PRD-070 已完成。Excel 交叉确认的下一项为
 
 PRD-071 的 0063 开发库升级、相关分层复跑、中文注释、真实三服务/API、账单事件 owner、隐私和应用内
 Browser 双视口均已通过。Excel 多表交叉确认的下一条未完成项为
-`PRD-072 | M2-企业增强 | P2 | 文件解析 | 文件上传与文本解析基础`。该状态只代表 PRD-071 完成；
-`all_108_prds_complete=false`。
+`PRD-072 | M2-企业增强 | P2 | 文件解析 | 文件上传与文本解析基础`；该项现已完成。
+
+## PRD-072 文件上传与文本解析基础目录（已完成）
+
+- `shared-sdk/python/metahub_shared/files/`：冻结 PDF/DOCX/UTF-8 TXT 格式合同、有界解析、确定性 Token
+  估算、tenant DLP 全文扫描、分域 HMAC/AES-GCM 和只保存认证密文的本地原子 Blob Store。
+- `control-plane-api/src/metahub_control/files/`：提供鉴权后有界 multipart 读取、同步容量门禁、
+  `POST /files`、`GET /files`、`GET /files/{id}`、两阶段状态事务、租户签名 cursor 和安全事件派发。
+- `shared-sdk/python/metahub_shared/runtime/{config,errors,error_diagnosis,i18n,logging,webhooks}.py`：增加
+  文件密钥/存储/资源配置、统一文件错误、`pypdf` 自由日志拦截以及 `file.uploaded/file.scanned` exact-key
+  Webhook 合同；Provider、Prompt、Auth 与文件根密钥保持独立。
+- `infra/migrations/0064_file_upload_text_extraction.sql/.down.sql`：增加 UploadedFile、FileExtract、
+  FileDlpMatch、FileEvent 的 tenant owner、单向状态机、不可变和 down guard；RBAC 升至 revision 8。
+- `console-web/src/features/files/` 与 `src/lib/files.js`：实现 PAGE-101/102 上传栏、状态筛选、私有 cursor、
+  文件处理记录、DLP/病毒/Token 摘要、只读权限投影和 owner/generation 清理。
+- `shared-sdk/python/tests/test_prd072_*.py`、`control-plane-api/tests/**/*prd072*.py` 和
+  `console-web/tests/unit/{files,prd072BrowserAcceptance}.test.mjs`：覆盖主流程、格式/解析/存储、DLP、权限、
+  租户、迁移、DOM 隐私和双视口布局合同。
+- `scripts/acceptance/prd072-runtime-acceptance.py`：仅访问工作区隔离数据库、对象目录和固定回环三服务，
+  验证 TXT/DOCX/PDF、DLP block、SecurityAdmin 只读、跨租户 404、密文、事件、数据库完整性和日志 canary；
+  UTF-8、UTF-16LE、UTF-16BE 均按等价敏感值扫描。
+- `docs/prd/PRD-072-file-upload-text-extraction.md`、`docs/api/files.md` 与
+  `docs/testing/PRD-072-tests.md`：分别保存冻结设计及两轮自审、公开 API 合同和完整验收记录。
+- `.artifacts/prd072-runtime/prd072_20260804T212908Z_922f8ab2ff200912/`：只保存脱敏 Runtime JSON；
+  文件正文、文件名、规则 pattern、密码、Session Token、数据库和日志均不进入提交制品。
+- `.artifacts/prd072-browser/prd072_20260804T212908Z_922f8ab2ff200912/`：保存脱敏 Browser JSON、
+  `SHA256SUMS.txt` 及桌面/移动截图；抽取正文 canary、对象键、规则内容和凭据均未进入 DOM 或证据。
+
+PRD-072 的 0064、相关分层回归、中文注释、真实三服务/API、密文/隐私和 Browser 双视口均已通过。
+Excel 的总表、M2/M3 交付、页面、API、数据对象、Webhook 和验收用例共同确认下一条未完成项为
+`PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`；对应 PAGE-103、
+`POST /files/{id}/security-scan`、FileSecurityFinding、`file.prompt_injection_detected` 和 TC-0145/0146。
+该状态只代表 PRD-072 完成；`all_108_prds_complete=false`。
 
 ## MVP 非目标
 
