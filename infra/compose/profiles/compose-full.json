@@ -1,0 +1,21 @@
+{
+  "profile_id": "compose-full",
+  "project_name": "metahub",
+  "database_mode": "sqlite",
+  "env_file": "infra/compose/.env.compose",
+  "services": {
+    "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
+    "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "console": { "enabled": true, "port": 5173, "health": "/" },
+    "redis": { "enabled": true, "port": 6379 },
+    "postgres": { "enabled": true, "port": 5432 },
+    "minio": { "enabled": true, "port": 9000 }
+  },
+  "volumes": {
+    "sqlite": "metahub-sqlite",
+    "logs": "metahub-logs",
+    "redis": "metahub-redis",
+    "postgres": "metahub-postgres",
+    "minio": "metahub-minio"
+  }
+}

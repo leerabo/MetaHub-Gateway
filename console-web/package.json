@@ -1,0 +1,11 @@
+{
+  "name": "@metahub/console-web",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test tests/unit/*.test.mjs"
+  }
+}

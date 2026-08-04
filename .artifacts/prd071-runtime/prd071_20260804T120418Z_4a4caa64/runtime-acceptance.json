@@ -1,0 +1,295 @@
+{
+  "cleanup": {
+    "admin_session_revoked": true,
+    "provider_key_disabled": true,
+    "runtime_rule_disabled": true,
+    "viewer_active_sessions": 0,
+    "viewer_session_revoked": true,
+    "viewer_sessions_revoked_by_fallback": 0,
+    "viewer_users_disabled": 1,
+    "virtual_key_disabled": true
+  },
+  "completed_at": "2026-08-04T12:04:43Z",
+  "control_read_models": {
+    "details": {
+      "blocked": {
+        "decision": "blocked",
+        "dispute_present": true,
+        "request_id": "req_prd071_20260804T120418Z_4a4caa64_blocked_7d639c15dccf",
+        "scan_status": "completed"
+      },
+      "clean": {
+        "decision": "clean",
+        "dispute_present": false,
+        "request_id": "req_prd071_20260804T120418Z_4a4caa64_clean_9cf29feae5c0",
+        "scan_status": "completed"
+      },
+      "stream_blocked": {
+        "decision": "blocked",
+        "dispute_present": true,
+        "request_id": "req_prd071_20260804T120418Z_4a4caa64_stream_blocked_2b0a04b48a8b",
+        "scan_status": "completed"
+      },
+      "unavailable": {
+        "decision": "unknown",
+        "dispute_present": false,
+        "request_id": "req_prd071_20260804T120418Z_4a4caa64_unavailable_487c255a8ae4",
+        "scan_status": "unavailable"
+      }
+    },
+    "filters": {
+      "billing": 2,
+      "exposure": 2,
+      "mode": 1,
+      "status": 3
+    },
+    "finops_dispute_present": {
+      "blocked": true,
+      "clean": false,
+      "stream_blocked": true,
+      "unavailable": false
+    }
+  },
+  "database": {
+    "foreign_key_violations": 0,
+    "integrity_check": "ok",
+    "schema": {
+      "count": 63,
+      "max_version": "0063"
+    },
+    "tenant_id": "944f3e6d-8b66-584e-b095-7cac890a5f87"
+  },
+  "gateway": {
+    "blocked": {
+      "code": "content_policy_violation",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_blocked_7d639c15dccf",
+      "status": 403,
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_blocked_7d639c15dccf"
+    },
+    "clean": {
+      "code": null,
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_clean_9cf29feae5c0",
+      "status": 200,
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_clean_9cf29feae5c0"
+    },
+    "stream_blocked": {
+      "body_event_count": 1,
+      "code": "content_policy_violation",
+      "done_count": 0,
+      "error_event_count": 1,
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_stream_blocked_2b0a04b48a8b",
+      "status": 200,
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_stream_blocked_2b0a04b48a8b"
+    },
+    "unavailable": {
+      "code": "gateway.output_safety_unavailable",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_unavailable_487c255a8ae4",
+      "status": 503,
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_unavailable_487c255a8ae4"
+    }
+  },
+  "health": {
+    "control": 200,
+    "gateway": 200
+  },
+  "permission": {
+    "anonymous": {
+      "code": "auth.token_missing",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_request_log_anonymous_5791a587a41b"
+    },
+    "cross_tenant": {
+      "code": "request_log.not_found",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_request_log_cross_7cf3c54e15ed"
+    },
+    "missing": {
+      "code": "request_log.not_found",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_request_log_missing_0dab6955dfad"
+    },
+    "viewer": {
+      "code": "auth.permission_denied",
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_request_log_viewer_e631b13b7d0f"
+    }
+  },
+  "persistence": {
+    "blocked": {
+      "charge": {
+        "count": 1,
+        "finops_ledger_entry_id": "fle_c5abe658293981e1b30fd463e9b6982d"
+      },
+      "dispute": {
+        "count": 1
+      },
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_blocked_7d639c15dccf",
+      "request_log": {
+        "count": 1,
+        "error_code": "content_policy_violation",
+        "status": "failed",
+        "stream_status": null
+      },
+      "scan": {
+        "billing_disposition": "dispute_pending",
+        "count": 1,
+        "decision": "blocked",
+        "exposure_state": "none",
+        "failure_reason_code": null,
+        "output_safety_scan_id": "oss_2b52d59646b64b57bcd1791fd3f8a555",
+        "scan_mode": "non_stream_full",
+        "scan_status": "completed"
+      },
+      "source_event": {
+        "count": 1
+      },
+      "stream": {
+        "count": 0,
+        "error_code": null,
+        "status": null
+      },
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_blocked_7d639c15dccf",
+      "usage": {
+        "count": 1,
+        "usage_ledger_id": "usg_0d5ad164aabb42769a8569605319903b"
+      }
+    },
+    "clean": {
+      "charge": {
+        "count": 1,
+        "finops_ledger_entry_id": "fle_38f6474d3bf7a75b749b958f1dcc6b3f"
+      },
+      "dispute": {
+        "count": 0
+      },
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_clean_9cf29feae5c0",
+      "request_log": {
+        "count": 1,
+        "error_code": null,
+        "status": "success",
+        "stream_status": null
+      },
+      "scan": {
+        "billing_disposition": "not_required",
+        "count": 1,
+        "decision": "clean",
+        "exposure_state": "complete",
+        "failure_reason_code": null,
+        "output_safety_scan_id": "oss_d85f0b726caf41dda9fdc784f3d9733f",
+        "scan_mode": "non_stream_full",
+        "scan_status": "completed"
+      },
+      "source_event": {
+        "count": 0
+      },
+      "stream": {
+        "count": 0,
+        "error_code": null,
+        "status": null
+      },
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_clean_9cf29feae5c0",
+      "usage": {
+        "count": 1,
+        "usage_ledger_id": "usg_17ca62fe657b49018283355b5a516b4e"
+      }
+    },
+    "stream_blocked": {
+      "charge": {
+        "count": 1,
+        "finops_ledger_entry_id": "fle_bea07a7a98984b5ca50c8b9dad317588"
+      },
+      "dispute": {
+        "count": 1
+      },
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_stream_blocked_2b0a04b48a8b",
+      "request_log": {
+        "count": 1,
+        "error_code": "content_policy_violation",
+        "status": "failed",
+        "stream_status": "output_blocked"
+      },
+      "scan": {
+        "billing_disposition": "dispute_pending",
+        "count": 1,
+        "decision": "blocked",
+        "exposure_state": "partial",
+        "failure_reason_code": null,
+        "output_safety_scan_id": "oss_dffff489317543d5a6a377feb77918c9",
+        "scan_mode": "stream_window",
+        "scan_status": "completed"
+      },
+      "source_event": {
+        "count": 1
+      },
+      "stream": {
+        "count": 1,
+        "error_code": "content_policy_violation",
+        "status": "output_blocked"
+      },
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_stream_blocked_2b0a04b48a8b",
+      "usage": {
+        "count": 1,
+        "usage_ledger_id": "usg_9c420efdfef34f1194063d44663a10af"
+      }
+    },
+    "unavailable": {
+      "charge": {
+        "count": 1,
+        "finops_ledger_entry_id": "fle_52a98c8578dfc4ff0de72ddcf6463421"
+      },
+      "dispute": {
+        "count": 0
+      },
+      "request_id": "req_prd071_20260804T120418Z_4a4caa64_unavailable_487c255a8ae4",
+      "request_log": {
+        "count": 1,
+        "error_code": "gateway.output_safety_unavailable",
+        "status": "failed",
+        "stream_status": null
+      },
+      "scan": {
+        "billing_disposition": "not_required",
+        "count": 1,
+        "decision": "unknown",
+        "exposure_state": "none",
+        "failure_reason_code": "output_safety.response_shape_invalid",
+        "output_safety_scan_id": "oss_521cb05db58f4665947f13ddc909fc10",
+        "scan_mode": "non_stream_full",
+        "scan_status": "unavailable"
+      },
+      "source_event": {
+        "count": 0
+      },
+      "stream": {
+        "count": 0,
+        "error_code": null,
+        "status": null
+      },
+      "trace_id": "trc_prd071_20260804T120418Z_4a4caa64_unavailable_487c255a8ae4",
+      "usage": {
+        "count": 1,
+        "usage_ledger_id": "usg_e195edf6d03c437891eb942fe9bf2b2a"
+      }
+    }
+  },
+  "prd_id": "PRD-071",
+  "privacy": {
+    "files_scanned": 4,
+    "matches": 0
+  },
+  "provider": {
+    "blocked_calls": 1,
+    "calls": 4,
+    "clean_calls": 1,
+    "cross_chunk_splits": 1,
+    "invalid_authorization": 0,
+    "invalid_requests": 0,
+    "malformed_calls": 1,
+    "stream_blocked_calls": 1
+  },
+  "run_id": "prd071_20260804T120418Z_4a4caa64",
+  "setup": {
+    "provider_key_id": "9f9f4dbf-1926-423d-8b10-bc9d4b84b1e3",
+    "runtime_rule_id": "dlp_9efdaf73883843b1b8148d96d8c4dc2d",
+    "stale_runtime_rules_disabled": 0,
+    "virtual_key_id": "98af4eef-ab36-403b-a3c2-719e61a68289"
+  },
+  "started_at": "2026-08-04T12:04:18Z",
+  "status": "passed"
+}

@@ -1,0 +1,49 @@
+{
+  "admin": {
+    "detail_refresh_passed": true,
+    "output_safety_request_id": "req_61129a9584024677a2bc07ffa9b0d73f",
+    "page_099_visible": true,
+    "page_100_visible": true
+  },
+  "cleanup": {
+    "viewer_active_sessions": 0,
+    "viewer_disabled": true
+  },
+  "console": {
+    "application_error_count": 0,
+    "health_status": 200
+  },
+  "desktop": {
+    "detail_actions_inside_list": true,
+    "list_detail_overlap": false,
+    "viewport": "1280x720"
+  },
+  "evidence_method": "in_app_browser_manual",
+  "mobile": {
+    "document_client_width": 375,
+    "document_scroll_width": 375,
+    "overflow_offender_count": 0,
+    "stream_session_client_width": 320,
+    "stream_session_scroll_width": 320,
+    "viewport": "390x844"
+  },
+  "prd_id": "PRD-071",
+  "privacy": {
+    "dlp_pattern_dom_match_count": 0,
+    "prompt_or_response_dom_match_count": 0
+  },
+  "recorded_on": "2026-08-04",
+  "status": "passed",
+  "viewer": {
+    "backend": {
+      "code": "auth.permission_denied",
+      "request_id": "prd071_viewer_api_forbidden",
+      "status": 403
+    },
+    "navigation_entry_count": 0,
+    "page_099_dom_count": 0,
+    "page_100_dom_count": 0,
+    "query_event_count": 0,
+    "request_log_dom_count": 0
+  }
+}

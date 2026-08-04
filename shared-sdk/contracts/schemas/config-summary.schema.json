@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metahub.local/schemas/config-summary.schema.json",
+  "title": "ConfigSummary",
+  "type": "object",
+  "required": ["service_name", "environment", "loaded_at", "items", "warnings", "request_id"],
+  "properties": {
+    "service_name": { "type": "string" },
+    "environment": { "type": "string", "enum": ["dev", "test", "prod"] },
+    "loaded_at": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "source", "status", "value_preview"],
+        "properties": {
+          "key": { "type": "string" },
+          "source": { "type": "string", "enum": ["default", "file", "env"] },
+          "status": {
+            "type": "string",
+            "enum": ["configured", "missing", "masked", "defaulted"]
+          },
+          "value_preview": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "request_id": { "type": "string" }
+  },
+  "additionalProperties": false
+}

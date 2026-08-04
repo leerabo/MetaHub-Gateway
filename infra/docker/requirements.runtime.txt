@@ -1,0 +1,6 @@
+# MetaHub Python 容器运行时依赖；版本范围保持保守，避免 M0 部署包被不必要锁死。
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+httpx>=0.27,<1.0
+cryptography>=42,<46

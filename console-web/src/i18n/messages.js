@@ -1,0 +1,240 @@
+// i18n 支持语言和默认语言集中定义，前端写入用户偏好时必须与后端 SUPPORTED_LOCALES 保持一致。
+export const DEFAULT_LOCALE = "zh-CN";
+export const SUPPORTED_LOCALES = ["zh-CN", "en-US"];
+
+// 控制台静态文案注册表只承载展示文本，不能把这些文本写入日志 event、error_code 或 Webhook event_type。
+const MESSAGES = {
+  "zh-CN": {
+    "shell.eyebrow": "中国境内企业级 AI Gateway",
+    "shell.title": "MetaHub 控制台",
+    "shell.nav_aria": "控制台导航",
+    "shell.sidebar_title": "治理入口",
+    "shell.active_id": "当前入口",
+    "shell.guest": "未登录",
+    "shell.logout": "登出",
+    "shell.user_menu_aria": "个人菜单",
+    "shell.navigation_failed": "控制台导航操作失败",
+    "shell.session_expires": "Session 到期：{value}",
+    "nav.group.system": "系统",
+    "nav.language-settings": "语言设置",
+    "nav.language-settings.description": "切换控制台中文或英文展示。",
+    "nav.request-explanations": "请求解释中心",
+    "nav.request-explanations.description": "按 request_id 查看单次调用的治理决策与脱敏证据。",
+    "language.title": "语言设置",
+    "language.description": "选择当前账号在本租户控制台中的显示语言。",
+    "language.current": "当前语言",
+    "language.available": "可选语言",
+    "language.save": "保存语言",
+    "language.saving": "保存中",
+    "language.saved": "语言偏好已保存",
+    "language.loading": "正在读取语言偏好。",
+    "language.error": "语言偏好暂不可用",
+    "language.request_id": "request_id：{value}",
+    "language.fallback_note": "缺失翻译会先回退到中文，再回退到文案 key。",
+    "feedback.form.title": "调用反馈",
+    "feedback.form.unavailable": "当前调用不可反馈",
+    "feedback.form.rating": "评分",
+    "feedback.form.accepted": "是否采纳",
+    "feedback.form.tags": "标签",
+    "feedback.form.submit": "提交反馈",
+    "feedback.form.submitting": "提交中",
+    "feedback.form.cancel": "清除",
+    "feedback.form.error": "反馈提交失败",
+    "feedback.form.recorded": "已记录反馈",
+    "feedback.form.model": "模型",
+    "feedback.status.dirty": "存在未提交反馈",
+    "feedback.status.submitting": "反馈提交中",
+    "feedback.status.confirmed": "反馈已确认",
+    "feedback.status.recorded": "反馈已记录",
+    "feedback.status.failed": "反馈提交失败",
+    "feedback.status.cleared": "已清除未提交反馈",
+    "feedback.validation.tags": "最多选择 5 个标签，且正反标签不能同时选择",
+    "feedback.validation.time_pair": "开始时间和结束时间必须同时填写",
+    "feedback.accepted.yes": "已采纳",
+    "feedback.accepted.no": "未采纳",
+    "feedback.tags.none": "无标签",
+    "feedback.tag.accurate": "准确",
+    "feedback.tag.relevant": "相关",
+    "feedback.tag.complete": "完整",
+    "feedback.tag.helpful": "有帮助",
+    "feedback.tag.clear": "清晰",
+    "feedback.tag.inaccurate": "不准确",
+    "feedback.tag.irrelevant": "不相关",
+    "feedback.tag.incomplete": "不完整",
+    "feedback.tag.unsafe": "不安全",
+    "feedback.tag.slow": "响应慢",
+    "feedback.reason.already_recorded": "该调用已记录反馈",
+    "feedback.reason.request_failed": "失败调用不能提交反馈",
+    "feedback.reason.stream_incomplete": "流式调用尚未完成",
+    "feedback.reason.attribution_unavailable": "最终模型归因暂不可用",
+    "feedback.summary.title": "反馈报表",
+    "feedback.summary.tenant_scope": "当前租户",
+    "feedback.summary.pending_scope": "口径待加载",
+    "feedback.summary.model": "模型 ID",
+    "feedback.summary.from": "开始时间（UTC）",
+    "feedback.summary.to": "结束时间（UTC）",
+    "feedback.summary.apply": "查询",
+    "feedback.summary.refresh": "刷新",
+    "feedback.summary.reset": "清空",
+    "feedback.summary.loading": "正在读取当前租户反馈统计",
+    "feedback.summary.error": "反馈报表暂不可用",
+    "feedback.summary.metrics": "租户反馈总计",
+    "feedback.summary.samples": "反馈样本",
+    "feedback.summary.average": "平均评分",
+    "feedback.summary.adoption": "采纳率",
+    "feedback.summary.accepted_count": "已采纳",
+    "feedback.summary.distribution": "评分分布",
+    "feedback.summary.tags": "标签统计",
+    "feedback.summary.no_tags": "当前窗口没有标签",
+    "feedback.summary.models": "按模型反馈统计",
+    "feedback.summary.empty": "当前筛选没有反馈样本",
+    "feedback.summary.prev": "上一页",
+    "feedback.summary.next": "下一页",
+    "error.auth.token_missing.label": "需要登录",
+    "error.auth.permission_denied.label": "权限不足",
+    "error.user_preference.locale_invalid.label": "语言不受支持",
+    "error.user_preference.payload_invalid.label": "偏好请求不合法",
+    "error.user_preference.unavailable.label": "用户偏好暂不可用",
+    "error.infra.validation_failed.label": "请求参数不合法",
+  },
+  "en-US": {
+    "shell.eyebrow": "Enterprise AI Gateway for China",
+    "shell.title": "MetaHub Console",
+    "shell.nav_aria": "Console navigation",
+    "shell.sidebar_title": "Governance",
+    "shell.active_id": "Active",
+    "shell.guest": "Guest",
+    "shell.logout": "Log out",
+    "shell.user_menu_aria": "User menu",
+    "shell.navigation_failed": "Console navigation failed",
+    "shell.session_expires": "Session expires: {value}",
+    "nav.group.system": "System",
+    "nav.language-settings": "Language",
+    "nav.language-settings.description": "Switch the console display language.",
+    "nav.request-explanations": "Request explanations",
+    "nav.request-explanations.description": "Inspect governance decisions and redacted evidence for one request_id.",
+    "language.title": "Language",
+    "language.description": "Choose the display language for your account in this tenant console.",
+    "language.current": "Current language",
+    "language.available": "Available languages",
+    "language.save": "Save language",
+    "language.saving": "Saving",
+    "language.saved": "Language preference saved",
+    "language.loading": "Loading language preference.",
+    "language.error": "Language preference is unavailable",
+    "language.request_id": "request_id: {value}",
+    "language.fallback_note": "Missing translations fall back to Chinese, then to the message key.",
+    "feedback.form.title": "Request feedback",
+    "feedback.form.unavailable": "This request cannot receive feedback",
+    "feedback.form.rating": "Rating",
+    "feedback.form.accepted": "Adoption",
+    "feedback.form.tags": "Tags",
+    "feedback.form.submit": "Submit feedback",
+    "feedback.form.submitting": "Submitting",
+    "feedback.form.cancel": "Clear",
+    "feedback.form.error": "Feedback submission failed",
+    "feedback.form.recorded": "Feedback recorded",
+    "feedback.form.model": "Model",
+    "feedback.status.dirty": "Feedback has not been submitted",
+    "feedback.status.submitting": "Submitting feedback",
+    "feedback.status.confirmed": "Feedback confirmed",
+    "feedback.status.recorded": "Feedback recorded",
+    "feedback.status.failed": "Feedback submission failed",
+    "feedback.status.cleared": "Unsubmitted feedback cleared",
+    "feedback.validation.tags": "Choose no more than 5 tags and do not combine opposite tags",
+    "feedback.validation.time_pair": "From and To must be provided together",
+    "feedback.accepted.yes": "Accepted",
+    "feedback.accepted.no": "Not accepted",
+    "feedback.tags.none": "No tags",
+    "feedback.tag.accurate": "Accurate",
+    "feedback.tag.relevant": "Relevant",
+    "feedback.tag.complete": "Complete",
+    "feedback.tag.helpful": "Helpful",
+    "feedback.tag.clear": "Clear",
+    "feedback.tag.inaccurate": "Inaccurate",
+    "feedback.tag.irrelevant": "Irrelevant",
+    "feedback.tag.incomplete": "Incomplete",
+    "feedback.tag.unsafe": "Unsafe",
+    "feedback.tag.slow": "Slow",
+    "feedback.reason.already_recorded": "Feedback has already been recorded for this request",
+    "feedback.reason.request_failed": "Failed requests cannot receive feedback",
+    "feedback.reason.stream_incomplete": "The streaming request is not complete",
+    "feedback.reason.attribution_unavailable": "Final model attribution is unavailable",
+    "feedback.summary.title": "Feedback report",
+    "feedback.summary.tenant_scope": "Current tenant",
+    "feedback.summary.pending_scope": "Scope pending",
+    "feedback.summary.model": "Model ID",
+    "feedback.summary.from": "From (UTC)",
+    "feedback.summary.to": "To (UTC)",
+    "feedback.summary.apply": "Search",
+    "feedback.summary.refresh": "Refresh",
+    "feedback.summary.reset": "Clear",
+    "feedback.summary.loading": "Loading feedback statistics for this tenant",
+    "feedback.summary.error": "Feedback report is unavailable",
+    "feedback.summary.metrics": "Tenant feedback totals",
+    "feedback.summary.samples": "Feedback samples",
+    "feedback.summary.average": "Average rating",
+    "feedback.summary.adoption": "Adoption rate",
+    "feedback.summary.accepted_count": "Accepted",
+    "feedback.summary.distribution": "Rating distribution",
+    "feedback.summary.tags": "Tag counts",
+    "feedback.summary.no_tags": "No tags in this time window",
+    "feedback.summary.models": "Feedback statistics by model",
+    "feedback.summary.empty": "No feedback matches these filters",
+    "feedback.summary.prev": "Previous",
+    "feedback.summary.next": "Next",
+    "error.auth.token_missing.label": "Sign in required",
+    "error.auth.permission_denied.label": "Permission denied",
+    "error.user_preference.locale_invalid.label": "Unsupported language",
+    "error.user_preference.payload_invalid.label": "Preference request is invalid",
+    "error.user_preference.unavailable.label": "User preferences are unavailable",
+    "error.infra.validation_failed.label": "Request payload is invalid",
+  },
+};
+
+/**
+ * 创建当前页面使用的 i18n 上下文。
+ * fallback 参数只用于展示层兜底，调用方不能把返回文案写入内部 code 字段。
+ */
+export function createI18n(locale = DEFAULT_LOCALE) {
+  const normalized = normalizeLocale(locale);
+  return {
+    locale: normalized,
+    t: (key, params = {}, fallback = "") => translate(normalized, key, params, fallback),
+    errorLabel: (code) => errorLabel(code, normalized),
+  };
+}
+
+/**
+ * 查询静态文案，缺失时按当前语言、默认中文和 fallback 顺序回退。
+ */
+export function translate(locale, key, params = {}, fallback = "") {
+  const normalized = normalizeLocale(locale);
+  const template = MESSAGES[normalized]?.[key] ?? MESSAGES[DEFAULT_LOCALE]?.[key] ?? (fallback || key);
+  return interpolate(template, params);
+}
+
+/**
+ * 返回错误码展示 label，未知错误码回退到稳定英文 code。
+ */
+export function errorLabel(code, locale = DEFAULT_LOCALE) {
+  const key = `error.${code}.label`;
+  const label = translate(locale, key, {}, code);
+  return label === key ? code : label;
+}
+
+/**
+ * 判断并归一化 locale，非法值统一回到中文。
+ */
+export function normalizeLocale(locale) {
+  return SUPPORTED_LOCALES.includes(locale) ? locale : DEFAULT_LOCALE;
+}
+
+/**
+ * 替换文案模板参数，所有值仍需在渲染层进行 HTML 转义。
+ */
+function interpolate(template, params) {
+  return String(template).replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
+  );
+}

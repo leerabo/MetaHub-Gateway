@@ -1,0 +1,64 @@
+import { AuthApiError } from "./auth.js";
+
+/**
+ * 查询当前租户 Provider 健康列表。
+ * 边界：tenant_id 从登录 Token 恢复，调用方不能提交凭据、Header 或任意探测 URL。
+ */
+export async function listProviderHealth({ controlApiUrl, token, filters = {}, signal }) {
+  const url = new URL(`${controlApiUrl}/provider-health`);
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return providerHealthRequest(url.toString(), {
+    signal,
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** 触发一次无客户端参数的安全探测，URL 和 Key 均由后端可信配置读取。 */
+export async function probeProvider({ controlApiUrl, token, providerId, signal }) {
+  return providerHealthRequest(
+    `${controlApiUrl}/providers/${encodeURIComponent(providerId)}/probe`,
+    {
+      method: "POST",
+      signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+  );
+}
+
+/** 把统一错误响应转换为现有控制台 AuthApiError。 */
+async function providerHealthRequest(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "X-Request-ID": `console_provider_health_${Date.now()}`,
+      ...(options.headers ?? {}),
+    },
+  });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    // 统一包装保留 request_id/trace_id，同时拒绝把原始响应对象或请求头传到 UI。
+    throw new AuthApiError({
+      status: response.status,
+      code: payload.code,
+      message: payload.message || `Provider 健康接口返回 ${response.status}`,
+      requestId: payload.request_id || response.headers.get("X-Request-ID") || "-",
+      traceId: payload.trace_id || response.headers.get("X-Trace-ID") || "-",
+      suggestion: payload.suggestion || "",
+      diagnosis: payload.diagnosis ?? null,
+    });
+  }
+  return { state: "ok", ...payload };
+}

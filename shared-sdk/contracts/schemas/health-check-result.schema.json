@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metahub.local/schemas/health-check-result.schema.json",
+  "title": "HealthCheckResult",
+  "type": "object",
+  "required": [
+    "service_name",
+    "status",
+    "live",
+    "ready",
+    "environment",
+    "checks",
+    "version",
+    "build_commit",
+    "build_time",
+    "started_at",
+    "uptime_seconds",
+    "request_id",
+    "trace_id"
+  ],
+  "properties": {
+    "service_name": { "type": "string" },
+    "status": { "type": "string", "enum": ["ok", "degraded", "fail"] },
+    "live": { "type": "boolean" },
+    "ready": { "type": "boolean" },
+    "environment": { "type": "string" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "required", "message"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["ok", "skipped", "fail"] },
+          "required": { "type": "boolean" },
+          "latency_ms": { "type": ["integer", "null"] },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "version": { "type": "string" },
+    "build_commit": { "type": "string" },
+    "build_time": { "type": "string" },
+    "started_at": { "type": "string" },
+    "uptime_seconds": { "type": "number" },
+    "request_id": { "type": "string" },
+    "trace_id": { "type": "string" }
+  },
+  "additionalProperties": false
+}

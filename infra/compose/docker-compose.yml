@@ -1,0 +1,155 @@
+# MetaHub 单机 Compose 编排，默认只启动可运行的 SQLite 持久化 MVP。
+# PostgreSQL、Redis、MinIO 保留在 compose-full profile 中，避免当前 sqlite-only 运行时被错误切到不可用的数据库驱动。
+name: ${METAHUB_COMPOSE_PROJECT:-metahub}
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/gateway:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_gateway.main"]
+    env_file:
+      - .env.compose
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src
+      METAHUB_SERVICE_NAME: metahub-gateway
+    ports:
+      - "${METAHUB_GATEWAY_BIND:-127.0.0.1}:${METAHUB_GATEWAY_PORT:-8000}:8000"
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  control-api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.main"]
+    env_file:
+      - .env.compose
+    environment:
+      # Control 的会话风险人工处置与 Gateway 共用 Redis Store 合同；三个源码根目录必须
+      # 同时存在，否则容器会在导入 metahub_gateway.session_risk 时启动失败。
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: metahub-control-api
+    ports:
+      - "${METAHUB_CONTROL_BIND:-127.0.0.1}:${METAHUB_CONTROL_PORT:-8001}:8001"
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  console:
+    build:
+      context: ../..
+      dockerfile: infra/docker/console.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/console:${METAHUB_IMAGE_TAG:-local}
+    env_file:
+      - .env.compose
+    environment:
+      METAHUB_CONSOLE_PORT: "5173"
+    ports:
+      - "${METAHUB_CONSOLE_BIND:-127.0.0.1}:${METAHUB_CONSOLE_PORT:-5173}:5173"
+    depends_on:
+      gateway:
+        condition: service_started
+      control-api:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["compose-full"]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${METAHUB_REDIS_BIND:-127.0.0.1}:${METAHUB_REDIS_PORT:-6379}:6379"
+    volumes:
+      - metahub-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["compose-full"]
+    environment:
+      POSTGRES_DB: ${METAHUB_POSTGRES_DB:-metahub}
+      POSTGRES_USER: ${METAHUB_POSTGRES_USER:-metahub}
+      POSTGRES_PASSWORD: ${METAHUB_POSTGRES_PASSWORD:?set METAHUB_POSTGRES_PASSWORD in .env.compose}
+    ports:
+      - "${METAHUB_POSTGRES_BIND:-127.0.0.1}:${METAHUB_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - metahub-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2026-07-02T15-40-28Z
+    profiles: ["compose-full"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${METAHUB_MINIO_ACCESS_KEY:?set METAHUB_MINIO_ACCESS_KEY in .env.compose}
+      MINIO_ROOT_PASSWORD: ${METAHUB_MINIO_SECRET_KEY:?set METAHUB_MINIO_SECRET_KEY in .env.compose}
+    ports:
+      - "${METAHUB_MINIO_BIND:-127.0.0.1}:${METAHUB_MINIO_PORT:-9000}:9000"
+      - "${METAHUB_MINIO_CONSOLE_BIND:-127.0.0.1}:${METAHUB_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - metahub-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  metahub-sqlite:
+  metahub-logs:
+  metahub-redis:
+  metahub-postgres:
+  metahub-minio:

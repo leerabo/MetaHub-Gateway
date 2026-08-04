@@ -1,0 +1,33 @@
+{
+  "tenant": {
+    "slug": "default",
+    "name": "MetaHub Default Tenant",
+    "service_mode": "internal_only"
+  },
+  "admin": {
+    "email": "admin@metahub.local",
+    "display_name": "MetaHub Admin",
+    "password": "MetaHubLocal!2026"
+  },
+  "provider": {
+    "provider_code": "local_openai",
+    "name": "Local OpenAI Compatible Endpoint",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_placeholder": "replace-with-local-provider-key"
+  },
+  "model": {
+    "model_alias": "default-chat",
+    "upstream_model_name": "local-chat-model",
+    "provider_model_id": "local-chat-model",
+    "display_name": "Default Chat",
+    "context_window": 8192,
+    "input_price_per_1k": 0,
+    "output_price_per_1k": 0,
+    "currency": "CNY",
+    "price_schema_version": "seed-v1"
+  },
+  "virtual_key": {
+    "name": "Local Development Virtual Key",
+    "plain_value": "mhv_dev_seed_virtual_key"
+  }
+}
