@@ -34,22 +34,22 @@ from metahub_shared.runtime.webhooks import (
     build_webhook_event,
 )
 
-# revision 8 的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
-REVISION_8_HASHES = {
-    "admin": "6826d92219b488c5d6553147fbf59bb5a1ff514e7cb1812be724bb352017a052",
-    "developer": "d1cc4e0cad810c33e57ca2061a2345ef9a7843b26d8af80cb218d4dbf34fae87",
-    "viewer": "519abd5f24d6c0612727f010fc1eae824b8c05ff0b8a4b0ca32f5ee9c2d3ddb5",
+# 当前 revision 9 的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
+REVISION_9_HASHES = {
+    "admin": "e098913e46c2f1512960a9ff91f8aec5f8ccd6267d414404a07c9f591079a319",
+    "developer": "a55457236abcd09c3d42d57f50e636494c5d8ec7ddd92a33f2f94fb95f7ed15f",
+    "viewer": "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9",
     "finance_admin": "96b0c1f87a2e3d47e11b9d54b878d282814af589ddf7672a9d2a68cc1da97114",
-    "security_admin": "6b090e14a83776cb75f9633a8cd49033b4b95fc79f18de6c33fbefd1f6f04ec0",
+    "security_admin": "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6",
     "ops_admin": "6f1fddb0cb1774760bc3efc88193968f364add4e91df1a2490ff6a4104fc154b",
 }
 
 
-def test_file_permissions_are_revision_8_and_role_bounded() -> None:
+def test_file_permissions_are_current_revision_and_role_bounded() -> None:
     """权限主流程：目录、风险级别、默认角色与 canonical hash 必须精确一致。"""
 
-    assert CATALOG_REVISION == 8
-    assert len(PERMISSION_CODES) == 61
+    assert CATALOG_REVISION == 9
+    assert len(PERMISSION_CODES) == 62
     assert PERMISSION_BY_CODE["file.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["file.write"].risk_level == "write"
     for role_code in ("admin", "developer", "viewer", "security_admin"):
@@ -62,7 +62,7 @@ def test_file_permissions_are_revision_8_and_role_bounded() -> None:
     assert {
         role_code: permission_matrix_sha256(permission_codes)
         for role_code, permission_codes in ROLE_GRANTABLE_PERMISSIONS.items()
-    } == REVISION_8_HASHES
+    } == REVISION_9_HASHES
 
 
 def test_auth_package_exports_file_dependencies() -> None:

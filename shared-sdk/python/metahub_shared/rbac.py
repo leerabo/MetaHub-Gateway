@@ -42,9 +42,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 权限目录版本只描述产品级目录结构，不可替代租户角色自身的 permission_revision。
 # PRD-070 新增高危会话读取与处置边界后提升目录版本；认证层会据此发现旧迁移并失败关闭，
 # 不能把 revision 6 的目录静默当成完整权限矩阵。
-# PRD-072 增加文件读写独立权限后提升目录版本；认证层会拒绝仍停留 revision 7 的旧投影，
+# PRD-073 增加文件安全扫描独立权限后提升目录版本；认证层会拒绝仍停留 revision 8 的旧投影，
 # 不能把 Shared 默认矩阵当成运行时回退授权。
-CATALOG_REVISION: Final[int] = 8
+CATALOG_REVISION: Final[int] = 9
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -217,6 +217,15 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "上传当前租户 PDF、DOCX 或 TXT，并执行解析、DLP 预扫描和加密存储。",
         "write",
     ),
+    # 安全扫描会读取认证密文并写入不可变安全事实，必须使用独立命令权限；file.read 只允许
+    # 查看报告，file.write 只允许接收文件，两者都不能隐式获得这项有成本的后端能力。
+    PermissionDefinition(
+        "file.security.scan",
+        "file",
+        "扫描文件 Prompt Injection",
+        "对当前租户文件执行隐藏 Prompt Injection 检测并写入不可变安全报告。",
+        "write",
+    ),
     PermissionDefinition("system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"),
 )
 
@@ -233,11 +242,11 @@ _DEVELOPER = {
     "webhook.manage", "developer_portal.read", "debug_console.use",
     "config.transfer.read", "config.transfer.write", "chat.use",
     "prompt_template.read", "prompt_template.write", "prompt_template.use",
-    "file.read", "file.write",
+    "file.read", "file.write", "file.security.scan",
 }
 _VIEWER = {
     "console.basic.read", "dashboard.read", "chat.use", "prompt_template.use",
-    "file.read", "file.write",
+    "file.read", "file.write", "file.security.scan",
 }
 _FINANCE = {
     "console.basic.read", "dashboard.read", "model.read", "model_price.read", "model_price.write",
@@ -253,7 +262,7 @@ _SECURITY = {
     "policy_template.read", "policy_template.apply",
     "intent_risk.classify",
     "session_risk.read", "session_risk.manage",
-    "file.read",
+    "file.read", "file.security.scan",
 }
 _OPS = {
     "console.basic.read", "dashboard.read", "environment.read", "environment.write", "project.read",
