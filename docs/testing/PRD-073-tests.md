@@ -36,6 +36,7 @@ PRD-073，全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。
 | PRD-072 文件链路冻结回归 | `25 passed`；上传、解析、DLP、权限和导航保持通过 |
 | Console 全量 | `690 passed / 0 failed` |
 | Console lint | `214 files passed` |
+| Node 示例全量 | `33 passed / 0 failed`；在主工作区使用已安装的固定 `openai 6.47.0` 依赖执行 |
 | 目标 Ruff、`py_compile`、中文注释门禁 | `All checks passed / 0 / comment coverage ok` |
 | 正式 Runtime | `status=passed`；六样本、三服务、权限/租户、数据库、清理和 37 个隐私目标 |
 | 应用内 Browser | `status=passed`；1280x720 与 390x844、交互、DOM 隐私和页面错误 0 |
