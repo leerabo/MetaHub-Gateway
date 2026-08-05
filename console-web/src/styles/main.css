@@ -1643,6 +1643,628 @@ h3 {
   }
 }
 
+/* PAGE-103 文件安全报告：左侧 ready 文件与右侧报告共用单层工作面，固定 ID 在窄栏内换行。 */
+.file-security-panel {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.file-security-workspace {
+  min-width: 0;
+  color: #17202a;
+}
+
+.file-security-heading,
+.file-security-section-heading,
+.file-security-report-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.file-security-heading {
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.file-security-heading h2,
+.file-security-section-heading h3,
+.file-security-section-heading h4,
+.file-security-report-heading h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.file-security-section-heading h3,
+.file-security-section-heading h4,
+.file-security-report-heading h3 {
+  font-size: 15px;
+}
+
+.file-security-heading p,
+.file-security-section-heading span,
+.file-security-report-heading span {
+  margin: 4px 0 0;
+  color: #65717d;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.file-security-heading > span {
+  flex: 0 1 auto;
+  max-width: 42%;
+  border: 1px solid #b8c2cc;
+  border-radius: 6px;
+  padding: 4px 9px;
+  color: #46515d;
+  background: #f5f7f9;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid #c7e3d2;
+  border-left: 4px solid #20734a;
+  padding: 9px 18px;
+  color: #205c3e;
+  background: #eef8f2;
+  font-size: 12px;
+}
+
+.file-security-feedback.is-error {
+  border-bottom-color: #efc2c2;
+  border-left-color: #b73737;
+  color: #842d2d;
+  background: #fff2f2;
+}
+
+.file-security-feedback code,
+.file-security-error code,
+.file-security-contract code,
+.file-security-verdict code,
+.file-security-finding-row code {
+  min-width: 0;
+  color: inherit;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-layout {
+  display: grid;
+  grid-template-columns: minmax(238px, 0.34fr) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.file-security-files,
+.file-security-report {
+  min-width: 0;
+  padding: 16px 18px 20px;
+}
+
+.file-security-files {
+  border-right: 1px solid #d8dee6;
+  background: #f8fafb;
+}
+
+.file-security-section-heading > strong {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #bdc7d0;
+  border-radius: 6px;
+  color: #46515d;
+  background: #fff;
+  font-size: 12px;
+}
+
+.file-security-file-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  max-height: 690px;
+  margin-top: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.file-security-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.file-security-pager button {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid #aeb8c3;
+  border-radius: 6px;
+  color: #27313c;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.file-security-pager button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.file-security-file {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  min-height: 74px;
+  border: 1px solid #cfd7df;
+  border-radius: 6px;
+  padding: 10px;
+  color: #26313b;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-security-file:hover {
+  border-color: #7895a6;
+  background: #f3f8fa;
+}
+
+.file-security-file.is-selected {
+  border-color: #126f9a;
+  box-shadow: inset 3px 0 0 #126f9a;
+  background: #edf7fa;
+}
+
+.file-security-file:focus-visible,
+.file-security-commands button:focus-visible {
+  outline: 3px solid rgba(18, 111, 154, 0.26);
+  outline-offset: 2px;
+}
+
+.file-security-file strong,
+.file-security-file span,
+.file-security-file small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-security-file strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.file-security-file span {
+  display: flex;
+  gap: 8px;
+  color: #4f5c68;
+  font-size: 12px;
+}
+
+.file-security-file small {
+  color: #6a7580;
+  font-size: 11px;
+}
+
+.file-security-report-heading {
+  align-items: center;
+  min-height: 42px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e0e5ea;
+}
+
+.file-security-report-heading > div:first-child {
+  min-width: 0;
+}
+
+.file-security-report-heading > div:first-child span {
+  display: block;
+  max-width: 48ch;
+}
+
+.file-security-commands {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.file-security-commands button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 82px;
+  min-height: 38px;
+  border: 1px solid #126f9a;
+  border-radius: 6px;
+  padding: 0 11px;
+  color: #fff;
+  background: #126f9a;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.file-security-commands button[data-file-security-export] {
+  border-color: #6c7883;
+  color: #27313c;
+  background: #fff;
+}
+
+.file-security-commands button > span:first-child {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.file-security-commands button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.file-security-read-only {
+  align-self: center;
+  border: 1px solid #c4ccd4;
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: #596672;
+  background: #f5f7f9;
+  font-size: 12px;
+}
+
+.file-security-empty,
+.file-security-error {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  min-height: 150px;
+  min-width: 0;
+  padding: 18px;
+  color: #63707b;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.file-security-error {
+  margin: 14px 18px 18px;
+  border: 1px solid #efc2c2;
+  border-radius: 6px;
+  color: #842d2d;
+  background: #fff5f5;
+}
+
+.file-security-report-body {
+  min-width: 0;
+  padding-top: 14px;
+}
+
+/* 报告判定与指标保持稳定网格，blocked/failed 使用文字、符号和色调三重语义。 */
+.file-security-verdict {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(130px, auto);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border-left: 4px solid #20734a;
+  padding: 10px 12px;
+  background: #eef8f2;
+}
+
+.file-security-verdict.tone-blocked,
+.file-security-verdict.tone-failed {
+  border-left-color: #b73737;
+  color: #842d2d;
+  background: #fff2f2;
+}
+
+.file-security-verdict > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  background: #20734a;
+  font-weight: 700;
+}
+
+.file-security-verdict.tone-blocked > span:first-child,
+.file-security-verdict.tone-failed > span:first-child {
+  background: #b73737;
+}
+
+.file-security-verdict > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.file-security-verdict strong {
+  font-size: 15px;
+}
+
+.file-security-verdict small {
+  color: inherit;
+  font-size: 12px;
+}
+
+.file-security-verdict code {
+  justify-self: end;
+  max-width: 100%;
+  text-align: right;
+}
+
+.file-security-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  margin-top: 12px;
+  border: 1px solid #d8dee6;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.file-security-metrics > div {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 86px;
+  padding: 11px;
+  border-right: 1px solid #e0e5ea;
+}
+
+.file-security-metrics > div:last-child {
+  border-right: 0;
+}
+
+.file-security-metrics span,
+.file-security-metrics small {
+  color: #65717d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-metrics strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-contract {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  min-width: 0;
+  margin: 12px 0 0;
+  border-top: 1px solid #e0e5ea;
+}
+
+.file-security-contract > div {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e0e5ea;
+}
+
+.file-security-contract dt,
+.file-security-contract dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-contract dt {
+  color: #65717d;
+}
+
+.file-security-findings {
+  min-width: 0;
+  margin-top: 16px;
+}
+
+.file-security-finding-table {
+  min-width: 0;
+  margin-top: 10px;
+  border: 1px solid #d4dbe3;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.file-security-finding-row {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.42fr) minmax(0, 1.3fr) minmax(0, 1.05fr) minmax(0, 0.85fr);
+  min-width: 0;
+  border-bottom: 1px solid #e0e5ea;
+}
+
+.file-security-finding-row:last-child {
+  border-bottom: 0;
+}
+
+.file-security-finding-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px;
+  border-right: 1px solid #e5e9ed;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-security-finding-row > span:last-child {
+  border-right: 0;
+}
+
+.file-security-finding-row.is-head {
+  color: #53606c;
+  background: #f1f4f6;
+  font-weight: 650;
+}
+
+.file-security-finding-row small,
+.file-security-finding-row time {
+  color: #65717d;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.finding-severity {
+  align-self: flex-start;
+  border-left: 3px solid #7b8792;
+  padding-left: 6px;
+}
+
+.finding-severity.tone-high,
+.finding-severity.tone-critical {
+  border-left-color: #b73737;
+  color: #8b2f2f;
+}
+
+.finding-severity.tone-medium {
+  border-left-color: #a26b14;
+  color: #76511a;
+}
+
+.file-security-findings-empty {
+  min-height: 64px;
+  margin-top: 14px;
+  border-top: 1px solid #e0e5ea;
+  padding: 18px;
+  color: #356a4d;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .file-security-heading,
+  .file-security-section-heading,
+  .file-security-report-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .file-security-heading,
+  .file-security-files,
+  .file-security-report {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .file-security-heading > span {
+    align-self: flex-start;
+    max-width: 100%;
+  }
+
+  .file-security-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .file-security-files {
+    border-right: 0;
+    border-bottom: 1px solid #d8dee6;
+  }
+
+  .file-security-file-list {
+    max-height: 270px;
+  }
+
+  .file-security-commands {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .file-security-commands button,
+  .file-security-read-only {
+    width: 100%;
+  }
+
+  .file-security-verdict {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .file-security-verdict code {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    text-align: left;
+  }
+
+  .file-security-metrics,
+  .file-security-contract {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .file-security-metrics > div {
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid #e0e5ea;
+  }
+
+  .file-security-metrics > div:last-child {
+    border-bottom: 0;
+  }
+
+  .file-security-finding-row.is-head {
+    display: none;
+  }
+
+  .file-security-finding-table {
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  .file-security-finding-row:not(.is-head) {
+    grid-template-columns: minmax(0, 1fr);
+    margin-bottom: 9px;
+    border: 1px solid #d4dbe3;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .file-security-finding-row:not(.is-head) > [data-label] {
+    display: grid;
+    grid-template-columns: minmax(102px, 0.7fr) minmax(0, 1.3fr);
+    gap: 8px;
+    border-right: 0;
+    border-bottom: 1px solid #e4e8ec;
+  }
+
+  .file-security-finding-row:not(.is-head) > [data-label]:last-child {
+    border-bottom: 0;
+  }
+
+  .file-security-finding-row:not(.is-head) > [data-label]::before {
+    content: attr(data-label);
+    color: #65717d;
+    font-size: 11px;
+    font-weight: 500;
+  }
+}
+
 /* PAGE-093 企业 Chat：单一工作面，不使用嵌套卡片；正文区域保持有界并允许长内容安全换行。 */
 .enterprise-chat-shell {
   min-width: 0;

@@ -18,6 +18,7 @@ import { renderDlpPanel } from "../dlp/renderDlpPanel.js";
 import { renderIntentSecurity } from "../intent-security/renderIntentSecurity.js";
 import { renderSessionRisks } from "../session-risks/renderSessionRisks.js";
 import { renderFiles } from "../files/renderFiles.js";
+import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -396,6 +397,14 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-101/PAGE-102 只消费 strict 文件摘要；上传、tenant 与正文安全边界由 Control API 再次校验。
       return renderFilesSection(
         options.filesState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "file-security":
+      // PAGE-103 只消费 strict 报告；扫描命令、报告读取、tenant 与模型准入均由后端再次校验。
+      return renderFileSecuritySection(
+        options.fileSecurityState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -796,6 +805,21 @@ function renderFilesSection(state, authContext, consoleShellState, i18n) {
   return html
     ? `
       <section class="panel files-panel" aria-labelledby="files-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/**
+ * 渲染 PAGE-103 文件安全报告工作区。
+ * renderer 会再次核对后端 file-security 导航、实时 file.read 与独立扫描权限；失败时返回零 DOM。
+ */
+function renderFileSecuritySection(state, authContext, consoleShellState, i18n) {
+  const html = renderFileSecurity(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel file-security-panel" aria-labelledby="file-security-title">
         ${html}
       </section>
     `

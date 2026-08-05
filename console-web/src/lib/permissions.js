@@ -48,6 +48,8 @@ export const PERMISSIONS = Object.freeze({
   // PAGE-101/PAGE-102 读取与上传独立授权；write 不隐含 read，按钮投影不能替代 POST 后端校验。
   FILE_READ: "file.read",
   FILE_WRITE: "file.write",
+  // PAGE-103 扫描会写安全事实并消耗离线 OCR 资源，必须与 file.read 组合且不能由角色名推导。
+  FILE_SECURITY_SCAN: "file.security.scan",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

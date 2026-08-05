@@ -37,6 +37,13 @@ import {
   fileReadIdentitySnapshot,
   isFileAbortError,
 } from "../features/files/filePageState.js";
+import { bindFileSecurityInteractions } from "../features/file-security/bindFileSecurity.js";
+import {
+  createFileSecurityPageState,
+  fileSecurityPageOwner,
+  fileSecurityReadIdentitySnapshot,
+  isFileSecurityAbortError,
+} from "../features/file-security/fileSecurityPageState.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -245,6 +252,13 @@ import {
   shouldRetainSessionRiskIdempotencyKey,
 } from "../lib/sessionRisks.js";
 import { listFiles, uploadFile } from "../lib/files.js";
+import {
+  downloadFileSecurityReportCsv,
+  getFileSecurityReport,
+  listFileSecurityFiles,
+  scanFileSecurity,
+  triggerFileSecurityReportCsvDownload,
+} from "../lib/fileSecurity.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -519,6 +533,8 @@ const costAnomalyPageState = createCostAnomalyPageState();
 const sessionRiskPageState = createSessionRiskPageState();
 // PAGE-101/PAGE-102 的文件名、安全摘要、私有 cursor 与上传 ticket 只属于当前授权 owner。
 const filePageState = createFilePageState();
+// PAGE-103 的 ready 文件名、严格报告、扫描/导出 ticket 只属于独立 file-security owner。
+const fileSecurityPageState = createFileSecurityPageState();
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -643,6 +659,10 @@ if (app && globalThis.window) {
         // 文件名、opaque cursor 和在途上传必须在 hash 离页时立即失效，不能等待后端导航返回。
         filePageState.clear();
       }
+      if (nextItemId !== "file-security") {
+        // PAGE-103 文件名、报告与扫描/导出 ticket 在 hash 离页时立即销毁，不能等待导航 API。
+        fileSecurityPageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -671,6 +691,7 @@ if (app && globalThis.window) {
       costAnomalyPageState.clear();
       sessionRiskPageState.clear();
       filePageState.clear();
+      fileSecurityPageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -786,6 +807,7 @@ async function start() {
     clearCostAnomalyStateOnIdentityChange(authSession.context, context);
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
     clearFileStateOnIdentityChange(authSession.context, context);
+    clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -856,6 +878,7 @@ async function performRefresh() {
     clearCostAnomalyStateOnIdentityChange(authSession.context, context);
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
     clearFileStateOnIdentityChange(authSession.context, context);
+    clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1023,6 +1046,10 @@ async function performRefresh() {
   // PAGE-101/PAGE-102 只属于后端确认的 files 导航；离页或撤权立即清除文件名和上传 owner。
   if (consoleShellState?.activeNavigationItemId !== "files") {
     filePageState.clear();
+  }
+  // PAGE-103 只属于后端确认的 file-security 导航；撤权或裁剪必须立即销毁文件名和报告。
+  if (consoleShellState?.activeNavigationItemId !== "file-security") {
+    fileSecurityPageState.clear();
   }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
@@ -1202,6 +1229,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-103 只有后端 file-security 导航与实时 file.read 同时成立时读取 ready 文件和报告。
+  const fileSecurityState = await loadFileSecurityState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   const budgetState = await loadBudgetState(virtualKeysState, consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
@@ -1324,6 +1356,7 @@ async function performRefresh() {
     costAnomaliesState,
     sessionRisksState,
     filesState,
+    fileSecurityState,
     budgetState,
     dlpState,
     webhookState,
@@ -1392,6 +1425,10 @@ if (app && globalThis.window) {
     }
     // 在途上传或浏览器 file input 已选中文件时不重建 DOM，避免丢失不可恢复的用户选择或制造重复 POST。
     if (filePageState.isUploadBusy() || fileUploadHasSelection()) {
+      return;
+    }
+    // 文件安全扫描或认证 CSV 未决时不重建按钮 DOM，避免重复命令和 Blob 生命周期漂移。
+    if (fileSecurityPageState.isActionBusy()) {
       return;
     }
     // 死信重放/归档结果未知时不得由全页定时刷新重建操作 DOM。
@@ -1474,6 +1511,7 @@ function renderLogin(error, requestId) {
   costAnomalyPageState.clear();
   sessionRiskPageState.clear();
   filePageState.clear();
+  fileSecurityPageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1809,6 +1847,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     costAnomalyPageState.clear();
     sessionRiskPageState.clear();
     filePageState.clear();
+    fileSecurityPageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -3975,6 +4014,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindCostAnomalyPageInteractions(consoleShellState);
   bindSessionRiskPageInteractions(consoleShellState);
   bindFilesPageInteractions(consoleShellState);
+  bindFileSecurityPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -4787,6 +4827,185 @@ async function submitFileUpload(file, consoleShellState) {
     }
     filePageState.rejectUpload(operation, error, currentOwner);
     // 解析/DLP/存储失败可能已经提交 failed/blocked owner，结束 POST 后权威刷新处理记录。
+    finishOperation();
+    await refresh();
+  } finally {
+    finishOperation();
+  }
+}
+
+/** 构造 PAGE-103 read owner，并绑定浏览器 hash，避免旧 DOM 离页后发起报告 GET/CSV。 */
+function currentFileSecurityReadOwner(consoleShellState) {
+  const owner = fileSecurityPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "file-security")) return null;
+  return owner;
+}
+
+/** 构造 PAGE-103 read+scan owner；只读身份、撤权或导航漂移固定返回 null。 */
+function currentFileSecurityScanOwner(consoleShellState) {
+  const owner = fileSecurityPageOwner(authSession.context, consoleShellState, { requireScan: true });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "file-security")) return null;
+  return owner;
+}
+
+/** 绑定 ready 文件选择、扫描和 CSV；DOM 可见性不替代每次 owner 与后端 RBAC 校验。 */
+function bindFileSecurityPageInteractions(consoleShellState) {
+  const owner = currentFileSecurityReadOwner(consoleShellState);
+  if (!owner || !fileSecurityPageState.enter(owner)) return;
+  bindFileSecurityInteractions({
+    /** 文件 ID 必须由状态机确认属于当前 strict ready 列表，再触发 owner-bound 报告读取。 */
+    async onSelect(fileId) {
+      if (fileSecurityPageState.selectFile(fileId)) await refresh();
+    },
+    /** 上一页 cursor 只从 PAGE-103 私有栈恢复。 */
+    async onPreviousPage() {
+      if (fileSecurityPageState.previousPage()) await refresh();
+    },
+    /** 下一页只使用最近一次后端响应中保存的签名 cursor。 */
+    async onNextPage() {
+      if (fileSecurityPageState.nextPage()) await refresh();
+    },
+    /** 扫描命令在主应用中再次冻结复合权限 owner。 */
+    async onScan() {
+      await submitFileSecurityScan(consoleShellState);
+    },
+    /** CSV 读取仅要求 read owner，但后端仍逐请求复核租户与 file.read。 */
+    async onExport() {
+      await exportFileSecurityReport(consoleShellState);
+    },
+  });
+}
+
+/**
+ * 提交一次 PAGE-103 安全扫描。
+ * ticket 同时绑定 tenant、用户、Session、权限 revision/fingerprint、导航与选中文件。
+ */
+async function submitFileSecurityScan(consoleShellState) {
+  const token = authSession.token;
+  const owner = currentFileSecurityScanOwner(consoleShellState);
+  // Token 或复合权限 owner 缺失都先销毁报告，不能仅依赖扫描按钮隐藏。
+  if (!token || !owner) {
+    fileSecurityPageState.clear();
+    if (!token) renderLogin();
+    return;
+  }
+  const operation = fileSecurityPageState.beginScanOperation(owner);
+  if (!operation) return;
+  let operationFinished = false;
+  const finishOperation = () => {
+    if (operationFinished) return;
+    operationFinished = true;
+    fileSecurityPageState.finishScanOperation(operation);
+  };
+  try {
+    const result = await scanFileSecurity({
+      controlApiUrl,
+      token,
+      fileId: operation.fileId,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentFileSecurityScanOwner(consoleShellState);
+    if (!fileSecurityPageState.acceptScan(operation, result, currentOwner)) return;
+    finishOperation();
+    await refresh();
+  } catch (error) {
+    const currentOwner = currentFileSecurityScanOwner(consoleShellState);
+    if (
+      !fileSecurityPageState.isScanOperationCurrent(operation, currentOwner)
+      || isFileSecurityAbortError(error)
+    ) return;
+    // 401 是强认证边界，必须在显示登录页前销毁当前 tenant 的文件名和安全事实。
+    if (error instanceof AuthApiError && error.status === 401) {
+      fileSecurityPageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return;
+    }
+    if (
+      error instanceof AuthApiError
+      && error.status === 403
+      && error.code === "auth.permission_denied"
+    ) {
+      // 撤权响应先销毁旧报告和文件名，再重读 /auth/me 与后端导航；业务阻断不能走该分支。
+      fileSecurityPageState.clear();
+      finishOperation();
+      await refresh();
+      return;
+    }
+    fileSecurityPageState.rejectScan(operation, error, currentOwner);
+    finishOperation();
+    await refresh();
+  } finally {
+    finishOperation();
+  }
+}
+
+/**
+ * 下载当前报告 CSV，并在同一调用栈内创建和 revoke Object URL。
+ * Blob 不进入状态机；下载前后都核对 read owner、选中文件与 generation。
+ */
+async function exportFileSecurityReport(consoleShellState) {
+  const token = authSession.token;
+  const owner = currentFileSecurityReadOwner(consoleShellState);
+  // CSV 命令必须绑定当前 read owner；缺失时即使旧 DOM 仍存在也不能发请求。
+  if (!token || !owner) {
+    // Token 或 read owner 不完整时立即失效页面；不能仅依赖 CSV 按钮是否存在。
+    fileSecurityPageState.clear();
+    // 只有 Token 缺失才切换登录页，撤权仍交给后端导航刷新收口。
+    if (!token) renderLogin();
+    return;
+  }
+  const operation = fileSecurityPageState.beginExportOperation(owner);
+  if (!operation) return;
+  let operationFinished = false;
+  // 单一收口函数避免成功、异常和 finally 三条路径重复结束同一导出 ticket。
+  const finishOperation = () => {
+    if (operationFinished) return;
+    operationFinished = true;
+    fileSecurityPageState.finishExportOperation(operation);
+  };
+  try {
+    const result = await downloadFileSecurityReportCsv({
+      controlApiUrl,
+      token,
+      fileId: operation.fileId,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentFileSecurityReadOwner(consoleShellState);
+    if (!fileSecurityPageState.isExportOperationCurrent(operation, currentOwner)) return;
+    // trigger 内部 finally 会在 click 成功或失败后立即 revoke；调用方绝不保存 Blob URL。
+    triggerFileSecurityReportCsvDownload(result);
+    if (!fileSecurityPageState.acceptExport(operation, result, currentOwner)) return;
+    finishOperation();
+    await refresh();
+  } catch (error) {
+    const currentOwner = currentFileSecurityReadOwner(consoleShellState);
+    if (
+      !fileSecurityPageState.isExportOperationCurrent(operation, currentOwner)
+      || isFileSecurityAbortError(error)
+    ) return;
+    // CSV 的 401 与 JSON 报告使用相同强认证清理边界。
+    if (error instanceof AuthApiError && error.status === 401) {
+      fileSecurityPageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return;
+    }
+    if (
+      error instanceof AuthApiError
+      && error.status === 403
+      && error.code === "auth.permission_denied"
+    ) {
+      fileSecurityPageState.clear();
+      finishOperation();
+      await refresh();
+      return;
+    }
+    fileSecurityPageState.rejectExport(operation, error, currentOwner);
     finishOperation();
     await refresh();
   } finally {
@@ -6737,6 +6956,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "files") {
     // 导航偏好写入前取消文件 GET/POST 并销毁文件名与 cursor，迟到响应不得落入目标页面。
     filePageState.clear();
+  }
+  if (itemId !== "file-security") {
+    // 导航写入前取消 PAGE-103 GET/POST/CSV 并销毁文件名与报告，迟到响应不得跨页面落地。
+    fileSecurityPageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -11459,6 +11682,90 @@ async function loadFilesState(consoleShellState, refreshId) {
     filePageState.finishListOperation(operation);
   }
 }
+
+/**
+ * 只在后端授权 file-security 导航与实时 file.read 同时成立时读取 ready 文件及当前报告。
+ * 两段 GET 共用一个 owner/generation/Abort ticket，其他页面不会后台预取文件名或安全事实。
+ */
+async function loadFileSecurityState(consoleShellState, refreshId) {
+  const owner = currentFileSecurityReadOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !fileSecurityPageState.enter(owner)) return null;
+  const operation = fileSecurityPageState.beginLoadOperation(owner, refreshId);
+  if (!operation) return null;
+  let filesAccepted = false;
+  try {
+    const filesResult = await listFileSecurityFiles({
+      controlApiUrl,
+      token: authSession.token,
+      ...fileSecurityPageState.query(),
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentFileSecurityReadOwner(consoleShellState);
+    if (!fileSecurityPageState.acceptFiles(operation, filesResult, currentOwner, refreshId)) return null;
+    filesAccepted = true;
+    const fileId = fileSecurityPageState.selectedFile();
+    if (!fileId) return fileSecurityPageState.snapshot();
+    try {
+      const reportResult = await getFileSecurityReport({
+        controlApiUrl,
+        token: authSession.token,
+        fileId,
+        signal: operation.controller.signal,
+      });
+      const reportOwner = currentFileSecurityReadOwner(consoleShellState);
+      if (!fileSecurityPageState.acceptReport(operation, reportResult, reportOwner, refreshId)) return null;
+    } catch (error) {
+      const reportOwner = currentFileSecurityReadOwner(consoleShellState);
+      if (
+        !fileSecurityPageState.isLoadOperationCurrent(operation, reportOwner, refreshId)
+        || isFileSecurityAbortError(error)
+      ) return null;
+      if (
+        error instanceof AuthApiError
+        && error.status === 404
+        && error.code === "file.security_report_not_found"
+      ) {
+        fileSecurityPageState.acceptReportNotFound(operation, reportOwner, refreshId);
+        return fileSecurityPageState.snapshot();
+      }
+      // 其他报告异常交给外层统一处理 401/403 与固定页面错误。
+      throw error;
+    }
+    return fileSecurityPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentFileSecurityReadOwner(consoleShellState);
+    if (
+      !fileSecurityPageState.isLoadOperationCurrent(operation, currentOwner, refreshId)
+      || isFileSecurityAbortError(error)
+    ) return null;
+    // 顺序 GET 任一阶段确认 Session 失效，都必须清理全部 PAGE-103 owner 事实。
+    if (error instanceof AuthApiError && error.status === 401) {
+      fileSecurityPageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    if (
+      error instanceof AuthApiError
+      && error.status === 403
+      && error.code === "auth.permission_denied"
+    ) {
+      // GET 撤权先销毁文件名与报告，再异步重读授权和导航，避免当前刷新栈递归。
+      fileSecurityPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    if (filesAccepted) {
+      fileSecurityPageState.rejectReport(operation, error, currentOwner, refreshId);
+    } else {
+      fileSecurityPageState.rejectLoad(operation, error, currentOwner, refreshId);
+    }
+    return fileSecurityPageState.snapshot();
+  } finally {
+    fileSecurityPageState.finishLoadOperation(operation);
+  }
+}
 /**
  * 清除预算页会话内快照。
  *
@@ -12443,6 +12750,16 @@ function clearSessionRiskStateOnIdentityChange(previous, current) {
 function clearFileStateOnIdentityChange(previous, current) {
   if (fileReadIdentitySnapshot(previous) !== fileReadIdentitySnapshot(current)) {
     filePageState.clear();
+  }
+}
+
+/**
+ * tenant、用户、Session、权限 revision 或授权指纹变化时销毁 PAGE-103 文件名、报告和命令。
+ * file.read 被撤销时 identity 收敛为空；file.security.scan 变化也由授权指纹触发 owner 重建。
+ */
+function clearFileSecurityStateOnIdentityChange(previous, current) {
+  if (fileSecurityReadIdentitySnapshot(previous) !== fileSecurityReadIdentitySnapshot(current)) {
+    fileSecurityPageState.clear();
   }
 }
 /**
