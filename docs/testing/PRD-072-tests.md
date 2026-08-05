@@ -121,9 +121,13 @@ DLP 规则和活动 Session 均已禁用/撤销。运行库中的 UploadedFile/F
   `METAHUB_PRD072_ADMIN_PASSWORD`，读取后立即从进程环境移除且配置 repr 隐藏。只复跑验收器合同，
   结果 `6 passed`，正式 Runtime JSON 和既有运行事实不受影响。
 - Python `compileall` 通过，最终中文注释门禁返回 `comment coverage ok`。推荐 Python 环境未内置 Ruff，
-  因此使用独立工具 `C:\Users\rabol\AppData\Local\hermes\hermes-agent\venv\Scripts\ruff.exe`；
-  PRD-072 全部新增 Python 文件复核结果为 `All checks passed!`。该检查只覆盖本条新增文件，不把历史文件的
-  既有行宽债务误记为 PRD-072 失败，也没有访问 `D:\MetaHub` 之外的项目数据或临时目录。
+  因此本条不把 Ruff 记为正式通过项，也不调用工作区外工具补写结果；语法、注释和直接影响测试均在
+  `D:\MetaHub` 内完成。
+- 随机临时密码、关闭 `repr`、真实清理计数及 HTTP 异常路径 `finally` 清理补修后，执行一次既定的
+  224 节点定向回归，真实结果为 `215 passed / 9 failed`，JUnit 证据为
+  `.tmp/prd072-targeted-rerun-20260805.xml`。九项失败均位于旧迁移版本冻结断言、历史 FinOps spool
+  校验顺序或 PRD-069 未配置输出安全测试桩，不经过本次 PRD-072 验收器补修路径，故没有为这些历史
+  节点改写产品代码或重复整套测试。随后只复验本次新增的三个补修节点，结果为 `3 passed`。
 - 开发库为 `64/0064`，`integrity_check=ok`、外键违规 0；正式 Runtime/Browser JSON 均为 `status=passed`。
 - 提交前只读健康复核为 Gateway `/health` 200、Control `/health` 200、Console `/` 200；随后只停止本次验收的
   三个服务及其启动包装进程，`5173/8000/8001` 监听数为 0。进程释放后对 `.tmp/prd072-live` 的 5 份日志执行
