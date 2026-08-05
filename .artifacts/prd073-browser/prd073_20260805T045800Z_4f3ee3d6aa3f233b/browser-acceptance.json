@@ -1,0 +1,68 @@
+{
+  "schema": "metahub.prd073.browser-acceptance.v1",
+  "run_id": "prd073-browser-4f3ee3d6aa3f233b",
+  "completed_at": "2026-08-05T05:26:01.050Z",
+  "url": "http://localhost:5173/#file-security",
+  "viewports": {
+    "desktop_1280x720": {
+      "clippedInteractiveCount": 0,
+      "document": {
+        "clientWidth": 1265,
+        "scrollHeight": 1299,
+        "scrollWidth": 1265
+      },
+      "headingCount": 14,
+      "horizontalOverflow": false,
+      "securityTables": 1,
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "mobile_390x844": {
+      "clippedInteractiveCount": 0,
+      "document": {
+        "clientWidth": 375,
+        "scrollHeight": 6101,
+        "scrollWidth": 375
+      },
+      "horizontalOverflow": false,
+      "selectedOptions": 1,
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "visibleButtons": 69
+    }
+  },
+  "interactions": {
+    "login": "passed",
+    "blocked_report_rendered": true,
+    "selected_file": "ocr-4f3ee3d6aa3f233b.docx",
+    "selection_preserved_after_scan": true,
+    "coverage_status": "complete",
+    "ocr_status": "completed",
+    "ocr_engine_version": "rapidocr-onnxruntime-1.4.4",
+    "finding_count": 2,
+    "csv_ui_status": "file.security_report_exported",
+    "csv_request_id_visible": true
+  },
+  "security": {
+    "csvRequestIdVisible": true,
+    "csvSuccessVisible": true,
+    "currentUrlContainsFilename": false,
+    "datasetContainsFilename": false,
+    "evidenceFingerprintInDom": false,
+    "objectKeyInDom": false,
+    "promptCanaryInDom": false,
+    "reportHashInDom": false,
+    "retainedDownloadAnchorCount": 0
+  },
+  "console_warning_or_error_count": 0,
+  "screenshots": [
+    "desktop-1280x720.png",
+    "mobile-390x844.png",
+    "mobile-report-390x844.png"
+  ],
+  "status": "passed"
+}

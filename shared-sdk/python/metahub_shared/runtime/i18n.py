@@ -662,6 +662,60 @@ I18N_MESSAGES: tuple[I18nMessage, ...] = (
     I18nMessage("error.file.integrity_failed.label", "en-US", "File integrity failed", "errors"),
     I18nMessage("error.file.not_found.label", "zh-CN", "文件不存在", "errors"),
     I18nMessage("error.file.not_found.label", "en-US", "File not found", "errors"),
+    I18nMessage(
+        "error.file.security_report_not_found.label",
+        "zh-CN",
+        "文件安全报告不存在",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.security_report_not_found.label",
+        "en-US",
+        "File security report not found",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.security_not_ready.label",
+        "zh-CN",
+        "文件尚不可安全扫描",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.security_not_ready.label",
+        "en-US",
+        "File not ready for security scan",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.security_scan_busy.label", "zh-CN", "文件安全扫描繁忙", "errors"
+    ),
+    I18nMessage(
+        "error.file.security_scan_busy.label", "en-US", "File security scan busy", "errors"
+    ),
+    I18nMessage(
+        "error.file.security_scan_unavailable.label",
+        "zh-CN",
+        "文件安全扫描暂不可用",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.security_scan_unavailable.label",
+        "en-US",
+        "File security scan unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.model_access_blocked.label",
+        "zh-CN",
+        "文件模型准入已阻断",
+        "errors",
+    ),
+    I18nMessage(
+        "error.file.model_access_blocked.label",
+        "en-US",
+        "File model access blocked",
+        "errors",
+    ),
 )
 MESSAGE_INDEX = {(message.locale, message.key): message.text for message in I18N_MESSAGES}
 

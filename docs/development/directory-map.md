@@ -1501,10 +1501,56 @@ Browser 双视口均已通过。Excel 多表交叉确认的下一条未完成项
   `SHA256SUMS.txt` 及桌面/移动截图；抽取正文 canary、对象键、规则内容和凭据均未进入 DOM 或证据。
 
 PRD-072 的 0064、相关分层回归、中文注释、真实三服务/API、密文/隐私和 Browser 双视口均已通过。
-Excel 的总表、M2/M3 交付、页面、API、数据对象、Webhook 和验收用例共同确认下一条未完成项为
-`PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`；对应 PAGE-103、
-`POST /files/{id}/security-scan`、FileSecurityFinding、`file.prompt_injection_detected` 和 TC-0145/0146。
-该状态只代表 PRD-072 完成；`all_108_prds_complete=false`。
+PRD-072 完成时，Excel 总表、M2/M3 交付、页面、API、数据对象、Webhook 和验收用例共同确认其
+下一项为 `PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`；对应
+PAGE-103、`POST /files/{id}/security-scan`、FileSecurityFinding、
+`file.prompt_injection_detected` 和 TC-0145/0146。PRD-073 的实现与安全终审修复现已落地；
+全部 108 条总体目标仍为 `all_108_prds_complete=false`。
+
+## PRD-073 隐藏 Prompt Injection 检测目录
+
+- `shared-sdk/python/metahub_shared/file_security/`：冻结安全报告/发现合同、可见 Prompt 规则、DOCX
+  `w:vanish`/颜色/字号/嵌入对象检测、PDF 文本渲染模式/OCG/附件检测、候选图片提取、有界离线 OCR、
+  PRD-072 认证持久抽取正文的模型语义扫描、canonical report SHA-256、HMAC evidence 和动态模型
+  上下文边界；原文件结构操作数不能替代 `trusted_extracted_text`。
+- `control-plane-api/src/metahub_control/file_security/`：提供
+  `POST /files/{id}/security-scan`、`GET /files/{id}/security-report` 和 CSV 下载；扫描前与事务内执行
+  `file.read + file.security.scan` 双权限和 tenant owner 复核；同一个短 `BEGIN IMMEDIATE` 权限快照
+  读取并验真原件与抽取 Blob，报告读取只要求 `file.read`。
+- `shared-sdk/python/metahub_shared/runtime/{config,errors,error_diagnosis,i18n,webhooks}.py`：增加扫描/OCR
+  部署上限、统一错误与中文/英文展示，并冻结 `file.prompt_injection_detected` 七字段 exact-key payload。
+- `infra/migrations/0065_file_prompt_injection_detection.sql/.down.sql`：增加 FileSecurityScan、
+  FileSecurityFinding、FileSecurityEvent 三张 tenant-qualified append-only 表、失败 attempt/权威结果索引、
+  owner/计数/不可变/down guard；新增 `file.security.scan` 并把 RBAC catalog 升至 revision 9。
+- `console-web/src/features/file-security/` 与 `src/lib/fileSecurity.js`：实现 PAGE-103 文件选择、扫描、
+  报告、风险指标、发现表和 CSV；私有 cursor、owner/generation/Abort、列表重排和权限漂移共同阻止
+  迟到响应或旧身份数据写回。
+- `shared-sdk/python/tests/test_prd073_*.py`、`control-plane-api/tests/**/*prd073*.py` 和
+  `console-web/tests/unit/{fileSecurity,prd073BrowserAcceptance}.test.mjs`：覆盖检测器、配置、迁移、API、
+  权限/租户、Webhook、模型准入、PDF `ToUnicode/CMap` 语义绕过、FindingCollector 饱和优先级、
+  strict DTO、DOM 隐私和双视口布局。
+- `scripts/acceptance/prd073-runtime-acceptance.py`：只访问工作区 `.tmp` 隔离数据库/对象目录和固定回环
+  三服务，真实验证 clean、可见/隐藏/OCR 注入、字体映射 PDF、只读 403、跨租户 404、CSV、模型
+  准入、完整性和隐私；管理员密码只从环境读取一次，临时用户和 Session 在失败路径也通过 finally
+  收敛。
+- `scripts/acceptance/tests/test_prd073_runtime_acceptance.py`：冻结工作区路径、回环 URL、密码移除、
+  真实 DOCX/PDF/PNG/CMap 样本、失败清理与证据脱敏，不连接任何服务；最终计数见测试记录。
+- `docs/prd/PRD-073-hidden-prompt-injection-detection.md`、`docs/api/file-security.md` 与
+  `docs/testing/PRD-073-tests.md`：分别保存冻结设计及两轮自审、公开 API/Webhook 合同和最终验收记录。
+- `.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/`：保存最终六样本脱敏
+  Runtime JSON 与 SHA-256；数据库、Blob、文件名、Prompt/OCR、密码和 Session Token 不进入制品。
+- `.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b/`：保存最终 Browser JSON、
+  `SHA256SUMS.txt` 和桌面/移动截图；Prompt、对象键、report SHA、evidence fingerprint 与文件名
+  URL/dataset 的 DOM 命中均为 0。
+
+PRD-073 的实现和实现后安全终审修复均已落地：Shared 强制扫描 PRD-072 持久抽取正文以关闭 PDF
+字体 CMap 语义绕过，Control 在同一权限快照读取两份 owner-bound Blob，FindingCollector 饱和后
+仍保留 Prompt、可信正文格式控制与 coverage。最终 Python 分层 `71 passed`、Runtime 合同
+`9 passed`、Console 全量 `690 passed`、lint `214 files passed`、开发库 `65/0065`、三服务 HTTP 200
+及最终制品哈希均已写入测试记录，PRD-073 已完成。Excel 多表交叉确认其后的下一项为
+`PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`，对应 PAGE-104、
+BatchJob/BatchTask、三个 BatchJob API、`batch_job.created/completed` 和 TC-0147/0148。
+全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。
 
 ## MVP 非目标
 

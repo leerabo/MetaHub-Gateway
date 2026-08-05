@@ -649,6 +649,59 @@ OR NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT,'file_security_event_owner_mismatch'); END;
 
+-- SQLite 在 recursive_triggers=OFF 时不会为 REPLACE 的隐式 DELETE 调用删除触发器；
+-- 因此必须在 INSERT 阶段枚举所有物理/逻辑唯一键，先于冲突处理拒绝覆盖既有扫描事实。
+CREATE TRIGGER trg_file_security_scans_conflict_insert_prd073
+BEFORE INSERT ON file_security_scans FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1 FROM file_security_scans current
+  WHERE current.scan_id=NEW.scan_id
+     OR (current.tenant_id=NEW.tenant_id AND current.scan_id=NEW.scan_id)
+     OR (current.tenant_id=NEW.tenant_id AND current.scan_id=NEW.scan_id
+         AND current.file_id=NEW.file_id)
+     OR (current.tenant_id=NEW.tenant_id AND current.file_id=NEW.file_id
+         AND current.detector_version=NEW.detector_version
+         AND current.attempt_no=NEW.attempt_no)
+     OR (NEW.status IN ('passed','blocked')
+         AND current.status IN ('passed','blocked')
+         AND current.tenant_id=NEW.tenant_id AND current.file_id=NEW.file_id
+         AND current.content_fingerprint=NEW.content_fingerprint
+         AND current.extract_fingerprint=NEW.extract_fingerprint
+         AND current.detector_version=NEW.detector_version)
+     OR (NEW.rowid!=-1 AND current.rowid=NEW.rowid)
+)
+BEGIN SELECT RAISE(ABORT,'file_security_scan_immutable'); END;
+
+-- Finding 的 location_index 允许 NULL；这里用 IS 实现 NULL-safe 比较，确保文档级命中也不能重复或被覆盖。
+CREATE TRIGGER trg_file_security_findings_conflict_insert_prd073
+BEFORE INSERT ON file_security_findings FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1 FROM file_security_findings current
+  WHERE current.finding_id=NEW.finding_id
+     OR (current.tenant_id=NEW.tenant_id AND current.scan_id=NEW.scan_id
+         AND current.detector_code=NEW.detector_code
+         AND current.source_kind=NEW.source_kind
+         AND current.location_kind=NEW.location_kind
+         AND current.location_index IS NEW.location_index
+         AND current.evidence_fingerprint=NEW.evidence_fingerprint)
+     OR (NEW.rowid!=-1 AND current.rowid=NEW.rowid)
+)
+BEGIN SELECT RAISE(ABORT,'file_security_finding_immutable'); END;
+
+-- Webhook 安全事件同样在 INSERT 前封死主键、租户复合键、扫描幂等键和显式 rowid 冲突。
+CREATE TRIGGER trg_file_security_events_conflict_insert_prd073
+BEFORE INSERT ON file_security_events FOR EACH ROW
+WHEN EXISTS (
+  SELECT 1 FROM file_security_events current
+  WHERE current.file_security_event_id=NEW.file_security_event_id
+     OR (current.tenant_id=NEW.tenant_id
+         AND current.file_security_event_id=NEW.file_security_event_id)
+     OR (current.tenant_id=NEW.tenant_id AND current.scan_id=NEW.scan_id
+         AND current.event_type=NEW.event_type)
+     OR (NEW.rowid!=-1 AND current.rowid=NEW.rowid)
+)
+BEGIN SELECT RAISE(ABORT,'file_security_event_immutable'); END;
+
 -- 三类安全事实全部 append-only；更新、删除或负 rowid 会破坏报告 hash 和 Webhook 可追踪性。
 CREATE TRIGGER trg_file_security_scans_update_prd073
 BEFORE UPDATE ON file_security_scans FOR EACH ROW
@@ -701,6 +754,12 @@ SELECT
   + CASE WHEN (SELECT COUNT(*) FROM rbac_role_permission_templates
       WHERE permission_code='file.security.scan' AND default_granted=1)=4
     THEN 0 ELSE 1 END
+  + CASE WHEN (SELECT COUNT(*) FROM sqlite_schema
+      WHERE type='trigger' AND name IN (
+        'trg_file_security_scans_conflict_insert_prd073',
+        'trg_file_security_findings_conflict_insert_prd073',
+        'trg_file_security_events_conflict_insert_prd073'
+      ))=3 THEN 0 ELSE 1 END
   + (SELECT COUNT(*) FROM pragma_foreign_key_check)
   + (SELECT COUNT(*) FROM pragma_integrity_check WHERE integrity_check!='ok');
 DROP TABLE prd073_up_final_guard;

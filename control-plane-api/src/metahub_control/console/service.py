@@ -77,6 +77,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "output-safety": "console.page_viewed",
     # PAGE-101/102 访问事件不携带文件名、文件 ID、DLP 命中、Token 数或处理结果。
     "files": "console.page_viewed",
+    # PAGE-103 访问事件只证明页面被打开，文件 ID、报告、finding 和扫描结果均不得进入载荷。
+    "file-security": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -555,6 +557,17 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "上传文档并查看当前租户的文本抽取、安全预扫描与 Token 估算结果。",
         "上传 TXT、DOCX 或 PDF 后，可在此查看处理状态与安全摘要。",
         120,
+    ),
+    NavigationDefinition(
+        "file-security",
+        "文件安全报告",
+        "安全与治理",
+        "file-security",
+        # 报告读取以 file.read 为唯一导航门槛；扫描是独立写命令，不能裁掉只读审查入口。
+        ("file.read",),
+        "查看当前租户文件的隐藏 Prompt Injection 检测结果并按权限发起扫描。",
+        "先上传并解析文件，再在此执行安全扫描或查看已有报告。",
+        121,
     ),
     NavigationDefinition(
         "debug-console",

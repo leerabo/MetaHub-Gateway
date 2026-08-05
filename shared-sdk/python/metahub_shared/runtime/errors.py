@@ -2139,6 +2139,38 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Refresh the current tenant file list and select an existing file.",
         owner="file",
     ),
+    "file.security_report_not_found": ErrorSpec(
+        404,
+        "File security report was not found.",
+        "Run a security scan for this file before requesting its report.",
+        owner="file_security",
+    ),
+    "file.security_not_ready": ErrorSpec(
+        409,
+        "File is not ready for security scanning.",
+        "Wait for a ready file that was not blocked by DLP, then retry.",
+        owner="file_security",
+    ),
+    "file.security_scan_busy": ErrorSpec(
+        429,
+        "File security scanning capacity is temporarily full.",
+        "Retry after current file security scans complete.",
+        retryable=True,
+        owner="file_security",
+    ),
+    "file.security_scan_unavailable": ErrorSpec(
+        503,
+        "File security scanning is temporarily unavailable.",
+        "Check detector, OCR, database, encryption, and object storage readiness before retrying.",
+        retryable=True,
+        owner="file_security",
+    ),
+    "file.model_access_blocked": ErrorSpec(
+        403,
+        "File is blocked from model context.",
+        "Review the current security report and use only a passed file with complete coverage.",
+        owner="file_security",
+    ),
     "policy.payload_invalid": ErrorSpec(
         422,
         "Policy payload is invalid.",

@@ -82,6 +82,8 @@ WEBHOOK_EVENT_TYPES = {
     # 文件事件只外发处理状态与安全计数，文件名、正文、对象键、hash 和规则 ID 永不进入事件。
     "file.uploaded",
     "file.scanned",
+    # 文件注入事件只外发报告计数和风险，不包含文件名、finding 证据、OCR 文本或报告哈希。
+    "file.prompt_injection_detected",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -287,6 +289,9 @@ def build_webhook_event(
     elif event_type in {"file.uploaded", "file.scanned"}:
         # PRD-072 两个阶段只接受 UploadedFile/FileExtract 的固定安全投影。
         _validate_file_event_payload(event_type, safe_payload)
+    elif event_type == "file.prompt_injection_detected":
+        # PRD-073 只接受不可变安全报告可反向证明的七字段 blocked 摘要。
+        _validate_file_prompt_injection_payload(safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -322,6 +327,7 @@ def build_webhook_event(
         "security.output_blocked",
         "file.uploaded",
         "file.scanned",
+        "file.prompt_injection_detected",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -522,6 +528,18 @@ def build_webhook_event(
         # 文件事件必须绑定同一个 file owner、可信 Session actor、原请求链路和 source event 秒。
         _validate_file_event_envelope(
             event_type,
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == "file.prompt_injection_detected":
+        # 安全事件信封绑定 fsev_ source row、Session actor、file owner 和原扫描链路。
+        _validate_file_prompt_injection_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1261,6 +1279,64 @@ def _validate_file_event_envelope(
         or _to_iso(occurred_at) != payload[time_field]
     ):
         # 任一 owner、actor、链路或 source event 时间漂移都在签名前失败关闭。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_file_prompt_injection_payload(payload: dict[str, Any]) -> None:
+    """校验文件 Prompt Injection 事件的七字段 exact-key 安全摘要。"""
+
+    expected = {
+        "scan_id",
+        "file_id",
+        "risk_level",
+        "finding_count",
+        "high_finding_count",
+        "model_access_status",
+        "detector_version",
+    }
+    if set(payload) != expected:
+        # exact-set 阻止文件名、finding ID、页码、OCR 状态或报告哈希被未来调用方意外外发。
+        raise ValueError("webhook.payload_invalid")
+    finding_count = payload["finding_count"]
+    high_count = payload["high_finding_count"]
+    if (
+        not _is_prefixed_lower_hex_id(payload["scan_id"], prefix="fscn_")
+        or not _is_prefixed_lower_hex_id(payload["file_id"], prefix="file_")
+        or payload["risk_level"] not in {"high", "critical"}
+        or type(finding_count) is not int
+        or not 1 <= finding_count <= 256
+        or type(high_count) is not int
+        or not 1 <= high_count <= finding_count
+        or payload["model_access_status"] != "blocked"
+        or payload["detector_version"] != "file-security-detector-v1"
+    ):
+        # bool 不能冒充计数；只有真实高风险 blocked 报告才具备该事件语义。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_file_prompt_injection_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把安全摘要绑定到持久 fsev_、tenant/actor/file 和原扫描 request/trace。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="fsev_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != payload["file_id"]
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or not _is_bounded_safe_text(trace_id, maximum=128)
+        or occurred_at.tzinfo is None
+    ):
+        # payload 不复制 request/trace/time；数据库 source trigger 进一步证明它们与 Scan 完全一致。
         raise ValueError("webhook.payload_invalid")
 
 

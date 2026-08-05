@@ -11700,6 +11700,8 @@ async function loadFileSecurityState(consoleShellState, refreshId) {
       ...fileSecurityPageState.query(),
       signal: operation.controller.signal,
     });
+    // 新一轮全页刷新可能尚未执行到 PAGE-103；旧响应必须先核对全局代次，不能短暂覆盖新 owner 的页面事实。
+    if (refreshId !== refreshSequence) return null;
     const currentOwner = currentFileSecurityReadOwner(consoleShellState);
     if (!fileSecurityPageState.acceptFiles(operation, filesResult, currentOwner, refreshId)) return null;
     filesAccepted = true;
@@ -11712,12 +11714,15 @@ async function loadFileSecurityState(consoleShellState, refreshId) {
         fileId,
         signal: operation.controller.signal,
       });
+      // 报告 GET 与列表 GET 分属两个 await，二者都必须独立核对全局刷新代次。
+      if (refreshId !== refreshSequence) return null;
       const reportOwner = currentFileSecurityReadOwner(consoleShellState);
       if (!fileSecurityPageState.acceptReport(operation, reportResult, reportOwner, refreshId)) return null;
     } catch (error) {
       const reportOwner = currentFileSecurityReadOwner(consoleShellState);
       if (
-        !fileSecurityPageState.isLoadOperationCurrent(operation, reportOwner, refreshId)
+        refreshId !== refreshSequence
+        || !fileSecurityPageState.isLoadOperationCurrent(operation, reportOwner, refreshId)
         || isFileSecurityAbortError(error)
       ) return null;
       if (
@@ -11735,7 +11740,8 @@ async function loadFileSecurityState(consoleShellState, refreshId) {
   } catch (error) {
     const currentOwner = currentFileSecurityReadOwner(consoleShellState);
     if (
-      !fileSecurityPageState.isLoadOperationCurrent(operation, currentOwner, refreshId)
+      refreshId !== refreshSequence
+      || !fileSecurityPageState.isLoadOperationCurrent(operation, currentOwner, refreshId)
       || isFileSecurityAbortError(error)
     ) return null;
     // 顺序 GET 任一阶段确认 Session 失效，都必须清理全部 PAGE-103 owner 事实。

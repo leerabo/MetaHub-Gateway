@@ -75,6 +75,13 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_FILE_STORAGE_ROOT": ".data/file-storage",
     "METAHUB_FILE_MAX_UPLOAD_BYTES": "20971520",
     "METAHUB_FILE_PARSE_CONCURRENCY": "2",
+    # 文件安全扫描和 OCR 使用独立 limiter；像素、页数和图片数都是部署级硬预算，浏览器不能覆盖。
+    "METAHUB_FILE_SECURITY_SCAN_CONCURRENCY": "2",
+    "METAHUB_FILE_SECURITY_OCR_CONCURRENCY": "1",
+    "METAHUB_FILE_SECURITY_MAX_OCR_PAGES": "20",
+    "METAHUB_FILE_SECURITY_MAX_IMAGES": "50",
+    "METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS": "12000000",
+    "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS": "50000000",
     # FinOps Usage spool 只保存经过白名单筛选的账务恢复数据。默认落在仓库本地数据目录，
     # 生产环境应显式改为 Gateway 服务账号独占的本地磁盘目录，不能指向网络共享。
     "METAHUB_FINOPS_USAGE_SPOOL_ROOT": ".data/finops-usage-spool",
@@ -276,6 +283,13 @@ class AppConfig(BaseModel):
     )
     file_max_upload_bytes: int = 20_971_520
     file_parse_concurrency: int = 2
+    # 安全扫描与 OCR 分开限流，防止低成本 TXT 被昂贵视觉任务耗尽同一容量池。
+    file_security_scan_concurrency: int = 2
+    file_security_ocr_concurrency: int = 1
+    file_security_max_ocr_pages: int = 20
+    file_security_max_images: int = 50
+    file_security_max_image_pixels: int = 12_000_000
+    file_security_max_total_pixels: int = 50_000_000
     auth_token_secret: str = Field(exclude=True, repr=False)
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
@@ -659,6 +673,29 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Increase the output safety window or reduce the scan interval.",
         )
 
+    file_security_max_image_pixels = _bounded_int(
+        values,
+        "METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS",
+        minimum=1,
+        maximum=50_000_000,
+    )
+    file_security_max_total_pixels = _bounded_int(
+        values,
+        "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS",
+        minimum=1,
+        maximum=200_000_000,
+    )
+    if file_security_max_total_pixels < file_security_max_image_pixels:
+        # 总预算小于单图预算会让同一图片在两个层次得到矛盾结论，启动阶段必须拒绝。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=(
+                "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS cannot be lower than "
+                "METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS."
+            ),
+            suggestion="Increase the total pixel budget or lower the per-image budget.",
+        )
+
     return AppConfig(
         service_name=service_name,
         environment=environment,
@@ -712,6 +749,32 @@ def load_app_config(service_name: str) -> AppConfig:
             minimum=1,
             maximum=8,
         ),
+        file_security_scan_concurrency=_bounded_int(
+            values,
+            "METAHUB_FILE_SECURITY_SCAN_CONCURRENCY",
+            minimum=1,
+            maximum=4,
+        ),
+        file_security_ocr_concurrency=_bounded_int(
+            values,
+            "METAHUB_FILE_SECURITY_OCR_CONCURRENCY",
+            minimum=1,
+            maximum=2,
+        ),
+        file_security_max_ocr_pages=_bounded_int(
+            values,
+            "METAHUB_FILE_SECURITY_MAX_OCR_PAGES",
+            minimum=1,
+            maximum=100,
+        ),
+        file_security_max_images=_bounded_int(
+            values,
+            "METAHUB_FILE_SECURITY_MAX_IMAGES",
+            minimum=1,
+            maximum=200,
+        ),
+        file_security_max_image_pixels=file_security_max_image_pixels,
+        file_security_max_total_pixels=file_security_max_total_pixels,
         auth_token_secret=auth_token_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
         finops_usage_spool_root=_validated_local_spool_root(
@@ -1202,6 +1265,12 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_FILE_ENCRYPTION_SECRET",
         "METAHUB_FILE_MAX_UPLOAD_BYTES",
         "METAHUB_FILE_PARSE_CONCURRENCY",
+        "METAHUB_FILE_SECURITY_SCAN_CONCURRENCY",
+        "METAHUB_FILE_SECURITY_OCR_CONCURRENCY",
+        "METAHUB_FILE_SECURITY_MAX_OCR_PAGES",
+        "METAHUB_FILE_SECURITY_MAX_IMAGES",
+        "METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS",
+        "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS",
         "METAHUB_AUTH_TOKEN_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_FINOPS_USAGE_SPOOL_ROOT",

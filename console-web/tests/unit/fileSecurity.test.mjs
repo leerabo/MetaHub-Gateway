@@ -297,6 +297,48 @@ test("PRD-073 strict DTO accepts passed blocked failed and freezes every public 
   assert.equal(Object.isFrozen(blocked.report.findings[0]), true);
 });
 
+test("PRD-073 strict DTO accepts the pinned real OCR report version and rejects wildcards", () => {
+  const ocrPayload = reportFixture({
+    report: {
+      status: "blocked",
+      risk_level: "critical",
+      risk_score: 100,
+      model_access_status: "blocked",
+      ocr_status: "completed",
+      ocr_engine_version: "rapidocr-onnxruntime-1.4.4",
+      scanned_image_count: 1,
+      finding_count: 2,
+      high_finding_count: 1,
+      findings: [
+        findingFixture({
+          detector_code: "ocr.prompt_instruction",
+          category: "ocr",
+          severity: "critical",
+          source_kind: "docx_image",
+          location_kind: "image",
+          location_index: 1,
+        }),
+        findingFixture({
+          finding_id: `fsfd_${"c".repeat(32)}`,
+          detector_code: "ocr.text_observed",
+          category: "ocr",
+          severity: "low",
+          confidence_milli: 900,
+          source_kind: "docx_image",
+          location_kind: "image",
+          location_index: 1,
+        }),
+      ],
+    },
+  });
+  const normalized = normalizeFileSecurityReportResponse(ocrPayload, FILE_ID);
+  assert.equal(normalized?.report.ocr_engine_version, "rapidocr-onnxruntime-1.4.4");
+
+  const wildcardVersion = structuredClone(ocrPayload);
+  wildcardVersion.report.ocr_engine_version = "rapidocr-onnxruntime-1.4.x";
+  assert.equal(normalizeFileSecurityReportResponse(wildcardVersion, FILE_ID), null);
+});
+
 test("PRD-073 strict DTO rejects sensitive extras, duplicate findings, unknown rules and false clean states", () => {
   const blocked = reportFixture({
     report: {
@@ -602,6 +644,63 @@ test("PRD-073 scan and export state preserve only fixed feedback and report fact
   assert.equal(state.snapshot().feedback.code, "file.security_report_exported");
 });
 
+test("PRD-073 refresh preserves valid selection and clears feedback when its file leaves the page", () => {
+  const context = authContext();
+  const owner = fileSecurityPageOwner(context, shellState(context));
+  const state = createFileSecurityPageState();
+  const secondFile = fileFixture({
+    file_id: OTHER_FILE_ID,
+    original_name: "离线 OCR 评审.docx",
+    extract: {
+      ...fileFixture().extract,
+      file_extract_id: `fext_${"f".repeat(32)}`,
+    },
+  });
+  state.enter(owner);
+  const initialLoad = state.beginLoadOperation(owner, 1);
+  state.acceptFiles(initialLoad, normalizeFileListResponse(listFixture({
+    files: [fileFixture(), secondFile],
+  })), owner, 1);
+  state.finishLoadOperation(initialLoad);
+  assert.equal(state.selectFile(OTHER_FILE_ID), true);
+
+  const scan = state.beginScanOperation(owner);
+  assert.equal(state.acceptScan(scan, normalizeFileSecurityReportResponse(reportFixture({
+    reused: true,
+    report: { file_id: OTHER_FILE_ID },
+  }), OTHER_FILE_ID), owner), true);
+  state.finishScanOperation(scan);
+
+  // 扫描完成后的全页刷新可能改变后端列表顺序；只要同一 owner 的文件仍在当前页，
+  // 就必须同时保留选中 ID 和固定反馈，不能静默跳到首项并让反馈与报告对象错配。
+  const refreshedLoad = state.beginLoadOperation(owner, 2);
+  assert.equal(state.acceptFiles(refreshedLoad, normalizeFileListResponse(listFixture({
+    files: [secondFile, fileFixture()],
+  })), owner, 2), true);
+  assert.equal(state.selectedFile(), OTHER_FILE_ID);
+  assert.equal(state.snapshot().selectedFileId, OTHER_FILE_ID);
+  assert.equal(state.snapshot().feedback.code, "file.security_scan_reused");
+
+  state.finishLoadOperation(refreshedLoad);
+  const fallbackLoad = state.beginLoadOperation(owner, 3);
+  assert.equal(state.acceptFiles(fallbackLoad, normalizeFileListResponse(listFixture({
+    files: [fileFixture()],
+    next_cursor: "signed.security.next-2",
+  })), owner, 3), true);
+  assert.equal(state.snapshot().selectedFileId, FILE_ID);
+  assert.equal(state.snapshot().feedback, null);
+  state.finishLoadOperation(fallbackLoad);
+
+  const firstFileScan = state.beginScanOperation(owner);
+  assert.equal(state.acceptScan(firstFileScan, normalizeFileSecurityReportResponse(reportFixture({
+    reused: true,
+  }), FILE_ID), owner), true);
+  state.finishScanOperation(firstFileScan);
+  assert.equal(state.snapshot().feedback.code, "file.security_scan_reused");
+  assert.equal(state.nextPage(), true);
+  assert.equal(state.snapshot().feedback, null);
+});
+
 test("PRD-073 renderer escapes filename, shows blocked report and exposes no sensitive contract fields", () => {
   const context = authContext();
   const shell = shellState(context);
@@ -691,6 +790,16 @@ test("PRD-073 main lifecycle and narrow CSS freeze cleanup, permissions and no h
   assert.match(mainSource, /itemId !== "file-security"[\s\S]*fileSecurityPageState\.clear\(\)/);
   assert.match(mainSource, /fileSecurityPageState\.isActionBusy\(\)/);
   assert.match(mainSource, /error\.status === 403[\s\S]*error\.code === "auth\.permission_denied"/);
+  const loaderSource = mainSource.match(
+    /async function loadFileSecurityState[\s\S]*?\n}\n\/\*\*\n \* 清除预算页会话内快照/,
+  )?.[0] ?? "";
+  // 每个 await 的成功和异常落盘路径都必须独立核对全局 refresh generation；
+  // 断言限定在 PAGE-103 loader 内，避免被函数入口或其他页面的同名门禁误满足。
+  assert.match(loaderSource, /await listFileSecurityFiles\([\s\S]*?if \(refreshId !== refreshSequence\) return null;[\s\S]*?acceptFiles/);
+  assert.match(loaderSource, /await getFileSecurityReport\([\s\S]*?if \(refreshId !== refreshSequence\) return null;[\s\S]*?acceptReport/);
+  assert.match(loaderSource, /catch \(error\) \{[\s\S]*?refreshId !== refreshSequence[\s\S]*?reportOwner/);
+  assert.match(loaderSource, /catch \(error\) \{[\s\S]*?refreshId !== refreshSequence[\s\S]*?currentOwner/);
+  assert.equal((loaderSource.match(/refreshId !== refreshSequence/g) ?? []).length, 5);
   assert.match(shellSource, /case "file-security":/);
   assert.match(permissionsSource, /FILE_SECURITY_SCAN: "file\.security\.scan"/);
   assert.match(clientSource, /link\.remove\?\.\(\);[\s\S]*revokeObjectURL\(objectUrl\)/);

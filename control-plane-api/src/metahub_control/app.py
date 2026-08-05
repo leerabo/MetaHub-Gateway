@@ -30,6 +30,7 @@ from .environments.routes import router as environments_router
 from .error_maps import install_provider_error_map_scheduler
 from .error_maps import router as error_maps_router
 from .feedback.routes import router as feedback_router
+from .file_security.routes import router as file_security_router
 from .files.routes import router as files_router
 from .finops.routes import router as finops_router
 from .intent_security import router as intent_security_router
@@ -75,6 +76,8 @@ app = create_service_app(
         "X-Policy-Candidate-ETag",
         "X-MetaHub-Audit-Export-ID",
         "X-MetaHub-Audit-Export-Row-Count",
+        # 文件安全 CSV 已返回 nosniff；浏览器必须能读取该头并执行下载合同验收。
+        "X-Content-Type-Options",
     ),
 )
 app.include_router(auth_router)
@@ -94,6 +97,7 @@ app.include_router(enterprise_chat_router)
 app.include_router(error_maps_router)
 app.include_router(feedback_router)
 app.include_router(files_router)
+app.include_router(file_security_router)
 app.include_router(finops_router)
 app.include_router(tenant_router)
 app.include_router(user_preferences_router)

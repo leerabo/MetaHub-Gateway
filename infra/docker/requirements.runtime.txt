@@ -10,3 +10,8 @@ cryptography>=42,<46
 python-multipart>=0.0.27,<0.1
 pypdf>=6.0,<7.0
 python-docx>=1.2,<2.0
+# PRD-073 的视觉检查完全离线运行：Pillow 负责有界图片解码，pypdfium2 只渲染
+# 已通过页尺寸预算的 PDF 候选页，RapidOCR 的模型随部署镜像安装且运行期禁止下载。
+Pillow>=12.0,<13.0
+pypdfium2>=5.9,<6.0
+rapidocr-onnxruntime==1.4.4

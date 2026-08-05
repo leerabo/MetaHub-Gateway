@@ -83,9 +83,26 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-069 - 轻量敏感意图分类`
 - `PRD-070 - 多轮会话风险引擎`
 - `PRD-071 - 输出侧安全检测与流式滑窗`
+- `PRD-072 - 文件上传与文本解析基础`
+- `PRD-073 - 隐藏 Prompt Injection 检测`
 
 最近完成：
 
+- `PRD-073 - 隐藏 Prompt Injection 检测`的设计、两轮编码前自审、Shared TXT/DOCX/PDF 检测、
+  固定版本离线 OCR、Control 扫描/报告/CSV/模型准入、PAGE-103、0065、RBAC revision 9、后端
+  tenant/双权限/统一错误和 7 字段安全 Webhook 均已实现。实现后安全终审进一步关闭两项绕过：
+  扫描强制使用 PRD-072 已认证 `trusted_extracted_text`，因此原始操作数无害但字体
+  `ToUnicode/CMap` 映射为模型注入正文的 PDF 仍会 blocked；FindingCollector 饱和后保留 Prompt
+  与 coverage，避免 255 条结构 finding 挤掉明确阻断原因和安全事件。Control 在同一个短
+  `BEGIN IMMEDIATE` 权限快照内复核 tenant owner、`file.read + file.security.scan`，并读取、认证、
+  验真原文件和抽取 Blob。最终 Python 分层为 `55 + 16 = 71 passed`，Console 全量 `690 passed`、
+  lint `214 files passed`，中文注释和目标 Ruff/语法通过；六样本 Runtime、双视口 Browser、开发库
+  `65/0065` 和三服务 HTTP 200 均完成验收。详见
+  [PRD-073 设计](docs/prd/PRD-073-hidden-prompt-injection-detection.md)、
+  [文件安全 API](docs/api/file-security.md)、
+  [PRD-073 测试记录](docs/testing/PRD-073-tests.md)、
+  [最终 Runtime](.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad) 和
+  [最终 Browser](.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b)。
 - `PRD-072 - 文件上传与文本解析基础`：设计与两轮自审、Shared 文件合同、Control 文件 API、
   PAGE-101/102、0064、RBAC revision 8、加密 Blob、TXT/DOCX/PDF 抽取、DLP 预扫描、Token 估算、
   后端租户/权限/统一错误和安全 Webhook 均已完成。专项结果为 Shared `25 passed`、Control 与导航
@@ -127,10 +144,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 当前下一项：
 
 - Excel 的 `01_PRD总表`、`03_M2-M3扩展交付`、页面、API、数据对象、Webhook 与验收用例表已交叉确认：
-  PRD-072 已完成，下一条未完成项是
-  `PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`，对应 PAGE-103、
-  `POST /files/{id}/security-scan`、FileSecurityFinding、`file.prompt_injection_detected` 与 TC-0145/0146。
-  PRD-073 尚未开始设计或编码；总体目标仍为 `all_108_prds_complete=false`。
+  PRD-073 之后的下一条权威未完成项是
+  `PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`，对应 PAGE-104、
+  `POST /batch-jobs`、`GET /batch-jobs/{id}`、`POST /batch-jobs/{id}/cancel`、BatchJob/BatchTask、
+  `batch_job.created/completed` 与 TC-0147/0148。PRD-073 已完成；总体目标仍为
+  `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

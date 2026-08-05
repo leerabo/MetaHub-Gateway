@@ -79,7 +79,7 @@ const SOURCE_KINDS = new Set([
 // 位置类型只配合有界整数序号使用，不能承载任意 part 名或对象路径。
 const LOCATION_KINDS = new Set(["document", "page", "part", "image"]);
 // OCR 版本与离线部署包冻结，未知版本响应不得进入页面。
-const OCR_ENGINE_VERSION = "rapidocr-onnxruntime-1.4.x";
+const OCR_ENGINE_VERSION = "rapidocr-onnxruntime-1.4.4";
 // 256 条 finding 的固定 CSV 远小于该硬上限，防止代理异常放大浏览器内存。
 const MAX_CSV_BYTES = 2 * 1024 * 1024;
 

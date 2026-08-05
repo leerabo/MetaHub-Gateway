@@ -1,8 +1,9 @@
 # PRD-073 - 隐藏 Prompt Injection 检测
 
-状态：**设计已冻结，两轮编码前自审均已完成（2026-08-05），可以编码但禁止完成标记**。
-只有实现、迁移、测试、文档和真实运行验收全部通过后才能标记 PRD-073 完成。总体目标仍在
-进行中：`all_108_prds_complete=false`。
+状态：**已完成（2026-08-05）**。两轮编码前自审与两轮实现后安全终审均已完成，PDF 字体映射
+语义绕过和 finding 饱和优先级问题均已修正；实现、迁移、最终分层回归、中文注释、真实 Runtime
+和双视口 Browser 验收全部通过。该状态只覆盖 PRD-073，全部 108 条 PRD 的总体目标仍在进行中：
+`all_108_prds_complete=false`。
 
 ## 1. 需求来源与顺序确认
 
@@ -25,8 +26,8 @@
 - 主流程：`TC-0145`
 - 异常、权限与安全：`TC-0146`
 
-PRD-072 已完成并推送。按 Excel 的里程碑、优先级和原始行序，下一条未完成项为 PRD-073；
-PRD-074 的 Scheduler/Worker 不进入本条实现。
+本条设计启动时，PRD-072 已完成并推送；按 Excel 的里程碑、优先级和原始行序，当时下一条
+未完成项为 PRD-073。PRD-074 的 Scheduler/Worker 不进入本条实现。
 
 ### 1.2 原始范围与验收
 
@@ -63,9 +64,11 @@ PRD-072 解决“文件能否被安全接收、解析、DLP 预扫并加密保�
 file.read + file.security.scan + tenant owner
                     |
                     v
-读取认证密文 -> owner-bound 解密 -> 格式专用结构检查 -> 有界离线 OCR
-                    |                         |
-                    +---- 可见/隐藏文本规则 ----+
+同一权限快照读取并验真原件与抽取正文
+                    |
+                    +--> 原件：格式专用结构检查 + 有界离线 OCR
+                    |
+                    +--> 持久抽取正文：模型实际字符语义规则
                                       |
                                       v
                    FileSecurityScan + FileSecurityFinding
@@ -78,6 +81,11 @@ file.read + file.security.scan + tenant owner
                   |
       HMAC 边界包装后的不可信文件上下文
 ```
+
+扫描不能只检查 PDF/DOCX 的原始文本操作数。字体 `ToUnicode/CMap`、DOCX 域或后续解析器可能让
+原始操作数与 PRD-072 实际持久化、未来模型实际消费的正文不同，因此 `scan_file_security()` 强制
+接收已认证的 `trusted_extracted_text`：原件负责结构与 OCR，持久抽取正文负责模型字符语义，任一
+输入缺失或完整性校验失败都失败关闭。
 
 扫描成功不等于“绝对安全”。公共报告只陈述确定性检测器版本、覆盖状态和已发现风险；模型准入
 采用更保守的失败关闭规则。文件未扫描、扫描失败、确有 OCR 候选内容但 OCR 不可用、页数/像素/
@@ -145,7 +153,7 @@ file.read + file.security.scan + tenant owner
 - Prompt 规则：`file-prompt-injection-rules-v1`
 - DOCX 结构：`file-docx-visual-v1`
 - PDF 结构：`file-pdf-visual-v1`
-- OCR：`rapidocr-onnxruntime-1.4.x`
+- OCR：`rapidocr-onnxruntime-1.4.4`
 - 上下文边界：`file-context-boundary-v1`
 
 规则和阈值是发布包静态代码，不接受请求级 pattern、正则、阈值或模型名称。版本变化必须产生
@@ -207,6 +215,9 @@ file.read + file.security.scan + tenant owner
    pypdfium2 固定比例渲染并交给离线 OCR，避免无差别 OCR 普通纯文本页。
 6. 候选图片页、图片对象或像素预算未覆盖全部潜在图片内容时标记 `coverage=partial`，模型准入
    失败关闭；纯文本 PDF 即使超过默认 OCR 页上限，只要结构遍历完整也不因此误判 partial。
+7. PDF 原始内容流操作数仅用于结构可见性判断，不能作为模型正文语义的唯一来源。规则检测同时
+   覆盖 PRD-072 已认证持久抽取正文，确保无害操作数经字体 `ToUnicode/CMap` 映射成注入指令时仍
+   形成 `prompt.visible_instruction` 并阻断；扫描器不自行采用另一套临时抽取结果。
 
 ### 5.6 OCR 资源边界
 
@@ -241,6 +252,11 @@ file.read + file.security.scan + tenant owner
 故障重试放大数据库。多实例并发完成时，唯一索引的输家加载并返回赢家的可信报告。
 并发失败 attempt 若争用同一 attempt_no，输家重新读取计数并最多重试一次分配；若期间已有
 passed/blocked 权威结果则直接复用，不能把唯一冲突回显为数据库异常。
+
+扫描输入读取使用短 `BEGIN IMMEDIATE` 权限快照：在同一事务内实时复核
+`file.read + file.security.scan`、tenant owner、文件/抽取状态，随后读取并验真原文件 Blob 和抽取
+Blob，读取结束后立即提交释放锁。这样先提交的撤权必然被看到，后到撤权则等待本次短读取结束；
+不能出现只验真原件、却从另一个权限或 owner 时点读取模型正文的 TOCTOU 窗口。
 
 ### 6.2 模型准入
 
@@ -320,7 +336,10 @@ finding_id)` 顺序和 ASCII JSON 分隔符计算；不包含 request_id、trace
 | `created_at/updated_at` | 与 Scan 完成时间一致 |
 
 每个 scan/detector/source/location/evidence 唯一。每次扫描最多持久化 256 条 finding：最多 255 条
-具体发现，检测结果继续溢出时保留一条 `coverage.incomplete/high` 并停止收集正文证据；报告读取使用
+具体发现，检测结果继续溢出时保留一条 `coverage.incomplete/high`。可信抽取正文的 Prompt finding
+必须优先进入收集器；若结构 finding 已先占满容量，后到的 `prompt.visible_instruction` 或
+`ocr.prompt_instruction` 可替换一条非 Prompt、非 coverage 的结构 finding，但不能替换 coverage
+事实。这样数量饱和仍保留阻断原因和安全 Webhook，同时维持 256 条硬上限。报告读取使用
 `LIMIT 257` 反向证明数据库没有越界。Finding 到 Scan 的复合外键声明为
 `DEFERRABLE INITIALLY DEFERRED`；Finding insert trigger 先证明同 tenant ready file/extract，随后 Scan
 insert trigger 在同一事务反向证明完整 finding 集合。Finding 不保存原文、OCR 文本、坐标框、
@@ -429,7 +448,8 @@ OCR 引擎明确不可用但仍能形成可信 coverage 报告时返回 HTTP 200
 2. POST 先鉴权、再取得 limiter、再立即复核权限、最后读取/解密对象；无权请求不触碰企业文件正文。
 3. 写事务内再次复核 `file.read + file.security.scan`，关闭扫描期间撤权竞态；撤权后的计算结果丢弃。
 4. 报告读取/导出逐请求后端 `file.read`；前端按钮隐藏不承担授权。
-5. 原文件、抽取正文、隐藏文本、OCR 文本和命中片段只存在于有界调用栈并关闭 repr。
+5. 原文件、抽取正文、隐藏文本、OCR 文本和命中片段只存在于有界调用栈并关闭 repr；扫描必须使用
+   PRD-072 已认证持久抽取正文，不接受 HTTP 参数或调用方临时解析文本替代。
 6. 日志只允许 event、tenant/actor/file/scan ID、固定状态、计数、request/trace ID；禁止文件名、
    Prompt、Response、Token、Provider Key、对象键、pattern、报告 CSV 和异常文本。
 7. Webhook 使用 exact-key payload；事件构造、数据库 source、pending 恢复和重放都验证同一合同。
@@ -438,6 +458,8 @@ OCR 引擎明确不可用但仍能形成可信 coverage 报告时返回 HTTP 200
 10. 任何 `unknown/partial/unavailable/failed` 都不能转换为 clean 或 allowed。
 11. 通过静态导入门禁限制原文/抽取正文解密所有权；Gateway 和其他 Control 业务模块不能绕过
     `build_file_model_context()` 直接读取对象键。
+12. 扫描命令在同一个短 `BEGIN IMMEDIATE` 权限快照内读取两份 owner-bound Blob；跨租户、撤权、
+    owner 漂移、AAD/fingerprint 不一致均在扫描前失败关闭，不把客户端 tenant 或前端按钮当授权。
 
 ## 12. RBAC 与导航
 
@@ -480,7 +502,7 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 - `METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS=12000000`
 - `METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS=50000000`
 
-运行依赖：`rapidocr-onnxruntime>=1.4.4,<2.0`、`pypdfium2>=5.9,<6.0`、Pillow 的受支持主版本。
+运行依赖：`rapidocr-onnxruntime==1.4.4`、`pypdfium2>=5.9,<6.0`、Pillow 的受支持主版本。
 模型必须随部署依赖离线可用；不得在请求时下载。
 
 ## 15. 数据库迁移与回退
@@ -507,16 +529,20 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 
 - DOCX direct/style 继承 vanish、white、<=3pt、文本框/页眉页脚/脚注。
 - PDF `Tr=3`、白色文本、超小字体、OFF OCG、EmbeddedFiles/FileAttachment。
+- PDF 原始操作数无害但 `ToUnicode/CMap` 映射为注入正文时，必须以 PRD-072 持久抽取正文命中并阻断。
 - DOCX 图片与 PDF 页面真实 OCR 中英文注入样本；普通图片不误报 Prompt finding。
 - PDF 页面 OCR 与可见文本去重、CMYK/透明度、未知颜色空间、操作数/递归/图形栈上限。
 - 嵌套 ZIP/embedding、entry/页数/像素/图片数上限与 coverage 失败关闭。
 - Unicode 规范化、规则上限、无灾难回溯、风险汇总和 deterministic report。
 - HMAC evidence 与 boundary token owner 隔离、正文碰撞重派生和关闭 repr。
+- 255 条结构 finding 饱和后仍保留 Prompt 与 coverage；集合总数固定 256，普通后续结构事实被丢弃。
 
 ### 16.2 Control 集成测试
 
 - Admin/Developer/Viewer/SecurityAdmin 可按矩阵扫描；缺任一权限 403 且不解密 Blob。
 - 同 tenant 主流程、幂等复用、并发唯一、事务内撤权、跨 tenant 404、随机 ID 404。
+- 同一 `BEGIN IMMEDIATE` 权限快照读取并验真原文件与抽取 Blob；字体 CMap 映射出的模型正文端到端
+  形成 blocked 报告，且 DTO、数据库与 Webhook 不出现正文或裸 evidence。
 - processing/blocked/failed 文件 409；ready Blob 缺失/密文损坏固定 500；报告缺失 404；数据库不可写
   等无法形成事实的依赖异常统一 503/request_id。
 - 高/critical、存在候选内容时 OCR unavailable/partial、failed/未扫描均由模型准入函数 403；
@@ -544,7 +570,8 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 
 1. 开发库迁移到 0065，`integrity_check=ok`、外键违规 0、revision 9/62 权限。
 2. 启动 Gateway、Control、Console，三服务健康 200。
-3. 真实上传 clean TXT、隐藏 DOCX、含图片指令 DOCX、隐藏文本 PDF 并执行扫描。
+3. 真实上传 clean TXT、隐藏 DOCX、含图片指令 DOCX、隐藏文本 PDF、`ToUnicode/CMap` 字体映射
+   PDF 并执行扫描；字体映射样本的原始操作数无害，但持久抽取正文包含注入指令且必须 blocked。
 4. 通过独立后端准入验收器证明高风险报告 `model_access_status=blocked` 且正文解密函数未被调用；
    clean 文件只返回带不可预测 BEGIN/END 边界的内存上下文。该验收不调用任何上游模型。
 5. 下载 CSV，验证固定列、无正文/文件名/fingerprint/对象键和 formula 注入。
@@ -624,5 +651,44 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 16. **failed 事实与数据库故障混淆**：数据库仍可写且 owner/fingerprint 已验证时才保存 failed；
     数据库本身不可用只能返回 503，不能声称报告已持久化。
 
-两轮修正后，设计已覆盖 tenant owner、后端权限、统一错误、request_id、迁移、隐私、资源边界、
-报告导出和非真空模型准入验收，可以进入编码阶段。
+两轮修正后形成的冻结设计覆盖 tenant owner、后端权限、统一错误、request_id、迁移、隐私、资源
+边界、报告导出和非真空模型准入验收，并作为后续实现与实现后终审的基线。
+
+## 19. 实现后安全终审
+
+状态：**两轮实现后交叉复核均已完成并修正（2026-08-05）**。
+
+### 19.1 字体映射语义一致性
+
+终审构造了原始 PDF 文本操作数无害、但字体 `ToUnicode/CMap` 把字符映射为
+`ignore previous instructions` 的样本。原实现只用原文件内容流做 Prompt 规则判断，会漏掉
+PRD-072 实际持久化并交给模型的字符语义。修正如下：
+
+1. `scan_file_security()` 的 `trusted_extracted_text` 改为必填且执行严格类型、非空和长度校验；
+   缺失时不能退回原始操作数猜测。
+2. Control 在同一个短 `BEGIN IMMEDIATE` 权限快照内复核双权限与 tenant owner，并读取、认证、
+   验真原文件 Blob 和抽取 Blob；原件用于结构/OCR，抽取正文用于模型实际字符语义。
+3. Shared 单元、Control 真实上传链路和 Runtime 固定字体映射样本共同证明 CMap 指令形成 blocked；
+   报告、事件、日志和数据库仍只保存固定元数据与分域 HMAC，不保存正文。
+
+### 19.2 finding 饱和时的安全事实优先级
+
+终审进一步确认，若 255 条中低风险结构 finding 先占满具体事实容量，第 256 条只补 coverage，
+随后出现的可信正文 Prompt 可能被容量门禁丢弃。虽然报告仍会因 coverage 阻断，但会丢失明确的
+Prompt 原因和 `file.prompt_injection_detected` Webhook。修正后的 `FindingCollector`：
+
+1. 始终保留一条 `coverage.incomplete/high` 证明扫描结果不完整。
+2. 饱和后允许 Prompt finding 替换一条非 Prompt、非 coverage 结构 finding；不增加总数，不替换
+   已保留的 Prompt 或 coverage。
+3. 以 Shared 收集器边界测试和 Control 端到端测试证明最终恰为 256 条，Prompt、coverage、blocked
+   状态与 7 字段安全事件同时存在，正文和 evidence canary 在 DTO、数据库及事件中零命中。
+
+上述修复不改变公开 API、迁移版本、tenant/RBAC 矩阵或 Gateway 热路径。最终代码点的 PRD-073
+Python 分层结果为 `55 + 16 = 71 passed`，Console 全量 `690 passed`、lint `214 files passed`，
+中文注释、Ruff 和 `py_compile` 均通过。正式六样本 Runtime 为 `status=passed`，开发库为
+`65/0065` 且完整性/外键通过；完整命令、路径和 SHA-256 见 `docs/testing/PRD-073-tests.md`。
+
+因此 PRD-073 已满足设计、实现、tenant 隔离、后端权限、统一错误/request_id、数据库迁移、主流程、
+异常/权限测试、开发文档与实际运行验收门禁，可以标记完成。下一条权威未完成项为
+`PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`；全部 108 条仍在
+持续开发，`all_108_prds_complete=false`。

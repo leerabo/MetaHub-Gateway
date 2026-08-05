@@ -190,7 +190,11 @@ export function createFileSecurityPageState() {
     if (new Set(ids).size !== ids.length) return false;
     files = Object.freeze([...payload.files]);
     nextCursor = payload.next_cursor;
-    if (!ids.includes(selectedFileId)) selectedFileId = ids[0] ?? "";
+    if (!ids.includes(selectedFileId)) {
+      selectedFileId = ids[0] ?? "";
+      // 文件离开当前页时必须同步清除上一文件的命令反馈；否则新首项报告会与旧扫描/导出结果错配。
+      feedback = null;
+    }
     loadState = "ready";
     loadError = null;
     report = null;
@@ -460,7 +464,7 @@ export function createFileSecurityPageState() {
     feedback = null;
   }
 
-  /** 翻页时清除上一页文件名和报告，但保留 owner、cursor 历史与固定操作反馈。 */
+  /** 翻页时清除上一页文件名、报告和操作反馈，但保留 owner 与 cursor 历史。 */
   function resetPageForPaging() {
     files = Object.freeze([]);
     selectedFileId = "";
@@ -470,6 +474,8 @@ export function createFileSecurityPageState() {
     reportState = "idle";
     report = null;
     reportError = null;
+    // 固定反馈也绑定上一页选中文件；翻页后继续展示会误导为新页首项的命令结果。
+    feedback = null;
   }
 
   /** 取消 GET 并推进代次，忽略 AbortSignal 的迟到回调也不能落盘。 */

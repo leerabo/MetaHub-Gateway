@@ -1112,7 +1112,7 @@ def require_file_writer(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """要求当前登录 Session 具有文件上传、解析和安全扫描权限。
+    """要求当前登录 Session 具有文件上传、解析和 DLP 预扫权限。
 
     参数：Control 请求和 Bearer Session。返回：实时数据库矩阵复核后的 AuthContext。
     关键约束：依赖必须先于 multipart 正文读取；服务事务还会二次复核，关闭撤权竞态。
@@ -1120,3 +1120,22 @@ def require_file_writer(
 
     # 上传会接触企业正文并产生持久对象，前端按钮、角色名或 chat.use 都不能替代独立权限。
     return _require_request_permissions(request, authorization, ("file.write",))
+
+
+def require_file_security_scanner(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 同时具备文件读取和独立安全扫描命令权限。
+
+    参数：Control 请求与 Bearer Session。返回：实时数据库矩阵复核后的 AuthContext。关键约束：
+    dependency 在 path/query/body 解析前执行；``file.read``、``file.write`` 或前端可见性都不能替代
+    ``file.security.scan``，避免无权请求触发企业 Blob 解密和 OCR 成本。
+    """
+
+    # 两项权限必须由同一实时矩阵快照同时证明，不能先读后扫形成撤权或跨 Session 竞态。
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("file.read", "file.security.scan"),
+    )
