@@ -13,6 +13,7 @@ import re
 import secrets
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -1300,17 +1301,28 @@ def dispatch_webhook_event(
     request_id: str,
     trace_id: str,
     resume_existing_pending: bool = False,
+    source_lease_guard: Callable[[], None] | None = None,
+    create_snapshot_if_missing: bool = True,
 ) -> list[WebhookDeliveryInfo]:
     """向当前租户订阅了事件类型的 Endpoint 投递治理事件。
 
     参数：resume_existing_pending 只供持有源 outbox lease 的内部 worker 使用；默认关闭，
     以保持既有预算、DLP 和调用失败事件“重复调用只回读、不再次出网”的行为。
+    source_lease_guard 在每次真实网络尝试前续租或协作停服，不能用于普通直接派发。
+    create_snapshot_if_missing=False 表示上游已在同库事务冻结过（包括空集合）快照，恢复时禁止
+    根据当前 Endpoint 补建 intent；默认 True 保持其他既有 source outbox 的行为。
     返回：本次订阅者快照中的 delivery 摘要，终态记录不会重复发送。
     """
 
     # tenant_id 必须与不可变事件信封一致，调用方不能借恢复模式跨租户枚举历史 delivery。
     if tenant_id != event.tenant_id:
         raise ApiError("webhook.endpoint_invalid")
+    if source_lease_guard is not None and not resume_existing_pending:
+        # 只有持久 source 恢复链路拥有 lease；普通调用传入 guard 说明内部合同使用错误。
+        raise ApiError("webhook.delivery_unavailable")
+    if not create_snapshot_if_missing and not resume_existing_pending:
+        # “禁止补快照”只对持久 resume 有定义，普通派发不能用它静默跳过订阅者。
+        raise ApiError("webhook.delivery_unavailable")
     connection = _connect(config)
     try:
         if resume_existing_pending:
@@ -1322,6 +1334,8 @@ def dispatch_webhook_event(
                 event,
                 request_id=request_id,
                 trace_id=trace_id,
+                source_lease_guard=source_lease_guard,
+                create_snapshot_if_missing=create_snapshot_if_missing,
             )
         rows = connection.execute(
             """
@@ -1363,6 +1377,8 @@ def _dispatch_event_with_pending_resume(
     *,
     request_id: str,
     trace_id: str,
+    source_lease_guard: Callable[[], None] | None,
+    create_snapshot_if_missing: bool,
 ) -> list[WebhookDeliveryInfo]:
     """冻结或读取原始 delivery 快照，并只续发其中仍为 pending 的记录。"""
 
@@ -1372,7 +1388,7 @@ def _dispatch_event_with_pending_resume(
         if existing and any(row["event_type"] != event.event_type for row in existing):
             # 同一持久 event_id 不能映射到另一事件类型，否则按损坏事实失败关闭且零出网。
             raise ApiError("webhook.delivery_unavailable")
-        if not existing:
+        if not existing and create_snapshot_if_missing:
             # 只有首次 claim 会读取当前 active 订阅；恢复已有快照时不追溯后来新增的订阅者。
             safe_envelope = _safe_payload(event.to_payload())
             payload_json = _json_dumps(safe_envelope)
@@ -1441,6 +1457,7 @@ def _dispatch_event_with_pending_resume(
                 delivery,
                 request_id=request_id,
                 trace_id=trace_id,
+                source_lease_guard=source_lease_guard,
             )
         )
     return deliveries
@@ -1463,6 +1480,168 @@ def _load_original_event_deliveries(
     ).fetchall()
 
 
+def freeze_webhook_event_delivery_snapshot(
+    connection: sqlite3.Connection,
+    event: WebhookEvent,
+    *,
+    frozen_at: str,
+) -> int:
+    """在调用方写事务中冻结 Webhook Endpoint 快照，补齐 legacy 部分 intent。
+
+    参数：已执行 ``BEGIN IMMEDIATE`` 的同库连接、由不可变 source 重建的事件和 canonical 冻结时间。
+    返回：冻结后的 original delivery 数量；零表示当时没有订阅者，但调用方仍必须持久化 marker。
+    约束：既有 delivery 的租户、事件、时间和 canonical payload 必须全部一致；本函数不提交事务、
+    不执行网络，也不覆盖已有 delivery ID、状态、attempt 或 Secret 版本。
+    """
+
+    if not connection.in_transaction:
+        # 快照与 source marker 必须同事务提交；无调用方事务时禁止自行创建 delivery。
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        if _to_db_time(_parse_db_time(frozen_at)) != frozen_at:
+            # 非规范时间会破坏 marker、delivery 和 source 的同一冻结点，必须拒绝写入。
+            raise ApiError("webhook.delivery_unavailable")
+        payload_json = _json_dumps(_safe_payload(event.to_payload()))
+        existing = _load_original_event_deliveries(connection, event.tenant_id, event.event_id)
+        for delivery in existing:
+            if (
+                delivery["tenant_id"] != event.tenant_id
+                or delivery["event_type"] != event.event_type
+                or delivery["event_timestamp"] != event.timestamp
+                or delivery["payload_json"] != payload_json
+            ):
+                # 0065 遗留子集只有与 immutable source 完全一致时才能作为权威历史保留。
+                raise ApiError("webhook.delivery_unavailable")
+        endpoints = connection.execute(
+            """
+            SELECT * FROM webhook_endpoints
+            WHERE tenant_id=? AND status='active'
+            ORDER BY created_at ASC,webhook_endpoint_id ASC
+            """,
+            (event.tenant_id,),
+        ).fetchall()
+        expected_endpoint_ids: set[str] = set()
+        for endpoint in endpoints:
+            if event.event_type not in _event_types_from_row(endpoint):
+                continue
+            if event.event_type == "webhook.delivery_failed":
+                continue
+            endpoint_id = str(endpoint["webhook_endpoint_id"])
+            expected_endpoint_ids.add(endpoint_id)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO webhook_deliveries(
+                  webhook_delivery_id,tenant_id,webhook_endpoint_id,event_id,event_type,
+                  event_timestamp,payload_json,status,attempt_count,max_attempts,
+                  delivery_kind,secret_version,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,'pending',0,?,'original',?,?,?)
+                """,
+                (
+                    f"whd_{uuid4().hex}",
+                    event.tenant_id,
+                    endpoint_id,
+                    event.event_id,
+                    event.event_type,
+                    event.timestamp,
+                    payload_json,
+                    int(endpoint["max_attempts"] or MAX_ATTEMPTS),
+                    int(endpoint["secret_version"]),
+                    frozen_at,
+                    frozen_at,
+                ),
+            )
+        frozen = _load_original_event_deliveries(connection, event.tenant_id, event.event_id)
+        frozen_endpoint_ids: set[str] = set()
+        for delivery in frozen:
+            if (
+                delivery["tenant_id"] != event.tenant_id
+                or delivery["event_type"] != event.event_type
+                or delivery["event_timestamp"] != event.timestamp
+                or delivery["payload_json"] != payload_json
+            ):
+                # 补齐后再次验证全部 intent，防止唯一键冲突掩盖损坏或跨事件旧行。
+                raise ApiError("webhook.delivery_unavailable")
+            frozen_endpoint_ids.add(str(delivery["webhook_endpoint_id"]))
+        if not expected_endpoint_ids.issubset(frozen_endpoint_ids):
+            # INSERT OR IGNORE 只能由既有唯一 intent 解释；随机 ID 冲突或并发漂移必须整体回滚。
+            raise ApiError("webhook.delivery_unavailable")
+        return len(frozen)
+    except ApiError:
+        raise
+    # JSON、字段类型或 SQLite 异常可能携带配置内容，只转换为固定投递错误。
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+
+
+def fail_pending_webhook_event_deliveries(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: object,
+    event_id: object,
+    updated_at: str,
+    failure_code: str,
+) -> int:
+    """在 source 终态事务中失败关闭一个事件的全部 original pending delivery。
+
+    参数：调用方写事务连接、source tenant/event、canonical UTC 终态时间和固定失败码。
+    返回：本次转为 failed 的 delivery 数量；零表示快照为空或全部已经是终态。
+    约束：本函数不提交事务；delivery 更新会复用既有 trigger 原子建立死信，且禁止自由错误摘要。
+    """
+
+    summaries = {
+        "webhook.delivery_unavailable": "Source delivery attempts are exhausted.",
+        "webhook.payload_invalid": "Source payload validation failed.",
+    }
+    if (
+        not connection.in_transaction
+        or type(tenant_id) is not str
+        or not tenant_id
+        or type(event_id) is not str
+        or not event_id
+        or failure_code not in summaries
+    ):
+        # 只有持有 source 写事务的内部 worker 能终结 intent，参数漂移时不能自行开启新事务。
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        if _to_db_time(_parse_db_time(updated_at)) != updated_at:
+            # source、delivery 和死信必须共享同一个 canonical 秒，禁止容错改写坏时间。
+            raise ApiError("webhook.delivery_unavailable")
+        cursor = connection.execute(
+            """
+            UPDATE webhook_deliveries
+            SET status='failed',error_code=?,error_summary=?,next_retry_at=NULL,updated_at=?
+            WHERE tenant_id=? AND event_id=?
+              AND event_type='file.prompt_injection_detected'
+              AND delivery_kind='original' AND status='pending'
+            """,
+            (
+                failure_code,
+                summaries[failure_code],
+                updated_at,
+                tenant_id,
+                event_id,
+            ),
+        )
+        remaining = connection.execute(
+            """
+            SELECT COUNT(*) FROM webhook_deliveries
+            WHERE tenant_id=? AND event_id=?
+              AND event_type='file.prompt_injection_detected'
+              AND delivery_kind='original' AND status='pending'
+            """,
+            (tenant_id, event_id),
+        ).fetchone()[0]
+        if remaining != 0:
+            # source 一旦终态就不会再次领取；任何残留 pending 都必须让整个事务回滚。
+            raise ApiError("webhook.delivery_unavailable")
+        return int(cursor.rowcount)
+    except ApiError:
+        raise
+    # SQLite、时间或行数异常可能含内部值，边界只转换为固定投递错误。
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+
+
 def _resume_pending_delivery(
     config: AppConfig,
     connection: sqlite3.Connection,
@@ -1470,6 +1649,7 @@ def _resume_pending_delivery(
     *,
     request_id: str,
     trace_id: str,
+    source_lease_guard: Callable[[], None] | None,
 ) -> WebhookDeliveryInfo:
     """使用持久正文和尝试上限，从 attempt_count + 1 续发一条 pending delivery。"""
 
@@ -1557,6 +1737,9 @@ def _resume_pending_delivery(
             raise ApiError("webhook.delivery_unavailable") from exc
 
         attempt_no = attempt_count + 1
+        if source_lease_guard is not None:
+            # source 可能包含 20 个 Endpoint；每次最长 30 秒外呼前都必须独立确认 owner 并续租。
+            source_lease_guard()
         attempt_result = _send_once(config, endpoint, body, delivery_id)
         try:
             _record_attempt(connection, endpoint, delivery_id, attempt_no, attempt_result)
@@ -1568,6 +1751,10 @@ def _resume_pending_delivery(
                 attempt_result,
                 final=attempt_result["status"] == "success" or attempt_no >= max_attempts,
             )
+        # 网络返回后 source 可能已被 reaper 终结；delivery CAS 失败必须回滚迟到 attempt。
+        except ApiError:
+            connection.rollback()
+            raise
         # attempt 与摘要更新共享事务，SQL 故障时必须整体回滚。
         except sqlite3.Error as exc:
             # attempt 和 delivery 摘要必须同事务；失败回滚后下次仍从同一序号进行 at-least-once 重试。
@@ -1622,6 +1809,10 @@ def _validated_pending_delivery_body(
             # 合同失败的 request_id 同样不公开在 Webhook 信封。恢复必须回到不可变 run，
             # 不能使用本轮 worker ID，否则会切断 CI 上报、数据库和投递的同一链路。
             source_request_id = _adapter_contract_source_request_id(connection, envelope)
+        elif envelope.get("event_type") == "file.prompt_injection_detected":
+            # 文件安全 request_id 不进入公开七字段 payload；pending 恢复必须从同 tenant
+            # 不可变 source/scan/finding 重新取得，禁止用 worker request_id 或占位值绕过绑定。
+            source_request_id = _file_security_source_request_id(connection, envelope)
         rebuilt = build_webhook_event(
             tenant_id=envelope["tenant_id"],
             event_type=envelope["event_type"],
@@ -1816,6 +2007,96 @@ def _audit_export_source_request_id(
     return request_id
 
 
+def _file_security_source_request_id(
+    connection: sqlite3.Connection,
+    envelope: dict[str, Any],
+) -> str:
+    """从不可变文件安全事实恢复 Prompt Injection 事件的构造期 request_id。
+
+    参数：当前 pending delivery 的数据库连接与已通过通用安全扫描的持久信封。
+    返回：与同租户 event、blocked scan、Prompt finding、actor、trace 和七字段摘要精确绑定的 ID。
+    约束：缺失、多义、跨租户或任一字段漂移都在真实网络请求前失败关闭。
+    """
+
+    payload = envelope.get("payload")
+    expected_fields = {
+        "scan_id",
+        "file_id",
+        "risk_level",
+        "finding_count",
+        "high_finding_count",
+        "model_access_status",
+        "detector_version",
+    }
+    event_id = envelope.get("event_id")
+    file_id = envelope.get("object_id")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_fields
+        or type(event_id) is not str
+        or type(file_id) is not str
+        or payload.get("file_id") != file_id
+    ):
+        # 先证明公开信封内部自洽，避免用另一个合法 source 为损坏 delivery 提供背书。
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        rows = connection.execute(
+            """
+            SELECT event.source_request_id
+            FROM file_security_events event
+            JOIN file_security_scans scan
+              ON scan.tenant_id=event.tenant_id AND scan.scan_id=event.scan_id
+             AND scan.file_id=event.file_id
+            WHERE event.tenant_id=? AND event.file_security_event_id=?
+              AND event.event_type='file.prompt_injection_detected'
+              AND event.scan_id=? AND event.file_id=? AND event.actor_user_id=?
+              AND event.source_trace_id=? AND event.occurred_at=?
+              AND event.risk_level=? AND event.finding_count=?
+              AND event.high_finding_count=? AND event.model_access_status=?
+              AND event.detector_version=?
+              AND scan.status='blocked' AND scan.requested_by=event.actor_user_id
+              AND scan.source_request_id=event.source_request_id
+              AND scan.source_trace_id=event.source_trace_id
+              AND scan.risk_level=event.risk_level
+              AND scan.finding_count=event.finding_count
+              AND scan.high_finding_count=event.high_finding_count
+              AND scan.model_access_status=event.model_access_status
+              AND scan.detector_version=event.detector_version
+              AND scan.completed_at=event.occurred_at
+              AND EXISTS (
+                SELECT 1 FROM file_security_findings finding
+                WHERE finding.tenant_id=event.tenant_id
+                  AND finding.scan_id=event.scan_id AND finding.file_id=event.file_id
+                  AND finding.detector_code IN (
+                    'prompt.visible_instruction','ocr.prompt_instruction'
+                  )
+              )
+            LIMIT 2
+            """,
+            (
+                envelope.get("tenant_id"),
+                event_id,
+                payload.get("scan_id"),
+                file_id,
+                envelope.get("actor_id"),
+                envelope.get("trace_id"),
+                envelope.get("timestamp"),
+                payload.get("risk_level"),
+                payload.get("finding_count"),
+                payload.get("high_finding_count"),
+                payload.get("model_access_status"),
+                payload.get("detector_version"),
+            ),
+        ).fetchall()
+    # 数据库异常可能携带路径或 SQL，恢复边界只公开固定 Webhook 错误。
+    except sqlite3.Error as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+    if len(rows) != 1 or type(rows[0]["source_request_id"]) is not str:
+        # 禁止回退到本轮 worker request_id；只有唯一权威 source 能恢复构造身份。
+        raise ApiError("webhook.delivery_unavailable")
+    return rows[0]["source_request_id"]
+
+
 def _finish_pending_without_network(
     connection: sqlite3.Connection,
     delivery: sqlite3.Row,
@@ -1987,6 +2268,10 @@ def _send_pending_delivery(
                 final=attempt_result["status"] == "success"
                 or attempt_no >= int(endpoint["max_attempts"] or MAX_ATTEMPTS),
             )
+        # 重复 dispatcher 或终态并发同样不能覆盖已经提交的 delivery 结果。
+        except ApiError:
+            connection.rollback()
+            raise
         # attempt 与摘要任一 SQL 失败都回滚当前发送事实，避免部分提交。
         except sqlite3.Error as exc:
             # attempt 与 delivery 摘要属于同一发送事实，任一写入失败必须一起回滚。
@@ -2117,11 +2402,12 @@ def _update_delivery_after_attempt(
 
     delivery_status = "success" if result["status"] == "success" else ("failed" if final else "pending")
     now = _to_db_time(_utcnow())
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE webhook_deliveries
         SET status=?, attempt_count=?, http_status=?, duration_ms=?, error_code=?, error_summary=?, updated_at=?
-        WHERE tenant_id=? AND webhook_delivery_id=?
+        WHERE tenant_id=? AND webhook_endpoint_id=? AND webhook_delivery_id=?
+          AND status='pending' AND attempt_count=? AND secret_version=?
         """,
         (
             delivery_status,
@@ -2132,9 +2418,15 @@ def _update_delivery_after_attempt(
             _truncate_text(result["error_summary"], 240),
             now,
             endpoint["tenant_id"],
+            endpoint["webhook_endpoint_id"],
             delivery_id,
+            attempt_no - 1,
+            int(endpoint["secret_version"]),
         ),
     )
+    if cursor.rowcount != 1:
+        # 迟到 worker、重复 attempt 或 Secret 轮换竞态都不能覆盖已提交终态。
+        raise ApiError("webhook.delivery_unavailable")
     if final:
         success_at = now if delivery_status == "success" else None
         failure_at = now if delivery_status == "failed" else None

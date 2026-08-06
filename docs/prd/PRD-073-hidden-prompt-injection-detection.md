@@ -1,8 +1,9 @@
 # PRD-073 - 隐藏 Prompt Injection 检测
 
-状态：**已完成（2026-08-05）**。两轮编码前自审与两轮实现后安全终审均已完成，PDF 字体映射
-语义绕过和 finding 饱和优先级问题均已修正；实现、迁移、最终分层回归、中文注释、真实 Runtime
-和双视口 Browser 验收全部通过。该状态只覆盖 PRD-073，全部 108 条 PRD 的总体目标仍在进行中：
+状态：**已完成并通过最终复核（2026-08-06）**。PDF 字体映射语义绕过、finding 饱和优先级和
+Webhook source 提交后的崩溃丢失窗口均已修正；0066 定向回归、`66/0066` 真实 Runtime、三服务、
+隐私与实际页面复验均已通过。0066 不改变 PAGE-103，既有双视口 Browser 证据继续有效。下一项为
+PRD-074；全部 108 条总体目标仍在进行中：
 `all_108_prds_complete=false`。
 
 ## 1. 需求来源与顺序确认
@@ -108,7 +109,7 @@ file.read + file.security.scan + tenant owner
 - `file.prompt_injection_detected` 安全 source event 与既有 Webhook 投递链路。
 - 后端 `build_file_model_context()` 准入函数；只有通过报告才能解密抽取正文并添加边界。
 - PAGE-103 文件安全报告、扫描命令、报告详情和 CSV 导出。
-- 0065 正向/反向迁移、RBAC revision 9、统一错误、中文注释和验收证据。
+- 0065 安全事实/RBAC 正反迁移，以及追加 0066 source outbox 恢复迁移、统一错误、中文注释和验收证据。
 
 ### 3.2 明确不做
 
@@ -283,7 +284,8 @@ Blob，读取结束后立即提交释放锁。这样先提交的撤权必然被�
 
 ## 7. 数据表和字段设计
 
-迁移版本：`0065_file_prompt_injection_detection.sql`。
+迁移链：`0065_file_prompt_injection_detection.sql` 创建安全事实与 RBAC，追加
+`0066_file_security_event_outbox_recovery.sql` 创建可恢复投递状态；已发布的 0065 checksum 不改写。
 
 ### 7.1 `file_security_scans`
 
@@ -357,6 +359,30 @@ insert trigger 在同一事务反向证明完整 finding 集合。Finding 不保
 数据库 trigger 必须从 Scan/Finding 反向证明计数、风险、actor、链路和时间；Webhook payload 不含
 filename、finding ID、detector 证据或报告 hash。
 
+### 7.4 `file_security_event_outbox`
+
+0066 为每个不可变 `file_security_events` source 创建一条同 tenant、同 `fsev_` identity 的可变恢复状态：
+
+| 字段 | 约束 |
+| --- | --- |
+| `file_security_event_id/tenant_id` | 主键与复合外键绑定同 tenant source；身份、owner 和 created_at 不可改写 |
+| `dispatch_status` | 固定 `pending/processing/dispatched/failed` 状态机 |
+| `dispatch_attempts` | 0..10；领取或接管 lease 前原子加一 |
+| `next_attempt_at/dispatched_at` | pending 到期时间与成功终态时间互斥 |
+| `claim_token/lease_owner_id/lease_expires_at` | processing 必填；90 秒 lease、逐网络 attempt 续租和完成 CAS 所需 owner |
+| `delivery_snapshot_frozen_at` | claim 事务提交 processing lease 后，由当前有效 owner 在独立事务冻结 original delivery 集合的持久时间；集合为空也必须写非空时间 |
+| `last_error_code` | 只允许固定 Webhook 错误码，不保存异常文本、URL 或 payload |
+| `created_at/updated_at` | canonical UTC 秒；状态时间单调推进 |
+
+`AFTER INSERT ON file_security_events` trigger 让 source 与 pending outbox 在同一扫描事务提交或回滚；
+0066 升级还会原子回填已有 source，关闭部署升级前形成的孤儿窗口。到期索引不含 payload；insert/update/
+delete trigger 拒绝跨 tenant owner、REPLACE、rowid/身份改写、非法状态组合、尝试次数倒退和历史删除。
+首次 claim 事务只负责以完整条件提交 `processing`、attempt、claim token、owner 和 90 秒 lease，不能在
+claim 前验证 source，也不能在该事务内冻结 delivery。提交后，当前且未过期的 owner 在独立短事务中以
+tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 复核 source，补齐 0065 遗留的部分 original
+deliveries，同时创建/恢复 intent、写入 `delivery_snapshot_frozen_at` 并续租；即使没有匹配 Endpoint 也冻结
+空集合。marker 形成后，任何恢复只能处理冻结 delivery，不能把后来新增或改订阅的 Endpoint 追溯到旧 source。
+
 ## 8. API 设计
 
 ### 8.1 `POST /files/{file_id}/security-scan`
@@ -368,7 +394,11 @@ filename、finding ID、detector 证据或报告 hash。
 - 若文件不是 ready、DLP 已阻断或原/抽取对象不存在，返回固定统一错误
 - CPU/OCR 在独立 limiter 的 worker thread 运行；读取密文前和写事务内都再次校验两个权限
 - passed/blocked 报告幂等复用；failed attempt 不复用，可在 10 次上限内重试
-- 成功后机会性派发 Webhook；投递失败不回滚已提交报告
+- 高风险 source 与 pending outbox 由 0066 trigger 同事务形成；提交后路由只 wake 常驻 scheduler，
+  不直接联网投递。wake 丢失或进程退出都由启动恢复/周期轮询接管；worker 先在独立短事务提交真实
+  `processing` claim，随后当前 owner 在另一个事务以完整 CAS 完成 source 复核、legacy delivery 补齐、
+  intent/快照 marker 写入和续租，冻结完整或空 Endpoint 快照，之后不追溯新增 Endpoint。投递失败不回滚
+  已提交报告
 
 ### 8.2 `GET /files/{file_id}/security-report`
 
@@ -460,6 +490,13 @@ OCR 引擎明确不可用但仍能形成可信 coverage 报告时返回 HTTP 200
     `build_file_model_context()` 直接读取对象键。
 12. 扫描命令在同一个短 `BEGIN IMMEDIATE` 权限快照内读取两份 owner-bound Blob；跨租户、撤权、
     owner 漂移、AAD/fingerprint 不一致均在扫描前失败关闭，不把客户端 tenant 或前端按钮当授权。
+13. source worker 初始领取 90 秒 lease；每次真实网络 attempt 前先检查停服信号，再以
+    tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 续租 90 秒。任何持久字段漂移、
+    跨租户 join、续租冲突或迟到 worker 都失败关闭，且日志只保留固定 event/error code。
+14. 首次 claim 事务只提交 processing lease；随后当前有效 owner 在独立事务以 tenant/event/token/owner/
+    attempt/当前且未过期 lease 完整 CAS，补齐 0065 legacy 部分集合并与
+    `delivery_snapshot_frozen_at` 一起提交，空集合也写 marker。冻结后 dispatcher 禁止按当前 Endpoint 补建
+    intent。
 
 ## 12. RBAC 与导航
 
@@ -488,8 +525,14 @@ OCR 引擎明确不可用但仍能形成可信 coverage 报告时返回 HTTP 200
 }
 ```
 
-事件不含文件名、finding ID、正文、页码、OCR 文本、fingerprint 或 report hash。订阅、delivery、
-dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件订阅或投递事实时失败关闭。
+事件不含文件名、finding ID、正文、页码、OCR 文本、fingerprint 或 report hash。0066 trigger 与 source
+同事务形成 pending outbox；Control lifespan 启动即 drain，请求路由只 wake scheduler。worker 在独立短事务
+初始取得 90 秒 processing lease 并提交真实 claim；随后当前 owner 在另一独立事务以完整 CAS 补齐 legacy
+部分 deliveries、创建/恢复 intent、持久冻结完整或空 Endpoint 快照并续租；每次真实网络 attempt 前
+通过完整 CAS 续租，dispatcher 只 resume 冻结集合。稳定 `fsev_` event ID 提供
+at-least-once；远端收包后、本地确认前崩溃可能重发，不能宣称网络 exactly-once。lifespan 使用
+`threading.Event` 协作停服并等待同步 worker 完成，不取消 `to_thread` 遗留写库线程。0066 down 在
+outbox 存在任一业务行时拒绝，0065 down 仍在相关订阅或投递事实存在时失败关闭。
 
 ## 14. 配置与依赖
 
@@ -523,6 +566,24 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 - 不修改或删除 PRD-072 文件、抽取、DLP 和 source event 事实。
 - up/down/up roundtrip 后角色矩阵、rowid、tenant owner 和外键必须一致。
 
+0066 up：
+
+1. 前置 guard 精确确认数据库位于 65/0065、三张安全事实表与完整性均成立，且 0066 对象不存在。
+2. 创建 tenant-qualified `file_security_event_outbox`、`delivery_snapshot_frozen_at`、到期索引及
+   insert/update/delete/rowid 状态约束；claim 和同 owner 续租均固定为 90 秒并受完整 CAS 保护。
+3. 在同一迁移事务把既有 source 全部回填为立即到期 pending，再安装 source `AFTER INSERT` trigger。
+4. 首次 worker claim 先在独立短业务事务提交 processing lease；提交后由当前有效 owner 在另一个业务
+   事务以完整 CAS 补齐 legacy 部分 delivery、冻结包括空集合在内的订阅快照并续租；marker 形成后禁止
+   按当前 Endpoint 追溯补建。
+5. final guard 证明 source/outbox 一一覆盖、六个 trigger、外键和 integrity_check；迁移 runner 完成后
+   数据库栈顶为 66/0066。
+
+0066 down：
+
+- 仅当 outbox 完全为空且没有 0066 之后迁移时允许回到 0065；任一 pending、processing、dispatched
+  或 failed 行都是不可删除业务事实并原子拒绝降级。
+- 只移除 0066 trigger、索引和 outbox，保留 0065 三张安全事实表、RBAC revision 9 和 checksum。
+
 ## 16. 测试用例
 
 ### 16.1 Shared 单元测试
@@ -550,6 +611,12 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 - 静态所有权测试拒绝 Gateway/其他业务模块直接导入文件解密或读取对象键。
 - JSON/CSV strict DTO、no-store/nosniff、CSV formula 防护、无正文/对象键/fingerprint。
 - source event exact keys、Webhook 签名/投递/死信/重放，正文和 finding 证据命中为零。
+- source 提交后未执行 wake、Control 重启仍恢复同一 `fsev_`；失败退避、过期 lease 接管、迟到 worker
+  CAS 失败、第十次过期终结，以及已有 pending delivery resume 都不得产生第二个 event identity。
+- 首次 claim 先独立提交 processing lease；随后当前 owner 在独立事务完整 CAS 验证并补齐 legacy 部分
+  original deliveries；无订阅者时仍写 `delivery_snapshot_frozen_at`，冻结后新增 Endpoint 不得收到旧 source。
+- 90 秒初始 lease 与每个真实网络 attempt 前完整 CAS 续租；停服 `threading.Event` 被同步 worker
+  观察后不开始下一次网络访问，lifespan 必须等待 worker 完成状态回写。
 
 ### 16.3 迁移测试
 
@@ -558,6 +625,9 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 - deferred Finding/Scan 提交顺序、孤立 Finding 提交失败、失败 attempt 可重试/上限、权威结果并发唯一。
 - 256 finding 硬上限、溢出 coverage finding、读取 `LIMIT 257`、failed null score 与 128 字符链路 ID。
 - 伪造跨 tenant finding/event、伪造计数/hash、降级 guard 和完整性检查。
+- 65 -> 66、已有 source 原子 backfill、source/outbox 同事务 trigger、跨 tenant 复合 FK、状态机约束、
+  `delivery_snapshot_frozen_at`、90 秒 claim/续租、空 outbox down/up、存在任一 outbox 事实拒绝 down、
+  迁移幂等及 66/0066 完整性。
 
 ### 16.4 Console 测试
 
@@ -568,7 +638,8 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 
 ### 16.5 真实运行验收
 
-1. 开发库迁移到 0065，`integrity_check=ok`、外键违规 0、revision 9/62 权限。
+1. 开发库迁移到 0066，`integrity_check=ok`、外键违规 0、revision 9/62 权限，并证明 source/outbox
+   一一覆盖和 0066 trigger 完整。
 2. 启动 Gateway、Control、Console，三服务健康 200。
 3. 真实上传 clean TXT、隐藏 DOCX、含图片指令 DOCX、隐藏文本 PDF、`ToUnicode/CMap` 字体映射
    PDF 并执行扫描；字体映射样本的原始操作数无害，但持久抽取正文包含注入指令且必须 blocked。
@@ -577,17 +648,23 @@ dead-letter 与 replay 继续复用既有机制；0065 down 在仍有该事件�
 5. 下载 CSV，验证固定列、无正文/文件名/fingerprint/对象键和 formula 注入。
 6. 验证无权限、跨 tenant、OCR 不可用、覆盖超限、并发和统一 request_id。
 7. 扫描数据库、Blob、日志、Webhook、JSON/CSV 与 DOM 中的 Prompt/OCR/Token/密码 canary。
-8. Browser 桌面/移动验收，生成脱敏 Runtime 与 Browser JSON、截图和 SHA-256。
+8. 制造只有 source、尚无 delivery 的恢复场景，不依赖请求内 task；重启 Control 后证明同一 `fsev_`
+   被恢复且 outbox 进入 `dispatched`；同时证明空快照 marker、legacy 部分快照补齐、冻结后不追溯
+   新 Endpoint、逐网络 attempt 续租。故障演练只按有界状态机退避/终结，协作停服等待同步 worker，
+   停服后无 processing lease 或未清理运行资源。
+9. 生成新的 `66/0066` 脱敏 Runtime JSON 与 SHA-256；0066 不改页面，既有桌面/移动 Browser 证据继续有效。
 
 ## 17. 代码修改计划
 
 1. Shared 新增文件安全合同、DOCX/PDF 检测、离线 OCR adapter、模型边界构造和 Webhook 合同。
 2. 扩展运行配置、统一错误、i18n、诊断和依赖清单。
 3. 新建 0065 up/down 与迁移测试；RBAC revision 9 和后端依赖。
-4. Control 新增 security models/service/routes，复用文件密钥和加密 Blob owner，不修改 FileInfo。
-5. Console 新增 `file-security` feature/lib/state/render/bind，接入导航、i18n、样式和 owner 清理。
-6. 补 Shared/Control/Console/验收器测试、README、目录说明、API 文档和 testing 记录。
-7. 只在直接改动后跑聚焦测试；收口执行约定回归、迁移和真实双视口验收。
+4. 追加 0066 up/down、source trigger/outbox、90 秒 lease/逐网络 attempt CAS 续租、持久 delivery
+   snapshot 和 `threading.Event` 协作停服 worker；Control lifespan 启动恢复且不改写 0065。
+5. Control 新增 security models/service/routes，复用文件密钥和加密 Blob owner，不修改 FileInfo。
+6. Console 新增 `file-security` feature/lib/state/render/bind，接入导航、i18n、样式和 owner 清理。
+7. 补 Shared/Control/Console/验收器测试、README、目录说明、API 文档和 testing 记录。
+8. 只在直接改动后跑聚焦测试；收口执行约定回归、迁移和真实 Runtime 验收，页面未改则复用有效 Browser 证据。
 
 ## 18. 编码前自审
 
@@ -683,12 +760,165 @@ Prompt 原因和 `file.prompt_injection_detected` Webhook。修正后的 `Findin
 3. 以 Shared 收集器边界测试和 Control 端到端测试证明最终恰为 256 条，Prompt、coverage、blocked
    状态与 7 字段安全事件同时存在，正文和 evidence canary 在 DTO、数据库及事件中零命中。
 
-上述修复不改变公开 API、迁移版本、tenant/RBAC 矩阵或 Gateway 热路径。最终代码点的 PRD-073
-Python 分层结果为 `55 + 16 = 71 passed`，Console 全量 `690 passed`、lint `214 files passed`，
-中文注释、Ruff 和 `py_compile` 均通过。正式六样本 Runtime 为 `status=passed`，开发库为
-`65/0065` 且完整性/外键通过；完整命令、路径和 SHA-256 见 `docs/testing/PRD-073-tests.md`。
+上述两项修复不改变公开 API、tenant/RBAC 矩阵或 Gateway 热路径，但最终交叉审查随后发现 Webhook
+source 提交后的崩溃丢失窗口，见第 20 节。因而本节曾取得的 `65/0065` Runtime 只作为 0066 之前的
+中间检查点，不再是 PRD-073 终态证据；最终计数、Runtime 路径与 SHA-256 已在 0066 实际验收后更新到
+`docs/testing/PRD-073-tests.md`。0066 不改公开 API 和 PAGE-103，既有双视口 Browser 证据仍有效。
 
-因此 PRD-073 已满足设计、实现、tenant 隔离、后端权限、统一错误/request_id、数据库迁移、主流程、
-异常/权限测试、开发文档与实际运行验收门禁，可以标记完成。下一条权威未完成项为
-`PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`；全部 108 条仍在
-持续开发，`all_108_prds_complete=false`。
+PRD-073 未凭该中间检查点标记完成；第 20 节最终门禁实际通过后，下一条权威未完成项仍为
+`PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`。全部 108 条持续开发，
+`all_108_prds_complete=false`。
+
+## 20. 最终交叉审查修复设计、自审与实现
+
+状态：**设计、两轮编码前自审、实现与最终门禁均已完成（2026-08-06）**。
+
+最终交叉审查确认，原实现把 `file_security_events` 与扫描报告原子提交后，才把首次 Webhook
+派发加入进程内 `BackgroundTasks`。若进程在提交后、创建 `webhook_deliveries` 前退出，既有 replay
+worker 无法从只有 source event 的事实恢复 intent。本节冻结并落实修复设计；它覆盖并替代前文“仅机会性
+派发即可恢复”的描述，不改变公开文件 API、PAGE-103、RBAC revision 9 或检测结果合同。
+
+### 20.1 数据与迁移设计
+
+新增 `0066_file_security_event_outbox_recovery.sql` 及 down migration，不修改已经发布且有 checksum
+的 0065。新建 tenant-qualified `file_security_event_outbox`，与不可变 source event 一对一：
+
+| 字段 | 约束与用途 |
+| --- | --- |
+| `file_security_event_id/tenant_id` | 复合外键引用同 tenant `file_security_events`，source identity 不可改写 |
+| `dispatch_status` | `pending/processing/dispatched/failed` 固定状态机 |
+| `dispatch_attempts` | 0..10；每次取得 lease 前原子递增 |
+| `next_attempt_at/dispatched_at` | pending 到期时间或唯一成功终态时间，互斥 |
+| `claim_token/lease_owner_id/lease_expires_at` | processing 三元组；90 秒租约、逐网络 attempt 续租与完成 CAS |
+| `delivery_snapshot_frozen_at` | claim 提交 processing lease 后，由当前有效 owner 在独立事务持久冻结 original delivery 集合；零 Endpoint 也写 marker |
+| `last_error_code` | 只允许固定 Webhook/事件错误码，禁止异常文本、URL 或 payload |
+| `created_at/updated_at` | UTC 秒精度；状态推进必须单调 |
+
+0066 的 `AFTER INSERT ON file_security_events` trigger 在扫描同一事务内创建 pending outbox；迁移对
+已有 source event 原子回填 pending，关闭升级前已经形成的孤儿窗口。索引只覆盖到期状态和稳定排序。
+数据库约束/trigger 必须拒绝跨 tenant owner、REPLACE、身份改写、非法状态组合、尝试次数倒退和删除。
+claim 与续租固定 90 秒。claim 先在独立短事务中由完整到期条件选出一条 source，原子递增 attempt、写入
+processing/token/owner/lease 并提交；它不负责验证 source 或冻结 delivery。提交后，当前且未过期 owner
+只能在另一个独立事务以同 tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 推进，复核不可变
+source、补齐 legacy 部分 delivery、创建/恢复 intent、写 `delivery_snapshot_frozen_at` 并续租；空快照也
+必须冻结。down 只允许在 outbox 无任何业务行且没有后续迁移时执行，不能通过降级删除未投递或已投递历史。
+
+### 20.2 Worker 与投递语义
+
+Control lifespan 安装文件安全 source-outbox scheduler；Gateway 热路径不扫描该表。每轮先在独立短
+`BEGIN IMMEDIATE` 中领取至多一行，原子提交 processing lease 后关闭 claim 连接；claim 事务不预验证
+source，也不冻结 delivery。当前 owner 再从同 tenant immutable source 重建 exact-key 事件，并在另一个
+独立快照事务以完整 CAS 验证已有 original deliveries 的 tenant/event/time/payload，补齐当时 active 且
+订阅该事件的 Endpoint，并与 `delivery_snapshot_frozen_at` 一起提交；0065 遗留部分集合由此补齐，零
+delivery 也有持久 marker。确定性 source 交叉校验失败时，仍使用当前 claim 的完整 CAS 转为
+`failed + webhook.payload_invalid`，不得在 claim 前隔离或伪造 attempt。随后调用
+`dispatch_webhook_event(..., resume_existing_pending=True, create_snapshot_if_missing=False)`，只恢复
+冻结集合，不按当前 Endpoint 补建 intent。
+
+初始 claim 使用 90 秒 lease；公共 dispatcher 在每个真实网络 attempt 前回调 source guard，先检查
+`threading.Event` 停服信号，再以 tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 续租
+90 秒。source worker 只在 dispatcher 返回后用同一 owner 条件 CAS 完成。语义为稳定 `event_id` 的
+at-least-once：远端收包后、本地确认前崩溃可能重发，但并发 worker、迟到旧 worker和普通重启不能
+覆盖新 owner、扩大冻结 Endpoint 集合或创建另一 event identity。
+
+公共 Webhook attempt 回写还必须以 `tenant + endpoint + delivery + pending + attempt_count +
+secret_version` 完整 CAS；网络返回后若 source reaper 已先把 delivery 终结，迟到 worker 的 attempt 与
+摘要更新整体回滚。source 进入 `failed` 前，同一事务先把该事件剩余 original pending delivery 转为
+固定失败并由既有 trigger 建立死信；已经 success/failed 的混合快照保持不变。0066 source trigger
+同时禁止 `dispatched/failed` 终态仍存在 pending delivery。
+
+路由提交后只调用 `wake_file_security_event_scheduler()` 提示已运行的 scheduler，不直接 drain、领取
+lease 或执行网络投递；wake 信号本身不承载正文、finding 证据、Endpoint 信息或恢复正确性。即使 wake
+完全未执行或进程立即退出，持久 pending 仍由下次 Control lifespan 启动 drain 或固定轮询恢复。无匹配
+active Endpoint 时，公共 dispatcher 的空订阅快照视为已处理；以后新增
+订阅不追溯旧事件。失败按 5/30/300 秒有界退避，最多 10 个 source dispatch attempt；attempt=10 的
+lease 过期时直接终结 failed，不能进行第十一次 source dispatch。日志只记录固定 event/error code，
+不记录异常正文。停服时 lifespan 设置线程安全 stop event、唤醒 scheduler，并等待
+`asyncio.to_thread` 中的同步 worker 完成当前 attempt 和数据库收尾；不能用 task cancel 假装同步线程
+已经退出，也不能在观察 stop 后开始下一次真实网络访问。
+
+### 20.3 定向测试与实际验收
+
+- 迁移：65 -> 66、已有 source backfill、同事务 trigger、跨 tenant/FK、状态约束、空库 down/up、
+  有业务 outbox 时拒绝 down、幂等迁移、完整性和外键检查。
+- Worker：提交后首次 task 未执行、服务重启后投递；90 秒 claim；每个真实网络 attempt 前完整 CAS
+  续租；失败退避；过期 lease 接管；旧 worker 迟到 CAS 失败；第十次孤儿 lease 终结；两个 worker
+  只领取一次；稳定 event ID 恢复已有 pending delivery；坏 source 先真实 claim，再由有效 owner 完整
+  CAS 隔离后继续领取后续事件。
+- 快照：claim 先独立提交 processing lease；随后当前 owner 在独立快照事务以完整 CAS 补齐 0065 legacy
+  部分 original deliveries；无订阅者仍写 `delivery_snapshot_frozen_at`；marker 后新增 Endpoint 不追溯；
+  坏 tenant/event/time/payload 必须在真实 claim 后隔离并零出网；source 终态同步关闭 pending delivery、
+  保留 success，并证明迟到 attempt 不能覆盖 failed。
+- 停服：`threading.Event` 在下一网络 attempt 前被 source guard 观察；lifespan 等待同步 worker 完成，
+  不取消 `to_thread` 后留下写库或外呼线程。
+- 安全：重建信封 exact keys，source tenant 与事件 tenant 一致，数据库/日志/证据中 Prompt、文件名、
+  URL、Secret、Token 和异常文本零命中。
+- 回归：PRD-073 Control/迁移聚焦、Runtime 验收器合同、相邻 Webhook resume/replay 测试、中文注释、
+  Ruff、`py_compile`；实际三服务运行必须证明 66/0066、孤儿 source 恢复和资源清理。
+
+### 20.4 第一轮修复设计自审
+
+状态：**已完成并修正（2026-08-05）**。
+
+1. **仅扫描 `file_security_events` 会产生并发重复发送**：新增独立 lease/CAS 状态，不让多实例直接
+   对同一 source 调 dispatcher；claim 事务先提交唯一 processing owner，后续快照/intent 事务仍需完整
+   owner CAS。
+2. **先提交 source、后插 outbox 仍保留原崩溃窗口**：使用数据库 `AFTER INSERT` trigger，让二者在
+   同一扫描事务提交或回滚；0066 同时回填存量 source。
+3. **在扫描写事务内调用网络会扩大锁和反向回滚风险**：扫描事务只写 source/outbox；worker 的 claim
+   lease 与后续快照/intent 事务也都在网络前完成，网络严格在这些事务提交后。
+4. **没有订阅者时无法区分“已冻结空集合”和“尚未快照”**：新增持久
+   `delivery_snapshot_frozen_at`；空订阅快照同样写 marker，source 可进入 dispatched，后增订阅不追溯。
+5. **直接改 0065 会破坏已应用 checksum**：冻结为追加 0066，保留 0065 历史和可验证迁移链。
+
+### 20.5 第二轮修复设计自审
+
+状态：**已完成并修正（2026-08-05）**。
+
+1. **worker 崩溃在第十次 source dispatch 后可能突破上限**：attempt 在 dispatch 前持久递增；
+   attempt=10 的过期 processing 行只终结 failed，不再领取。
+2. **固定短 lease 无法覆盖多个 Endpoint 的串行投递**：初始 lease 固定为 90 秒；每次真实网络 attempt
+   前使用 tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 续租，失败则零出网。
+3. **0065 可能已经留下部分快照**：claim 先独立提交 processing lease；随后当前 owner 在独立快照事务
+   以完整 CAS 验证已有 original delivery，并为当时 active 订阅补齐缺项，再和 marker/续租一起提交；
+   任何不一致都整体回滚快照事务，但不伪造 claim 前验证。
+4. **恢复时重新读取当前订阅会改变历史快照**：marker 后调用 dispatcher 固定
+   `resume_existing_pending=True, create_snapshot_if_missing=False`，只恢复冻结 delivery；空快照也不
+   因后来新增 Endpoint 被误判为“缺失快照”。
+5. **outbox 可能成为跨租户重建入口**：claim 必须复合连接 tenant/source ID，并对 owner、枚举、时间、
+   exact payload 逐字段校验；任何损坏统一折叠为固定内部事件错误。
+6. **取消 asyncio task 不会终止 `to_thread` 同步外呼**：lifespan 使用 `threading.Event` 协作停服；
+   guard 在下一次真实网络 attempt 前观察 stop，lifespan 等待同步 worker 完成当前 attempt 和数据库收尾。
+7. **down 删除恢复事实会伪造可回退性**：只允许空 outbox 回退；存在 pending、processing、dispatched
+   或 failed 任一行时原子拒绝。
+8. **第十次 source 终结可能遗留永久 pending delivery**：三个失败入口先在同一写事务终结剩余
+   original pending delivery、触发固定死信，再以完整 source CAS 进入 failed；任一步失败全部回滚。
+9. **损坏的最早 due source 会阻塞全部后续事件**：先完成真实 processing claim，再由当前 owner 交叉
+   验证；确定性失败时用 tenant/event/token/owner/attempt/lease 完整 CAS 以
+   `webhook.payload_invalid` 隔离并继续稳定排序领取，不让坏 tenant/source 永久占据全局队首，也不伪造
+   attempt=10。
+10. **网络返回后的迟到 worker 可能覆盖 reaper 终态**：delivery 摘要更新新增 pending、前一 attempt
+    和 Secret 版本 CAS；不命中时回滚本轮 attempt，不能把 failed 改回 pending/success。
+
+### 20.6 实现落点与最终验收门禁
+
+  0066 up/down、`file_security/outbox.py`、`file_security/scheduler.py`、路由 wake 和 Control lifespan
+安装均已落地；claim 先在独立短事务提交 processing lease，公共 Webhook helper 随后在当前 owner 的独立
+快照事务以完整 CAS 补齐 legacy delivery 并冻结空/非空快照，pending resume 禁止按当前 Endpoint 补建。
+坏 source 只有在真实 claim 后交叉验证失败，才以完整 owner CAS 隔离为 `webhook.payload_invalid`。每次真实
+网络 attempt 前执行 90 秒完整 CAS 续租和 stop 检查；lifespan 用
+`threading.Event` 等待同步 worker。恢复还会逐字段复核 source tenant、事件身份、scan/file/actor、
+request/trace/time、七字段 payload 与 Prompt finding。最终标记门禁及实际结果如下：
+
+1. 0065/0066 迁移、90 秒 claim/续租、快照冻结、legacy/空快照、协作停服、source-outbox worker、
+   PRD-073 API、相邻 Webhook resume、20 个验收器合同、中文注释、目标静态检查和受影响回归均通过；
+   真实结果已写入测试记录。
+2. 三服务实际运行证明 `66/0066`、Control 真停服、停服期间 source 提交、新 lifespan scheduler 恢复、
+   稳定 event ID、attempt 1 `dispatched`、完整性/外键、隐私和资源清理；权威 Runtime 为
+   `prd073_20260806T062221Z_b2632ac89f57fc3a`，JSON SHA-256 为
+   `E2EFF29227A4246AE8FBB86B5B3C973C6E5212A1568AA32D9ABFB05B0DAE34FD`。
+3. 0066 未修改 Console、公开 API 或视觉布局，既有双视口 Browser 证据继续有效；2026-08-06 的实际
+   隔离库页面复验又确认桌面/移动无横向溢出、幂等扫描完成、页面 error/warn 为 0 且 Session 已登出。
+
+上述门禁已经完成，PRD-073 恢复“已完成”状态；下一轮从 PRD-074 开始，总体目标始终为
+`all_108_prds_complete=false`。

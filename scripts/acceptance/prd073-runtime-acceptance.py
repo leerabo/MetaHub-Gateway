@@ -12,6 +12,10 @@ import json
 import os
 import secrets
 import sqlite3
+import subprocess
+import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,10 +26,15 @@ from uuid import uuid4
 import httpx
 from docx import Document
 from docx.shared import Inches
+from metahub_control.auth import AuthContext
 from metahub_control.auth.service import authenticate_bearer
-from metahub_control.file_security.service import build_file_model_context
+from metahub_control.file_security.service import (
+    OcrBackendPool,
+    build_file_model_context,
+    scan_security_report,
+)
 from metahub_shared.db.security import hash_password, hash_token
-from metahub_shared.runtime.config import load_app_config
+from metahub_shared.runtime.config import AppConfig, load_app_config
 from metahub_shared.runtime.errors import ApiError
 from PIL import Image, ImageDraw, ImageFont
 
@@ -35,23 +44,43 @@ DEFAULT_RUN_ROOT = ROOT / ".tmp" / "prd073-live"
 DEFAULT_DATABASE = DEFAULT_RUN_ROOT / "metahub-prd073.db"
 DEFAULT_STORAGE = DEFAULT_RUN_ROOT / "file-storage"
 DEFAULT_ARTIFACT_ROOT = ROOT / ".artifacts" / "prd073-runtime"
+DEFAULT_CONTROL_LOG = ROOT / ".logs" / "control-api.log"
+DEFAULT_CONTROL_ERR_LOG = ROOT / ".logs" / "control-api.err.log"
+DEFAULT_GATEWAY_LOG = ROOT / ".logs" / "gateway.log"
+DEFAULT_GATEWAY_ERR_LOG = ROOT / ".logs" / "gateway.err.log"
+DEFAULT_CONSOLE_LOG = ROOT / ".logs" / "console.log"
+DEFAULT_CONSOLE_ERR_LOG = ROOT / ".logs" / "console.err.log"
 CONTROL_URL = "http://127.0.0.1:8001"
 GATEWAY_URL = "http://127.0.0.1:8000"
 CONSOLE_URL = "http://127.0.0.1:5173"
+CONTROL_RECOVERY_TIMEOUT_SECONDS = 20.0
+CONTROL_STOP_OBSERVATION_SECONDS = 5.0
+MAX_PRIVACY_FILE_BYTES = 64 * 1024 * 1024
+
+# 重启期间的临时 stdout/stderr 只写入 .tmp；它们加入本轮日志扫描，但不进入公开证据。
+_RUNTIME_RESTART_LOGS: list[Path] = []
+_CONTROL_RESTART_PROCESS: subprocess.Popen[bytes] | None = None
 
 # 正式证据禁止出现正文、文件名、凭据、租户身份或安全实现内部定位字段。
 FORBIDDEN_EVIDENCE_KEYS = frozenset(
     {
         "authorization",
         "content",
+        "endpoint",
+        "endpoint_id",
+        "endpoint_url",
         "evidence_fingerprint",
         "filename",
         "object_key",
         "password",
         "prompt",
+        "request_id",
         "response",
+        "secret",
+        "secret_version",
         "tenant_id",
         "token",
+        "trace_id",
     }
 )
 
@@ -119,6 +148,14 @@ class RuntimeConfig:
     console_url: str
     # 管理员密码只能由当前进程环境注入，关闭 repr 防止测试失败或调试输出泄露。
     admin_password: str = field(default="", repr=False)
+    # 日志路径是隐私验收目标而非运行配置；默认指向仓库既有三服务日志，测试批次
+    # 可以将它们重定向到 .tmp，但环境覆盖仍必须留在仓库边界内。
+    control_log: Path = DEFAULT_CONTROL_LOG
+    gateway_log: Path = DEFAULT_GATEWAY_LOG
+    console_log: Path = DEFAULT_CONSOLE_LOG
+    control_err_log: Path = DEFAULT_CONTROL_ERR_LOG
+    gateway_err_log: Path = DEFAULT_GATEWAY_ERR_LOG
+    console_err_log: Path = DEFAULT_CONSOLE_ERR_LOG
 
     @classmethod
     def from_environment(cls) -> RuntimeConfig:
@@ -159,6 +196,36 @@ class RuntimeConfig:
                 stage="config.console_url",
             ),
             admin_password=admin_password,
+            control_log=workspace_path(
+                os.getenv("METAHUB_PRD073_CONTROL_LOG", str(DEFAULT_CONTROL_LOG)),
+                ROOT,
+                stage="config.control_log",
+            ),
+            gateway_log=workspace_path(
+                os.getenv("METAHUB_PRD073_GATEWAY_LOG", str(DEFAULT_GATEWAY_LOG)),
+                ROOT,
+                stage="config.gateway_log",
+            ),
+            console_log=workspace_path(
+                os.getenv("METAHUB_PRD073_CONSOLE_LOG", str(DEFAULT_CONSOLE_LOG)),
+                ROOT,
+                stage="config.console_log",
+            ),
+            control_err_log=workspace_path(
+                os.getenv("METAHUB_PRD073_CONTROL_ERR_LOG", str(DEFAULT_CONTROL_ERR_LOG)),
+                ROOT,
+                stage="config.control_err_log",
+            ),
+            gateway_err_log=workspace_path(
+                os.getenv("METAHUB_PRD073_GATEWAY_ERR_LOG", str(DEFAULT_GATEWAY_ERR_LOG)),
+                ROOT,
+                stage="config.gateway_err_log",
+            ),
+            console_err_log=workspace_path(
+                os.getenv("METAHUB_PRD073_CONSOLE_ERR_LOG", str(DEFAULT_CONSOLE_ERR_LOG)),
+                ROOT,
+                stage="config.console_err_log",
+            ),
         )
 
 
@@ -196,6 +263,7 @@ class RuntimeSecrets:
                 f"hidden-{suffix}.pdf",
                 f"ocr-{suffix}.docx",
                 f"mapped-{suffix}.pdf",
+                f"outbox-recovery-{suffix}.txt",
             ),
             viewer_email=f"viewer-{suffix}@prd073.local",
             viewer_password=f"Prd073!{secrets.token_urlsafe(24)}Aa1",
@@ -400,7 +468,7 @@ def build_to_unicode_pdf(mapped_text: str) -> bytes:
 
 
 def prepare_identities(database: Path, secrets_: RuntimeSecrets) -> RuntimeIdentities:
-    """在隔离 0065 库创建只读 Viewer、第二租户 Admin，并实时撤销 Viewer 扫描权限。"""
+    """在隔离 0066 库创建只读 Viewer、第二租户 Admin，并实时撤销 Viewer 扫描权限。"""
 
     require(database.is_file(), "database", "path_invalid")
     connection = sqlite3.connect(database)
@@ -413,7 +481,7 @@ def prepare_identities(database: Path, secrets_: RuntimeSecrets) -> RuntimeIdent
         migration = connection.execute(
             "SELECT COUNT(*),MAX(version) FROM schema_migrations WHERE status='applied'"
         ).fetchone()
-        require(tuple(migration) == (65, "0065"), "database", "migration_not_0065")
+        require(tuple(migration) == (66, "0066"), "database", "migration_not_0066")
         owner = connection.execute(
             "SELECT tenant_id FROM users WHERE email='admin@metahub.local' AND status='active'"
         ).fetchone()
@@ -600,22 +668,200 @@ def finding_codes(payload: dict[str, object]) -> set[str]:
     return {str(item.get("detector_code")) for item in findings if isinstance(item, dict)}
 
 
+def runtime_service_log_paths(config: RuntimeConfig | None = None) -> tuple[Path, ...]:
+    """返回三项服务的 stdout/stderr 日志目标，并验证每个目标仍在仓库内。
+
+    参数：可选运行配置；缺省时读取仓库既有 ``.logs`` 目标。返回：去重后的普通路径元组。
+    约束：隐私扫描不能因为日志重定向而跟随仓库外链接；不存在的日志只作为待产生目标，
+    不在扫描时伪造文件内容。
+    """
+
+    if config is None:
+        paths = (
+            DEFAULT_CONTROL_LOG,
+            DEFAULT_CONTROL_ERR_LOG,
+            DEFAULT_GATEWAY_LOG,
+            DEFAULT_GATEWAY_ERR_LOG,
+            DEFAULT_CONSOLE_LOG,
+            DEFAULT_CONSOLE_ERR_LOG,
+        )
+    else:
+        paths = (
+            config.control_log,
+            config.control_err_log,
+            config.gateway_log,
+            config.gateway_err_log,
+            config.console_log,
+            config.console_err_log,
+        )
+    paths = (*paths, *_RUNTIME_RESTART_LOGS)
+    unique: list[Path] = []
+    for path in paths:
+        resolved = workspace_path(path, ROOT, stage="privacy.log_path")
+        require(not resolved.is_symlink(), "privacy", "log_symlink")
+        if resolved not in unique:
+            unique.append(resolved)
+    return tuple(unique)
+
+
+def _privacy_scan_files(
+    paths: tuple[Path, ...],
+    values: tuple[bytes, ...],
+    *,
+    stage: str,
+) -> tuple[int, int, int]:
+    """逐字节扫描有界普通文件，返回命中数、文件数和读取字节数。
+
+    参数：待扫路径、敏感 canary、失败阶段。返回：``(hits, files, bytes)``。
+    关键约束：单个日志/数据库文件超过上限或不可读时必须失败关闭，避免验收器成为
+    无界文件读取器；异常正文和路径不向外传播。
+    """
+
+    hits = 0
+    scanned_files = 0
+    scanned_bytes = 0
+    markers = tuple(dict.fromkeys(value for value in values if value))
+    for path in paths:
+        try:
+            require(path.is_file() and not path.is_symlink(), stage, "file_invalid")
+            size = path.stat().st_size
+            require(size <= MAX_PRIVACY_FILE_BYTES, stage, "file_too_large")
+            content = path.read_bytes()
+        except AcceptanceFailure:
+            raise
+        # 文件系统异常可能包含本机路径或锁信息，统一折叠为固定隐私扫描错误。
+        except (OSError, ValueError):
+            raise AcceptanceFailure(stage, "read_failed") from None
+        scanned_files += 1
+        scanned_bytes += len(content)
+        hits += sum(content.count(marker) for marker in markers)
+    return hits, scanned_files, scanned_bytes
+
+
+def _sensitive_log_encodings(value: bytes) -> tuple[bytes, ...]:
+    """返回日志中必须等价拦截的敏感值字节表示。
+
+    参数：验收器内部保存的 UTF-8 敏感 canary。返回：去重后的 UTF-8、UTF-16LE 和
+    UTF-16BE 字节序列。Windows PowerShell 重定向可能把子进程输出转换为 UTF-16；若只
+    扫描 UTF-8 会产生隐私假阴性。未来若传入非 UTF-8 二进制值，至少保留原字节扫描，
+    不能因为辅助解码失败而跳过该值或让验收器异常退出。
+    """
+
+    try:
+        text = value.decode("utf-8", errors="strict")
+    # 非文本 canary 仍按原字节参与扫描，避免解码错误缩小隐私验收覆盖面。
+    except UnicodeDecodeError:
+        return (value,)
+    candidates = (value, text.encode("utf-16-le"), text.encode("utf-16-be"))
+    return tuple(dict.fromkeys(candidates))
+
+
 def verify_private_storage(
     database: Path,
     storage: Path,
     values: tuple[bytes, ...],
+    *,
+    log_paths: tuple[Path, ...] = (),
+    log_values: tuple[bytes, ...] = (),
+    extra_targets: tuple[Path, ...] = (),
 ) -> dict[str, int]:
-    """扫描隔离数据库和加密对象，证明合成明文没有被直接持久化。"""
+    """扫描数据库伴生文件、加密对象、三服务日志和既有目标，证明明文没有落盘。
 
-    candidates = [database]
-    if storage.exists():
-        candidates.extend(path for path in storage.rglob("*") if path.is_file())
-    hits = 0
-    for path in candidates:
-        content = path.read_bytes()
-        hits += sum(1 for value in values if value and value in content)
+    参数：数据库、对象目录、存储 canary，以及可选日志/额外目标和日志专用 canary。
+    返回：只含计数的脱敏扫描摘要。SQLite 的 ``-wal``、``-shm`` 和 ``-journal`` 即使
+    尚未被 checkpoint 也必须纳入候选；日志 canary 使用完整批次集合，避免只扫 Blob
+    时漏掉 email、文件名或 Session 值。
+    """
+
+    database = workspace_path(database, ROOT / ".tmp", stage="privacy.database")
+    storage = workspace_path(storage, ROOT / ".tmp", stage="privacy.storage")
+    require(database.is_file() and not database.is_symlink(), "privacy", "database_missing")
+    require(storage.is_dir() and not storage.is_symlink(), "privacy", "storage_missing")
+
+    database_candidates = tuple(
+        path
+        for path in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        if path.exists()
+    )
+    storage_candidates: list[Path] = []
+    try:
+        for path in storage.rglob("*"):
+            if path.is_symlink():
+                raise AcceptanceFailure("privacy", "storage_symlink")
+            if path.is_file():
+                storage_candidates.append(path)
+    except AcceptanceFailure:
+        raise
+    # 遍历失败不得回显存储路径或操作系统详情，只暴露稳定验收坐标。
+    except OSError:
+        raise AcceptanceFailure("privacy", "storage_walk_failed") from None
+
+    configured_logs = log_paths or runtime_service_log_paths()
+    log_candidates: list[Path] = []
+    for path in configured_logs:
+        candidate = Path(path).expanduser()
+        try:
+            # 正式日志是验收证据的一部分，缺失时必须失败关闭；同时在 resolve 前拒绝链接，
+            # 否则链接会被解析成目标普通文件，导致仓库外日志或替换后的日志被误判为已扫描。
+            require(not candidate.is_symlink(), "privacy.logs", "required_log_invalid")
+            resolved = workspace_path(candidate, ROOT, stage="privacy.log_path")
+            require(resolved.exists(), "privacy.logs", "required_log_missing")
+            require(
+                resolved.is_file() and not resolved.is_symlink(),
+                "privacy.logs",
+                "required_log_invalid",
+            )
+        except AcceptanceFailure:
+            raise
+        # 文件系统异常可能携带本机路径，统一折叠为稳定错误码且不回显异常正文。
+        except (OSError, ValueError):
+            raise AcceptanceFailure("privacy.logs", "required_log_invalid") from None
+        log_candidates.append(resolved)
+    extra_candidates = tuple(
+        workspace_path(path, ROOT, stage="privacy.target_path")
+        for path in extra_targets
+        if path.exists()
+    )
+    storage_hits, storage_count, storage_bytes = _privacy_scan_files(
+        tuple(storage_candidates) + extra_candidates,
+        values,
+        stage="privacy.storage",
+    )
+    database_hits, database_count, database_bytes = _privacy_scan_files(
+        database_candidates,
+        values,
+        stage="privacy.database",
+    )
+    log_hits, log_count, log_bytes = _privacy_scan_files(
+        tuple(log_candidates),
+        tuple(
+            encoded_value
+            for value in (log_values or values)
+            for encoded_value in _sensitive_log_encodings(value)
+        ),
+        stage="privacy.logs",
+    )
+    hits = storage_hits + database_hits + log_hits
     require(hits == 0, "privacy", "plaintext_persisted")
-    return {"scanned_files": len(candidates), "plaintext_hits": hits}
+    return {
+        "scanned_files": storage_count + database_count + log_count,
+        "plaintext_hits": hits,
+        "database_files_scanned": database_count,
+        "database_bytes_scanned": database_bytes,
+        "storage_files_scanned": storage_count,
+        "storage_bytes_scanned": storage_bytes,
+        "service_log_files_scanned": log_count,
+        "service_log_bytes_scanned": log_bytes,
+        "service_log_plaintext_hits": log_hits,
+        "database_wal_present": int(Path(f"{database}-wal").exists()),
+        "database_shm_present": int(Path(f"{database}-shm").exists()),
+        "database_journal_present": int(Path(f"{database}-journal").exists()),
+    }
 
 
 def database_counts(database: Path, tenant_id: str) -> dict[str, int]:
@@ -633,9 +879,606 @@ def database_counts(database: Path, tenant_id: str) -> dict[str, int]:
             "event_count": connection.execute(
                 "SELECT COUNT(*) FROM file_security_events WHERE tenant_id=?", (tenant_id,)
             ).fetchone()[0],
+            "outbox_count": connection.execute(
+                "SELECT COUNT(*) FROM file_security_event_outbox WHERE tenant_id=?",
+                (tenant_id,),
+            ).fetchone()[0],
         }
     finally:
         connection.close()
+
+
+def _require_app_database_binding(app_config: AppConfig, database: Path) -> None:
+    """证明生产 outbox worker 与验收器读取的是同一 ``.tmp`` 隔离库。
+
+    参数：Control 运行配置和验收数据库路径。返回：无。
+    关键约束：先解析并约束 SQLite URL，再比较真实路径；禁止为了恢复证明误连开发库或工作区外库。
+    """
+
+    value = app_config.database_url
+    require(type(value) is str, "outbox-recovery", "database_url_missing")
+    parsed = urlsplit(value)
+    require(
+        parsed.scheme == "sqlite"
+        and not parsed.netloc
+        and not parsed.query
+        and not parsed.fragment,
+        "outbox-recovery",
+        "database_url_invalid",
+    )
+    raw_path = parsed.path
+    # Windows 绝对路径在 sqlite URL 中表示为 /D:/...；移除 URL 根斜杠后再交给 Path。
+    if len(raw_path) >= 4 and raw_path[0] == "/" and raw_path[2] == ":":
+        raw_path = raw_path[1:]
+    require("%" not in raw_path, "outbox-recovery", "database_url_encoded")
+    candidate = Path(raw_path)
+    require(candidate.is_absolute(), "outbox-recovery", "database_path_relative")
+    bound = workspace_path(candidate, ROOT / ".tmp", stage="outbox-recovery")
+    require(bound == database.resolve(), "outbox-recovery", "database_binding_drift")
+
+
+def _control_health_available(url: str) -> bool:
+    """只用固定回环 health 判断 Control 是否仍由目标进程提供服务。
+
+    参数：已通过 ``loopback_url`` 校验的 Control 基址。返回：目标服务健康 200 且服务名
+    匹配时为 True。网络异常和非 JSON 响应均按未运行处理，不把底层正文带入验收结果。
+    """
+
+    try:
+        response = httpx.get(f"{url}/health", timeout=2.0)
+        if response.status_code != 200:
+            return False
+        payload = response.json()
+        return isinstance(payload, dict) and payload.get("service_name") == "control-plane-api"
+    except Exception:
+        return False
+
+
+def _control_listener_pid() -> int:
+    """读取固定 8001 回环监听 PID，并将系统命令输出折叠为固定失败码。
+
+    参数：无。返回：当前 Control 监听进程 PID。约束：只在 Windows 本地开发运行时使用
+    ``Get-NetTCPConnection``，不接受命令行或网络输入，避免误杀其他端口服务。
+    """
+
+    require(os.name == "nt", "outbox-recovery", "control_restart_platform")
+    command = (
+        "$item = Get-NetTCPConnection -State Listen -LocalPort 8001 "
+        "-ErrorAction SilentlyContinue | Select-Object -First 1; "
+        "if ($null -ne $item) { [Console]::WriteLine($item.OwningProcess) }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=10.0,
+            check=False,
+        )
+    # 系统查询失败或超时均不能泄露命令输出，统一报告监听者不可用。
+    except (OSError, subprocess.TimeoutExpired):
+        raise AcceptanceFailure("outbox-recovery", "control_pid_unavailable") from None
+    if result.returncode != 0:
+        raise AcceptanceFailure("outbox-recovery", "control_pid_unavailable")
+    candidates = [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+    require(len(candidates) == 1, "outbox-recovery", "control_pid_unavailable")
+    try:
+        pid = int(candidates[0])
+    # 即使系统返回非数字 PID，也只公开固定失败码，禁止透传原始输出。
+    except ValueError:
+        raise AcceptanceFailure("outbox-recovery", "control_pid_unavailable") from None
+    require(pid > 0, "outbox-recovery", "control_pid_unavailable")
+    return pid
+
+
+def _assert_control_process_identity(pid: int) -> None:
+    """确认待停止 PID 是 MetaHub Control 模块，防止验收器误杀无关本地服务。"""
+
+    command = (
+        f"$item = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' "
+        "-ErrorAction SilentlyContinue; "
+        "if ($null -ne $item) { [Console]::WriteLine($item.CommandLine) }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=10.0,
+            check=False,
+        )
+    # 进程身份查询失败时必须停止验收，且不向证据复制系统命令详情。
+    except (OSError, subprocess.TimeoutExpired):
+        raise AcceptanceFailure("outbox-recovery", "control_identity_unavailable") from None
+    require(result.returncode == 0, "outbox-recovery", "control_identity_unavailable")
+    identity = result.stdout.lower()
+    # start-control-api.ps1 使用 run_module(main)，直接 uvicorn 使用 app；两者都属于本仓库
+    # Control 入口。只凭端口和 PID 不足以安全执行停止动作，必须再做模块身份校验。
+    require(
+        "metahub_control.main" in identity or "metahub_control.app" in identity,
+        "outbox-recovery",
+        "control_identity_invalid",
+    )
+
+
+def _stop_control_process(pid: int) -> None:
+    """递归停止已完成身份校验的 Control 进程，不记录 PID 或系统输出。"""
+
+    try:
+        result = subprocess.run(
+            ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=15.0,
+            check=False,
+        )
+    # 停止动作失败或超时只转换为稳定错误码，避免暴露本地进程信息。
+    except (OSError, subprocess.TimeoutExpired):
+        raise AcceptanceFailure("outbox-recovery", "control_stop_failed") from None
+    # 进程可能在 taskkill 竞态中自行退出；调用方随后仍会强制观察 health 断开。
+    if result.returncode != 0 and _control_health_available(CONTROL_URL):
+        raise AcceptanceFailure("outbox-recovery", "control_stop_failed")
+
+
+def stop_control_for_recovery(config: RuntimeConfig, suffix: str) -> dict[str, bool]:
+    """真实停止 Control，并在提交 source 前观察固定回环 health 断开。
+
+    参数：本批配置和安全后缀（仅用于稳定日志阶段，不写入证据）。返回：停服观测摘要。
+    关键约束：只有已健康且身份匹配的本地 Control 才允许被停止；停服未被观察到时立即
+    失败，避免把仍在运行的 scheduler 误当成“重启恢复”。
+    """
+
+    require(_control_health_available(config.control_url), "outbox-recovery", "control_not_healthy")
+    pid = _control_listener_pid()
+    _assert_control_process_identity(pid)
+    _stop_control_process(pid)
+    deadline = time.monotonic() + CONTROL_STOP_OBSERVATION_SECONDS
+    while time.monotonic() < deadline:
+        if not _control_health_available(config.control_url):
+            # 留出一个很短的稳定窗口，防止父 shell 立刻拉起旧进程而形成假停服。
+            time.sleep(0.15)
+            require(
+                not _control_health_available(config.control_url),
+                "outbox-recovery",
+                "control_stop_unstable",
+            )
+            return {
+                "control_stopped": True,
+                "control_outage_observed": True,
+                "control_scheduler_quiesced": True,
+            }
+        time.sleep(0.05)
+    raise AcceptanceFailure("outbox-recovery", "control_stop_not_observed")
+
+
+def start_control_for_recovery(config: RuntimeConfig, suffix: str) -> dict[str, bool]:
+    """启动新的 Control 进程并等待 health 恢复，让真实 lifespan scheduler 接管 source。
+
+    参数：本批配置和随机后缀。返回：只含启动/健康布尔值的摘要。
+    约束：子进程继承当前已绑定的 SQLite URL 和源码路径，但不继承管理员密码；stdout/stderr
+    只写到仓库 ``.tmp``，供最终隐私扫描读取。
+    """
+
+    global _CONTROL_RESTART_PROCESS
+    if _control_health_available(config.control_url):
+        # 失败恢复可能在首轮启动刚刚恢复 health 时再次进入；此时复用现有服务，禁止重复拉起
+        # 第二个 8001 进程。正常停服验收不会命中该分支，因为调用前已证明 health 断开。
+        return {
+            "control_restarted": True,
+            "control_health_restored": True,
+            "scheduler_started_after_restart": True,
+        }
+    run_root = workspace_path(DEFAULT_RUN_ROOT, ROOT / ".tmp", stage="outbox-recovery")
+    run_root.mkdir(parents=True, exist_ok=True)
+    safe_suffix = "".join(char for char in suffix if char.isalnum()) or "restart"
+    stdout_path = run_root / f"control-restart-{safe_suffix}.log"
+    stderr_path = run_root / f"control-restart-{safe_suffix}.err.log"
+    for path in (stdout_path, stderr_path):
+        require(not path.is_symlink(), "outbox-recovery", "restart_log_symlink")
+    environment = os.environ.copy()
+    # 验收器已从父环境移除管理员密码；再次显式清理，避免未来调用顺序变化时泄露给子进程。
+    environment.pop("METAHUB_PRD073_ADMIN_PASSWORD", None)
+    source_roots = [
+        ROOT / "shared-sdk" / "python",
+        ROOT / "gateway-data-plane" / "src",
+        ROOT / "control-plane-api" / "src",
+        ROOT / "examples" / "python" / "src",
+    ]
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [*(str(path) for path in source_roots), environment.get("PYTHONPATH", "")]
+    )
+    port = urlsplit(config.control_url).port
+    require(port == 8001, "outbox-recovery", "control_port_drift")
+    command = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "metahub_control.app:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--no-access-log",
+        "--no-proxy-headers",
+    ]
+    process = _CONTROL_RESTART_PROCESS
+    if process is None or process.poll() is not None:
+        try:
+            stdout_handle = stdout_path.open("ab")
+            stderr_handle = stderr_path.open("ab")
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=ROOT,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    close_fds=True,
+                )
+                _CONTROL_RESTART_PROCESS = process
+            finally:
+                stdout_handle.close()
+                stderr_handle.close()
+        # 日志文件或子进程创建失败不得暴露环境、命令行和本机路径。
+        except (OSError, ValueError):
+            raise AcceptanceFailure("outbox-recovery", "control_start_failed") from None
+        for path in (stdout_path, stderr_path):
+            if path not in _RUNTIME_RESTART_LOGS:
+                _RUNTIME_RESTART_LOGS.append(path)
+    # 首轮启动超时后进程可能仍在初始化；失败恢复应继续观察同一进程，不能制造端口竞争。
+    require(process is not None, "outbox-recovery", "control_start_failed")
+    deadline = time.monotonic() + CONTROL_RECOVERY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if _control_health_available(config.control_url):
+            return {
+                "control_restarted": True,
+                "control_health_restored": True,
+                "scheduler_started_after_restart": True,
+            }
+        # 进程异常退出只公开固定启动失败码，不读取 stderr。
+        if process.poll() is not None:
+            raise AcceptanceFailure("outbox-recovery", "control_start_failed")
+        time.sleep(0.1)
+    raise AcceptanceFailure("outbox-recovery", "control_start_not_observed")
+
+
+def _best_effort_restore_control(
+    start_control: Callable[[RuntimeConfig, str], dict[str, bool]],
+    config: RuntimeConfig,
+    suffix: str,
+) -> None:
+    """验收失败后尽力恢复 Control，同时保留触发失败的原始固定错误坐标。
+
+    参数：重启实现、当前运行配置和安全批次后缀。返回：无。
+    关键约束：恢复动作自身失败不得覆盖扫描、数据库或启动合同的原始失败；正式重启实现
+    会复用尚在启动的进程，避免恢复重试产生第二个 8001 监听者。
+    """
+
+    try:
+        start_control(config, suffix)
+    except Exception:
+        # best-effort 的职责是恢复本地开发服务，失败只能被吞掉，原验收异常由调用方继续抛出。
+        return
+
+
+def _start_control_and_require_recovery(
+    start_control: Callable[[RuntimeConfig, str], dict[str, bool]],
+    config: RuntimeConfig,
+    suffix: str,
+) -> None:
+    """执行正式重启合同；首轮启动失败时先补做一次恢复，再报告验收失败。
+
+    参数：重启实现、当前运行配置和安全批次后缀。返回：无。
+    约束：补偿恢复成功也不能把首轮失败改写成通过，否则运行证据会掩盖不稳定的启动过程。
+    """
+
+    try:
+        result = start_control(config, suffix)
+        require(
+            isinstance(result, dict)
+            and result.get("control_restarted") is True
+            and result.get("control_health_restored") is True
+            and result.get("scheduler_started_after_restart") is True,
+            "outbox-recovery",
+            "control_start_contract_invalid",
+        )
+    except AcceptanceFailure:
+        _best_effort_restore_control(start_control, config, suffix)
+        raise
+    except Exception:
+        _best_effort_restore_control(start_control, config, suffix)
+        raise AcceptanceFailure("outbox-recovery", "control_start_failed") from None
+
+
+def _canonical_delivery_snapshot_time(value: object) -> str:
+    """校验 outbox 快照或成功时间，并返回不含业务身份的秒精度 UTC 文本。"""
+
+    require(
+        type(value) is str and value.endswith("Z"),
+        "outbox-recovery",
+        "snapshot_time_invalid",
+    )
+    try:
+        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
+    # 原始时间可能来自损坏数据库；解析异常只转换为固定坐标，禁止回显持久值。
+    except ValueError:
+        raise AcceptanceFailure("outbox-recovery", "snapshot_time_invalid") from None
+    canonical = parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    require(value == canonical, "outbox-recovery", "snapshot_time_invalid")
+    return canonical
+
+
+def recover_committed_file_security_source(
+    database: Path,
+    app_config: AppConfig,
+    *,
+    context: AuthContext,
+    tenant_id: str,
+    file_id: str,
+    suffix: str,
+    stop_control: Callable[[RuntimeConfig, str], dict[str, bool]] | None = None,
+    start_control: Callable[[RuntimeConfig, str], dict[str, bool]] | None = None,
+    runtime_config: RuntimeConfig | None = None,
+) -> dict[str, object]:
+    """停服后提交真实扫描 source，再由重启后的生产 scheduler 恢复到终态。
+
+    参数：隔离库、Control 配置、可信认证上下文、tenant/file owner 和批次后缀。
+    ``stop_control``/``start_control`` 仅供不连接真实服务的合同测试注入；正式入口使用
+    本地进程控制实现，绝不在验收器内直接调用 outbox drain。
+    返回：不包含业务 ID、正文、租户或 worker 身份的恢复与清理摘要。
+    关键约束：先观察 Control health 断开，再由 service 在停服窗口提交 blocked scan、finding、
+    source 和 trigger outbox；重启后仅观察数据库终态，成功只能归因于 lifespan scheduler。
+    """
+
+    _require_app_database_binding(app_config, database)
+    runtime_config = runtime_config or RuntimeConfig(
+        database=database,
+        storage=DEFAULT_STORAGE,
+        artifact_root=DEFAULT_ARTIFACT_ROOT,
+        control_url=CONTROL_URL,
+        gateway_url=GATEWAY_URL,
+        console_url=CONSOLE_URL,
+    )
+    stop_hook = stop_control or stop_control_for_recovery
+    start_hook = start_control or start_control_for_recovery
+    request_id = f"prd073-outbox-{suffix}"
+    trace_id = f"trc_prd073_outbox_{suffix}"
+    connection = sqlite3.connect(database)
+    try:
+        nonterminal_before = connection.execute(
+            "SELECT COUNT(*) FROM file_security_event_outbox "
+            "WHERE tenant_id=? AND dispatch_status IN ('pending','processing')",
+            (tenant_id,),
+        ).fetchone()[0]
+        require(nonterminal_before == 0, "outbox-recovery", "source_backlog_not_idle")
+        existing_scan_count = connection.execute(
+            "SELECT COUNT(*) FROM file_security_scans WHERE tenant_id=? AND file_id=?",
+            (tenant_id, file_id),
+        ).fetchone()[0]
+        require(existing_scan_count == 0, "outbox-recovery", "source_file_already_scanned")
+        subscriber_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM webhook_endpoints endpoint
+            WHERE endpoint.tenant_id=? AND endpoint.status='active'
+              AND EXISTS (
+                SELECT 1 FROM json_each(endpoint.event_types_json) item
+                WHERE item.value='file.prompt_injection_detected'
+              )
+            """,
+            (tenant_id,),
+        ).fetchone()[0]
+        # 验收器只允许固定回环 HTTP；source 恢复测试使用零订阅快照，禁止触发任意客户 URL。
+        require(subscriber_count == 0, "outbox-recovery", "active_subscriber_present")
+    except AcceptanceFailure:
+        raise
+    # 隔离库结构或 JSON 目录异常不得把 SQL、路径或订阅内容带入终端。
+    except sqlite3.Error:
+        raise AcceptanceFailure("outbox-recovery", "precondition_query_failed") from None
+    finally:
+        connection.close()
+
+    # 停服必须发生在 source 提交之前；否则在线 scheduler 可能先领取 intent，无法证明
+    # 下面的 dispatched 是重启后的 lifespan worker 产生。合同测试以 hook 记录调用顺序。
+    stop_result = stop_hook(runtime_config, suffix)
+    require(
+        isinstance(stop_result, dict)
+        and stop_result.get("control_stopped") is True
+        and stop_result.get("control_outage_observed") is True,
+        "outbox-recovery",
+        "control_stop_contract_invalid",
+    )
+    # 直接调用 service 只负责提交扫描事实；停服窗口内绝不调用 route wake 或 outbox drain。
+    try:
+        report_response, event = scan_security_report(
+            app_config,
+            context,
+            file_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            ocr_backend=OcrBackendPool(capacity=1),
+        )
+    # 扫描依赖或未知解析器异常都可能携带正文；先尽力恢复 Control，再只保留固定验收分类。
+    except Exception:
+        _best_effort_restore_control(start_hook, runtime_config, suffix)
+        raise AcceptanceFailure("outbox-recovery", "source_scan_failed") from None
+    try:
+        require(event is not None, "outbox-recovery", "source_event_missing")
+        require(report_response.reused is False, "outbox-recovery", "source_scan_reused")
+        require(report_response.report.status == "blocked", "outbox-recovery", "source_not_blocked")
+        require(
+            event.event_type == "file.prompt_injection_detected",
+            "outbox-recovery",
+            "source_event_type_drift",
+        )
+        require(event.tenant_id == tenant_id, "outbox-recovery", "source_tenant_drift")
+        require(event.object_id == file_id, "outbox-recovery", "source_file_drift")
+        event_id = event.event_id
+    except Exception:
+        # service 返回结构漂移同样发生在停服窗口；恢复服务后仍保留精确合同错误。
+        _best_effort_restore_control(start_hook, runtime_config, suffix)
+        raise
+
+    # service 已关闭提交连接；使用另一连接证明 intent 已提交。在线 scheduler 可能恰在此毫秒领取，
+    # 因此允许 pending、首次 processing 或首次 dispatched，但三者都必须保持同一 source 身份。
+    connection = sqlite3.connect(database)
+    try:
+        committed = connection.execute(
+            """
+            SELECT event.event_type,event.source_request_id,event.source_trace_id,
+                   event.occurred_at,outbox.dispatch_status,outbox.dispatch_attempts,
+                   outbox.next_attempt_at,outbox.dispatched_at,
+                   outbox.claim_token,outbox.lease_owner_id,outbox.lease_expires_at,
+                   outbox.delivery_snapshot_frozen_at,outbox.last_error_code
+            FROM file_security_events event
+            JOIN file_security_event_outbox outbox
+              ON outbox.tenant_id=event.tenant_id
+             AND outbox.file_security_event_id=event.file_security_event_id
+            WHERE event.tenant_id=? AND event.file_security_event_id=?
+            """,
+            (tenant_id, event_id),
+        ).fetchone()
+        require(committed is not None, "outbox-recovery", "committed_intent_not_visible")
+        committed_values = tuple(committed)
+        require(
+            committed_values[:3] == ("file.prompt_injection_detected", request_id, trace_id),
+            "outbox-recovery",
+            "committed_source_identity_drift",
+        )
+        occurred_at = committed_values[3]
+        initial_status = committed_values[4]
+        attempts = committed_values[5]
+        (
+            next_attempt_at,
+            dispatched_at,
+            claim_token,
+            owner_id,
+            lease_at,
+            snapshot_frozen_at,
+            error_code,
+        ) = committed_values[6:]
+        pending_valid = (
+            initial_status == "pending"
+            and attempts == 0
+            and next_attempt_at == occurred_at
+            and dispatched_at is None
+            and claim_token is None
+            and owner_id is None
+            and lease_at is None
+            and snapshot_frozen_at is None
+            and error_code is None
+        )
+        # 停服提交必须仍是零 attempt pending；若已 processing/dispatched，说明停服观察
+        # 不可信或存在旁路 worker，不能把它伪装成重启恢复。
+        require(
+            pending_valid,
+            "outbox-recovery",
+            "committed_intent_state_invalid",
+        )
+    except AcceptanceFailure:
+        _best_effort_restore_control(start_hook, runtime_config, suffix)
+        raise
+    # commit 后的数据库损坏只公开固定分类，禁止回显 event/source 身份。
+    except sqlite3.Error:
+        _best_effort_restore_control(start_hook, runtime_config, suffix)
+        raise AcceptanceFailure("outbox-recovery", "committed_intent_query_failed") from None
+    finally:
+        connection.close()
+
+    # source 仍处于 pending 时才允许重新启动；从此处开始的唯一推进者是 Control lifespan
+    # scheduler。验收器只读数据库，不导入、不调用任何 drain/claim 函数。
+    _start_control_and_require_recovery(start_hook, runtime_config, suffix)
+    scheduler_processing_observed = False
+    deadline = time.monotonic() + CONTROL_RECOVERY_TIMEOUT_SECONDS
+    while True:
+        connection = sqlite3.connect(database)
+        try:
+            terminal = connection.execute(
+                """
+                SELECT dispatch_status,dispatch_attempts,next_attempt_at,dispatched_at,
+                       claim_token,lease_owner_id,lease_expires_at,
+                       delivery_snapshot_frozen_at,last_error_code
+                FROM file_security_event_outbox
+                WHERE tenant_id=? AND file_security_event_id=?
+                """,
+                (tenant_id, event_id),
+            ).fetchone()
+            if (
+                terminal is not None
+                and terminal[0] == "processing"
+                and terminal[1] == 1
+                and type(terminal[5]) is str
+                and type(terminal[6]) is str
+            ):
+                # lease owner 只在本地短暂存在；记录布尔观测即可，不把 worker 身份写进证据。
+                scheduler_processing_observed = True
+            if (
+                terminal is not None
+                and terminal[0] == "dispatched"
+                and terminal[1] == 1
+                and terminal[2] is None
+                and type(terminal[3]) is str
+                and terminal[4] is None
+                and terminal[5] is None
+                and terminal[6] is None
+                and type(terminal[7]) is str
+                and terminal[8] is None
+            ):
+                dispatched_at = _canonical_delivery_snapshot_time(terminal[3])
+                snapshot_frozen_at = _canonical_delivery_snapshot_time(terminal[7])
+                require(
+                    snapshot_frozen_at <= dispatched_at,
+                    "outbox-recovery",
+                    "snapshot_time_invalid",
+                )
+                nonterminal_after = connection.execute(
+                    "SELECT COUNT(*) FROM file_security_event_outbox "
+                    "WHERE tenant_id=? AND dispatch_status IN ('pending','processing')",
+                    (tenant_id,),
+                ).fetchone()[0]
+                delivery_snapshots = connection.execute(
+                    "SELECT COUNT(*) FROM webhook_deliveries WHERE tenant_id=? AND event_id=?",
+                    (tenant_id, event_id),
+                ).fetchone()[0]
+                break
+            if terminal is not None and terminal[0] == "failed":
+                raise AcceptanceFailure("outbox-recovery", "source_failed_after_restart")
+        # 终态查询失败时不能猜测为已清理，更不能打印数据库内部错误。
+        except sqlite3.Error:
+            raise AcceptanceFailure("outbox-recovery", "terminal_query_failed") from None
+        finally:
+            connection.close()
+        require(time.monotonic() < deadline, "outbox-recovery", "terminal_state_invalid")
+        # scheduler 每轮至多处理一条；轮询只让出 CPU，绝不在验收器内推进状态。
+        time.sleep(0.05)
+    require(nonterminal_after == 0, "outbox-recovery", "source_not_settled")
+    require(delivery_snapshots == 0, "outbox-recovery", "unexpected_delivery_snapshot")
+    return {
+        "source_committed": True,
+        "commit_reopened": True,
+        "route_task_skipped": True,
+        "control_stopped": True,
+        "control_outage_observed": True,
+        "source_committed_while_control_stopped": True,
+        "control_restarted": True,
+        "scheduler_started_after_restart": True,
+        "active_drain_invoked": False,
+        "active_drain_claimed": False,
+        "scheduler_claim_observed": True,
+        "scheduler_processing_observed": scheduler_processing_observed,
+        "dispatch_status": "dispatched",
+        "dispatch_attempts": 1,
+        "transient_claim_fields_cleared": True,
+        "nonterminal_sources": 0,
+        "delivery_snapshots": 0,
+        "delivery_snapshot_frozen_at": snapshot_frozen_at,
+    }
 
 
 def database_summary(
@@ -658,12 +1501,20 @@ def database_summary(
         events = connection.execute(
             "SELECT COUNT(*) FROM file_security_events WHERE tenant_id=?", (tenant_id,)
         ).fetchone()[0]
+        outboxes = connection.execute(
+            "SELECT COUNT(*) FROM file_security_event_outbox WHERE tenant_id=?",
+            (tenant_id,),
+        ).fetchone()[0]
         require(integrity == "ok" and foreign_keys == 0, "database", "integrity_failed")
         scan_delta = scans - baseline["scan_count"]
         finding_delta = findings - baseline["finding_count"]
         event_delta = events - baseline["event_count"]
+        outbox_delta = outboxes - baseline["outbox_count"]
         require(
-            scan_delta == 6 and finding_delta >= 5 and event_delta >= 5,
+            scan_delta == 7
+            and finding_delta >= 6
+            and event_delta >= 6
+            and outbox_delta == event_delta,
             "database",
             "facts_missing",
         )
@@ -673,6 +1524,7 @@ def database_summary(
             "scan_count": scan_delta,
             "finding_count": finding_delta,
             "event_count": event_delta,
+            "source_outbox_count": outbox_delta,
         }
     finally:
         connection.close()
@@ -727,6 +1579,9 @@ def cleanup_runtime_identities(
         return {
             "disabled_users": user_cursor.rowcount,
             "revoked_sessions": session_cursor.rowcount,
+            "active_users_remaining": 0,
+            "active_sessions_remaining": 0,
+            "identity_terminal_verified": True,
         }
     except AcceptanceFailure:
         connection.rollback()
@@ -761,7 +1616,12 @@ def assert_safe_evidence(value: object, sensitive_values: tuple[bytes, ...]) -> 
 
 
 def write_evidence(config: RuntimeConfig, payload: dict[str, Any]) -> Path:
-    """以独占目录和同目录原子替换发布脱敏 Runtime 证据。"""
+    """以独占目录发布脱敏 Runtime 证据，并原子生成可复核的 SHA-256 清单。
+
+    参数：已通过配置门禁的运行配置和脱敏 payload。返回：正式 JSON 路径。
+    约束：清单只覆盖本目录已经写入的 JSON，不把自身递归加入；JSON 与清单均使用
+    独占临时文件和 ``os.replace``，避免验收中断留下看似完整的制品。
+    """
 
     config.artifact_root.mkdir(parents=True, exist_ok=True)
     run_directory = config.artifact_root / str(payload["run_id"])
@@ -774,6 +1634,21 @@ def write_evidence(config: RuntimeConfig, payload: dict[str, Any]) -> Path:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, destination)
+    digest = hashlib.sha256(destination.read_bytes()).hexdigest().upper()
+    sums_destination = run_directory / "SHA256SUMS.txt"
+    sums_temporary = run_directory / ".SHA256SUMS.txt.tmp"
+    sums_encoded = f"{digest}  {destination.name}\n".encode("ascii")
+    with sums_temporary.open("xb") as handle:
+        handle.write(sums_encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(sums_temporary, sums_destination)
+    require(
+        hashlib.sha256(destination.read_bytes()).hexdigest().upper() == digest
+        and sums_destination.read_bytes() == sums_encoded,
+        "evidence",
+        "checksum_write_failed",
+    )
     return destination
 
 
@@ -861,6 +1736,14 @@ def run() -> Path:
             build_to_unicode_pdf(secrets_.injection_text),
             "application/pdf",
             "mapped-pdf",
+        )
+        outbox_source_id = upload(
+            client,
+            admin,
+            secrets_.filenames[6],
+            secrets_.injection_text.encode(),
+            "text/plain",
+            "outbox-recovery",
         )
 
         clean = scan(client, admin, clean_id, "clean")
@@ -1003,6 +1886,16 @@ def run() -> Path:
         else:
             raise AcceptanceFailure("mapped-pdf", "model_allowed")
 
+        # 直接提交受数据库约束的 source/outbox，刻意不调用扫描路由的 wake/task 路径。
+        outbox_recovery = recover_committed_file_security_source(
+            config.database,
+            app_config,
+            context=context,
+            tenant_id=identities.default_tenant_id,
+            file_id=outbox_source_id,
+            suffix=secrets_.suffix,
+            runtime_config=config,
+        )
         database = database_summary(
             config.database,
             identities.default_tenant_id,
@@ -1012,6 +1905,8 @@ def run() -> Path:
             config.database,
             config.storage,
             secrets_.storage_private_values(tuple(tokens)),
+            log_paths=runtime_service_log_paths(config),
+            log_values=secrets_.private_values(tuple(tokens)),
         )
     finally:
         client.close()
@@ -1025,7 +1920,7 @@ def run() -> Path:
         "status": "passed",
         "run_id": run_id,
         "services": {"gateway": 200, "control": 200, "console": 200},
-        "migration": {"count": 65, "highest": "0065", "catalog_revision": 9},
+        "migration": {"count": 66, "highest": "0066", "catalog_revision": 9},
         "flows": {
             "clean": "passed",
             "visible_injection": "blocked",
@@ -1041,6 +1936,7 @@ def run() -> Path:
             "model_clean": "allowed",
             "model_injection": "blocked",
         },
+        "outbox_recovery": outbox_recovery,
         "database": database,
         "privacy": privacy,
         "cleanup": cleanup,

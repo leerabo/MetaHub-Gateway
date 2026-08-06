@@ -1,0 +1,81 @@
+{
+  "all_108_prds_complete": false,
+  "cleanup": {
+    "active_sessions_remaining": 0,
+    "active_users_remaining": 0,
+    "disabled_users": 2,
+    "identity_terminal_verified": true,
+    "revoked_sessions": 3
+  },
+  "completed_at": "2026-08-06T06:22:21Z",
+  "database": {
+    "event_count": 6,
+    "finding_count": 13,
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "scan_count": 7,
+    "source_outbox_count": 6
+  },
+  "flows": {
+    "clean": "passed",
+    "cross_tenant": 404,
+    "font_mapped_pdf": "blocked",
+    "hidden_docx": "blocked",
+    "hidden_pdf": "blocked",
+    "idempotent_reuse": true,
+    "invalid_body": 422,
+    "model_clean": "allowed",
+    "model_injection": "blocked",
+    "read_only_report": 200,
+    "read_only_scan": 403,
+    "real_ocr_docx": "blocked",
+    "visible_injection": "blocked"
+  },
+  "migration": {
+    "catalog_revision": 9,
+    "count": 66,
+    "highest": "0066"
+  },
+  "outbox_recovery": {
+    "active_drain_claimed": false,
+    "active_drain_invoked": false,
+    "commit_reopened": true,
+    "control_outage_observed": true,
+    "control_restarted": true,
+    "control_stopped": true,
+    "delivery_snapshot_frozen_at": "2026-08-06T06:22:20Z",
+    "delivery_snapshots": 0,
+    "dispatch_attempts": 1,
+    "dispatch_status": "dispatched",
+    "nonterminal_sources": 0,
+    "route_task_skipped": true,
+    "scheduler_claim_observed": true,
+    "scheduler_processing_observed": true,
+    "scheduler_started_after_restart": true,
+    "source_committed": true,
+    "source_committed_while_control_stopped": true,
+    "transient_claim_fields_cleared": true
+  },
+  "privacy": {
+    "database_bytes_scanned": 5132288,
+    "database_files_scanned": 1,
+    "database_journal_present": 0,
+    "database_shm_present": 0,
+    "database_wal_present": 0,
+    "plaintext_hits": 0,
+    "scanned_files": 23,
+    "service_log_bytes_scanned": 45370,
+    "service_log_files_scanned": 8,
+    "service_log_plaintext_hits": 0,
+    "storage_bytes_scanned": 127318,
+    "storage_files_scanned": 14
+  },
+  "run_id": "prd073_20260806T062221Z_b2632ac89f57fc3a",
+  "schema": "metahub.prd073.runtime-acceptance.v1",
+  "services": {
+    "console": 200,
+    "control": 200,
+    "gateway": 200
+  },
+  "status": "passed"
+}

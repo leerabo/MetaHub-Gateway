@@ -1,6 +1,6 @@
 # PRD-073 隐藏 Prompt Injection 检测测试记录
 
-状态：**已完成并通过最终复核（2026-08-05）**。本文件将终审前阶段性基线与最终权威结果严格
+状态：**已完成并通过最终复核（2026-08-06）**。本文件将终审前阶段性基线与最终权威结果严格
 分开；以下最终计数、Runtime/Browser 制品路径和 SHA-256 均来自实际命令。该状态只描述
 PRD-073，全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。
 
@@ -26,20 +26,25 @@ PRD-073，全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。
 ### 1.2 最终权威结果
 
 最终安全修正只复跑直接受影响集合；既有冻结回归保留原结果，不因局部 finding 顺序修正重复数小时
-无关全量。最终代码点的两个 Python 命令分别通过 55 个直接节点和 16 个配置/迁移/导航节点：
+无关全量。0066 source-outbox 修复另以完整迁移文件、相邻 Webhook resume、scheduler/API 节点和
+Runtime 合同闭环；这些独立命令不相加冒充一次全量：
 
 | 验证项 | 最终权威结果 |
 | --- | --- |
 | PRD-073 五组 Python 分层（含 CMap、格式控制与饱和回归） | `55 + 16 = 71 passed`；Shared 32、配置 9、迁移 5、Control 23、导航 2，退出码均为 0 |
-| Runtime 验收器合同 | `9 passed`；固定回环、路径、密码移除、六样本、失败清理和证据脱敏 |
+| 0066 迁移完整文件 | `23 passed`；up/down、backfill/trigger、完整 CAS、坏 source、快照、reaper 与终态约束 |
+| Outbox API/scheduler 聚焦 | `7 passed`；路由只 wake、lifespan 恢复、housekeeping 进度与停服协作 |
+| `payload_invalid` attempt 1..10 | `10 passed`；真实 claim 后完整 CAS 隔离，pending 不携带终态错误码 |
+| PRD-053 Webhook resume 相邻回归 | `10 passed`；公共 dispatcher、pending resume 与终态 CAS 保持兼容 |
+| Runtime 验收器合同 | `20 passed`；路径/回环、密码移除、真实 0066 trigger、失败恢复、多编码隐私与证据 SHA |
 | 相邻 PRD-066/068/069/070/072 与 RBAC 冻结回归 | `93 passed`；终审修正未改这些模块，不重复无关节点 |
 | PRD-072 文件链路冻结回归 | `25 passed`；上传、解析、DLP、权限和导航保持通过 |
 | Console 全量 | `690 passed / 0 failed` |
 | Console lint | `214 files passed` |
 | Node 示例全量 | `33 passed / 0 failed`；在主工作区使用已安装的固定 `openai 6.47.0` 依赖执行 |
 | 目标 Ruff、`py_compile`、中文注释门禁 | `All checks passed / 0 / comment coverage ok` |
-| 正式 Runtime | `status=passed`；六样本、三服务、权限/租户、数据库、清理和 37 个隐私目标 |
-| 应用内 Browser | `status=passed`；1280x720 与 390x844、交互、DOM 隐私和页面错误 0 |
+| 正式 Runtime | `status=passed`；六样本、三服务、真停服/重启、scheduler、权限/租户、数据库、清理和 23 个隐私文件 |
+| 应用内 Browser | 权威制品保持 `status=passed`；2026-08-06 又实测 1280x720/390x844、幂等扫描、零横向溢出和页面错误 0 |
 
 Python 命令统一设置：
 
@@ -99,13 +104,19 @@ $python = 'C:/Users/rabol/.cache/codex-runtimes/codex-primary-runtime/dependenci
   blocked 和 Webhook 存在，正文/evidence canary 在 DTO、数据库与事件中零命中。
 - 三张安全事实表均带 `tenant_id`，复合外键和 trigger 约束 owner、计数、状态与不可变；数据库、
   WAL/SHM、加密对象和日志隐私扫描禁止 Prompt、OCR、密码、Session Token 或文件名明文命中。
+- 0066 为每个不可变 source 同事务创建 tenant-qualified pending outbox；worker 先在独立短事务真实 claim，
+  再由当前 owner 在另一事务完成 source/scan/finding 校验、legacy delivery 补齐、空/非空快照冻结和续租。
+- 坏 source 必须真实递增 attempt 后才以 tenant/event/token/owner/attempt/lease 完整 CAS 隔离；source
+  终态、剩余 pending delivery 和死信同事务收敛，迟到 worker 不能覆盖新 owner 或终态。
+- 隐私扫描强制六份启动日志存在且为仓库内普通文件，并把重启 stdout/stderr 纳入同一批次；日志 canary
+  同时按 UTF-8、UTF-16LE 与 UTF-16BE 字节搜索，缺失日志不能静默算通过。
 
 ## 3. 正式 Runtime 验收
 
 最终 Runtime 证据：
-[runtime-acceptance.json](../../.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/runtime-acceptance.json)
+[runtime-acceptance.json](../../.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/runtime-acceptance.json)
 
-最终 Runtime SHA-256：`E3073F967A5173C41EB4B91DC677CFAECA40C188198EA749BE7A2DCEB261BDFB`
+最终 Runtime SHA-256：`E2EFF29227A4246AE8FBB86B5B3C973C6E5212A1568AA32D9ABFB05B0DAE34FD`
 
 最终 Runtime 必须由同一份 `runtime-acceptance.json` 证明：
 
@@ -116,13 +127,17 @@ $python = 'C:/Users/rabol/.cache/codex-runtimes/codex-primary-runtime/dependenci
 | 字体映射 PDF | 原始操作数无害，PRD-072 持久正文为注入指令，最终 `blocked` |
 | 权限与租户 | 只读报告 200、只读扫描 403、跨租户 404、非法 body 422 |
 | 模型准入 | clean allowed，全部注入 blocked，blocked 文件不进入模型上下文 |
-| 数据库 | 65 条迁移、最高 0065、RBAC revision 9、`integrity_check=ok`、外键违规 0 |
-| 隐私 | 扫描数据库/WAL/SHM、密文对象和日志共 37 个文件，敏感明文命中 0 |
-| 清理 | 临时用户禁用 2、Session 撤销 3，密码与 Token 未进入证据 |
+| Source 恢复 | Control 真停服后提交 source；新 Control lifespan scheduler 自主恢复，验收器主动 drain=false |
+| Outbox 终态 | attempt 1 `dispatched`，processing 曾被观察，claim 字段清空，nonterminal source=0 |
+| 数据库 | 66 条迁移、最高 0066、RBAC revision 9、event/outbox 均 6、`integrity_check=ok`、外键违规 0 |
+| 隐私 | 扫描数据库 1、密文对象 14、启动/重启日志 8，共 23 个文件；三编码敏感明文命中 0 |
+| 清理 | 临时用户禁用 2、Session 撤销 3，active user/session 均为 0，密码与 Token 未进入证据 |
 
 仓库内 [Runtime 验收器](../../scripts/acceptance/prd073-runtime-acceptance.py) 只允许从
 `METAHUB_PRD073_ADMIN_PASSWORD` 读取一次性管理员密码，读取后立即从环境移除；数据库和对象目录
 只能位于工作区 `.tmp`，目标 URL 只能是三个固定回环端口。合同测试本身不发出网络请求。
+`SHA256SUMS.txt` 恰好一行，逐字匹配上述 JSON；最终证据保持
+`all_108_prds_complete=false`。
 
 ## 4. 应用内 Browser 验收
 
@@ -142,23 +157,35 @@ $python = 'C:/Users/rabol/.cache/codex-runtimes/codex-primary-runtime/dependenci
 响应头和隐私合同由生产路由集成测试覆盖，页面侧只记录实际可观察的成功事件、`request_id` 与
 anchor 清理事实。
 
+0066 未改 Console 或公开文件安全 API，因此保留上述权威截图制品。2026-08-06 又在最终隔离库与
+三服务上实际登录 PAGE-103：桌面 `1280x720` 与移动 `390x844` 的 document scrollWidth 均不超过
+viewport，阻断报告、风险指标和两条安全发现可见，幂等“扫描”交互完成，console error/warn 为 0，
+最后登出并恢复登录页。该复验不伪造或替换既有截图 SHA。
+
 ## 5. 实现后终审修复与最终证据
 
-实现后安全终审关闭了两个会影响验收结论的问题：
+实现后安全终审关闭了三个会影响验收结论的问题：
 
 1. **PDF 字体映射语义绕过**：`scan_file_security()` 强制接收 `trusted_extracted_text`；Control 在同一
    权限快照内读取并验真原件和持久抽取 Blob，阻断 `ToUnicode/CMap` 映射出的模型指令。
 2. **finding 饱和丢失 Prompt 事实**：饱和后 Prompt 可替换非 Prompt、非 coverage 结构事实，确保
    blocked 报告、明确 Prompt 原因和 7 字段安全 Webhook 同时存在。
+3. **source 已提交但 intent 未创建的崩溃窗口**：0066 用同事务 trigger 创建 source outbox；Control
+   lifespan scheduler 以真实 claim、完整 owner CAS、持久快照和稳定 event ID 恢复，路由只 wake。
 
 最终证据已复核：
 
-- 开发库为 `65/0065`，幂等迁移 `applied=[]/skipped=65`；0065 checksum 为
-  `6447e818c539888113ebc46f295549b647632af5ca56cfa122b4d4988219c345`，
+- 开发库从权威 0065 备份恢复后只应用最终 0066，现为 `66/0066`；0066 checksum 为
+  `e5cd51c00ebe3e43df026e9e6f892e504dadc0b4e09fd0fbb13f49eeacce5af4`，
   `integrity_check=ok`、外键违规 0、revision 9 权限模板 62、角色模板 166。
-- 最终在线备份仅位于
-  `D:/MetaHub/.tmp/prd073-dev-db-final-20260805/metahub-dev-0065-final.db`，SHA-256 为
-  `5a73bdeb5f12c7c55adefca323936600353d34c25695044a13db3c0849b1e355`；数据库不进入 Git。
+- 最终开发库本地备份位于
+  `D:/MetaHub/.tmp/prd073-dev-db-final-0066-20260806/metahub-dev-prd031-0066-final.db`，SHA-256 为
+  `3963dc2d28b4413b9cfe87aa3b5382030f42cb2540a5721d7f812f31d056f49b`。0065 回退点仍保留在
+  `D:/MetaHub/.tmp/prd073-dev-db-backup-0065-20260805T182641/`，SHA-256 为
+  `5a73bdeb5f12c7c55adefca323936600353d34c25695044a13db3c0849b1e355`；数据库均不进入 Git。
+- Runtime `SHA256SUMS.txt` 恰好一行并匹配 JSON
+  `e2eff29227a4246ae8fbb86b5b3c973c6e5212a1568aa32d9abfb05b0dae34fd`；证据中 migration 为
+  `66/0066`、active drain 为 false、attempt 为 1、claim 已清空、23 个隐私文件明文命中 0。
 - Browser `SHA256SUMS.txt` 与当前四个文件逐项一致：JSON
   `2a942f773f63adc2ac81abdfcaff2e965c5b9d2033cb0860d6004e4c44b1cb65`、桌面
   `4ed1ee15b43b2889092f90ec1a7a5a39828a36c538ff496debde02dccf430969`、移动主页

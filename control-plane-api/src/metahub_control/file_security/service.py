@@ -514,40 +514,6 @@ def build_file_model_context(
         raise ApiError(exc.code) from None
 
 
-def dispatch_security_event_safely(
-    config: AppConfig,
-    event: WebhookEvent,
-    *,
-    request_id: str,
-    trace_id: str,
-) -> None:
-    """提交后机会性派发安全事件；投递失败不回滚不可变扫描事实。"""
-
-    from metahub_control.webhooks.service import dispatch_webhook_event
-
-    try:
-        dispatch_webhook_event(
-            config,
-            event.tenant_id,
-            event,
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-    except Exception:
-        # Endpoint、payload 和异常文本都可能敏感，日志只保留固定 source identity。
-        logger.error(
-            "file_security.webhook_dispatch_failed",
-            extra={
-                "event": "file_security.webhook_dispatch_failed",
-                "tenant_id": event.tenant_id,
-                "object_id": event.object_id,
-                "request_id": request_id,
-                "trace_id": trace_id,
-                "error_code": "webhook.dispatch_failed",
-            },
-        )
-
-
 def _load_owner_for_scan(
     config: AppConfig,
     context: AuthContext,
@@ -1645,7 +1611,6 @@ def _csv_cell(value: object) -> object:
 __all__ = [
     "OcrBackendPool",
     "build_file_model_context",
-    "dispatch_security_event_safely",
     "export_security_report_csv",
     "get_security_report",
     "scan_security_report",

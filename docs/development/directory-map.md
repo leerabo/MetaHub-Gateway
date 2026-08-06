@@ -1504,8 +1504,9 @@ PRD-072 的 0064、相关分层回归、中文注释、真实三服务/API、密
 PRD-072 完成时，Excel 总表、M2/M3 交付、页面、API、数据对象、Webhook 和验收用例共同确认其
 下一项为 `PRD-073 | M2-企业增强 | P2 | 文件型注入防护 | 隐藏 Prompt Injection 检测`；对应
 PAGE-103、`POST /files/{id}/security-scan`、FileSecurityFinding、
-`file.prompt_injection_detected` 和 TC-0145/0146。PRD-073 的实现与安全终审修复现已落地；
-全部 108 条总体目标仍为 `all_108_prds_complete=false`。
+`file.prompt_injection_detected` 和 TC-0145/0146。PRD-073 主体实现、追加 0066 source-outbox 崩溃恢复、
+定向回归、`66/0066` 真实 Runtime 和实际页面复验均已通过；全部 108 条总体目标仍为
+`all_108_prds_complete=false`。
 
 ## PRD-073 隐藏 Prompt Injection 检测目录
 
@@ -1516,38 +1517,58 @@ PAGE-103、`POST /files/{id}/security-scan`、FileSecurityFinding、
 - `control-plane-api/src/metahub_control/file_security/`：提供
   `POST /files/{id}/security-scan`、`GET /files/{id}/security-report` 和 CSV 下载；扫描前与事务内执行
   `file.read + file.security.scan` 双权限和 tenant owner 复核；同一个短 `BEGIN IMMEDIATE` 权限快照
-  读取并验真原件与抽取 Blob，报告读取只要求 `file.read`。
+  读取并验真原件与抽取 Blob，报告读取只要求 `file.read`；`outbox.py` 以 90 秒 lease、每次真实
+  网络 attempt 前完整 CAS 续租和稳定 `fsev_` event ID 恢复 Webhook intent。worker 先在独立短事务真实
+  claim 并提交 `processing` lease；随后当前有效 owner 在另一个独立事务以 tenant/event/token/owner/
+  attempt/当前且未过期 lease 完整 CAS，补齐 legacy 部分 delivery、创建/恢复 intent 并持久冻结包括空集合
+  在内的 Endpoint 快照，冻结后不追溯新 Endpoint；坏 source 先完成真实 claim，再由 owner 交叉验证并以
+  完整 CAS 隔离为 `webhook.payload_invalid`，不能在 claim 前验证或伪造 attempt；
+  `scheduler.py` 组合进 Control lifespan，在启动、wake 或轮询时 drain，以 `threading.Event` 协作停服
+  并等待同步 worker 完成。坏 source 固定隔离后继续领取；source 终态与剩余 pending delivery/死信
+  同事务收敛。路由提交后只发送 wake 信号，不直接联网投递。
+- `control-plane-api/src/metahub_control/webhooks/service.py`：文件安全恢复复用公共快照和失败关闭 helper；
+  attempt 摘要以 pending/前序 attempt/Secret 版本 CAS，阻断 reaper 后迟到 worker 覆盖终态。
 - `shared-sdk/python/metahub_shared/runtime/{config,errors,error_diagnosis,i18n,webhooks}.py`：增加扫描/OCR
   部署上限、统一错误与中文/英文展示，并冻结 `file.prompt_injection_detected` 七字段 exact-key payload。
 - `infra/migrations/0065_file_prompt_injection_detection.sql/.down.sql`：增加 FileSecurityScan、
   FileSecurityFinding、FileSecurityEvent 三张 tenant-qualified append-only 表、失败 attempt/权威结果索引、
   owner/计数/不可变/down guard；新增 `file.security.scan` 并把 RBAC catalog 升至 revision 9。
+- `infra/migrations/0066_file_security_event_outbox_recovery.sql/.down.sql`：不改写已发布 0065 checksum；
+  新增 tenant-qualified `file_security_event_outbox`、存量 source 回填、`AFTER INSERT` 同事务 trigger、
+  持久 `delivery_snapshot_frozen_at`、到期索引、90 秒 claim/续租与不可变状态机。
+  pending/processing/dispatched/failed 任一业务行存在时拒绝 down。
 - `console-web/src/features/file-security/` 与 `src/lib/fileSecurity.js`：实现 PAGE-103 文件选择、扫描、
   报告、风险指标、发现表和 CSV；私有 cursor、owner/generation/Abort、列表重排和权限漂移共同阻止
   迟到响应或旧身份数据写回。
 - `shared-sdk/python/tests/test_prd073_*.py`、`control-plane-api/tests/**/*prd073*.py` 和
   `console-web/tests/unit/{fileSecurity,prd073BrowserAcceptance}.test.mjs`：覆盖检测器、配置、迁移、API、
   权限/租户、Webhook、模型准入、PDF `ToUnicode/CMap` 语义绕过、FindingCollector 饱和优先级、
-  strict DTO、DOM 隐私和双视口布局。
+  0066 trigger/backfill、启动恢复、90 秒 lease/逐网络 attempt 续租、legacy 部分快照补齐、空快照冻结、
+  冻结后不追溯新 Endpoint、协作停服等待同步 worker、失败退避、过期接管、迟到 worker CAS、
+  第十次终结、strict DTO、DOM 隐私和双视口布局。
 - `scripts/acceptance/prd073-runtime-acceptance.py`：只访问工作区 `.tmp` 隔离数据库/对象目录和固定回环
   三服务，真实验证 clean、可见/隐藏/OCR 注入、字体映射 PDF、只读 403、跨租户 404、CSV、模型
-  准入、完整性和隐私；管理员密码只从环境读取一次，临时用户和 Session 在失败路径也通过 finally
-  收敛。
+  准入、完整性、隐私、`66/0066`、Control 真停服、停服期间 source 提交、新 lifespan scheduler 恢复、
+  冻结快照、outbox 终态与协作停服；管理员密码只从环境读取一次，临时用户、Session 和同步 worker
+  在失败路径也通过 finally/lifespan 收敛。日志 canary 同时覆盖 UTF-8/UTF-16LE/UTF-16BE。
 - `scripts/acceptance/tests/test_prd073_runtime_acceptance.py`：冻结工作区路径、回环 URL、密码移除、
   真实 DOCX/PDF/PNG/CMap 样本、失败清理与证据脱敏，不连接任何服务；最终计数见测试记录。
 - `docs/prd/PRD-073-hidden-prompt-injection-detection.md`、`docs/api/file-security.md` 与
   `docs/testing/PRD-073-tests.md`：分别保存冻结设计及两轮自审、公开 API/Webhook 合同和最终验收记录。
-- `.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/`：保存最终六样本脱敏
-  Runtime JSON 与 SHA-256；数据库、Blob、文件名、Prompt/OCR、密码和 Session Token 不进入制品。
+- `.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/`：保存唯一权威 0066 Runtime
+  JSON 与 `SHA256SUMS.txt`；JSON SHA-256 为
+  `E2EFF29227A4246AE8FBB86B5B3C973C6E5212A1568AA32D9ABFB05B0DAE34FD`。旧 `65/0065` Runtime
+  仅是修复前检查点，不再作为 PRD-073 终态证据。
 - `.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b/`：保存最终 Browser JSON、
   `SHA256SUMS.txt` 和桌面/移动截图；Prompt、对象键、report SHA、evidence fingerprint 与文件名
-  URL/dataset 的 DOM 命中均为 0。
+  URL/dataset 的 DOM 命中均为 0。0066 不改变 PAGE-103 或公开 API，因此该 Browser 证据仍有效。
 
-PRD-073 的实现和实现后安全终审修复均已落地：Shared 强制扫描 PRD-072 持久抽取正文以关闭 PDF
-字体 CMap 语义绕过，Control 在同一权限快照读取两份 owner-bound Blob，FindingCollector 饱和后
-仍保留 Prompt、可信正文格式控制与 coverage。最终 Python 分层 `71 passed`、Runtime 合同
-`9 passed`、Console 全量 `690 passed`、lint `214 files passed`、开发库 `65/0065`、三服务 HTTP 200
-及最终制品哈希均已写入测试记录，PRD-073 已完成。Excel 多表交叉确认其后的下一项为
+PRD-073 的主体实现和 0066 终审修复均已落地：Shared 强制扫描 PRD-072 持久抽取正文以关闭 PDF
+字体 CMap 语义绕过，FindingCollector 饱和后仍保留 Prompt 与 coverage；0066 以同事务 trigger、
+source outbox、启动恢复、90 秒 lease、逐网络 attempt 完整 CAS 续租、持久 Endpoint 快照和协作停服
+提供稳定 event ID 的 at-least-once。最终测试计数、`66/0066` Runtime 路径、SHA-256、开发库
+checksum、三服务和双视口页面复验均已写入测试记录；旧 `65/0065` 结果未用于宣称终态。Excel 多表
+交叉确认其后的下一项为
 `PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`，对应 PAGE-104、
 BatchJob/BatchTask、三个 BatchJob API、`batch_job.created/completed` 和 TC-0147/0148。
 全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。

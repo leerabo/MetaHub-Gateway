@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from metahub_control.webhooks import service as webhook_service
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.db.security import (
@@ -22,8 +21,8 @@ from metahub_shared.db.security import (
     secret_prefix,
 )
 from metahub_shared.runtime.config import AppConfig, load_app_config
+from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
-
 
 # 固定 ID 和时间让持久快照断言可重复，同时避免测试输出携带任何真实租户或密钥信息。
 EVENT_ID = f"caevt_{'1' * 32}"
@@ -39,6 +38,9 @@ DELIVERY_ID_SUCCESS = f"whd_{'3' * 32}"
 DELIVERY_ID_FAILED = f"whd_{'4' * 32}"
 DELIVERY_ID_DISABLED = f"whd_{'5' * 32}"
 DELIVERY_ID_ROTATED = f"whd_{'6' * 32}"
+DELIVERY_ID_GUARD_FIRST = f"whd_{'7' * 32}"
+DELIVERY_ID_GUARD_SECOND = f"whd_{'8' * 32}"
+DELIVERY_ID_GUARD_FAILURE = f"whd_{'9' * 32}"
 
 
 @pytest.fixture
@@ -709,11 +711,14 @@ def test_first_resume_freezes_all_subscriber_intents_before_send(
         *,
         request_id: str,
         trace_id: str,
+        source_lease_guard: object | None,
     ) -> Any:
         """在首条 pending 真正发送前模拟 worker 崩溃，并从独立连接观察已提交快照。"""
 
         assert request_id == "req_prd053_snapshot"
         assert trace_id == "trc_prd053_snapshot"
+        # 普通 PRD-053 source 未接入文件安全 lease，兼容路径必须显式保持空 guard。
+        assert source_lease_guard is None
         rows = _rows(
             database_url,
             """
@@ -755,3 +760,219 @@ def test_first_resume_freezes_all_subscriber_intents_before_send(
         "wh_prd053_snapshot_b",
     }
     assert all((row["status"], row["attempt_count"]) == ("pending", 0) for row in rows)
+
+
+def test_source_lease_guard_precedes_every_real_network_attempt(
+    webhook_runtime: tuple[AppConfig, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """source 恢复的每次真实重试前都必须先续租，不能只在 Endpoint 开始时检查一次。"""
+
+    config, database_url, tenant_id = webhook_runtime
+    event = _for_tenant(_cost_anomaly_event(), tenant_id)
+    endpoint_id = "wh_prd073_guard_attempts"
+    _insert_endpoint(
+        database_url,
+        tenant_id,
+        endpoint_id,
+        secret="whsec_prd073_guard_attempts",
+        max_attempts=3,
+    )
+    _insert_delivery(
+        database_url,
+        tenant_id,
+        endpoint_id,
+        DELIVERY_ID_GUARD_FIRST,
+        event,
+        max_attempts=3,
+    )
+    call_order: list[str] = []
+
+    def preserve_source_lease() -> None:
+        """记录 source CAS；真实 worker 在此处执行当前 lease 值的精确续租。"""
+
+        call_order.append("guard")
+
+    def record_failed_attempt(
+        _config: AppConfig,
+        _endpoint: Any,
+        _body: bytes,
+        delivery_id: str,
+    ) -> dict[str, object]:
+        """模拟三次可重试失败，证明每个 HTTP attempt 都有独立 guard。"""
+
+        assert delivery_id == DELIVERY_ID_GUARD_FIRST
+        call_order.append("send")
+        return _failure_result()
+
+    monkeypatch.setattr(webhook_service, "_send_once", record_failed_attempt)
+    deliveries = webhook_service.dispatch_webhook_event(
+        config,
+        tenant_id,
+        event,
+        request_id="req_prd073_guard_attempts",
+        trace_id="trc_prd073_guard_attempts",
+        resume_existing_pending=True,
+        source_lease_guard=preserve_source_lease,
+        create_snapshot_if_missing=False,
+    )
+
+    assert call_order == ["guard", "send", "guard", "send", "guard", "send"]
+    assert len(deliveries) == 1
+    assert (deliveries[0].status, deliveries[0].attempt_count) == ("failed", 3)
+
+
+def test_source_lease_guard_failure_blocks_network_and_preserves_pending(
+    webhook_runtime: tuple[AppConfig, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """续租或停服检查失败时必须零网络，并保留原 delivery 供有效 owner 后续恢复。"""
+
+    config, database_url, tenant_id = webhook_runtime
+    event = _for_tenant(_cost_anomaly_event(), tenant_id)
+    endpoint_id = "wh_prd073_guard_failure"
+    _insert_endpoint(
+        database_url,
+        tenant_id,
+        endpoint_id,
+        secret="whsec_prd073_guard_failure",
+    )
+    _insert_delivery(
+        database_url,
+        tenant_id,
+        endpoint_id,
+        DELIVERY_ID_GUARD_FAILURE,
+        event,
+    )
+    network_calls: list[str] = []
+
+    def reject_stale_source() -> None:
+        """模拟完整 CAS 未命中；异常只带固定领域码，不泄漏 owner 或数据库字段。"""
+
+        # 测试桩只模拟固定领域拒绝，不能把租户、owner 或 lease 原值带入异常正文。
+        raise ApiError("file.security_scan_unavailable")
+
+    def record_unexpected_network(
+        _config: AppConfig,
+        _endpoint: Any,
+        _body: bytes,
+        delivery_id: str,
+    ) -> dict[str, object]:
+        """任何调用都表示失权 worker 已越过 guard，必须让测试失败。"""
+
+        network_calls.append(delivery_id)
+        return _success_result()
+
+    monkeypatch.setattr(webhook_service, "_send_once", record_unexpected_network)
+    with pytest.raises(ApiError) as rejected:
+        webhook_service.dispatch_webhook_event(
+            config,
+            tenant_id,
+            event,
+            request_id="req_prd073_guard_failure",
+            trace_id="trc_prd073_guard_failure",
+            resume_existing_pending=True,
+            source_lease_guard=reject_stale_source,
+            create_snapshot_if_missing=False,
+        )
+
+    assert rejected.value.code == "file.security_scan_unavailable"
+    assert network_calls == []
+    row = _rows(
+        database_url,
+        "SELECT status,attempt_count FROM webhook_deliveries WHERE webhook_delivery_id=?",
+        (DELIVERY_ID_GUARD_FAILURE,),
+    )[0]
+    assert (row["status"], row["attempt_count"]) == ("pending", 0)
+
+
+def test_cooperative_stop_after_blocking_attempt_skips_next_endpoint(
+    webhook_runtime: tuple[AppConfig, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """停服发生在同步 attempt 内时允许当前落库，但下一 Endpoint 必须在出网前停止。"""
+
+    config, database_url, tenant_id = webhook_runtime
+    event = _for_tenant(_cost_anomaly_event(), tenant_id)
+    first_endpoint = "wh_prd073_stop_first"
+    second_endpoint = "wh_prd073_stop_second"
+    _insert_endpoint(
+        database_url,
+        tenant_id,
+        first_endpoint,
+        secret="whsec_prd073_stop_first",
+        max_attempts=1,
+    )
+    _insert_endpoint(
+        database_url,
+        tenant_id,
+        second_endpoint,
+        secret="whsec_prd073_stop_second",
+        max_attempts=1,
+    )
+    _insert_delivery(
+        database_url,
+        tenant_id,
+        first_endpoint,
+        DELIVERY_ID_GUARD_FIRST,
+        event,
+        max_attempts=1,
+    )
+    _insert_delivery(
+        database_url,
+        tenant_id,
+        second_endpoint,
+        DELIVERY_ID_GUARD_SECOND,
+        event,
+        max_attempts=1,
+    )
+    stopping = False
+    network_calls: list[str] = []
+
+    def stop_guard() -> None:
+        """模拟 scheduler 的 threading.Event：首次发送中置位后，下一次 guard 失败关闭。"""
+
+        if stopping:
+            # stop 置位后下一 Endpoint 必须在网络原语之前收到固定领域拒绝。
+            raise ApiError("file.security_scan_unavailable")
+
+    def finish_current_attempt(
+        _config: AppConfig,
+        _endpoint: Any,
+        _body: bytes,
+        delivery_id: str,
+    ) -> dict[str, object]:
+        """同步 attempt 无法强杀；返回后置位的 stop 会阻止下一个 Endpoint。"""
+
+        nonlocal stopping
+        network_calls.append(delivery_id)
+        stopping = True
+        return _success_result()
+
+    monkeypatch.setattr(webhook_service, "_send_once", finish_current_attempt)
+    with pytest.raises(ApiError) as stopped:
+        webhook_service.dispatch_webhook_event(
+            config,
+            tenant_id,
+            event,
+            request_id="req_prd073_cooperative_stop",
+            trace_id="trc_prd073_cooperative_stop",
+            resume_existing_pending=True,
+            source_lease_guard=stop_guard,
+            create_snapshot_if_missing=False,
+        )
+
+    assert stopped.value.code == "file.security_scan_unavailable"
+    assert network_calls == [DELIVERY_ID_GUARD_FIRST]
+    rows = _rows(
+        database_url,
+        """
+        SELECT webhook_delivery_id,status,attempt_count FROM webhook_deliveries
+        WHERE event_id=? ORDER BY webhook_delivery_id
+        """,
+        (EVENT_ID,),
+    )
+    assert [tuple(row) for row in rows] == [
+        (DELIVERY_ID_GUARD_FIRST, "success", 1),
+        (DELIVERY_ID_GUARD_SECOND, "pending", 0),
+    ]

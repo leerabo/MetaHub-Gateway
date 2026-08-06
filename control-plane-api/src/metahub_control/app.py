@@ -30,7 +30,8 @@ from .environments.routes import router as environments_router
 from .error_maps import install_provider_error_map_scheduler
 from .error_maps import router as error_maps_router
 from .feedback.routes import router as feedback_router
-from .file_security.routes import router as file_security_router
+from .file_security import install_file_security_event_scheduler
+from .file_security import router as file_security_router
 from .files.routes import router as files_router
 from .finops.routes import router as finops_router
 from .intent_security import router as intent_security_router
@@ -133,4 +134,5 @@ install_request_log_query_event_scheduler(app)
 install_provider_error_map_scheduler(app)
 install_audit_export_scheduler(app)
 install_webhook_replay_scheduler(app)
+install_file_security_event_scheduler(app)
 install_adapter_contract_event_scheduler(app)

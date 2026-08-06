@@ -86,23 +86,35 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-072 - 文件上传与文本解析基础`
 - `PRD-073 - 隐藏 Prompt Injection 检测`
 
-最近完成：
+最近进展：
 
 - `PRD-073 - 隐藏 Prompt Injection 检测`的设计、两轮编码前自审、Shared TXT/DOCX/PDF 检测、
-  固定版本离线 OCR、Control 扫描/报告/CSV/模型准入、PAGE-103、0065、RBAC revision 9、后端
-  tenant/双权限/统一错误和 7 字段安全 Webhook 均已实现。实现后安全终审进一步关闭两项绕过：
-  扫描强制使用 PRD-072 已认证 `trusted_extracted_text`，因此原始操作数无害但字体
-  `ToUnicode/CMap` 映射为模型注入正文的 PDF 仍会 blocked；FindingCollector 饱和后保留 Prompt
-  与 coverage，避免 255 条结构 finding 挤掉明确阻断原因和安全事件。Control 在同一个短
-  `BEGIN IMMEDIATE` 权限快照内复核 tenant owner、`file.read + file.security.scan`，并读取、认证、
-  验真原文件和抽取 Blob。最终 Python 分层为 `55 + 16 = 71 passed`，Console 全量 `690 passed`、
-  lint `214 files passed`，中文注释和目标 Ruff/语法通过；六样本 Runtime、双视口 Browser、开发库
-  `65/0065` 和三服务 HTTP 200 均完成验收。详见
+  固定版本离线 OCR、Control 扫描/报告/CSV/模型准入、PAGE-103、0065 安全事实与 RBAC revision 9、
+  后端 tenant/双权限/统一错误和 7 字段安全 Webhook 均已实现。实现后安全终审关闭 PDF
+  `ToUnicode/CMap` 语义绕过和 finding 饱和后丢失 Prompt/coverage 两项问题；最终交叉审查又以追加
+  0066 关闭 source 已提交、delivery intent 尚未创建时的崩溃丢失窗口。0066 trigger 在扫描同一事务
+  写 tenant-qualified pending outbox，并回填既有 source；Control lifespan 启动即恢复，路由只 wake
+  scheduler。worker 使用 90 秒 lease；每轮先在独立短 `BEGIN IMMEDIATE` 事务中真实 claim 一条到期
+  source，提交 `processing`、attempt、token、owner 和 lease。随后当前且未过期的 owner 在另一个独立
+  事务中，以 tenant/event/token/owner/attempt/当前且未过期 lease 完整 CAS 复核并补齐 0065 遗留的部分
+  delivery、持久化 `delivery_snapshot_frozen_at` 并续租；即使订阅集合为空也冻结，之后新增 Endpoint
+  不追溯旧 source。每次真实网络尝试前仍以同一组完整 CAS 再续租。lifespan 以 `threading.Event` 协作停服并等待同步 worker 完成收尾，不通过取消
+  `to_thread` 遗留写库线程。稳定 `fsev_` event ID 提供 at-least-once，失败按 5/30/300 秒退避且
+  最多 10 次。source 终态与剩余 pending delivery/死信同事务，Webhook attempt 使用状态、序号和
+  Secret 版本 CAS 阻断迟到覆盖；坏 source 必须先完成真实 claim，再由当前 owner 交叉验证并以完整 CAS
+  固定隔离，随后继续处理后续 tenant 事件，不让损坏队首形成
+  全局阻塞。
+  0066 迁移与聚焦回归、20 个 Runtime 合同节点和新的 `66/0066` 真实 Runtime 均已通过。正式验收
+  真实停止 Control，在停服窗口提交 source/outbox，再由新 Control lifespan scheduler 以 attempt 1
+  恢复为 `dispatched`；验收器主动 drain 为 false、临时 claim 已清空、隐私命中为 0。权威 Runtime
+  为 [prd073_20260806T062221Z_b2632ac89f57fc3a](.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a)，
+  JSON SHA-256 为 `E2EFF29227A4246AE8FBB86B5B3C973C6E5212A1568AA32D9ABFB05B0DAE34FD`。
+  0066 不改 PAGE-103，既有双视口 Browser 证据继续有效；2026-08-06 又在实际隔离库上复验桌面、
+  移动、幂等扫描、零横向溢出、零页面错误和登出清理。详见
   [PRD-073 设计](docs/prd/PRD-073-hidden-prompt-injection-detection.md)、
   [文件安全 API](docs/api/file-security.md)、
   [PRD-073 测试记录](docs/testing/PRD-073-tests.md)、
-  [最终 Runtime](.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad) 和
-  [最终 Browser](.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b)。
+  [有效 Browser](.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b)。
 - `PRD-072 - 文件上传与文本解析基础`：设计与两轮自审、Shared 文件合同、Control 文件 API、
   PAGE-101/102、0064、RBAC revision 8、加密 Blob、TXT/DOCX/PDF 抽取、DLP 预扫描、Token 估算、
   后端租户/权限/统一错误和安全 Webhook 均已完成。专项结果为 Shared `25 passed`、Control 与导航
@@ -147,8 +159,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   PRD-073 之后的下一条权威未完成项是
   `PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`，对应 PAGE-104、
   `POST /batch-jobs`、`GET /batch-jobs/{id}`、`POST /batch-jobs/{id}/cancel`、BatchJob/BatchTask、
-  `batch_job.created/completed` 与 TC-0147/0148。PRD-073 已完成；总体目标仍为
-  `all_108_prds_complete=false`。
+  `batch_job.created/completed` 与 TC-0147/0148。PRD-073 已完整收口，下一轮从 PRD-074 的设计与
+  两轮自审开始；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

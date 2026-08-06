@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import anyio
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import (
@@ -19,9 +19,9 @@ from metahub_control.auth import (
 )
 
 from .models import FileSecurityReportResponse
+from .scheduler import wake_file_security_event_scheduler
 from .service import (
     OcrBackendPool,
-    dispatch_security_event_safely,
     export_security_report_csv,
     get_security_report,
     scan_security_report,
@@ -38,7 +38,6 @@ async def post_file_security_scan(
     file_id: str,
     request: Request,
     response: Response,
-    background_tasks: BackgroundTasks,
     context: Annotated[AuthContext, Depends(require_file_security_scanner)],
 ) -> FileSecurityReportResponse:
     """扫描当前 tenant 的 ready 文件，或返回同 detector 权威报告的幂等复用结果。"""
@@ -72,14 +71,9 @@ async def post_file_security_scan(
             )
         )
         if event is not None:
-            # Webhook 只在扫描事务提交后派发，外部 Endpoint 故障不能反向撤销安全事实。
-            background_tasks.add_task(
-                dispatch_security_event_safely,
-                request.app.state.config,
-                event,
-                request_id=request_id,
-                trace_id=trace_id,
-            )
+            # 0066 trigger 已与 source 同事务写入 pending intent；路由只唤醒持久 worker，
+            # 即使进程在此处退出，重启后的启动 drain 仍会恢复同一个 fsev_ 事件。
+            wake_file_security_event_scheduler(request.app)
         _no_store(response)
         return result
     finally:

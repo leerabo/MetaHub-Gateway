@@ -57,10 +57,10 @@ artifacts/
 !.artifacts/prd072-browser/prd072_20260804T212908Z_922f8ab2ff200912/mobile-records-390x844.jpg
 !.artifacts/prd073-runtime/
 .artifacts/prd073-runtime/*
-!.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/
-.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/*
-!.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/SHA256SUMS.txt
-!.artifacts/prd073-runtime/prd073_20260805T080840Z_09b8fb38aba539ad/runtime-acceptance.json
+!.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/
+.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/*
+!.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/SHA256SUMS.txt
+!.artifacts/prd073-runtime/prd073_20260806T062221Z_b2632ac89f57fc3a/runtime-acceptance.json
 !.artifacts/prd073-browser/
 .artifacts/prd073-browser/*
 !.artifacts/prd073-browser/prd073_20260805T045800Z_4f3ee3d6aa3f233b/
