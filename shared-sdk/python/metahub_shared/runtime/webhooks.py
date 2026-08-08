@@ -712,7 +712,10 @@ def _validate_batch_job_event_payload(
     event_type: str,
     payload: dict[str, Any],
 ) -> None:
-    """Validate the exact public summary for a persisted Batch lifecycle event."""
+    """校验批任务 Webhook 公共载荷的固定字段、状态和成本摘要，不接受业务正文。
+
+    Validate the exact public summary for a persisted Batch lifecycle event.
+    """
 
     common = {"schema_version", "batch_job_id"}
     if event_type == "batch_job.created":
@@ -732,12 +735,14 @@ def _validate_batch_job_event_payload(
             "possible_cost_cny",
         }
     if set(payload) != expected:
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
         raise ValueError("webhook.payload_invalid")
     if (
         type(payload["schema_version"]) is not int
         or payload["schema_version"] != 1
         or not _is_prefixed_lower_hex_id(payload["batch_job_id"], prefix="bjob_")
     ):
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
         raise ValueError("webhook.payload_invalid")
     if event_type == "batch_job.created":
         if (
@@ -747,6 +752,7 @@ def _validate_batch_job_event_payload(
             or not 1 <= payload["task_count"] <= 100
             or not _is_finops_money_text(payload["estimated_cost_cny"])
         ):
+            # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
             raise ValueError("webhook.payload_invalid")
         return
     counts = (
@@ -762,6 +768,7 @@ def _validate_batch_job_event_payload(
         or not _is_finops_money_text(payload["actual_cost_cny"])
         or not _is_finops_money_text(payload["possible_cost_cny"])
     ):
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
         raise ValueError("webhook.payload_invalid")
 
 
@@ -776,7 +783,10 @@ def _validate_batch_job_event_envelope(
     source_request_id: str | None,
     occurred_at: datetime,
 ) -> None:
-    """Bind a Batch summary to its immutable source event and tenant-qualified Job."""
+    """校验批任务 Webhook 信封的事件类型、租户所有者和载荷一致性。
+
+    Bind a Batch summary to its immutable source event and tenant-qualified Job.
+    """
 
     if (
         not _is_prefixed_lower_hex_id(event_id, prefix="bjev_")
@@ -787,6 +797,7 @@ def _validate_batch_job_event_envelope(
         or not _is_bounded_safe_text(source_request_id, maximum=128)
         or occurred_at.tzinfo is None
     ):
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
         raise ValueError("webhook.payload_invalid")
 
 

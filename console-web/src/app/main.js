@@ -1274,6 +1274,7 @@ async function performRefresh() {
     environmentState,
     modelAliasesState,
   });
+  // Batch loader 确认 Session 失效后必须停止，不能继续读取实验租户事实。
   if (!authSession.token) {
     return;
   }
@@ -5065,6 +5066,7 @@ async function exportFileSecurityReport(consoleShellState) {
 }
 
 /** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
+/** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchReadOwner(consoleShellState) {
   const owner = batchJobPageOwner(authSession.context, consoleShellState);
   const hashNavigation = readActiveNavigationHash();
@@ -5073,6 +5075,7 @@ function currentBatchReadOwner(consoleShellState) {
 }
 
 /** Creation requires batch.write + file.read in addition to the read/navigation owner. */
+/** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchCreateOwner(consoleShellState) {
   const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "create" });
   const hashNavigation = readActiveNavigationHash();
@@ -5081,6 +5084,7 @@ function currentBatchCreateOwner(consoleShellState) {
 }
 
 /** Cancellation requires batch.write, while file.read is deliberately not part of this owner. */
+/** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchWriteOwner(consoleShellState) {
   const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "write" });
   const hashNavigation = readActiveNavigationHash();
@@ -5089,6 +5093,7 @@ function currentBatchWriteOwner(consoleShellState) {
 }
 
 /** Result reads require file.read and never reuse the create or cancel permission projection. */
+/** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchResultOwner(consoleShellState) {
   const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "result" });
   const hashNavigation = readActiveNavigationHash();
@@ -5097,6 +5102,7 @@ function currentBatchResultOwner(consoleShellState) {
 }
 
 /** Bind PAGE-104 commands; every callback transitions private state before starting a new GET/POST. */
+/** 绑定批任务页面交互，并在每次命令前重新核对当前权限与页面所有者。 */
 function bindBatchJobsPageInteractions(consoleShellState) {
   const owner = currentBatchReadOwner(consoleShellState);
   if (!owner || !batchJobPageState.enter(owner)) return;
@@ -5149,11 +5155,14 @@ function bindBatchJobsPageInteractions(consoleShellState) {
 }
 
 /** Fetch one assistant result and hydrate it only after the exact owner/job/task ticket accepts it. */
+/** 按当前所有者加载单项批任务结果；权限撤销或选择漂移时丢弃迟到响应。 */
 async function loadBatchTaskResult(consoleShellState, batchTaskId) {
   const token = authSession.token;
   const owner = currentBatchResultOwner(consoleShellState);
+  // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
   if (!token || !owner) {
     batchJobPageState.clear();
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!token) renderLogin();
     return null;
   }
@@ -5182,10 +5191,13 @@ async function loadBatchTaskResult(consoleShellState, batchTaskId) {
     return batchJobPageState.snapshot();
   } catch (error) {
     const currentOwner = currentBatchResultOwner(consoleShellState);
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!batchJobPageState.isResultCurrent(operation, currentOwner) || isBatchAbortError(error)) {
       return null;
     }
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (handleBatchAuthenticationFailure(error)) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (isBatchPermissionRevocation(error)) {
       batchJobPageState.clear();
       await refresh();
@@ -5199,11 +5211,14 @@ async function loadBatchTaskResult(consoleShellState, batchTaskId) {
 }
 
 /** Submit one create request without persisting form values or its idempotency key. */
+/** 提交批任务创建命令，幂等键与请求体只驻留当前操作且不写入页面日志。 */
 async function submitBatchJob(request, idempotencyKey, consoleShellState) {
   const token = authSession.token;
   const owner = currentBatchCreateOwner(consoleShellState);
+  // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
   if (!token || !owner) {
     batchJobPageState.clear();
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!token) renderLogin();
     return null;
   }
@@ -5212,6 +5227,7 @@ async function submitBatchJob(request, idempotencyKey, consoleShellState) {
   // The POST and current form DOM now own the page; an older refresh must not replace either.
   refreshSequence += 1;
   let finished = false;
+  /** 结束当前批任务页面操作并释放代次状态，防止重复完成回调覆盖新请求。 */
   const finish = () => {
     if (finished) return;
     finished = true;
@@ -5232,10 +5248,13 @@ async function submitBatchJob(request, idempotencyKey, consoleShellState) {
     return batchJobPageState.snapshot();
   } catch (error) {
     const currentOwner = currentBatchCreateOwner(consoleShellState);
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!batchJobPageState.isCreateCurrent(operation, currentOwner) || isBatchAbortError(error)) {
       return null;
     }
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (handleBatchAuthenticationFailure(error)) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (isBatchPermissionRevocation(error)) {
       batchJobPageState.clear();
       finish();
@@ -5250,11 +5269,14 @@ async function submitBatchJob(request, idempotencyKey, consoleShellState) {
 }
 
 /** Cancel only the currently selected active Job under a fresh batch.write owner. */
+/** 提交批任务取消命令；后端拒绝、权限撤销和迟到响应均按当前所有者收敛。 */
 async function submitBatchCancellation(batchJobId, consoleShellState) {
   const token = authSession.token;
   const owner = currentBatchWriteOwner(consoleShellState);
+  // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
   if (!token || !owner) {
     batchJobPageState.clear();
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!token) renderLogin();
     return null;
   }
@@ -5263,6 +5285,7 @@ async function submitBatchCancellation(batchJobId, consoleShellState) {
   // Keep an older full-shell GET from rebuilding the selected row while cancellation is unresolved.
   refreshSequence += 1;
   let finished = false;
+  /** 结束当前批任务页面操作并释放代次状态，防止重复完成回调覆盖新请求。 */
   const finish = () => {
     if (finished) return;
     finished = true;
@@ -5282,10 +5305,13 @@ async function submitBatchCancellation(batchJobId, consoleShellState) {
     return batchJobPageState.snapshot();
   } catch (error) {
     const currentOwner = currentBatchWriteOwner(consoleShellState);
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (!batchJobPageState.isCancelCurrent(operation, currentOwner) || isBatchAbortError(error)) {
       return null;
     }
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (handleBatchAuthenticationFailure(error)) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (isBatchPermissionRevocation(error)) {
       batchJobPageState.clear();
       finish();
@@ -5300,7 +5326,9 @@ async function submitBatchCancellation(batchJobId, consoleShellState) {
 }
 
 /** A 401 is the only Batch error that directly clears the authenticated browser session. */
+/** 识别后端认证或撤权失败并清空受保护页面状态，前端不自行降级授权。 */
 function handleBatchAuthenticationFailure(error) {
+  // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
   if (!(error instanceof AuthApiError) || error.status !== 401) return false;
   batchJobPageState.clear();
   clearAuthSession();
@@ -5310,7 +5338,9 @@ function handleBatchAuthenticationFailure(error) {
 }
 
 /** Business 403s remain visible; only the canonical permission error triggers authorization reload. */
+/** 识别后端认证或撤权失败并清空受保护页面状态，前端不自行降级授权。 */
 function isBatchPermissionRevocation(error) {
+  // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
@@ -12096,6 +12126,7 @@ function clearBudgetSessionState() {
  * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
  * Every response is accepted only while the full Batch owner and global refresh generation match.
  */
+/** 加载批任务列表或详情，并用刷新代次阻止旧租户响应覆盖当前页面。 */
 async function loadBatchJobsState(consoleShellState, refreshId, resourceStates) {
   const owner = currentBatchReadOwner(consoleShellState);
   if (!owner || refreshId !== refreshSequence || !batchJobPageState.enter(owner)) return null;
@@ -12158,7 +12189,9 @@ async function loadBatchJobsState(consoleShellState, refreshId, resourceStates) 
       || !batchJobPageState.isListCurrent(operation, currentOwner, refreshId)
       || isBatchAbortError(error)
     ) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (handleBatchAuthenticationFailure(error)) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (isBatchPermissionRevocation(error)) {
       batchJobPageState.clear();
       globalThis.window?.setTimeout?.(() => void refresh(), 0);
@@ -12176,6 +12209,7 @@ async function loadBatchJobsState(consoleShellState, refreshId, resourceStates) 
 }
 
 /** Load the selected Job and one private-cursor Task page under a single detail ticket. */
+/** 加载批任务列表或详情，并用刷新代次阻止旧租户响应覆盖当前页面。 */
 async function loadBatchJobDetailState(consoleShellState, refreshId) {
   const owner = currentBatchReadOwner(consoleShellState);
   const operation = batchJobPageState.beginDetail(owner, refreshId);
@@ -12214,7 +12248,9 @@ async function loadBatchJobDetailState(consoleShellState, refreshId) {
       || !batchJobPageState.isDetailCurrent(operation, currentOwner, refreshId)
       || isBatchAbortError(error)
     ) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (handleBatchAuthenticationFailure(error)) return null;
+    // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
     if (isBatchPermissionRevocation(error)) {
       batchJobPageState.clear();
       globalThis.window?.setTimeout?.(() => void refresh(), 0);

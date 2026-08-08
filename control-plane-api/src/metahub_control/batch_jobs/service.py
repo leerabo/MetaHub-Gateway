@@ -1,4 +1,12 @@
-"""Tenant-scoped PRD-074 Batch API persistence and terminal aggregation.
+"""PRD-074 批任务控制面模块：负责租户内调度、领取、续租、取消、计量和可恢复事件投递。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Tenant-scoped PRD-074 Batch API persistence and terminal aggregation.
 
 This module persists only encrypted operation metadata and safe execution/accounting facts. It
 never logs or returns Provider keys, tokens, prompts, file text, assistant results, grants, lease
@@ -63,6 +71,7 @@ from .models import (
     ReconcileBatchTaskRequest,
 )
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _JOB_ID = re.compile(r"^bjob_[0-9a-f]{32}$")
 _TASK_ID = re.compile(r"^btsk_[0-9a-f]{32}$")
 _ADJUSTMENT_ID = re.compile(r"^fadj_[0-9a-f]{32}$")
@@ -94,6 +103,11 @@ _CURSOR_MAX_BYTES = 2048
 
 @dataclass(frozen=True, slots=True)
 class RouteCandidate:
+    """实现批任务业务步骤。
+
+    定义：RouteCandidate。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     role: str
     model_id: str
     provider_id: str
@@ -105,6 +119,11 @@ class RouteCandidate:
 
 @dataclass(frozen=True, slots=True)
 class BatchBinding:
+    """实现批任务业务步骤。
+
+    定义：BatchBinding。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     project_id: str
     environment_id: str
     environment_code: str
@@ -117,6 +136,11 @@ class BatchBinding:
 
 @dataclass(frozen=True, slots=True)
 class _FrozenRoutePlan:
+    """实现批任务业务步骤。
+
+    定义：_FrozenRoutePlan。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     application_id: str | None
     candidates: tuple[RouteCandidate, ...]
 
@@ -130,7 +154,13 @@ def create_batch_job(
     request_id: str,
     trace_id: str,
 ) -> BatchJobResponse:
-    """Atomically create an encrypted Job, tasks, budget holds, and created source event."""
+    """实现批任务业务步骤。
+
+    定义：create_batch_job。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Atomically create an encrypted Job, tasks, budget holds, and created source event.
+    """
 
     secret = _batch_secret(config)
     normalized_key = _canonical_uuid(idempotency_key, "batch.idempotency_required")
@@ -158,6 +188,7 @@ def create_batch_job(
         ).fetchone()
         if existing is not None:
             if not hmac.compare_digest(str(existing["request_fingerprint"]), fingerprint):
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.idempotency_conflict")
             job = _job_info(connection, existing, secret=secret)
             connection.commit()
@@ -214,7 +245,9 @@ def create_batch_job(
                 secret=secret,
                 owner=owner,
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except BatchCryptoError:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable") from None
         connection.execute(
             """
@@ -325,15 +358,19 @@ def create_batch_job(
             (live.user.tenant_id, job_id),
         ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         job = _job_info(connection, row, secret=secret)
         connection.commit()
         return BatchJobResponse(job=job, request_id=request_id, trace_id=trace_id)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ArithmeticError, ValueError, TypeError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -349,7 +386,13 @@ def list_batch_jobs(
     request_id: str,
     trace_id: str,
 ) -> BatchJobListResponse:
-    """List safe job projections in stable reverse creation order."""
+    """实现批任务业务步骤。
+
+    定义：list_batch_jobs。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    List safe job projections in stable reverse creation order.
+    """
 
     secret = _batch_secret(config)
     normalized_status = _optional_enum(status, _JOB_STATUSES)
@@ -397,9 +440,12 @@ def list_batch_jobs(
             request_id=request_id,
             trace_id=trace_id,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -413,7 +459,13 @@ def get_batch_job(
     request_id: str,
     trace_id: str,
 ) -> BatchJobResponse:
-    """Return one tenant-owned job without internal execution fields."""
+    """实现批任务业务步骤。
+
+    定义：get_batch_job。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Return one tenant-owned job without internal execution fields.
+    """
 
     job_id = _owned_job_id(batch_job_id)
     secret = _batch_secret(config)
@@ -424,15 +476,19 @@ def get_batch_job(
             (context.user.tenant_id, job_id),
         ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.not_found")
         return BatchJobResponse(
             job=_job_info(connection, row, secret=secret),
             request_id=request_id,
             trace_id=trace_id,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -449,7 +505,13 @@ def list_batch_tasks(
     request_id: str,
     trace_id: str,
 ) -> BatchTaskListResponse:
-    """List task execution summaries without result or request plaintext."""
+    """实现批任务业务步骤。
+
+    定义：list_batch_tasks。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    List task execution summaries without result or request plaintext.
+    """
 
     job_id = _owned_job_id(batch_job_id)
     secret = _batch_secret(config)
@@ -468,6 +530,7 @@ def list_batch_tasks(
             "SELECT 1 FROM batch_jobs WHERE tenant_id=? AND batch_job_id=?",
             (context.user.tenant_id, job_id),
         ).fetchone() is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.not_found")
         clauses = ["task.tenant_id=?", "task.batch_job_id=?"]
         params: list[object] = [context.user.tenant_id, job_id]
@@ -507,9 +570,12 @@ def list_batch_tasks(
             request_id=request_id,
             trace_id=trace_id,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -521,7 +587,13 @@ def get_batch_task_result(
     batch_job_id: object,
     batch_task_id: object,
 ) -> BatchTaskResultResponse:
-    """Recheck both permissions and return one authenticated assistant result."""
+    """实现批任务业务步骤。
+
+    定义：get_batch_task_result。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Recheck both permissions and return one authenticated assistant result.
+    """
 
     job_id = _owned_job_id(batch_job_id)
     task_id = _owned_task_id(batch_task_id)
@@ -556,10 +628,13 @@ def get_batch_task_result(
             (live.user.tenant_id, job_id, task_id),
         ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.task_not_found")
         if row["task_status"] == "outcome_unknown":
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.provider_outcome_unknown")
         if row["task_status"] != "succeeded":
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.result_not_ready")
         if (
             row["result_available"] != 1
@@ -567,6 +642,7 @@ def get_batch_task_result(
             or row["result_ciphertext"] is None
             or row["result_hmac"] is None
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.result_unavailable")
         owner = BatchEnvelopeOwner(
             tenant_id=live.user.tenant_id,
@@ -584,9 +660,12 @@ def get_batch_task_result(
                 owner=owner,
             )
             expected_hmac = batch_result_hmac(assistant, secret=secret, owner=owner)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except BatchCryptoError:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.result_unavailable") from None
         if not hmac.compare_digest(str(row["result_hmac"]), expected_hmac):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.result_unavailable")
         connection.commit()
         return BatchTaskResultResponse(
@@ -596,11 +675,14 @@ def get_batch_task_result(
             request_id=str(row["request_id"]),
             trace_id=str(row["trace_id"]),
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -614,7 +696,13 @@ def cancel_batch_job(
     request_id: str,
     trace_id: str,
 ) -> BatchJobResponse:
-    """Idempotently request cancellation and cancel work not yet calling a Provider."""
+    """实现批任务业务步骤。
+
+    定义：cancel_batch_job。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Idempotently request cancellation and cancel work not yet calling a Provider.
+    """
 
     job_id = _owned_job_id(batch_job_id)
     secret = _batch_secret(config)
@@ -632,6 +720,7 @@ def cancel_batch_job(
             (live.user.tenant_id, job_id),
         ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.not_found")
         if row["status"] not in {"completed", "partial_failed", "failed", "cancelled", "expired"}:
             now = _db_time(_utcnow())
@@ -677,15 +766,19 @@ def cancel_batch_job(
                 (live.user.tenant_id, job_id),
             ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.not_found")
         job = _job_info(connection, row, secret=secret)
         connection.commit()
         return BatchJobResponse(job=job, request_id=request_id, trace_id=trace_id)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -702,7 +795,13 @@ def reconcile_batch_task(
     request_id: str,
     trace_id: str,
 ) -> BatchReconciliationResponse:
-    """Resolve possible cost with an idempotent, immutable management fact."""
+    """实现批任务业务步骤。
+
+    定义：reconcile_batch_task。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Resolve possible cost with an idempotent, immutable management fact.
+    """
 
     job_id = _owned_job_id(batch_job_id)
     task_id = _owned_task_id(batch_task_id)
@@ -738,6 +837,7 @@ def reconcile_batch_task(
                 or existing["decision"] != payload.decision
                 or existing["adjustment_id"] != payload.adjustment_id
             ):
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.reconciliation_conflict")
             pending = _job_reconciliation_pending(connection, live.user.tenant_id, job_id)
             connection.commit()
@@ -765,6 +865,7 @@ def reconcile_batch_task(
             (live.user.tenant_id, job_id, task_id),
         ).fetchall()
         if not allocation_rows:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.reconciliation_conflict")
         attempt_id = str(allocation_rows[0]["batch_attempt_id"])
         attempt_rows = [
@@ -788,6 +889,7 @@ def reconcile_batch_task(
                     amount=possible_cny,
                 )
             ):
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.reconciliation_conflict")
             allocation_status = "posted"
             charge_state = "posted"
@@ -814,6 +916,7 @@ def reconcile_batch_task(
             ),
         )
         if connection.execute("SELECT changes()").fetchone()[0] < 1:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.reconciliation_conflict")
         connection.execute(
             """
@@ -849,11 +952,14 @@ def reconcile_batch_task(
             request_id=request_id,
             trace_id=trace_id,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, ValueError, TypeError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -866,7 +972,13 @@ def decrypt_job_operation_spec(
     batch_job_id: str,
     ciphertext: object,
 ) -> object:
-    """Decrypt and validate a durable operation spec for the Worker without logging it."""
+    """实现批任务业务步骤。
+
+    定义：decrypt_job_operation_spec。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Decrypt and validate a durable operation spec for the Worker without logging it.
+    """
 
     try:
         plaintext = decrypt_batch_payload(
@@ -876,7 +988,9 @@ def decrypt_job_operation_spec(
         )
         decoded = json.loads(plaintext.decode("utf-8", errors="strict"))
         return validate_operation_spec(decoded)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (BatchCryptoError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 
@@ -890,7 +1004,13 @@ def finalize_batch_job_if_terminal(
     now: str,
     actor_id: str = "batch-worker",
 ) -> bool:
-    """Public transaction helper used by Worker/reaper after a task reaches a terminal state."""
+    """实现批任务业务步骤。
+
+    定义：finalize_batch_job_if_terminal。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Public transaction helper used by Worker/reaper after a task reaches a terminal state.
+    """
 
     return _finalize_job_if_terminal(
         connection,
@@ -910,18 +1030,34 @@ def attempt_reserved_cost(
     input_tokens: int,
     output_tokens: int,
 ) -> Decimal:
-    """Recompute one attempt's frozen worst-case cost from an exact route plan."""
+    """实现批任务业务步骤。
+
+    定义：attempt_reserved_cost。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Recompute one attempt's frozen worst-case cost from an exact route plan.
+    """
 
     route = _route_plan_from_json(route_plan_json)
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     return _attempt_cost(route.candidates, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def route_plan_hash(route_plan_json: object) -> str:
+    """实现批任务业务步骤。
+
+    定义：route_plan_hash。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
+    # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
     if type(route_plan_json) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     try:
         encoded = route_plan_json.encode("utf-8", errors="strict")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except UnicodeError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     return hashlib.sha256(encoded).hexdigest()
 
@@ -933,9 +1069,16 @@ def rollover_batch_budget_holds(
     batch_job_id: str,
     current: datetime,
 ) -> None:
-    """Move unallocated worst-case cost to the current Shanghai business day."""
+    """实现批任务业务步骤。
+
+    定义：rollover_batch_budget_holds。
+    数据访问始终绑定租户并保留审计和失败事实。
+
+    Move unallocated worst-case cost to the current Shanghai business day.
+    """
 
     if not connection.in_transaction:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     budget_date, _start, _end = _budget_window(current)
     job = connection.execute(
@@ -949,6 +1092,7 @@ def rollover_batch_budget_holds(
         (tenant_id, batch_job_id),
     ).fetchone()
     if job is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     latest_row = connection.execute(
         """
@@ -963,13 +1107,16 @@ def rollover_batch_budget_holds(
     if comparison_date == budget_date:
         return
     if comparison_date > budget_date:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
 
     frozen_route = _route_plan_from_json(job["route_plan_json"])
     current_application_id = (
         str(job["current_application_id"]) if job["current_application_id"] else None
     )
+    # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
     if current_application_id != frozen_route.application_id:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
     candidates = frozen_route.candidates
     task_rows = connection.execute(
@@ -992,9 +1139,11 @@ def rollover_batch_budget_holds(
             or type(task["estimated_tokens"]) is not int
             or type(task["attempt_count"]) is not int
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         attempts_left = int(job["max_attempts"]) - int(task["attempt_count"])
         if attempts_left < 0:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         remaining += _attempt_cost(
             candidates,
@@ -1056,6 +1205,11 @@ def _resolve_binding_and_route(
     model_alias_id: str,
     as_of: datetime,
 ) -> BatchBinding:
+    """实现批任务业务步骤。
+
+    定义：_resolve_binding_and_route。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     owner = connection.execute(
         """
         SELECT project.project_id,environment.environment_id,environment.code
@@ -1067,6 +1221,7 @@ def _resolve_binding_and_route(
         (tenant_id, project_id, environment_id),
     ).fetchone()
     if owner is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
     alias = connection.execute(
         """
@@ -1082,6 +1237,7 @@ def _resolve_binding_and_route(
         (tenant_id, model_alias_id, environment_id, owner["code"]),
     ).fetchone()
     if alias is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
     keys = connection.execute(
         """
@@ -1093,6 +1249,7 @@ def _resolve_binding_and_route(
         (tenant_id, project_id, environment_id, owner["code"]),
     ).fetchall()
     if len(keys) != 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
     model_roles: list[tuple[str, str]] = [("default", str(alias["default_model_id"]))]
     if (
@@ -1158,6 +1315,11 @@ def _priced_candidate(
     model_id: str,
     as_of: datetime,
 ) -> RouteCandidate:
+    """实现批任务业务步骤。
+
+    定义：_priced_candidate。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     row = connection.execute(
         """
         SELECT model.model_id,model.provider_id,model.status,
@@ -1180,6 +1342,7 @@ def _priced_candidate(
         (_db_time(as_of), tenant_id, model_id),
     ).fetchone()
     if row is None or row["status"] != "active":
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
     if row["price_plan_id"] is not None:
         source = "price_plan"
@@ -1193,12 +1356,16 @@ def _priced_candidate(
         output_price = row["catalog_output"]
         currency = row["catalog_currency"]
         version = row["catalog_version"]
+    # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
     if currency != "CNY" or type(version) is not str or not version:
+        # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         raise ApiError("batch.cost_estimate_unavailable")
     try:
         normalized_input = _price(input_price)
         normalized_output = _price(output_price)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
+        # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         raise ApiError("batch.cost_estimate_unavailable") from None
     return RouteCandidate(
         role=role,
@@ -1220,6 +1387,11 @@ def _create_budget_holds(
     reserved: Decimal,
     created: datetime,
 ) -> None:
+    """实现批任务业务步骤。
+
+    定义：_create_budget_holds。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     budget_date, start, end = _budget_window(created)
     scopes = {
         ("tenant", tenant_id),
@@ -1256,9 +1428,12 @@ def _create_budget_holds(
                 end_utc=end,
             )
             budget_micros = _money_micros(_money(rule["daily_budget_cny"]))
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except (BudgetSpendUnavailableError, ValueError, TypeError):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable") from None
         if amounts.effective_cny_micros + reserved_micros >= budget_micros:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.budget_exceeded")
         amount = _money_text(reserved)
         now = _db_time(created)
@@ -1298,6 +1473,11 @@ def _finalize_job_if_terminal(
     trace_id: str,
     now: str,
 ) -> bool:
+    """实现批任务业务步骤。
+
+    定义：_finalize_job_if_terminal。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     job = connection.execute(
         "SELECT * FROM batch_jobs WHERE tenant_id=? AND batch_job_id=?",
         (tenant_id, job_id),
@@ -1361,6 +1541,7 @@ def _finalize_job_if_terminal(
         (tenant_id, job_id),
     ).fetchone()
     if refreshed is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     _insert_job_event(
         connection,
@@ -1393,6 +1574,11 @@ def _refresh_job_costs(
     *,
     now: str,
 ) -> None:
+    """实现批任务业务步骤。
+
+    定义：_refresh_job_costs。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     attempts = connection.execute(
         """
         SELECT batch_attempt_id,cost_cny FROM batch_attempts
@@ -1456,6 +1642,11 @@ def _insert_job_event(
     occurred_at: str,
     payload: dict[str, object],
 ) -> None:
+    """实现批任务业务步骤。
+
+    定义：_insert_job_event。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     payload_json = json.dumps(
         payload,
         ensure_ascii=True,
@@ -1486,12 +1677,19 @@ def _insert_job_event(
 
 
 def _job_info(connection: sqlite3.Connection, row: sqlite3.Row, *, secret: str) -> BatchJobInfo:
+    """实现批任务业务步骤。
+
+    定义：_job_info。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     owner = _job_envelope_owner(str(row["tenant_id"]), str(row["batch_job_id"]))
     try:
         name = decrypt_batch_payload(row["name_ciphertext"], secret=secret, owner=owner).decode(
             "utf-8", errors="strict"
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (BatchCryptoError, UnicodeError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     counts = _task_counts(connection, str(row["tenant_id"]), str(row["batch_job_id"]))
     return BatchJobInfo(
@@ -1533,6 +1731,11 @@ def _job_info(connection: sqlite3.Connection, row: sqlite3.Row, *, secret: str) 
 
 
 def _task_info(row: sqlite3.Row) -> BatchTaskInfo:
+    """实现批任务业务步骤。
+
+    定义：_task_info。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return BatchTaskInfo(
         batch_task_id=str(row["batch_task_id"]),
         file_id=str(row["file_id"]),
@@ -1555,6 +1758,11 @@ def _task_info(row: sqlite3.Row) -> BatchTaskInfo:
 
 
 def _task_counts(connection: sqlite3.Connection, tenant_id: str, job_id: str) -> dict[str, int]:
+    """实现批任务业务步骤。
+
+    定义：_task_counts。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     counts = {status: 0 for status in _TASK_STATUSES}
     rows = connection.execute(
         """
@@ -1566,6 +1774,7 @@ def _task_counts(connection: sqlite3.Connection, tenant_id: str, job_id: str) ->
     for row in rows:
         status = str(row["status"])
         if status not in counts or type(row["count"]) is not int:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         counts[status] = int(row["count"])
     return counts
@@ -1577,6 +1786,11 @@ def _enforce_capacity(
     tenant_id: str,
     tasks: int,
 ) -> None:
+    """实现批任务业务步骤。
+
+    定义：_enforce_capacity。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     pending_jobs = connection.execute(
         """
         SELECT COUNT(*) FROM batch_jobs
@@ -1597,15 +1811,24 @@ def _enforce_capacity(
         or pending_jobs >= config.batch_max_pending_jobs_per_tenant
         or pending_tasks + tasks > config.batch_max_pending_tasks_per_tenant
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.capacity_full")
 
 
 def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
+    """实现批任务业务步骤。
+
+    定义：_route_plan_from_json。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     try:
         payload = json.loads(value)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     if type(payload) is not dict or set(payload) != {
         "schema_version",
@@ -1616,14 +1839,17 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
         "fallback_policy_version",
         "candidates",
     } or payload["schema_version"] != 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     application_id = payload["application_id"]
     if application_id is not None and (
         type(application_id) is not str or _BINDING_ID.fullmatch(application_id) is None
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     rows = payload["candidates"]
     if type(rows) is not list or not 1 <= len(rows) <= 2:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     result: list[RouteCandidate] = []
     for index, item in enumerate(rows):
@@ -1637,6 +1863,7 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
             "price_source",
             "price_version",
         }:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         expected_role = "default" if index == 0 else "fallback"
         if (
@@ -1646,6 +1873,7 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
             or type(item["price_version"]) is not str
             or not item["price_version"]
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         try:
             result.append(
@@ -1659,7 +1887,9 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
                     price_version=str(item["price_version"]),
                 )
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except ValueError:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable") from None
     return _FrozenRoutePlan(
         application_id=application_id,
@@ -1673,6 +1903,11 @@ def _attempt_cost(
     input_tokens: int,
     output_tokens: int,
 ) -> Decimal:
+    """实现批任务业务步骤。
+
+    定义：_attempt_cost。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if (
         not candidates
         or type(input_tokens) is not int
@@ -1680,6 +1915,7 @@ def _attempt_cost(
         or type(output_tokens) is not int
         or output_tokens < 0
     ):
+        # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         raise ApiError("batch.cost_estimate_unavailable")
     with localcontext() as context:
         context.prec = 64
@@ -1705,6 +1941,11 @@ def _matching_adjustment(
     request_id: str,
     amount: Decimal,
 ) -> bool:
+    """实现批任务业务步骤。
+
+    定义：_matching_adjustment。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     columns = {row[1] for row in connection.execute("PRAGMA table_info(finops_adjustments)")}
     required = {
         "finops_adjustment_id",
@@ -1740,16 +1981,27 @@ def _job_reconciliation_pending(
     tenant_id: str,
     job_id: str,
 ) -> bool:
+    """实现批任务业务步骤。
+
+    定义：_job_reconciliation_pending。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     row = connection.execute(
         "SELECT reconciliation_pending FROM batch_jobs WHERE tenant_id=? AND batch_job_id=?",
         (tenant_id, job_id),
     ).fetchone()
     if row is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.not_found")
     return bool(row["reconciliation_pending"])
 
 
 def _canonical_create_request(payload: CreateBatchJobRequest) -> bytes:
+    """实现批任务业务步骤。
+
+    定义：_canonical_create_request。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     value = {
         "name": payload.name,
         "project_id": payload.project_id,
@@ -1770,7 +2022,9 @@ def _canonical_create_request(payload: CreateBatchJobRequest) -> bytes:
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8", errors="strict")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (UnicodeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid") from None
 
 
@@ -1782,6 +2036,11 @@ def _encode_cursor(
     kind: str,
     status: str | None,
 ) -> str:
+    """实现批任务业务步骤。
+
+    定义：_encode_cursor。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     payload = json.dumps(
         {"v": 1, "tenant": tenant_id, "kind": kind, "status": status, "position": position},
         ensure_ascii=True,
@@ -1800,19 +2059,27 @@ def _decode_cursor(
     kind: str,
     status: str | None,
 ) -> tuple[Any, str] | None:
+    """实现批任务业务步骤。
+
+    定义：_decode_cursor。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if value is None:
         return None
     if type(value) is not str or not value or len(value) > _CURSOR_MAX_BYTES:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     try:
         raw = _unb64(value)
         if len(raw) <= 32:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError
         payload, signature = raw[:-32], raw[-32:]
         expected = hmac.new(
             _secret_bytes(secret), b"cursor/v1\x00" + payload, hashlib.sha256
         ).digest()
         if not hmac.compare_digest(signature, expected):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError
         decoded = json.loads(payload.decode("ascii"))
         if (
@@ -1826,57 +2093,99 @@ def _decode_cursor(
             or len(decoded["position"]) != 2
             or type(decoded["position"][1]) is not str
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError
         return decoded["position"][0], decoded["position"][1]
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (ValueError, TypeError, UnicodeError, json.JSONDecodeError, binascii.Error):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid") from None
 
 
 def _canonical_uuid(value: object, error_code: str) -> str:
+    """实现批任务业务步骤。
+
+    定义：_canonical_uuid。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError(error_code)
     try:
         parsed = UUID(value)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (ValueError, TypeError, AttributeError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError(error_code) from None
     canonical = str(parsed)
     if value != canonical:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError(error_code)
     return canonical
 
 
 def _owned_job_id(value: object) -> str:
+    """实现批任务业务步骤。
+
+    定义：_owned_job_id。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if type(value) is not str or _JOB_ID.fullmatch(value) is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.not_found")
     return value
 
 
 def _owned_task_id(value: object) -> str:
+    """实现批任务业务步骤。
+
+    定义：_owned_task_id。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if type(value) is not str or _TASK_ID.fullmatch(value) is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.task_not_found")
     return value
 
 
 def _optional_enum(value: object, allowed: frozenset[str]) -> str | None:
+    """实现批任务业务步骤。
+
+    定义：_optional_enum。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if value is None:
         return None
     if type(value) is not str or value not in allowed:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     return value
 
 
 def _limit(value: object) -> int:
+    """实现批任务业务步骤。
+
+    定义：_limit。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if value is None:
         return 50
     if type(value) is not str or not value.isascii() or not value.isdigit():
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     parsed = int(value)
     if not 1 <= parsed <= 100:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     return parsed
 
 
 def _job_envelope_owner(tenant_id: str, job_id: str) -> BatchEnvelopeOwner:
+    """实现批任务业务步骤。
+
+    定义：_job_envelope_owner。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return BatchEnvelopeOwner(
         tenant_id=tenant_id,
         batch_job_id=job_id,
@@ -1889,20 +2198,41 @@ def _job_envelope_owner(tenant_id: str, job_id: str) -> BatchEnvelopeOwner:
 
 
 def _batch_secret(config: AppConfig) -> str:
+    """实现批任务业务步骤。
+
+    定义：_batch_secret。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     secret = config.batch_encryption_secret
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     if type(secret) is not str or not secret:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     return secret
 
 
 def _secret_bytes(secret: str) -> bytes:
+    """实现批任务业务步骤。
+
+    定义：_secret_bytes。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     try:
+        # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
         return secret.encode("utf-8", errors="strict")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except UnicodeError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 
 def _domain_hmac(secret: str, domain: bytes, value: bytes) -> str:
+    """实现批任务业务步骤。
+
+    定义：_domain_hmac。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return hmac.new(
         _secret_bytes(secret),
         b"metahub/batch/" + domain + b"\x00" + value,
@@ -1911,21 +2241,37 @@ def _domain_hmac(secret: str, domain: bytes, value: bytes) -> str:
 
 
 def _price(value: object) -> Decimal:
+    """实现批任务业务步骤。
+
+    定义：_price。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     try:
         return Decimal(canonical_batch_price(value))
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except BatchContractError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError from None
 
 
 def _money(value: object) -> Decimal:
+    """实现批任务业务步骤。
+
+    定义：_money。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if value is None or isinstance(value, bool):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     text = str(value)
     if not text or text != text.strip() or "e" in text.lower():
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     try:
         amount = Decimal(text)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (InvalidOperation, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError from None
     if (
         not amount.is_finite()
@@ -1933,6 +2279,7 @@ def _money(value: object) -> Decimal:
         or amount > _MAX_MONEY
         or amount != amount.quantize(_MONEY_QUANT)
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     return amount
 
@@ -1942,40 +2289,79 @@ def _consistent_allocation_amount(
     *,
     error_code: str,
 ) -> Decimal:
+    """实现批任务业务步骤。
+
+    定义：_consistent_allocation_amount。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     try:
         amounts = [_money(value) for value in values]
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError(error_code) from None
     if not amounts or any(amount != amounts[0] for amount in amounts[1:]):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError(error_code)
     return amounts[0]
 
 
 def _money_text(value: Decimal) -> str:
+    """实现批任务业务步骤。
+
+    定义：_money_text。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return format(_money(value), ".6f")
 
 
 def _price_text(value: Decimal) -> str:
+    """实现批任务业务步骤。
+
+    定义：_price_text。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return canonical_batch_price(value)
 
 
 def _money_micros(value: Decimal) -> int:
+    """实现批任务业务步骤。
+
+    定义：_money_micros。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return int(_money(value) * MICROS_PER_CNY)
 
 
 def _budget_window(now: datetime) -> tuple[str, str, str]:
+    """实现批任务业务步骤。
+
+    定义：_budget_window。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     local = now.astimezone(_SHANGHAI)
     start = datetime(local.year, local.month, local.day, tzinfo=_SHANGHAI)
     return start.date().isoformat(), _db_time(start), _db_time(start + timedelta(days=1))
 
 
 def _b64(value: bytes) -> str:
+    """实现批任务业务步骤。
+
+    定义：_b64。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
 def _unb64(value: str) -> bytes:
+    """实现批任务业务步骤。
+
+    定义：_unb64。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
     if any(character not in alphabet for character in value):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise binascii.Error
     return base64.b64decode(
         value + "=" * (-len(value) % 4),
@@ -1985,30 +2371,59 @@ def _unb64(value: str) -> bytes:
 
 
 def _time(value: object) -> datetime:
+    """实现批任务业务步骤。
+
+    定义：_time。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     return parsed.astimezone(UTC)
 
 
 def _optional_time(value: object) -> datetime | None:
+    """实现批任务业务步骤。
+
+    定义：_optional_time。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return None if value is None else _time(value)
 
 
 def _utcnow() -> datetime:
+    """实现批任务业务步骤。
+
+    定义：_utcnow。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return datetime.now(UTC).replace(microsecond=0)
 
 
 def _db_time(value: datetime) -> str:
+    """实现批任务业务步骤。
+
+    定义：_db_time。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
+    """实现批任务业务步骤。
+
+    定义：_connect。
+    数据访问始终绑定租户并保留审计和失败事实。
+    """
     try:
         return connect_database(config.database_url)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except DbError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 

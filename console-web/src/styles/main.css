@@ -14419,7 +14419,7 @@ h3 {
   }
 }
 
-/* PAGE-104 Batch operations use dense tables on desktop and labeled rows on narrow screens. */
+/* PAGE-104 批任务工作区：桌面使用密集表格，窄屏改为带字段标签的纵向记录。 */
 .batch-jobs-panel {
   padding: 0;
   overflow: hidden;
@@ -14784,6 +14784,7 @@ h3 {
   margin-top: 3px;
 }
 
+/* 批任务创建对话框：遮罩固定于视口，表单内容独立滚动且不扩大页面根宽度。 */
 .batch-dialog-backdrop {
   position: fixed;
   z-index: 40;

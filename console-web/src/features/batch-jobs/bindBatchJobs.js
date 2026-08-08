@@ -1,3 +1,4 @@
+/** PRD-074 批任务控制台模块：负责页面状态与交互，最终权限、租户隔离和错误裁决均由后端完成。 */
 /**
  * PAGE-104 DOM bindings.
  *
@@ -7,6 +8,7 @@
 
 import { createBatchJobIdempotencyKey } from "../../lib/batchJobs.js";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const JOB_ID = /^bjob_[0-9a-f]{32}$/;
 const TASK_ID = /^btsk_[0-9a-f]{32}$/;
 const OPERATIONS = new Set(["summarize", "translate", "classify"]);
@@ -15,6 +17,7 @@ const STATUSES = new Set([
   "queued", "running", "completed", "partial_failed", "failed", "cancelled", "expired",
 ]);
 
+/** 处理 bindBatchJobInteractions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function bindBatchJobInteractions(handlers = {}, root = globalThis.document) {
   const workspace = root?.querySelector?.("[data-batch-jobs-root]");
   if (!workspace) return false;
@@ -25,6 +28,7 @@ export function bindBatchJobInteractions(handlers = {}, root = globalThis.docume
   return true;
 }
 
+/** 处理 bindList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function bindList(workspace, handlers) {
   workspace.querySelector("[data-batch-status-filter]")?.addEventListener("change", async (event) => {
     const value = String(event.currentTarget?.value ?? "");
@@ -47,6 +51,7 @@ function bindList(workspace, handlers) {
   }
 }
 
+/** 处理 bindDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function bindDetail(workspace, handlers) {
   workspace.querySelector("[data-batch-task-previous]")?.addEventListener("click", async () => {
     await handlers.onTaskPreviousPage?.();
@@ -68,6 +73,7 @@ function bindDetail(workspace, handlers) {
   });
 }
 
+/** 处理 bindResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function bindResult(workspace, handlers) {
   let bindingGeneration = 0;
   for (const button of workspace.querySelectorAll("[data-batch-result]")) {
@@ -94,9 +100,11 @@ function bindResult(workspace, handlers) {
   });
 }
 
+/** 处理 syncBatchResultState 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function syncBatchResultState(workspace, snapshot) {
   const status = workspace.querySelector("[data-batch-result-status]");
   if (!status || !snapshot) return;
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (snapshot.resultState === "error" && snapshot.resultError) {
     status.textContent = `${snapshot.resultError.code} · request_id: ${snapshot.resultError.requestId}`;
     return;
@@ -104,6 +112,7 @@ function syncBatchResultState(workspace, snapshot) {
   if (snapshot.resultState === "idle") status.textContent = "";
 }
 
+/** 处理 bindCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function bindCreate(workspace, handlers) {
   const dialog = workspace.querySelector("[data-batch-create-dialog]");
   const form = dialog?.querySelector("[data-batch-create-form]");
@@ -112,6 +121,7 @@ function bindCreate(workspace, handlers) {
   if (!dialog || !form || !openButton) return;
   let pendingRequestFingerprint = "";
   let pendingIdempotencyKey = "";
+  /** 处理 open 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   const open = async () => {
     if (await handlers.onOpenCreate?.() !== true) return;
     pendingRequestFingerprint = "";
@@ -123,6 +133,7 @@ function bindCreate(workspace, handlers) {
     syncFileSelection(form);
     form.querySelector("input[name='name']")?.focus();
   };
+  /** 处理 close 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   const close = async () => {
     if (await handlers.onCloseCreate?.() !== true) return;
     pendingRequestFingerprint = "";
@@ -185,11 +196,13 @@ function bindCreate(workspace, handlers) {
 }
 
 /** Build the exact Batch create body from a FormData-like object. */
+/** 处理 batchCreateRequestFromFormData 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchCreateRequestFromFormData(data) {
   const operation = text(data?.get?.("operation"));
   const priority = text(data?.get?.("priority"));
   const fileIds = (data?.getAll?.("file_ids") ?? []).map(text).filter(Boolean);
   if (!OPERATIONS.has(operation) || !PRIORITIES.has(priority) || fileIds.length < 1) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw new TypeError("batch.request_invalid");
   }
   const request = {
@@ -219,8 +232,10 @@ export function batchCreateRequestFromFormData(data) {
 }
 
 /** Hash the exact create wire so an ambiguous retry can reuse its key without retaining form text. */
+/** 处理 batchCreateRequestFingerprint 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function batchCreateRequestFingerprint(request) {
   if (!request || typeof globalThis.crypto?.subtle?.digest !== "function") {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw new TypeError("batch.request_invalid");
   }
   const bytes = new TextEncoder().encode(JSON.stringify(request));
@@ -229,6 +244,7 @@ export async function batchCreateRequestFingerprint(request) {
 }
 
 /** Clear result text synchronously before owner invalidation or AbortController cancellation. */
+/** 处理 clearBatchResultDom 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function clearBatchResultDom(root = globalThis.document) {
   const bodies = root?.matches?.("[data-batch-result-body]")
     ? [root]
@@ -244,6 +260,7 @@ export function clearBatchResultDom(root = globalThis.document) {
 }
 
 /** Assign assistant text once, after the main owner ticket has already accepted the response. */
+/** 处理 hydrateBatchResultText 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function hydrateBatchResultText(root, {
   batchJobId,
   batchTaskId,
@@ -273,6 +290,7 @@ export function hydrateBatchResultText(root, {
   return true;
 }
 
+/** 处理 markBatchResultLoading 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function markBatchResultLoading(workspace, batchTaskId) {
   clearBatchResultDom(workspace);
   workspace.querySelector(".batch-result")?.setAttribute("aria-busy", "true");
@@ -280,6 +298,7 @@ function markBatchResultLoading(workspace, batchTaskId) {
   if (status) status.textContent = `正在读取任务 ${batchTaskId.slice(-8)} 的结果`;
 }
 
+/** 处理 syncOperationFields 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function syncOperationFields(form) {
   const operation = text(form.querySelector("input[name='operation']:checked")?.value);
   for (const container of form.querySelectorAll("[data-batch-operation-field]")) {
@@ -292,6 +311,7 @@ function syncOperationFields(form) {
   }
 }
 
+/** 处理 syncAliasOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function syncAliasOptions(form) {
   const environmentId = text(form.querySelector("select[name='environment_id']")?.value);
   const alias = form.querySelector("select[name='model_alias_id']");
@@ -310,6 +330,7 @@ function syncAliasOptions(form) {
   syncFileSelection(form);
 }
 
+/** 处理 syncFileSelection 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function syncFileSelection(form) {
   const selected = form.querySelectorAll("input[name='file_ids']:checked").length;
   const count = form.querySelector("[data-batch-file-count]");
@@ -323,6 +344,7 @@ function syncFileSelection(form) {
   }
 }
 
+/** 处理 syncBatchActionFeedback 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function syncBatchActionFeedback(workspace, snapshot) {
   const target = workspace.querySelector("[data-batch-action-feedback]");
   if (!target || !snapshot) return;
@@ -334,6 +356,7 @@ function syncBatchActionFeedback(workspace, snapshot) {
   target.classList.toggle("is-error", Boolean(error));
 }
 
+/** 处理 clearBatchCreateForm 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function clearBatchCreateForm(form) {
   form.reset();
   for (const control of form.querySelectorAll("input[type='text'], textarea")) control.value = "";
@@ -344,6 +367,7 @@ function clearBatchCreateForm(form) {
   syncFileSelection(form);
 }
 
+/** 处理 lockForm 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function lockForm(form, locked) {
   if (locked) form.setAttribute("aria-busy", "true");
   else form.removeAttribute("aria-busy");
@@ -357,14 +381,18 @@ function lockForm(form, locked) {
   }
 }
 
+/** 处理 integerText 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function integerText(value) {
   const normalized = text(value);
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!/^(?:0|[1-9][0-9]*)$/.test(normalized)) throw new TypeError("batch.request_invalid");
   const parsed = Number(normalized);
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!Number.isSafeInteger(parsed)) throw new TypeError("batch.request_invalid");
   return parsed;
 }
 
+/** 处理 text 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function text(value) {
   return typeof value === "string" ? value : "";
 }

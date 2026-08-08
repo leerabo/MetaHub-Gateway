@@ -1,7 +1,9 @@
+/** PRD-074 批任务控制台模块：负责页面状态与交互，最终权限、租户隔离和错误裁决均由后端完成。 */
 /** Strict PAGE-104 Batch API client. */
 
 import { AuthApiError } from "./auth.js";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const JOB_ID = /^bjob_[0-9a-f]{32}$/;
 const TASK_ID = /^btsk_[0-9a-f]{32}$/;
 const FILE_ID = /^file_[0-9a-f]{32}$/;
@@ -27,6 +29,7 @@ const JOB_KEYS = Object.freeze([
   "cost", "deadline_at", "cancel_requested_at", "started_at", "completed_at", "failure_code",
   "created_at", "updated_at",
 ]);
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const PROGRESS_KEYS = Object.freeze([
   "total", "queued", "running", "succeeded", "failed", "cancelled", "expired", "outcome_unknown",
 ]);
@@ -65,6 +68,7 @@ const ERROR_MESSAGES = Object.freeze({
   "batch.response_invalid": "批处理响应合同不完整",
 });
 
+/** 处理 listBatchJobs 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function listBatchJobs({
   controlApiUrl,
   token,
@@ -73,6 +77,7 @@ export async function listBatchJobs({
   cursor = null,
   signal,
 }) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if ((status && !JOB_STATUSES.has(status)) || !integer(limit, 1, 100)) throw clientError("batch.request_invalid", 400);
   const query = new URLSearchParams({ limit: String(limit) });
   if (status) query.set("status", status);
@@ -83,6 +88,7 @@ export async function listBatchJobs({
   return normalizeBatchJobListResponse(payload);
 }
 
+/** 处理 getBatchJob 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function getBatchJob({ controlApiUrl, token, batchJobId, signal }) {
   const jobId = requireJobId(batchJobId);
   const payload = await requestJson(`${controlApiUrl}/batch-jobs/${encodeURIComponent(jobId)}`, {
@@ -91,6 +97,7 @@ export async function getBatchJob({ controlApiUrl, token, batchJobId, signal }) 
   return normalizeBatchJobResponse(payload, jobId);
 }
 
+/** 处理 listBatchTasks 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function listBatchTasks({
   controlApiUrl,
   token,
@@ -101,6 +108,7 @@ export async function listBatchTasks({
   signal,
 }) {
   const jobId = requireJobId(batchJobId);
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if ((status && !TASK_STATUSES.has(status)) || !integer(limit, 1, 100)) throw clientError("batch.request_invalid", 400);
   const query = new URLSearchParams({ limit: String(limit) });
   if (status) query.set("status", status);
@@ -113,6 +121,7 @@ export async function listBatchTasks({
   return Object.freeze({ ...normalized, batch_job_id: jobId });
 }
 
+/** 处理 getBatchTaskResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function getBatchTaskResult({
   controlApiUrl,
   token,
@@ -127,10 +136,12 @@ export async function getBatchTaskResult({
     { headers: authorizationHeaders(token), signal },
   );
   const normalized = normalizeBatchTaskResultResponse(payload, jobId, taskId);
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!normalized) throw clientError("batch.response_invalid", 502, payload?.request_id, payload?.trace_id);
   return normalized;
 }
 
+/** 处理 createBatchJob 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function createBatchJob({ controlApiUrl, token, idempotencyKey, request, signal }) {
   const body = normalizeCreateRequest(request);
   const key = requireIdempotencyKey(idempotencyKey);
@@ -148,14 +159,17 @@ export async function createBatchJob({ controlApiUrl, token, idempotencyKey, req
 }
 
 /** Generate a canonical one-shot create idempotency key without embedding tenant or form data. */
+/** 处理 createBatchJobIdempotencyKey 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function createBatchJobIdempotencyKey() {
   if (typeof globalThis.crypto?.randomUUID !== "function") {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.idempotency_required", 400);
   }
   const value = globalThis.crypto.randomUUID().toLowerCase();
   return requireIdempotencyKey(value);
 }
 
+/** 处理 cancelBatchJob 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export async function cancelBatchJob({ controlApiUrl, token, batchJobId, signal }) {
   const jobId = requireJobId(batchJobId);
   const payload = await requestJson(`${controlApiUrl}/batch-jobs/${encodeURIComponent(jobId)}/cancel`, {
@@ -164,6 +178,7 @@ export async function cancelBatchJob({ controlApiUrl, token, batchJobId, signal 
   return normalizeBatchJobResponse(payload, jobId);
 }
 
+/** 处理 normalizeBatchJobListResponse 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function normalizeBatchJobListResponse(payload) {
   if (
     !exact(payload, LIST_KEYS)
@@ -175,6 +190,7 @@ export function normalizeBatchJobListResponse(payload) {
   ) throw clientError("batch.response_invalid", 502, payload?.request_id, payload?.trace_id);
   const jobs = payload.jobs.map(normalizeJob);
   if (jobs.some((job) => !job) || new Set(jobs.map((job) => job.batch_job_id)).size !== jobs.length) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", 502, payload.request_id, payload.trace_id);
   }
   return Object.freeze({
@@ -186,17 +202,22 @@ export function normalizeBatchJobListResponse(payload) {
   });
 }
 
+/** 处理 normalizeBatchJobResponse 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function normalizeBatchJobResponse(payload, expectedJobId) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!exact(payload, JOB_RESPONSE_KEYS) || !chain(payload.request_id) || !chain(payload.trace_id)) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", 502, payload?.request_id, payload?.trace_id);
   }
   const job = normalizeJob(payload.job);
   if (!job || (expectedJobId !== undefined && job.batch_job_id !== expectedJobId)) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", 502, payload.request_id, payload.trace_id);
   }
   return Object.freeze({ state: "ok", job, request_id: payload.request_id, trace_id: payload.trace_id });
 }
 
+/** 处理 normalizeBatchTaskListResponse 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function normalizeBatchTaskListResponse(payload) {
   if (
     !exact(payload, TASK_LIST_KEYS)
@@ -208,6 +229,7 @@ export function normalizeBatchTaskListResponse(payload) {
   ) throw clientError("batch.response_invalid", 502, payload?.request_id, payload?.trace_id);
   const tasks = payload.tasks.map(normalizeTask);
   if (tasks.some((task) => !task) || new Set(tasks.map((task) => task.batch_task_id)).size !== tasks.length) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", 502, payload.request_id, payload.trace_id);
   }
   return Object.freeze({
@@ -219,6 +241,7 @@ export function normalizeBatchTaskListResponse(payload) {
   });
 }
 
+/** 处理 normalizeBatchTaskResultResponse 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function normalizeBatchTaskResultResponse(payload, expectedJobId, expectedTaskId) {
   if (
     !exact(payload, RESULT_KEYS)
@@ -242,6 +265,7 @@ export function normalizeBatchTaskResultResponse(payload, expectedJobId, expecte
   });
 }
 
+/** 处理 normalizeJob 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function normalizeJob(value) {
   if (
     !exact(value, JOB_KEYS)
@@ -274,6 +298,7 @@ function normalizeJob(value) {
   });
 }
 
+/** 处理 normalizeTask 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function normalizeTask(value) {
   if (
     !exact(value, TASK_KEYS)
@@ -293,11 +318,13 @@ function normalizeTask(value) {
     || !utc(value.updated_at)
     || !nullableUtc(value.completed_at)
   ) return null;
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if ((value.request_id === null) !== (value.trace_id === null)) return null;
   if (value.result_available && value.status !== "succeeded") return null;
   return Object.freeze({ ...value });
 }
 
+/** 处理 validProgress 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function validProgress(value) {
   if (!exact(value, PROGRESS_KEYS) || !integer(value.total, 1, 100)) return false;
   const keys = PROGRESS_KEYS.filter((key) => key !== "total");
@@ -305,7 +332,9 @@ function validProgress(value) {
   return keys.reduce((sum, key) => sum + value[key], 0) === value.total;
 }
 
+/** 处理 validCost 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function validCost(value) {
+  // 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
   return exact(value, COST_KEYS)
     && MONEY.test(String(value.estimated_cny ?? ""))
     && MONEY.test(String(value.posted_cny ?? ""))
@@ -314,7 +343,9 @@ function validCost(value) {
     && (value.possible_cny === "0.000000" || value.reconciliation_pending);
 }
 
+/** 处理 normalizeCreateRequest 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function normalizeCreateRequest(value) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!value || typeof value !== "object" || Array.isArray(value)) throw clientError("batch.request_invalid", 400);
   const operation = value.operation;
   const baseKeys = [
@@ -350,26 +381,32 @@ function normalizeCreateRequest(value) {
   return Object.freeze({ ...value, file_ids: Object.freeze([...value.file_ids]) });
 }
 
+/** 处理 requestJson 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 async function requestJson(url, options) {
   let response;
   try {
     response = await fetch(url, { ...options, cache: "no-store", credentials: "omit" });
   } catch (error) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     if (error?.name === "AbortError") throw error;
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.worker_unavailable", 503);
   }
   let payload = null;
   try {
     payload = await response.json();
   } catch {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", response.ok ? 502 : response.status);
   }
   const cacheControl = String(response.headers.get("Cache-Control") ?? "").toLowerCase();
   if (!cacheControl.includes("no-store")) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.response_invalid", 502, payload?.request_id, payload?.trace_id);
   }
   if (!response.ok) {
     const code = ERROR_CODE.test(String(payload?.code ?? "")) ? payload.code : "batch.worker_unavailable";
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError(
       code,
       response.status,
@@ -380,37 +417,50 @@ async function requestJson(url, options) {
   return payload;
 }
 
+/** 处理 authorizationHeaders 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function authorizationHeaders(token) {
+  // 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
   if (typeof token !== "string" || !token || /\s/.test(token)) throw clientError("auth.token_missing", 401);
+  // 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
   return { Authorization: `Bearer ${token}`, Accept: "application/json" };
 }
 
+/** 处理 requireJobId 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function requireJobId(value) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!JOB_ID.test(String(value ?? ""))) throw clientError("batch.not_found", 404);
   return value;
 }
 
+/** 处理 requireTaskId 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function requireTaskId(value) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!TASK_ID.test(String(value ?? ""))) throw clientError("batch.not_found", 404);
   return value;
 }
 
+/** 处理 requireCursor 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function requireCursor(value) {
   if (typeof value !== "string" || !value || value.length > 1024 || /\s/.test(value)) {
+    // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     throw clientError("batch.request_invalid", 400);
   }
   return value;
 }
 
+/** 处理 requireIdempotencyKey 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function requireIdempotencyKey(value) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (!UUID.test(String(value ?? ""))) throw clientError("batch.idempotency_required", 400);
   return value;
 }
 
+/** 处理 language 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function language(value) {
   return typeof value === "string" && value.trim() && value.length <= 35 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+/** 处理 labels 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function labels(value) {
   return Array.isArray(value)
     && integer(value.length, 2, 20)
@@ -418,6 +468,7 @@ function labels(value) {
     && new Set(value).size === value.length;
 }
 
+/** 处理 exact 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function exact(value, keys) {
   return Boolean(
     value
@@ -427,40 +478,50 @@ function exact(value, keys) {
   );
 }
 
+/** 处理 integer 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function integer(value, minimum, maximum) {
   return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 }
 
+/** 处理 nullableInteger 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function nullableInteger(value, minimum, maximum) {
   return value === null || integer(value, minimum, maximum);
 }
 
+/** 处理 chain 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function chain(value) {
   return typeof value === "string" && CHAIN_ID.test(value);
 }
 
+/** 处理 nullableChain 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function nullableChain(value) {
   return value === null || chain(value);
 }
 
+/** 处理 nullableCursor 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function nullableCursor(value) {
   return value === null || (typeof value === "string" && value.length >= 1 && value.length <= 1024 && !/\s/.test(value));
 }
 
+/** 处理 utc 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function utc(value) {
   return typeof value === "string" && UTC_TIME.test(value) && Number.isFinite(Date.parse(value));
 }
 
+/** 处理 nullableUtc 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function nullableUtc(value) {
   return value === null || utc(value);
 }
 
+/** 处理 nullableBatchError 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function nullableBatchError(value) {
   return value === null || (typeof value === "string" && value.startsWith("batch.") && ERROR_CODE.test(value));
 }
 
+/** 处理 clientError 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function clientError(code, status, requestId = "-", traceId = "-") {
   const safeCode = ERROR_CODE.test(String(code ?? "")) ? code : "batch.worker_unavailable";
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   return new AuthApiError({
     status,
     code: safeCode,

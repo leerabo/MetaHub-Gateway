@@ -1,4 +1,13 @@
-"""PRD-074 shared Batch contracts, RBAC, crypto, and deployment configuration."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 shared Batch contracts, RBAC, crypto, and deployment configuration.
+"""
 
 from __future__ import annotations
 
@@ -35,10 +44,16 @@ from metahub_shared.runtime.config import ConfigError, load_app_config
 from metahub_shared.runtime.errors import ERROR_SPECS
 from metahub_shared.runtime.webhooks import build_webhook_event
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 SECRET = "test-only-prd074-independent-batch-secret-0000001"
 
 
 def _owner(**changes: object) -> BatchEnvelopeOwner:
+    """验证批处理场景。
+
+    定义：_owner。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     values: dict[str, object] = {
         "tenant_id": "tenant_default",
         "batch_job_id": "bjob_0123456789abcdef0123456789abcdef",
@@ -52,6 +67,11 @@ def _owner(**changes: object) -> BatchEnvelopeOwner:
 
 
 def test_revision_10_batch_permissions_and_frozen_hashes() -> None:
+    """验证批处理场景。
+
+    定义：test_revision_10_batch_permissions_and_frozen_hashes。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     assert CATALOG_REVISION == 10
     assert len(PERMISSION_CODES) == 64
     for role in ("admin", "developer", "ops_admin"):
@@ -71,6 +91,11 @@ def test_revision_10_batch_permissions_and_frozen_hashes() -> None:
 
 
 def test_operation_contract_is_exact_and_renders_untrusted_boundary() -> None:
+    """验证批处理场景。
+
+    定义：test_operation_contract_is_exact_and_renders_untrusted_boundary。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     summarize = validate_operation_spec(
         {"operation": "summarize", "output_language": "zh-CN"}
     )
@@ -96,6 +121,11 @@ def test_operation_contract_is_exact_and_renders_untrusted_boundary() -> None:
 
 
 def test_batch_price_contract_is_shared_canonical_and_rejects_drift() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_price_contract_is_shared_canonical_and_rejects_drift。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     assert canonical_batch_price("0.1") == "0.100000000000"
     assert canonical_batch_price(Decimal("0.200000")) == "0.200000000000"
     assert canonical_batch_price("1e-12") == "0.000000000001"
@@ -107,6 +137,11 @@ def test_batch_price_contract_is_shared_canonical_and_rejects_drift() -> None:
 
 
 def test_payload_and_result_use_independent_owner_bound_domains() -> None:
+    """验证批处理场景。
+
+    定义：test_payload_and_result_use_independent_owner_bound_domains。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     owner = _owner()
     payload = b'{"messages":[{"role":"user","content":"sensitive prompt"}]}'
     result = "sensitive assistant response"
@@ -128,6 +163,11 @@ def test_payload_and_result_use_independent_owner_bound_domains() -> None:
 def test_batch_config_defaults_are_masked_and_worker_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_config_defaults_are_masked_and_worker_fails_closed。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     monkeypatch.delenv("METAHUB_CONFIG_FILE", raising=False)
     monkeypatch.setenv("METAHUB_ENV", "dev")
     config = load_app_config("control-plane-api")
@@ -156,6 +196,11 @@ def test_batch_config_defaults_are_masked_and_worker_fails_closed(
 def test_batch_config_rejects_cross_domain_secret_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_config_rejects_cross_domain_secret_reuse。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     monkeypatch.delenv("METAHUB_CONFIG_FILE", raising=False)
     monkeypatch.setenv("METAHUB_ENV", "dev")
     monkeypatch.setenv("METAHUB_BATCH_ENCRYPTION_SECRET", SECRET)
@@ -166,6 +211,11 @@ def test_batch_config_rejects_cross_domain_secret_reuse(
 
 
 def test_budget_outstanding_counts_hold_balance_and_live_allocations_once() -> None:
+    """验证批处理场景。
+
+    定义：test_budget_outstanding_counts_hold_balance_and_live_allocations_once。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     connection = sqlite3.connect(":memory:")
     connection.executescript(
         """
@@ -201,6 +251,11 @@ def test_budget_outstanding_counts_hold_balance_and_live_allocations_once() -> N
 
 
 def test_batch_error_catalog_is_complete_and_fixed() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_error_catalog_is_complete_and_fixed。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     required = {
         "batch.request_invalid",
         "batch.budget_exceeded",
@@ -216,6 +271,11 @@ def test_batch_error_catalog_is_complete_and_fixed() -> None:
 
 
 def test_batch_webhook_events_are_exact_and_owner_bound() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_webhook_events_are_exact_and_owner_bound。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     job_id = "bjob_0123456789abcdef0123456789abcdef"
     envelope = {
         "tenant_id": "tenant_default",

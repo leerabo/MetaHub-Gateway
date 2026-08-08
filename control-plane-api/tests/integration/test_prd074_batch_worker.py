@@ -1,4 +1,13 @@
-"""PRD-074 Control Worker settlement integration tests."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 Control Worker settlement integration tests.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +39,7 @@ from metahub_shared.db.security import encrypt_secret, secret_fingerprint, secre
 from metahub_shared.runtime.config import load_app_config
 from metahub_shared.runtime.errors import ApiError, build_error_response
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 NOW = "2026-08-08T00:00:00Z"
 LEASE_EXPIRED = "2026-08-08T00:30:00Z"
 REAP_AT = datetime(2026, 8, 8, 0, 45, tzinfo=UTC)
@@ -37,11 +47,21 @@ DEADLINE = "2026-08-08T01:00:00Z"
 
 
 def _url(path: Path) -> str:
+    """验证批处理场景。
+
+    定义：_url。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return f"sqlite:///{path.as_posix()}"
 
 
 @pytest.fixture(scope="module")
 def prd074_worker_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """验证批处理场景。
+
+    定义：prd074_worker_template。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path_factory.mktemp("prd074-worker-template") / "template.sqlite3"
     database_url = _url(database)
     previous = os.environ.get("METAHUB_SEED_ADMIN_PASSWORD")
@@ -65,6 +85,11 @@ def _insert_success_fixture(
     cross_business_day: bool = False,
     allocation_amount: str = "0.000784",
 ) -> dict[str, str]:
+    """验证批处理场景。
+
+    定义：_insert_success_fixture。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     connection = connect_database(database_url)
     identity = connection.execute(
         """
@@ -456,6 +481,11 @@ def _copy_row(
     parameters: tuple[object, ...],
     updates: dict[str, object],
 ) -> None:
+    """验证批处理场景。
+
+    定义：_copy_row。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     row = connection.execute(f"SELECT * FROM {table} WHERE {where}", parameters).fetchone()
     assert row is not None
     columns = tuple(row.keys())
@@ -471,6 +501,11 @@ def _clone_tenant_owner_graph(
     source: dict[str, str],
     marker: str,
 ) -> dict[str, str]:
+    """验证批处理场景。
+
+    定义：_clone_tenant_owner_graph。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     tenant_id = f"tenant_prd074_scheduler_{marker}"
     user_id = f"user_prd074_scheduler_{marker}"
     provider_id = f"provider_prd074_scheduler_{marker}"
@@ -631,6 +666,11 @@ def _insert_queued_job_task(
     *,
     priority_rank: int,
 ) -> tuple[str, str]:
+    """验证批处理场景。
+
+    定义：_insert_queued_job_task。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     job_id = "bjob_" + marker * 32
     task_id = "btsk_" + marker * 32
     route_plan = source["route_plan_json"]
@@ -705,6 +745,11 @@ def _insert_created_event(
     *,
     payload: dict[str, object] | None = None,
 ) -> tuple[str, str]:
+    """验证批处理场景。
+
+    定义：_insert_created_event。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     event_id = "bjev_" + marker * 32
     serialized = json.dumps(
         payload
@@ -748,6 +793,11 @@ def _insert_batch_resume_fixture(
     event_type: str,
     occurred_at: str,
 ) -> tuple[str, str, str]:
+    """验证批处理场景。
+
+    定义：_insert_batch_resume_fixture。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     event_id = "bjev_" + marker * 32
     payload = (
         {
@@ -821,6 +871,11 @@ def _insert_batch_resume_fixture(
 
 
 def _unit_prepared_attempt() -> tuple[BatchTaskLease, PreparedBatchAttempt]:
+    """验证批处理场景。
+
+    定义：_unit_prepared_attempt。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     lease = BatchTaskLease(
         tenant_id="tenant_prd074_worker",
         batch_job_id="bjob_" + "1" * 32,
@@ -853,6 +908,11 @@ def _unit_prepared_attempt() -> tuple[BatchTaskLease, PreparedBatchAttempt]:
 def _cross_day_prepared_attempt(
     ids: dict[str, str],
 ) -> tuple[BatchTaskLease, PreparedBatchAttempt]:
+    """验证批处理场景。
+
+    定义：_cross_day_prepared_attempt。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     lease = BatchTaskLease(
         tenant_id=ids["tenant_id"],
         batch_job_id=ids["batch_job_id"],
@@ -886,6 +946,11 @@ def _cross_day_prepared_attempt(
 def test_gateway_call_recognizes_unified_top_level_busy_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_gateway_call_recognizes_unified_top_level_busy_error。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     _lease, prepared = _unit_prepared_attempt()
     payload = build_error_response(
         ApiError("batch.gateway_busy"),
@@ -894,6 +959,11 @@ def test_gateway_call_recognizes_unified_top_level_busy_error(
     ).model_dump(mode="json")
 
     def gateway_busy(request: httpx.Request) -> httpx.Response:
+        """验证批处理场景。
+
+        定义：gateway_busy。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert request.url == "http://127.0.0.1:8000/internal/batch/chat/completions"
         assert request.headers["X-MetaHub-Internal-Batch-Token"] == "batch-token-test-only"
         assert json.loads(request.content) == {"grant": prepared.grant}
@@ -917,6 +987,11 @@ def test_gateway_call_recognizes_unified_top_level_busy_error(
 def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_busy_retries_use_bounded_backoff_and_one_provider_attempt。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     current = datetime(2026, 8, 8, 0, 0, tzinfo=UTC)
     lease, prepared = _unit_prepared_attempt()
     facts = [GatewayCallFact(outcome="busy", error_code="batch.gateway_busy") for _ in range(16)]
@@ -925,6 +1000,11 @@ def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
     counters = {"prepare": 0, "refresh": 0, "calls": 0, "settle": 0}
 
     def prepare_once(_config: object, claimed: BatchTaskLease) -> PreparedBatchAttempt:
+        """验证批处理场景。
+
+        定义：prepare_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert claimed is lease
         counters["prepare"] += 1
         return prepared
@@ -935,6 +1015,11 @@ def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
         *,
         client: object,
     ) -> GatewayCallFact:
+        """验证批处理场景。
+
+        定义：call_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert current_prepared is prepared
         assert client is None
         counters["calls"] += 1
@@ -944,6 +1029,11 @@ def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
         _config: object,
         current_prepared: PreparedBatchAttempt,
     ) -> PreparedBatchAttempt:
+        """验证批处理场景。
+
+        定义：refresh_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert current_prepared is prepared
         counters["refresh"] += 1
         return prepared
@@ -953,6 +1043,11 @@ def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
         current_prepared: PreparedBatchAttempt,
         fact: GatewayCallFact,
     ) -> bool:
+        """验证批处理场景。
+
+        定义：settle_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert current_prepared is prepared
         assert fact.outcome == "accepted"
         counters["settle"] += 1
@@ -979,10 +1074,21 @@ def test_busy_retries_use_bounded_backoff_and_one_provider_attempt(
 
 
 def test_stopped_worker_does_not_reap_or_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证批处理场景。
+
+    定义：test_stopped_worker_does_not_reap_or_claim。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     stop = threading.Event()
     stop.set()
 
     def unexpected(*_args: object, **_kwargs: object) -> None:
+        """验证批处理场景。
+
+        定义：unexpected。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("stopped worker touched the queue")
 
     monkeypatch.setattr(batch_worker, "reap_expired_batch_tasks", unexpected)
@@ -998,22 +1104,47 @@ def test_stopped_worker_does_not_reap_or_claim(monkeypatch: pytest.MonkeyPatch) 
 def test_stop_interrupts_busy_wait_before_grant_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_stop_interrupts_busy_wait_before_grant_refresh。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     lease, prepared = _unit_prepared_attempt()
     delays: list[float] = []
     refreshed = 0
 
     class StopOnWait:
+        """验证批处理场景。
+
+        定义：StopOnWait。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         stopped = False
 
         def is_set(self) -> bool:
+            """验证批处理场景。
+
+            定义：is_set。
+            固定租户隔离、权限拒绝、失败追踪和回退边界。
+            """
             return self.stopped
 
         def wait(self, timeout: float) -> bool:
+            """验证批处理场景。
+
+            定义：wait。
+            固定租户隔离、权限拒绝、失败追踪和回退边界。
+            """
             delays.append(timeout)
             self.stopped = True
             return True
 
     def refresh_unexpected(*_args: object, **_kwargs: object) -> PreparedBatchAttempt:
+        """验证批处理场景。
+
+        定义：refresh_unexpected。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         nonlocal refreshed
         refreshed += 1
         return prepared
@@ -1054,6 +1185,11 @@ def test_busy_beyond_grant_ttl_rotates_one_attempt_without_reaper_takeover(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_busy_beyond_grant_ttl_rotates_one_attempt_without_reaper_takeover。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker-busy-grants.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1161,6 +1297,11 @@ def test_prepared_attempt_rolls_budget_to_new_business_day_idempotently(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prepared_attempt_rolls_budget_to_new_business_day_idempotently。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker-rollover.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1244,6 +1385,11 @@ def test_prepared_attempt_rollover_budget_rejection_rolls_back_new_day(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prepared_attempt_rollover_budget_rejection_rolls_back_new_day。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker-rollover-rejected.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1337,6 +1483,11 @@ def test_reaper_waits_for_usage_replay_before_immutable_completion_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_reaper_waits_for_usage_replay_before_immutable_completion_event。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1438,6 +1589,11 @@ def test_reaper_allows_posted_cost_without_applicable_budget_allocations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_reaper_allows_posted_cost_without_applicable_budget_allocations。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker-no-allocation.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1494,6 +1650,11 @@ def test_reaper_preserves_known_non_retryable_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_reaper_preserves_known_non_retryable_failure。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-known-failure-reaper.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1590,6 +1751,11 @@ def test_reconciliation_rejects_inconsistent_multi_rule_amounts_without_cost_upd
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_reconciliation_rejects_inconsistent_multi_rule_amounts_without_cost_update。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-reconciliation-inconsistent.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1742,6 +1908,11 @@ def test_scheduler_rotates_due_work_across_tenants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_scheduler_rotates_due_work_across_tenants。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-scheduler-fairness.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1805,6 +1976,11 @@ def test_scheduler_prefers_high_priority_within_one_tenant(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_scheduler_prefers_high_priority_within_one_tenant。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-scheduler-priority.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1855,6 +2031,11 @@ def test_cancel_after_claim_is_terminalized_by_first_reaper_pass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_cancel_after_claim_is_terminalized_by_first_reaper_pass。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-cancel-claim-race.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1938,6 +2119,11 @@ def test_claim_without_attempt_expires_on_first_reaper_pass(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_claim_without_attempt_expires_on_first_reaper_pass。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-deadline-claim-race.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -1993,6 +2179,11 @@ def test_cancel_after_provider_result_discards_payload_but_posts_cost(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_cancel_after_provider_result_discards_payload_but_posts_cost。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-cancel-settle-race.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2102,6 +2293,11 @@ def test_prepared_attempt_is_reclaimed_with_same_identity_after_downtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prepared_attempt_is_reclaimed_with_same_identity_after_downtime。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-worker-downtime.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2144,6 +2340,11 @@ def test_batch_outbox_freezes_empty_endpoint_snapshot_and_completes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_outbox_freezes_empty_endpoint_snapshot_and_completes。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-outbox-empty-snapshot.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2207,6 +2408,11 @@ def test_batch_outbox_pending_resume_restores_immutable_source_request(
     event_type: str,
     marker: str,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_outbox_pending_resume_restores_immutable_source_request。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / f"prd074-outbox-resume-{marker}.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2240,6 +2446,11 @@ def test_batch_outbox_pending_resume_restores_immutable_source_request(
         body: bytes,
         seen_delivery_id: str,
     ) -> dict[str, object]:
+        """验证批处理场景。
+
+        定义：record_success。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert seen_delivery_id.startswith("whd_")
         sent_bodies.append(json.loads(body.decode("utf-8")))
         return {
@@ -2308,6 +2519,11 @@ def test_batch_source_request_recovery_fails_closed_on_identity_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_source_request_recovery_fails_closed_on_identity_drift。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-outbox-source-drift.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2388,6 +2604,11 @@ def test_batch_outbox_retries_then_reclaims_expired_processing_lease(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_outbox_retries_then_reclaims_expired_processing_lease。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-outbox-retry-reclaim.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)
@@ -2405,6 +2626,12 @@ def test_batch_outbox_retries_then_reclaims_expired_processing_lease(
     original_dispatch = webhook_service.dispatch_webhook_event
 
     def fail_dispatch(*_args: object, **_kwargs: object) -> None:
+        """验证批处理场景。
+
+        定义：fail_dispatch。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise RuntimeError("test-only delivery outage")
 
     monkeypatch.setattr(webhook_service, "dispatch_webhook_event", fail_dispatch)
@@ -2478,6 +2705,11 @@ def test_batch_outbox_isolates_corrupt_source_without_mutating_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_outbox_isolates_corrupt_source_without_mutating_event。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-outbox-corrupt-source.sqlite3"
     shutil.copy2(prd074_worker_template, database)
     database_url = _url(database)

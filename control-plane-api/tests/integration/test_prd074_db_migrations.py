@@ -1,4 +1,13 @@
-"""PRD-074 migration coverage for the Batch Scheduler and Worker schema."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 migration coverage for the Batch Scheduler and Worker schema.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +24,7 @@ from metahub_shared.db import (
 )
 from metahub_shared.db.errors import DbError
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 EXPECTED_VERSIONS = [f"{version:04d}" for version in range(1, 68)]
 NOW = "2026-08-08T00:00:00Z"
@@ -46,10 +56,20 @@ REVISION_9_HASHES = {
 
 
 def _url(path: Path) -> str:
+    """验证批处理场景。
+
+    定义：_url。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return f"sqlite:///{path.as_posix()}"
 
 
 def _migration_subset(destination: Path, maximum_version: int) -> Path:
+    """验证批处理场景。
+
+    定义：_migration_subset。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     destination.mkdir(parents=True, exist_ok=False)
     for source in MIGRATIONS_DIR.glob("*.sql"):
         version = source.name[:4]
@@ -60,6 +80,11 @@ def _migration_subset(destination: Path, maximum_version: int) -> Path:
 
 @pytest.fixture(scope="module")
 def prd074_templates(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """验证批处理场景。
+
+    定义：prd074_templates。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     root = tmp_path_factory.mktemp("prd074-migration-templates")
     migrations_0066 = _migration_subset(root / "migrations-0066", 66)
     migrations_0067 = _migration_subset(root / "migrations-0067", 67)
@@ -74,6 +99,11 @@ def _clone_and_upgrade(
     templates: dict[str, Path],
     destination: Path,
 ) -> tuple[str, sqlite3.Connection]:
+    """验证批处理场景。
+
+    定义：_clone_and_upgrade。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     shutil.copy2(templates["database_0066"], destination)
     database_url = _url(destination)
     assert apply_migrations(
@@ -84,11 +114,21 @@ def _clone_and_upgrade(
 
 
 def _assert_healthy(connection: sqlite3.Connection) -> None:
+    """验证批处理场景。
+
+    定义：_assert_healthy。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 def _applied_head(connection: sqlite3.Connection) -> str:
+    """验证批处理场景。
+
+    定义：_applied_head。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     row = connection.execute(
         """
         SELECT version FROM schema_migrations
@@ -104,6 +144,11 @@ def _role_grants(
     tenant_id: str,
     role_code: str,
 ) -> set[str]:
+    """验证批处理场景。
+
+    定义：_role_grants。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return {
         str(row[0])
         for row in connection.execute(
@@ -123,6 +168,11 @@ def _role_grants(
 
 
 def _assert_revision_10(connection: sqlite3.Connection) -> str:
+    """验证批处理场景。
+
+    定义：_assert_revision_10。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     assert connection.execute("SELECT COUNT(*) FROM rbac_permission_templates").fetchone()[0] == 64
     assert connection.execute(
         "SELECT COUNT(*) FROM rbac_permission_templates WHERE catalog_revision=10"
@@ -148,10 +198,16 @@ def _assert_revision_10(connection: sqlite3.Connection) -> str:
         ).fetchone()[0]
         assert role_hash == REVISION_10_HASHES[role_code]
     assert "file.read" in _role_grants(connection, tenant_id, "ops_admin")
+    # 租户标识只取自认证上下文；缺失或不一致时拒绝，禁止跨租户访问。
     return tenant_id
 
 
 def _resource_graph(connection: sqlite3.Connection, marker: str) -> dict[str, str]:
+    """验证批处理场景。
+
+    定义：_resource_graph。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     assert len(marker) == 1 and marker in "0123456789abcdef"
     identity = connection.execute(
         """
@@ -273,6 +329,11 @@ def _insert_job(
     virtual_key_id: str | None = None,
     estimated_cost_cny: str = "0",
 ) -> str:
+    """验证批处理场景。
+
+    定义：_insert_job。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     job_id = "bjob_" + marker * 32
     connection.execute(
         """
@@ -319,6 +380,11 @@ def _insert_task(
     job_id: str,
     marker: str,
 ) -> str:
+    """验证批处理场景。
+
+    定义：_insert_task。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     task_id = "btsk_" + marker * 32
     connection.execute(
         """
@@ -341,6 +407,11 @@ def _insert_attempt(
     task_id: str,
     marker: str,
 ) -> str:
+    """验证批处理场景。
+
+    定义：_insert_attempt。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     attempt_id = "batm_" + marker * 32
     connection.execute(
         """
@@ -369,6 +440,11 @@ def _insert_attempt(
 
 
 def test_prd074_fresh_repeat_schema_integrity_and_rbac(tmp_path: Path) -> None:
+    """验证批处理场景。
+
+    定义：test_prd074_fresh_repeat_schema_integrity_and_rbac。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     migrations = _migration_subset(tmp_path / "migrations-0067", 67)
     database_url = _url(tmp_path / "fresh.sqlite3")
     assert apply_migrations(database_url, migrations_dir=migrations).applied == EXPECTED_VERSIONS
@@ -399,6 +475,11 @@ def test_prd074_0066_upgrade_empty_down_and_reapply(
     tmp_path: Path,
     prd074_templates: dict[str, Path],
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prd074_0066_upgrade_empty_down_and_reapply。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "empty-round-trip.sqlite3"
     shutil.copy2(prd074_templates["database_0066"], database)
     database_url = _url(database)
@@ -461,6 +542,11 @@ def test_prd074_owner_immutability_and_source_outbox(
     tmp_path: Path,
     prd074_templates: dict[str, Path],
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prd074_owner_immutability_and_source_outbox。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     _, connection = _clone_and_upgrade(
         prd074_templates,
         tmp_path / "constraints.sqlite3",
@@ -666,6 +752,11 @@ def test_prd074_business_fact_blocks_down_atomically(
     tmp_path: Path,
     prd074_templates: dict[str, Path],
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prd074_business_fact_blocks_down_atomically。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database_url, connection = _clone_and_upgrade(
         prd074_templates,
         tmp_path / "business-down-guard.sqlite3",
@@ -694,6 +785,11 @@ def test_prd074_webhook_reference_blocks_down_atomically(
     tmp_path: Path,
     prd074_templates: dict[str, Path],
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_prd074_webhook_reference_blocks_down_atomically。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database_url, connection = _clone_and_upgrade(
         prd074_templates,
         tmp_path / "external-down-guard.sqlite3",

@@ -847,6 +847,7 @@ def record_usage_ledger(
                     committed=existing,
                 )
                 if write_intent.captured_estimate is None and context.batch_attempt_id is not None:
+                    # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
                     raise sqlite3.IntegrityError("batch_usage_settlement_evidence_missing")
                 if write_intent.captured_estimate is not None:
                     _settle_batch_usage_allocation(
@@ -1064,7 +1065,10 @@ def _settle_batch_usage_allocation(
     estimate: CostEstimate,
     replay: bool,
 ) -> None:
-    """Post all allocation rows and the attempt projection in the Usage/FinOps transaction."""
+    """在用量账本事务内结算批任务预算分配，并校验任务、尝试和金额归属一致。
+
+    Post all allocation rows and the attempt projection in the Usage/FinOps transaction.
+    """
 
     owner_values = (
         context.batch_job_id,
@@ -1074,17 +1078,21 @@ def _settle_batch_usage_allocation(
     )
     if not any(value is not None for value in owner_values):
         if context.batch_allocation_settlement_cny is not None:
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_owner_missing")
         return
     if any(value is None for value in owner_values):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_owner_incomplete")
     settlement = format(estimate.cost_cny, ".6f")
     if replay and context.batch_allocation_settlement_cny is None:
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_amount_missing")
     if (
         context.batch_allocation_settlement_cny is not None
         and context.batch_allocation_settlement_cny != settlement
     ):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_amount_mismatch")
     attempt = connection.execute(
         """
@@ -1102,7 +1110,9 @@ def _settle_batch_usage_allocation(
             context.trace_id,
         ),
     ).fetchone()
+    # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
     if attempt is None or str(attempt["status"]) not in {"calling", "provider_succeeded"}:
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_attempt_invalid")
     rows = connection.execute(
         """
@@ -1134,13 +1144,16 @@ def _settle_batch_usage_allocation(
     for row in rows:
         try:
             reserved = Decimal(str(row["reserved_cost_cny"]))
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         except (InvalidOperation, ValueError) as exc:
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_amount_invalid") from exc
         if (
             not reserved.is_finite()
             or reserved < actual_amount
             or str(row["route_plan_hash"]) != context.batch_route_plan_hash
         ):
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_coverage_invalid")
         row_states.add(
             (
@@ -1152,6 +1165,7 @@ def _settle_batch_usage_allocation(
     active_state = ("not_invoked", "none", "active")
     posted_state = ("succeeded", "posted", "posted")
     if row_states and row_states not in ({active_state}, {posted_state}):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_state_invalid")
     if row_states == {active_state}:
         latest_budget_date = str(rows[0]["budget_date"])
@@ -1173,6 +1187,7 @@ def _settle_batch_usage_allocation(
             ),
         )
         if cursor.rowcount != len(rows):
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_allocation_conflict")
     if str(attempt["status"]) == "calling":
         cursor = connection.execute(
@@ -1193,6 +1208,7 @@ def _settle_batch_usage_allocation(
             ),
         )
         if cursor.rowcount != 1:
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_attempt_conflict")
     elif (
         str(attempt["execution_outcome"]) == "succeeded"
@@ -1217,6 +1233,7 @@ def _settle_batch_usage_allocation(
             ),
         )
         if cursor.rowcount != 1:
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise sqlite3.IntegrityError("batch_usage_settlement_attempt_conflict")
     elif (
         str(attempt["execution_outcome"]) != "succeeded"
@@ -1227,6 +1244,7 @@ def _settle_batch_usage_allocation(
         or int(attempt["output_tokens"]) != intent.output_tokens
         or format(Decimal(str(attempt["cost_cny"])), ".6f") != settlement
     ):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise sqlite3.IntegrityError("batch_usage_settlement_attempt_mismatch")
 def _ensure_output_safety_billing_evidence(
     connection: sqlite3.Connection,
@@ -1468,6 +1486,7 @@ def _serialize_usage_spool_record(
         or intent.captured_estimate is None
         or output_safety_values is None
     ):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise ValueError("finops_spool_batch_context_invalid")
     # Batch always uses v6. Other Chat uses v5 when Output Safety has a complete owner.
     record_version = 6 if batch_present else (5 if output_safety_values is not None else 4)
@@ -1662,6 +1681,7 @@ def _deserialize_usage_spool_record(
             character not in "0123456789abcdef"
             for character in batch_route_plan_hash
         ):
+            # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
             raise ValueError("finops_spool_payload_invalid")
         batch_settlement = _spool_money_text(
             context_value["batch_allocation_settlement_cny"]
@@ -1799,6 +1819,7 @@ def _deserialize_usage_spool_record(
         or context.batch_allocation_settlement_cny
         != format(intent.captured_estimate.cost_cny, ".6f")
     ):
+        # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise ValueError("finops_spool_payload_invalid")
     return context, intent
 

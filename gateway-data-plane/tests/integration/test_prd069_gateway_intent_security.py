@@ -888,7 +888,10 @@ def _gateway_auth() -> GatewayAuthContext:
 
 
 def _trusted_gateway_call(payload: dict[str, object]) -> openai_api.TrustedGatewayInvocation:
-    """Build the exact Enterprise Chat invocation used by governance-order tests."""
+    """构造测试专用的可信网关调用，验证未受信字段不能越过内部边界。
+
+    Build the exact Enterprise Chat invocation used by governance-order tests.
+    """
 
     return openai_api.TrustedGatewayInvocation(
         source="enterprise_chat",

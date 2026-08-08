@@ -1,4 +1,12 @@
-"""PRD-074 public Batch API authorization, tenancy, idempotency, and lifecycle coverage.
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 public Batch API authorization, tenancy, idempotency, and lifecycle coverage.
 
 The tests use real migrations, Session authentication, PRD-072 upload, PRD-073 admission, and
 the ASGI middleware. Test-only secrets and file text stay inside pytest's workspace temp tree;
@@ -24,6 +32,7 @@ from metahub_shared.db.security import hash_password
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 ADMIN_PASSWORD = "Prd074AdminTestOnly!2026"
 VIEWER_PASSWORD = "Prd074ViewerTestOnly!2026"
 OTHER_PASSWORD = "Prd074OtherTestOnly!2026"
@@ -40,12 +49,23 @@ VIRTUAL_KEY_ID = "vkey_prd074_api"
 
 
 def _url(path: Path) -> str:
+    """验证批处理场景。
+
+    定义：_url。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return f"sqlite:///{path.as_posix()}"
 
 
 @pytest.fixture(scope="module")
 def prd074_api_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Build one closed revision-10 template with two tenants and a Batch binding."""
+    """验证批处理场景。
+
+    定义：prd074_api_template。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+
+    Build one closed revision-10 template with two tenants and a Batch binding.
+    """
 
     root = tmp_path_factory.mktemp("prd074-api-template")
     database = root / "template.sqlite3"
@@ -186,6 +206,11 @@ def _clone_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> str:
+    """验证批处理场景。
+
+    定义：_clone_environment。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "prd074-api.sqlite3"
     storage = tmp_path / "file-storage"
     shutil.copy2(template, database)
@@ -204,6 +229,11 @@ def _clone_environment(
 
 
 def _build_app():
+    """验证批处理场景。
+
+    定义：_build_app。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     app = create_service_app("control-plane-api", "PRD-074 Batch API Test")
     app.include_router(auth_router)
     app.include_router(files_router)
@@ -219,15 +249,26 @@ async def _login(
     password: str,
     tenant_slug: str = "default",
 ) -> str:
+    """验证批处理场景。
+
+    定义：_login。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     response = await client.post(
         "/auth/login",
         json={"tenant_slug": tenant_slug, "email": email, "password": password},
     )
     assert response.status_code == 200, response.text
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     return str(response.json()["access_token"])
 
 
 def _headers(token: str, request_id: str, *, idempotency_key: str | None = None):
+    """验证批处理场景。
+
+    定义：_headers。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     headers = {"Authorization": f"Bearer {token}", "X-Request-ID": request_id}
     if idempotency_key is not None:
         headers["Idempotency-Key"] = idempotency_key
@@ -235,6 +276,11 @@ def _headers(token: str, request_id: str, *, idempotency_key: str | None = None)
 
 
 async def _ready_safe_file(client: AsyncClient, token: str, marker: str) -> str:
+    """验证批处理场景。
+
+    定义：_ready_safe_file。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     upload = await client.post(
         "/files",
         files={
@@ -258,6 +304,11 @@ async def _ready_safe_file(client: AsyncClient, token: str, marker: str) -> str:
 
 
 def _create_payload(file_id: str, *, name: str = "PRD074 API lifecycle") -> dict[str, object]:
+    """验证批处理场景。
+
+    定义：_create_payload。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return {
         "name": name,
         "project_id": PROJECT_ID,
@@ -274,6 +325,11 @@ def _create_payload(file_id: str, *, name: str = "PRD074 API lifecycle") -> dict
 
 
 def _actual_environment_id(database_url: str) -> str:
+    """验证批处理场景。
+
+    定义：_actual_environment_id。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     connection = connect_database(database_url)
     try:
         row = connection.execute(
@@ -298,7 +354,13 @@ async def test_batch_api_create_idempotency_list_tenant_and_cancel(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Exercise the public lifecycle and prove tenant-qualified event/outbox persistence."""
+    """验证批处理场景。
+
+    定义：test_batch_api_create_idempotency_list_tenant_and_cancel。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+
+    Exercise the public lifecycle and prove tenant-qualified event/outbox persistence.
+    """
 
     database_url = _clone_environment(prd074_api_template, monkeypatch, tmp_path)
     app = _build_app()
@@ -399,6 +461,11 @@ async def test_batch_api_create_idempotency_list_tenant_and_cancel(
         original_blob_reader = file_security_service._read_extracted_blob_text
 
         def revoke_during_unlocked_blob_read(config, owner, *, secret):
+            """验证批处理场景。
+
+            定义：revoke_during_unlocked_blob_read。
+            固定租户隔离、权限拒绝、失败追踪和回退边界。
+            """
             text = original_blob_reader(config, owner, secret=secret)
             connection = connect_database(database_url)
             try:
@@ -526,7 +593,13 @@ async def test_batch_api_backend_permission_and_strict_input_gates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Prove backend RBAC runs before body parsing and strict inputs never echo content."""
+    """验证批处理场景。
+
+    定义：test_batch_api_backend_permission_and_strict_input_gates。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+
+    Prove backend RBAC runs before body parsing and strict inputs never echo content.
+    """
 
     database_url = _clone_environment(prd074_api_template, monkeypatch, tmp_path)
     app = _build_app()

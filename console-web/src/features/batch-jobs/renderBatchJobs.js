@@ -1,7 +1,9 @@
+/** PRD-074 批任务控制台模块：负责页面状态与交互，最终权限、租户隔离和错误裁决均由后端完成。 */
 /** PAGE-104 compact Batch workspace renderer. */
 
 import { batchJobPageOwner } from "./batchJobPageState.js";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const STATUS_LABELS = Object.freeze({
   queued: "排队中",
   running: "执行中",
@@ -16,6 +18,7 @@ const STATUS_LABELS = Object.freeze({
   succeeded: "成功",
   outcome_unknown: "待对账",
 });
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const OPERATION_LABELS = Object.freeze({ summarize: "摘要", translate: "翻译", classify: "分类" });
 const PRIORITY_LABELS = Object.freeze({ low: "低", normal: "普通", high: "高" });
 const ERROR_LABELS = Object.freeze({
@@ -29,6 +32,7 @@ const ERROR_LABELS = Object.freeze({
   "batch.worker_unavailable": "批处理服务暂不可用",
 });
 
+/** 处理 renderBatchJobs 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function renderBatchJobs(state, authContext, consoleShellState, i18n = null) {
   const owner = batchJobPageOwner(authContext, consoleShellState);
   if (!owner) return "";
@@ -75,7 +79,9 @@ export function renderBatchJobs(state, authContext, consoleShellState, i18n = nu
   `;
 }
 
+/** 处理 renderList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderList(state) {
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (state.state === "error") return renderError(state.error, "批处理列表读取失败");
   const jobs = Array.isArray(state.jobs) ? state.jobs : [];
   return `
@@ -102,6 +108,7 @@ function renderList(state) {
   `;
 }
 
+/** 处理 renderJobRow 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderJobRow(job, selectedJobId) {
   const progress = job.progress ?? {};
   const completed = Number(progress.succeeded ?? 0)
@@ -123,8 +130,10 @@ function renderJobRow(job, selectedJobId) {
   `;
 }
 
+/** 处理 renderDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderDetail(state, owner) {
   if (!state.selectedJobId) return "";
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (state.detailState === "error") return renderError(state.detailError, "批处理详情读取失败");
   if (state.detailState !== "ready" || !state.job) {
     return `<section class="batch-detail"><div class="batch-empty">正在读取任务详情</div></section>`;
@@ -154,6 +163,7 @@ function renderDetail(state, owner) {
   `;
 }
 
+/** 处理 renderJobMetrics 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderJobMetrics(job) {
   const cost = job.cost ?? {};
   return `
@@ -169,6 +179,7 @@ function renderJobMetrics(job) {
   `;
 }
 
+/** 处理 renderTasks 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderTasks(state, owner) {
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   return `
@@ -185,6 +196,7 @@ function renderTasks(state, owner) {
   `;
 }
 
+/** 处理 renderTask 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderTask(task, owner) {
   return `
     <div class="batch-task">
@@ -201,6 +213,7 @@ function renderTask(task, owner) {
   `;
 }
 
+/** 处理 renderResultRegion 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderResultRegion(state) {
   const error = state.resultState === "error" ? renderError(state.resultError, "结果读取失败") : "";
   return `
@@ -217,6 +230,7 @@ function renderResultRegion(state) {
   `;
 }
 
+/** 处理 renderCreateDialog 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderCreateDialog(state, owner) {
   if (!owner.canCreate) return "";
   const options = state.createOptions ?? { projects: [], environments: [], modelAliases: [], files: [] };
@@ -262,6 +276,7 @@ function renderCreateDialog(state, owner) {
   `;
 }
 
+/** 处理 renderProjectOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderProjectOptions(projects) {
   if (!projects.length) return `<option value="">暂无可用项目</option>`;
   return projects.map((item) => (
@@ -269,6 +284,7 @@ function renderProjectOptions(projects) {
   )).join("");
 }
 
+/** 处理 renderEnvironmentOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderEnvironmentOptions(environments) {
   if (!environments.length) return `<option value="">暂无可用环境</option>`;
   return environments.map((item) => (
@@ -276,6 +292,7 @@ function renderEnvironmentOptions(environments) {
   )).join("");
 }
 
+/** 处理 renderAliasOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderAliasOptions(aliases, firstEnvironmentId) {
   if (!aliases.length) return `<option value="">暂无可用模型别名</option>`;
   return aliases.map((item) => {
@@ -284,6 +301,7 @@ function renderAliasOptions(aliases, firstEnvironmentId) {
   }).join("");
 }
 
+/** 处理 renderFileOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderFileOptions(files) {
   if (!files.length) return `<div class="batch-empty">暂无通过处理的文件</div>`;
   return files.map((item) => `
@@ -291,19 +309,24 @@ function renderFileOptions(files) {
   `).join("");
 }
 
+/** 处理 renderActionFeedback 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderActionFeedback(state) {
   const error = state.createError || state.cancelError;
   const feedback = state.createFeedback || state.cancelFeedback;
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (error) return `${escapeHtml(error.code)} · request_id: ${escapeHtml(error.requestId)}`;
+  // 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
   if (feedback) return `${escapeHtml(feedback.code)} · request_id: ${escapeHtml(feedback.requestId)}`;
   return "";
 }
 
+/** 处理 renderError 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function renderError(error, fallback) {
   const code = String(error?.code ?? "batch.worker_unavailable");
   return `<div class="batch-error" role="alert"><b>${escapeHtml(ERROR_LABELS[code] ?? fallback)}</b><code>${escapeHtml(code)}</code><small>request_id: ${escapeHtml(error?.requestId ?? "-")}</small></div>`;
 }
 
+/** 处理 formatTime 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function formatTime(value) {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime())
@@ -311,10 +334,12 @@ function formatTime(value) {
     : "-";
 }
 
+/** 处理 t 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function t(i18n, key, fallback) {
   return i18n?.t?.(key, {}, fallback) ?? fallback;
 }
 
+/** 处理 escapeHtml 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -324,6 +349,7 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+/** 处理 escapeAttribute 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }

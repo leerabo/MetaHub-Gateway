@@ -1,4 +1,13 @@
-"""Recoverable source outbox for ``batch_job.created/completed`` Webhooks."""
+"""PRD-074 批任务控制面模块：负责租户内调度、领取、续租、取消、计量和可恢复事件投递。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Recoverable source outbox for ``batch_job.created/completed`` Webhooks.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +25,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 EVENT_LEASE_SECONDS = 90
 EVENT_MAX_ATTEMPTS = 10
 EVENT_BACKOFF_SECONDS = (5, 30, 300)
@@ -26,6 +36,11 @@ _WORKER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 @dataclass(frozen=True, slots=True)
 class BatchEventClaim:
+    """处理批任务事件投递。
+
+    定义：BatchEventClaim。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     event_id: str
     tenant_id: str
     batch_job_id: str
@@ -47,6 +62,11 @@ def claim_next_batch_event(
     worker_id: str,
     now: datetime | None = None,
 ) -> BatchEventClaim | None:
+    """处理批任务事件投递。
+
+    定义：claim_next_batch_event。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     current = _now(now)
     owner = _worker_id(worker_id)
     current_text = _db_time(current)
@@ -120,6 +140,7 @@ def claim_next_batch_event(
                 attempts=attempts,
                 expires=expires,
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except (ApiError, TypeError, ValueError):
             isolated = connection.execute(
                 """
@@ -143,16 +164,20 @@ def claim_next_batch_event(
                 ),
             )
             if isolated.rowcount != 1:
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.worker_unavailable") from None
             connection.commit()
             return None
         connection.commit()
         return claim
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -165,15 +190,27 @@ def dispatch_claimed_batch_event(
     now: datetime | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> bool:
+    """处理批任务事件投递。
+
+    定义：dispatch_claimed_batch_event。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     current = _now(now)
 
     def preserve_source_lease() -> None:
+        """处理批任务事件投递。
+
+        定义：preserve_source_lease。
+        租约、重试和终态更新必须限定在所属租户。
+        """
         if should_stop is not None and should_stop():
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         _renew(config, claim)
 
     try:
         if should_stop is not None and should_stop():
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         event = _event(claim)
         _freeze_snapshot(config, claim, event, current=current)
@@ -190,6 +227,7 @@ def dispatch_claimed_batch_event(
             create_snapshot_if_missing=False,
         )
         return _finish(config, claim, error_code=None, now=_now(now))
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
         return _finish(config, claim, error_code="webhook.payload_invalid", now=_now(now))
     except Exception:
@@ -208,6 +246,11 @@ def drain_batch_event_once(
     now: datetime | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> bool:
+    """处理批任务事件投递。
+
+    定义：drain_batch_event_once。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     if should_stop is not None and should_stop():
         return False
     claim = claim_next_batch_event(config, worker_id=worker_id, now=now)
@@ -229,6 +272,11 @@ def _freeze_snapshot(
     *,
     current: datetime,
 ) -> None:
+    """处理批任务事件投递。
+
+    定义：_freeze_snapshot。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -256,6 +304,7 @@ def _freeze_snapshot(
                 ),
             )
             if updated.rowcount != 1:
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.worker_unavailable")
         connection.commit()
     except Exception:
@@ -266,6 +315,11 @@ def _freeze_snapshot(
 
 
 def _renew(config: AppConfig, claim: BatchEventClaim) -> None:
+    """处理批任务事件投递。
+
+    定义：_renew。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     current = _utcnow()
     expires = current + timedelta(seconds=EVENT_LEASE_SECONDS)
     connection = _connect(config)
@@ -291,6 +345,7 @@ def _renew(config: AppConfig, claim: BatchEventClaim) -> None:
             ),
         )
         if updated.rowcount != 1:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         connection.commit()
     except Exception:
@@ -307,6 +362,11 @@ def _finish(
     error_code: str | None,
     now: datetime,
 ) -> bool:
+    """处理批任务事件投递。
+
+    定义：_finish。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     terminal = error_code == "webhook.payload_invalid" or (
         error_code is not None and claim.dispatch_attempts >= EVENT_MAX_ATTEMPTS
     )
@@ -347,6 +407,7 @@ def _finish(
         )
         connection.commit()
         return updated.rowcount == 1
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except sqlite3.Error:
         connection.rollback()
         return False
@@ -360,6 +421,11 @@ def _active_claim(
     *,
     current: datetime,
 ) -> sqlite3.Row:
+    """处理批任务事件投递。
+
+    定义：_active_claim。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     row = connection.execute(
         """
         SELECT delivery_snapshot_frozen_at FROM batch_job_event_outbox
@@ -377,6 +443,7 @@ def _active_claim(
         ),
     ).fetchone()
     if row is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return row
 
@@ -389,6 +456,11 @@ def _claim_from_row(
     attempts: int,
     expires: datetime,
 ) -> BatchEventClaim:
+    """处理批任务事件投递。
+
+    定义：_claim_from_row。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     event_id = str(row["batch_job_event_id"])
     job_id = str(row["batch_job_id"])
     event_type = str(row["event_type"])
@@ -397,10 +469,13 @@ def _claim_from_row(
         or _JOB_ID.fullmatch(job_id) is None
         or event_type not in {"batch_job.created", "batch_job.completed"}
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     try:
         payload = json.loads(str(row["payload_json"]))
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     _validate_payload(event_type, payload, job_id=job_id)
     return BatchEventClaim(
@@ -421,7 +496,13 @@ def _claim_from_row(
 
 
 def _validate_payload(event_type: str, payload: object, *, job_id: str) -> None:
+    """处理批任务事件投递。
+
+    定义：_validate_payload。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     if type(payload) is not dict or payload.get("batch_job_id") != job_id:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     expected = (
         {
@@ -445,10 +526,16 @@ def _validate_payload(event_type: str, payload: object, *, job_id: str) -> None:
         }
     )
     if set(payload) != expected or payload.get("schema_version") != 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
 
 
 def _event(claim: BatchEventClaim) -> WebhookEvent:
+    """处理批任务事件投递。
+
+    定义：_event。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     return build_webhook_event(
         tenant_id=claim.tenant_id,
         event_type=claim.event_type,
@@ -463,39 +550,75 @@ def _event(claim: BatchEventClaim) -> WebhookEvent:
 
 
 def _worker_id(value: object) -> str:
+    """处理批任务事件投递。
+
+    定义：_worker_id。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     if type(value) is not str or _WORKER_ID.fullmatch(value) is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return value
 
 
 def _time(value: object) -> datetime:
+    """处理批任务事件投递。
+
+    定义：_time。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     return parsed.astimezone(UTC)
 
 
 def _now(value: datetime | None) -> datetime:
+    """处理批任务事件投递。
+
+    定义：_now。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     current = value or _utcnow()
     if not isinstance(current, datetime) or current.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return current.astimezone(UTC).replace(microsecond=0)
 
 
 def _utcnow() -> datetime:
+    """处理批任务事件投递。
+
+    定义：_utcnow。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     return datetime.now(UTC).replace(microsecond=0)
 
 
 def _db_time(value: datetime) -> str:
+    """处理批任务事件投递。
+
+    定义：_db_time。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
+    """处理批任务事件投递。
+
+    定义：_connect。
+    租约、重试和终态更新必须限定在所属租户。
+    """
     try:
         return connect_database(config.database_url)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except DbError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 

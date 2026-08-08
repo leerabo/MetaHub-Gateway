@@ -836,6 +836,7 @@ function renderFileSecuritySection(state, authContext, consoleShellState, i18n) 
 }
 
 /** Render PAGE-104 only when its exact backend navigation owner remains current. */
+/** 渲染批任务页面并保持权限撤销后的状态清理边界。 */
 function renderBatchJobsSection(state, authContext, consoleShellState, i18n) {
   const html = renderBatchJobs(state, authContext, consoleShellState, i18n);
   return html

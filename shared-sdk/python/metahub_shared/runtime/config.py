@@ -1691,15 +1691,21 @@ def _validate_batch_config(
     lease_seconds: int,
     heartbeat_seconds: int,
 ) -> None:
-    """Validate Batch service identity, key isolation, and scheduler invariants."""
+    """校验批任务并发、租约、内部认证与加密配置，拒绝复用其他安全域密钥。
 
+    Validate Batch service identity, key isolation, and scheduler invariants.
+    """
+
+    # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
     if tenant_concurrency > global_concurrency:
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
             code="infra.config_invalid",
             message="Batch tenant concurrency cannot exceed global concurrency.",
             suggestion="Lower the tenant limit or increase the bounded global limit.",
         )
     if heartbeat_seconds * 2 >= lease_seconds:
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
             code="infra.config_invalid",
             message="Batch heartbeat must be lower than half of the lease.",
@@ -1710,15 +1716,19 @@ def _validate_batch_config(
         or batch_encryption_secret is None
         or database_url is None
     ):
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
             code="infra.config_missing",
             message="Enabled Batch worker configuration is incomplete.",
             suggestion="Configure the Batch token, encryption secret, and database URL.",
         )
+    # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
     if internal_batch_token is not None:
         try:
             token_bytes = internal_batch_token.encode("ascii")
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         except UnicodeEncodeError:
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_INTERNAL_BATCH_TOKEN must contain ASCII characters only.",
@@ -1731,13 +1741,16 @@ def _validate_batch_config(
                 for character in internal_batch_token
             )
         ):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_INTERNAL_BATCH_TOKEN does not meet security requirements.",
                 suggestion="Use a 32-512 byte token without whitespace or control characters.",
             )
         for other in (internal_config_token, internal_chat_token):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             if other is not None and hmac.compare_digest(internal_batch_token, other):
+                # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
                 raise ConfigError(
                     code="infra.config_invalid",
                     message="Batch and other internal service tokens must be different.",
@@ -1746,15 +1759,19 @@ def _validate_batch_config(
         if environment == "prod" and hmac.compare_digest(
             internal_batch_token, DEFAULT_INTERNAL_BATCH_TOKEN
         ):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_INTERNAL_BATCH_TOKEN must be replaced in prod.",
                 suggestion="Configure the same independent Batch token on Worker and Gateway.",
             )
+    # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
     if batch_encryption_secret is not None:
         try:
             secret_bytes = batch_encryption_secret.encode("utf-8")
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         except UnicodeEncodeError:
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_BATCH_ENCRYPTION_SECRET is invalid.",
@@ -1767,6 +1784,7 @@ def _validate_batch_config(
                 for character in batch_encryption_secret
             )
         ):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_BATCH_ENCRYPTION_SECRET does not meet security requirements.",
@@ -1788,6 +1806,7 @@ def _validate_batch_config(
             other is not None and hmac.compare_digest(batch_encryption_secret, other)
             for other in other_secrets
         ):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="Batch encryption secret must use an independent key domain.",
@@ -1796,6 +1815,7 @@ def _validate_batch_config(
         if environment == "prod" and hmac.compare_digest(
             batch_encryption_secret, DEFAULT_BATCH_ENCRYPTION_SECRET
         ):
+            # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
                 code="infra.config_invalid",
                 message="METAHUB_BATCH_ENCRYPTION_SECRET must be replaced in prod.",
@@ -2317,10 +2337,14 @@ def _bounded_int(
 def _bounded_nonnegative_int(
     values: dict[str, ConfigValue], key: str, *, maximum: int
 ) -> int:
-    """Read a canonical ASCII integer in ``0..maximum`` without accepting signs."""
+    """解析有上限的非负整型配置，拒绝布尔值、越界值和非规范文本。
+
+    Read a canonical ASCII integer in ``0..maximum`` without accepting signs.
+    """
 
     raw = _value(values, key).strip()
     if not raw or not raw.isascii() or not raw.isdecimal():
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
             code="infra.config_invalid",
             message=f"{key} must be a non-negative integer.",
@@ -2328,6 +2352,7 @@ def _bounded_nonnegative_int(
         )
     value = int(raw)
     if value > maximum:
+        # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
             code="infra.config_invalid",
             message=f"{key} must be between 0 and {maximum}.",

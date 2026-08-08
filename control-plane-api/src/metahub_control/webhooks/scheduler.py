@@ -1,4 +1,6 @@
-"""Control webhook scheduler for replay recovery and Batch source dispatch.
+"""Webhook 恢复调度：按租约投递待处理事件，失败可重试且日志不得包含业务载荷或凭据。
+
+Control webhook scheduler for replay recovery and Batch source dispatch.
 
 The scheduler runs only in the Control API lifespan. Synchronous HTTP and SQLite work stays
 off the async event loop and never enters the Gateway model-call hot path.
@@ -29,7 +31,10 @@ POLL_INTERVAL_SECONDS = 2.0
 
 
 def install_webhook_replay_scheduler(app: FastAPI) -> None:
-    """Compose replay and Batch source dispatch into the existing Control lifespan."""
+    """安装可停止的 Webhook 恢复调度器，并确保应用退出时回收后台任务。
+
+    Compose replay and Batch source dispatch into the existing Control lifespan.
+    """
 
     original_lifespan = app.router.lifespan_context
 
@@ -83,7 +88,10 @@ def run_webhook_replay_once(
     now: datetime | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> bool:
-    """Drain one Batch source event, expire dead letters, and process at most one replay."""
+    """领取并投递一条通用 Webhook 事件，租约丢失或停止请求时保留可恢复状态。
+
+    Drain one Batch source event, expire dead letters, and process at most one replay.
+    """
 
     batch_worked = run_batch_event_once(
         config,
@@ -127,7 +135,10 @@ def run_batch_event_once(
     now: datetime | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> bool:
-    """Drain one Batch source event in the Control webhook process."""
+    """领取并投递一条批任务源事件，严格复用租约与失败重试边界。
+
+    Drain one Batch source event in the Control webhook process.
+    """
 
     if should_stop is not None and should_stop():
         return False
@@ -138,6 +149,7 @@ def run_batch_event_once(
             now=now,
             should_stop=should_stop,
         )
+    # 单次投递失败按稳定错误处理；不得泄露事件载荷，也不能破坏后续租约恢复。
     except ApiError as exc:
         logger.warning(
             "batch webhook source iteration failed",

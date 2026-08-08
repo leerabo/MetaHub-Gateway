@@ -1,4 +1,13 @@
-"""PRD-074 PAGE-104 backend navigation authorization tests."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 PAGE-104 backend navigation authorization tests.
+"""
 
 from metahub_control.console.service import (
     EVENT_TYPE_BY_NAVIGATION,
@@ -9,6 +18,11 @@ from metahub_shared.rbac import ROLE_GRANTABLE_PERMISSIONS
 
 
 def test_batch_navigation_requires_only_batch_read() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_navigation_requires_only_batch_read。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     definition = next(item for item in NAVIGATION_DEFINITIONS if item.id == "batch-jobs")
     assert definition.target_section == "batch-jobs"
     assert definition.required_permissions == ("batch.read",)
@@ -22,6 +36,11 @@ def test_batch_navigation_requires_only_batch_read() -> None:
 
 
 def test_batch_navigation_follows_runtime_read_revocation() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_navigation_follows_runtime_read_revocation。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     developer = tuple(sorted(
         code for code in ROLE_GRANTABLE_PERMISSIONS["developer"] if code != "batch.read"
     ))

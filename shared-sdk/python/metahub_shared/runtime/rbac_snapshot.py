@@ -1,4 +1,6 @@
-"""Database-backed RBAC snapshots for durable, sessionless actors.
+"""后台任务实时权限快照：按租户重建完整 RBAC 矩阵，拒绝静态角色回退和跨租户关系。
+
+Database-backed RBAC snapshots for durable, sessionless actors.
 
 Recovery workers and internal data-plane calls receive actor identities only from immutable
 tenant-owned rows. This module validates the complete current catalog, tenant projection, role
@@ -26,6 +28,7 @@ from metahub_shared.runtime.errors import ApiError
 
 @dataclass(frozen=True, slots=True)
 class RuntimePermissionSnapshot:
+    """封装后台操作者的实时权限、矩阵版本与授权指纹，不包含会话或令牌。"""
     permission_codes: tuple[str, ...]
     permission_revision: int
     matrix_sha256: str
@@ -40,9 +43,13 @@ def require_actor_runtime_permissions(
     permission_codes: tuple[str, ...],
     unavailable_error_code: str,
 ) -> RuntimePermissionSnapshot:
-    """Validate a durable actor and require permissions in the caller's DB transaction."""
+    """在调用方事务内重建后台操作者权限并校验所需权限，禁止静态角色回退。
+
+    Validate a durable actor and require permissions in the caller's DB transaction.
+    """
 
     if not connection.in_transaction:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError(unavailable_error_code)
     if (
         type(tenant_id) is not str
@@ -53,6 +60,7 @@ def require_actor_runtime_permissions(
         or len(permission_codes) != len(set(permission_codes))
         or any(type(code) is not str or code not in PERMISSION_CODES for code in permission_codes)
     ):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     try:
         actor = connection.execute(
@@ -66,6 +74,7 @@ def require_actor_runtime_permissions(
             (tenant_id, user_id),
         ).fetchone()
         if actor is None:
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("auth.permission_denied")
         snapshot = _load_permission_snapshot(
             connection,
@@ -73,14 +82,21 @@ def require_actor_runtime_permissions(
             user_id=user_id,
             role_code=actor["role"],
         )
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         if any(code not in snapshot.permission_codes for code in permission_codes):
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("auth.permission_denied")
         return snapshot
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     except ApiError:
         raise
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     except sqlite3.Error as exc:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError(unavailable_error_code) from exc
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     except (KeyError, TypeError, ValueError) as exc:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed") from exc
 
 
@@ -91,6 +107,7 @@ def _load_permission_snapshot(
     user_id: str,
     role_code: object,
 ) -> RuntimePermissionSnapshot:
+    """从租户权限目录和角色关系重建完整快照，并验证矩阵哈希与管理员闭包。"""
     required_tables = {
         "roles",
         "permissions",
@@ -104,6 +121,7 @@ def _load_permission_snapshot(
         tuple(sorted(required_tables)),
     ).fetchall()
     if {row["name"] for row in table_rows} != required_tables:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
 
     template_by_code = _validate_permission_templates(connection)
@@ -112,7 +130,9 @@ def _load_permission_snapshot(
         tenant_id,
         template_by_code,
     )
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if type(role_code) is not str or role_code not in ROLE_CODES:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     role_rows = connection.execute(
         """
@@ -122,7 +142,9 @@ def _load_permission_snapshot(
         """,
         (tenant_id, role_code),
     ).fetchall()
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if len(role_rows) != 1:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     role = role_rows[0]
     revision = role["permission_revision"]
@@ -134,6 +156,7 @@ def _load_permission_snapshot(
         or revision < 1
         or role["is_permission_immutable"] != expected_immutable
     ):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     granted = _load_role_permission_codes(
         connection,
@@ -143,12 +166,18 @@ def _load_permission_snapshot(
     )
     grantable = ROLE_GRANTABLE_PERMISSIONS[role_code]
     if not set(granted) <= grantable:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if role_code == ADMIN_ROLE and set(granted) != set(PERMISSION_CODES):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     calculated = permission_matrix_sha256(granted)
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if role["matrix_sha256"] != calculated:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     return RuntimePermissionSnapshot(
         permission_codes=granted,
         permission_revision=revision,
@@ -166,13 +195,16 @@ def _load_permission_snapshot(
 def _validate_permission_templates(
     connection: sqlite3.Connection,
 ) -> dict[str, tuple[str, str, str, str, int]]:
+    """验证全局权限模板和角色授权上限与代码目录完全一致。"""
     rows = connection.execute(
         """
         SELECT permission_code,category,name,description,risk_level,catalog_revision
         FROM rbac_permission_templates
         """
     ).fetchall()
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if len(rows) != len(PERMISSION_CODES):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     template_by_code: dict[str, tuple[str, str, str, str, int]] = {}
     for row in rows:
@@ -192,9 +224,12 @@ def _validate_permission_templates(
             or metadata[3] not in {"read", "write", "critical"}
             or metadata[4] != CATALOG_REVISION
         ):
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("rbac.matrix_integrity_failed")
         template_by_code[code] = metadata
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if set(template_by_code) != set(PERMISSION_CODES):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
 
     role_rows = connection.execute(
@@ -212,9 +247,11 @@ def _validate_permission_templates(
     for row in role_rows:
         pair = (row["role_code"], row["permission_code"])
         if pair in actual_pairs or pair not in expected_pairs or row["default_granted"] != 1:
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("rbac.matrix_integrity_failed")
         actual_pairs.add(pair)
     if actual_pairs != expected_pairs:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     return template_by_code
 
@@ -224,6 +261,7 @@ def _load_tenant_permission_catalog(
     tenant_id: str,
     template_by_code: dict[str, tuple[str, str, str, str, int]],
 ) -> dict[str, str]:
+    """加载指定租户的权限投影，并核对每条元数据与全局模板一致。"""
     rows = connection.execute(
         """
         SELECT permission_id,tenant_id,code,category,name,description,risk_level,
@@ -233,6 +271,7 @@ def _load_tenant_permission_catalog(
         (tenant_id,),
     ).fetchall()
     if len(rows) != len(template_by_code):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
     permission_by_id: dict[str, str] = {}
     seen_codes: set[str] = set()
@@ -248,6 +287,7 @@ def _load_tenant_permission_catalog(
             or code in seen_codes
             or code not in template_by_code
         ):
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("rbac.matrix_integrity_failed")
         metadata = (
             row["category"],
@@ -257,11 +297,15 @@ def _load_tenant_permission_catalog(
             row["catalog_revision"],
         )
         if metadata != template_by_code[code] or row["status"] != "active":
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("rbac.matrix_integrity_failed")
         permission_by_id[permission_id] = code
         seen_codes.add(code)
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     if seen_codes != set(PERMISSION_CODES):
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     return permission_by_id
 
 
@@ -272,6 +316,7 @@ def _load_role_permission_codes(
     role_id: object,
     permission_by_id: dict[str, str],
 ) -> tuple[str, ...]:
+    """加载指定租户角色的权限关系，拒绝孤儿关系、跨租户关系和越权授予。"""
     rows = connection.execute(
         """
         SELECT rp.role_permission_id,rp.tenant_id AS relation_tenant_id,
@@ -305,13 +350,18 @@ def _load_role_permission_codes(
             or permission_by_id.get(permission_id) != permission_code
             or permission_code not in ROLE_GRANTABLE_PERMISSIONS[relation_role_code]
         ):
+            # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
             raise ApiError("rbac.matrix_integrity_failed")
         relation_ids.add(relation_id)
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         if row["relation_role_id"] == role_id:
             granted_codes.append(permission_code)
     try:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         return canonical_permission_codes(granted_codes)
+    # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
     except ValueError as exc:
+        # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed") from exc
 
 

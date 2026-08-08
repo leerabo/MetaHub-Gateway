@@ -389,10 +389,13 @@ async def _handle_gateway_request(
     log_endpoint = audit_endpoint or endpoint
 
     try:
+        # trusted invocation 必须是后端构造的冻结 DTO，任意松散对象都不能绕过公开鉴权。
         if trusted_invocation is not None and not isinstance(
             trusted_invocation, TrustedGatewayInvocation
         ):
+            # 类型不受信时统一按鉴权失败处理，不能读取其伪造的 tenant 或 payload 字段。
             raise ApiError("gateway.auth_invalid")
+        # 内部身份与 Authorization 不能同时存在，避免两个租户 owner 在热路径发生歧义。
         if trusted_invocation is not None and request.headers.get("Authorization") is not None:
             # 内部调用不接受 Virtual Key Bearer 冒充，避免出现两个相互冲突的身份来源。
             raise ApiError(
@@ -422,6 +425,7 @@ async def _handle_gateway_request(
                         getattr(config, "batch_realtime_cooldown_milliseconds", 250)
                     ),
                 ).enter_realtime()
+            # admission gate 无法证明状态时必须在路由和 Provider 前失败关闭。
             except (RuntimeError, ValueError) as exc:
                 raise ApiError("gateway.request_log_unavailable") from exc
         # tenant_id 只取自已认证 Virtual Key；正文尚未读取，因此客户端不能影响租约归属。
@@ -453,6 +457,7 @@ async def _handle_gateway_request(
                 batch.request_id != request_log_context.request_id
                 or batch.trace_id != request_log_context.trace_id
             ):
+                # Batch owner 与当前不可变请求链路不一致时不能继续执行或写错归属。
                 raise ApiError("batch.execution_invalid")
             request_log_context = replace(
                 request_log_context,

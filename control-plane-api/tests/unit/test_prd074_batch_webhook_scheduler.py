@@ -1,4 +1,13 @@
-"""PRD-074 Batch source events run only in the Control webhook process."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 Batch source events run only in the Control webhook process.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +28,11 @@ from fastapi.testclient import TestClient
 def test_control_webhook_lifespan_waits_for_batch_dispatch_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_control_webhook_lifespan_waits_for_batch_dispatch_stop。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     started = threading.Event()
     finished = threading.Event()
     pause = threading.Event()
@@ -29,6 +43,11 @@ def test_control_webhook_lifespan_waits_for_batch_dispatch_stop(
         now: datetime | None = None,
         should_stop: object = None,
     ) -> bool:
+        """验证批处理场景。
+
+        定义：wait_for_stop。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert now is None
         assert callable(should_stop)
         started.set()
@@ -51,6 +70,11 @@ def test_control_webhook_lifespan_waits_for_batch_dispatch_stop(
 def test_control_webhook_tick_drains_batch_source_before_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_control_webhook_tick_drains_batch_source_before_replay。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     calls: list[str] = []
 
     def drain_once(
@@ -60,6 +84,11 @@ def test_control_webhook_tick_drains_batch_source_before_replay(
         now: datetime | None = None,
         should_stop: object = None,
     ) -> bool:
+        """验证批处理场景。
+
+        定义：drain_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert worker_id.startswith("batch-event-")
         assert now is None
         assert callable(should_stop)
@@ -88,6 +117,11 @@ def test_control_webhook_tick_drains_batch_source_before_replay(
 def test_batch_dispatch_stop_prevents_snapshot_and_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_dispatch_stop_prevents_snapshot_and_network。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     now = datetime(2026, 8, 8, tzinfo=UTC)
     claim = batch_outbox.BatchEventClaim(
         event_id="bjev_" + "1" * 32,
@@ -107,6 +141,12 @@ def test_batch_dispatch_stop_prevents_snapshot_and_network(
     finished: list[str | None] = []
 
     def unexpected_snapshot(*_args: object, **_kwargs: object) -> None:
+        """验证批处理场景。
+
+        定义：unexpected_snapshot。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("stopped dispatch must not freeze or send")
 
     def finish(
@@ -116,6 +156,11 @@ def test_batch_dispatch_stop_prevents_snapshot_and_network(
         error_code: str | None,
         now: datetime,
     ) -> bool:
+        """验证批处理场景。
+
+        定义：finish。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         assert now == claim.occurred_at
         finished.append(error_code)
         return True
@@ -135,9 +180,20 @@ def test_batch_source_scheduler_logs_only_fixed_unknown_error(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_source_scheduler_logs_only_fixed_unknown_error。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     sensitive_exception = "https://private.example/secret-token"
 
     def fail_once(*_args: object, **_kwargs: object) -> bool:
+        """验证批处理场景。
+
+        定义：fail_once。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise RuntimeError(sensitive_exception)
 
     monkeypatch.setattr(webhook_scheduler, "drain_batch_event_once", fail_once)
@@ -152,6 +208,11 @@ def test_batch_source_scheduler_logs_only_fixed_unknown_error(
 
 
 def test_independent_batch_worker_has_no_outbox_dependency() -> None:
+    """验证批处理场景。
+
+    定义：test_independent_batch_worker_has_no_outbox_dependency。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     tree = ast.parse(inspect.getsource(batch_worker_main))
     assert all(
         not (

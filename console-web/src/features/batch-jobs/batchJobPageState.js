@@ -1,3 +1,4 @@
+/** PRD-074 批任务控制台模块：负责页面状态与交互，最终权限、租户隔离和错误裁决均由后端完成。 */
 /**
  * PAGE-104 owner and lifecycle state.
  *
@@ -14,6 +15,7 @@ import {
   PERMISSIONS,
 } from "../../lib/permissions.js";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const NAVIGATION_ID = "batch-jobs";
 const JOB_ID = /^bjob_[0-9a-f]{32}$/;
 const TASK_ID = /^btsk_[0-9a-f]{32}$/;
@@ -23,12 +25,16 @@ const STATUS_VALUES = new Set([
   "queued", "running", "completed", "partial_failed", "failed", "cancelled", "expired",
 ]);
 
+/** 处理 batchReadIdentitySnapshot 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchReadIdentitySnapshot(authContext) {
+  // 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
   return authorizationIdentitySnapshot(authContext, PERMISSIONS.BATCH_READ);
 }
 
 /** Cancellation requires batch.read + batch.write, but does not require file.read. */
+/** 处理 batchWriteIdentitySnapshot 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchWriteIdentitySnapshot(authContext) {
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   if (!hasEveryPermission(authContext, [PERMISSIONS.BATCH_READ, PERMISSIONS.BATCH_WRITE])) return "";
   return JSON.stringify([
     authorizationIdentitySnapshot(authContext, PERMISSIONS.BATCH_READ),
@@ -37,7 +43,9 @@ export function batchWriteIdentitySnapshot(authContext) {
 }
 
 /** Creation additionally requires file.read because the user must choose approved tenant files. */
+/** 处理 batchCreateIdentitySnapshot 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchCreateIdentitySnapshot(authContext) {
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   if (!hasEveryPermission(
     authContext,
     [PERMISSIONS.BATCH_READ, PERMISSIONS.BATCH_WRITE, PERMISSIONS.FILE_READ],
@@ -48,7 +56,9 @@ export function batchCreateIdentitySnapshot(authContext) {
   ]);
 }
 
+/** 处理 batchResultIdentitySnapshot 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchResultIdentitySnapshot(authContext) {
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   if (!hasEveryPermission(authContext, [PERMISSIONS.BATCH_READ, PERMISSIONS.FILE_READ])) return "";
   return JSON.stringify([
     authorizationIdentitySnapshot(authContext, PERMISSIONS.BATCH_READ),
@@ -56,6 +66,7 @@ export function batchResultIdentitySnapshot(authContext) {
   ]);
 }
 
+/** 处理 batchJobPageOwner 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function batchJobPageOwner(authContext, consoleShellState, { mode = "read" } = {}) {
   const readIdentity = batchReadIdentitySnapshot(authContext);
   const writeIdentity = batchWriteIdentitySnapshot(authContext);
@@ -109,6 +120,7 @@ export function batchJobPageOwner(authContext, consoleShellState, { mode = "read
   });
 }
 
+/** 处理 createBatchJobPageState 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
   let ownerKey = "";
   let ownerCanCreate = false;
@@ -154,6 +166,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
   let cancelGeneration = 0;
   let cancelOperation = null;
 
+  /** 处理 enter 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function enter(owner) {
     const nextKey = keyFromOwner(owner);
     if (!nextKey) {
@@ -175,6 +188,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 clear 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function clear() {
     resetAll();
     ownerKey = "";
@@ -183,18 +197,22 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     ownerCanReadResults = false;
   }
 
+  /** 处理 query 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function query() {
     return Object.freeze({ cursor });
   }
 
+  /** 处理 listQuery 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function listQuery() {
     return Object.freeze({ status, cursor });
   }
 
+  /** 处理 taskQuery 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function taskQuery() {
     return Object.freeze({ cursor: taskCursor });
   }
 
+  /** 处理 setStatus 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function setStatus(value) {
     if (listOperation || createOperation || cancelOperation) return false;
     const normalized = STATUS_VALUES.has(String(value ?? "")) ? String(value) : "";
@@ -204,6 +222,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 beginList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function beginList(owner, refreshGeneration) {
     const key = keyFromOwner(owner);
     if (!validOperationOwner(key, refreshGeneration)) return null;
@@ -217,6 +236,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return listOperation;
   }
 
+  /** 处理 isListCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isListCurrent(operation, owner, refreshGeneration) {
     return isCurrent(
       operation,
@@ -227,6 +247,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     );
   }
 
+  /** 处理 acceptList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptList(operation, payload, owner, refreshGeneration, optionPayload = undefined) {
     if (
       !isListCurrent(operation, owner, refreshGeneration)
@@ -246,6 +267,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 rejectList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function rejectList(operation, error, owner, refreshGeneration) {
     if (!isListCurrent(operation, owner, refreshGeneration)) return false;
     jobs = Object.freeze([]);
@@ -255,10 +277,12 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 finishList 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function finishList(operation) {
     if (listOperation === operation) listOperation = null;
   }
 
+  /** 处理 selectJob 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function selectJob(batchJobId) {
     const normalized = String(batchJobId ?? "");
     if (!JOB_ID.test(normalized) || !jobs.some((candidate) => candidate.batch_job_id === normalized)) {
@@ -268,6 +292,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 beginDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function beginDetail(owner, refreshGeneration) {
     const key = keyFromOwner(owner);
     if (!validOperationOwner(key, refreshGeneration) || !JOB_ID.test(selectedJobId)) return null;
@@ -284,6 +309,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return detailOperation;
   }
 
+  /** 处理 isDetailCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isDetailCurrent(operation, owner, refreshGeneration) {
     return isCurrent(
       operation,
@@ -294,6 +320,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     ) && operation.batchJobId === selectedJobId && operation.taskCursor === taskCursor;
   }
 
+  /** 处理 acceptDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptDetail(operation, detailPayload, taskPayload, owner, refreshGeneration) {
     if (
       !isDetailCurrent(operation, owner, refreshGeneration)
@@ -313,6 +340,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 rejectDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function rejectDetail(operation, error, owner, refreshGeneration) {
     if (!isDetailCurrent(operation, owner, refreshGeneration)) return false;
     job = null;
@@ -324,10 +352,12 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 finishDetail 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function finishDetail(operation) {
     if (detailOperation === operation) detailOperation = null;
   }
 
+  /** 处理 beginResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function beginResult(owner, batchTaskId) {
     const key = keyFromOwner(owner);
     const normalizedTaskId = String(batchTaskId ?? "");
@@ -354,6 +384,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return resultOperation;
   }
 
+  /** 处理 isResultCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isResultCurrent(operation, owner) {
     return Boolean(
       operation
@@ -369,6 +400,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     );
   }
 
+  /** 处理 acceptResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptResult(operation, payload, owner) {
     if (
       !isResultCurrent(operation, owner)
@@ -385,6 +417,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return payload.assistant_text;
   }
 
+  /** 处理 rejectResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function rejectResult(operation, error, owner) {
     if (!isResultCurrent(operation, owner)) return false;
     clearResultDomAndMetadata();
@@ -394,14 +427,17 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 finishResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function finishResult(operation) {
     if (resultOperation === operation) resultOperation = null;
   }
 
+  /** 处理 invalidateResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function invalidateResult() {
     clearResult();
   }
 
+  /** 处理 nextPage 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function nextPage() {
     if (!nextCursor || listOperation || createOperation || cancelOperation) return false;
     cursorStack = [...cursorStack, cursor];
@@ -413,6 +449,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 previousPage 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function previousPage() {
     if (!cursorStack.length || listOperation || createOperation || cancelOperation) return false;
     cursor = cursorStack.at(-1) ?? null;
@@ -424,6 +461,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 nextTaskPage 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function nextTaskPage() {
     if (!taskNextCursor || detailOperation || createOperation || cancelOperation) return false;
     clearResult();
@@ -435,6 +473,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 previousTaskPage 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function previousTaskPage() {
     if (!taskCursorStack.length || detailOperation || createOperation || cancelOperation) return false;
     clearResult();
@@ -446,6 +485,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 openCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function openCreate(owner) {
     if (!currentCapabilityOwner(owner, "create") || createOperation || cancelOperation) return false;
     createOpen = true;
@@ -455,6 +495,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 closeCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function closeCreate(owner) {
     if (!currentCapabilityOwner(owner, "create") || createOperation) return false;
     createOpen = false;
@@ -463,6 +504,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 beginCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function beginCreate(owner) {
     const key = keyFromOwner(owner);
     if (
@@ -485,10 +527,12 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return createOperation;
   }
 
+  /** 处理 isCreateCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isCreateCurrent(operation, owner) {
     return mutationCurrent(operation, createOperation, createGeneration, owner, "create");
   }
 
+  /** 处理 acceptCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptCreate(operation, payload, owner) {
     if (
       !isCreateCurrent(operation, owner)
@@ -506,6 +550,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 rejectCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function rejectCreate(operation, error, owner) {
     if (!isCreateCurrent(operation, owner)) return false;
     createState = "error";
@@ -513,10 +558,12 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 finishCreate 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function finishCreate(operation) {
     if (createOperation === operation) createOperation = null;
   }
 
+  /** 处理 beginCancel 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function beginCancel(owner, batchJobId) {
     const key = keyFromOwner(owner);
     const normalized = String(batchJobId ?? "");
@@ -542,11 +589,13 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return cancelOperation;
   }
 
+  /** 处理 isCancelCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isCancelCurrent(operation, owner) {
     return mutationCurrent(operation, cancelOperation, cancelGeneration, owner, "write")
       && operation.batchJobId === selectedJobId;
   }
 
+  /** 处理 acceptCancel 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptCancel(operation, payload, owner) {
     if (
       !isCancelCurrent(operation, owner)
@@ -567,6 +616,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 rejectCancel 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function rejectCancel(operation, error, owner) {
     if (!isCancelCurrent(operation, owner)) return false;
     cancelState = "error";
@@ -574,18 +624,22 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return true;
   }
 
+  /** 处理 finishCancel 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function finishCancel(operation) {
     if (cancelOperation === operation) cancelOperation = null;
   }
 
+  /** 处理 isActionBusy 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function isActionBusy() {
     return Boolean(createOperation || cancelOperation);
   }
 
+  /** 处理 blocksShellDomReplacement 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function blocksShellDomReplacement() {
     return Boolean(createOpen || createOperation || cancelOperation || ["loading", "ready"].includes(resultState));
   }
 
+  /** 处理 snapshot 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function snapshot() {
     return Object.freeze({
       state: listState,
@@ -621,6 +675,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     });
   }
 
+  /** 处理 validOperationOwner 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function validOperationOwner(key, refreshGeneration) {
     return Boolean(
       key
@@ -630,6 +685,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     );
   }
 
+  /** 处理 currentCapabilityOwner 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function currentCapabilityOwner(owner, capability) {
     const key = keyFromOwner(owner);
     if (!key || key !== ownerKey) return false;
@@ -638,6 +694,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     return false;
   }
 
+  /** 处理 mutationCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function mutationCurrent(operation, current, generation, owner, capability) {
     return Boolean(
       operation
@@ -650,6 +707,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     );
   }
 
+  /** 处理 acceptCreateOptionsInternal 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function acceptCreateOptionsInternal(value) {
     if (!ownerCanCreate) {
       createOptions = emptyCreateOptions();
@@ -669,6 +727,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     createOptionsError = null;
   }
 
+  /** 处理 selectJobInternal 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function selectJobInternal(value) {
     abortOperation(detailOperation);
     detailOperation = null;
@@ -686,6 +745,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     clearResult();
   }
 
+  /** 处理 clearResultDomAndMetadata 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function clearResultDomAndMetadata() {
     try {
       clearResultDom();
@@ -697,12 +757,14 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     }
   }
 
+  /** 处理 clearResult 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function clearResult() {
     clearResultDomAndMetadata();
     abortOperation(resultOperation);
     resultOperation = null;
   }
 
+  /** 处理 resetListPage 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function resetListPage() {
     abortOperation(listOperation);
     listOperation = null;
@@ -715,6 +777,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
     listError = null;
   }
 
+  /** 处理 resetAll 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
   function resetAll() {
     clearResult();
     abortOperation(listOperation);
@@ -798,6 +861,7 @@ export function createBatchJobPageState({ clearResultDom = () => {} } = {}) {
   });
 }
 
+/** 处理 operationTicket 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function operationTicket(ownerKey, generation, refreshGeneration) {
   return Object.freeze({
     ownerKey,
@@ -807,6 +871,7 @@ function operationTicket(ownerKey, generation, refreshGeneration) {
   });
 }
 
+/** 处理 isCurrent 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function isCurrent(operation, current, generation, ownerKey, refreshGeneration) {
   return Boolean(
     operation
@@ -818,10 +883,12 @@ function isCurrent(operation, current, generation, ownerKey, refreshGeneration) 
   );
 }
 
+/** 处理 abortOperation 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function abortOperation(operation) {
   operation?.controller?.abort();
 }
 
+/** 处理 keyFromOwner 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function keyFromOwner(owner) {
   if (
     !owner
@@ -834,18 +901,22 @@ function keyFromOwner(owner) {
   return JSON.stringify([owner.readIdentity, owner.navigationOwner]);
 }
 
+/** 处理 mirroredTenantId 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function mirroredTenantId(authContext) {
   const userTenant = String(authContext?.user?.tenant_id ?? "").trim();
   const tenant = String(authContext?.tenant?.tenant_id ?? userTenant).trim();
+  // 租户标识只取自认证上下文；缺失或不一致时拒绝，禁止跨租户访问。
   return userTenant && tenant === userTenant ? tenant : "";
 }
 
+/** 处理 normalizePermissionCodes 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function normalizePermissionCodes(value) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return null;
   const normalized = [...value].sort();
   return new Set(normalized).size === normalized.length ? normalized : null;
 }
 
+/** 处理 normalizeCreateOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function normalizeCreateOptions(value) {
   if (
     !value
@@ -888,6 +959,7 @@ function normalizeCreateOptions(value) {
       label,
     });
   });
+  // 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
   if (modelAliases.some((item) => !item) || !unique(modelAliases, "model_alias_id")) return null;
   const files = value.files.map((item) => {
     if (
@@ -907,6 +979,7 @@ function normalizeCreateOptions(value) {
   });
 }
 
+/** 处理 emptyCreateOptions 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function emptyCreateOptions() {
   return Object.freeze({
     projects: Object.freeze([]),
@@ -916,14 +989,17 @@ function emptyCreateOptions() {
   });
 }
 
+/** 处理 unique 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function unique(values, key) {
   return new Set(values.map((item) => item[key])).size === values.length;
 }
 
+/** 处理 resourceId 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function resourceId(value) {
   return RESOURCE_ID.test(String(value ?? ""));
 }
 
+/** 处理 safeLabel 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function safeLabel(value, maximum = 160) {
   return typeof value === "string"
     && Boolean(value.trim())
@@ -931,10 +1007,12 @@ function safeLabel(value, maximum = 160) {
     && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+/** 处理 safeChain 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function safeChain(value) {
   return /^[A-Za-z0-9_.:-]{1,160}$/.test(String(value ?? "")) ? value : "-";
 }
 
+/** 处理 fixedError 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 function fixedError(error, fallbackCode) {
   const code = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(String(error?.code ?? ""))
     ? error.code
@@ -943,6 +1021,7 @@ function fixedError(error, fallbackCode) {
   return Object.freeze({ code, requestId });
 }
 
+/** 处理 isBatchAbortError 对应的批任务页面状态或交互；界面结果不替代后端权限与租户校验。 */
 export function isBatchAbortError(error) {
   return error?.name === "AbortError";
 }

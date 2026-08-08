@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""控制面认证依赖：在解析业务参数前校验当前 Session 与数据库实时权限矩阵。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：control-plane-api/src/metahub_control/auth/dependencies.py
+所有守卫均从认证上下文取得 tenant_id，并由后端执行 RBAC；前端可见性不能补权，
+认证令牌和敏感业务字段不得进入日志或错误响应。
 """
 
 from __future__ import annotations
@@ -209,7 +209,8 @@ def require_usage_reader(
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
     """要求当前用户可读取用量与成本账本。
-    用量 API 会暴露模型、Key、Token 和成本维度，M0 仅开放给管理员和开发者，避免 viewer 扩大企业内部调用可见范围。
+    用量 API 会暴露模型、Key、Token 和成本维度，M0 仅开放给管理员和开发者，
+    避免 viewer 扩大企业内部调用可见范围。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -228,8 +229,9 @@ def require_dashboard_reader(
 ) -> AuthContext:
     """要求当前用户可读取租户 Dashboard。
 
-    PRD-026 旧总览和 PRD-065 角色首页都先经过本守卫；六个固定角色是否还能进入具体角色视图，随后继续以同一次请求的
-    permission 快照与 tenant-scoped 配置求交。前端隐藏入口、角色名或历史 Session 均不能替代该后端权限校验。
+    PRD-026 旧总览和 PRD-065 角色首页都先经过本守卫；六个固定角色是否还能进入
+    具体角色视图，随后继续以同一次请求的 permission 快照与 tenant-scoped 配置求交。
+    前端隐藏入口、角色名或历史 Session 均不能替代该后端权限校验。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -249,7 +251,8 @@ def require_project_reader(
 ) -> AuthContext:
     """要求当前用户可读取项目与应用归属信息。
 
-    Project/Application 会暴露业务系统归属、Key 绑定数量和成本聚合入口，M0.5 只开放给管理员和开发者。
+    Project/Application 会暴露业务系统归属、Key 绑定数量和成本聚合入口，
+    M0.5 只开放给管理员和开发者。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -469,7 +472,8 @@ def require_model_price_reader(
 ) -> AuthContext:
     """要求当前用户可读取模型价格时间线。
 
-    价格会暴露企业模型成本口径，当前基础角色中仅 admin/developer 可读；viewer 手写请求也必须由后端拒绝。
+    价格会暴露企业模型成本口径，当前基础角色中仅 admin/developer 可读；
+    viewer 手写请求也必须由后端拒绝。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -488,7 +492,8 @@ def require_model_price_writer(
 ) -> AuthContext:
     """要求当前用户可创建不可变模型价格计划。
 
-    当前 RBAC 尚未拆出 finance 角色，因此 M0.5 由 admin 承担财务写入职责，developer/viewer 均由后端拒绝。
+    当前 RBAC 尚未拆出 finance 角色，因此 M0.5 由 admin 承担财务写入职责，
+    developer/viewer 均由后端拒绝。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -566,7 +571,8 @@ def require_environment_reader(
 ) -> AuthContext:
     """要求当前用户可读取租户 Environment。
 
-    环境会暴露 Key、别名和预算的配置边界，M0.5 只开放给 admin/developer，viewer 不能通过手写请求绕过导航隐藏。
+    环境会暴露 Key、别名和预算的配置边界，M0.5 只开放给 admin/developer，
+    viewer 不能通过手写请求绕过导航隐藏。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -604,7 +610,8 @@ def require_budget_reader(
 ) -> AuthContext:
     """要求当前用户可读取预算规则和预算状态。
 
-    预算会暴露当前租户成本阈值和 Key 级治理策略，M0 暂开放给管理员和开发者；viewer 不能通过手写请求绕过页面隐藏。
+    预算会暴露当前租户成本阈值和 Key 级治理策略，M0 暂开放给管理员和开发者；
+    viewer 不能通过手写请求绕过页面隐藏。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -623,7 +630,8 @@ def require_budget_writer(
 ) -> AuthContext:
     """要求当前用户可修改预算规则。
 
-    PRD-023 的“财务”角色在 M0 尚未独立建模，因此写权限先限定为 admin，避免 developer 私自提高或关闭预算。
+    PRD-023 的“财务”角色在 M0 尚未独立建模，因此写权限先限定为 admin，
+    避免 developer 私自提高或关闭预算。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -1016,8 +1024,9 @@ def require_debug_console_user(
 ) -> AuthContext:
     """要求当前用户可以使用内置 API 调试台。
 
-    调试台会触发真实上游模型调用并写入用量账本，因此只开放给管理员和开发者；viewer 即使前端看不到入口，
-    也必须由后端依赖再次拦截，避免通过手写 HTTP 请求绕过控制台按钮隐藏。
+    调试台会触发真实上游模型调用并写入用量账本，因此只开放给管理员和开发者；
+    viewer 即使前端看不到入口，也必须由后端依赖再次拦截，避免通过手写 HTTP 请求
+    绕过控制台按钮隐藏。
     """
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
@@ -1145,8 +1154,12 @@ def require_batch_reader(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require the current database permission snapshot to contain ``batch.read``."""
+    """建立批任务只读依赖，在解析业务参数前按实时后端矩阵校验读取权限。
 
+    Require the current database permission snapshot to contain ``batch.read``.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(request, authorization, ("batch.read",))
 
 
@@ -1154,8 +1167,12 @@ def require_batch_writer(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require the current database permission snapshot to contain ``batch.write``."""
+    """建立批任务写入依赖，在解析业务参数前按实时后端矩阵校验写权限。
 
+    Require the current database permission snapshot to contain ``batch.write``.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(request, authorization, ("batch.write",))
 
 
@@ -1163,8 +1180,12 @@ def require_batch_creator(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require both Batch mutation and file-read authority before parsing a create body."""
+    """建立批任务创建依赖，同时校验批写入与文件读取权限后才允许解析正文。
 
+    Require both Batch mutation and file-read authority before parsing a create body.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(
         request,
         authorization,
@@ -1176,8 +1197,12 @@ def require_batch_canceller(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require read and write authority because cancellation returns the current job fact."""
+    """建立批任务取消依赖，同时校验读取和写入权限以返回最新任务事实。
 
+    Require read and write authority because cancellation returns the current job fact.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(
         request,
         authorization,
@@ -1189,8 +1214,12 @@ def require_batch_task_reader(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require access to both a Batch task and its file-derived projections."""
+    """建立批任务结果读取依赖，同时校验批读取与文件读取权限。
 
+    Require access to both a Batch task and its file-derived projections.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(
         request,
         authorization,
@@ -1202,8 +1231,12 @@ def require_batch_reconciler(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> AuthContext:
-    """Require Batch visibility and FinOps write authority for possible-cost resolution."""
+    """建立批任务对账依赖，同时校验批读取与财务调整权限。
 
+    Require Batch visibility and FinOps write authority for possible-cost resolution.
+    """
+
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return _require_request_permissions(
         request,
         authorization,

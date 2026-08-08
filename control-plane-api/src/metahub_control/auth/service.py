@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""控制面认证服务：处理租户内登录、Session 生命周期和实时权限快照。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：control-plane-api/src/metahub_control/auth/service.py
+账号枚举、跨租户会话和撤权竞态均采用关闭式处理；日志只保留 request_id、主体标识与
+脱敏审计事实，不记录密码、Bearer Token 或其他认证材料。
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ class PermissionSnapshot:
 @dataclass(frozen=True)
 class AuthContext:
     """聚合 控制面认证与会话 的可信上下文，调用方只能从这里读取已校验的身份和租户边界。
-    
+
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
@@ -129,7 +129,10 @@ def login_admin(
     """
 
     normalized_email = email.strip().lower()
-    normalized_tenant = (tenant_slug or config.default_tenant_slug).strip() or config.default_tenant_slug
+    normalized_tenant = (
+        (tenant_slug or config.default_tenant_slug).strip()
+        or config.default_tenant_slug
+    )
     now = _utcnow()
     connection = _connect(config)
     tenant = _tenant_by_slug(connection, normalized_tenant)
@@ -152,7 +155,13 @@ def login_admin(
 
     if not _verify_password(password, user["password_hash"]):
         _record_failed_login(connection, user, config, now)
-        _log_login_failed(request_id, trace_id, tenant["tenant_id"], user["user_id"], "bad_password")
+        _log_login_failed(
+            request_id,
+            trace_id,
+            tenant["tenant_id"],
+            user["user_id"],
+            "bad_password",
+        )
         connection.close()
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError(
@@ -221,7 +230,8 @@ def login_admin(
             "actor_id": user["user_id"],
             "object_id": session_id,
             "payload": {
-                # actor_id 已能在租户内唯一关联用户；邮箱属于个人信息，不应为方便检索而复制到运行日志。
+                # actor_id 已能在租户内唯一关联用户；邮箱属于个人信息，
+                # 不应为方便检索而复制到运行日志。
                 "session_id": session_id,
                 "expires_at": _to_db_time(expires_at),
             },
@@ -374,10 +384,16 @@ def _remaining_auth_deadline_ms(deadline: float, error_code: str) -> int:
     return max(1, int(remaining * 1000))
 
 
-def current_user_response(context: AuthContext, *, request_id: str, trace_id: str) -> MeResponse:
-    """执行 控制面认证与会话 的 current user response 业务流程，集中处理输入校验、数据库写入和响应转换。
-    
-    安全：服务层必须使用认证上下文中的租户和角色，不能相信前端传入的权限边界。
+def current_user_response(
+    context: AuthContext,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> MeResponse:
+    """执行控制面认证与会话的当前用户响应流程。
+
+    集中处理输入校验、数据库写入和响应转换；服务层必须使用认证上下文中的租户和角色，
+    不能相信前端传入的权限边界。
     """
 
 
@@ -395,7 +411,7 @@ def current_user_response(context: AuthContext, *, request_id: str, trace_id: st
 
 def logout_current_session(config: AppConfig, context: AuthContext) -> None:
     """撤销当前 控制面认证与会话 会话，把 Session 标记为不可继续使用。
-    
+
     边界：仅更新会话状态，不记录明文 Token，也不影响其他有效会话。
     """
 
@@ -527,7 +543,9 @@ def require_actor_transaction_permissions(
     permission_codes: tuple[str, ...],
     unavailable_error_code: str,
 ) -> PermissionSnapshot:
-    """Require permissions for a durable actor without a browser session.
+    """在当前事务内重载持久操作者的权限快照，防止撤权后继续执行后台任务。
+
+    Require permissions for a durable actor without a browser session.
 
     Batch and other recovery workers must resume work after the submitting login session has
     expired. They still have to re-read the active tenant, user, role, full catalog projection,
@@ -543,6 +561,7 @@ def require_actor_transaction_permissions(
         permission_codes=permission_codes,
         unavailable_error_code=unavailable_error_code,
     )
+    # 权限以后端实时矩阵为准；缺失任一所需权限时拒绝并保留脱敏审计事实。
     return PermissionSnapshot(
         permission_codes=snapshot.permission_codes,
         permission_revision=snapshot.permission_revision,
@@ -884,7 +903,7 @@ def _load_role_permission_codes(
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
     """创建 控制面认证与会话 所需的数据库连接，并把基础设施异常映射到统一错误模型。
-    
+
     边界：调用方只看到业务错误码，不直接暴露数据库路径、SQL 或连接细节。
     """
 
@@ -899,7 +918,7 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
 
 def _tenant_by_slug(connection: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
     """在 控制面认证与会话 内部复用 tenant by slug 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -910,10 +929,14 @@ def _tenant_by_slug(connection: sqlite3.Connection, slug: str) -> sqlite3.Row | 
     ).fetchone()
 
 
-def _user_by_email(connection: sqlite3.Connection, tenant_id: str, email: str) -> sqlite3.Row | None:
-    """在 控制面认证与会话 内部复用 user by email 辅助逻辑，集中处理边界值和错误映射。
-    
-    边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
+def _user_by_email(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    email: str,
+) -> sqlite3.Row | None:
+    """在控制面认证与会话内部按租户查询邮箱。
+
+    该辅助逻辑集中处理边界值和错误映射，不得绕过租户隔离、统一错误码或脱敏约束。
     """
 
 
@@ -936,7 +959,7 @@ def _record_failed_login(
     now: datetime,
 ) -> None:
     """在 控制面认证与会话 内部复用 record failed login 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -963,7 +986,7 @@ def _record_successful_login(
     now: datetime,
 ) -> sqlite3.Row:
     """在 控制面认证与会话 内部复用 record successful login 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -995,7 +1018,7 @@ def _record_successful_login(
 
 def _auth_user(row: sqlite3.Row, snapshot: PermissionSnapshot) -> AuthUser:
     """在 控制面认证与会话 内部复用 auth user 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1015,7 +1038,7 @@ def _auth_user(row: sqlite3.Row, snapshot: PermissionSnapshot) -> AuthUser:
 
 def _extract_bearer(authorization: str | None) -> str:
     """在 控制面认证与会话 内部复用 extract bearer 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1033,7 +1056,7 @@ def _extract_bearer(authorization: str | None) -> str:
 
 def _verify_password(password: str, password_hash: str) -> bool:
     """在 控制面认证与会话 内部复用 verify password 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1047,7 +1070,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 def _fake_password_check(password: str) -> None:
     """在 控制面认证与会话 内部复用 fake password check 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1057,7 +1080,7 @@ def _fake_password_check(password: str) -> None:
 
 def _parse_datetime(value: object) -> datetime | None:
     """解析 控制面认证与会话 的 parse datetime 数据，把数据库或外部输入转换为内部稳定类型。
-    
+
     边界：解析失败要么返回空值口径，要么抛统一错误，不能把底层异常透出给 API。
     """
 
@@ -1074,7 +1097,7 @@ def _parse_datetime(value: object) -> datetime | None:
 
 def _to_db_time(value: datetime) -> str:
     """把 控制面认证与会话 的 UTC 时间序列化为数据库 ISO 字符串。
-    
+
     边界：统一时间口径可避免分页、审计和测试在时区上产生歧义。
     """
 
@@ -1084,7 +1107,7 @@ def _to_db_time(value: datetime) -> str:
 
 def _utcnow() -> datetime:
     """返回 控制面认证与会话 使用的当前 UTC 时间，去掉微秒以保持数据库字段稳定。
-    
+
     边界：所有状态更新时间共用该口径，避免同一事务内出现混合时间格式。
     """
 
@@ -1094,7 +1117,7 @@ def _utcnow() -> datetime:
 
 def _safe_user_agent(user_agent: str | None) -> str | None:
     """生成 控制面认证与会话 可安全展示或落日志的 safe user agent 内容。
-    
+
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
 
@@ -1106,7 +1129,7 @@ def _safe_user_agent(user_agent: str | None) -> str | None:
 
 def _safe_client_host(client_host: str | None) -> str | None:
     """生成 控制面认证与会话 可安全展示或落日志的 safe client host 内容。
-    
+
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
 

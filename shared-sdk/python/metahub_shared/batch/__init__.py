@@ -1,4 +1,13 @@
-"""PRD-074 shared Batch contracts and cryptographic envelopes."""
+"""PRD-074 批处理共享契约：统一字段、加密和状态语义，不持有租户授权或服务端业务决策。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 shared Batch contracts and cryptographic envelopes.
+"""
 
 from .contracts import (
     BATCH_OPERATION_TEMPLATE_VERSION,

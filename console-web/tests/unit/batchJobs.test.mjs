@@ -1,3 +1,4 @@
+/** 本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。 */
 /** PRD-074 PAGE-104 owner and sensitive-result lifecycle tests. */
 
 import assert from "node:assert/strict";
@@ -26,11 +27,13 @@ import { renderBatchJobs } from "../../src/features/batch-jobs/renderBatchJobs.j
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const JOB_ID = `bjob_${"a".repeat(32)}`;
 const OTHER_JOB_ID = `bjob_${"b".repeat(32)}`;
 const TASK_ID = `btsk_${"c".repeat(32)}`;
 const RESULT_CANARY = "assistant-result-private-canary";
 
+/** 验证 authContext 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function authContext({
   permissions = [PERMISSIONS.BATCH_READ, PERMISSIONS.BATCH_WRITE, PERMISSIONS.FILE_READ],
   tenantId = "tenant_batch_a",
@@ -38,6 +41,7 @@ function authContext({
   sessionId = "ses_batch_a",
   fingerprint = "batch_authz_a",
 } = {}) {
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   return withPermissionSnapshot({
     tenant: { tenant_id: tenantId, slug: "batch", display_name: "Batch tenant" },
     user: {
@@ -50,6 +54,7 @@ function authContext({
   }, permissions, { permissionRevision: 10, authorizationFingerprint: fingerprint });
 }
 
+/** 验证 shellState 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function shellState(context = authContext()) {
   return {
     state: "ok",
@@ -72,6 +77,7 @@ function shellState(context = authContext()) {
   };
 }
 
+/** 验证 listPayload 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function listPayload() {
   return Object.freeze({
     state: "ok",
@@ -82,6 +88,7 @@ function listPayload() {
   });
 }
 
+/** 验证 detailPayload 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function detailPayload() {
   return Object.freeze({
     state: "ok",
@@ -91,6 +98,7 @@ function detailPayload() {
   });
 }
 
+/** 验证 taskPayload 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function taskPayload() {
   return Object.freeze({
     state: "ok",
@@ -102,6 +110,7 @@ function taskPayload() {
   });
 }
 
+/** 验证 jobInfo 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function jobInfo(overrides = {}) {
   return {
     batch_job_id: JOB_ID,
@@ -142,6 +151,7 @@ function jobInfo(overrides = {}) {
   };
 }
 
+/** 验证 taskInfo 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function taskInfo(overrides = {}) {
   return {
     batch_task_id: TASK_ID,
@@ -163,6 +173,7 @@ function taskInfo(overrides = {}) {
   };
 }
 
+/** 验证 jsonResponse 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,

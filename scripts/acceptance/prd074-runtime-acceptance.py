@@ -1,4 +1,12 @@
-"""Self-contained runtime acceptance for PRD-074 Batch Scheduler and Worker.
+"""本脚本执行 PRD-074 真实运行验收，仅持久化脱敏事实，并负责进程、端口和临时资源回收。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Self-contained runtime acceptance for PRD-074 Batch Scheduler and Worker.
 
 The runner creates an isolated SQLite database and all runtime artifacts under the repository,
 starts only processes it owns, and uses fixed loopback ports. Provider and webhook request bodies
@@ -31,6 +39,7 @@ import httpx
 
 # Direct execution must not depend on a caller-provided PYTHONPATH. Only repository source roots
 # are added, before any MetaHub module is imported.
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _BOOTSTRAP_ROOT = Path(__file__).resolve().parents[2]
 for _source_root in (
     _BOOTSTRAP_ROOT / "shared-sdk" / "python",
@@ -48,6 +57,7 @@ from metahub_shared.db.security import hash_password  # noqa: E402
 from metahub_shared.rbac import permission_matrix_sha256  # noqa: E402
 from metahub_shared.runtime.webhooks import verify_webhook_signature  # noqa: E402
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 ROOT = _BOOTSTRAP_ROOT
 WORK_ROOT = ROOT / ".tmp" / "prd074-runtime"
 ARTIFACT_ROOT = ROOT / ".artifacts" / "prd074-runtime"
@@ -63,25 +73,52 @@ MIGRATION_CONTRACT = (67, "0067")
 
 
 class AcceptanceFailure(RuntimeError):
-    """A stable failure coordinate that never embeds response bodies or secrets."""
+    """执行真实运行验收步骤。
+
+    定义：AcceptanceFailure。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    A stable failure coordinate that never embeds response bodies or secrets.
+    """
 
     def __init__(self, stage: str, code: str) -> None:
+        """执行真实运行验收步骤。
+
+        定义：__init__。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         super().__init__(f"{stage}:{code}")
         self.stage = stage
         self.code = code
 
 
 def require(condition: bool, stage: str, code: str) -> None:
+    """执行真实运行验收步骤。
+
+    定义：require。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     if not condition:
         raise AcceptanceFailure(stage, code)
 
 
 def utc_now() -> str:
+    """执行真实运行验收步骤。
+
+    定义：utc_now。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def workspace_path(value: str | Path, boundary: str | Path, *, stage: str) -> Path:
-    """Resolve a path and require both it and its boundary to remain under this repository."""
+    """执行真实运行验收步骤。
+
+    定义：workspace_path。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Resolve a path and require both it and its boundary to remain under this repository.
+    """
 
     candidate = Path(value).resolve()
     allowed = Path(boundary).resolve()
@@ -89,17 +126,25 @@ def workspace_path(value: str | Path, boundary: str | Path, *, stage: str) -> Pa
     try:
         candidate.relative_to(allowed)
         allowed.relative_to(root)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
         raise AcceptanceFailure(stage, "path_outside_workspace") from None
     return candidate
 
 
 def loopback_url(value: str, *, port: int, stage: str, path: str = "") -> str:
-    """Accept one exact HTTP loopback origin and an optional fixed path."""
+    """执行真实运行验收步骤。
+
+    定义：loopback_url。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Accept one exact HTTP loopback origin and an optional fixed path.
+    """
 
     try:
         parsed = urlsplit(value)
         actual_port = parsed.port
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
         raise AcceptanceFailure(stage, "url_invalid") from None
     valid = (
@@ -117,6 +162,11 @@ def loopback_url(value: str, *, port: int, stage: str, path: str = "") -> str:
 
 
 def safe_run_id(value: str | None) -> str:
+    """执行真实运行验收步骤。
+
+    定义：safe_run_id。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     candidate = value or datetime.now(UTC).strftime("run-%Y%m%dT%H%M%SZ")
     normalized = candidate.replace("-", "").replace("_", "")
     require(
@@ -128,7 +178,13 @@ def safe_run_id(value: str | None) -> str:
 
 
 def create_run_directories(run_id: str) -> tuple[Path, Path]:
-    """Create exclusive work/evidence directories without overwriting an earlier run."""
+    """执行真实运行验收步骤。
+
+    定义：create_run_directories。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Create exclusive work/evidence directories without overwriting an earlier run.
+    """
 
     for parent in (WORK_ROOT.parent, ARTIFACT_ROOT.parent):
         require(parent.is_dir() and not parent.is_symlink(), "config.parent", "invalid")
@@ -148,6 +204,11 @@ def create_run_directories(run_id: str) -> tuple[Path, Path]:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSecrets:
+    """执行真实运行验收步骤。
+
+    定义：RuntimeSecrets。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     admin_password: str = field(repr=False)
     developer_password: str = field(repr=False)
     provider_key: str = field(repr=False)
@@ -169,6 +230,11 @@ class RuntimeSecrets:
 
     @classmethod
     def create(cls) -> RuntimeSecrets:
+        """执行真实运行验收步骤。
+
+        定义：create。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         suffix = secrets.token_urlsafe(18)
         return cls(
             admin_password=f"Prd074-Admin-Aa1!{secrets.token_urlsafe(24)}",
@@ -203,6 +269,11 @@ class RuntimeSecrets:
         session_tokens: tuple[str, ...] = (),
         webhook_secret: str | None = None,
     ) -> tuple[str, ...]:
+        """执行真实运行验收步骤。
+
+        定义：private_values。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         values = (
             self.admin_password,
             self.developer_password,
@@ -224,11 +295,17 @@ class RuntimeSecrets:
             self.assistant_text,
             *session_tokens,
         )
+        # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
         return values + ((webhook_secret,) if webhook_secret else ())
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeGraph:
+    """执行真实运行验收步骤。
+
+    定义：RuntimeGraph。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     database_url: str = field(repr=False)
     database: Path = field(repr=False)
     tenant_id: str
@@ -243,6 +320,11 @@ class RuntimeGraph:
 
 @dataclass(slots=True)
 class ManagedProcess:
+    """执行真实运行验收步骤。
+
+    定义：ManagedProcess。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     name: str
     process: subprocess.Popen[bytes]
     stdout_file: Any = field(repr=False)
@@ -250,44 +332,88 @@ class ManagedProcess:
 
 
 class OwnedProcessSet:
-    """Tracks exact Popen handles; cleanup never enumerates or kills unrelated listeners."""
+    """执行真实运行验收步骤。
+
+    定义：OwnedProcessSet。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Tracks exact Popen handles; cleanup never enumerates or kills unrelated listeners.
+    """
 
     def __init__(self) -> None:
+        """执行真实运行验收步骤。
+
+        定义：__init__。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         self.items: list[ManagedProcess] = []
 
     def add(self, item: ManagedProcess) -> ManagedProcess:
+        """执行真实运行验收步骤。
+
+        定义：add。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         self.items.append(item)
         return item
 
     def stop(self, item: ManagedProcess) -> None:
+        """执行真实运行验收步骤。
+
+        定义：stop。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         stop_owned_process(item)
         if item in self.items:
             self.items.remove(item)
 
     def close(self) -> None:
+        """执行真实运行验收步骤。
+
+        定义：close。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         while self.items:
             stop_owned_process(self.items.pop())
 
 
 class FixedThreadingHTTPServer(ThreadingHTTPServer):
+    """执行真实运行验收步骤。
+
+    定义：FixedThreadingHTTPServer。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     allow_reuse_address = False
     daemon_threads = True
 
 
 def _read_stub_body(handler: BaseHTTPRequestHandler) -> bytes:
+    """执行真实运行验收步骤。
+
+    定义：_read_stub_body。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     values = handler.headers.get_all("Content-Length", failobj=[])
     if len(values) != 1 or not values[0].isascii() or not values[0].isdecimal():
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError("length")
     length = int(values[0])
     if not 0 < length <= MAX_STUB_BODY_BYTES:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError("length")
     body = handler.rfile.read(length)
     if len(body) != length:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError("length")
     return body
 
 
 def _send_stub_json(handler: BaseHTTPRequestHandler, status: int, payload: object) -> None:
+    """执行真实运行验收步骤。
+
+    定义：_send_stub_json。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
@@ -297,9 +423,20 @@ def _send_stub_json(handler: BaseHTTPRequestHandler, status: int, payload: objec
 
 
 class ProviderStub:
-    """Fixed-port OpenAI-compatible stub retaining counters and synchronization only."""
+    """执行真实运行验收步骤。
+
+    定义：ProviderStub。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Fixed-port OpenAI-compatible stub retaining counters and synchronization only.
+    """
 
     def __init__(self, secrets_: RuntimeSecrets) -> None:
+        """执行真实运行验收步骤。
+
+        定义：__init__。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         self._secrets = secrets_
         self._lock = threading.Lock()
         self.realtime_seen = threading.Event()
@@ -313,10 +450,25 @@ class ProviderStub:
         self.thread: threading.Thread | None = None
 
     def start(self) -> str:
+        """执行真实运行验收步骤。
+
+        定义：start。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            """执行真实运行验收步骤。
+
+            定义：Handler。
+            只保存脱敏证据，并负责失败后的进程和临时资源回收。
+            """
             def do_POST(self) -> None:  # noqa: N802
+                """执行真实运行验收步骤。
+
+                定义：do_POST。
+                只保存脱敏证据，并负责失败后的进程和临时资源回收。
+                """
                 try:
                     body = _read_stub_body(self)
                     payload = json.loads(body.decode("utf-8"))
@@ -340,9 +492,11 @@ class ProviderStub:
                         and bool(contents)
                     )
                     if not valid:
+                        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                         raise ValueError("invalid")
                     realtime = owner._secrets.realtime_text in contents
                     del body, payload, messages, contents
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 except (ValueError, UnicodeError, json.JSONDecodeError):
                     with owner._lock:
                         owner.invalid_calls += 1
@@ -400,11 +554,18 @@ class ProviderStub:
                         owner.active_calls -= 1
 
             def log_message(self, _format: str, *_args: object) -> None:
+                """执行真实运行验收步骤。
+
+                定义：log_message。
+                只保存脱敏证据，并负责失败后的进程和临时资源回收。
+                """
                 return
 
         try:
             self.server = FixedThreadingHTTPServer((LOOPBACK_HOST, PROVIDER_PORT), Handler)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except OSError:
+            # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
             raise AcceptanceFailure("stub.provider", "port_unavailable") from None
         self.thread = threading.Thread(
             target=self.server.serve_forever,
@@ -420,6 +581,11 @@ class ProviderStub:
         )
 
     def stop(self) -> None:
+        """执行真实运行验收步骤。
+
+        定义：stop。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         self.release_realtime.set()
         if self.server is not None:
             self.server.shutdown()
@@ -428,6 +594,11 @@ class ProviderStub:
             self.thread.join(timeout=5)
 
     def snapshot(self) -> dict[str, int]:
+        """执行真实运行验收步骤。
+
+        定义：snapshot。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         with self._lock:
             return {
                 "realtime_calls": self.realtime_calls,
@@ -438,9 +609,20 @@ class ProviderStub:
 
 
 class WebhookStub:
-    """Webhook receiver retaining event-type counts and validation booleans, never payloads."""
+    """执行真实运行验收步骤。
+
+    定义：WebhookStub。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Webhook receiver retaining event-type counts and validation booleans, never payloads.
+    """
 
     def __init__(self) -> None:
+        """执行真实运行验收步骤。
+
+        定义：__init__。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         self._lock = threading.Lock()
         self._signing_secret: str | None = None
         self.created_count = 0
@@ -452,14 +634,34 @@ class WebhookStub:
         self.thread: threading.Thread | None = None
 
     def set_signing_secret(self, value: str) -> None:
+        """执行真实运行验收步骤。
+
+        定义：set_signing_secret。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         require(bool(value), "stub.webhook", "secret_missing")
         self._signing_secret = value
 
     def start(self) -> str:
+        """执行真实运行验收步骤。
+
+        定义：start。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            """执行真实运行验收步骤。
+
+            定义：Handler。
+            只保存脱敏证据，并负责失败后的进程和临时资源回收。
+            """
             def do_POST(self) -> None:  # noqa: N802
+                """执行真实运行验收步骤。
+
+                定义：do_POST。
+                只保存脱敏证据，并负责失败后的进程和临时资源回收。
+                """
                 try:
                     body = _read_stub_body(self)
                     payload = json.loads(body.decode("utf-8"))
@@ -473,6 +675,7 @@ class WebhookStub:
                     )
                     header_matches = self.headers.get("X-MetaHub-Event") == event_type
                     del body, payload
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 except (ValueError, UnicodeError, json.JSONDecodeError):
                     with owner._lock:
                         owner.invalid_count += 1
@@ -502,10 +705,16 @@ class WebhookStub:
                 _send_stub_json(self, 204 if valid else 400, {})
 
             def log_message(self, _format: str, *_args: object) -> None:
+                """执行真实运行验收步骤。
+
+                定义：log_message。
+                只保存脱敏证据，并负责失败后的进程和临时资源回收。
+                """
                 return
 
         try:
             self.server = FixedThreadingHTTPServer((LOOPBACK_HOST, WEBHOOK_PORT), Handler)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except OSError:
             raise AcceptanceFailure("stub.webhook", "port_unavailable") from None
         self.thread = threading.Thread(
@@ -522,6 +731,11 @@ class WebhookStub:
         )
 
     def stop(self) -> None:
+        """执行真实运行验收步骤。
+
+        定义：stop。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         if self.server is not None:
             self.server.shutdown()
             self.server.server_close()
@@ -529,6 +743,11 @@ class WebhookStub:
             self.thread.join(timeout=5)
 
     def snapshot(self) -> dict[str, int]:
+        """执行真实运行验收步骤。
+
+        定义：snapshot。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         with self._lock:
             return {
                 "created": self.created_count,
@@ -540,6 +759,11 @@ class WebhookStub:
 
 
 def _contains_forbidden_webhook_field(value: object) -> bool:
+    """执行真实运行验收步骤。
+
+    定义：_contains_forbidden_webhook_field。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     forbidden = {
         "prompt",
         "response",
@@ -563,6 +787,11 @@ def _contains_forbidden_webhook_field(value: object) -> bool:
 
 
 def assert_fixed_ports_available() -> None:
+    """执行真实运行验收步骤。
+
+    定义：assert_fixed_ports_available。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     sockets: list[socket.socket] = []
     try:
         for port in FIXED_PORTS:
@@ -570,6 +799,7 @@ def assert_fixed_ports_available() -> None:
             candidate.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
                 candidate.bind((LOOPBACK_HOST, port))
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             except OSError:
                 candidate.close()
                 raise AcceptanceFailure("config.ports", "fixed_port_unavailable") from None
@@ -580,11 +810,22 @@ def assert_fixed_ports_available() -> None:
 
 
 def database_url(path: Path) -> str:
+    """执行真实运行验收步骤。
+
+    定义：database_url。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     return f"sqlite:///{path.as_posix()}"
 
 
 def prepare_database(work: Path, provider_base_url: str, secrets_: RuntimeSecrets) -> RuntimeGraph:
-    """Migrate a fresh database to 0067 twice and create the minimal tenant binding."""
+    """执行真实运行验收步骤。
+
+    定义：prepare_database。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Migrate a fresh database to 0067 twice and create the minimal tenant binding.
+    """
 
     database = workspace_path(work / "prd074-runtime.sqlite3", work, stage="database.path")
     url = database_url(database)
@@ -768,6 +1009,7 @@ def prepare_database(work: Path, provider_base_url: str, secrets_: RuntimeSecret
             model_alias=model_alias,
             virtual_key_id=str(virtual_key["virtual_key_id"]),
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, AcceptanceFailure):
         connection.rollback()
         raise
@@ -781,7 +1023,13 @@ def service_environment(
     provider_base_url: str,
     secrets_: RuntimeSecrets,
 ) -> dict[str, str]:
-    """Build a bounded child environment with every writable path inside the run directory."""
+    """执行真实运行验收步骤。
+
+    定义：service_environment。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Build a bounded child environment with every writable path inside the run directory.
+    """
 
     allowed_system = {
         "PATH",
@@ -861,7 +1109,13 @@ def start_process(
     port: int | None = None,
     app: str | None = None,
 ) -> ManagedProcess:
-    """Start one repository-Python process and direct both logs into this run."""
+    """执行真实运行验收步骤。
+
+    定义：start_process。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Start one repository-Python process and direct both logs into this run.
+    """
 
     python = workspace_path(PYTHON, ROOT, stage=f"process.{name}.python")
     require(python.is_file(), f"process.{name}", "repository_python_missing")
@@ -895,6 +1149,7 @@ def start_process(
             stderr=stderr_file,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except OSError:
         stdout_file.close()
         stderr_file.close()
@@ -903,7 +1158,13 @@ def start_process(
 
 
 def stop_owned_process(item: ManagedProcess) -> None:
-    """Stop only the exact Popen handle supplied by this runner."""
+    """执行真实运行验收步骤。
+
+    定义：stop_owned_process。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Stop only the exact Popen handle supplied by this runner.
+    """
 
     if item.process.poll() is None:
         item.process.terminate()
@@ -919,6 +1180,11 @@ def stop_owned_process(item: ManagedProcess) -> None:
 
 
 def wait_health(url: str, process: ManagedProcess, *, stage: str) -> None:
+    """执行真实运行验收步骤。
+
+    定义：wait_health。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.process.poll() is not None:
@@ -927,6 +1193,7 @@ def wait_health(url: str, process: ManagedProcess, *, stage: str) -> None:
             response = httpx.get(url, timeout=1, follow_redirects=False, trust_env=False)
             if response.status_code == 200:
                 return
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except httpx.HTTPError:
             pass
         time.sleep(0.15)
@@ -936,6 +1203,11 @@ def wait_health(url: str, process: ManagedProcess, *, stage: str) -> None:
 def auth_headers(
     token: str, request_id: str, *, idempotency_key: str | None = None
 ) -> dict[str, str]:
+    """执行真实运行验收步骤。
+
+    定义：auth_headers。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     result = {"Authorization": f"Bearer {token}", "X-Request-ID": request_id}
     if idempotency_key is not None:
         result["Idempotency-Key"] = idempotency_key
@@ -949,6 +1221,11 @@ def login(
     password: str,
     request_id: str,
 ) -> str:
+    """执行真实运行验收步骤。
+
+    定义：login。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     response = client.post(
         "/auth/login",
         json={"tenant_slug": "default", "email": email, "password": password},
@@ -958,6 +1235,7 @@ def login(
     payload = response.json()
     token = payload.get("access_token") if isinstance(payload, dict) else None
     require(isinstance(token, str) and len(token) > 40, "http.login", "token_missing")
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     return token
 
 
@@ -969,6 +1247,11 @@ def expect_error(
     request_id: str,
     stage: str,
 ) -> dict[str, object]:
+    """执行真实运行验收步骤。
+
+    定义：expect_error。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     require(response.status_code == status, stage, "status")
     payload = response.json()
     valid = (
@@ -990,6 +1273,11 @@ def upload_and_scan(
     text: str,
     marker: str,
 ) -> str:
+    """执行真实运行验收步骤。
+
+    定义：upload_and_scan。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     upload = client.post(
         "/files",
         files={"file": (filename, text.encode("utf-8"), "text/plain")},
@@ -1028,6 +1316,11 @@ def create_batch_job(
     marker: str,
     priority: str = "normal",
 ) -> str:
+    """执行真实运行验收步骤。
+
+    定义：create_batch_job。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     request_id = f"prd074-create-{marker}"
     response = client.post(
         "/batch-jobs",
@@ -1079,6 +1372,11 @@ def wait_database(
     stage: str,
     timeout: float = 45,
 ) -> sqlite3.Row:
+    """执行真实运行验收步骤。
+
+    定义：wait_database。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         connection = connect_database(graph.database_url)
@@ -1093,6 +1391,11 @@ def wait_database(
 
 
 def job_status(graph: RuntimeGraph, job_id: str) -> str | None:
+    """执行真实运行验收步骤。
+
+    定义：job_status。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     connection = connect_database(graph.database_url)
     try:
         row = connection.execute(
@@ -1105,7 +1408,13 @@ def job_status(graph: RuntimeGraph, job_id: str) -> str | None:
 
 
 def revoke_developer_batch_permission(graph: RuntimeGraph) -> None:
-    """Revoke developer batch.write and advance the authoritative role matrix revision/hash."""
+    """执行真实运行验收步骤。
+
+    定义：revoke_developer_batch_permission。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Revoke developer batch.write and advance the authoritative role matrix revision/hash.
+    """
 
     connection = connect_database(graph.database_url)
     try:
@@ -1151,6 +1460,7 @@ def revoke_developer_batch_permission(graph: RuntimeGraph) -> None:
             ),
         )
         connection.commit()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, AcceptanceFailure):
         connection.rollback()
         raise
@@ -1160,6 +1470,11 @@ def revoke_developer_batch_permission(graph: RuntimeGraph) -> None:
 
 @dataclass(slots=True)
 class RealtimeObservation:
+    """执行真实运行验收步骤。
+
+    定义：RealtimeObservation。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     status: int | None = None
     contract_valid: bool = False
     failure: str | None = None
@@ -1169,11 +1484,22 @@ def start_realtime_request(
     graph: RuntimeGraph,
     secrets_: RuntimeSecrets,
 ) -> tuple[threading.Thread, RealtimeObservation]:
-    """Start one public Gateway request whose provider response is held by the stub."""
+    """执行真实运行验收步骤。
+
+    定义：start_realtime_request。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Start one public Gateway request whose provider response is held by the stub.
+    """
 
     observation = RealtimeObservation()
 
     def invoke() -> None:
+        """执行真实运行验收步骤。
+
+        定义：invoke。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         try:
             with httpx.Client(
                 base_url=f"http://{LOOPBACK_HOST}:{GATEWAY_PORT}",
@@ -1205,6 +1531,7 @@ def start_realtime_request(
                     and message.get("content") == secrets_.realtime_answer
                 )
                 del payload, choices, message
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except (httpx.HTTPError, ValueError, TypeError, IndexError):
             observation.failure = "request_failed"
 
@@ -1219,6 +1546,11 @@ def create_webhook_endpoint(
     endpoint_url: str,
     stub: WebhookStub,
 ) -> str:
+    """执行真实运行验收步骤。
+
+    定义：create_webhook_endpoint。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     response = client.post(
         "/webhooks",
         json={
@@ -1239,6 +1571,7 @@ def create_webhook_endpoint(
         "secret",
     )
     stub.set_signing_secret(signing_secret)
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     return signing_secret
 
 
@@ -1249,6 +1582,11 @@ def wait_webhook(
     stage: str,
     timeout: float = 30,
 ) -> dict[str, int]:
+    """执行真实运行验收步骤。
+
+    定义：wait_webhook。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         snapshot = stub.snapshot()
@@ -1264,6 +1602,11 @@ def main_result_contract(
     main_job_id: str,
     secrets_: RuntimeSecrets,
 ) -> dict[str, object]:
+    """执行真实运行验收步骤。
+
+    定义：main_result_contract。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     tasks = client.get(
         f"/batch-jobs/{main_job_id}/tasks",
         headers=auth_headers(admin_token, "prd074-main-tasks"),
@@ -1307,6 +1650,11 @@ def main_result_contract(
 
 
 def busy_recovery_facts(graph: RuntimeGraph, job_id: str) -> dict[str, object]:
+    """执行真实运行验收步骤。
+
+    定义：busy_recovery_facts。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     connection = connect_database(graph.database_url)
     try:
         task = connection.execute(
@@ -1349,7 +1697,13 @@ def busy_recovery_facts(graph: RuntimeGraph, job_id: str) -> dict[str, object]:
 
 
 def owner_chain_facts(graph: RuntimeGraph, job_id: str) -> dict[str, object]:
-    """Cross-check the successful owner chain without returning any business identifiers."""
+    """执行真实运行验收步骤。
+
+    定义：owner_chain_facts。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Cross-check the successful owner chain without returning any business identifiers.
+    """
 
     connection = connect_database(graph.database_url)
     try:
@@ -1452,6 +1806,11 @@ def database_summary(
     outbox_job_id: str,
     revoked_job_id: str,
 ) -> dict[str, object]:
+    """执行真实运行验收步骤。
+
+    定义：database_summary。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     connection = connect_database(graph.database_url)
     try:
         migration = connection.execute(
@@ -1525,6 +1884,7 @@ def database_summary(
         connection.close()
 
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 PROCESS_NAMES = (
     "gateway",
     "control-initial",
@@ -1546,7 +1906,13 @@ def exercise_runtime(
     webhook_url: str,
     processes: OwnedProcessSet,
 ) -> tuple[dict[str, object], tuple[str, ...], str]:
-    """Exercise busy admission, owned-worker recovery, outbox recovery, cancel, and revocation."""
+    """执行真实运行验收步骤。
+
+    定义：exercise_runtime。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Exercise busy admission, owned-worker recovery, outbox recovery, cancel, and revocation.
+    """
 
     gateway = processes.add(
         start_process(
@@ -1898,6 +2264,11 @@ def exercise_runtime(
 
 
 def runtime_service_log_paths(work: Path) -> tuple[Path, ...]:
+    """执行真实运行验收步骤。
+
+    定义：runtime_service_log_paths。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     logs = workspace_path(work / "logs", work, stage="privacy.logs")
     return tuple(
         logs / f"{name}.{stream}.log" for name in PROCESS_NAMES for stream in ("stdout", "stderr")
@@ -1905,11 +2276,21 @@ def runtime_service_log_paths(work: Path) -> tuple[Path, ...]:
 
 
 def sensitive_encodings(value: str) -> tuple[bytes, ...]:
+    """执行真实运行验收步骤。
+
+    定义：sensitive_encodings。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     require(len(value) >= 12, "privacy.value", "too_short")
     return tuple(value.encode(encoding) for encoding in ("utf-8", "utf-16-le", "utf-16-be"))
 
 
 def _safe_scan_file(path: Path, *, stage: str, maximum: int = 128 * 1024 * 1024) -> bytes:
+    """执行真实运行验收步骤。
+
+    定义：_safe_scan_file。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     require(path.exists(), stage, "required_file_missing")
     require(path.is_file() and not path.is_symlink(), stage, "required_file_invalid")
     size = path.stat().st_size
@@ -1925,7 +2306,13 @@ def verify_private_storage(
     log_paths: tuple[Path, ...],
     extra_targets: tuple[Path, ...] = (),
 ) -> dict[str, int]:
-    """Scan database, encrypted objects, spool, every required log, and final evidence."""
+    """执行真实运行验收步骤。
+
+    定义：verify_private_storage。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Scan database, encrypted objects, spool, every required log, and final evidence.
+    """
 
     encodings = tuple(encoded for value in private_values for encoded in sensitive_encodings(value))
     targets: list[tuple[Path, str]] = [(database, "privacy.database")]
@@ -1958,6 +2345,7 @@ def verify_private_storage(
     }
 
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _FORBIDDEN_EVIDENCE_KEYS = {
     "password",
     "access_token",
@@ -1979,11 +2367,22 @@ _FORBIDDEN_EVIDENCE_KEYS = {
 
 
 def assert_safe_evidence(value: object, private_values: tuple[str, ...]) -> None:
-    """Reject secret-shaped keys and any private value in the recursive evidence projection."""
+    """执行真实运行验收步骤。
+
+    定义：assert_safe_evidence。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Reject secret-shaped keys and any private value in the recursive evidence projection.
+    """
 
     encoded_private = tuple(item.encode("utf-8") for item in private_values)
 
     def walk(item: object) -> None:
+        """执行真实运行验收步骤。
+
+        定义：walk。
+        只保存脱敏证据，并负责失败后的进程和临时资源回收。
+        """
         if isinstance(item, dict):
             for key, child in item.items():
                 normalized = str(key).lower()
@@ -1997,6 +2396,7 @@ def assert_safe_evidence(value: object, private_values: tuple[str, ...]) -> None
                 walk(child)
         elif isinstance(item, str):
             body = item.encode("utf-8")
+            # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
             if any(secret in body for secret in encoded_private):
                 raise AcceptanceFailure("evidence", "private_value")
 
@@ -2008,6 +2408,11 @@ def write_evidence(
     payload: dict[str, object],
     private_values: tuple[str, ...],
 ) -> Path:
+    """执行真实运行验收步骤。
+
+    定义：write_evidence。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     assert_safe_evidence(payload, private_values)
     encoded = (json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
         "utf-8"
@@ -2032,7 +2437,13 @@ def write_evidence(
 
 
 def run(run_id: str | None = None) -> Path:
-    """Run the complete self-contained acceptance and return the evidence path."""
+    """执行真实运行验收步骤。
+
+    定义：run。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+
+    Run the complete self-contained acceptance and return the evidence path.
+    """
 
     actual_run_id = safe_run_id(run_id)
     work, artifact = create_run_directories(actual_run_id)
@@ -2111,12 +2522,22 @@ def run(run_id: str | None = None) -> Path:
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """执行真实运行验收步骤。
+
+    定义：parse_arguments。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     parser = argparse.ArgumentParser(description="Run PRD-074 isolated runtime acceptance")
     parser.add_argument("--run-id", default=None)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
+    """执行真实运行验收步骤。
+
+    定义：main。
+    只保存脱敏证据，并负责失败后的进程和临时资源回收。
+    """
     try:
         target = run(parse_arguments(argv).run_id)
     except AcceptanceFailure as exc:

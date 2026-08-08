@@ -1,4 +1,12 @@
-"""Strict public DTOs for PRD-074 Batch jobs.
+"""PRD-074 批任务控制面模块：负责租户内调度、领取、续租、取消、计量和可恢复事件投递。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Strict public DTOs for PRD-074 Batch jobs.
 
 The models intentionally have no tenant, actor, Provider, endpoint, key, prompt, response, lease,
 grant, ciphertext, or internal routing fields. Sensitive names, operation parameters, and results
@@ -32,12 +40,19 @@ BatchTaskStatus = Literal[
 BatchOperation = Literal["summarize", "translate", "classify"]
 BatchPriority = Literal["low", "normal", "high"]
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _FILE_ID = re.compile(r"^file_[0-9a-f]{32}$")
 
 
 class CreateBatchJobRequest(BaseModel):
-    """A fixed operation over one to one hundred already-approved files."""
+    """定义批处理数据边界。
+
+    定义：CreateBatchJobRequest。
+    字段规范化不替代服务端租户隔离和权限校验。
+
+    A fixed operation over one to one hundred already-approved files.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -57,30 +72,41 @@ class CreateBatchJobRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_exact_operation(self) -> CreateBatchJobRequest:
-        """Validate visible text, canonical owners, unique files, and operation exact-set."""
+        """定义批处理数据边界。
+
+        定义：validate_exact_operation。
+        字段规范化不替代服务端租户隔离和权限校验。
+
+        Validate visible text, canonical owners, unique files, and operation exact-set.
+        """
 
         if not self.name.strip() or any(
             unicodedata.category(character) == "Cc" for character in self.name
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("batch.request_invalid")
         if any(
             _RESOURCE_ID.fullmatch(value) is None
             for value in (self.project_id, self.environment_id, self.model_alias_id)
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("batch.request_invalid")
         if (
             any(_FILE_ID.fullmatch(file_id) is None for file_id in self.file_ids)
             or len(set(self.file_ids)) != len(self.file_ids)
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("batch.request_invalid")
         provided = self.model_fields_set
         try:
             if self.operation == "summarize":
                 if provided.intersection({"target_language", "classification_labels"}):
+                    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                     raise BatchContractError()
                 value: dict[str, object] = {"operation": "summarize"}
                 if "output_language" in provided:
                     if self.output_language is None:
+                        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                         raise BatchContractError()
                     value["output_language"] = self.output_language
             elif self.operation == "translate":
@@ -89,6 +115,7 @@ class CreateBatchJobRequest(BaseModel):
                     or self.target_language is None
                     or provided.intersection({"output_language", "classification_labels"})
                 ):
+                    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                     raise BatchContractError()
                 value = {"operation": "translate", "target_language": self.target_language}
             else:
@@ -97,18 +124,27 @@ class CreateBatchJobRequest(BaseModel):
                     or self.classification_labels is None
                     or provided.intersection({"output_language", "target_language"})
                 ):
+                    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                     raise BatchContractError()
                 value = {
                     "operation": "classify",
                     "classification_labels": self.classification_labels,
                 }
             validate_operation_spec(value)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except BatchContractError:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("batch.request_invalid") from None
         return self
 
     def operation_wire(self) -> dict[str, object]:
-        """Return the exact validated operation object for encryption only."""
+        """定义批处理数据边界。
+
+        定义：operation_wire。
+        字段规范化不替代服务端租户隔离和权限校验。
+
+        Return the exact validated operation object for encryption only.
+        """
 
         value: dict[str, object] = {"operation": self.operation}
         if self.operation == "summarize" and self.output_language is not None:
@@ -121,6 +157,11 @@ class CreateBatchJobRequest(BaseModel):
 
 
 class BatchProgress(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchProgress。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     total: int = Field(ge=1, le=100)
@@ -134,6 +175,11 @@ class BatchProgress(BaseModel):
 
 
 class BatchCostSummary(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchCostSummary。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     estimated_cny: str
@@ -143,6 +189,11 @@ class BatchCostSummary(BaseModel):
 
 
 class BatchJobInfo(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchJobInfo。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     batch_job_id: str
@@ -168,6 +219,11 @@ class BatchJobInfo(BaseModel):
 
 
 class BatchJobResponse(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchJobResponse。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     job: BatchJobInfo
@@ -176,6 +232,11 @@ class BatchJobResponse(BaseModel):
 
 
 class BatchJobListResponse(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchJobListResponse。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     jobs: list[BatchJobInfo]
@@ -185,6 +246,11 @@ class BatchJobListResponse(BaseModel):
 
 
 class BatchTaskInfo(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchTaskInfo。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     batch_task_id: str
@@ -205,6 +271,11 @@ class BatchTaskInfo(BaseModel):
 
 
 class BatchTaskListResponse(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchTaskListResponse。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     tasks: list[BatchTaskInfo]
@@ -214,6 +285,11 @@ class BatchTaskListResponse(BaseModel):
 
 
 class BatchTaskResultResponse(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchTaskResultResponse。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     batch_job_id: str
@@ -224,6 +300,11 @@ class BatchTaskResultResponse(BaseModel):
 
 
 class ReconcileBatchTaskRequest(BaseModel):
+    """定义批处理数据边界。
+
+    定义：ReconcileBatchTaskRequest。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     decision: Literal["confirm_not_charged", "confirm_charged"]
@@ -231,12 +312,23 @@ class ReconcileBatchTaskRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_decision(self) -> ReconcileBatchTaskRequest:
+        """定义批处理数据边界。
+
+        定义：validate_decision。
+        字段规范化不替代服务端租户隔离和权限校验。
+        """
         if (self.decision == "confirm_charged") != (self.adjustment_id is not None):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ValueError("batch.request_invalid")
         return self
 
 
 class BatchReconciliationResponse(BaseModel):
+    """定义批处理数据边界。
+
+    定义：BatchReconciliationResponse。
+    字段规范化不替代服务端租户隔离和权限校验。
+    """
     model_config = ConfigDict(extra="forbid", strict=True)
 
     batch_job_id: str

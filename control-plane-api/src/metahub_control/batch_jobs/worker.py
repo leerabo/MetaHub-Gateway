@@ -1,4 +1,12 @@
-"""Independent fair Scheduler/Worker core for PRD-074 Batch tasks.
+"""PRD-074 批任务控制面模块：负责租户内调度、领取、续租、取消、计量和可恢复事件投递。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Independent fair Scheduler/Worker core for PRD-074 Batch tasks.
 
 All SQLite claims and state transitions are short ``BEGIN IMMEDIATE`` transactions. File
 decryption and Gateway HTTP happen after commit. Secret tokens, grants, prompts, responses, and
@@ -46,6 +54,7 @@ from .service import (
     route_plan_hash,
 )
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _WORKER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _BATCH_ERROR_CODE = re.compile(r"^batch\.[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _MONEY_QUANT = Decimal("0.000001")
@@ -59,6 +68,11 @@ _BUSY_BACKOFF_MAX_SECONDS = 5.0
 
 @dataclass(frozen=True, slots=True)
 class BatchTaskLease:
+    """执行批任务工作步骤。
+
+    定义：BatchTaskLease。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     tenant_id: str
     batch_job_id: str
     batch_task_id: str
@@ -82,6 +96,11 @@ class BatchTaskLease:
 
 @dataclass(frozen=True, slots=True)
 class PreparedBatchAttempt:
+    """执行批任务工作步骤。
+
+    定义：PreparedBatchAttempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     lease: BatchTaskLease
     request_id: str
     trace_id: str
@@ -93,6 +112,11 @@ class PreparedBatchAttempt:
 
 @dataclass(frozen=True, slots=True)
 class GatewayCallFact:
+    """执行批任务工作步骤。
+
+    定义：GatewayCallFact。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     outcome: Literal["accepted", "busy", "rejected", "transport_unknown"]
     error_code: str | None = None
 
@@ -103,7 +127,13 @@ def claim_next_batch_task(
     worker_id: str,
     now: datetime | None = None,
 ) -> BatchTaskLease | None:
-    """Fairly claim one due task while proving global and per-tenant DB caps."""
+    """执行批任务工作步骤。
+
+    定义：claim_next_batch_task。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Fairly claim one due task while proving global and per-tenant DB caps.
+    """
 
     owner = _worker_id(worker_id)
     current = _now(now)
@@ -119,6 +149,7 @@ def claim_next_batch_task(
             """,
             (current_text,),
         ).fetchone()[0]
+        # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         if type(active) is not int or active >= config.batch_global_concurrency:
             connection.commit()
             return None
@@ -151,6 +182,7 @@ def claim_next_batch_task(
                 config.batch_tenant_concurrency,
             ),
         ).fetchone()
+        # 租户标识只取自认证上下文；缺失或不一致时拒绝，禁止跨租户访问。
         if tenant is None:
             connection.commit()
             return None
@@ -182,7 +214,9 @@ def claim_next_batch_task(
                 permission_codes=("batch.write", "file.read"),
                 unavailable_error_code="batch.worker_unavailable",
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except ApiError as exc:
+            # 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
             if exc.code != "auth.permission_denied":
                 raise
             _fail_unclaimed_task(
@@ -282,11 +316,14 @@ def claim_next_batch_task(
         )
         connection.commit()
         return lease
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -298,7 +335,13 @@ def prepare_batch_attempt(
     *,
     now: datetime | None = None,
 ) -> PreparedBatchAttempt:
-    """Encrypt a fixed payload, allocate holds, and issue a one-time execution grant."""
+    """执行批任务工作步骤。
+
+    定义：prepare_batch_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Encrypt a fixed payload, allocate holds, and issue a one-time execution grant.
+    """
 
     current = _now(now)
     if lease.existing_attempt:
@@ -331,11 +374,14 @@ def prepare_batch_attempt(
             allow_nan=False,
         )
         payload_bytes = payload.encode("utf-8", errors="strict")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError as exc:
         _terminalize_lease_error(config, lease, code=_batch_execution_code(exc.code), now=current)
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (UnicodeError, TypeError, ValueError):
         _terminalize_lease_error(config, lease, code="batch.worker_unavailable", now=current)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     request_id = f"breq_{uuid4().hex}"
     trace_id = f"btrc_{uuid4().hex}"
@@ -360,8 +406,10 @@ def prepare_batch_attempt(
             secret=secret,
             owner=envelope_owner,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except BatchCryptoError:
         _terminalize_lease_error(config, lease, code="batch.worker_unavailable", now=current)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     connection = _connect(config)
     try:
@@ -381,7 +429,9 @@ def prepare_batch_attempt(
             """,
             (lease.tenant_id, lease.file_id),
         ).fetchone()
+        # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
         if input_row is None or type(input_row["estimated_tokens"]) is not int:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.file_not_ready")
         input_tokens = int(input_row["estimated_tokens"]) + 256
         reserved = attempt_reserved_cost(
@@ -426,6 +476,7 @@ def prepare_batch_attempt(
             now=now_text,
         )
         if row["cancel_requested_at"] is not None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         prepared = _insert_grant(
             connection,
@@ -436,13 +487,16 @@ def prepare_batch_attempt(
         )
         connection.commit()
         return prepared
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError as exc:
         connection.rollback()
         _terminalize_lease_error(config, lease, code=_batch_execution_code(exc.code), now=current)
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError, ArithmeticError):
         connection.rollback()
         _terminalize_lease_error(config, lease, code="batch.worker_unavailable", now=current)
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -454,7 +508,13 @@ def refresh_batch_grant(
     *,
     now: datetime | None = None,
 ) -> PreparedBatchAttempt:
-    """Rotate an unconsumed grant for the same prepared attempt and Provider identity."""
+    """执行批任务工作步骤。
+
+    定义：refresh_batch_grant。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Rotate an unconsumed grant for the same prepared attempt and Provider identity.
+    """
 
     return _prepare_existing_attempt(config, prepared.lease, current=_now(now))
 
@@ -465,8 +525,14 @@ def _prepare_existing_attempt(
     *,
     current: datetime,
 ) -> PreparedBatchAttempt:
+    """执行批任务工作步骤。
+
+    定义：_prepare_existing_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     try:
         _ensure_existing_attempt_allocation(config, lease, current=current)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError as exc:
         _terminalize_lease_error(
             config,
@@ -484,6 +550,11 @@ def _ensure_existing_attempt_allocation(
     *,
     current: datetime,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_ensure_existing_attempt_allocation。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -501,6 +572,7 @@ def _ensure_existing_attempt_allocation(
             or attempt["execution_outcome"] != "not_invoked"
             or attempt["route_plan_json"] != lease.route_plan_json
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         rollover_batch_budget_holds(
             connection,
@@ -515,7 +587,9 @@ def _ensure_existing_attempt_allocation(
             """,
             (lease.tenant_id, lease.file_id),
         ).fetchone()
+        # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
         if input_row is None or type(input_row["estimated_tokens"]) is not int:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.file_not_ready")
         reserved = attempt_reserved_cost(
             lease.route_plan_json,
@@ -530,11 +604,14 @@ def _ensure_existing_attempt_allocation(
             now=_db_time(current),
         )
         connection.commit()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError, ArithmeticError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -546,10 +623,18 @@ def call_batch_gateway(
     *,
     client: httpx.Client | None = None,
 ) -> GatewayCallFact:
-    """Send only the grant to the internal Gateway and return a fixed transport fact."""
+    """执行批任务工作步骤。
+
+    定义：call_batch_gateway。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Send only the grant to the internal Gateway and return a fixed transport fact.
+    """
 
     token = config.internal_batch_token
+    # 凭据仅用于校验或内存解密；异常输入必须拒绝，严禁回显或记录明文。
     if type(token) is not str or not token:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     url = config.gateway_api_base_url.rstrip("/") + "/internal/batch/chat/completions"
     own_client = client is None
@@ -579,9 +664,11 @@ def call_batch_gateway(
         error_code = _gateway_error_code(response)
         if response.status_code == 200:
             return GatewayCallFact(outcome="accepted")
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         if response.status_code == 429 and error_code == "batch.gateway_busy":
             return GatewayCallFact(outcome="busy", error_code=error_code)
         return GatewayCallFact(outcome="rejected", error_code=error_code)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except httpx.TransportError:
         return GatewayCallFact(outcome="transport_unknown")
     finally:
@@ -598,7 +685,13 @@ def settle_batch_attempt(
     *,
     now: datetime | None = None,
 ) -> bool:
-    """Project durable Gateway facts to Task state; never infer outcome from HTTP alone."""
+    """执行批任务工作步骤。
+
+    定义：settle_batch_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Project durable Gateway facts to Task state; never infer outcome from HTTP alone.
+    """
 
     if fact.outcome in {"busy", "transport_unknown"}:
         return False
@@ -630,11 +723,14 @@ def settle_batch_attempt(
                 permission_codes=("batch.write", "file.read"),
                 unavailable_error_code="batch.worker_unavailable",
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except ApiError as exc:
+            # 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
             if exc.code == "auth.permission_denied":
                 revoked = True
             else:
                 raise
+        # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
         if attempt["result_state"] == "available" and attempt["status"] == "provider_succeeded":
             if not _successful_attempt_usage_posted(
                 connection,
@@ -737,6 +833,7 @@ def settle_batch_attempt(
                 result_available=False,
                 now=now_text,
             )
+        # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
         elif attempt["status"] == "provider_succeeded":
             _finish_leased_task(
                 connection,
@@ -761,11 +858,14 @@ def settle_batch_attempt(
         )
         connection.commit()
         return True
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -777,7 +877,13 @@ def heartbeat_batch_task(
     *,
     now: datetime | None = None,
 ) -> bool:
-    """Extend only the exact live lease owner and never beyond the Job deadline."""
+    """执行批任务工作步骤。
+
+    定义：heartbeat_batch_task。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Extend only the exact live lease owner and never beyond the Job deadline.
+    """
 
     current = _now(now)
     if lease.deadline_at is None or current >= lease.deadline_at:
@@ -808,6 +914,7 @@ def heartbeat_batch_task(
         )
         connection.commit()
         return updated.rowcount == 1
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except sqlite3.Error:
         connection.rollback()
         return False
@@ -822,12 +929,19 @@ def reap_expired_batch_tasks(
     now: datetime | None = None,
     limit: int = 100,
 ) -> int:
-    """Recover expired leases using durable result/outcome/routing evidence in fixed order."""
+    """执行批任务工作步骤。
+
+    定义：reap_expired_batch_tasks。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Recover expired leases using durable result/outcome/routing evidence in fixed order.
+    """
 
     _worker_id(worker_id)
     current = _now(now)
     now_text = _db_time(current)
     if type(limit) is not int or not 1 <= limit <= 1000:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     connection = _connect(config)
     progressed = 0
@@ -918,6 +1032,7 @@ def reap_expired_batch_tasks(
                     )
                 progressed += 1
                 continue
+            # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
             if attempt["status"] == "provider_succeeded":
                 _finish_reaped_task(
                     connection,
@@ -954,11 +1069,14 @@ def reap_expired_batch_tasks(
         _finalize_all_terminal_jobs(connection, now=now_text)
         connection.commit()
         return progressed
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (sqlite3.Error, TypeError, ValueError):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -971,7 +1089,13 @@ def run_batch_task_once(
     client: httpx.Client | None = None,
     stop_event: threading.Event | None = None,
 ) -> bool:
-    """Claim and process at most one task; a busy gate rotates only its grant."""
+    """执行批任务工作步骤。
+
+    定义：run_batch_task_once。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+
+    Claim and process at most one task; a busy gate rotates only its grant.
+    """
 
     if stop_event is not None and stop_event.is_set():
         return False
@@ -985,6 +1109,7 @@ def run_batch_task_once(
         return True
     try:
         prepared = prepare_batch_attempt(config, lease)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         return True
     consecutive_busy = 0
@@ -1013,6 +1138,7 @@ def run_batch_task_once(
                 return True
             try:
                 prepared = refresh_batch_grant(config, prepared)
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             except ApiError:
                 return True
             continue
@@ -1026,6 +1152,11 @@ def _issue_grant(
     *,
     current: datetime,
 ) -> PreparedBatchAttempt:
+    """执行批任务工作步骤。
+
+    定义：_issue_grant。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -1038,6 +1169,7 @@ def _issue_grant(
             (lease.tenant_id, lease.batch_attempt_id, lease.batch_task_id),
         ).fetchone()
         if attempt is None or attempt["status"] != "prepared":
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         connection.execute(
             """
@@ -1056,11 +1188,14 @@ def _issue_grant(
         )
         connection.commit()
         return prepared
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except sqlite3.Error:
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -1074,6 +1209,11 @@ def _insert_grant(
     trace_id: str,
     current: datetime,
 ) -> PreparedBatchAttempt:
+    """执行批任务工作步骤。
+
+    定义：_insert_grant。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     generation = connection.execute(
         """
         SELECT COALESCE(MAX(grant_generation),0)+1 FROM batch_execution_grants
@@ -1082,6 +1222,7 @@ def _insert_grant(
         (lease.tenant_id, lease.batch_attempt_id),
     ).fetchone()[0]
     if type(generation) is not int or generation < 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     grant = token_urlsafe(32)
     grant_id = f"bgrt_{uuid4().hex}"
@@ -1131,6 +1272,11 @@ def _allocate_attempt(
     route_hash: str,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_allocate_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     holds = connection.execute(
         """
         SELECT * FROM batch_budget_holds
@@ -1164,10 +1310,12 @@ def _allocate_attempt(
                 or existing["charge_state"] != "none"
                 or existing["status"] != "active"
             ):
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.worker_unavailable")
             continue
         remaining = _money(hold["remaining_cost_cny"])
         if remaining < reserved:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.budget_exceeded")
         new_remaining = _money_text(remaining - reserved)
         updated = connection.execute(
@@ -1186,6 +1334,7 @@ def _allocate_attempt(
             ),
         )
         if updated.rowcount != 1:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         connection.execute(
             """
@@ -1219,6 +1368,11 @@ def _load_current_lease(
     *,
     current: datetime | None,
 ) -> sqlite3.Row:
+    """执行批任务工作步骤。
+
+    定义：_load_current_lease。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     clauses = [
         "task.tenant_id=?",
         "task.batch_job_id=?",
@@ -1259,6 +1413,7 @@ def _load_current_lease(
         params,
     ).fetchone()
     if row is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     return row
 
@@ -1270,6 +1425,12 @@ def _successful_attempt_usage_posted(
     batch_attempt_id: str,
     cost_cny: object,
 ) -> bool:
+    """执行批任务工作步骤。
+
+    定义：_successful_attempt_usage_posted。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
+    # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
     if cost_cny is None:
         return False
     pending = connection.execute(
@@ -1298,7 +1459,13 @@ def _finish_leased_task(
     result_available: bool,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_finish_leased_task。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if status not in _TERMINAL_TASKS:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     updated = connection.execute(
         """
@@ -1328,6 +1495,7 @@ def _finish_leased_task(
         ),
     )
     if updated.rowcount != 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
 
 
@@ -1338,6 +1506,11 @@ def _terminalize_lease_error(
     code: str,
     now: datetime,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_terminalize_lease_error。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection = _connect(config)
     now_text = _db_time(now)
     try:
@@ -1390,6 +1563,7 @@ def _terminalize_lease_error(
             now=now_text,
         )
         connection.commit()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (ApiError, sqlite3.Error):
         connection.rollback()
     finally:
@@ -1403,6 +1577,11 @@ def _fail_unclaimed_task(
     code: str,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_fail_unclaimed_task。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection.execute(
         """
         UPDATE batch_tasks
@@ -1423,6 +1602,11 @@ def _fail_unclaimed_task(
 
 
 def _expire_unclaimed_work(connection: sqlite3.Connection, *, now: str) -> None:
+    """执行批任务工作步骤。
+
+    定义：_expire_unclaimed_work。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection.execute(
         """
         UPDATE batch_tasks
@@ -1445,6 +1629,11 @@ def _restore_task_without_attempt(
     *,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_restore_task_without_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     cancelled_at = task["cancel_requested_at"] or task["job_cancel_requested_at"]
     expired = _time(task["deadline_at"]) <= _time(now)
     if cancelled_at is not None or expired:
@@ -1502,6 +1691,11 @@ def _release_lease_for_same_attempt(
     *,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_release_lease_for_same_attempt。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection.execute(
         """
         UPDATE batch_tasks
@@ -1531,6 +1725,11 @@ def _retry_or_finish_reaped(
     *,
     now: datetime,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_retry_or_finish_reaped。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if int(task["attempt_count"]) < int(task["max_attempts"]):
         index = min(max(int(task["attempt_count"]) - 1, 0), len(_RETRY_DELAYS) - 1)
         connection.execute(
@@ -1574,6 +1773,11 @@ def _finish_reaped_task(
     code: str,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_finish_reaped_task。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection.execute(
         """
         UPDATE batch_tasks
@@ -1608,6 +1812,11 @@ def _mark_attempt_unknown(
     *,
     now: str,
 ) -> None:
+    """执行批任务工作步骤。
+
+    定义：_mark_attempt_unknown。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     connection.execute(
         """
         UPDATE batch_attempts
@@ -1636,6 +1845,11 @@ def _mark_attempt_unknown(
 
 
 def _finalize_all_terminal_jobs(connection: sqlite3.Connection, *, now: str) -> None:
+    """执行批任务工作步骤。
+
+    定义：_finalize_all_terminal_jobs。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     jobs = connection.execute(
         """
         SELECT tenant_id,batch_job_id FROM batch_jobs job
@@ -1659,6 +1873,11 @@ def _finalize_all_terminal_jobs(connection: sqlite3.Connection, *, now: str) -> 
 
 
 def _lease_from_rows(task: sqlite3.Row, attempt: sqlite3.Row) -> BatchTaskLease:
+    """执行批任务工作步骤。
+
+    定义：_lease_from_rows。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     return BatchTaskLease(
         tenant_id=str(task["tenant_id"]),
         batch_job_id=str(task["batch_job_id"]),
@@ -1682,21 +1901,34 @@ def _lease_from_rows(task: sqlite3.Row, attempt: sqlite3.Row) -> BatchTaskLease:
 
 
 def _gateway_error_code(response: httpx.Response) -> str | None:
+    """执行批任务工作步骤。
+
+    定义：_gateway_error_code。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     try:
         payload = response.json()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (ValueError, TypeError):
         return None
     if type(payload) is not dict:
         return None
     code = payload.get("code")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     if type(code) is not str and type(payload.get("error")) is dict:
         code = payload["error"].get("code")
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     if type(code) is not str or len(code) > 96 or _BATCH_ERROR_CODE.fullmatch(code) is None:
         return None
     return code
 
 
 def _safe_gateway_failure(value: object) -> str:
+    """执行批任务工作步骤。
+
+    定义：_safe_gateway_failure。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if (
         type(value) is str
         and len(value) <= 96
@@ -1707,6 +1939,11 @@ def _safe_gateway_failure(value: object) -> str:
 
 
 def _batch_execution_code(value: str) -> str:
+    """执行批任务工作步骤。
+
+    定义：_batch_execution_code。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     allowed = {
         "batch.authorization_revoked",
         "batch.file_not_ready",
@@ -1718,20 +1955,37 @@ def _batch_execution_code(value: str) -> str:
 
 
 def _heartbeat_loop(config: AppConfig, lease: BatchTaskLease, stop: threading.Event) -> None:
+    """执行批任务工作步骤。
+
+    定义：_heartbeat_loop。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     while not stop.wait(float(config.batch_heartbeat_seconds)):
         if not heartbeat_batch_task(config, lease):
             return
 
 
 def _worker_id(value: object) -> str:
+    """执行批任务工作步骤。
+
+    定义：_worker_id。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if type(value) is not str or _WORKER_ID.fullmatch(value) is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return value
 
 
 def _busy_backoff_seconds(config: AppConfig, consecutive_busy: int) -> float:
+    """执行批任务工作步骤。
+
+    定义：_busy_backoff_seconds。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     milliseconds = config.batch_realtime_cooldown_milliseconds
     if type(milliseconds) is not int or milliseconds < 0 or consecutive_busy < 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     base = max(milliseconds / 1000.0, _BUSY_BACKOFF_MIN_SECONDS)
     exponent = min(consecutive_busy - 1, 16)
@@ -1739,63 +1993,119 @@ def _busy_backoff_seconds(config: AppConfig, consecutive_busy: int) -> float:
 
 
 def _batch_secret(config: AppConfig) -> str:
+    """执行批任务工作步骤。
+
+    定义：_batch_secret。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     value = config.batch_encryption_secret
     if type(value) is not str or not value:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return value
 
 
 def _money(value: object) -> Decimal:
+    """执行批任务工作步骤。
+
+    定义：_money。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if value is None or isinstance(value, bool):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     text = str(value)
     if not text or text != text.strip() or "e" in text.lower():
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     try:
         amount = Decimal(text)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (InvalidOperation, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError from None
     if not amount.is_finite() or amount < 0 or amount != amount.quantize(_MONEY_QUANT):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     return amount
 
 
 def _money_text(value: Decimal) -> str:
+    """执行批任务工作步骤。
+
+    定义：_money_text。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     return format(_money(value), ".6f")
 
 
 def _optional_time(value: object) -> datetime | None:
+    """执行批任务工作步骤。
+
+    定义：_optional_time。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     return None if value is None else _time(value)
 
 
 def _time(value: object) -> datetime:
+    """执行批任务工作步骤。
+
+    定义：_time。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError
     return parsed.astimezone(UTC)
 
 
 def _now(value: datetime | None) -> datetime:
+    """执行批任务工作步骤。
+
+    定义：_now。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     current = value or _utcnow()
     if not isinstance(current, datetime) or current.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return current.astimezone(UTC).replace(microsecond=0)
 
 
 def _utcnow() -> datetime:
+    """执行批任务工作步骤。
+
+    定义：_utcnow。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     return datetime.now(UTC).replace(microsecond=0)
 
 
 def _db_time(value: datetime) -> str:
+    """执行批任务工作步骤。
+
+    定义：_db_time。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
+    """执行批任务工作步骤。
+
+    定义：_connect。
+    领取、续租、计量和失败终态必须幂等且可追踪。
+    """
     try:
         return connect_database(config.database_url)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except DbError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 

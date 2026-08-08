@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""数据面限流服务：构造租户、项目、应用、Virtual Key 与全局维度的原子配额请求。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：gateway-data-plane/src/metahub_gateway/rate_limits/service.py
+批任务必须使用内部可信令牌估算，普通请求使用本地估算；限流日志仅保留 request_id 和
+脱敏维度标识，不得记录密钥、Token、Prompt 或 Response。
 """
 
 from __future__ import annotations
@@ -115,7 +115,9 @@ async def enforce_virtual_key_rate_limit(
     try:
         await store.ping()
         if batch_lane:
+            # 批任务限流依赖可信令牌估算；缺失时拒绝，防止绕过租户和全局配额。
             if batch_token_estimate is None:
+                # 批任务限流依赖可信令牌估算；缺失时拒绝，防止绕过租户和全局配额。
                 raise ApiError("batch.execution_invalid")
             estimated_tokens = batch_token_estimate.total_tokens
             reserve_percent = getattr(config, "batch_realtime_reserve_percent", 25)

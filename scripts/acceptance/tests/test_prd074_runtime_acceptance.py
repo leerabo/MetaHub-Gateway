@@ -1,4 +1,13 @@
-"""Safety and source contracts for the PRD-074 self-contained runtime acceptance."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+Safety and source contracts for the PRD-074 self-contained runtime acceptance.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +20,18 @@ import pytest
 
 
 def load_runtime_module():
+    """验证批处理场景。
+
+    定义：load_runtime_module。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     path = Path(__file__).resolve().parents[1] / "prd074-runtime-acceptance.py"
     specification = importlib.util.spec_from_file_location(
         "prd074_runtime_acceptance",
         path,
     )
     if specification is None or specification.loader is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("unable to load PRD-074 runtime acceptance")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
@@ -24,11 +39,18 @@ def load_runtime_module():
     return module
 
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 RUNTIME = load_runtime_module()
 
 
 def test_module_load_is_inert_and_ports_are_frozen() -> None:
-    """Importing the contract must not bind ports or start subprocesses."""
+    """验证批处理场景。
+
+    定义：test_module_load_is_inert_and_ports_are_frozen。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+
+    Importing the contract must not bind ports or start subprocesses.
+    """
 
     assert RUNTIME.FIXED_PORTS == (18740, 18741, 18742, 18743)
     assert RUNTIME.GATEWAY_PORT == 18740
@@ -39,6 +61,11 @@ def test_module_load_is_inert_and_ports_are_frozen() -> None:
 
 
 def test_workspace_and_loopback_guards_fail_closed() -> None:
+    """验证批处理场景。
+
+    定义：test_workspace_and_loopback_guards_fail_closed。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     inside = RUNTIME.workspace_path(
         RUNTIME.ROOT / ".tmp" / "prd074-contract" / "runtime.sqlite3",
         RUNTIME.ROOT / ".tmp",
@@ -72,6 +99,11 @@ def test_workspace_and_loopback_guards_fail_closed() -> None:
 
 
 def test_runtime_secrets_are_random_hidden_and_complete() -> None:
+    """验证批处理场景。
+
+    定义：test_runtime_secrets_are_random_hidden_and_complete。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     first = RUNTIME.RuntimeSecrets.create()
     second = RUNTIME.RuntimeSecrets.create()
     assert first.provider_key != second.provider_key
@@ -100,6 +132,11 @@ def test_runtime_secrets_are_random_hidden_and_complete() -> None:
 
 
 def test_stubs_retain_only_counters_and_synchronization() -> None:
+    """验证批处理场景。
+
+    定义：test_stubs_retain_only_counters_and_synchronization。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     provider = RUNTIME.ProviderStub(RUNTIME.RuntimeSecrets.create())
     webhook = RUNTIME.WebhookStub()
     provider_names = set(vars(provider))
@@ -123,42 +160,97 @@ def test_stubs_retain_only_counters_and_synchronization() -> None:
 
 
 class _FakeStream:
+    """验证批处理场景。
+
+    定义：_FakeStream。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     def __init__(self) -> None:
+        """验证批处理场景。
+
+        定义：__init__。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         self.closed = False
 
     def close(self) -> None:
+        """验证批处理场景。
+
+        定义：close。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         self.closed = True
 
 
 class _FakeProcess:
+    """验证批处理场景。
+
+    定义：_FakeProcess。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     def __init__(self, *, running: bool = True) -> None:
+        """验证批处理场景。
+
+        定义：__init__。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         self.running = running
         self.terminate_calls = 0
         self.kill_calls = 0
         self.wait_calls = 0
 
     def poll(self):
+        """验证批处理场景。
+
+        定义：poll。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         return None if self.running else 0
 
     def terminate(self) -> None:
+        """验证批处理场景。
+
+        定义：terminate。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         self.terminate_calls += 1
         self.running = False
 
     def kill(self) -> None:
+        """验证批处理场景。
+
+        定义：kill。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         self.kill_calls += 1
         self.running = False
 
     def wait(self, timeout: float | None = None) -> int:
+        """验证批处理场景。
+
+        定义：wait。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         del timeout
         self.wait_calls += 1
         return 0
 
 
 def _managed(name: str, process: _FakeProcess):
+    """验证批处理场景。
+
+    定义：_managed。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return RUNTIME.ManagedProcess(name, process, _FakeStream(), _FakeStream())
 
 
 def test_owned_process_cleanup_touches_only_registered_handles() -> None:
+    """验证批处理场景。
+
+    定义：test_owned_process_cleanup_touches_only_registered_handles。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     owned = _FakeProcess()
     unrelated = _FakeProcess()
     item = _managed("owned", owned)
@@ -176,6 +268,11 @@ def test_owned_process_cleanup_touches_only_registered_handles() -> None:
 
 
 def _private_fixture(tmp_path: Path) -> tuple[Path, Path, tuple[Path, ...]]:
+    """验证批处理场景。
+
+    定义：_private_fixture。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "runtime.sqlite3"
     database.write_bytes(b"safe-database")
     storage = tmp_path / "storage"
@@ -190,6 +287,11 @@ def _private_fixture(tmp_path: Path) -> tuple[Path, Path, tuple[Path, ...]]:
 
 
 def test_private_scan_requires_every_log_and_scans_storage(tmp_path: Path) -> None:
+    """验证批处理场景。
+
+    定义：test_private_scan_requires_every_log_and_scans_storage。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database, storage, logs = _private_fixture(tmp_path)
     result = RUNTIME.verify_private_storage(
         database,
@@ -218,6 +320,11 @@ def test_private_scan_rejects_all_supported_encodings(
     tmp_path: Path,
     encoding: str,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_private_scan_rejects_all_supported_encodings。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database, storage, logs = _private_fixture(tmp_path)
     canary = "private-canary-0123456789"
     logs[1].write_bytes(canary.encode(encoding))
@@ -236,6 +343,11 @@ def test_private_scan_rejects_log_directory_and_link_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_private_scan_rejects_log_directory_and_link_contract。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database, storage, logs = _private_fixture(tmp_path)
     logs[0].unlink()
     logs[0].mkdir()
@@ -253,6 +365,11 @@ def test_private_scan_rejects_log_directory_and_link_contract(
     original = Path.is_symlink
 
     def report_link(path: Path) -> bool:
+        """验证批处理场景。
+
+        定义：report_link。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         return path == logs[0] or original(path)
 
     monkeypatch.setattr(Path, "is_symlink", report_link)
@@ -267,6 +384,11 @@ def test_private_scan_rejects_log_directory_and_link_contract(
 
 
 def test_evidence_rejects_sensitive_keys_and_values() -> None:
+    """验证批处理场景。
+
+    定义：test_evidence_rejects_sensitive_keys_and_values。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     private = ("private-evidence-value-0123456789",)
     RUNTIME.assert_safe_evidence(
         {
@@ -298,6 +420,11 @@ def test_owner_chain_traces_usage_through_routing_attempt(
     usage_status: str,
     expected_complete: bool,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_owner_chain_traces_usage_through_routing_attempt。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path / "owner-chain.sqlite3"
     url = f"sqlite:///{database.as_posix()}"
     connection = RUNTIME.connect_database(url)
@@ -363,6 +490,11 @@ def test_owner_chain_traces_usage_through_routing_attempt(
 
 
 def test_source_freezes_migration_process_recovery_and_global_status() -> None:
+    """验证批处理场景。
+
+    定义：test_source_freezes_migration_process_recovery_and_global_status。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     source = (Path(__file__).resolve().parents[1] / "prd074-runtime-acceptance.py").read_text(
         encoding="utf-8"
     )
@@ -380,6 +512,11 @@ def test_source_freezes_migration_process_recovery_and_global_status() -> None:
 
 
 def test_service_environment_keeps_writable_paths_under_run_directory(tmp_path: Path) -> None:
+    """验证批处理场景。
+
+    定义：test_service_environment_keeps_writable_paths_under_run_directory。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     work = tmp_path
     for name in ("temp", "storage", "spool"):
         (work / name).mkdir(exist_ok=True)

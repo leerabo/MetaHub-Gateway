@@ -1,4 +1,13 @@
-"""PRD-074 internal Batch grant consumer and governed non-stream execution route."""
+"""PRD-074 批任务控制面模块：负责租户内调度、领取、续租、取消、计量和可恢复事件投递。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 internal Batch grant consumer and governed non-stream execution route.
+"""
 
 from __future__ import annotations
 
@@ -42,6 +51,7 @@ from .openai_compatible import _handle_gateway_request
 
 router = APIRouter(prefix="/internal/batch", tags=["internal-batch"])
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 _TOKEN_HEADER = "X-MetaHub-Internal-Batch-Token"
 _PROVIDER_ENDPOINT = "chat/completions"
 _AUDIT_ENDPOINT = "/internal/batch/chat/completions"
@@ -55,18 +65,34 @@ _FORBIDDEN_PROXY_HEADERS = (
 
 
 class _DuplicateJsonKey(ValueError):
+    """处理批任务接口边界。
+
+    定义：_DuplicateJsonKey。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     pass
 
 
 @dataclass(frozen=True, slots=True)
 class InternalBatchExecution:
+    """处理批任务接口边界。
+
+    定义：InternalBatchExecution。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     invocation: TrustedGatewayInvocation
     owner: BatchEnvelopeOwner
 
 
 @router.post("/chat/completions")
 async def internal_batch_chat_completions(request: Request) -> JSONResponse:
-    """Consume one exact-owner grant and persist the encrypted result before responding."""
+    """处理批任务接口边界。
+
+    定义：internal_batch_chat_completions。
+    后端统一校验租户权限并返回可追踪错误。
+
+    Consume one exact-owner grant and persist the encrypted result before responding.
+    """
 
     config = _config(request)
     _authenticate_internal_service(request, config)
@@ -78,9 +104,12 @@ async def internal_batch_chat_completions(request: Request) -> JSONResponse:
             realtime_cooldown_milliseconds=config.batch_realtime_cooldown_milliseconds,
         )
         gate_lease = await gate.try_enter_batch()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (RuntimeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     if gate_lease is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.gateway_busy")
 
     execution: InternalBatchExecution | None = None
@@ -100,6 +129,7 @@ async def internal_batch_chat_completions(request: Request) -> JSONResponse:
             trusted_invocation=execution.invocation,
         )
         if isinstance(response, StreamingResponse):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         assistant, input_tokens, output_tokens = _validated_assistant_result(request, response)
         _persist_encrypted_result(
@@ -111,6 +141,7 @@ async def internal_batch_chat_completions(request: Request) -> JSONResponse:
         )
         batch = execution.invocation.batch
         if batch is None:  # pragma: no cover - constructor enforces the source contract.
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         return JSONResponse(
             {
@@ -121,38 +152,56 @@ async def internal_batch_chat_completions(request: Request) -> JSONResponse:
             },
             headers={"Cache-Control": "no-store"},
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError as exc:
         if execution is not None:
             mapped = _record_execution_failure(config, execution, exc.code)
             if mapped != exc.code:
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError(mapped) from None
         raise
     except Exception:
         if execution is not None:
             _record_execution_failure(config, execution, "batch.worker_unavailable")
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         await gate_lease.release()
 
 
 def _authenticate_internal_service(request: Request, config: AppConfig) -> None:
+    """处理批任务接口边界。
+
+    定义：_authenticate_internal_service。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     expected = config.internal_batch_token
     if expected is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     values = tuple(request.headers.getlist(_TOKEN_HEADER))
     if len(values) != 1:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     supplied = values[0]
     try:
         valid = supplied.isascii() and hmac.compare_digest(supplied, expected)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (TypeError, UnicodeError):
         valid = False
     if not valid:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
 
 
 def _validate_request_surface(request: Request) -> None:
+    """处理批任务接口边界。
+
+    定义：_validate_request_surface。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     if request.query_params.multi_items():
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     if (
         request.headers.get("Authorization") is not None
@@ -161,25 +210,35 @@ def _validate_request_surface(request: Request) -> None:
         or request.headers.get("X-MetaHub-Turn-ID") is not None
         or any(request.headers.get(name) is not None for name in _FORBIDDEN_PROXY_HEADERS)
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     content_types = _raw_header_values(request, b"content-type")
     if (
         len(content_types) != 1
         or content_types[0].split(b";", 1)[0].strip().lower() != b"application/json"
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
 
 
 async def _validated_grant_body(request: Request) -> str:
+    """处理批任务接口边界。
+
+    定义：_validated_grant_body。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     try:
         raw = await _read_bounded_body(request)
         payload = json.loads(
             raw.decode("utf-8", errors="strict"),
             object_pairs_hook=_object_without_duplicates,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, UnicodeDecodeError, _DuplicateJsonKey, RecursionError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid") from None
     if type(payload) is not dict or set(payload) != {"grant"}:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     grant = payload["grant"]
     if (
@@ -188,31 +247,48 @@ async def _validated_grant_body(request: Request) -> str:
         or not grant.isascii()
         or any(not (character.isalnum() or character in "-_") for character in grant)
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     return grant
 
 
 async def _read_bounded_body(request: Request) -> bytes:
+    """处理批任务接口边界。
+
+    定义：_read_bounded_body。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     declared = _content_length(request)
     if declared is not None and (declared < 1 or declared > _MAX_WIRE_BODY_BYTES):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     body = bytearray()
     try:
         async for chunk in request.stream():
             if len(body) + len(chunk) > _MAX_WIRE_BODY_BYTES:
+                # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
                 raise ApiError("batch.request_invalid")
             body.extend(chunk)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         raise
     except Exception:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid") from None
     if not body or (declared is not None and declared != len(body)):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     return bytes(body)
 
 
 def _raw_header_values(request: Request, name: bytes) -> tuple[bytes, ...]:
-    """Return every raw ASGI value for one case-insensitive wire header."""
+    """处理批任务接口边界。
+
+    定义：_raw_header_values。
+    后端统一校验租户权限并返回可追踪错误。
+
+    Return every raw ASGI value for one case-insensitive wire header.
+    """
 
     try:
         return tuple(
@@ -220,11 +296,18 @@ def _raw_header_values(request: Request, name: bytes) -> tuple[bytes, ...]:
             for raw_name, value in request.scope.get("headers", ())
             if raw_name.lower() == name
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (AttributeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid") from None
 
 
 def _content_length(request: Request) -> int | None:
+    """处理批任务接口边界。
+
+    定义：_content_length。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     values = _raw_header_values(request, b"content-length")
     if not values:
         return None
@@ -235,11 +318,17 @@ def _content_length(request: Request) -> int | None:
         or len(value) > 12
         or any(character < 48 or character > 57 for character in value)
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.request_invalid")
     return int(value)
 
 
 def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """处理批任务接口边界。
+
+    定义：_object_without_duplicates。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -255,6 +344,11 @@ def _consume_execution_grant(
     request_id: str,
     trace_id: str,
 ) -> InternalBatchExecution:
+    """处理批任务接口边界。
+
+    定义：_consume_execution_grant。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     connection = _connect(config)
     now = _db_now()
     try:
@@ -296,6 +390,7 @@ def _consume_execution_grant(
             (hashlib.sha256(grant.encode("ascii")).hexdigest(), request_id, trace_id, now),
         ).fetchone()
         if row is None:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         tenant_id = str(row["tenant_id"])
         try:
@@ -306,8 +401,10 @@ def _consume_execution_grant(
                 permission_codes=("batch.write", "file.read"),
                 unavailable_error_code="batch.worker_unavailable",
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except ApiError:
             # The internal grant contract never distinguishes revocation from damaged RBAC facts.
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid") from None
         environment = connection.execute(
             """
@@ -385,6 +482,7 @@ def _consume_execution_grant(
             or unixepoch(row["deadline_at"]) <= unixepoch(now)
             or unixepoch(row["lease_expires_at"]) <= unixepoch(now)
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         application_id = (
             str(virtual_key["application_id"])
@@ -398,7 +496,9 @@ def _consume_execution_grant(
             virtual_key_id=str(row["virtual_key_id"]),
             application_id=application_id,
         )
+        # 模型和上游只用授权解析结果；解析失败即停止，不得切换未批准路由。
         if row["attempt_route_plan"] != row["job_route_plan"]:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         allocation_rows = connection.execute(
             """
@@ -437,6 +537,7 @@ def _consume_execution_grant(
             or str(item["hold_budget_date"]) != str(item["budget_date"])
             for item in allocation_rows
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         write_deadline = min(
             _parse_db_time(str(row["deadline_at"])),
@@ -491,6 +592,7 @@ def _consume_execution_grant(
             ),
         )
         if any(cursor.rowcount != 1 for cursor in (grant_cursor, attempt_cursor, task_cursor)):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
 
         owner = BatchEnvelopeOwner(
@@ -513,6 +615,7 @@ def _consume_execution_grant(
             owner=owner,
         )
         if not hmac.compare_digest(expected_hmac, str(row["request_payload_hmac"])):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         messages = _validated_request_payload(plaintext)
         auth_context = GatewayAuthContext(
@@ -568,17 +671,22 @@ def _consume_execution_grant(
         # envelope must not strand the attempt and task in the calling state.
         connection.commit()
         return execution
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         if connection.in_transaction:
             connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except BatchCryptoError:
         if connection.in_transaction:
             connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (DbError, sqlite3.Error, TypeError, ValueError, OverflowError):
         if connection.in_transaction:
             connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -592,11 +700,19 @@ def _validated_route_plan(
     virtual_key_id: str,
     application_id: str | None,
 ) -> tuple[BatchRouteCoverage, str]:
+    """处理批任务接口边界。
+
+    定义：_validated_route_plan。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     if type(value) is not str:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     try:
         payload = json.loads(value, object_pairs_hook=_object_without_duplicates)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, _DuplicateJsonKey, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid") from None
     if type(payload) is not dict or set(payload) != {
         "schema_version",
@@ -607,6 +723,7 @@ def _validated_route_plan(
         "fallback_policy_version",
         "candidates",
     }:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     if (
         payload["schema_version"] != 1
@@ -619,9 +736,11 @@ def _validated_route_plan(
             and type(payload["fallback_policy_version"]) is not int
         )
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     candidates = payload["candidates"]
     if type(candidates) is not list or not 1 <= len(candidates) <= 2:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     parsed: list[BatchRouteCandidateCoverage] = []
     for index, candidate in enumerate(candidates):
@@ -635,9 +754,12 @@ def _validated_route_plan(
             "price_source",
             "price_version",
         }:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         expected_role = "default" if index == 0 else "fallback"
+        # 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
         if candidate["role"] != expected_role or candidate["currency"] != "CNY":
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         try:
             item = BatchRouteCandidateCoverage(
@@ -649,15 +771,19 @@ def _validated_route_plan(
                 price_source=candidate["price_source"],
                 price_version=candidate["price_version"],
             )
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         except ValueError:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid") from None
         if (
             item.input_price_per_1k != candidate["input_price_per_1k"]
             or item.output_price_per_1k != candidate["output_price_per_1k"]
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         parsed.append(item)
     if (len(parsed) == 1) != (payload["fallback_policy_version"] is None):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     canonical = json.dumps(
         payload,
@@ -667,22 +793,32 @@ def _validated_route_plan(
         allow_nan=False,
     )
     if canonical != value:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.execution_invalid")
     return BatchRouteCoverage(tuple(parsed)), hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _validated_request_payload(value: bytes) -> list[dict[str, str]]:
+    """处理批任务接口边界。
+
+    定义：_validated_request_payload。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     try:
         payload = json.loads(
             value.decode("utf-8", errors="strict"),
             object_pairs_hook=_object_without_duplicates,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, UnicodeDecodeError, _DuplicateJsonKey, RecursionError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     if type(payload) is not dict or set(payload) != {"schema_version", "messages"}:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     messages = payload["messages"]
     if payload["schema_version"] != 1 or type(messages) is not list or len(messages) != 2:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     normalized: list[dict[str, str]] = []
     for index, message in enumerate(messages):
@@ -694,6 +830,7 @@ def _validated_request_payload(value: bytes) -> list[dict[str, str]]:
             or type(message["content"]) is not str
             or not message["content"]
         ):
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         normalized.append({"role": role, "content": message["content"]})
     return normalized
@@ -703,12 +840,20 @@ def _validated_assistant_result(
     request: Request,
     response: JSONResponse,
 ) -> tuple[str, int, int]:
+    """处理批任务接口边界。
+
+    定义：_validated_assistant_result。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     try:
         payload = json.loads(bytes(response.body).decode("utf-8", errors="strict"))
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.result_unavailable") from None
     choices = payload.get("choices") if type(payload) is dict else None
     if type(choices) is not list or len(choices) != 1 or type(choices[0]) is not dict:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.result_unavailable")
     message = choices[0].get("message")
     if (
@@ -716,14 +861,18 @@ def _validated_assistant_result(
         or message.get("role") != "assistant"
         or type(message.get("content")) is not str
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.result_unavailable")
     assistant = message["content"]
     try:
         size = len(assistant.encode("utf-8", errors="strict"))
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except UnicodeEncodeError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.result_unavailable") from None
     maximum = min(_config(request).batch_max_result_bytes, MAX_BATCH_RESULT_BYTES)
     if not assistant or not 1 <= size <= maximum:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.result_unavailable")
     usage = getattr(request.state, "batch_gateway_usage", None)
     if (
@@ -731,6 +880,7 @@ def _validated_assistant_result(
         or len(usage) != 2
         or any(type(item) is not int or item < 0 for item in usage)
     ):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return assistant, usage[0], usage[1]
 
@@ -743,8 +893,14 @@ def _persist_encrypted_result(
     input_tokens: int,
     output_tokens: int,
 ) -> None:
+    """处理批任务接口边界。
+
+    定义：_persist_encrypted_result。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     batch = execution.invocation.batch
     if batch is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     try:
         ciphertext = encrypt_batch_result(
@@ -757,7 +913,9 @@ def _persist_encrypted_result(
             secret=config.batch_encryption_secret,
             owner=execution.owner,
         )
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except BatchCryptoError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     connection = _connect(config)
     now = _db_now()
@@ -771,6 +929,7 @@ def _persist_encrypted_result(
             (batch.tenant_id, batch.request_id, batch.trace_id),
         ).fetchone()
         if request_log is None or request_log["status"] != "success":
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.worker_unavailable")
         cursor = connection.execute(
             """
@@ -801,13 +960,17 @@ def _persist_encrypted_result(
             ),
         )
         if cursor.rowcount != 1:
+            # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
             raise ApiError("batch.execution_invalid")
         connection.commit()
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ApiError:
         connection.rollback()
         raise
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (DbError, sqlite3.Error):
         connection.rollback()
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -818,6 +981,11 @@ def _record_execution_failure(
     execution: InternalBatchExecution,
     error_code: str,
 ) -> str:
+    """处理批任务接口边界。
+
+    定义：_record_execution_failure。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     batch = execution.invocation.batch
     if batch is None:
         return "batch.worker_unavailable"
@@ -915,6 +1083,7 @@ def _record_execution_failure(
         )
         connection.commit()
         return mapped
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except (DbError, sqlite3.Error, ValueError, TypeError):
         connection.rollback()
         return "batch.worker_unavailable"
@@ -923,47 +1092,93 @@ def _record_execution_failure(
 
 
 def unixepoch(value: object) -> int:
+    """处理批任务接口边界。
+
+    定义：unixepoch。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     return int(_parse_db_time(str(value)).timestamp())
 
 
 def _parse_db_time(value: str) -> datetime:
+    """处理批任务接口边界。
+
+    定义：_parse_db_time。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ValueError("timezone required")
     return parsed.astimezone(UTC)
 
 
 def _to_db_time(value: datetime) -> str:
+    """处理批任务接口边界。
+
+    定义：_to_db_time。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _db_now() -> str:
+    """处理批任务接口边界。
+
+    定义：_db_now。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     return _to_db_time(datetime.now(UTC))
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
+    """处理批任务接口边界。
+
+    定义：_connect。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     try:
         return connect_database(config.database_url)
+    # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except DbError:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable") from None
 
 
 def _config(request: Request) -> AppConfig:
+    """处理批任务接口边界。
+
+    定义：_config。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     config = getattr(request.app.state, "config", None)
     if not isinstance(config, AppConfig):
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return config
 
 
 def _request_id(request: Request) -> str:
+    """处理批任务接口边界。
+
+    定义：_request_id。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     value = getattr(request.state, "request_id", None)
     if type(value) is not str or not value:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return value
 
 
 def _trace_id(request: Request) -> str:
+    """处理批任务接口边界。
+
+    定义：_trace_id。
+    后端统一校验租户权限并返回可追踪错误。
+    """
     value = getattr(request.state, "trace_id", None)
     if type(value) is not str or not value:
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.worker_unavailable")
     return value

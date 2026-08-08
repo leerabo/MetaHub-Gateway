@@ -1,4 +1,13 @@
-"""PRD-074 internal Batch grant consumption against the real 0067 schema."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 internal Batch grant consumption against the real 0067 schema.
+"""
 
 from __future__ import annotations
 
@@ -43,21 +52,37 @@ from metahub_shared.runtime.config import AppConfig, load_app_config
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.routing_policy import TokenEstimate
 
+# 该常量组统一批任务状态、限额和错误语义，变更时同步契约与测试。
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 SECRET = "test-only-prd074-batch-envelope-secret-0000000001"
 GRANT = "grant_prd074_" + "g" * 43
 
 
 def _url(path: Path) -> str:
+    """验证批处理场景。
+
+    定义：_url。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return f"sqlite:///{path.as_posix()}"
 
 
 def _db_time(value: datetime) -> str:
+    """验证批处理场景。
+
+    定义：_db_time。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 @pytest.fixture(scope="module")
 def migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """验证批处理场景。
+
+    定义：migrated_template。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = tmp_path_factory.mktemp("prd074-gateway-template") / "template.sqlite3"
     database_url = _url(database)
     assert apply_migrations(database_url, migrations_dir=MIGRATIONS_DIR).applied[-1] == "0067"
@@ -69,6 +94,11 @@ def _config(
     monkeypatch: pytest.MonkeyPatch,
     database: Path,
 ) -> AppConfig:
+    """验证批处理场景。
+
+    定义：_config。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     monkeypatch.delenv("METAHUB_CONFIG_FILE", raising=False)
     monkeypatch.setenv("METAHUB_ENV", "dev")
     monkeypatch.setenv("METAHUB_DATABASE_URL", _url(database))
@@ -86,6 +116,11 @@ def _route_plan(
     model_id: str,
     provider_id: str,
 ) -> str:
+    """验证批处理场景。
+
+    定义：_route_plan。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     return json.dumps(
         {
             "schema_version": 1,
@@ -124,6 +159,11 @@ def _prepare_execution(
     with_allocation: bool = True,
     application_id: str | None = None,
 ) -> dict[str, str]:
+    """验证批处理场景。
+
+    定义：_prepare_execution。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     connection = connect_database(_url(database))
     now = datetime.now(UTC).replace(microsecond=0)
     created = now - timedelta(seconds=2)
@@ -541,6 +581,11 @@ def _prepare_execution(
 
 
 def _database_copy(template: Path, destination: Path) -> Path:
+    """验证批处理场景。
+
+    定义：_database_copy。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     shutil.copy2(template, destination)
     return destination
 
@@ -549,6 +594,11 @@ def _add_released_historical_allocation(
     database: Path,
     values: dict[str, str],
 ) -> tuple[str, str]:
+    """验证批处理场景。
+
+    定义：_add_released_historical_allocation。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     old_date = (
         datetime.fromisoformat(values["budget_date"]).date() - timedelta(days=1)
     ).isoformat()
@@ -606,6 +656,11 @@ def _add_released_historical_allocation(
 
 
 def _states(database: Path, values: dict[str, str]) -> tuple[str, str, str]:
+    """验证批处理场景。
+
+    定义：_states。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     connection = connect_database(_url(database))
     states = (
         str(
@@ -636,6 +691,11 @@ def _spooled_usage_record(
     execution: InternalBatchExecution,
     values: dict[str, str],
 ) -> dict[str, object]:
+    """验证批处理场景。
+
+    定义：_spooled_usage_record。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     batch = execution.invocation.batch
     assert batch is not None
     assert batch.token_estimate == TokenEstimate(
@@ -725,6 +785,11 @@ def test_valid_grant_is_consumed_once(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_valid_grant_is_consumed_once。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "valid.sqlite3")
     values = _prepare_execution(database)
     config = _config(monkeypatch, database)
@@ -754,6 +819,11 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "cross-day-latest.sqlite3")
     values = _prepare_execution(database)
     old_date, old_allocation_id = _add_released_historical_allocation(database, values)
@@ -790,6 +860,12 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
     )
 
     def reject_body_estimation(*_args: object, **_kwargs: object) -> TokenEstimate:
+        """验证批处理场景。
+
+        定义：reject_body_estimation。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("Batch budget must not estimate decrypted request content")
 
     monkeypatch.setattr(budget_service, "estimate_request_tokens", reject_body_estimation)
@@ -847,6 +923,11 @@ def test_cross_day_failure_after_posted_usage_ignores_historical_release(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_cross_day_failure_after_posted_usage_ignores_historical_release。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "cross-day-failure.sqlite3")
     values = _prepare_execution(database)
     old_date, old_allocation_id = _add_released_historical_allocation(database, values)
@@ -920,6 +1001,11 @@ def test_grant_owner_and_expiry_fail_closed_without_state_change(
     migrated_template: Path,
     expired_grant: bool,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_grant_owner_and_expiry_fail_closed_without_state_change。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(
         migrated_template,
         tmp_path / f"invalid-{expired_grant}.sqlite3",
@@ -944,6 +1030,11 @@ def test_grant_rejects_damaged_complete_rbac_matrix(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_grant_rejects_damaged_complete_rbac_matrix。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "rbac-integrity.sqlite3")
     values = _prepare_execution(database)
     connection = connect_database(_url(database))
@@ -975,6 +1066,11 @@ def test_grant_rejects_virtual_key_application_rebinding(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_grant_rejects_virtual_key_application_rebinding。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "application-rebind.sqlite3")
     values = _prepare_execution(database, application_id="app_prd074_gateway")
     connection = connect_database(_url(database))
@@ -1005,6 +1101,11 @@ def test_corrupt_payload_hmac_rolls_back_all_grant_state(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_corrupt_payload_hmac_rolls_back_all_grant_state。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "corrupt.sqlite3")
     values = _prepare_execution(database, corrupt_hmac=True)
     config = _config(monkeypatch, database)
@@ -1025,6 +1126,11 @@ def test_grant_consumption_honors_job_max_attempts(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_grant_consumption_honors_job_max_attempts。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "max-attempts.sqlite3")
     values = _prepare_execution(database, max_attempts=1, attempt_count=1)
     config = _config(monkeypatch, database)
@@ -1045,6 +1151,11 @@ def test_grant_consumption_requires_next_attempt_sequence(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_grant_consumption_requires_next_attempt_sequence。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "attempt-sequence.sqlite3")
     values = _prepare_execution(
         database,
@@ -1070,6 +1181,11 @@ def test_spooled_usage_replay_posts_batch_allocation_after_result_persistence(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_spooled_usage_replay_posts_batch_allocation_after_result_persistence。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "usage-replay.sqlite3")
     values = _prepare_execution(database)
     config = _config(monkeypatch, database)
@@ -1164,6 +1280,11 @@ def test_spooled_usage_replay_recovers_attempt_without_allocations(
     monkeypatch: pytest.MonkeyPatch,
     migrated_template: Path,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_spooled_usage_replay_recovers_attempt_without_allocations。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     database = _database_copy(migrated_template, tmp_path / "usage-no-allocation.sqlite3")
     values = _prepare_execution(database, with_allocation=False)
     config = _config(monkeypatch, database)

@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""数据面预算服务：按租户、项目、应用和 Virtual Key 执行成本准入与批任务覆盖校验。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：gateway-data-plane/src/metahub_gateway/budgets/service.py
+预算判断只消费可信路由价格、令牌估算和账本事实；成功与失败均保留 request_id，
+Prompt、Response、Provider Key、Token 和内部端点不得进入日志。
 """
 
 from __future__ import annotations
@@ -98,11 +98,14 @@ def enforce_budget_guard(
 ) -> BudgetGuardResult | None:
     """执行租户、项目、兼容 Application 与 Virtual Key 的逐层日预算准入检查。
 
-    预算检查只读取安全元数据和 token/成本估算；不会记录 Prompt、Response、Authorization、Provider Key 或 Virtual Key 明文。
+    预算检查只读取安全元数据和 token/成本估算；不会记录 Prompt、Response、
+    Authorization、Provider Key 或 Virtual Key 明文。
     """
 
     if batch_context is not None:
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         if route_plan is None:
+            # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
             raise ApiError("batch.execution_invalid")
         return _enforce_batch_budget_coverage(
             config,
@@ -237,7 +240,13 @@ def enforce_budget_guard(
             connection.rollback()
         raise
     # 预算账本或规则读取失败时必须失败关闭，不能让成本保护在异常时静默放行。
-    except (DbError, sqlite3.Error, DecimalException, OverflowError, BudgetSpendUnavailableError) as exc:
+    except (
+        DbError,
+        sqlite3.Error,
+        DecimalException,
+        OverflowError,
+        BudgetSpendUnavailableError,
+    ) as exc:
         if connection is not None:
             connection.rollback()
         _log_budget_unavailable(auth_context, route, endpoint, request_id, trace_id, exc)
@@ -275,16 +284,22 @@ def _enforce_batch_budget_coverage(
     token_estimate: TokenEstimate | None,
     batch_context: TrustedBatchContext,
 ) -> BudgetGuardResult | None:
-    """Validate frozen Batch allocations without creating ordinary request reservations."""
+    """校验批任务冻结路由的最坏成本已被预算预留覆盖，缺失数据时关闭执行。
+
+    Validate frozen Batch allocations without creating ordinary request reservations.
+    """
 
     if (
         batch_context.tenant_id != auth_context.tenant_id
         or batch_context.request_id != request_id
         or batch_context.trace_id != trace_id
     ):
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid")
     _validate_batch_route_coverage(route_plan, batch_context)
+    # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
     if token_estimate is None:
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid")
     estimate_tokens = token_estimate
     expected_cost = _batch_frozen_route_cost(batch_context, estimate_tokens)
@@ -334,6 +349,7 @@ def _enforce_batch_budget_coverage(
             or set(row_by_rule) != expected_rule_ids
             or set(context_by_rule) != expected_rule_ids
         ):
+            # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
             raise ApiError("batch.execution_invalid")
         expected_text = _money_text(expected_cost)
         for rule in rules:
@@ -358,6 +374,7 @@ def _enforce_batch_budget_coverage(
                 or str(row["hold_budget_date"]) != budget_date
                 or str(row["hold_status"]) not in {"active", "settled"}
             ):
+                # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
                 raise ApiError("batch.execution_invalid")
             if get_active_budget_block(
                 connection,
@@ -365,12 +382,15 @@ def _enforce_batch_budget_coverage(
                 budget_rule_id=rule.budget_rule_id,
                 budget_date=budget_date,
             ) is not None:
+                # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
                 raise ApiError("batch.budget_exceeded")
         connection.commit()
+    # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
     except ApiError:
         if connection is not None and connection.in_transaction:
             connection.rollback()
         raise
+    # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
     except (DbError, sqlite3.Error, DecimalException, ValueError, OverflowError) as exc:
         if connection is not None and connection.in_transaction:
             connection.rollback()
@@ -385,6 +405,7 @@ def _enforce_batch_budget_coverage(
                 "payload": {"exception_type": exc.__class__.__name__},
             },
         )
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         if connection is not None:
@@ -400,7 +421,10 @@ def _validate_batch_route_coverage(
     plan: GatewayRoutePlan,
     context: TrustedBatchContext,
 ) -> None:
-    """Require the dynamic Gateway plan to stay inside the frozen ordered candidate plan."""
+    """核对预算覆盖使用的冻结路由集合与任务执行计划完全一致。
+
+    Require the dynamic Gateway plan to stay inside the frozen ordered candidate plan.
+    """
 
     frozen = context.route
     actual = plan.initial_route
@@ -408,15 +432,18 @@ def _validate_batch_route_coverage(
         actual.model_id != frozen.default.model_id
         or actual.provider_id != frozen.default.provider_id
     ):
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid")
     expected_fallback = frozen.fallback
     actual_fallback = plan.fallback_route
     if (expected_fallback is None) != (actual_fallback is None):
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid")
     if expected_fallback is not None and actual_fallback is not None and (
         actual_fallback.model_id != expected_fallback.model_id
         or actual_fallback.provider_id != expected_fallback.provider_id
     ):
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid")
 
 
@@ -424,7 +451,10 @@ def _batch_frozen_route_cost(
     context: TrustedBatchContext,
     token_estimate: TokenEstimate,
 ) -> Decimal:
-    """Calculate the exact worst-case amount from frozen candidate prices."""
+    """按冻结价格和可信令牌估算计算单次批任务最坏成本，禁止使用动态降级价格。
+
+    Calculate the exact worst-case amount from frozen candidate prices.
+    """
 
     try:
         with localcontext() as decimal_context:
@@ -440,7 +470,9 @@ def _batch_frozen_route_cost(
                 for candidate in context.route.candidates
             )
             return total.quantize(MONEY_QUANT, rounding=ROUND_CEILING)
+    # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
     except (DecimalException, ValueError, OverflowError) as exc:
+        # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         raise ApiError("batch.execution_invalid") from exc
 
 def load_policy_budget_remaining(
@@ -501,7 +533,10 @@ def load_policy_budget_remaining(
             connection.close()
 
 
-def apply_budget_decision(context: RequestLogContext, decision: BudgetDecision | None) -> RequestLogContext:
+def apply_budget_decision(
+    context: RequestLogContext,
+    decision: BudgetDecision | None,
+) -> RequestLogContext:
     """把预算命中摘要复制到 RequestLogContext，供成功或失败日志写入 request_logs。"""
 
     if decision is None:
@@ -1354,7 +1389,10 @@ def _most_severe_decision(decisions: list[BudgetDecision]) -> BudgetDecision | N
 
     if not decisions:
         return None
-    exhausted = next((decision for decision in decisions if decision.budget_status == "exhausted"), None)
+    exhausted = next(
+        (decision for decision in decisions if decision.budget_status == "exhausted"),
+        None,
+    )
     return exhausted or decisions[0]
 
 

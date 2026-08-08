@@ -11,7 +11,6 @@ import os
 import re
 from pathlib import Path
 
-
 # 注释门禁的扫描范围、源码后缀和关键治理关键词集中定义，避免后续 PRD 重新降低注释标准。
 ROOT = Path(__file__).resolve().parents[2]
 # 临时目录和验收证据会保存冻结源码副本，其中还可能包含目录联接；它们不是当前维护源码，
@@ -65,43 +64,43 @@ JS_CRITICAL_FLOW_RE = re.compile(r"^\s*(if|else if|else|catch|throw|return|conti
 CRITICAL_BRANCH_TERMS = tuple(
     term.lower()
     for term in (
-    "ApiError(",
-    "ConfigError(",
-    "permission",
-    "role",
-    "tenant_id",
-    "tenant",
-    "auth",
-    "token_hash",
-    "key_hash",
-    "encrypted_key",
-    "provider_key",
-    "authorization",
-    "token",
-    "session",
-    "usage_ledger",
-    "usage",
-    "request_logs",
-    "estimated_cost",
-    "cost_",
-    "currency",
-    "error",
-    "sqlite3.Error",
-    "json.JSONDecodeError",
-    "ValueError",
-    "TypeError",
-    "resolved_model",
-    "model_alias",
-    "model_id",
-    "provider_code",
-    "provider",
-    "upstream",
-    "route",
-    "request_id",
-    "trace_id",
-    "Virtual Key",
-    "Provider Key",
-    "secret",
+        "ApiError(",
+        "ConfigError(",
+        "permission",
+        "role",
+        "tenant_id",
+        "tenant",
+        "auth",
+        "token_hash",
+        "key_hash",
+        "encrypted_key",
+        "provider_key",
+        "authorization",
+        "token",
+        "session",
+        "usage_ledger",
+        "usage",
+        "request_logs",
+        "estimated_cost",
+        "cost_",
+        "currency",
+        "error",
+        "sqlite3.Error",
+        "json.JSONDecodeError",
+        "ValueError",
+        "TypeError",
+        "resolved_model",
+        "model_alias",
+        "model_id",
+        "provider_code",
+        "provider",
+        "upstream",
+        "route",
+        "request_id",
+        "trace_id",
+        "Virtual Key",
+        "Provider Key",
+        "secret",
     )
 )
 CRITICAL_JUMP_TERMS = tuple(
@@ -145,6 +144,59 @@ FROZEN_SQL_COMMENT_EXEMPTIONS: dict[str, tuple[str, frozenset[str]]] = {
                 "ALTER TABLE audit_logs_prd060_new RENAME TO audit_logs;",
                 "INSERT INTO audit_log_export_sequences(tenant_id,audit_log_id)",
                 "INSERT INTO prd060_final_guard(invalid_count)",
+            }
+        ),
+    ),
+    "infra/migrations/0067_batch_scheduler_worker.sql": (
+        "6e02752f1a86fe28cfb8e30ecf534bc88ed064981ab9cbb2710cd732f752f76b",
+        frozenset(
+            {
+                "DROP TABLE IF EXISTS temp.prd074_up_guard;",
+                "INSERT INTO prd074_up_guard(issue_count)",
+                "INSERT INTO rbac_permission_templates_prd074_new(",
+                (
+                    "ALTER TABLE rbac_permission_templates_prd074_new "
+                    "RENAME TO rbac_permission_templates;"
+                ),
+                (
+                    "INSERT INTO rbac_role_permission_templates("
+                    "role_code,permission_code,default_granted)"
+                ),
+                "INSERT INTO permissions_prd074_new(",
+                "ALTER TABLE permissions_prd074_new RENAME TO permissions;",
+                "INSERT INTO role_permissions(",
+                "UPDATE roles",
+                "INSERT INTO roles(",
+                "INSERT INTO permissions(",
+                "INSERT INTO batch_job_event_outbox(",
+                "DROP TABLE IF EXISTS temp.prd074_up_final_guard;",
+                "INSERT INTO prd074_up_final_guard(issue_count)",
+            }
+        ),
+    ),
+    "infra/migrations/0067_batch_scheduler_worker.down.sql": (
+        "5a73497db8a28aa8a642b902f208d5ed71804aa8119cb09e6e160b9e989a81e6",
+        frozenset(
+            {
+                "DROP TABLE IF EXISTS temp.prd074_down_guard;",
+                "INSERT INTO prd074_down_guard(issue_count)",
+                "DROP TABLE IF EXISTS temp.prd074_down_role_guard;",
+                "INSERT INTO prd074_down_role_guard(issue_count)",
+                "DELETE FROM role_permissions",
+                "UPDATE roles",
+                "DELETE FROM rbac_role_permission_templates",
+                "INSERT INTO rbac_permission_templates_prd074_old(",
+                (
+                    "ALTER TABLE rbac_permission_templates_prd074_old "
+                    "RENAME TO rbac_permission_templates;"
+                ),
+                "INSERT INTO permissions_prd074_old(",
+                "ALTER TABLE permissions_prd074_old RENAME TO permissions;",
+                "INSERT INTO roles(",
+                "INSERT INTO permissions(",
+                "INSERT INTO role_permissions(",
+                "DROP TABLE IF EXISTS temp.prd074_down_final_guard;",
+                "INSERT INTO prd074_down_final_guard(issue_count)",
             }
         ),
     ),
@@ -203,9 +255,7 @@ def iter_code_files() -> list[Path]:
             continue
         for current_root, directory_names, file_names in os.walk(source_root, topdown=True):
             # 必须在 walk 读取子目录前原地剪枝；结果阶段再过滤无法阻止目录联接或临时树被访问。
-            directory_names[:] = [
-                name for name in directory_names if name not in EXCLUDED_PARTS
-            ]
+            directory_names[:] = [name for name in directory_names if name not in EXCLUDED_PARTS]
             for filename in file_names:
                 path = Path(current_root) / filename
                 if path.suffix in SOURCE_SUFFIXES:
@@ -220,6 +270,9 @@ def check_file_has_chinese_context(path: Path) -> list[str]:
 
     text = path.read_text(encoding="utf-8")
     if has_head_chinese_context(text):
+        return []
+    # 已应用迁移的任何字节变化都会破坏登记 checksum；只有精确哈希冻结项可沿用历史文件头。
+    if path.suffix == ".sql" and frozen_sql_comment_exemptions(path):
         return []
     return [f"{relative(path)}:1: file header lacks Chinese responsibility/boundary comment"]
 
@@ -335,7 +388,11 @@ def python_constant_names(node: ast.AST) -> list[str]:
         for target in node.targets:
             if isinstance(target, ast.Name) and is_constant_name(target.id):
                 names.append(target.id)
-    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and is_constant_name(node.target.id):
+    elif (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and is_constant_name(node.target.id)
+    ):
         names.append(node.target.id)
     return names
 
@@ -438,8 +495,8 @@ def check_critical_flow(path: Path, flow_re: re.Pattern[str]) -> list[str]:
 def check_css_file(path: Path) -> list[str]:
     """检查大型 CSS 文件是否有足够密度的中文分段说明。
 
-    CSS 没有函数定义，但控制台样式会承载大量业务面板和响应式边界；要求分段说明能让维护者快速定位模块，
-    同时避免为每个选择器写机械注释造成噪音。
+    CSS 没有函数定义，但控制台样式会承载大量业务面板和响应式边界；要求分段说明能让
+    维护者快速定位模块，同时避免为每个选择器写机械注释造成噪音。
     """
 
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -456,12 +513,14 @@ def check_css_file(path: Path) -> list[str]:
     for current in chinese_comment_lines:
         if current - previous > MAX_CSS_SECTION_GAP:
             missing.append(
-                f"{relative(path)}:{previous}: css section gap exceeds {MAX_CSS_SECTION_GAP} lines before line {current}"
+                f"{relative(path)}:{previous}: css section gap exceeds "
+                f"{MAX_CSS_SECTION_GAP} lines before line {current}"
             )
         previous = current
     if len(lines) - previous > MAX_CSS_SECTION_GAP:
         missing.append(
-            f"{relative(path)}:{previous}: css section gap exceeds {MAX_CSS_SECTION_GAP} lines before file end"
+            f"{relative(path)}:{previous}: css section gap exceeds "
+            f"{MAX_CSS_SECTION_GAP} lines before file end"
         )
     return missing
 
@@ -481,7 +540,8 @@ def terms_for_flow_keyword(keyword: str) -> tuple[str, ...]:
 def has_nearby_flow_comment(lines: list[str], flow_index: int) -> bool:
     """检查关键控制流附近是否存在直接解释该判断原因的中文注释。
 
-    只承认分支前方小范围内的注释行，避免文件头、字符串文案或距离很远的 JSDoc 被误判成当前判断的说明。
+    只承认分支前方小范围内的注释行，避免文件头、字符串文案或距离很远的 JSDoc
+    被误判成当前判断的说明。
     """
 
     for probe in range(max(0, flow_index - FLOW_COMMENT_LOOKBACK), flow_index + 1):

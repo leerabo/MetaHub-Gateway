@@ -126,7 +126,10 @@ def _trusted(
     payload: dict[str, object],
     candidates: tuple[SessionRiskRequestIdentity, ...] = (),
 ) -> openai_api.TrustedGatewayInvocation:
-    """Build the complete Enterprise Chat trusted-invocation boundary."""
+    """构造测试专用的可信请求上下文，用于固定会话风险校验的输入边界。
+
+    Build the complete Enterprise Chat trusted-invocation boundary.
+    """
 
     return openai_api.TrustedGatewayInvocation(
         source="enterprise_chat",

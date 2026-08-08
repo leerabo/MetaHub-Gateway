@@ -1,4 +1,13 @@
-"""PRD-074 Gateway admission, trusted invocation, and durable Usage contracts."""
+"""本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+定义：模块职责与安全边界。
+所有调用路径均维持租户隔离、脱敏和失败追踪。
+
+PRD-074 Gateway admission, trusted invocation, and durable Usage contracts.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +64,12 @@ from starlette.requests import Request
 
 
 def _auth(*, tenant_id: str = "tenant_prd074") -> GatewayAuthContext:
+    """验证批处理场景。
+
+    定义：_auth。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
+    # 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
     return GatewayAuthContext(
         tenant_id=tenant_id,
         virtual_key_id="vkey_prd074",
@@ -69,6 +84,11 @@ def _auth(*, tenant_id: str = "tenant_prd074") -> GatewayAuthContext:
 
 
 def _batch_context(*, tenant_id: str = "tenant_prd074") -> TrustedBatchContext:
+    """验证批处理场景。
+
+    定义：_batch_context。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     candidate = BatchRouteCandidateCoverage(
         role="default",
         model_id="model_prd074",
@@ -104,6 +124,11 @@ def _batch_context(*, tenant_id: str = "tenant_prd074") -> TrustedBatchContext:
 
 
 def test_trusted_invocation_rejects_cross_source_and_partial_batch_context() -> None:
+    """验证批处理场景。
+
+    定义：test_trusted_invocation_rejects_cross_source_and_partial_batch_context。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     batch = _batch_context()
     invocation = TrustedGatewayInvocation(
         source="batch",
@@ -139,6 +164,11 @@ def test_trusted_invocation_rejects_cross_source_and_partial_batch_context() -> 
 
 
 def test_internal_batch_token_rejects_missing_wrong_and_duplicate_headers() -> None:
+    """验证批处理场景。
+
+    定义：test_internal_batch_token_rejects_missing_wrong_and_duplicate_headers。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     expected = "test-only-prd074-internal-token"
     config = SimpleNamespace(internal_batch_token=expected)
 
@@ -171,6 +201,11 @@ def test_internal_batch_token_rejects_missing_wrong_and_duplicate_headers() -> N
 async def test_duplicate_batch_tokens_cannot_collide_with_chain_ids(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_duplicate_batch_tokens_cannot_collide_with_chain_ids。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     synthetic_token = "test-only-prd074-duplicate-token-00000001"
     app = create_service_app("gateway-data-plane", "PRD-074 Batch Token Boundary")
     app.state.config = app.state.config.model_copy(
@@ -209,19 +244,50 @@ async def test_duplicate_batch_tokens_cannot_collide_with_chain_ids(
 async def test_public_authentication_precedes_realtime_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_public_authentication_precedes_realtime_gate。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     gate_touched = False
 
     class TrackingLease:
+        """验证批处理场景。
+
+        定义：TrackingLease。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         async def release(self) -> None:
+            """验证批处理场景。
+
+            定义：release。
+            固定租户隔离、权限拒绝、失败追踪和回退边界。
+            """
             return None
 
     class TrackingGate:
+        """验证批处理场景。
+
+        定义：TrackingGate。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         async def enter_realtime(self) -> TrackingLease:
+            """验证批处理场景。
+
+            定义：enter_realtime。
+            固定租户隔离、权限拒绝、失败追踪和回退边界。
+            """
             nonlocal gate_touched
             gate_touched = True
             return TrackingLease()
 
     def reject_authentication(*_args: object, **_kwargs: object) -> None:
+        """验证批处理场景。
+
+        定义：reject_authentication。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
         raise ApiError("gateway.auth_invalid")
 
     monkeypatch.setattr(openai_api, "_config", lambda _request: SimpleNamespace())
@@ -250,9 +316,19 @@ async def test_public_authentication_precedes_realtime_gate(
 
 
 def _wire_request(headers: list[tuple[bytes, bytes]], body: bytes) -> Request:
+    """验证批处理场景。
+
+    定义：_wire_request。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     sent = False
 
     async def receive() -> dict[str, object]:
+        """验证批处理场景。
+
+        定义：receive。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
         nonlocal sent
         if sent:
             return {"type": "http.request", "body": b"", "more_body": False}
@@ -273,6 +349,11 @@ def _wire_request(headers: list[tuple[bytes, bytes]], body: bytes) -> Request:
 
 @pytest.mark.anyio
 async def test_internal_batch_wire_headers_are_exact_and_length_bound() -> None:
+    """验证批处理场景。
+
+    定义：test_internal_batch_wire_headers_are_exact_and_length_bound。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     body = b'{"grant":"grant_test_abcdefghijklmnopqrstuvwxyz0123456789"}'
     length = str(len(body)).encode("ascii")
     valid_headers = [
@@ -313,6 +394,11 @@ async def test_internal_batch_wire_headers_are_exact_and_length_bound() -> None:
 
 @pytest.mark.anyio
 async def test_batch_gate_prioritizes_active_and_recent_realtime_requests() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_gate_prioritizes_active_and_recent_realtime_requests。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     clock = [100.0]
     gate = BatchGatewayGate(
         batch_concurrency=1,
@@ -337,6 +423,11 @@ async def test_batch_gate_prioritizes_active_and_recent_realtime_requests() -> N
 
 @pytest.mark.anyio
 async def test_batch_limit_rejection_does_not_mutate_any_counter() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_limit_rejection_does_not_mutate_any_counter。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     store = InMemoryRateLimitStore()
     first = (
         BatchRateLimitDimension("rpm", "rpm", 1, 2, 90),
@@ -363,6 +454,11 @@ async def test_batch_limit_rejection_does_not_mutate_any_counter() -> None:
 async def test_batch_rate_limit_uses_frozen_token_estimate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_rate_limit_uses_frozen_token_estimate。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     store = InMemoryRateLimitStore()
     rule = RateLimitRule(
         tenant_id="tenant_prd074",
@@ -383,6 +479,12 @@ async def test_batch_rate_limit_uses_frozen_token_estimate(
     )
 
     def reject_body_estimation(*_args: object, **_kwargs: object) -> int:
+        """验证批处理场景。
+
+        定义：reject_body_estimation。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("Batch TPM must not estimate decrypted request content")
 
     monkeypatch.setattr(rate_limit_service, "estimate_request_tokens", reject_body_estimation)
@@ -414,9 +516,20 @@ async def test_batch_rate_limit_uses_frozen_token_estimate(
 def test_batch_routing_uses_frozen_token_estimate_before_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证批处理场景。
+
+    定义：test_batch_routing_uses_frozen_token_estimate_before_payload。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     frozen = TokenEstimate(input_tokens=272, output_tokens=256, truncated=False)
 
     def reject_body_estimation(*_args: object, **_kwargs: object) -> TokenEstimate:
+        """验证批处理场景。
+
+        定义：reject_body_estimation。
+        固定租户隔离、权限拒绝、失败追踪和回退边界。
+        """
+        # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise AssertionError("Batch routing must not estimate decrypted request content")
 
     monkeypatch.setattr(routing_models, "estimate_request_tokens", reject_body_estimation)
@@ -428,6 +541,11 @@ def test_batch_routing_uses_frozen_token_estimate_before_payload(
 
 
 def _canonical_route_plan() -> str:
+    """验证批处理场景。
+
+    定义：_canonical_route_plan。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     payload = {
         "schema_version": 1,
         "model_alias_id": "model_alias_prd074",
@@ -452,6 +570,11 @@ def _canonical_route_plan() -> str:
 
 
 def test_route_plan_and_attempt_payload_are_canonical_exact_sets() -> None:
+    """验证批处理场景。
+
+    定义：test_route_plan_and_attempt_payload_are_canonical_exact_sets。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     value = _canonical_route_plan()
     route, digest = _validated_route_plan(
         value,
@@ -493,6 +616,11 @@ def test_route_plan_and_attempt_payload_are_canonical_exact_sets() -> None:
 
 
 def test_batch_usage_spool_v6_is_exact_and_excludes_sensitive_content() -> None:
+    """验证批处理场景。
+
+    定义：test_batch_usage_spool_v6_is_exact_and_excludes_sensitive_content。
+    固定租户隔离、权限拒绝、失败追踪和回退边界。
+    """
     secret_prompt = "prd074-sensitive-prompt"
     secret_response = "prd074-sensitive-response"
     intent = _prepare_usage_ledger_intent(

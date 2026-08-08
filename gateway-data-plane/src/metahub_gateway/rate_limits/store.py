@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""限流存储适配：为内存与 Redis 后端提供单维和批任务多维原子扣减语义。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：gateway-data-plane/src/metahub_gateway/rate_limits/store.py
+维度键只使用受控标识，Redis 密码仅进入 AUTH 命令；存储失败必须关闭请求，不能以本地
+放行为降级策略，也不得把连接凭据写入日志。
 """
 
 from __future__ import annotations
@@ -24,7 +24,10 @@ class RateLimitStoreUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class BatchRateLimitDimension:
-    """One bounded dimension in an all-or-nothing Batch lane claim."""
+    """描述批任务一次需要原子扣减的限流维度，维度键不包含凭据明文。
+
+    One bounded dimension in an all-or-nothing Batch lane claim.
+    """
 
     limit_type: Literal["rpm", "tpm", "concurrency"]
     key: str
@@ -35,7 +38,10 @@ class BatchRateLimitDimension:
 
 @dataclass(frozen=True, slots=True)
 class BatchRateLimitDecision:
-    """Atomic Batch lane result; a rejection never changes any counter."""
+    """汇总批任务多维限流的原子判定结果和最小重试时间。
+
+    Atomic Batch lane result; a rejection never changes any counter.
+    """
 
     allowed: bool
     limit_type: str | None = None
@@ -62,7 +68,10 @@ class RateLimitCounterStore(Protocol):
         self,
         dimensions: tuple[BatchRateLimitDimension, ...],
     ) -> BatchRateLimitDecision:
-        """Atomically check and increment every configured Batch dimension."""
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Atomically check and increment every configured Batch dimension.
+        """
 
     async def ping(self) -> bool:
         """检查限流计数器存储是否已经连接且可以执行原子计数。"""
@@ -128,7 +137,10 @@ class InMemoryRateLimitStore:
         self,
         dimensions: tuple[BatchRateLimitDimension, ...],
     ) -> BatchRateLimitDecision:
-        """Check all Batch ceilings under one lock and mutate only after all pass."""
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Check all Batch ceilings under one lock and mutate only after all pass.
+        """
 
         self._ensure_available()
         _validate_batch_dimensions(dimensions)
@@ -172,7 +184,11 @@ class InMemoryRateLimitStore:
         """
 
         now = self._now()
-        expired = [key for key, (_value, expires_at) in self._values.items() if expires_at and expires_at <= now]
+        expired = [
+            key
+            for key, (_value, expires_at) in self._values.items()
+            if expires_at and expires_at <= now
+        ]
         for key in expired:
             self._values.pop(key, None)
 
@@ -235,7 +251,10 @@ class RedisRateLimitStore:
         self,
         dimensions: tuple[BatchRateLimitDimension, ...],
     ) -> BatchRateLimitDecision:
-        """Use one Lua script so a rejected Batch claim leaves every Redis key unchanged."""
+        """原子申请批任务全部租户和全局限流维度，任一不足时不消耗任何配额。
+
+        Use one Lua script so a rejected Batch claim leaves every Redis key unchanged.
+        """
 
         _validate_batch_dimensions(dimensions)
         if not dimensions:
@@ -315,7 +334,11 @@ class RedisRateLimitStore:
         except Exception as exc:
             raise RateLimitStoreUnavailable("redis command failed") from exc
 
-    async def _authenticate(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _authenticate(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
         """按需执行 AUTH 和 SELECT。
 
         Redis 密码只进入 AUTH 命令，不写日志；DB 选择失败会被外层统一映射为存储不可用。
@@ -323,7 +346,11 @@ class RedisRateLimitStore:
 
         if self._config.password:
             if self._config.username:
-                writer.write(_encode_command(("AUTH", self._config.username, self._config.password)))
+                writer.write(
+                    _encode_command(
+                        ("AUTH", self._config.username, self._config.password)
+                    )
+                )
             else:
                 writer.write(_encode_command(("AUTH", self._config.password)))
             await writer.drain()
@@ -401,7 +428,10 @@ async def _read_response(reader: asyncio.StreamReader) -> object:
 def _validate_batch_dimensions(
     dimensions: tuple[BatchRateLimitDimension, ...],
 ) -> None:
-    """Reject malformed or duplicate atomic claims before touching counters."""
+    """校验批任务限流维度集合完整、唯一且归属同一请求边界。
+
+    Reject malformed or duplicate atomic claims before touching counters.
+    """
 
     if type(dimensions) is not tuple or any(
         not isinstance(item, BatchRateLimitDimension) for item in dimensions

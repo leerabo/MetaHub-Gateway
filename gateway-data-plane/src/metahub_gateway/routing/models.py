@@ -581,10 +581,16 @@ def _routing_request_token_estimate(
     *,
     trusted_token_estimate: TokenEstimate | None,
 ) -> TokenEstimate:
-    """Use the immutable Batch estimate before considering decrypted request content."""
+    """优先使用内部批任务可信令牌估算，普通请求才允许采用本地估算值。
 
+    Use the immutable Batch estimate before considering decrypted request content.
+    """
+
+    # 内部批任务只接受可信令牌估算；普通估算不得覆盖已冻结的调度输入。
     if trusted_token_estimate is not None:
+        # 内部批任务只接受可信令牌估算；普通估算不得覆盖已冻结的调度输入。
         return trusted_token_estimate
+    # 内部批任务只接受可信令牌估算；普通估算不得覆盖已冻结的调度输入。
     return estimate_request_tokens(request_kind or "", payload or {})
 
 

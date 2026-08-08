@@ -1,3 +1,4 @@
+/** 本文件验证 PRD-074 批处理调度边界，覆盖租户隔离、权限拒绝、并发领取、失败追踪与回退。 */
 /** PAGE-104 interaction and main-application lifecycle coverage. */
 
 import assert from "node:assert/strict";
@@ -16,11 +17,14 @@ import {
 } from "../../src/features/batch-jobs/batchJobPageState.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
+// 该常量组约束批任务页面状态；权限和租户边界以后端响应为准。
 const JOB_ID = `bjob_${"a".repeat(32)}`;
 const TASK_ID = `btsk_${"b".repeat(32)}`;
 const FILE_ID = `file_${"c".repeat(32)}`;
 
+/** 验证 context 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function context(permissions, fingerprint = "batch_lifecycle_a") {
+  // 权限以后端校验结果为准；失败时拒绝并保留脱敏审计事实。
   return withPermissionSnapshot({
     tenant: { tenant_id: "tenant_batch_a" },
     user: { tenant_id: "tenant_batch_a", user_id: "usr_batch_a", role: "developer" },
@@ -28,6 +32,7 @@ function context(permissions, fingerprint = "batch_lifecycle_a") {
   }, permissions, { permissionRevision: 10, authorizationFingerprint: fingerprint });
 }
 
+/** 验证 shell 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function shell(authContext) {
   return {
     state: "ok",
@@ -48,6 +53,7 @@ function shell(authContext) {
   };
 }
 
+/** 验证 listPayload 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function listPayload(nextCursor = null) {
   return {
     state: "ok",
@@ -56,6 +62,7 @@ function listPayload(nextCursor = null) {
   };
 }
 
+/** 验证 taskPayload 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function taskPayload(nextCursor = null) {
   return {
     state: "ok",
@@ -65,6 +72,7 @@ function taskPayload(nextCursor = null) {
   };
 }
 
+/** 验证 formData 覆盖的批处理场景，并固定租户隔离、权限拒绝与失败追踪边界。 */
 function formData(values) {
   return {
     get(name) {

@@ -115,6 +115,7 @@ def load_outstanding_reserved_cny_micros(
         for row in hold_rows:
             total += _reservation_cny_to_micros(row[0])
             if total > MAX_BUDGET_CNY_MICROS:
+                # 预算预留总额必须是有限非负值；无效账本状态立即拒绝，不能静默修正。
                 raise ValueError("budget reservation total invalid")
     if _table_exists(connection, "batch_budget_allocations"):
         allocation_rows = connection.execute(
@@ -129,12 +130,16 @@ def load_outstanding_reserved_cny_micros(
         for row in allocation_rows:
             total += _reservation_cny_to_micros(row[0])
             if total > MAX_BUDGET_CNY_MICROS:
+                # 预算预留总额必须是有限非负值；无效账本状态立即拒绝，不能静默修正。
                 raise ValueError("budget reservation total invalid")
     return total
 
 
 def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    """Check an immutable internal table name without interpolating request data."""
+    """检查预算预留依赖表是否存在，仅用于兼容迁移期的关闭式能力探测。
+
+    Check an immutable internal table name without interpolating request data.
+    """
 
     return (
         connection.execute(

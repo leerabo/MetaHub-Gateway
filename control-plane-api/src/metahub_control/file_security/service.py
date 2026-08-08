@@ -132,7 +132,10 @@ class _PersistedFinding:
 
 @dataclass(frozen=True, slots=True)
 class BatchFileAdmission:
-    """Safe pre-decryption facts used by the Batch create transaction."""
+    """封装批任务入场前可公开的文件标识和令牌估算，不携带文件内容或存储定位。
+
+    Safe pre-decryption facts used by the Batch create transaction.
+    """
 
     file_id: str
     estimated_tokens: int
@@ -140,7 +143,10 @@ class BatchFileAdmission:
 
 @dataclass(frozen=True, slots=True)
 class _BatchFileContextSnapshot:
-    """Owner and admission facts captured on each side of external Blob I/O."""
+    """冻结外部文件读取前后的租户归属、安全报告和提交者事实，用于检测竞态漂移。
+
+    Owner and admission facts captured on each side of external Blob I/O.
+    """
 
     submitted_by_user_id: str
     owner: _FileSecurityOwner
@@ -543,7 +549,9 @@ def validate_file_for_batch_admission(
     tenant_id: str,
     file_id: object,
 ) -> BatchFileAdmission:
-    """Validate a ready, token-estimated, security-allowed file without decrypting it.
+    """在不解密正文的前提下校验文件归属、就绪状态、令牌估算和安全准入。
+
+    Validate a ready, token-estimated, security-allowed file without decrypting it.
 
     The caller must already hold the Batch create transaction and have rechecked
     ``batch.write + file.read``. Cross-tenant, missing, incomplete, and owner-drifted files use
@@ -552,6 +560,7 @@ def validate_file_for_batch_admission(
     """
 
     if not connection.in_transaction:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.worker_unavailable")
     normalized_file_id = _normalize_file_id(file_id)
     try:
@@ -560,13 +569,18 @@ def validate_file_for_batch_admission(
             (tenant_id, normalized_file_id),
         ).fetchone()
         if row is None:
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_not_ready")
         try:
             owner = _owner_from_row(row)
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         except ApiError:
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_not_ready") from None
         estimated_tokens = row["estimated_tokens"]
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         if type(estimated_tokens) is not int or estimated_tokens < 0:
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_not_ready")
         scan_row = _select_authoritative_scan(
             connection,
@@ -575,6 +589,7 @@ def validate_file_for_batch_admission(
             owner=owner,
         )
         if scan_row is None:
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_security_blocked")
         report = _report_response(
             connection,
@@ -588,16 +603,22 @@ def validate_file_for_batch_admission(
             and report.coverage_status == "complete"
             and report.model_access_status == "allowed"
         ):
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_security_blocked")
         return BatchFileAdmission(
             file_id=normalized_file_id,
             estimated_tokens=estimated_tokens,
         )
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except ApiError:
         raise
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except (FileSecurityError, ValidationError):
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.file_security_blocked") from None
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except sqlite3.Error:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.worker_unavailable") from None
 
 
@@ -608,7 +629,9 @@ def build_file_model_context_for_batch(
     batch_job_id: object,
     batch_task_id: object,
 ) -> BoundedFileContext:
-    """Build a bounded context for a durable Batch owner with live actor authorization.
+    """为持久批任务构造有界模型上下文，并在外部读取前后复核归属和实时权限。
+
+    Build a bounded context for a durable Batch owner with live actor authorization.
 
     Job, task, file, and submitting actor are recovered from one tenant-qualified owner graph.
     Two short read snapshots surround Blob I/O: both validate the current full RBAC matrix,
@@ -617,11 +640,15 @@ def build_file_model_context_for_batch(
     actor fields are deliberately not accepted.
     """
 
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     if type(tenant_id) is not str or not tenant_id:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.task_not_found")
     if type(batch_job_id) is not str or _BATCH_JOB_ID.fullmatch(batch_job_id) is None:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.task_not_found")
     if type(batch_task_id) is not str or _BATCH_TASK_ID.fullmatch(batch_task_id) is None:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.task_not_found")
     secret = _file_secret(config)
     connection = _connect(config)
@@ -654,17 +681,23 @@ def build_file_model_context_for_batch(
             batch_task_id=batch_task_id,
         )
         if after != before:
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.file_security_blocked")
         connection.commit()
         return bounded
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except ApiError:
         connection.rollback()
         raise
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except (FileSecurityError, FileContractError, UnicodeError, ValidationError):
         connection.rollback()
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.worker_unavailable") from None
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except sqlite3.Error:
         connection.rollback()
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.worker_unavailable") from None
     finally:
         connection.close()
@@ -677,9 +710,13 @@ def _load_batch_file_context_snapshot(
     batch_job_id: str,
     batch_task_id: str,
 ) -> _BatchFileContextSnapshot:
-    """Read one transaction-bound Batch actor, file owner, and allowed security report."""
+    """在同一租户事务内加载批任务、文件、安全报告和提交者权限的权威快照。
+
+    Read one transaction-bound Batch actor, file owner, and allowed security report.
+    """
 
     if not connection.in_transaction:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.worker_unavailable")
     durable_owner = connection.execute(
         """
@@ -692,6 +729,7 @@ def _load_batch_file_context_snapshot(
         (tenant_id, batch_job_id, batch_task_id),
     ).fetchone()
     if durable_owner is None:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.task_not_found")
     submitted_by_user_id = str(durable_owner["submitted_by_user_id"])
     try:
@@ -702,8 +740,11 @@ def _load_batch_file_context_snapshot(
             permission_codes=("batch.write", "file.read"),
             unavailable_error_code="batch.worker_unavailable",
         )
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except ApiError as exc:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         if exc.code == "auth.permission_denied":
+            # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
             raise ApiError("batch.authorization_revoked") from None
         raise
     file_row = connection.execute(
@@ -711,10 +752,13 @@ def _load_batch_file_context_snapshot(
         (tenant_id, durable_owner["file_id"]),
     ).fetchone()
     if file_row is None:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.file_not_ready")
     try:
         owner = _owner_from_row(file_row)
+    # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
     except ApiError:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.file_not_ready") from None
     scan_row = _select_authoritative_scan(
         connection,
@@ -723,6 +767,7 @@ def _load_batch_file_context_snapshot(
         owner=owner,
     )
     if scan_row is None:
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.file_security_blocked")
     report = _report_response(
         connection,
@@ -736,6 +781,7 @@ def _load_batch_file_context_snapshot(
         and report.coverage_status == "complete"
         and report.model_access_status == "allowed"
     ):
+        # 文件归属、状态或安全结论不满足批处理边界时拒绝，且不回显正文与存储定位。
         raise ApiError("batch.file_security_blocked")
     return _BatchFileContextSnapshot(
         submitted_by_user_id=submitted_by_user_id,
