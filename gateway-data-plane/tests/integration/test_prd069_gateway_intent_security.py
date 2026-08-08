@@ -692,7 +692,7 @@ def test_usage_spool_v4_restores_session_and_legacy_versions_use_safe_defaults()
     assert restored_v1.intent_risk_schedule_status == "disabled"
     assert restored_v1.session_risk_status == "not_applicable"
     with pytest.raises(ValueError, match="finops_spool_payload_version_invalid"):
-        _deserialize_usage_spool_record({**current, "schema_version": 5})
+        _deserialize_usage_spool_record({**current, "schema_version": 6})
     with pytest.raises(ValueError, match="finops_spool_payload_invalid"):
         _deserialize_usage_spool_record(
             {**current, "context": {**current["context"], "unexpected": "field"}}
@@ -1203,6 +1203,21 @@ async def test_provider_response_does_not_wait_for_delayed_light_classifier(
 
         return StreamingResponse(first_chunk(), media_type="text/event-stream")
 
+    def prepare_no_output_rules(
+        _config: object,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        """显式保留 PRD-071 Provider 前门禁，并隔离本测试不关注的持久化 Store。"""
+
+        assert kwargs["scan_mode"] == "non_stream_full"
+        return SimpleNamespace(
+            output_safety_scan_id="oss_" + "e" * 32,
+            tenant_id=kwargs["tenant_id"],
+            request_id=kwargs["request_id"],
+            trace_id=kwargs["trace_id"],
+            scan_status="not_configured",
+        )
+
     monkeypatch.setattr(intent_service, "classify_intent", delayed_classifier)
     monkeypatch.setattr(
         openai_api,
@@ -1211,6 +1226,7 @@ async def test_provider_response_does_not_wait_for_delayed_light_classifier(
     )
     monkeypatch.setattr(openai_api, "enforce_virtual_key_rate_limit", allow_rate)
     monkeypatch.setattr(openai_api, "enforce_budget_guard", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(openai_api, "prepare_output_safety_scan", prepare_no_output_rules)
     monkeypatch.setattr(openai_api, "_log_request_received", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(openai_api, "adapter_for_route", lambda _route: object())
     monkeypatch.setattr(

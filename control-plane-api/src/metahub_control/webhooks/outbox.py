@@ -239,6 +239,7 @@ def process_claimed_replay(
             delivery,
             request_id=f"worker_{claim.dead_letter_event_id}",
             trace_id=f"worker_{claim.replay_delivery_id}",
+            source_lease_guard=None,
         )
         # 生产请求可能在出网期间跨过 lease 到期点；提交前重新取时钟，旧 worker 必须立即失权。
         # 测试显式注入 now 时仍复用固定时间，保证边界用例可确定地推进。

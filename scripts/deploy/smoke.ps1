@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $ResolvedEnvFile)) {
   exit 1
 }
 
-$envValues = Read-MetaHubEnvFile -EnvFile $ResolvedEnvFile
+$envValues = Assert-MetaHubEnvFile -EnvFile $ResolvedEnvFile -RequestId $RequestId
 $services = Invoke-MetaHubSmoke -EnvValues $envValues -RequestId $RequestId -Retries $Retries -DelaySeconds $DelaySeconds
 
 # 登录 smoke 只发送默认管理员凭据，不把密码写入输出；失败则统一归类为健康失败。

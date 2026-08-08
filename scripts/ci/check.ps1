@@ -24,8 +24,17 @@ Invoke-CheckedNative $Python "$Root\scripts\ci\check-comments.py"
 # Provider Adapter 合同是独立合并门禁，必须在全量 pytest 前单独执行；仅依赖 pytest
 # 间接覆盖会让新增 spec 在收集或选择变化时被静默放行。
 $CurrentPowerShell = (Get-Process -Id $PID).Path
-Invoke-CheckedNative $CurrentPowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `
-  "$Root\scripts\ci\provider-adapter-contract-test.ps1" -Mode mock
+$ProviderContractArguments = @(
+  "-NoLogo"
+  "-NoProfile"
+  "-ExecutionPolicy"
+  "Bypass"
+  "-File"
+  "$Root\scripts\ci\provider-adapter-contract-test.ps1"
+  "-Mode"
+  "mock"
+)
+Invoke-CheckedNative -FilePath $CurrentPowerShell -Arguments $ProviderContractArguments
 Invoke-CheckedNative $Python -m pytest
 
 # JavaScript/Node 示例是独立可下载制品，必须按 lockfile 安装并执行自身测试，

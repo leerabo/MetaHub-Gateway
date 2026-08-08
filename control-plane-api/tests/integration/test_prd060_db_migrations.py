@@ -19,7 +19,6 @@ from metahub_shared.db import (
     connect_database,
     rollback_last_migration,
 )
-from metahub_shared.db.errors import DbError
 from metahub_shared.rbac import permission_matrix_sha256
 
 

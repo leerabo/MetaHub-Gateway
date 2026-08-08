@@ -10,7 +10,7 @@ services:
     image: ${METAHUB_IMAGE_PREFIX:-metahub}/gateway:${METAHUB_IMAGE_TAG:-local}
     command: ["python", "-m", "metahub_gateway.main"]
     env_file:
-      - .env.compose
+      - "${METAHUB_COMPOSE_ENV_FILE:-.env.compose}"
     environment:
       PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src
       METAHUB_SERVICE_NAME: metahub-gateway
@@ -40,7 +40,7 @@ services:
     image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
     command: ["python", "-m", "metahub_control.main"]
     env_file:
-      - .env.compose
+      - "${METAHUB_COMPOSE_ENV_FILE:-.env.compose}"
     environment:
       # Control 的会话风险人工处置与 Gateway 共用 Redis Store 合同；三个源码根目录必须
       # 同时存在，否则容器会在导入 metahub_gateway.session_risk 时启动失败。
@@ -70,8 +70,6 @@ services:
       context: ../..
       dockerfile: infra/docker/console.Dockerfile
     image: ${METAHUB_IMAGE_PREFIX:-metahub}/console:${METAHUB_IMAGE_TAG:-local}
-    env_file:
-      - .env.compose
     environment:
       METAHUB_CONSOLE_PORT: "5173"
     ports:

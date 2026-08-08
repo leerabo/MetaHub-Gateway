@@ -457,7 +457,7 @@ async def test_permission_matrix_get_patch_noop_cas_and_event_trace(
         assert matrix.status_code == 200, matrix.text
         matrix_payload = matrix.json()
         assert matrix_payload["request_id"] == "req_prd059_matrix_get"
-        # 当前 0061 栈顶是 revision 6：在 Chat、Prompt 与策略模板后继续加入敏感意图分类权限。
+        # 当前 0066 栈顶是 revision 9：会话风险与文件安全权限也已进入共享目录。
         # 本用例读取运行时完整链，数量和 code 集合都必须精确等于共享权威目录。
         assert len(matrix_payload["permissions"]) == len(PERMISSION_CATALOG)
         assert {item["code"] for item in matrix_payload["permissions"]} == {
@@ -470,7 +470,7 @@ async def test_permission_matrix_get_patch_noop_cas_and_event_trace(
         )
 
         developer = _matrix_role(matrix_payload, "developer")
-        # 当前迁移栈顶是 PRD-066：除验证普通权限撤销外，再显式撤销两项配置迁移权限，
+        # 当前迁移栈顶是 PRD-073：除验证普通权限撤销外，再显式撤销两项配置迁移权限，
         # 保留 chat.use 以验证新增权限也参与同一租户矩阵哈希与 CAS 更新。
         requested_codes = sorted(
             set(developer["permission_codes"])
@@ -565,25 +565,24 @@ async def test_permission_matrix_get_patch_noop_cas_and_event_trace(
     )
     connection.close()
 
-    # 0061 的敏感意图权限和 0060 的策略模板权限均未授予 Developer，且不存在相应业务事实，
-    # 因此可按真实栈顶依次安全收缩；随后 0059 看到仍持有 Prompt 权限的自定义 Developer
-    # 矩阵时，必须在首项 DDL 前失败关闭，不能因新增迁移而跳过原有 down guard。
-    assert rollback_last_migration(database_url).rolled_back == "0061"
-    assert rollback_last_migration(database_url).rolled_back == "0060"
+    # 空 outbox 可安全回退 0066；但上面的后端 PATCH 已产生自定义 Developer 矩阵与不可变授权事件，
+    # 其中仍持有 PRD-073 引入的 file.security.scan。0065 必须在首项持久 DDL 前失败关闭；
+    # PRD-067 迁移专项已在独立历史栈上覆盖 0059 的 Prompt 事实 down guard。
+    assert rollback_last_migration(database_url).rolled_back == "0066"
     with pytest.raises(DbError) as rollback_error:
         rollback_last_migration(database_url)
     assert rollback_error.value.code == "db.migration_failed"
-    assert "prd067_down_business_facts_present" in rollback_error.value.message
+    assert "prd073_down_business_facts_present" in rollback_error.value.message
 
     connection = connect_database(database_url)
     assert connection.execute(
+        "SELECT status FROM schema_migrations WHERE version='0066'"
+    ).fetchone()[0] == "rolled_back"
+    assert connection.execute(
+        "SELECT status FROM schema_migrations WHERE version='0065'"
+    ).fetchone()[0] == "applied"
+    assert connection.execute(
         "SELECT status FROM schema_migrations WHERE version='0061'"
-    ).fetchone()[0] == "rolled_back"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0060'"
-    ).fetchone()[0] == "rolled_back"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0059'"
     ).fetchone()[0] == "applied"
     assert connection.execute(
         "SELECT status FROM schema_migrations WHERE version='0054'"

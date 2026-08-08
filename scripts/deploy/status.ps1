@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $ResolvedEnvFile)) {
   exit 1
 }
 
-$envValues = Read-MetaHubEnvFile -EnvFile $ResolvedEnvFile
+$envValues = Assert-MetaHubEnvFile -EnvFile $ResolvedEnvFile -RequestId $RequestId
 Assert-MetaHubDockerAvailable -RequestId $RequestId
 $composeArgs = Get-MetaHubComposeArgs -EnvFile $ResolvedEnvFile -ProjectName $ProjectName -Profile $Profile
 $psOutput = (& docker @composeArgs ps --format json) -join "`n"

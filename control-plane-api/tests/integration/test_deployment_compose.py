@@ -65,6 +65,9 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     assert "redis:" in compose
     assert "minio:" in compose
     assert "healthcheck:" in compose
+    assert compose.count('${METAHUB_COMPOSE_ENV_FILE:-.env.compose}') == 2
+    console_section = compose.split("  console:", 1)[1].split("  redis:", 1)[0]
+    assert "env_file:" not in console_section
     assert (
         "PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:"
         "/app/control-plane-api/src"
@@ -109,6 +112,50 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
     assert "sk-" not in env_template
     assert "METAHUB_DATABASE_URL=sqlite:///./.data/compose/metahub.db" in env_template
     assert "METAHUB_POSTGRES_PASSWORD=replace-with-generated-postgres-password" in env_template
+
+
+def test_existing_placeholder_env_is_rejected_without_disclosing_values(tmp_path: Path) -> None:
+    """已存在的公开模板不得绕过初始化，也不得把占位值写入错误输出。"""
+
+    env_path = tmp_path / ".env.compose"
+    env_path.write_text(
+        (ROOT / "infra/compose/.env.compose.example").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    module = ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1"
+    command = (
+        f"Import-Module '{ps_single_quote(module)}' -Force; "
+        f"Initialize-MetaHubEnvFile -EnvFile '{ps_single_quote(env_path)}' "
+        "-RequestId 'deploy_placeholder_test' | ConvertTo-Json -Compress"
+    )
+    completed = run_powershell(["-Command", command], expect_success=False)
+    payload = json.loads(completed.stderr)
+
+    assert completed.returncode == 1
+    assert payload["code"] == "deployment.profile_invalid"
+    assert payload["request_id"] == "deploy_placeholder_test"
+    assert "replace-with-generated" not in completed.stdout
+    assert "replace-with-generated" not in completed.stderr
+
+
+def test_compose_args_bind_the_same_custom_env_file_to_services(tmp_path: Path) -> None:
+    """自定义 env 必须同时用于 Compose 插值和 Gateway/Control 容器注入。"""
+
+    env_path = (tmp_path / "custom compose.env").resolve()
+    module = ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1"
+    command = (
+        f"Import-Module '{ps_single_quote(module)}' -Force; "
+        f"$args = Get-MetaHubComposeArgs -EnvFile '{ps_single_quote(env_path)}' "
+        "-ProjectName 'metahub-test' -Profile 'local-sqlite'; "
+        "@{ args = $args; compose_env_file = $env:METAHUB_COMPOSE_ENV_FILE } "
+        "| ConvertTo-Json -Compress"
+    )
+    completed = run_powershell(["-Command", command])
+    payload = json.loads(completed.stdout)
+
+    assert payload["compose_env_file"] == env_path.as_posix()
+    assert payload["args"][0:2] == ["compose", "--env-file"]
+    assert payload["args"][2] == str(env_path)
 
 
 def test_install_dry_run_outputs_request_id_and_does_not_create_env(tmp_path: Path) -> None:
@@ -183,6 +230,16 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_MINIO_SECRET_KEY=" in generated_env
     assert "METAHUB_POSTGRES_PASSWORD=" not in completed.stdout
     assert "METAHUB_MINIO_SECRET_KEY=" not in completed.stdout
+    assert not list(tmp_path.glob(".metahub-env-*"))
+
+    deploy_module = (ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1").read_text(
+        encoding="utf-8"
+    )
+    protect_directory = deploy_module.index(
+        "Protect-MetaHubPrivateDirectory -Directory $temporaryDirectory"
+    )
+    write_secret = deploy_module.index("[System.IO.File]::WriteAllText(")
+    assert protect_directory < write_secret
 
 
 def test_dockerfiles_reference_existing_entrypoints_and_runtime_requirements() -> None:

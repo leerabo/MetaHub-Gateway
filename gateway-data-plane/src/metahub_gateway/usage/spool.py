@@ -19,6 +19,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -34,6 +35,18 @@ logger = logging.getLogger("metahub.gateway.finops_spool")
 MAX_SPOOL_RECORD_BYTES = 16 * 1024
 # 每轮最多恢复 64 条，防止数据库恢复后单个 Gateway worker 长时间占用 SQLite 写锁。
 REPLAY_BATCH_SIZE = 64
+# Windows 上安全软件或文件系统过滤驱动可能让刚完成原子发布的目录枚举短暂返回空；
+# 仅在第一次空扫描时做极小的有界重试，避免把已落盘记录无故推迟到下一轮恢复。
+_WINDOWS_EMPTY_SCAN_RETRIES = 2
+_WINDOWS_EMPTY_SCAN_RETRY_SECONDS = 0.01
+# 同进程已确认发布的 Windows hard-link 目录项偶尔会在精确 rename 时继续短暂返回
+# FileNotFound；该路径只发生在数据库故障落盘恢复，不进入正常模型请求成功热路径。
+_WINDOWS_PUBLISHED_RENAME_RETRIES = 20
+_WINDOWS_PUBLISHED_RENAME_RETRY_SECONDS = 0.025
+# 热路径写入和后台 replay 会构造不同 UsageSpool 实例；同进程登记必须跨实例共享，
+# 才能只重试本进程刚发布的路径，同时避免把普通多 worker 竞争误判为可见性延迟。
+_PUBLISHED_PENDING: set[Path] = set()
+_PUBLISHED_PENDING_LOCK = Lock()
 # HMAC 域和文件名域必须不同，避免同一密钥下的摘要被跨用途复用。
 _CONTENT_HMAC_DOMAIN = b"metahub.finops.usage-spool.v1\x00content\x00"
 _FILENAME_HMAC_DOMAIN = b"metahub.finops.usage-spool.v1\x00filename\x00"
@@ -158,6 +171,7 @@ class UsageSpool:
                 # 同目录 hard-link 发布不会覆盖既有文件；创建成功后删临时名仍保留同一 inode。
                 os.link(temporary, final)
                 _fsync_directory(self.pending)
+                self._remember_pending(final)
                 return True
             # 同身份文件已经存在时必须读取并比较完整 canonical payload，不能直接视为幂等。
             except FileExistsError:
@@ -165,6 +179,7 @@ class UsageSpool:
                 if _canonical_json_bytes(existing) != payload_bytes:
                     # tenant+Usage 身份相同但载荷不同表示冲突，禁止覆盖既有恢复事实。
                     raise UsageSpoolError("finops_spool_identity_conflict") from None
+                self._remember_pending(final)
                 return False
             # 发布失败统一转为安全内部码，不把宿主机路径或系统错误正文写入日志。
             except OSError as exc:
@@ -186,7 +201,7 @@ class UsageSpool:
         self.prepare()
         self._recover_stale_claims()
         claims: list[ClaimedUsageRecord] = []
-        for pending_path in sorted(self.pending.glob("*.json")):
+        for pending_path in self._pending_records():
             if len(claims) >= limit:
                 break
             digest = pending_path.stem
@@ -197,15 +212,32 @@ class UsageSpool:
             claim_path = self.processing / (
                 f"{digest}.{claimed_at}.{self.worker_token}.{uuid4().hex}.claim"
             )
+            remembered = pending_path in self._remembered_pending()
+            rename_retries = (
+                _WINDOWS_PUBLISHED_RENAME_RETRIES
+                if remembered and _is_windows_platform()
+                else 0
+            )
+            claimed = False
             try:
-                os.rename(pending_path, claim_path)
-            # 文件消失表示另一 worker 已成功领取，属于正常竞争而不是数据损坏。
-            except FileNotFoundError:
-                # 另一进程已领取是正常竞争；当前 worker 不读取或删除对方 claim。
+                for rename_attempt in range(rename_retries + 1):
+                    try:
+                        os.rename(pending_path, claim_path)
+                        claimed = True
+                        break
+                    # 文件消失通常表示另一 worker 已领取；仅同进程刚发布的 Windows 路径
+                    # 允许等待目录项完成可见，且始终复用同一个不可覆盖 claim 目标。
+                    except FileNotFoundError:
+                        if rename_attempt >= rename_retries:
+                            break
+                        time.sleep(_WINDOWS_PUBLISHED_RENAME_RETRY_SECONDS)
+                    # 其他 rename 错误可能破坏 claim 原子性，统一失败而不继续读取源文件。
+                    except OSError as exc:
+                        raise UsageSpoolError("finops_spool_claim_failed") from exc
+            finally:
+                self._forget_pending(pending_path)
+            if not claimed:
                 continue
-            # 其他 rename 错误可能破坏 claim 原子性，统一失败而不继续读取源文件。
-            except OSError as exc:
-                raise UsageSpoolError("finops_spool_claim_failed") from exc
             try:
                 payload = self._read_record(claim_path, expected_digest=digest)
             # 已领取记录真实性失败时只能隔离，不能归还 pending 反复重试。
@@ -214,6 +246,43 @@ class UsageSpool:
                 continue
             claims.append(ClaimedUsageRecord(claim_path, digest, payload))
         return claims
+
+    def _pending_records(self) -> list[Path]:
+        """按稳定顺序读取 pending 记录，并收敛 Windows 的短暂空枚举窗口。"""
+
+        records = set(self.pending.glob("*.json")) | self._remembered_pending()
+        if records or not _is_windows_platform():
+            return sorted(records)
+        for _ in range(_WINDOWS_EMPTY_SCAN_RETRIES):
+            time.sleep(_WINDOWS_EMPTY_SCAN_RETRY_SECONDS)
+            records = set(self.pending.glob("*.json")) | self._remembered_pending()
+            if records:
+                return sorted(records)
+        # 高 I/O 负载下 Windows 的通配枚举可能连续返回陈旧空结果；改用一次直接目录枚举，
+        # 仍只接收固定后缀并由后续文件名、类型和 HMAC 校验决定是否领取或隔离。
+        _assert_private_directory(self.pending)
+        records = {
+            path for path in self.pending.iterdir() if path.name.endswith(".json")
+        }
+        return sorted(records | self._remembered_pending())
+
+    def _remember_pending(self, path: Path) -> None:
+        """跨实例登记本进程已确认发布的精确路径，绕过 Windows 陈旧目录枚举。"""
+
+        with _PUBLISHED_PENDING_LOCK:
+            _PUBLISHED_PENDING.add(path)
+
+    def _forget_pending(self, path: Path) -> None:
+        """领取或隔离后清除进程内提示；持久文件状态仍是唯一恢复事实。"""
+
+        with _PUBLISHED_PENDING_LOCK:
+            _PUBLISHED_PENDING.discard(path)
+
+    def _remembered_pending(self) -> set[Path]:
+        """返回当前 spool 的提示快照，避免持锁执行文件系统操作。"""
+
+        with _PUBLISHED_PENDING_LOCK:
+            return {path for path in _PUBLISHED_PENDING if path.parent == self.pending}
 
     def complete(self, claim: ClaimedUsageRecord) -> None:
         """仅在数据库已提交或确认既有正式分录后删除当前 worker 的 claim。"""
@@ -236,19 +305,27 @@ class UsageSpool:
         pending_path = self.pending / f"{claim.digest}.json"
         try:
             os.link(claim.path, pending_path)
+            self._remember_pending(pending_path)
         # pending 同身份文件已存在时必须同时校验真实性和载荷一致性。
         except FileExistsError:
             try:
                 existing = self._read_record(pending_path, expected_digest=claim.digest)
             # 任一现存记录损坏时双边隔离，不能选择其中一份继续入账。
             except UsageSpoolError:
-                self._quarantine_path(pending_path, digest=claim.digest)
-                self._quarantine_path(claim.path, digest=claim.digest)
+                try:
+                    self._quarantine_path(pending_path, digest=claim.digest)
+                    self._quarantine_path(claim.path, digest=claim.digest)
+                finally:
+                    self._forget_pending(pending_path)
                 return
             if _canonical_json_bytes(existing) != _canonical_json_bytes(claim.payload):
-                self._quarantine_path(pending_path, digest=claim.digest)
-                self._quarantine_path(claim.path, digest=claim.digest)
+                try:
+                    self._quarantine_path(pending_path, digest=claim.digest)
+                    self._quarantine_path(claim.path, digest=claim.digest)
+                finally:
+                    self._forget_pending(pending_path)
                 return
+            self._remember_pending(pending_path)
         # hard-link 归还失败时保留原 claim，避免丢失唯一恢复副本。
         except OSError as exc:
             raise UsageSpoolError("finops_spool_release_failed") from exc
@@ -617,6 +694,12 @@ def _assert_no_reparse_ancestors(path: Path) -> None:
         if current == Path(current.anchor):
             return
         current = current.parent
+
+
+def _is_windows_platform() -> bool:
+    """隔离 Windows 枚举兼容分支，使跨平台测试无需修改全局 ``os.name``。"""
+
+    return os.name == "nt"
 
 
 def _assert_private_directory(path: Path) -> None:

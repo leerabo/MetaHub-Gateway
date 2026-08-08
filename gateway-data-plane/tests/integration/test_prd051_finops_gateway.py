@@ -394,11 +394,11 @@ def test_price_snapshot_insert_failure_preserves_original_evidence(
         connection.close()
 
 
-def test_tampered_spool_record_moves_to_quarantine(tmp_path: Path) -> None:
-    """内容被改而 HMAC 未更新时绝不重放，并原子移动到 quarantine。"""
+def _store_tampered_spool_record(tmp_path: Path, *, root_name: str) -> UsageSpool:
+    """创建一条 HMAC 已失配的 pending 记录，供普通与 Windows 回退路径复用。"""
 
     config = SimpleNamespace(
-        finops_usage_spool_root=str(tmp_path / "tamper-spool"),
+        finops_usage_spool_root=str(tmp_path / root_name),
         auth_token_secret="prd051-tamper-test-secret-at-least-32-characters",
         finops_usage_spool_claim_lease_seconds=60,
     )
@@ -432,13 +432,140 @@ def test_tampered_spool_record_moves_to_quarantine(tmp_path: Path) -> None:
         json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
+    return spool
+
+
+def test_tampered_spool_record_moves_to_quarantine(tmp_path: Path) -> None:
+    """内容被改而 HMAC 未更新时绝不重放，并原子移动到 quarantine。"""
+
+    spool = _store_tampered_spool_record(tmp_path, root_name="tamper-spool")
     assert spool.claim_batch() == []
     assert not list(spool.pending.glob("*.json"))
     assert len(list(spool.quarantine.glob("*.bad"))) == 1
 
 
-def test_spool_accepts_legacy_v1_v2_v3_and_current_v4_payloads(tmp_path: Path) -> None:
-    """升级兼容：精确接受历史 v1-v3 与含会话风险摘要的 v4，未知版本仍拒绝。"""
+def test_windows_empty_glob_falls_back_and_quarantines_tampered_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows 通配枚举持续为空时改用一次安全目录枚举，且仍执行完整 HMAC 校验。"""
+
+    writer = _store_tampered_spool_record(tmp_path, root_name="windows-empty-spool")
+    # 显式丢弃进程内提示，模拟 Gateway 重启后只凭持久目录恢复。
+    published_path = next(writer.pending.glob("*.json"))
+    writer._forget_pending(published_path)
+    spool = UsageSpool(
+        SimpleNamespace(
+            finops_usage_spool_root=str(writer.root),
+            auth_token_secret="prd051-tamper-test-secret-at-least-32-characters",
+            finops_usage_spool_claim_lease_seconds=60,
+        )
+    )
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+    pending_scans = 0
+    direct_scans = 0
+
+    def empty_pending_glob(path: Path, pattern: str):
+        """模拟 Windows 过滤驱动让全部有界 glob 重试都暂时不可见。"""
+
+        nonlocal pending_scans
+        if path == spool.pending and pattern == "*.json":
+            pending_scans += 1
+            return iter(())
+        return original_glob(path, pattern)
+
+    def counted_iterdir(path: Path):
+        """记录直接目录枚举只发生一次，并返回真实目录内容。"""
+
+        nonlocal direct_scans
+        if path == spool.pending:
+            direct_scans += 1
+        return original_iterdir(path)
+
+    monkeypatch.setattr(spool_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(Path, "glob", empty_pending_glob)
+    monkeypatch.setattr(Path, "iterdir", counted_iterdir)
+    assert spool.claim_batch() == []
+    assert pending_scans == 3
+    assert direct_scans == 1
+    assert not list(original_glob(spool.pending, "*.json"))
+    assert len(list(original_glob(spool.quarantine, "*.bad"))) == 1
+
+
+def test_cross_instance_pending_hint_survives_empty_directory_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """生产 writer/replay 的不同实例共享刚发布提示，并在目录暂不可见时安全领取。"""
+
+    writer = _store_tampered_spool_record(tmp_path, root_name="pending-hint-spool")
+    spool = UsageSpool(
+        SimpleNamespace(
+            finops_usage_spool_root=str(writer.root),
+            auth_token_secret="prd051-tamper-test-secret-at-least-32-characters",
+            finops_usage_spool_claim_lease_seconds=60,
+        )
+    )
+    original_glob = Path.glob
+    original_rename = spool_module.os.rename
+    pending_scans = 0
+    rename_attempts = 0
+
+    def empty_pending_glob(path: Path, pattern: str):
+        """模拟同进程 reader 暂时无法从通配枚举看见 writer 已发布的记录。"""
+
+        nonlocal pending_scans
+        if path == spool.pending and pattern == "*.json":
+            pending_scans += 1
+            return iter(())
+        return original_glob(path, pattern)
+
+    def delayed_pending_rename(source: object, destination: object) -> None:
+        """模拟 Windows 精确路径在前三次原子领取时仍报告短暂不可见。"""
+
+        nonlocal rename_attempts
+        if Path(source).parent == spool.pending:
+            rename_attempts += 1
+            if rename_attempts <= 3:
+                # 故障只覆盖有界重试窗口，第四次必须调用真实 rename 完成领取。
+                raise FileNotFoundError
+        original_rename(source, destination)
+
+    monkeypatch.setattr(Path, "glob", empty_pending_glob)
+    monkeypatch.setattr(spool_module, "_is_windows_platform", lambda: True)
+    monkeypatch.setattr(spool_module.os, "rename", delayed_pending_rename)
+    monkeypatch.setattr(spool_module.time, "sleep", lambda _seconds: None)
+    assert spool.claim_batch() == []
+    assert pending_scans == 1
+    assert rename_attempts == 4
+    assert not list(original_glob(spool.pending, "*.json"))
+    assert len(list(original_glob(spool.quarantine, "*.bad"))) == 1
+
+
+def test_pending_hint_is_isolated_by_spool_root(tmp_path: Path) -> None:
+    """进程内提示只能被同一 spool 根目录的 replay 实例看见。"""
+
+    writer = _store_tampered_spool_record(tmp_path, root_name="isolated-writer-spool")
+    published_path = next(writer.pending.glob("*.json"))
+    other = UsageSpool(
+        SimpleNamespace(
+            finops_usage_spool_root=str(tmp_path / "isolated-reader-spool"),
+            auth_token_secret="prd051-tamper-test-secret-at-least-32-characters",
+            finops_usage_spool_claim_lease_seconds=60,
+        )
+    )
+    try:
+        assert published_path in writer._remembered_pending()
+        assert other._remembered_pending() == set()
+        assert other.claim_batch() == []
+        assert published_path.is_file()
+    finally:
+        writer._forget_pending(published_path)
+
+
+def test_spool_accepts_legacy_v1_v2_v3_v4_and_current_v5_payloads(tmp_path: Path) -> None:
+    """升级兼容：精确接受历史 v1-v4 与输出安全 v5，未知版本仍拒绝。"""
 
     config = SimpleNamespace(
         finops_usage_spool_root=str(tmp_path / "versioned-spool"),
@@ -451,6 +578,10 @@ def test_spool_accepts_legacy_v1_v2_v3_and_current_v4_payloads(tmp_path: Path) -
         trace_id="trace-prd068-spool-version",
         policy_mask_applied=True,
         policy_mask_policy_id="pol_prd068_mask",
+        output_safety_scan_id="oss_" + "f" * 32,
+        output_safety_scan_status="completed",
+        output_safety_decision="clean",
+        billing_disposition="not_required",
     )
     intent = UsageLedgerIntent(
         usage_ledger_id="usg_" + "b" * 32,
@@ -470,16 +601,29 @@ def test_spool_accepts_legacy_v1_v2_v3_and_current_v4_payloads(tmp_path: Path) -
     )
     current = _serialize_usage_spool_record(context, intent)
     spool = UsageSpool(config)
-    assert current["schema_version"] == 4
+    assert current["schema_version"] == 5
     assert spool.store(current) is True
 
-    # v3 含 PRD-069 intent 字段但不含 PRD-070 会话风险字段；升级期间必须继续可落盘。
-    v3 = {
+    # v4 含 PRD-070 会话风险字段但不含 PRD-071 输出安全四元组。
+    v4 = {
         **current,
-        "schema_version": 3,
+        "schema_version": 4,
         "context": {
             key: value
             for key, value in current["context"].items()
+            if not key.startswith("output_safety_") and key != "billing_disposition"
+        },
+        "usage": {**current["usage"], "usage_ledger_id": "usg_" + "f" * 32},
+    }
+    assert spool.store(v4) is True
+
+    # v3 含 PRD-069 intent 字段但不含 PRD-070 会话风险字段；升级期间必须继续可落盘。
+    v3 = {
+        **v4,
+        "schema_version": 3,
+        "context": {
+            key: value
+            for key, value in v4["context"].items()
             if not key.startswith("session_risk_")
         },
         "usage": {**current["usage"], "usage_ledger_id": "usg_" + "e" * 32},
@@ -513,7 +657,7 @@ def test_spool_accepts_legacy_v1_v2_v3_and_current_v4_payloads(tmp_path: Path) -
     assert spool.store(legacy) is True
 
     # 未来版本可能新增尚未审查的字段，旧进程不能把它宽松解释为当前合同。
-    unsupported = {**current, "schema_version": 5}
+    unsupported = {**current, "schema_version": 6}
     with pytest.raises(UsageSpoolError, match="finops_spool_payload_version_invalid"):
         spool.store(unsupported)
 

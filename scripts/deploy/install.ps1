@@ -41,7 +41,7 @@ try {
   }
 
   $envResult = Initialize-MetaHubEnvFile -EnvFile $ResolvedEnvFile -RequestId $RequestId
-  $envValues = Read-MetaHubEnvFile -EnvFile $ResolvedEnvFile
+  $envValues = Assert-MetaHubEnvFile -EnvFile $ResolvedEnvFile -RequestId $RequestId
 
   Assert-MetaHubDockerAvailable -RequestId $RequestId
   Assert-MetaHubPortsAvailable -EnvValues $envValues -Profile $Profile -RequestId $RequestId

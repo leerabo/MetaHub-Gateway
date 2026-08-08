@@ -17,6 +17,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+!infra/compose/.env.compose.example
+.tools/
 .DS_Store
 Thumbs.db
 .idea/

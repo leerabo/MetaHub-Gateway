@@ -33,7 +33,7 @@ EXPECTED_VERSIONS = [f"{version:04d}" for version in range(1, 51)]
 
 # 历史升级测试复制真实迁移文件到 pytest 临时目录，以精确停在 0049，不修改生产目录。
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
-"""仓库中的生产迁移目录；测试只读取并复制到 D:/MetaHub/.tmp 下的 tmp_path。"""
+"""仓库中的生产迁移目录；测试只读取并复制到 pytest 独占的 tmp_path。"""
 
 # 以下 PRD-058 父子事实必须在 0050 up/down 中逐 rowid 保真，避免只比较行数漏掉漂移。
 PRESERVED_TABLES = (
@@ -48,14 +48,19 @@ PRESERVED_TABLES = (
 NOW = "2026-07-31T10:00:00Z"
 """固定 UTC 时间，避免迁移证据依赖测试机器当前时钟。"""
 
-# PRD-059 专项刻意停在 0050；共享目录已由 PRD-069 提升到 revision 6，因此这里必须显式冻结
-# revision 1 的 48 项历史投影，不能让配置迁移、Chat、两类模板或敏感意图权限反向改写早期语义。
+# PRD-059 专项刻意停在 0050；共享目录已由 PRD-073 提升到 revision 9，因此这里必须显式冻结
+# revision 1 的 48 项历史投影，不能让配置迁移、Chat、两类模板、风险或文件权限反向改写早期语义。
 PRD059_LATER_PERMISSION_CODES = frozenset(
     {
         "chat.use",
         "config.transfer.read",
         "config.transfer.write",
         "intent_risk.classify",
+        "session_risk.read",
+        "session_risk.manage",
+        "file.read",
+        "file.write",
+        "file.security.scan",
         "prompt_template.read",
         "prompt_template.write",
         "prompt_template.use",
@@ -63,7 +68,7 @@ PRD059_LATER_PERMISSION_CODES = frozenset(
         "policy_template.apply",
     }
 )
-"""0050 尚不存在、必须从共享 revision 6 目录中排除的后续权限码。"""
+"""0050 尚不存在、必须从共享 revision 9 目录中排除的后续权限码。"""
 
 
 def _sqlite_url(path: Path) -> str:

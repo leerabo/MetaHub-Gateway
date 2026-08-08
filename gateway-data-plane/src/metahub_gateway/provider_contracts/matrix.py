@@ -109,7 +109,6 @@ def build_contract_matrix(
     catalog = validate_fixture_coverage(fixtures, specs)
     cases: list[ContractCaseDefinition] = []
     for spec in catalog:
-        fixture = fixtures[spec.contract_case_id]
         for auth_type in spec.allowed_auth_types:
             cases.append(
                 ContractCaseDefinition(

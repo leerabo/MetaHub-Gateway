@@ -803,11 +803,14 @@ def test_gatewayctl_powershell_wrapper_runs_outside_repository_without_pythonpat
     environment.pop("PYTHONPATH", None)
     environment["METAHUB_PYTHON"] = sys.executable
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    # 仅为当前测试进程绕过机器级脚本策略；不修改用户策略，且保证真正执行包装脚本合同。
     result = subprocess.run(
         [
             "powershell.exe",
             "-NoLogo",
             "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
             "-File",
             str(REPOSITORY_ROOT / "scripts" / "gatewayctl.ps1"),
             "--help",

@@ -24,7 +24,6 @@ from metahub_shared.runtime.provider_adapter_spec import (
     CLASSIFICATIONS,
     OPTIONAL,
     ProviderAdapterSpec,
-    ProviderAdapterSpecError,
     catalog_identity,
     provider_adapter_specs,
 )

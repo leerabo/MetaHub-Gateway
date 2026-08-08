@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from metahub_shared.prompt_templates import (
@@ -166,10 +167,11 @@ def test_domain_hmacs_are_stable_and_not_interchangeable() -> None:
 
 def test_runtime_config_keeps_prompt_secret_optional_private_and_independent(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """模板密钥缺失不拖垮旧能力，显式值不进入 repr/摘要且不能复用 Auth 密钥。"""
 
-    monkeypatch.chdir("D:/MetaHub/.tmp")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("METAHUB_ENV", "test")
     monkeypatch.delenv("METAHUB_CONFIG_FILE", raising=False)
     monkeypatch.delenv("METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET", raising=False)

@@ -30,7 +30,6 @@ from .models import (
     RequestExplanationSummary,
 )
 from .repository import (
-    BoundedRows,
     ExplanationSnapshot,
     connect_explanation_database,
     insert_request_explanation,

@@ -685,3 +685,8 @@ def test_ci_scripts_wire_independent_gate_before_full_pytest() -> None:
     invocation = check.index("provider-adapter-contract-test.ps1")
     full_pytest = check.index("Invoke-CheckedNative $Python -m pytest")
     assert invocation < full_pytest
+    assert "$ProviderContractArguments = @(" in check
+    assert (
+        "Invoke-CheckedNative -FilePath $CurrentPowerShell "
+        "-Arguments $ProviderContractArguments"
+    ) in check

@@ -40,8 +40,6 @@ from metahub_shared.runtime.provider_adapter_spec import (
 )
 
 from .fixtures import CONTRACT_FIXTURES, SENSITIVE_CANARY
-from . import fixtures as fixtures_module
-from . import matrix as matrix_module
 from .matrix import build_contract_matrix, validate_result_coverage
 from .mock_server import MockRequestObservation, MockResponsePlan, run_mock_upstream
 from .models import (

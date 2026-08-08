@@ -23,6 +23,7 @@ from metahub_gateway.providers.base import (
 )
 from metahub_gateway.routing.attempts import RoutingAttempt
 from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
+from metahub_gateway.session_risk import SessionRiskPreflightResult
 from metahub_gateway.streaming.sessions import StreamSession
 from metahub_gateway.usage.ledger import RequestLogContext
 
@@ -458,12 +459,32 @@ async def test_outer_handler_records_and_settles_cancelled_provider_request(
 
         return rate_lease
 
+    async def preflight_session(*_args: Any, **_kwargs: Any) -> SessionRiskPreflightResult:
+        """取消专项不建立会话身份，但仍显式经过 PRD-070 读取正文前门禁。"""
+
+        # 固定 not_applicable 证明调用已发生，同时不引入该专项无关的 Session Store。
+        return SessionRiskPreflightResult(status="not_applicable", identity=None)
+
+    prepared_output_scan = SimpleNamespace(
+        output_safety_scan_id="oss_" + "c" * 32,
+        tenant_id="tenant-cancel-test",
+        request_id="req-cancel-test",
+        trace_id="trc-cancel-test",
+        scan_status="not_configured",
+    )
+
     monkeypatch.setattr(api_module, "_config", lambda _request: config)
     monkeypatch.setattr(api_module, "_request_id", lambda _request: "req-cancel-test")
     monkeypatch.setattr(api_module, "_trace_id", lambda _request: "trc-cancel-test")
     monkeypatch.setattr(api_module, "authenticate_virtual_key", lambda *_args: auth)
     monkeypatch.setattr(api_module, "_ensure_environment_active", lambda _auth: None)
     monkeypatch.setattr(api_module, "_acquire_policy_snapshot_lease", acquire_policy)
+    monkeypatch.setattr(api_module, "preflight_session_risk", preflight_session)
+    monkeypatch.setattr(
+        api_module,
+        "prepare_output_safety_scan",
+        lambda *_args, **_kwargs: prepared_output_scan,
+    )
     monkeypatch.setattr(
         api_module, "_partial_request_log_context", lambda *_args, **_kwargs: _context()
     )

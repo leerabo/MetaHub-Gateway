@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath $ResolvedEnvFile)) {
   exit 1
 }
 
-$envValues = Read-MetaHubEnvFile -EnvFile $ResolvedEnvFile
+$envValues = Assert-MetaHubEnvFile -EnvFile $ResolvedEnvFile -RequestId $RequestId
 if ($DryRun -or $WhatIfPreference) {
   # start dry-run 只说明将要启动的 profile，不触碰现有 volume。
   Write-MetaHubCliOk -RequestId $RequestId -Payload @{ mode = "dry_run"; profile_id = $Profile; project_name = $ProjectName; env_file = $ResolvedEnvFile }

@@ -53,6 +53,78 @@ function Get-MetaHubEnvValue {
   return $Default
 }
 
+# 已生成的部署 env 必须完整替换公开占位符，并保持各密钥域互不复用。
+function Assert-MetaHubEnvFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$EnvFile,
+    [Parameter(Mandatory = $true)][string]$RequestId
+  )
+
+  $values = Read-MetaHubEnvFile -EnvFile $EnvFile
+  $requiredSecrets = @(
+    "METAHUB_INTERNAL_CONFIG_TOKEN",
+    "METAHUB_INTERNAL_CHAT_TOKEN",
+    "METAHUB_AUTH_TOKEN_SECRET",
+    "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
+    "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
+    "METAHUB_FILE_ENCRYPTION_SECRET",
+    "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+    "METAHUB_SESSION_RISK_HMAC_SECRET",
+    "METAHUB_SEED_ADMIN_PASSWORD",
+    "METAHUB_SEED_PROVIDER_API_KEY",
+    "METAHUB_SEED_VIRTUAL_KEY",
+    "METAHUB_POSTGRES_PASSWORD",
+    "METAHUB_MINIO_ACCESS_KEY",
+    "METAHUB_MINIO_SECRET_KEY"
+  )
+  $invalid = $false
+  foreach ($entry in $values.GetEnumerator()) {
+    if ([string]$entry.Value -like "*replace-with-generated-*") {
+      $invalid = $true
+    }
+  }
+  $seenSecrets = @{}
+  foreach ($key in $requiredSecrets) {
+    if (-not $values.ContainsKey($key)) {
+      $invalid = $true
+      continue
+    }
+    $value = [string]$values[$key]
+    if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -lt 16) {
+      $invalid = $true
+      continue
+    }
+    if ($seenSecrets.ContainsKey($value)) {
+      $invalid = $true
+      continue
+    }
+    $seenSecrets[$value] = $true
+  }
+  foreach ($key in @(
+    "METAHUB_INTERNAL_CONFIG_TOKEN",
+    "METAHUB_INTERNAL_CHAT_TOKEN",
+    "METAHUB_AUTH_TOKEN_SECRET",
+    "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
+    "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
+    "METAHUB_FILE_ENCRYPTION_SECRET",
+    "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+    "METAHUB_SESSION_RISK_HMAC_SECRET"
+  )) {
+    if ($values.ContainsKey($key) -and ([string]$values[$key]).Length -lt 32) {
+      $invalid = $true
+    }
+  }
+  if ($invalid) {
+    Write-MetaHubCliError `
+      -Code "deployment.profile_invalid" `
+      -Message "Compose env secrets are missing, public placeholders, weak, or reused." `
+      -RequestId $RequestId `
+      -Suggestion "Remove the invalid env file and rerun scripts/deploy/install.ps1."
+    exit 1
+  }
+  return $values
+}
+
 # 输出统一 CLI 错误结构，并始终包含 request_id。
 function Write-MetaHubCliError {
   param(
@@ -176,6 +248,58 @@ function New-MetaHubLocalSecret {
   return [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_").TrimEnd("=")
 }
 
+# 生成中的 env 只允许当前服务账号读取；权限设置失败时不得发布目标文件。
+function Protect-MetaHubEnvFile {
+  param([Parameter(Mandatory = $true)][string]$EnvFile)
+
+  if ($env:OS -eq "Windows_NT") {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetOwner($identity)
+    $acl.SetAccessRuleProtection($true, $false)
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+      $identity,
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $acl.AddAccessRule($rule)
+    [System.IO.File]::SetAccessControl($EnvFile, $acl)
+    return
+  }
+  & chmod 600 -- $EnvFile
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to protect compose env file."
+  }
+}
+
+# 先收紧空的临时目录，使 secret 文件从创建起就不暴露在继承权限下。
+function Protect-MetaHubPrivateDirectory {
+  param([Parameter(Mandatory = $true)][string]$Directory)
+
+  if ($env:OS -eq "Windows_NT") {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetOwner($identity)
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+      [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+      $identity,
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      $inheritance,
+      [System.Security.AccessControl.PropagationFlags]::None,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $acl.AddAccessRule($rule)
+    [System.IO.Directory]::SetAccessControl($Directory, $acl)
+    return
+  }
+  & chmod 700 -- $Directory
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to protect compose env staging directory."
+  }
+}
+
 # 首次安装时从 example 生成本地 env，并替换所有 secret 占位符。
 function Initialize-MetaHubEnvFile {
   param(
@@ -184,6 +308,7 @@ function Initialize-MetaHubEnvFile {
   )
 
   if (Test-Path -LiteralPath $EnvFile) {
+    $null = Assert-MetaHubEnvFile -EnvFile $EnvFile -RequestId $RequestId
     return @{ created = $false; admin_password = $null }
   }
   $root = Get-MetaHubRoot
@@ -203,7 +328,13 @@ function Initialize-MetaHubEnvFile {
   $adminPassword = "MetaHub-" + (New-MetaHubLocalSecret -Length 18) + "!1"
   $replacements = @{
     "replace-with-generated-internal-config-token" = (New-MetaHubLocalSecret)
+    "replace-with-generated-internal-chat-token" = (New-MetaHubLocalSecret)
     "replace-with-generated-auth-token-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-provider-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-prompt-template-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-file-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-admin-password" = $adminPassword
     "replace-with-generated-provider-placeholder" = "placeholder-" + (New-MetaHubLocalSecret -Length 12)
     "replace-with-generated-virtual-key" = "mhv_dev_" + (New-MetaHubLocalSecret -Length 24)
@@ -214,7 +345,38 @@ function Initialize-MetaHubEnvFile {
   foreach ($key in $replacements.Keys) {
     $content = $content.Replace($key, [string]$replacements[$key])
   }
-  Set-Content -LiteralPath $EnvFile -Value $content -Encoding UTF8
+  $temporaryDirectory = Join-Path $targetDir ".metahub-env-$([Guid]::NewGuid().ToString("N")).private"
+  $temporaryEnvFile = Join-Path $temporaryDirectory "compose.env"
+  try {
+    New-Item -ItemType Directory -Path $temporaryDirectory -ErrorAction Stop | Out-Null
+    Protect-MetaHubPrivateDirectory -Directory $temporaryDirectory
+    [System.IO.File]::WriteAllText(
+      $temporaryEnvFile,
+      $content,
+      [System.Text.UTF8Encoding]::new($false)
+    )
+    Protect-MetaHubEnvFile -EnvFile $temporaryEnvFile
+    Move-Item -LiteralPath $temporaryEnvFile -Destination $EnvFile -ErrorAction Stop
+  }
+  catch {
+    $failure = $_
+    if (Test-Path -LiteralPath $temporaryEnvFile) {
+      Remove-Item -LiteralPath $temporaryEnvFile -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $temporaryDirectory) {
+      Remove-Item -LiteralPath $temporaryDirectory -Force -ErrorAction SilentlyContinue
+    }
+    # 并发安装只允许一个创建者；后来者接受并验证赢家的完整文件，绝不覆盖。
+    if (Test-Path -LiteralPath $EnvFile) {
+      $null = Assert-MetaHubEnvFile -EnvFile $EnvFile -RequestId $RequestId
+      return @{ created = $false; admin_password = $null }
+    }
+    throw $failure
+  }
+  if (Test-Path -LiteralPath $temporaryDirectory) {
+    Remove-Item -LiteralPath $temporaryDirectory -Force
+  }
+  $null = Assert-MetaHubEnvFile -EnvFile $EnvFile -RequestId $RequestId
   return @{ created = $true; admin_password = $adminPassword }
 }
 
@@ -228,6 +390,8 @@ function Get-MetaHubComposeArgs {
 
   $root = Get-MetaHubRoot
   $composeFile = Join-Path $root "infra/compose/docker-compose.yml"
+  # --env-file 只负责 Compose 插值；显式路径变量保证服务 env_file 使用同一份文件。
+  $env:METAHUB_COMPOSE_ENV_FILE = $EnvFile.Replace("\", "/")
   $args = @("compose", "--env-file", $EnvFile, "-f", $composeFile, "-p", $ProjectName)
   if ($Profile -eq "compose-full") {
     $args += @("--profile", "compose-full")
