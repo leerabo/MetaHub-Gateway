@@ -10,7 +10,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.parse import unquote, urlparse
 
 
@@ -20,6 +20,27 @@ class RateLimitStoreUnavailable(RuntimeError):
     上层会把该异常映射为 `gateway.rate_limit_unavailable`，不会把 Redis URL、密码或
     底层 socket 错误写入 API 响应。
     """
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRateLimitDimension:
+    """One bounded dimension in an all-or-nothing Batch lane claim."""
+
+    limit_type: Literal["rpm", "tpm", "concurrency"]
+    key: str
+    amount: int
+    ceiling: int
+    ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRateLimitDecision:
+    """Atomic Batch lane result; a rejection never changes any counter."""
+
+    allowed: bool
+    limit_type: str | None = None
+    current: int = 0
+    limit: int = 0
 
 
 class RateLimitCounterStore(Protocol):
@@ -36,6 +57,12 @@ class RateLimitCounterStore(Protocol):
 
     async def release_concurrency(self, key: str) -> None:
         """释放一个并发槽位，释放失败不能影响已完成的用户请求。"""
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """Atomically check and increment every configured Batch dimension."""
 
     async def ping(self) -> bool:
         """检查限流计数器存储是否已经连接且可以执行原子计数。"""
@@ -96,6 +123,35 @@ class InMemoryRateLimitStore:
                 self._values.pop(key, None)
                 return
             self._values[key] = (value, expires_at)
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """Check all Batch ceilings under one lock and mutate only after all pass."""
+
+        self._ensure_available()
+        _validate_batch_dimensions(dimensions)
+        async with self._lock:
+            self._expire_locked()
+            for dimension in dimensions:
+                current, _expires_at = self._values.get(dimension.key, (0, None))
+                projected = current + dimension.amount
+                if projected > dimension.ceiling:
+                    return BatchRateLimitDecision(
+                        allowed=False,
+                        limit_type=dimension.limit_type,
+                        current=projected,
+                        limit=dimension.ceiling,
+                    )
+            now = self._now()
+            for dimension in dimensions:
+                current, expires_at = self._values.get(dimension.key, (0, None))
+                self._values[dimension.key] = (
+                    current + dimension.amount,
+                    expires_at or now + dimension.ttl_seconds,
+                )
+            return BatchRateLimitDecision(allowed=True)
 
     async def ping(self) -> bool:
         """返回内存存储是否处于可用状态。"""
@@ -174,6 +230,64 @@ class RedisRateLimitStore:
         value = int(await self._command("DECR", key))
         if value <= 0:
             await self._command("DEL", key)
+
+    async def try_acquire_batch_limits(
+        self,
+        dimensions: tuple[BatchRateLimitDimension, ...],
+    ) -> BatchRateLimitDecision:
+        """Use one Lua script so a rejected Batch claim leaves every Redis key unchanged."""
+
+        _validate_batch_dimensions(dimensions)
+        if not dimensions:
+            return BatchRateLimitDecision(allowed=True)
+        script = (
+            "local n=tonumber(ARGV[1]);"
+            "for i=1,n do "
+            "local base=2+(i-1)*3;"
+            "local amount=tonumber(ARGV[base]);"
+            "local ceiling=tonumber(ARGV[base+1]);"
+            "local current=tonumber(redis.call('GET',KEYS[i]) or '0');"
+            "if current+amount>ceiling then return {0,i,current+amount}; end;"
+            "end;"
+            "for i=1,n do "
+            "local base=2+(i-1)*3;"
+            "local amount=tonumber(ARGV[base]);"
+            "local ttl=tonumber(ARGV[base+2]);"
+            "local value=redis.call('INCRBY',KEYS[i],amount);"
+            "if value==amount then redis.call('EXPIRE',KEYS[i],ttl); end;"
+            "end;"
+            "return {1,0,0};"
+        )
+        arguments: list[str] = [str(len(dimensions))]
+        for dimension in dimensions:
+            arguments.extend(
+                (str(dimension.amount), str(dimension.ceiling), str(dimension.ttl_seconds))
+            )
+        result = await self._command(
+            "EVAL",
+            script,
+            str(len(dimensions)),
+            *(dimension.key for dimension in dimensions),
+            *arguments,
+        )
+        if (
+            type(result) is not list
+            or len(result) != 3
+            or any(type(item) is not int for item in result)
+        ):
+            raise RateLimitStoreUnavailable("redis batch response invalid")
+        allowed, failed_index, current = result
+        if allowed == 1 and failed_index == 0:
+            return BatchRateLimitDecision(allowed=True)
+        if allowed != 0 or not 1 <= failed_index <= len(dimensions):
+            raise RateLimitStoreUnavailable("redis batch response invalid")
+        failed = dimensions[failed_index - 1]
+        return BatchRateLimitDecision(
+            allowed=False,
+            limit_type=failed.limit_type,
+            current=current,
+            limit=failed.ceiling,
+        )
 
     async def ping(self) -> bool:
         """用 PING 验证 Redis 连接、认证和 DB 选择是否可用。"""
@@ -273,7 +387,37 @@ async def _read_response(reader: asyncio.StreamReader) -> object:
         data = await reader.readexactly(length)
         await reader.readexactly(2)
         return data.decode("utf-8")
+    if prefix == b"*":
+        length = int(line.rstrip(b"\r\n"))
+        if length < 0:
+            return None
+        return [await _read_response(reader) for _index in range(length)]
     if prefix == b"-":
         # Redis 返回错误响应时把底层细节折叠为限流存储不可用，避免泄露服务端信息。
         raise RateLimitStoreUnavailable("redis returned error")
     raise RateLimitStoreUnavailable("unsupported redis response")
+
+
+def _validate_batch_dimensions(
+    dimensions: tuple[BatchRateLimitDimension, ...],
+) -> None:
+    """Reject malformed or duplicate atomic claims before touching counters."""
+
+    if type(dimensions) is not tuple or any(
+        not isinstance(item, BatchRateLimitDimension) for item in dimensions
+    ):
+        raise RateLimitStoreUnavailable("batch rate limit claim invalid")
+    if len({item.limit_type for item in dimensions}) != len(dimensions):
+        raise RateLimitStoreUnavailable("batch rate limit claim invalid")
+    for item in dimensions:
+        if (
+            type(item.key) is not str
+            or not item.key
+            or type(item.amount) is not int
+            or item.amount <= 0
+            or type(item.ceiling) is not int
+            or item.ceiling <= 0
+            or type(item.ttl_seconds) is not int
+            or item.ttl_seconds <= 0
+        ):
+            raise RateLimitStoreUnavailable("batch rate limit claim invalid")

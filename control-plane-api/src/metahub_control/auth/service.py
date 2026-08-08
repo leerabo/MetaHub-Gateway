@@ -35,6 +35,7 @@ from metahub_shared.rbac import (
 )
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
 
 from .models import AuthSession, AuthTenant, AuthUser, LoginResponse, MeResponse
 from .tokens import TokenClaims, decode_access_token, encode_access_token
@@ -516,6 +517,38 @@ def require_transaction_permission(
     )
     # 最终仍走全域统一权限 helper，确保未知权限码和缺权分别保持既有完整性错误与 403 口径。
     return require_permission(live_context, permission_code)
+
+
+def require_actor_transaction_permissions(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    user_id: str,
+    permission_codes: tuple[str, ...],
+    unavailable_error_code: str,
+) -> PermissionSnapshot:
+    """Require permissions for a durable actor without a browser session.
+
+    Batch and other recovery workers must resume work after the submitting login session has
+    expired. They still have to re-read the active tenant, user, role, full catalog projection,
+    role ceiling, matrix hash, and requested permission set in the caller's transaction. This
+    helper accepts only identities already recovered from durable tenant-owned rows; HTTP input
+    must never be passed directly to it.
+    """
+
+    snapshot = require_actor_runtime_permissions(
+        connection,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        permission_codes=permission_codes,
+        unavailable_error_code=unavailable_error_code,
+    )
+    return PermissionSnapshot(
+        permission_codes=snapshot.permission_codes,
+        permission_revision=snapshot.permission_revision,
+        matrix_sha256=snapshot.matrix_sha256,
+        authorization_fingerprint=snapshot.authorization_fingerprint,
+    )
 
 
 def require_any_permission(context: AuthContext, permission_codes: tuple[str, ...]) -> AuthContext:

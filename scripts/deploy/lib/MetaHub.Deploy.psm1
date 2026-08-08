@@ -64,10 +64,12 @@ function Assert-MetaHubEnvFile {
   $requiredSecrets = @(
     "METAHUB_INTERNAL_CONFIG_TOKEN",
     "METAHUB_INTERNAL_CHAT_TOKEN",
+    "METAHUB_INTERNAL_BATCH_TOKEN",
     "METAHUB_AUTH_TOKEN_SECRET",
     "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
     "METAHUB_FILE_ENCRYPTION_SECRET",
+    "METAHUB_BATCH_ENCRYPTION_SECRET",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
     "METAHUB_SEED_ADMIN_PASSWORD",
@@ -103,10 +105,12 @@ function Assert-MetaHubEnvFile {
   foreach ($key in @(
     "METAHUB_INTERNAL_CONFIG_TOKEN",
     "METAHUB_INTERNAL_CHAT_TOKEN",
+    "METAHUB_INTERNAL_BATCH_TOKEN",
     "METAHUB_AUTH_TOKEN_SECRET",
     "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
     "METAHUB_FILE_ENCRYPTION_SECRET",
+    "METAHUB_BATCH_ENCRYPTION_SECRET",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET"
   )) {
@@ -329,10 +333,12 @@ function Initialize-MetaHubEnvFile {
   $replacements = @{
     "replace-with-generated-internal-config-token" = (New-MetaHubLocalSecret)
     "replace-with-generated-internal-chat-token" = (New-MetaHubLocalSecret)
+    "replace-with-generated-internal-batch-token" = (New-MetaHubLocalSecret)
     "replace-with-generated-auth-token-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-provider-encryption-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-prompt-template-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-file-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-batch-encryption-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-admin-password" = $adminPassword

@@ -59,6 +59,7 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
 
     assert "gateway:" in compose
     assert "control-api:" in compose
+    assert "batch-worker:" in compose
     assert "console:" in compose
     assert 'profiles: ["compose-full"]' in compose
     assert "postgres:" in compose
@@ -68,12 +69,22 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     assert compose.count('${METAHUB_COMPOSE_ENV_FILE:-.env.compose}') == 2
     console_section = compose.split("  console:", 1)[1].split("  redis:", 1)[0]
     assert "env_file:" not in console_section
+    worker_section = compose.split("  batch-worker:", 1)[1].split("  console:", 1)[0]
+    assert "env_file:" not in worker_section
+    assert "METAHUB_INTERNAL_BATCH_TOKEN:" in worker_section
+    assert "METAHUB_BATCH_ENCRYPTION_SECRET:" in worker_section
+    assert "METAHUB_FILE_ENCRYPTION_SECRET:" in worker_section
+    assert "METAHUB_SEED_ADMIN_PASSWORD" not in worker_section
+    assert "METAHUB_SEED_PROVIDER_API_KEY" not in worker_section
+    assert "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET" not in worker_section
+    assert "ports:" not in worker_section
+    assert "read_only: true" in worker_section
     assert (
         "PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:"
         "/app/control-plane-api/src"
     ) in compose
     assert "sqlite:///./.data/compose/metahub.db" not in compose
-    assert "METAHUB_DATABASE_URL" not in compose
+    assert "METAHUB_DATABASE_URL:" in worker_section
 
 
 def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() -> None:
@@ -92,10 +103,12 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert local_profile["profile_id"] == "local-sqlite"
     assert local_profile["database_mode"] == "sqlite"
     assert local_profile["services"]["postgres"]["enabled"] is False
+    assert local_profile["services"]["batch-worker"]["enabled"] is True
     assert full_profile["profile_id"] == "compose-full"
     assert full_profile["database_mode"] == "sqlite"
     assert full_profile["services"]["postgres"]["enabled"] is True
     assert full_profile["services"]["minio"]["enabled"] is True
+    assert full_profile["services"]["batch-worker"]["enabled"] is True
 
 
 def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
@@ -108,6 +121,8 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
 
     assert "replace-with-generated-admin-password" in env_template
     assert "replace-with-generated-auth-token-secret" in env_template
+    assert "replace-with-generated-internal-batch-token" in env_template
+    assert "replace-with-generated-batch-encryption-secret" in env_template
     assert "MetaHubLocal!2026" not in env_template
     assert "sk-" not in env_template
     assert "METAHUB_DATABASE_URL=sqlite:///./.data/compose/metahub.db" in env_template
@@ -226,6 +241,8 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "replace-with-generated" not in generated_env
     assert "replace-with-generated" not in completed.stdout
     assert "METAHUB_AUTH_TOKEN_SECRET=" in generated_env
+    assert "METAHUB_INTERNAL_BATCH_TOKEN=" in generated_env
+    assert "METAHUB_BATCH_ENCRYPTION_SECRET=" in generated_env
     assert "METAHUB_POSTGRES_PASSWORD=" in generated_env
     assert "METAHUB_MINIO_SECRET_KEY=" in generated_env
     assert "METAHUB_POSTGRES_PASSWORD=" not in completed.stdout

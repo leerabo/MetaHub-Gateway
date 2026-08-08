@@ -106,11 +106,11 @@ def test_spool_rejects_partial_or_inconsistent_output_safety_context(
         _serialize_usage_spool_record(_context(**updates), _usage_intent())
 
 
-def test_spool_reader_rejects_unknown_v6() -> None:
-    """版本权限流程：未来 v6 不得被旧 reader 宽松解释。"""
+def test_spool_reader_rejects_unknown_v7() -> None:
+    """版本权限流程：未来 v7 不得被当前 reader 宽松解释。"""
 
     payload = _serialize_usage_spool_record(_context(), _usage_intent())
-    payload["schema_version"] = 6
+    payload["schema_version"] = 7
 
     with pytest.raises(ValueError, match="finops_spool_payload_version_invalid"):
         _deserialize_usage_spool_record(payload)

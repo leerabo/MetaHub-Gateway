@@ -367,6 +367,115 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="enterprise_chat",
     ),
+    # Batch errors expose only fixed scheduler and reconciliation states. They must never include
+    # file text, operation parameters, grants, Provider responses, keys, tokens, or internal URLs.
+    "batch.request_invalid": ErrorSpec(
+        422, "Batch request is invalid.", "Use the documented bounded Batch fields.", owner="batch"
+    ),
+    "batch.idempotency_required": ErrorSpec(
+        400,
+        "Batch idempotency key is required.",
+        "Send a canonical UUID Idempotency-Key.",
+        owner="batch",
+    ),
+    "batch.idempotency_conflict": ErrorSpec(
+        409,
+        "Batch idempotency key conflicts with another request.",
+        "Use a new idempotency key for a different Batch intent.",
+        owner="batch",
+    ),
+    "batch.not_found": ErrorSpec(
+        404, "Batch job was not found.", "Refresh the current tenant Batch job list.", owner="batch"
+    ),
+    "batch.task_not_found": ErrorSpec(
+        404, "Batch task was not found.", "Refresh the current Batch job details.", owner="batch"
+    ),
+    "batch.binding_unavailable": ErrorSpec(
+        409,
+        "Batch execution binding is unavailable.",
+        "Choose an active project, environment, alias, and unique project key.",
+        owner="batch",
+    ),
+    "batch.file_not_ready": ErrorSpec(
+        409, "Batch file is not ready.", "Select a ready file with a token estimate.", owner="batch"
+    ),
+    "batch.file_security_blocked": ErrorSpec(
+        403,
+        "Batch file is blocked by the security boundary.",
+        "Review the file security report before creating a new job.",
+        owner="batch",
+    ),
+    "batch.cost_estimate_unavailable": ErrorSpec(
+        503,
+        "Batch cost estimate is unavailable.",
+        "Configure complete CNY model prices and retry.",
+        retryable=True,
+        owner="batch",
+    ),
+    "batch.budget_exceeded": ErrorSpec(
+        402,
+        "Batch job exceeds an applicable budget.",
+        "Reduce the job or update the governing budget before retrying.",
+        owner="batch",
+    ),
+    "batch.capacity_full": ErrorSpec(
+        429,
+        "Batch tenant capacity is full.",
+        "Wait for queued work to complete before submitting more tasks.",
+        retryable=True,
+        owner="batch",
+    ),
+    "batch.gateway_busy": ErrorSpec(
+        429,
+        "Batch execution is deferred for realtime traffic.",
+        "Retry the same unconsumed execution grant after the cooldown.",
+        retryable=True,
+        owner="batch",
+    ),
+    "batch.execution_invalid": ErrorSpec(
+        403,
+        "Batch execution grant is invalid.",
+        "Let the scheduler issue a current execution grant.",
+        owner="batch",
+    ),
+    "batch.authorization_revoked": ErrorSpec(
+        403,
+        "Batch submitter authorization was revoked.",
+        "Restore the required Batch and file permissions before submitting new work.",
+        owner="batch",
+    ),
+    "batch.provider_outcome_unknown": ErrorSpec(
+        502,
+        "Batch provider outcome is unknown.",
+        "Reconcile the request id; do not resend the same attempt.",
+        owner="batch",
+    ),
+    "batch.result_not_ready": ErrorSpec(
+        409,
+        "Batch result is not ready.",
+        "Wait for the task to reach a successful terminal state.",
+        retryable=True,
+        owner="batch",
+    ),
+    "batch.result_unavailable": ErrorSpec(
+        500,
+        "Batch result is unavailable.",
+        "Use the request id to inspect durable execution facts without resending.",
+        owner="batch",
+    ),
+    "batch.reconciliation_conflict": ErrorSpec(
+        409,
+        "Batch reconciliation decision conflicts with an existing intent.",
+        "Use a new idempotency key for a different decision.",
+        owner="batch",
+    ),
+    "batch.worker_unavailable": ErrorSpec(
+        503,
+        "Batch worker is unavailable.",
+        "Check Batch configuration and durable worker state, then retry safely.",
+        retryable=True,
+        owner="batch",
+    ),
     "config_transfer.query_invalid": ErrorSpec(
         422,
         "Configuration transfer query is invalid.",
@@ -1243,13 +1352,19 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "model_alias.routing_mode_invalid": ErrorSpec(
         422,
         "Routing mode payload is invalid.",
-        "Choose fixed, cost_first, availability_first, or quality_cost and remove unsupported fields.",
+        (
+            "Choose fixed, cost_first, availability_first, or quality_cost and remove "
+            "unsupported fields."
+        ),
         owner="model_alias",
     ),
     "model_alias.quality_cost_settings_invalid": ErrorSpec(
         422,
         "Quality-cost routing settings are invalid.",
-        "Use complete basis-point weights totaling 10000, a positive quality floor, and a positive sample threshold.",
+        (
+            "Use complete basis-point weights totaling 10000, a positive quality floor, "
+            "and a positive sample threshold."
+        ),
         owner="model_alias",
     ),
     "model_alias.routing_policy_version_invalid": ErrorSpec(
@@ -1286,7 +1401,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "model_quality_score.input_invalid": ErrorSpec(
         422,
         "Model quality score payload is invalid.",
-        "Provide model_id, manual_quality_bps from 0 to 10000 or null, and the expected feedback version.",
+        (
+            "Provide model_id, manual_quality_bps from 0 to 10000 or null, and the expected "
+            "feedback version."
+        ),
         owner="model_quality_score",
     ),
     "model_quality_score.version_invalid": ErrorSpec(
@@ -1484,14 +1602,23 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         owner="request_log",
     ),
     "request_log.sort_invalid": ErrorSpec(
-        422, "Request log sort is invalid.", "Choose an allowed sort field and direction.", owner="request_log"
+        422,
+        "Request log sort is invalid.",
+        "Choose an allowed sort field and direction.",
+        owner="request_log",
     ),
     "request_log.pagination_invalid": ErrorSpec(
-        422, "Request log pagination is invalid.", "Use limit 1..100 and offset 0..10000.", owner="request_log"
+        422,
+        "Request log pagination is invalid.",
+        "Use limit 1..100 and offset 0..10000.",
+        owner="request_log",
     ),
     "request_log.query_unavailable": ErrorSpec(
-        503, "Request log query is unavailable.", "Retry after the trace database is available.",
-        retryable=True, owner="request_log"
+        503,
+        "Request log query is unavailable.",
+        "Retry after the trace database is available.",
+        retryable=True,
+        owner="request_log",
     ),
     "output_safety.integrity_failed": ErrorSpec(
         503,
@@ -1500,34 +1627,56 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         owner="output_safety",
     ),
     "request_log.query_audit_unavailable": ErrorSpec(
-        503, "Request log query audit is unavailable.", "Restore the query audit store before retrying.",
-        retryable=True, owner="request_log"
+        503,
+        "Request log query audit is unavailable.",
+        "Restore the query audit store before retrying.",
+        retryable=True,
+        owner="request_log",
     ),
     "request_log.query_event_unavailable": ErrorSpec(
-        503, "Request log query event is unavailable.", "Retry event processing after storage is available.",
-        retryable=True, owner="request_log"
+        503,
+        "Request log query event is unavailable.",
+        "Retry event processing after storage is available.",
+        retryable=True,
+        owner="request_log",
     ),
     "saved_filter.not_found": ErrorSpec(
-        404, "Saved filter was not found.", "Use a saved filter owned by the current user and tenant.",
-        owner="saved_filter"
+        404,
+        "Saved filter was not found.",
+        "Use a saved filter owned by the current user and tenant.",
+        owner="saved_filter",
     ),
     "saved_filter.invalid": ErrorSpec(
-        422, "Saved filter is invalid.", "Check the name, filters, sorting, and version.", owner="saved_filter"
+        422,
+        "Saved filter is invalid.",
+        "Check the name, filters, sorting, and version.",
+        owner="saved_filter",
     ),
     "saved_filter.name_conflict": ErrorSpec(
-        409, "Saved filter name already exists.", "Choose another name for the current user.", owner="saved_filter"
+        409,
+        "Saved filter name already exists.",
+        "Choose another name for the current user.",
+        owner="saved_filter",
     ),
     "saved_filter.limit_exceeded": ErrorSpec(
-        409, "Saved filter limit was reached.", "Delete an active saved filter before creating another.",
-        owner="saved_filter"
+        409,
+        "Saved filter limit was reached.",
+        "Delete an active saved filter before creating another.",
+        owner="saved_filter",
     ),
     "saved_filter.version_conflict": ErrorSpec(
-        409, "Saved filter version is stale.", "Refresh saved filters and retry with the current version.",
-        retryable=True, owner="saved_filter"
+        409,
+        "Saved filter version is stale.",
+        "Refresh saved filters and retry with the current version.",
+        retryable=True,
+        owner="saved_filter",
     ),
     "saved_filter.unavailable": ErrorSpec(
-        503, "Saved filters are unavailable.", "Retry after the saved filter store is available.",
-        retryable=True, owner="saved_filter"
+        503,
+        "Saved filters are unavailable.",
+        "Retry after the saved filter store is available.",
+        retryable=True,
+        owner="saved_filter",
     ),
     # 请求解释错误与普通日志查询分域，前端可以区分不可见、输入错误和证据依赖故障。
     "request_explanation.not_found": ErrorSpec(
@@ -1628,7 +1777,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "finops.query_invalid": ErrorSpec(
         422,
         "FinOps ledger query is invalid.",
-        "Use only documented ledger filters, limits, and the cursor returned for this tenant and filter set.",
+        (
+            "Use only documented ledger filters, limits, and the cursor returned for this "
+            "tenant and filter set."
+        ),
         owner="finops",
     ),
     "finops.adjustment_invalid": ErrorSpec(
@@ -1796,7 +1948,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "budget.scope_not_found": ErrorSpec(
         404,
         "Budget scope was not found.",
-        "Choose a tenant, project, application, or Virtual Key scope that belongs to the current tenant.",
+        (
+            "Choose a tenant, project, application, or Virtual Key scope that belongs to "
+            "the current tenant."
+        ),
         owner="budget",
     ),
     "budget.environment_mismatch": ErrorSpec(
@@ -1932,7 +2087,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "dlp.regex_unsafe": ErrorSpec(
         422,
         "DLP regex is unsafe for the gateway hot path.",
-        "Avoid backreferences, lookarounds, nested quantifiers, repeated wildcards, and overly long patterns.",
+        (
+            "Avoid backreferences, lookarounds, nested quantifiers, repeated wildcards, "
+            "and overly long patterns."
+        ),
         owner="dlp",
     ),
     "dlp.update_empty": ErrorSpec(
@@ -2180,7 +2338,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "policy.expression_invalid": ErrorSpec(
         422,
         "Policy expression is invalid.",
-        "Use only the supported policy variables, comparisons, boolean operators, and bounded literals.",
+        (
+            "Use only the supported policy variables, comparisons, boolean operators, "
+            "and bounded literals."
+        ),
         owner="policy",
     ),
     "policy.action_invalid": ErrorSpec(
@@ -2280,7 +2441,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "policy.dry_run_unavailable": ErrorSpec(
         503,
         "Policy dry-run service is unavailable.",
-        "Check policy graph integrity, database readiness, audit, and event storage before retrying.",
+        (
+            "Check policy graph integrity, database readiness, audit, and event storage "
+            "before retrying."
+        ),
         retryable=True,
         owner="policy_dry_run",
     ),
@@ -2622,7 +2786,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "dashboard.query_invalid": ErrorSpec(
         422,
         "Dashboard query is invalid.",
-        "Remove unsupported parameters; role-view accepts at most one supported lowercase view code.",
+        (
+            "Remove unsupported parameters; role-view accepts at most one supported "
+            "lowercase view code."
+        ),
         owner="dashboard",
     ),
     "dashboard.config_invalid": ErrorSpec(
@@ -2975,7 +3142,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "gateway.dlp_blocked": ErrorSpec(
         403,
         "Request was blocked by DLP policy.",
-        "Review the DLP rule that matched this request or change the rule to log_only for trial runs.",
+        (
+            "Review the DLP rule that matched this request or change the rule to log_only "
+            "for trial runs."
+        ),
         owner="gateway",
     ),
     "gateway.dlp_unavailable": ErrorSpec(
@@ -3077,7 +3247,10 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "gateway.upstream_auth_failed": ErrorSpec(
         502,
         "Upstream provider authentication failed.",
-        "Check Provider Key status, account permissions, and model access on the upstream provider.",
+        (
+            "Check Provider Key status, account permissions, and model access on the "
+            "upstream provider."
+        ),
         owner="gateway",
     ),
     "gateway.upstream_rate_limited": ErrorSpec(

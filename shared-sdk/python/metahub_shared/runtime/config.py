@@ -42,6 +42,12 @@ CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
 DEFAULT_INTERNAL_CHAT_TOKEN = (
     "dev-only-change-me-metahub-internal-chat-token-2026"
 )
+DEFAULT_INTERNAL_BATCH_TOKEN = (
+    "dev-only-change-me-metahub-internal-batch-token-2026"
+)
+DEFAULT_BATCH_ENCRYPTION_SECRET = (
+    "dev-only-change-me-metahub-batch-encryption-secret-2026"
+)
 
 # 运行时启动时间和默认配置集中定义，供健康检查、审计响应和本地默认值复用。
 STARTED_AT = datetime.now(UTC)
@@ -59,6 +65,22 @@ DEFAULT_CONFIG: dict[str, str] = {
     # 空默认值让生产与未启用 Chat 的部署保持可启动；load 阶段仅在 dev/test 回环环境
     # 注入公开的本地开发值，内部 Chat 入口遇到生产缺失值必须失败关闭。
     "METAHUB_INTERNAL_CHAT_TOKEN": "",
+    # Batch 使用独立服务身份和加密根域。空默认让未启用 Batch 的旧部署继续启动；
+    # dev/test 在加载期注入公开本地值，生产和启用的 batch-worker 必须显式配置。
+    "METAHUB_INTERNAL_BATCH_TOKEN": "",
+    "METAHUB_BATCH_ENCRYPTION_SECRET": "",
+    "METAHUB_BATCH_WORKER_ENABLED": "false",
+    "METAHUB_BATCH_POLL_INTERVAL_SECONDS": "1",
+    "METAHUB_BATCH_GLOBAL_CONCURRENCY": "2",
+    "METAHUB_BATCH_TENANT_CONCURRENCY": "1",
+    "METAHUB_BATCH_LEASE_SECONDS": "90",
+    "METAHUB_BATCH_HEARTBEAT_SECONDS": "30",
+    "METAHUB_BATCH_GATEWAY_CONCURRENCY": "1",
+    "METAHUB_BATCH_REALTIME_COOLDOWN_MILLISECONDS": "250",
+    "METAHUB_BATCH_REALTIME_RESERVE_PERCENT": "25",
+    "METAHUB_BATCH_MAX_PENDING_JOBS_PER_TENANT": "100",
+    "METAHUB_BATCH_MAX_PENDING_TASKS_PER_TENANT": "10000",
+    "METAHUB_BATCH_MAX_RESULT_BYTES": "1048576",
     # 会话风险默认关闭，避免升级后旧部署因尚未配置 Redis/keyring 改变既有 Chat 行为。
     # 版本可以进入脱敏配置摘要；两项 secret 必须始终按敏感字段屏蔽。
     "METAHUB_SESSION_RISK_ENABLED": "false",
@@ -261,6 +283,21 @@ class AppConfig(BaseModel):
     # 内部 Chat Token 只供 Control 与 Gateway 之间的服务身份校验，不能复用用户 Session、
     # Virtual Key 或策略同步 Token，也不能通过 model_dump/repr 意外泄露。
     internal_chat_token: str | None = Field(default=None, exclude=True, repr=False)
+    # Batch 服务身份与正文/结果根密钥都是独立敏感域；数值门限是部署事实，HTTP 不能覆盖。
+    internal_batch_token: str | None = Field(default=None, exclude=True, repr=False)
+    batch_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
+    batch_worker_enabled: bool = False
+    batch_poll_interval_seconds: float = 1.0
+    batch_global_concurrency: int = 2
+    batch_tenant_concurrency: int = 1
+    batch_lease_seconds: int = 90
+    batch_heartbeat_seconds: int = 30
+    batch_gateway_concurrency: int = 1
+    batch_realtime_cooldown_milliseconds: int = 250
+    batch_realtime_reserve_percent: int = 25
+    batch_max_pending_jobs_per_tenant: int = 100
+    batch_max_pending_tasks_per_tenant: int = 10_000
+    batch_max_result_bytes: int = 1_048_576
     # 多轮风险开关与 key 版本是部署级合同；secret 使用独立根域且绝不能进入序列化、repr、
     # 配置摘要明文或业务日志。previous 只服务于受控轮换，不得自动替代缺失 current。
     session_risk_enabled: bool = False
@@ -512,6 +549,12 @@ def load_app_config(service_name: str) -> AppConfig:
     configured_internal_chat_token = _optional_value(
         values, "METAHUB_INTERNAL_CHAT_TOKEN"
     )
+    configured_internal_batch_token = _raw_optional_value(
+        values, "METAHUB_INTERNAL_BATCH_TOKEN"
+    )
+    configured_batch_encryption_secret = _raw_optional_value(
+        values, "METAHUB_BATCH_ENCRYPTION_SECRET"
+    )
     prompt_template_encryption_secret = _optional_value(
         values, "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET"
     )
@@ -540,6 +583,57 @@ def load_app_config(service_name: str) -> AppConfig:
     # 失败关闭，不影响未启用该功能的既有控制面和数据面能力启动。
     internal_chat_token = configured_internal_chat_token or (
         DEFAULT_INTERNAL_CHAT_TOKEN if environment in {"dev", "test"} else None
+    )
+    internal_batch_token = configured_internal_batch_token or (
+        DEFAULT_INTERNAL_BATCH_TOKEN if environment in {"dev", "test"} else None
+    )
+    batch_encryption_secret = configured_batch_encryption_secret or (
+        DEFAULT_BATCH_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
+    )
+    batch_worker_enabled = _boolean(values, "METAHUB_BATCH_WORKER_ENABLED")
+    batch_poll_interval_seconds = _bounded_float(
+        values, "METAHUB_BATCH_POLL_INTERVAL_SECONDS", minimum=0.1, maximum=60.0
+    )
+    batch_global_concurrency = _bounded_int(
+        values, "METAHUB_BATCH_GLOBAL_CONCURRENCY", minimum=1, maximum=32
+    )
+    batch_tenant_concurrency = _bounded_int(
+        values, "METAHUB_BATCH_TENANT_CONCURRENCY", minimum=1, maximum=8
+    )
+    batch_lease_seconds = _bounded_int(
+        values, "METAHUB_BATCH_LEASE_SECONDS", minimum=30, maximum=3600
+    )
+    batch_heartbeat_seconds = _bounded_int(
+        values, "METAHUB_BATCH_HEARTBEAT_SECONDS", minimum=5, maximum=300
+    )
+    batch_gateway_concurrency = _bounded_int(
+        values, "METAHUB_BATCH_GATEWAY_CONCURRENCY", minimum=1, maximum=1
+    )
+    batch_realtime_cooldown_milliseconds = _bounded_nonnegative_int(
+        values,
+        "METAHUB_BATCH_REALTIME_COOLDOWN_MILLISECONDS",
+        maximum=5000,
+    )
+    batch_realtime_reserve_percent = _bounded_int(
+        values, "METAHUB_BATCH_REALTIME_RESERVE_PERCENT", minimum=1, maximum=90
+    )
+    batch_max_pending_jobs_per_tenant = _bounded_int(
+        values,
+        "METAHUB_BATCH_MAX_PENDING_JOBS_PER_TENANT",
+        minimum=1,
+        maximum=10_000,
+    )
+    batch_max_pending_tasks_per_tenant = _bounded_int(
+        values,
+        "METAHUB_BATCH_MAX_PENDING_TASKS_PER_TENANT",
+        minimum=1,
+        maximum=1_000_000,
+    )
+    batch_max_result_bytes = _bounded_int(
+        values,
+        "METAHUB_BATCH_MAX_RESULT_BYTES",
+        minimum=1024,
+        maximum=1_048_576,
     )
     _validate_policy_snapshot_config(
         service_name=service_name,
@@ -590,6 +684,30 @@ def load_app_config(service_name: str) -> AppConfig:
         previous_secret=session_risk_previous_hmac_secret,
         auth_token_secret=auth_token_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
+    )
+    _validate_batch_config(
+        service_name=service_name,
+        environment=environment,
+        enabled=batch_worker_enabled,
+        database_url=_optional_value(values, "METAHUB_DATABASE_URL"),
+        gateway_api_base_url=gateway_api_base_url,
+        internal_batch_token=internal_batch_token,
+        batch_encryption_secret=batch_encryption_secret,
+        internal_config_token=internal_config_token,
+        internal_chat_token=internal_chat_token,
+        auth_token_secret=auth_token_secret,
+        cache_affinity_hmac_secret=cache_affinity_hmac_secret,
+        prompt_template_encryption_secret=prompt_template_encryption_secret,
+        file_encryption_secret=file_encryption_secret,
+        provider_key_encryption_secret=_raw_optional_value(
+            values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"
+        ),
+        session_risk_hmac_secret=session_risk_hmac_secret,
+        session_risk_previous_hmac_secret=session_risk_previous_hmac_secret,
+        global_concurrency=batch_global_concurrency,
+        tenant_concurrency=batch_tenant_concurrency,
+        lease_seconds=batch_lease_seconds,
+        heartbeat_seconds=batch_heartbeat_seconds,
     )
     # 先保留既有快照配置错误优先级，再校验新增 Prompt HMAC 门禁，便于运维逐项修复启动配置。
     _validate_cache_affinity_hmac_secret(
@@ -719,6 +837,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "request_log_query_event_enabled": request_log_query_event_enabled,
             "session_risk_enabled": session_risk_enabled,
             "file_processing_enabled": file_encryption_secret is not None,
+            "batch_worker_enabled": batch_worker_enabled,
         },
         config_items=config_items,
         warnings=warnings,
@@ -727,6 +846,20 @@ def load_app_config(service_name: str) -> AppConfig:
         provider_api_keys=provider_api_keys,
         internal_config_token=internal_config_token,
         internal_chat_token=internal_chat_token,
+        internal_batch_token=internal_batch_token,
+        batch_encryption_secret=batch_encryption_secret,
+        batch_worker_enabled=batch_worker_enabled,
+        batch_poll_interval_seconds=batch_poll_interval_seconds,
+        batch_global_concurrency=batch_global_concurrency,
+        batch_tenant_concurrency=batch_tenant_concurrency,
+        batch_lease_seconds=batch_lease_seconds,
+        batch_heartbeat_seconds=batch_heartbeat_seconds,
+        batch_gateway_concurrency=batch_gateway_concurrency,
+        batch_realtime_cooldown_milliseconds=batch_realtime_cooldown_milliseconds,
+        batch_realtime_reserve_percent=batch_realtime_reserve_percent,
+        batch_max_pending_jobs_per_tenant=batch_max_pending_jobs_per_tenant,
+        batch_max_pending_tasks_per_tenant=batch_max_pending_tasks_per_tenant,
+        batch_max_result_bytes=batch_max_result_bytes,
         session_risk_enabled=session_risk_enabled,
         session_risk_hmac_version=session_risk_hmac_version,
         session_risk_hmac_secret=session_risk_hmac_secret,
@@ -1256,6 +1389,20 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_REDIS_URL",
         "METAHUB_INTERNAL_CONFIG_TOKEN",
         "METAHUB_INTERNAL_CHAT_TOKEN",
+        "METAHUB_INTERNAL_BATCH_TOKEN",
+        "METAHUB_BATCH_ENCRYPTION_SECRET",
+        "METAHUB_BATCH_WORKER_ENABLED",
+        "METAHUB_BATCH_POLL_INTERVAL_SECONDS",
+        "METAHUB_BATCH_GLOBAL_CONCURRENCY",
+        "METAHUB_BATCH_TENANT_CONCURRENCY",
+        "METAHUB_BATCH_LEASE_SECONDS",
+        "METAHUB_BATCH_HEARTBEAT_SECONDS",
+        "METAHUB_BATCH_GATEWAY_CONCURRENCY",
+        "METAHUB_BATCH_REALTIME_COOLDOWN_MILLISECONDS",
+        "METAHUB_BATCH_REALTIME_RESERVE_PERCENT",
+        "METAHUB_BATCH_MAX_PENDING_JOBS_PER_TENANT",
+        "METAHUB_BATCH_MAX_PENDING_TASKS_PER_TENANT",
+        "METAHUB_BATCH_MAX_RESULT_BYTES",
         "METAHUB_SESSION_RISK_ENABLED",
         "METAHUB_SESSION_RISK_HMAC_VERSION",
         "METAHUB_SESSION_RISK_HMAC_SECRET",
@@ -1519,6 +1666,146 @@ def _validate_internal_chat_config(
         gateway_api_base_url,
         environment=environment,
     )
+
+
+def _validate_batch_config(
+    *,
+    service_name: str,
+    environment: EnvironmentName,
+    enabled: bool,
+    database_url: str | None,
+    gateway_api_base_url: str,
+    internal_batch_token: str | None,
+    batch_encryption_secret: str | None,
+    internal_config_token: str | None,
+    internal_chat_token: str | None,
+    auth_token_secret: str,
+    cache_affinity_hmac_secret: str,
+    prompt_template_encryption_secret: str | None,
+    file_encryption_secret: str | None,
+    provider_key_encryption_secret: str | None,
+    session_risk_hmac_secret: str | None,
+    session_risk_previous_hmac_secret: str | None,
+    global_concurrency: int,
+    tenant_concurrency: int,
+    lease_seconds: int,
+    heartbeat_seconds: int,
+) -> None:
+    """Validate Batch service identity, key isolation, and scheduler invariants."""
+
+    if tenant_concurrency > global_concurrency:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Batch tenant concurrency cannot exceed global concurrency.",
+            suggestion="Lower the tenant limit or increase the bounded global limit.",
+        )
+    if heartbeat_seconds * 2 >= lease_seconds:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Batch heartbeat must be lower than half of the lease.",
+            suggestion="Lower the heartbeat or increase the lease duration.",
+        )
+    if service_name == "batch-worker" and enabled and (
+        internal_batch_token is None
+        or batch_encryption_secret is None
+        or database_url is None
+    ):
+        raise ConfigError(
+            code="infra.config_missing",
+            message="Enabled Batch worker configuration is incomplete.",
+            suggestion="Configure the Batch token, encryption secret, and database URL.",
+        )
+    if internal_batch_token is not None:
+        try:
+            token_bytes = internal_batch_token.encode("ascii")
+        except UnicodeEncodeError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_INTERNAL_BATCH_TOKEN must contain ASCII characters only.",
+                suggestion="Configure an independent printable ASCII Batch token.",
+            ) from None
+        if (
+            not 32 <= len(token_bytes) <= 512
+            or any(
+                character.isspace() or ord(character) < 32
+                for character in internal_batch_token
+            )
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_INTERNAL_BATCH_TOKEN does not meet security requirements.",
+                suggestion="Use a 32-512 byte token without whitespace or control characters.",
+            )
+        for other in (internal_config_token, internal_chat_token):
+            if other is not None and hmac.compare_digest(internal_batch_token, other):
+                raise ConfigError(
+                    code="infra.config_invalid",
+                    message="Batch and other internal service tokens must be different.",
+                    suggestion="Configure a dedicated METAHUB_INTERNAL_BATCH_TOKEN.",
+                )
+        if environment == "prod" and hmac.compare_digest(
+            internal_batch_token, DEFAULT_INTERNAL_BATCH_TOKEN
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_INTERNAL_BATCH_TOKEN must be replaced in prod.",
+                suggestion="Configure the same independent Batch token on Worker and Gateway.",
+            )
+    if batch_encryption_secret is not None:
+        try:
+            secret_bytes = batch_encryption_secret.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_BATCH_ENCRYPTION_SECRET is invalid.",
+                suggestion="Configure an independent high-entropy UTF-8 secret.",
+            ) from None
+        if (
+            not 32 <= len(secret_bytes) <= 512
+            or any(
+                character.isspace() or ord(character) < 32
+                for character in batch_encryption_secret
+            )
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_BATCH_ENCRYPTION_SECRET does not meet security requirements.",
+                suggestion="Use a 32-512 byte secret without whitespace or controls.",
+            )
+        other_secrets = (
+            internal_config_token,
+            internal_chat_token,
+            internal_batch_token,
+            auth_token_secret,
+            cache_affinity_hmac_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            provider_key_encryption_secret,
+            session_risk_hmac_secret,
+            session_risk_previous_hmac_secret,
+        )
+        if any(
+            other is not None and hmac.compare_digest(batch_encryption_secret, other)
+            for other in other_secrets
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Batch encryption secret must use an independent key domain.",
+                suggestion="Configure a dedicated METAHUB_BATCH_ENCRYPTION_SECRET.",
+            )
+        if environment == "prod" and hmac.compare_digest(
+            batch_encryption_secret, DEFAULT_BATCH_ENCRYPTION_SECRET
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_BATCH_ENCRYPTION_SECRET must be replaced in prod.",
+                suggestion="Configure an independent production Batch encryption secret.",
+            )
+    if service_name == "batch-worker" and enabled:
+        _validate_internal_chat_gateway_url(
+            gateway_api_base_url,
+            environment=environment,
+        )
 
 
 def _validate_prompt_template_encryption_secret(
@@ -2025,6 +2312,30 @@ def _bounded_int(
             suggestion=f"Set {key} to a value between {minimum} and {maximum}.",
         )
     return value
+
+
+def _bounded_nonnegative_int(
+    values: dict[str, ConfigValue], key: str, *, maximum: int
+) -> int:
+    """Read a canonical ASCII integer in ``0..maximum`` without accepting signs."""
+
+    raw = _value(values, key).strip()
+    if not raw or not raw.isascii() or not raw.isdecimal():
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=f"{key} must be a non-negative integer.",
+            suggestion=f"Set {key} to an integer from 0 through {maximum}.",
+        )
+    value = int(raw)
+    if value > maximum:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=f"{key} must be between 0 and {maximum}.",
+            suggestion=f"Set {key} to an integer from 0 through {maximum}.",
+        )
+    return value
+
+
 def _bounded_float(
     values: dict[str, ConfigValue],
     key: str,

@@ -50,6 +50,9 @@ export const PERMISSIONS = Object.freeze({
   FILE_WRITE: "file.write",
   // PAGE-103 扫描会写安全事实并消耗离线 OCR 资源，必须与 file.read 组合且不能由角色名推导。
   FILE_SECURITY_SCAN: "file.security.scan",
+  // PAGE-104 read/write are independent; task results additionally require current file.read.
+  BATCH_READ: "batch.read",
+  BATCH_WRITE: "batch.write",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

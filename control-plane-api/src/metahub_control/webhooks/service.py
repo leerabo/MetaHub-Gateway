@@ -1809,6 +1809,10 @@ def _validated_pending_delivery_body(
             # 合同失败的 request_id 同样不公开在 Webhook 信封。恢复必须回到不可变 run，
             # 不能使用本轮 worker ID，否则会切断 CI 上报、数据库和投递的同一链路。
             source_request_id = _adapter_contract_source_request_id(connection, envelope)
+        elif envelope.get("event_type") in {"batch_job.created", "batch_job.completed"}:
+            # Batch request_id 只存在于不可变生命周期事件中。恢复必须重新绑定同租户的
+            # event、Job、actor、trace、发生时间和完整公开摘要，禁止回退到 outbox worker ID。
+            source_request_id = _batch_job_source_request_id(connection, envelope)
         elif envelope.get("event_type") == "file.prompt_injection_detected":
             # 文件安全 request_id 不进入公开七字段 payload；pending 恢复必须从同 tenant
             # 不可变 source/scan/finding 重新取得，禁止用 worker request_id 或占位值绕过绑定。
@@ -1831,6 +1835,96 @@ def _validated_pending_delivery_body(
     if rebuilt != envelope:
         raise ApiError("webhook.delivery_unavailable")
     return canonical_json_bytes(envelope)
+
+
+def _batch_job_source_request_id(
+    connection: sqlite3.Connection,
+    envelope: dict[str, Any],
+) -> str:
+    """从不可变 Batch 生命周期事件恢复构造期 request_id。
+
+    参数：当前 pending delivery 的数据库连接和已通过通用敏感字段扫描的持久信封。
+    返回：与同租户 event、Job、actor、trace、发生时间和完整 payload 精确绑定的 request_id。
+    约束：缺失、多义、跨租户、字段漂移或数据库/JSON 错误都必须在出网前失败关闭。
+    """
+
+    event_type = envelope.get("event_type")
+    payload = envelope.get("payload")
+    expected_payload_fields = (
+        {
+            "schema_version",
+            "batch_job_id",
+            "operation",
+            "priority",
+            "task_count",
+            "estimated_cost_cny",
+        }
+        if event_type == "batch_job.created"
+        else {
+            "schema_version",
+            "batch_job_id",
+            "status",
+            "succeeded_count",
+            "failed_count",
+            "cancelled_count",
+            "actual_cost_cny",
+            "possible_cost_cny",
+        }
+    )
+    event_id = envelope.get("event_id")
+    job_id = envelope.get("object_id")
+    if (
+        event_type not in {"batch_job.created", "batch_job.completed"}
+        or not isinstance(payload, dict)
+        or set(payload) != expected_payload_fields
+        or type(event_id) is not str
+        or type(job_id) is not str
+        or payload.get("batch_job_id") != job_id
+        or type(envelope.get("tenant_id")) is not str
+        or type(envelope.get("actor_id")) is not str
+        or type(envelope.get("trace_id")) is not str
+        or type(envelope.get("timestamp")) is not str
+    ):
+        # 先证明公开信封内部自洽，再允许不可变 source 为其恢复非公开请求身份。
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        payload_json = json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        rows = connection.execute(
+            """
+            SELECT event.source_request_id
+            FROM batch_job_events event
+            JOIN batch_jobs job
+              ON job.tenant_id=event.tenant_id AND job.batch_job_id=event.batch_job_id
+            WHERE event.tenant_id=? AND event.batch_job_event_id=?
+              AND event.event_type=? AND event.batch_job_id=?
+              AND event.actor_id=? AND event.source_trace_id=?
+              AND event.occurred_at=? AND event.payload_json=?
+            LIMIT 2
+            """,
+            (
+                envelope.get("tenant_id"),
+                event_id,
+                event_type,
+                job_id,
+                envelope.get("actor_id"),
+                envelope.get("trace_id"),
+                envelope.get("timestamp"),
+                payload_json,
+            ),
+        ).fetchall()
+    # 恢复边界只能公开固定错误码，不能泄露数据库位置、SQL 或损坏的持久摘要。
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+    if len(rows) != 1 or type(rows[0]["source_request_id"]) is not str:
+        # 禁止使用本轮 worker request_id 或占位值掩盖 source 缺失、漂移或多义。
+        raise ApiError("webhook.delivery_unavailable")
+    return rows[0]["source_request_id"]
 
 
 def _adapter_spec_source_request_id(

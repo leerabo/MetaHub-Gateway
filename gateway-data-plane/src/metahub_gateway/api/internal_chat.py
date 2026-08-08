@@ -32,6 +32,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
+from metahub_gateway.batch import TrustedGatewayInvocation
 from metahub_gateway.session_risk import (
     reject_public_session_headers_on_internal_route,
     resolve_enterprise_chat_session_risk_candidates,
@@ -112,17 +113,20 @@ async def internal_chat_completions(request: Request) -> JSONResponse:
         endpoint=_PROVIDER_ENDPOINT,
         request_kind="chat",
         audit_endpoint=_AUDIT_ENDPOINT,
-        trusted_auth_context=execution.auth_context,
-        trusted_payload={
-            "model": execution.model_alias,
-            "messages": list(execution.messages),
-            "stream": False,
-        },
-        trusted_session_risk_candidates=resolve_enterprise_chat_session_risk_candidates(
-            config,
-            execution.auth_context,
-            chat_session_id=execution.chat_session_id,
-            chat_message_id=execution.chat_message_id,
+        trusted_invocation=TrustedGatewayInvocation(
+            source="enterprise_chat",
+            auth_context=execution.auth_context,
+            payload={
+                "model": execution.model_alias,
+                "messages": list(execution.messages),
+                "stream": False,
+            },
+            session_risk_candidates=resolve_enterprise_chat_session_risk_candidates(
+                config,
+                execution.auth_context,
+                chat_session_id=execution.chat_session_id,
+                chat_message_id=execution.chat_message_id,
+            ),
         ),
     )
     # 内部入口固定非流式；若共用治理器违反约束，必须失败关闭而不能返回半个流响应。

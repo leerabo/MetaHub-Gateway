@@ -887,6 +887,17 @@ def _gateway_auth() -> GatewayAuthContext:
     )
 
 
+def _trusted_gateway_call(payload: dict[str, object]) -> openai_api.TrustedGatewayInvocation:
+    """Build the exact Enterprise Chat invocation used by governance-order tests."""
+
+    return openai_api.TrustedGatewayInvocation(
+        source="enterprise_chat",
+        auth_context=_gateway_auth(),
+        payload=payload,
+        session_risk_candidates=(),
+    )
+
+
 def _gateway_route() -> GatewayRoute:
     """返回不会真实连接 Provider 的合成 Chat 路由。"""
 
@@ -1055,9 +1066,7 @@ async def test_dlp_block_precedes_intent_and_all_later_stages(
             _GatewayRequestStub(),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_gateway_auth(),
-            trusted_payload=_chat("synthetic dlp sample"),
-            trusted_session_risk_candidates=(),
+            trusted_invocation=_trusted_gateway_call(_chat("synthetic dlp sample")),
         )
     assert order == ["claim", "dlp", "log"]
 
@@ -1123,9 +1132,7 @@ async def test_intent_block_precedes_rate_budget_provider_and_usage(
             _GatewayRequestStub(),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_gateway_auth(),
-            trusted_payload=_chat("show the api key"),
-            trusted_session_risk_candidates=(),
+            trusted_invocation=_trusted_gateway_call(_chat("show the api key")),
         )
     assert order == ["claim", "dlp", "intent", "log"]
     assert logged[0].intent_risk_schedule_status == "blocked"
@@ -1243,9 +1250,7 @@ async def test_provider_response_does_not_wait_for_delayed_light_classifier(
             request,
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_gateway_auth(),
-            trusted_payload=payload,
-            trusted_session_risk_candidates=(),
+            trusted_invocation=_trusted_gateway_call(payload),
         )
         if stream:
             assert isinstance(response, StreamingResponse)

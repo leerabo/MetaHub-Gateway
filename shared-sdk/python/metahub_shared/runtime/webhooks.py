@@ -84,6 +84,10 @@ WEBHOOK_EVENT_TYPES = {
     "file.scanned",
     # 文件注入事件只外发报告计数和风险，不包含文件名、finding 证据、OCR 文本或报告哈希。
     "file.prompt_injection_detected",
+    # Batch lifecycle events expose only fixed counters and cost summaries. File identities,
+    # operation parameters, prompts, responses, grants, leases, and route plans stay internal.
+    "batch_job.created",
+    "batch_job.completed",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -292,6 +296,9 @@ def build_webhook_event(
     elif event_type == "file.prompt_injection_detected":
         # PRD-073 只接受不可变安全报告可反向证明的七字段 blocked 摘要。
         _validate_file_prompt_injection_payload(safe_payload)
+    elif event_type in {"batch_job.created", "batch_job.completed"}:
+        # PRD-074 只接受 Batch source row 冻结的任务计数与金额摘要。
+        _validate_batch_job_event_payload(event_type, safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -328,6 +335,8 @@ def build_webhook_event(
         "file.uploaded",
         "file.scanned",
         "file.prompt_injection_detected",
+        "batch_job.created",
+        "batch_job.completed",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -549,6 +558,18 @@ def build_webhook_event(
             source_request_id=source_request_id,
             occurred_at=occurred_at,
         )
+    elif event_type in {"batch_job.created", "batch_job.completed"}:
+        # Batch source event 必须绑定同租户 Job、持久事件、actor 和原始操作链路。
+        _validate_batch_job_event_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
     elif event_type == "audit.exported":
         # source worker 必须把稳定 aexevt_ 事件绑定到同一 AuditExport、actor、trace 和请求事实。
         _validate_audit_exported_envelope(
@@ -684,6 +705,88 @@ def _validate_persistent_event_id(event_id: str | None) -> None:
         or any(character.isspace() or ord(character) < 32 for character in event_id)
     ):
         # 持久事件 ID 不合法时必须失败关闭，不能生成随机 ID 掩盖幂等事实损坏。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_batch_job_event_payload(
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    """Validate the exact public summary for a persisted Batch lifecycle event."""
+
+    common = {"schema_version", "batch_job_id"}
+    if event_type == "batch_job.created":
+        expected = common | {
+            "operation",
+            "priority",
+            "task_count",
+            "estimated_cost_cny",
+        }
+    else:
+        expected = common | {
+            "status",
+            "succeeded_count",
+            "failed_count",
+            "cancelled_count",
+            "actual_cost_cny",
+            "possible_cost_cny",
+        }
+    if set(payload) != expected:
+        raise ValueError("webhook.payload_invalid")
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["batch_job_id"], prefix="bjob_")
+    ):
+        raise ValueError("webhook.payload_invalid")
+    if event_type == "batch_job.created":
+        if (
+            payload["operation"] not in {"summarize", "translate", "classify"}
+            or payload["priority"] not in {"low", "normal", "high"}
+            or type(payload["task_count"]) is not int
+            or not 1 <= payload["task_count"] <= 100
+            or not _is_finops_money_text(payload["estimated_cost_cny"])
+        ):
+            raise ValueError("webhook.payload_invalid")
+        return
+    counts = (
+        payload["succeeded_count"],
+        payload["failed_count"],
+        payload["cancelled_count"],
+    )
+    if (
+        payload["status"]
+        not in {"completed", "partial_failed", "failed", "cancelled", "expired"}
+        or any(type(value) is not int or not 0 <= value <= 100 for value in counts)
+        or sum(counts) > 100
+        or not _is_finops_money_text(payload["actual_cost_cny"])
+        or not _is_finops_money_text(payload["possible_cost_cny"])
+    ):
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_batch_job_event_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """Bind a Batch summary to its immutable source event and tenant-qualified Job."""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="bjev_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != payload["batch_job_id"]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or occurred_at.tzinfo is None
+    ):
         raise ValueError("webhook.payload_invalid")
 
 

@@ -15,6 +15,7 @@ from .adapter_specs.routes import router as adapter_specs_router
 from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
+from .batch_jobs import router as batch_jobs_router
 from .budgets.routes import router as budgets_router
 from .config.routes import router as config_router
 from .config_transfer.routes import router as config_transfer_router
@@ -82,6 +83,7 @@ app = create_service_app(
     ),
 )
 app.include_router(auth_router)
+app.include_router(batch_jobs_router)
 app.include_router(adapter_contracts_router)
 app.include_router(adapter_specs_router)
 app.include_router(audit_router)

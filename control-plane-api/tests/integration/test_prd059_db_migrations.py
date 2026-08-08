@@ -48,7 +48,7 @@ PRESERVED_TABLES = (
 NOW = "2026-07-31T10:00:00Z"
 """固定 UTC 时间，避免迁移证据依赖测试机器当前时钟。"""
 
-# PRD-059 专项刻意停在 0050；共享目录已由 PRD-073 提升到 revision 9，因此这里必须显式冻结
+# PRD-059 专项刻意停在 0050；共享目录已由 PRD-074 提升到 revision 10，因此这里必须显式冻结
 # revision 1 的 48 项历史投影，不能让配置迁移、Chat、两类模板、风险或文件权限反向改写早期语义。
 PRD059_LATER_PERMISSION_CODES = frozenset(
     {
@@ -66,9 +66,11 @@ PRD059_LATER_PERMISSION_CODES = frozenset(
         "prompt_template.use",
         "policy_template.read",
         "policy_template.apply",
+        "batch.read",
+        "batch.write",
     }
 )
-"""0050 尚不存在、必须从共享 revision 9 目录中排除的后续权限码。"""
+"""0050 尚不存在、必须从共享 revision 10 目录中排除的后续权限码。"""
 
 
 def _sqlite_url(path: Path) -> str:

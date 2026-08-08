@@ -256,7 +256,9 @@ async def test_template_invocation_renders_before_shared_governance_and_stays_pr
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json()["rendered_user"] == RENDERED_USER
     assert len(captured) == 1
-    assert captured[0]["trusted_payload"] == {
+    invocation = captured[0]["trusted_invocation"]
+    assert invocation.source == "enterprise_chat"
+    assert invocation.payload == {
         "model": "prd066-gateway-chat",
         "messages": [{"role": "user", "content": RENDERED_USER}],
         "stream": False,

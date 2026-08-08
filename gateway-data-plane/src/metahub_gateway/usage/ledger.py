@@ -42,7 +42,7 @@ NORMALIZATION_WARNING_CODES = {
     "provider_currency_missing",
 }
 # spool 使用独立版本号和精确字段集合；未知字段必须失败关闭，避免未来上下文扩展时把敏感值落盘。
-_SPOOL_RECORD_SCHEMA_VERSION = 5
+_SPOOL_RECORD_SCHEMA_VERSION = 6
 # v1/v2 字段集必须长期保留用于恢复升级前已 fsync 的待重放记录；各版本使用精确集合，
 # 旧记录缺失的安全证据只能解释为“未记录”，不能用宽松默认冒充新版本事实。
 _SPOOL_CONTEXT_FIELDS_V1 = frozenset(
@@ -120,6 +120,15 @@ _SPOOL_CONTEXT_FIELDS_V5 = _SPOOL_CONTEXT_FIELDS_V4 | frozenset(
         "output_safety_scan_status",
         "output_safety_decision",
         "billing_disposition",
+    }
+)
+_SPOOL_CONTEXT_FIELDS_V6 = _SPOOL_CONTEXT_FIELDS_V5 | frozenset(
+    {
+        "batch_job_id",
+        "batch_task_id",
+        "batch_attempt_id",
+        "batch_route_plan_hash",
+        "batch_allocation_settlement_cny",
     }
 )
 _SPOOL_USAGE_FIELDS = frozenset(
@@ -248,6 +257,13 @@ class RequestLogContext:
     output_safety_scan_status: str | None = None
     output_safety_decision: str | None = None
     billing_disposition: str | None = None
+    # Batch owner and settlement fields are internal-only. They are excluded from request_logs and
+    # enter disk only through the exact-set v6 Usage spool contract.
+    batch_job_id: str | None = None
+    batch_task_id: str | None = None
+    batch_attempt_id: str | None = None
+    batch_route_plan_hash: str | None = None
+    batch_allocation_settlement_cny: str | None = None
 
 
 # RequestLog 安全摘要按固定顺序比较，防止同一 request 被不同 result/mode/version 拼接。
@@ -830,6 +846,16 @@ def record_usage_ledger(
                     intent=write_intent,
                     committed=existing,
                 )
+                if write_intent.captured_estimate is None and context.batch_attempt_id is not None:
+                    raise sqlite3.IntegrityError("batch_usage_settlement_evidence_missing")
+                if write_intent.captured_estimate is not None:
+                    _settle_batch_usage_allocation(
+                        connection,
+                        context=context,
+                        intent=write_intent,
+                        estimate=write_intent.captured_estimate,
+                        replay=True,
+                    )
                 connection.commit()
                 return existing
             _ensure_replay_request_log(connection, context, write_intent.pricing_observed_at)
@@ -969,6 +995,13 @@ def record_usage_ledger(
                 context.request_id,
             ),
         )
+        _settle_batch_usage_allocation(
+            connection,
+            context=context,
+            intent=write_intent,
+            estimate=estimate,
+            replay=replay,
+        )
         if context.budget_reservation_outstanding_cny is not None:
             # Usage 与未结算覆盖额必须同事务提交；任一失败都保留原总预留并回滚本次账本。
             updated = set_request_budget_reservations_outstanding(
@@ -1023,6 +1056,178 @@ def record_usage_ledger(
     return committed
 
 
+def _settle_batch_usage_allocation(
+    connection: sqlite3.Connection,
+    *,
+    context: RequestLogContext,
+    intent: UsageLedgerIntent,
+    estimate: CostEstimate,
+    replay: bool,
+) -> None:
+    """Post all allocation rows and the attempt projection in the Usage/FinOps transaction."""
+
+    owner_values = (
+        context.batch_job_id,
+        context.batch_task_id,
+        context.batch_attempt_id,
+        context.batch_route_plan_hash,
+    )
+    if not any(value is not None for value in owner_values):
+        if context.batch_allocation_settlement_cny is not None:
+            raise sqlite3.IntegrityError("batch_usage_settlement_owner_missing")
+        return
+    if any(value is None for value in owner_values):
+        raise sqlite3.IntegrityError("batch_usage_settlement_owner_incomplete")
+    settlement = format(estimate.cost_cny, ".6f")
+    if replay and context.batch_allocation_settlement_cny is None:
+        raise sqlite3.IntegrityError("batch_usage_settlement_amount_missing")
+    if (
+        context.batch_allocation_settlement_cny is not None
+        and context.batch_allocation_settlement_cny != settlement
+    ):
+        raise sqlite3.IntegrityError("batch_usage_settlement_amount_mismatch")
+    attempt = connection.execute(
+        """
+        SELECT status,execution_outcome,result_state,input_tokens,output_tokens,cost_cny
+        FROM batch_attempts
+        WHERE tenant_id=? AND batch_job_id=? AND batch_task_id=? AND batch_attempt_id=?
+          AND request_id=? AND trace_id=?
+        """,
+        (
+            context.tenant_id,
+            context.batch_job_id,
+            context.batch_task_id,
+            context.batch_attempt_id,
+            context.request_id,
+            context.trace_id,
+        ),
+    ).fetchone()
+    if attempt is None or str(attempt["status"]) not in {"calling", "provider_succeeded"}:
+        raise sqlite3.IntegrityError("batch_usage_settlement_attempt_invalid")
+    rows = connection.execute(
+        """
+        SELECT allocation.batch_budget_allocation_id,allocation.budget_date,
+               allocation.reserved_cost_cny,allocation.route_plan_hash,
+               allocation.execution_outcome,allocation.charge_state,allocation.status
+        FROM batch_budget_allocations allocation
+        WHERE allocation.tenant_id=? AND allocation.batch_job_id=?
+          AND allocation.batch_task_id=? AND allocation.batch_attempt_id=?
+          AND allocation.budget_date=(
+            SELECT MAX(latest.budget_date)
+            FROM batch_budget_allocations latest
+            WHERE latest.tenant_id=allocation.tenant_id
+              AND latest.batch_job_id=allocation.batch_job_id
+              AND latest.batch_task_id=allocation.batch_task_id
+              AND latest.batch_attempt_id=allocation.batch_attempt_id
+          )
+        ORDER BY allocation.budget_rule_id
+        """,
+        (
+            context.tenant_id,
+            context.batch_job_id,
+            context.batch_task_id,
+            context.batch_attempt_id,
+        ),
+    ).fetchall()
+    row_states: set[tuple[str, str, str]] = set()
+    actual_amount = Decimal(settlement)
+    for row in rows:
+        try:
+            reserved = Decimal(str(row["reserved_cost_cny"]))
+        except (InvalidOperation, ValueError) as exc:
+            raise sqlite3.IntegrityError("batch_usage_settlement_amount_invalid") from exc
+        if (
+            not reserved.is_finite()
+            or reserved < actual_amount
+            or str(row["route_plan_hash"]) != context.batch_route_plan_hash
+        ):
+            raise sqlite3.IntegrityError("batch_usage_settlement_coverage_invalid")
+        row_states.add(
+            (
+                str(row["execution_outcome"]),
+                str(row["charge_state"]),
+                str(row["status"]),
+            )
+        )
+    active_state = ("not_invoked", "none", "active")
+    posted_state = ("succeeded", "posted", "posted")
+    if row_states and row_states not in ({active_state}, {posted_state}):
+        raise sqlite3.IntegrityError("batch_usage_settlement_state_invalid")
+    if row_states == {active_state}:
+        latest_budget_date = str(rows[0]["budget_date"])
+        cursor = connection.execute(
+            """
+            UPDATE batch_budget_allocations
+            SET execution_outcome='succeeded',charge_state='posted',status='posted',updated_at=?
+            WHERE tenant_id=? AND batch_job_id=? AND batch_task_id=? AND batch_attempt_id=?
+              AND budget_date=? AND execution_outcome='not_invoked'
+              AND charge_state='none' AND status='active'
+            """,
+            (
+                intent.pricing_observed_at,
+                context.tenant_id,
+                context.batch_job_id,
+                context.batch_task_id,
+                context.batch_attempt_id,
+                latest_budget_date,
+            ),
+        )
+        if cursor.rowcount != len(rows):
+            raise sqlite3.IntegrityError("batch_usage_settlement_allocation_conflict")
+    if str(attempt["status"]) == "calling":
+        cursor = connection.execute(
+            """
+            UPDATE batch_attempts
+            SET status='provider_succeeded',execution_outcome='succeeded',retry_safe=0,
+                gateway_error_code=NULL,input_tokens=?,output_tokens=?,cost_cny=?,updated_at=?
+            WHERE tenant_id=? AND batch_attempt_id=? AND status='calling'
+              AND execution_outcome='not_invoked' AND result_state='none'
+            """,
+            (
+                intent.input_tokens,
+                intent.output_tokens,
+                settlement,
+                intent.pricing_observed_at,
+                context.tenant_id,
+                context.batch_attempt_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise sqlite3.IntegrityError("batch_usage_settlement_attempt_conflict")
+    elif (
+        str(attempt["execution_outcome"]) == "succeeded"
+        and attempt["input_tokens"] is not None
+        and attempt["output_tokens"] is not None
+        and int(attempt["input_tokens"]) == intent.input_tokens
+        and int(attempt["output_tokens"]) == intent.output_tokens
+        and attempt["cost_cny"] is None
+    ):
+        # A durable v6 spool may be followed by encrypted result persistence before replay.
+        cursor = connection.execute(
+            """
+            UPDATE batch_attempts SET cost_cny=?,updated_at=?
+            WHERE tenant_id=? AND batch_attempt_id=? AND status='provider_succeeded'
+              AND execution_outcome='succeeded' AND cost_cny IS NULL
+            """,
+            (
+                settlement,
+                intent.pricing_observed_at,
+                context.tenant_id,
+                context.batch_attempt_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise sqlite3.IntegrityError("batch_usage_settlement_attempt_conflict")
+    elif (
+        str(attempt["execution_outcome"]) != "succeeded"
+        or attempt["input_tokens"] is None
+        or attempt["output_tokens"] is None
+        or attempt["cost_cny"] is None
+        or int(attempt["input_tokens"]) != intent.input_tokens
+        or int(attempt["output_tokens"]) != intent.output_tokens
+        or format(Decimal(str(attempt["cost_cny"])), ".6f") != settlement
+    ):
+        raise sqlite3.IntegrityError("batch_usage_settlement_attempt_mismatch")
 def _ensure_output_safety_billing_evidence(
     connection: sqlite3.Connection,
     *,
@@ -1250,13 +1455,33 @@ def _serialize_usage_spool_record(
         context.billing_disposition,
         allow_absent=True,
     )
-    # 只有真实 scan owner 才升级为 v5；无 scan 的 Embeddings/前置失败继续生成旧 reader 可恢复的 v4。
-    record_version = 5 if output_safety_values is not None else 4
-    context_fields = (
-        _SPOOL_CONTEXT_FIELDS_V5 if record_version == 5 else _SPOOL_CONTEXT_FIELDS_V4
+    batch_values = (
+        context.batch_job_id,
+        context.batch_task_id,
+        context.batch_attempt_id,
+        context.batch_route_plan_hash,
     )
+    batch_present = any(value is not None for value in batch_values)
+    if batch_present and (
+        any(value is None for value in batch_values)
+        or context.batch_allocation_settlement_cny is not None
+        or intent.captured_estimate is None
+        or output_safety_values is None
+    ):
+        raise ValueError("finops_spool_batch_context_invalid")
+    # Batch always uses v6. Other Chat uses v5 when Output Safety has a complete owner.
+    record_version = 6 if batch_present else (5 if output_safety_values is not None else 4)
+    context_fields = {
+        4: _SPOOL_CONTEXT_FIELDS_V4,
+        5: _SPOOL_CONTEXT_FIELDS_V5,
+        6: _SPOOL_CONTEXT_FIELDS_V6,
+    }[record_version]
     # 字段集合是显式白名单；RequestLogContext 未来新增字段不会自动落盘。
     context_payload = {name: getattr(context, name) for name in context_fields}
+    if batch_present:
+        context_payload["batch_allocation_settlement_cny"] = format(
+            intent.captured_estimate.cost_cny, ".6f"
+        )
     # 写盘前复用严格状态矩阵；无效上下文不能依赖重放时才发现。
     _deserialize_spool_intent_context(context_payload)
     estimate = intent.captured_estimate
@@ -1335,7 +1560,7 @@ def _deserialize_usage_spool_record(
     )
     # v1-v4 是升级前合法证据；缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
     record_version = record["schema_version"]
-    if record_version not in {1, 2, 3, 4, _SPOOL_RECORD_SCHEMA_VERSION}:
+    if record_version not in {1, 2, 3, 4, 5, _SPOOL_RECORD_SCHEMA_VERSION}:
         raise ValueError("finops_spool_payload_version_invalid")
     context_fields = {
         1: _SPOOL_CONTEXT_FIELDS_V1,
@@ -1343,6 +1568,7 @@ def _deserialize_usage_spool_record(
         3: _SPOOL_CONTEXT_FIELDS_V3,
         4: _SPOOL_CONTEXT_FIELDS_V4,
         5: _SPOOL_CONTEXT_FIELDS_V5,
+        6: _SPOOL_CONTEXT_FIELDS_V6,
     }[record_version]
     context_value = _spool_mapping(record["context"], context_fields)
     usage_value = _spool_mapping(record["usage"], _SPOOL_USAGE_FIELDS)
@@ -1367,6 +1593,7 @@ def _deserialize_usage_spool_record(
         "dlp_match_count",
         "fallback_triggered",
         "routing_attempt_count",
+        "batch_allocation_settlement_cny",
     }
     optional_context = {
         name: _spool_optional_text(context_value[name], maximum=256)
@@ -1422,6 +1649,29 @@ def _deserialize_usage_spool_record(
     reservation_outstanding = _spool_optional_decimal_text(
         context_value["budget_reservation_outstanding_cny"]
     )
+    if record_version == 6:
+        batch_job_id = _spool_prefixed_id(context_value["batch_job_id"], prefix="bjob_")
+        batch_task_id = _spool_prefixed_id(context_value["batch_task_id"], prefix="btsk_")
+        batch_attempt_id = _spool_prefixed_id(
+            context_value["batch_attempt_id"], prefix="batm_"
+        )
+        batch_route_plan_hash = _spool_required_text(
+            context_value["batch_route_plan_hash"], maximum=64
+        )
+        if len(batch_route_plan_hash) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in batch_route_plan_hash
+        ):
+            raise ValueError("finops_spool_payload_invalid")
+        batch_settlement = _spool_money_text(
+            context_value["batch_allocation_settlement_cny"]
+        )
+    else:
+        batch_job_id = None
+        batch_task_id = None
+        batch_attempt_id = None
+        batch_route_plan_hash = None
+        batch_settlement = None
     context = RequestLogContext(
         tenant_id=tenant_id,
         request_id=request_id,
@@ -1488,6 +1738,13 @@ def _deserialize_usage_spool_record(
             output_safety_context[2] if output_safety_context else None
         ),
         billing_disposition=(output_safety_context[3] if output_safety_context else None),
+        batch_job_id=batch_job_id,
+        batch_task_id=batch_task_id,
+        batch_attempt_id=batch_attempt_id,
+        batch_route_plan_hash=batch_route_plan_hash,
+        batch_allocation_settlement_cny=(
+            format(batch_settlement, ".6f") if batch_settlement is not None else None
+        ),
     )
 
     usage_ledger_id = _spool_prefixed_id(
@@ -1537,6 +1794,12 @@ def _deserialize_usage_spool_record(
         normalization_warnings=list(warnings_value),
         captured_estimate=_deserialize_spool_estimate(record["estimate"]),
     )
+    if record_version == 6 and (
+        intent.captured_estimate is None
+        or context.batch_allocation_settlement_cny
+        != format(intent.captured_estimate.cost_cny, ".6f")
+    ):
+        raise ValueError("finops_spool_payload_invalid")
     return context, intent
 
 

@@ -44,6 +44,17 @@ import {
   fileSecurityReadIdentitySnapshot,
   isFileSecurityAbortError,
 } from "../features/file-security/fileSecurityPageState.js";
+import {
+  bindBatchJobInteractions,
+  clearBatchResultDom,
+  hydrateBatchResultText,
+} from "../features/batch-jobs/bindBatchJobs.js";
+import {
+  batchJobPageOwner,
+  batchReadIdentitySnapshot,
+  createBatchJobPageState,
+  isBatchAbortError,
+} from "../features/batch-jobs/batchJobPageState.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -259,6 +270,14 @@ import {
   scanFileSecurity,
   triggerFileSecurityReportCsvDownload,
 } from "../lib/fileSecurity.js";
+import {
+  cancelBatchJob,
+  createBatchJob,
+  getBatchJob,
+  getBatchTaskResult,
+  listBatchJobs,
+  listBatchTasks,
+} from "../lib/batchJobs.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -535,6 +554,10 @@ const sessionRiskPageState = createSessionRiskPageState();
 const filePageState = createFilePageState();
 // PAGE-103 的 ready 文件名、严格报告、扫描/导出 ticket 只属于独立 file-security owner。
 const fileSecurityPageState = createFileSecurityPageState();
+// PAGE-104 的 Job/Task cursor、Mutation 与结果 ticket 属于完整 Batch owner；assistant 正文只驻留 DOM。
+const batchJobPageState = createBatchJobPageState({
+  clearResultDom: () => clearBatchResultDom(globalThis.document),
+});
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -663,6 +686,10 @@ if (app && globalThis.window) {
         // PAGE-103 文件名、报告与扫描/导出 ticket 在 hash 离页时立即销毁，不能等待导航 API。
         fileSecurityPageState.clear();
       }
+      if (nextItemId !== "batch-jobs") {
+        // PAGE-104 必须先擦除可见结果正文，再取消列表、详情和写请求。
+        batchJobPageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -692,6 +719,7 @@ if (app && globalThis.window) {
       sessionRiskPageState.clear();
       filePageState.clear();
       fileSecurityPageState.clear();
+      batchJobPageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -808,6 +836,7 @@ async function start() {
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
+    clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -879,6 +908,7 @@ async function performRefresh() {
     clearSessionRiskStateOnIdentityChange(authSession.context, context);
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
+    clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1050,6 +1080,10 @@ async function performRefresh() {
   // PAGE-103 只属于后端确认的 file-security 导航；撤权或裁剪必须立即销毁文件名和报告。
   if (consoleShellState?.activeNavigationItemId !== "file-security") {
     fileSecurityPageState.clear();
+  }
+  // PAGE-104 只属于后端确认的 batch-jobs 导航；撤权或离页同步清正文并取消全部 ticket。
+  if (consoleShellState?.activeNavigationItemId !== "batch-jobs") {
+    batchJobPageState.clear();
   }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
@@ -1234,6 +1268,15 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-104 只在精确 Batch 导航 owner 下读取列表、选中详情和创建候选；其他页面零预取。
+  const batchJobsState = await loadBatchJobsState(consoleShellState, refreshId, {
+    projectState,
+    environmentState,
+    modelAliasesState,
+  });
+  if (!authSession.token) {
+    return;
+  }
   const budgetState = await loadBudgetState(virtualKeysState, consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
@@ -1357,6 +1400,7 @@ async function performRefresh() {
     sessionRisksState,
     filesState,
     fileSecurityState,
+    batchJobsState,
     budgetState,
     dlpState,
     webhookState,
@@ -1429,6 +1473,10 @@ if (app && globalThis.window) {
     }
     // 文件安全扫描或认证 CSV 未决时不重建按钮 DOM，避免重复命令和 Blob 生命周期漂移。
     if (fileSecurityPageState.isActionBusy()) {
+      return;
+    }
+    // 创建表单和一次性 assistant 结果不能被定时全壳刷新复制或销毁；空闲列表仍可轮询状态。
+    if (batchJobPageState.blocksShellDomReplacement()) {
       return;
     }
     // 死信重放/归档结果未知时不得由全页定时刷新重建操作 DOM。
@@ -1512,6 +1560,7 @@ function renderLogin(error, requestId) {
   sessionRiskPageState.clear();
   filePageState.clear();
   fileSecurityPageState.clear();
+  batchJobPageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1848,6 +1897,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     sessionRiskPageState.clear();
     filePageState.clear();
     fileSecurityPageState.clear();
+    batchJobPageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -4015,6 +4065,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindSessionRiskPageInteractions(consoleShellState);
   bindFilesPageInteractions(consoleShellState);
   bindFileSecurityPageInteractions(consoleShellState);
+  bindBatchJobsPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -5011,6 +5062,258 @@ async function exportFileSecurityReport(consoleShellState) {
   } finally {
     finishOperation();
   }
+}
+
+/** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
+function currentBatchReadOwner(consoleShellState) {
+  const owner = batchJobPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "batch-jobs")) return null;
+  return owner;
+}
+
+/** Creation requires batch.write + file.read in addition to the read/navigation owner. */
+function currentBatchCreateOwner(consoleShellState) {
+  const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "create" });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "batch-jobs")) return null;
+  return owner;
+}
+
+/** Cancellation requires batch.write, while file.read is deliberately not part of this owner. */
+function currentBatchWriteOwner(consoleShellState) {
+  const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "write" });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "batch-jobs")) return null;
+  return owner;
+}
+
+/** Result reads require file.read and never reuse the create or cancel permission projection. */
+function currentBatchResultOwner(consoleShellState) {
+  const owner = batchJobPageOwner(authSession.context, consoleShellState, { mode: "result" });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "batch-jobs")) return null;
+  return owner;
+}
+
+/** Bind PAGE-104 commands; every callback transitions private state before starting a new GET/POST. */
+function bindBatchJobsPageInteractions(consoleShellState) {
+  const owner = currentBatchReadOwner(consoleShellState);
+  if (!owner || !batchJobPageState.enter(owner)) return;
+  bindBatchJobInteractions({
+    async onFilter(status) {
+      if (batchJobPageState.setStatus(status)) await refresh();
+    },
+    async onRefresh() {
+      batchJobPageState.invalidateResult();
+      await refresh();
+    },
+    async onPreviousPage() {
+      if (batchJobPageState.previousPage()) await refresh();
+    },
+    async onNextPage() {
+      if (batchJobPageState.nextPage()) await refresh();
+    },
+    async onSelect(batchJobId) {
+      if (batchJobPageState.selectJob(batchJobId)) await refresh();
+    },
+    async onTaskPreviousPage() {
+      if (batchJobPageState.previousTaskPage()) await refresh();
+    },
+    async onTaskNextPage() {
+      if (batchJobPageState.nextTaskPage()) await refresh();
+    },
+    async onResult(batchTaskId) {
+      return loadBatchTaskResult(consoleShellState, batchTaskId);
+    },
+    async onCloseResult() {
+      batchJobPageState.invalidateResult();
+      return true;
+    },
+    async onOpenCreate() {
+      const opened = batchJobPageState.openCreate(currentBatchCreateOwner(consoleShellState));
+      // Opening a form invalidates any older full-shell refresh before the user can enter draft text.
+      if (opened) refreshSequence += 1;
+      return opened;
+    },
+    async onCloseCreate() {
+      return batchJobPageState.closeCreate(currentBatchCreateOwner(consoleShellState));
+    },
+    async onCreate(request, idempotencyKey) {
+      return submitBatchJob(request, idempotencyKey, consoleShellState);
+    },
+    async onCancel(batchJobId) {
+      return submitBatchCancellation(batchJobId, consoleShellState);
+    },
+  });
+}
+
+/** Fetch one assistant result and hydrate it only after the exact owner/job/task ticket accepts it. */
+async function loadBatchTaskResult(consoleShellState, batchTaskId) {
+  const token = authSession.token;
+  const owner = currentBatchResultOwner(consoleShellState);
+  if (!token || !owner) {
+    batchJobPageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = batchJobPageState.beginResult(owner, batchTaskId);
+  if (!operation) return batchJobPageState.snapshot();
+  // A result click takes ownership from an already-running shell refresh before assistant text arrives.
+  refreshSequence += 1;
+  try {
+    const result = await getBatchTaskResult({
+      controlApiUrl,
+      token,
+      batchJobId: operation.batchJobId,
+      batchTaskId: operation.batchTaskId,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentBatchResultOwner(consoleShellState);
+    const assistantText = batchJobPageState.acceptResult(operation, result, currentOwner);
+    if (assistantText === null) return null;
+    const hydrated = hydrateBatchResultText(globalThis.document, {
+      batchJobId: operation.batchJobId,
+      batchTaskId: operation.batchTaskId,
+      assistantText,
+    });
+    // A replaced DOM cannot retain assistant text in state; fail closed by invalidating metadata too.
+    if (!hydrated) batchJobPageState.invalidateResult();
+    return batchJobPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentBatchResultOwner(consoleShellState);
+    if (!batchJobPageState.isResultCurrent(operation, currentOwner) || isBatchAbortError(error)) {
+      return null;
+    }
+    if (handleBatchAuthenticationFailure(error)) return null;
+    if (isBatchPermissionRevocation(error)) {
+      batchJobPageState.clear();
+      await refresh();
+      return null;
+    }
+    batchJobPageState.rejectResult(operation, error, currentOwner);
+    return batchJobPageState.snapshot();
+  } finally {
+    batchJobPageState.finishResult(operation);
+  }
+}
+
+/** Submit one create request without persisting form values or its idempotency key. */
+async function submitBatchJob(request, idempotencyKey, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentBatchCreateOwner(consoleShellState);
+  if (!token || !owner) {
+    batchJobPageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = batchJobPageState.beginCreate(owner);
+  if (!operation) return batchJobPageState.snapshot();
+  // The POST and current form DOM now own the page; an older refresh must not replace either.
+  refreshSequence += 1;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    batchJobPageState.finishCreate(operation);
+  };
+  try {
+    const result = await createBatchJob({
+      controlApiUrl,
+      token,
+      idempotencyKey,
+      request,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentBatchCreateOwner(consoleShellState);
+    if (!batchJobPageState.acceptCreate(operation, result, currentOwner)) return null;
+    finish();
+    await refresh();
+    return batchJobPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentBatchCreateOwner(consoleShellState);
+    if (!batchJobPageState.isCreateCurrent(operation, currentOwner) || isBatchAbortError(error)) {
+      return null;
+    }
+    if (handleBatchAuthenticationFailure(error)) return null;
+    if (isBatchPermissionRevocation(error)) {
+      batchJobPageState.clear();
+      finish();
+      await refresh();
+      return null;
+    }
+    batchJobPageState.rejectCreate(operation, error, currentOwner);
+    return batchJobPageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** Cancel only the currently selected active Job under a fresh batch.write owner. */
+async function submitBatchCancellation(batchJobId, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentBatchWriteOwner(consoleShellState);
+  if (!token || !owner) {
+    batchJobPageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = batchJobPageState.beginCancel(owner, batchJobId);
+  if (!operation) return batchJobPageState.snapshot();
+  // Keep an older full-shell GET from rebuilding the selected row while cancellation is unresolved.
+  refreshSequence += 1;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    batchJobPageState.finishCancel(operation);
+  };
+  try {
+    const result = await cancelBatchJob({
+      controlApiUrl,
+      token,
+      batchJobId: operation.batchJobId,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentBatchWriteOwner(consoleShellState);
+    if (!batchJobPageState.acceptCancel(operation, result, currentOwner)) return null;
+    finish();
+    await refresh();
+    return batchJobPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentBatchWriteOwner(consoleShellState);
+    if (!batchJobPageState.isCancelCurrent(operation, currentOwner) || isBatchAbortError(error)) {
+      return null;
+    }
+    if (handleBatchAuthenticationFailure(error)) return null;
+    if (isBatchPermissionRevocation(error)) {
+      batchJobPageState.clear();
+      finish();
+      await refresh();
+      return null;
+    }
+    batchJobPageState.rejectCancel(operation, error, currentOwner);
+    return batchJobPageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** A 401 is the only Batch error that directly clears the authenticated browser session. */
+function handleBatchAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  batchJobPageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+/** Business 403s remain visible; only the canonical permission error triggers authorization reload. */
+function isBatchPermissionRevocation(error) {
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
 }
 /**
  * 绑定 FinOps 筛选、opaque cursor、详情和调整命令。
@@ -6960,6 +7263,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "file-security") {
     // 导航写入前取消 PAGE-103 GET/POST/CSV 并销毁文件名与报告，迟到响应不得跨页面落地。
     fileSecurityPageState.clear();
+  }
+  if (itemId !== "batch-jobs") {
+    // 导航请求前同步擦除结果 DOM，再使 PAGE-104 的 GET/POST ticket 全部失效。
+    batchJobPageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -11786,6 +12093,140 @@ function clearBudgetSessionState() {
 }
 
 /**
+ * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
+ * Every response is accepted only while the full Batch owner and global refresh generation match.
+ */
+async function loadBatchJobsState(consoleShellState, refreshId, resourceStates) {
+  const owner = currentBatchReadOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !batchJobPageState.enter(owner)) return null;
+  const operation = batchJobPageState.beginList(owner, refreshId);
+  if (!operation) return null;
+  let accepted = false;
+  try {
+    const listResult = await listBatchJobs({
+      controlApiUrl,
+      token: authSession.token,
+      ...batchJobPageState.listQuery(),
+      limit: 50,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    let optionPayload;
+    if (owner.canCreate) {
+      let readyFiles = null;
+      try {
+        readyFiles = await listFiles({
+          controlApiUrl,
+          token: authSession.token,
+          status: "ready",
+          limit: 100,
+          signal: operation.controller.signal,
+        });
+      } catch (error) {
+        if (
+          isBatchAbortError(error)
+          || (error instanceof AuthApiError && error.status === 401)
+          || isBatchPermissionRevocation(error)
+        ) throw error;
+        // Non-auth candidate failures keep the readable Job list while the create form fails closed.
+      }
+      optionPayload = {
+        projects: resourceStates?.projectState?.state === "ok"
+          ? resourceStates.projectState.projects
+          : null,
+        environments: resourceStates?.environmentState?.state === "ok"
+          ? resourceStates.environmentState.environments
+          : null,
+        modelAliases: resourceStates?.modelAliasesState?.state === "ok"
+          ? resourceStates.modelAliasesState.model_aliases
+          : null,
+        files: readyFiles?.state === "ok" ? readyFiles.files : null,
+      };
+    }
+    const currentOwner = currentBatchReadOwner(consoleShellState);
+    accepted = batchJobPageState.acceptList(
+      operation,
+      listResult,
+      currentOwner,
+      refreshId,
+      optionPayload,
+    );
+  } catch (error) {
+    const currentOwner = currentBatchReadOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !batchJobPageState.isListCurrent(operation, currentOwner, refreshId)
+      || isBatchAbortError(error)
+    ) return null;
+    if (handleBatchAuthenticationFailure(error)) return null;
+    if (isBatchPermissionRevocation(error)) {
+      batchJobPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    batchJobPageState.rejectList(operation, error, currentOwner, refreshId);
+    return batchJobPageState.snapshot();
+  } finally {
+    batchJobPageState.finishList(operation);
+  }
+  if (!accepted || refreshId !== refreshSequence) return null;
+  if (!batchJobPageState.snapshot().selectedJobId) return batchJobPageState.snapshot();
+  await loadBatchJobDetailState(consoleShellState, refreshId);
+  return refreshId === refreshSequence ? batchJobPageState.snapshot() : null;
+}
+
+/** Load the selected Job and one private-cursor Task page under a single detail ticket. */
+async function loadBatchJobDetailState(consoleShellState, refreshId) {
+  const owner = currentBatchReadOwner(consoleShellState);
+  const operation = batchJobPageState.beginDetail(owner, refreshId);
+  if (!operation) return null;
+  try {
+    const [detailResult, taskResult] = await Promise.all([
+      getBatchJob({
+        controlApiUrl,
+        token: authSession.token,
+        batchJobId: operation.batchJobId,
+        signal: operation.controller.signal,
+      }),
+      listBatchTasks({
+        controlApiUrl,
+        token: authSession.token,
+        batchJobId: operation.batchJobId,
+        ...batchJobPageState.taskQuery(),
+        limit: 50,
+        signal: operation.controller.signal,
+      }),
+    ]);
+    if (refreshId !== refreshSequence) return null;
+    const currentOwner = currentBatchReadOwner(consoleShellState);
+    batchJobPageState.acceptDetail(
+      operation,
+      detailResult,
+      taskResult,
+      currentOwner,
+      refreshId,
+    );
+    return batchJobPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentBatchReadOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !batchJobPageState.isDetailCurrent(operation, currentOwner, refreshId)
+      || isBatchAbortError(error)
+    ) return null;
+    if (handleBatchAuthenticationFailure(error)) return null;
+    if (isBatchPermissionRevocation(error)) {
+      batchJobPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    batchJobPageState.rejectDetail(operation, error, currentOwner, refreshId);
+    return batchJobPageState.snapshot();
+  } finally {
+    batchJobPageState.finishDetail(operation);
+  }
+}
+/**
  * 身份边界变化时清除预算页面全部会话内事实。
  * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
  */
@@ -12766,6 +13207,13 @@ function clearFileStateOnIdentityChange(previous, current) {
 function clearFileSecurityStateOnIdentityChange(previous, current) {
   if (fileSecurityReadIdentitySnapshot(previous) !== fileSecurityReadIdentitySnapshot(current)) {
     fileSecurityPageState.clear();
+  }
+}
+
+/** Destroy PAGE-104 facts when tenant, Session, revision, fingerprint or batch.read identity changes. */
+function clearBatchJobStateOnIdentityChange(previous, current) {
+  if (batchReadIdentitySnapshot(previous) !== batchReadIdentitySnapshot(current)) {
+    batchJobPageState.clear();
   }
 }
 /**

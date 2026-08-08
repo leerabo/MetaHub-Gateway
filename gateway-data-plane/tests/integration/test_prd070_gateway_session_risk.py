@@ -122,6 +122,20 @@ def _payload(text: str, *, stream: bool = False) -> dict[str, object]:
     }
 
 
+def _trusted(
+    payload: dict[str, object],
+    candidates: tuple[SessionRiskRequestIdentity, ...] = (),
+) -> openai_api.TrustedGatewayInvocation:
+    """Build the complete Enterprise Chat trusted-invocation boundary."""
+
+    return openai_api.TrustedGatewayInvocation(
+        source="enterprise_chat",
+        auth_context=_auth(),
+        payload=payload,
+        session_risk_candidates=candidates,
+    )
+
+
 def _clean_intent() -> IntentClassification:
     """返回符合 Shared 合同的零风险意图摘要。"""
 
@@ -355,9 +369,7 @@ async def test_dlp_block_uses_zero_intent_calls_and_preserves_error_on_store_fai
             _RequestStub("dlp"),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_auth(),
-            trusted_payload=_payload("synthetic dlp value"),
-            trusted_session_risk_candidates=(identity,),
+            trusted_invocation=_trusted(_payload("synthetic dlp value"), (identity,)),
         )
     assert blocked.value.code == "gateway.dlp_blocked"
     assert order == ["claim", "preflight", "dlp", "session", "log"]
@@ -447,9 +459,9 @@ async def test_trusted_session_classifies_once_and_freezes_before_all_late_stage
             _RequestStub("freeze"),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_auth(),
-            trusted_payload=_payload("synthetic observed turn", stream=True),
-            trusted_session_risk_candidates=(identity,),
+            trusted_invocation=_trusted(
+                _payload("synthetic observed turn", stream=True), (identity,)
+            ),
         )
     assert frozen.value.code == "gateway.session_risk_frozen"
     assert order == ["claim", "preflight", "dlp", "intent", "session", "log"]
@@ -526,9 +538,7 @@ async def test_chat_without_session_keeps_prd069_path_and_records_disabled_reaso
             _RequestStub("no_session"),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_auth(),
-            trusted_payload=_payload("synthetic strong intent"),
-            trusted_session_risk_candidates=(),
+            trusted_invocation=_trusted(_payload("synthetic strong intent")),
         )
     assert order == ["claim", "preflight", "dlp", "intent", "log"]
     context, error_code = logged[0]
@@ -637,9 +647,9 @@ async def test_trusted_session_scores_once_before_successful_sse_handshake(
         _RequestStub("stream"),
         endpoint="chat/completions",
         request_kind="chat",
-        trusted_auth_context=_auth(),
-        trusted_payload=_payload("synthetic observed stream turn", stream=True),
-        trusted_session_risk_candidates=(identity,),
+        trusted_invocation=_trusted(
+            _payload("synthetic observed stream turn", stream=True), (identity,)
+        ),
     )
 
     assert isinstance(response, StreamingResponse)
@@ -727,9 +737,7 @@ async def test_intent_block_preserves_error_when_session_store_fails(
             _RequestStub("intent"),
             endpoint="chat/completions",
             request_kind="chat",
-            trusted_auth_context=_auth(),
-            trusted_payload=_payload("synthetic strong intent"),
-            trusted_session_risk_candidates=(identity,),
+            trusted_invocation=_trusted(_payload("synthetic strong intent"), (identity,)),
         )
 
     assert blocked.value.code == "gateway.intent_blocked"

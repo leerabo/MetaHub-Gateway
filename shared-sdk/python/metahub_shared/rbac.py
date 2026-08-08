@@ -42,9 +42,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 权限目录版本只描述产品级目录结构，不可替代租户角色自身的 permission_revision。
 # PRD-070 新增高危会话读取与处置边界后提升目录版本；认证层会据此发现旧迁移并失败关闭，
 # 不能把 revision 6 的目录静默当成完整权限矩阵。
-# PRD-073 增加文件安全扫描独立权限后提升目录版本；认证层会拒绝仍停留 revision 8 的旧投影，
+# PRD-074 增加 Batch 读写独立权限后提升目录版本；认证层会拒绝仍停留 revision 9 的旧投影，
 # 不能把 Shared 默认矩阵当成运行时回退授权。
-CATALOG_REVISION: Final[int] = 9
+CATALOG_REVISION: Final[int] = 10
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -65,29 +65,113 @@ class PermissionDefinition:
 
 # 目录顺序是 API 和迁移测试的稳定合同；新增权限必须提升 catalog revision 并新建迁移。
 PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
-    PermissionDefinition("console.basic.read", "console", "基础控制台", "访问概览、API 文档、系统状态和迁移兼容页面。", "read"),
-    PermissionDefinition("dashboard.read", "console", "读取概览", "读取当前租户的聚合运行概览，不包含正式账单明细。", "read"),
-    PermissionDefinition("tenant.settings.read", "tenant", "读取租户设置", "读取当前租户的脱敏基础配置。", "read"),
-    PermissionDefinition("user.manage", "tenant", "管理用户", "创建租户用户并分配固定角色。", "critical"),
-    PermissionDefinition("rbac.matrix.manage", "tenant", "管理权限矩阵", "读取并调整固定角色的可授权权限集合。", "critical"),
-    PermissionDefinition("environment.read", "environment", "读取环境", "读取当前租户的环境边界和状态。", "read"),
-    PermissionDefinition("environment.write", "environment", "管理环境", "创建、启停和维护当前租户环境。", "write"),
-    PermissionDefinition("project.read", "project", "读取项目", "读取项目、应用及其当前租户归属。", "read"),
-    PermissionDefinition("project.write", "project", "管理项目", "创建和维护项目、应用及资源绑定。", "write"),
-    PermissionDefinition("virtual_key.read", "key", "读取 Virtual Key", "读取脱敏 Virtual Key 元数据。", "read"),
-    PermissionDefinition("virtual_key.write", "key", "管理 Virtual Key", "创建、更新和撤销当前租户 Virtual Key。", "critical"),
-    PermissionDefinition("provider.read", "provider", "读取 Provider", "读取 Provider 与 KeyPool 的脱敏配置。", "read"),
-    PermissionDefinition("provider.write", "provider", "管理 Provider", "创建、更新和测试 Provider 与 KeyPool。", "critical"),
-    PermissionDefinition("provider.health.read", "provider", "读取 Provider 健康", "读取上游健康状态和归一化错误摘要。", "read"),
-    PermissionDefinition("provider.health.probe", "provider", "探测 Provider", "主动触发当前租户 Provider 健康探测。", "write"),
-    PermissionDefinition("provider_error_map.read", "provider", "读取错误映射", "读取 Provider 错误归一规则。", "read"),
-    PermissionDefinition("provider_error_map.write", "provider", "管理错误映射", "创建和更新 Provider 错误归一规则。", "critical"),
+    PermissionDefinition(
+        "console.basic.read",
+        "console",
+        "基础控制台",
+        "访问概览、API 文档、系统状态和迁移兼容页面。",
+        "read",
+    ),
+    PermissionDefinition(
+        "dashboard.read",
+        "console",
+        "读取概览",
+        "读取当前租户的聚合运行概览，不包含正式账单明细。",
+        "read",
+    ),
+    PermissionDefinition(
+        "tenant.settings.read", "tenant", "读取租户设置", "读取当前租户的脱敏基础配置。", "read"
+    ),
+    PermissionDefinition(
+        "user.manage", "tenant", "管理用户", "创建租户用户并分配固定角色。", "critical"
+    ),
+    PermissionDefinition(
+        "rbac.matrix.manage",
+        "tenant",
+        "管理权限矩阵",
+        "读取并调整固定角色的可授权权限集合。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "environment.read", "environment", "读取环境", "读取当前租户的环境边界和状态。", "read"
+    ),
+    PermissionDefinition(
+        "environment.write", "environment", "管理环境", "创建、启停和维护当前租户环境。", "write"
+    ),
+    PermissionDefinition(
+        "project.read", "project", "读取项目", "读取项目、应用及其当前租户归属。", "read"
+    ),
+    PermissionDefinition(
+        "project.write", "project", "管理项目", "创建和维护项目、应用及资源绑定。", "write"
+    ),
+    PermissionDefinition(
+        "virtual_key.read", "key", "读取 Virtual Key", "读取脱敏 Virtual Key 元数据。", "read"
+    ),
+    PermissionDefinition(
+        "virtual_key.write",
+        "key",
+        "管理 Virtual Key",
+        "创建、更新和撤销当前租户 Virtual Key。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "provider.read",
+        "provider",
+        "读取 Provider",
+        "读取 Provider 与 KeyPool 的脱敏配置。",
+        "read",
+    ),
+    PermissionDefinition(
+        "provider.write",
+        "provider",
+        "管理 Provider",
+        "创建、更新和测试 Provider 与 KeyPool。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "provider.health.read",
+        "provider",
+        "读取 Provider 健康",
+        "读取上游健康状态和归一化错误摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "provider.health.probe",
+        "provider",
+        "探测 Provider",
+        "主动触发当前租户 Provider 健康探测。",
+        "write",
+    ),
+    PermissionDefinition(
+        "provider_error_map.read",
+        "provider",
+        "读取错误映射",
+        "读取 Provider 错误归一规则。",
+        "read",
+    ),
+    PermissionDefinition(
+        "provider_error_map.write",
+        "provider",
+        "管理错误映射",
+        "创建和更新 Provider 错误归一规则。",
+        "critical",
+    ),
     PermissionDefinition("model.read", "model", "读取模型", "读取当前租户模型目录。", "read"),
-    PermissionDefinition("model.write", "model", "管理模型", "创建和更新当前租户模型目录。", "write"),
-    PermissionDefinition("model_price.read", "model", "读取价格", "读取模型价格时间线和版本。", "read"),
-    PermissionDefinition("model_price.write", "model", "管理价格", "创建不可变模型价格计划。", "critical"),
-    PermissionDefinition("routing.read", "routing", "读取路由", "读取别名、回退、路由和缓存亲和配置。", "read"),
-    PermissionDefinition("routing.write", "routing", "管理路由", "创建和更新别名、回退及路由策略。", "critical"),
+    PermissionDefinition(
+        "model.write", "model", "管理模型", "创建和更新当前租户模型目录。", "write"
+    ),
+    PermissionDefinition(
+        "model_price.read", "model", "读取价格", "读取模型价格时间线和版本。", "read"
+    ),
+    PermissionDefinition(
+        "model_price.write", "model", "管理价格", "创建不可变模型价格计划。", "critical"
+    ),
+    PermissionDefinition(
+        "routing.read", "routing", "读取路由", "读取别名、回退、路由和缓存亲和配置。", "read"
+    ),
+    PermissionDefinition(
+        "routing.write", "routing", "管理路由", "创建和更新别名、回退及路由策略。", "critical"
+    ),
     # 配置迁移是独立能力边界：读取权限只开放严格白名单导出，写权限只开放 create-only 原子导入。
     # 两者不能由普通 Provider/Model/路由/Virtual Key CRUD 权限推导，避免交付工具绕过后端最小授权。
     PermissionDefinition(
@@ -104,30 +188,100 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "以 create-only 方式批量导入配置并生成全新 Virtual Key。",
         "critical",
     ),
-    PermissionDefinition("model_quality.read", "routing", "读取模型质量", "读取模型质量、成功率和延迟聚合。", "read"),
-    PermissionDefinition("model_quality.write", "routing", "管理模型质量", "维护模型人工质量评分。", "write"),
+    PermissionDefinition(
+        "model_quality.read", "routing", "读取模型质量", "读取模型质量、成功率和延迟聚合。", "read"
+    ),
+    PermissionDefinition(
+        "model_quality.write", "routing", "管理模型质量", "维护模型人工质量评分。", "write"
+    ),
     PermissionDefinition("policy.read", "security", "读取策略", "读取治理策略和版本摘要。", "read"),
-    PermissionDefinition("policy.write", "security", "管理策略", "创建和更新治理策略。", "critical"),
-    PermissionDefinition("policy.simulate", "security", "模拟策略", "对脱敏输入执行策略 Dry-Run。", "write"),
-    PermissionDefinition("policy.publish", "security", "发布策略", "发布或回滚策略快照。", "critical"),
+    PermissionDefinition(
+        "policy.write", "security", "管理策略", "创建和更新治理策略。", "critical"
+    ),
+    PermissionDefinition(
+        "policy.simulate", "security", "模拟策略", "对脱敏输入执行策略 Dry-Run。", "write"
+    ),
+    PermissionDefinition(
+        "policy.publish", "security", "发布策略", "发布或回滚策略快照。", "critical"
+    ),
     PermissionDefinition("dlp.read", "security", "读取 DLP", "读取 DLP 规则的脱敏元数据。", "read"),
     PermissionDefinition("dlp.write", "security", "管理 DLP", "创建和更新 DLP 规则。", "critical"),
-    PermissionDefinition("request_log.read", "observability", "读取调用日志", "读取当前租户调用日志、Trace 和保存筛选。", "read"),
-    PermissionDefinition("request_explanation.read", "observability", "读取请求解释", "读取鉴权、路由、成本和安全解释事实。", "read"),
-    PermissionDefinition("feedback.use", "observability", "使用反馈", "提交请求反馈并读取租户反馈汇总。", "write"),
-    PermissionDefinition("billing.usage.read", "billing", "读取用量", "读取全租户用量、Token 和成本明细。", "read"),
-    PermissionDefinition("billing.usage.export", "billing", "导出用量", "导出当前租户用量和成本账单。", "critical"),
-    PermissionDefinition("billing.finops.read", "billing", "读取正式账本", "读取 append-only 正式账本和调整记录。", "read"),
-    PermissionDefinition("billing.finops.write", "billing", "调整正式账本", "创建财务调整和冲正。", "critical"),
-    PermissionDefinition("billing.budget.read", "billing", "读取预算", "读取预算规则和执行状态。", "read"),
-    PermissionDefinition("billing.budget.write", "billing", "管理预算", "创建和更新预算规则。", "critical"),
-    PermissionDefinition("billing.anomaly.read", "billing", "读取成本异常", "读取成本异常和检测器状态。", "read"),
-    PermissionDefinition("billing.anomaly.write", "billing", "处置成本异常", "确认、忽略异常并维护临时限流。", "critical"),
-    PermissionDefinition("audit.read", "audit", "读取审计", "读取当前租户不可变管理审计事实。", "read"),
-    PermissionDefinition("audit.export", "audit", "导出审计", "导出不可变审计快照并生成复核哈希。", "critical"),
-    PermissionDefinition("webhook.manage", "integration", "管理 Webhook", "管理 Endpoint、死信、重放和归档。", "critical"),
-    PermissionDefinition("developer_portal.read", "developer", "读取开发者门户", "读取快速开始、SDK 示例和迁移指南。", "read"),
-    PermissionDefinition("debug_console.use", "developer", "使用 API 调试台", "使用内置 OpenAI-compatible API 调试台。", "write"),
+    PermissionDefinition(
+        "request_log.read",
+        "observability",
+        "读取调用日志",
+        "读取当前租户调用日志、Trace 和保存筛选。",
+        "read",
+    ),
+    PermissionDefinition(
+        "request_explanation.read",
+        "observability",
+        "读取请求解释",
+        "读取鉴权、路由、成本和安全解释事实。",
+        "read",
+    ),
+    PermissionDefinition(
+        "feedback.use", "observability", "使用反馈", "提交请求反馈并读取租户反馈汇总。", "write"
+    ),
+    PermissionDefinition(
+        "billing.usage.read", "billing", "读取用量", "读取全租户用量、Token 和成本明细。", "read"
+    ),
+    PermissionDefinition(
+        "billing.usage.export", "billing", "导出用量", "导出当前租户用量和成本账单。", "critical"
+    ),
+    PermissionDefinition(
+        "billing.finops.read",
+        "billing",
+        "读取正式账本",
+        "读取 append-only 正式账本和调整记录。",
+        "read",
+    ),
+    PermissionDefinition(
+        "billing.finops.write", "billing", "调整正式账本", "创建财务调整和冲正。", "critical"
+    ),
+    PermissionDefinition(
+        "billing.budget.read", "billing", "读取预算", "读取预算规则和执行状态。", "read"
+    ),
+    PermissionDefinition(
+        "billing.budget.write", "billing", "管理预算", "创建和更新预算规则。", "critical"
+    ),
+    PermissionDefinition(
+        "billing.anomaly.read", "billing", "读取成本异常", "读取成本异常和检测器状态。", "read"
+    ),
+    PermissionDefinition(
+        "billing.anomaly.write",
+        "billing",
+        "处置成本异常",
+        "确认、忽略异常并维护临时限流。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "audit.read", "audit", "读取审计", "读取当前租户不可变管理审计事实。", "read"
+    ),
+    PermissionDefinition(
+        "audit.export", "audit", "导出审计", "导出不可变审计快照并生成复核哈希。", "critical"
+    ),
+    PermissionDefinition(
+        "webhook.manage",
+        "integration",
+        "管理 Webhook",
+        "管理 Endpoint、死信、重放和归档。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "developer_portal.read",
+        "developer",
+        "读取开发者门户",
+        "读取快速开始、SDK 示例和迁移指南。",
+        "read",
+    ),
+    PermissionDefinition(
+        "debug_console.use",
+        "developer",
+        "使用 API 调试台",
+        "使用内置 OpenAI-compatible API 调试台。",
+        "write",
+    ),
     # 企业 Chat 是独立模型调用能力。它只允许经过 Gateway 全治理链路发送短生命周期会话，
     # 不能由项目、模型或调试台读写权限隐式推导，否则撤销 chat.use 将无法实时阻断调用。
     PermissionDefinition(
@@ -226,7 +380,23 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "对当前租户文件执行隐藏 Prompt Injection 检测并写入不可变安全报告。",
         "write",
     ),
-    PermissionDefinition("system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"),
+    PermissionDefinition(
+        "batch.read",
+        "batch",
+        "读取批量任务",
+        "读取当前租户批量任务、任务状态、成本摘要和授权后的结果。",
+        "read",
+    ),
+    PermissionDefinition(
+        "batch.write",
+        "batch",
+        "管理批量任务",
+        "创建、取消和执行当前租户受治理的异步批量任务。",
+        "write",
+    ),
+    PermissionDefinition(
+        "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
+    ),
 )
 
 PERMISSION_CODES: Final[tuple[str, ...]] = tuple(item.code for item in PERMISSION_CATALOG)
@@ -235,43 +405,123 @@ PERMISSION_BY_CODE: Final[dict[str, PermissionDefinition]] = {
 }
 
 _DEVELOPER = {
-    "console.basic.read", "dashboard.read", "environment.read", "project.read",
-    "virtual_key.read", "virtual_key.write", "provider.health.read", "provider.health.probe",
-    "provider_error_map.read", "model.read", "model_price.read", "routing.read",
-    "model_quality.read", "request_log.read", "request_explanation.read", "feedback.use",
-    "webhook.manage", "developer_portal.read", "debug_console.use",
-    "config.transfer.read", "config.transfer.write", "chat.use",
-    "prompt_template.read", "prompt_template.write", "prompt_template.use",
-    "file.read", "file.write", "file.security.scan",
+    "console.basic.read",
+    "dashboard.read",
+    "environment.read",
+    "project.read",
+    "virtual_key.read",
+    "virtual_key.write",
+    "provider.health.read",
+    "provider.health.probe",
+    "provider_error_map.read",
+    "model.read",
+    "model_price.read",
+    "routing.read",
+    "model_quality.read",
+    "request_log.read",
+    "request_explanation.read",
+    "feedback.use",
+    "webhook.manage",
+    "developer_portal.read",
+    "debug_console.use",
+    "config.transfer.read",
+    "config.transfer.write",
+    "chat.use",
+    "prompt_template.read",
+    "prompt_template.write",
+    "prompt_template.use",
+    "file.read",
+    "file.write",
+    "file.security.scan",
+    "batch.read",
+    "batch.write",
 }
 _VIEWER = {
-    "console.basic.read", "dashboard.read", "chat.use", "prompt_template.use",
-    "file.read", "file.write", "file.security.scan",
+    "console.basic.read",
+    "dashboard.read",
+    "chat.use",
+    "prompt_template.use",
+    "file.read",
+    "file.write",
+    "file.security.scan",
 }
 _FINANCE = {
-    "console.basic.read", "dashboard.read", "model.read", "model_price.read", "model_price.write",
-    "billing.usage.read", "billing.usage.export", "billing.finops.read", "billing.finops.write",
-    "billing.budget.read", "billing.budget.write", "billing.anomaly.read", "billing.anomaly.write",
-    "policy_template.read", "policy_template.apply",
+    "console.basic.read",
+    "dashboard.read",
+    "model.read",
+    "model_price.read",
+    "model_price.write",
+    "billing.usage.read",
+    "billing.usage.export",
+    "billing.finops.read",
+    "billing.finops.write",
+    "billing.budget.read",
+    "billing.budget.write",
+    "billing.anomaly.read",
+    "billing.anomaly.write",
+    "policy_template.read",
+    "policy_template.apply",
 }
 _SECURITY = {
-    "console.basic.read", "dashboard.read", "provider_error_map.read", "provider_error_map.write",
-    "model.read", "model_price.read", "policy.read", "policy.write", "policy.simulate",
-    "policy.publish", "dlp.read", "dlp.write", "request_log.read", "request_explanation.read",
-    "billing.anomaly.read", "billing.anomaly.write", "audit.read", "audit.export", "webhook.manage",
-    "policy_template.read", "policy_template.apply",
+    "console.basic.read",
+    "dashboard.read",
+    "provider_error_map.read",
+    "provider_error_map.write",
+    "model.read",
+    "model_price.read",
+    "policy.read",
+    "policy.write",
+    "policy.simulate",
+    "policy.publish",
+    "dlp.read",
+    "dlp.write",
+    "request_log.read",
+    "request_explanation.read",
+    "billing.anomaly.read",
+    "billing.anomaly.write",
+    "audit.read",
+    "audit.export",
+    "webhook.manage",
+    "policy_template.read",
+    "policy_template.apply",
     "intent_risk.classify",
-    "session_risk.read", "session_risk.manage",
-    "file.read", "file.security.scan",
+    "session_risk.read",
+    "session_risk.manage",
+    "file.read",
+    "file.security.scan",
 }
 _OPS = {
-    "console.basic.read", "dashboard.read", "environment.read", "environment.write", "project.read",
-    "project.write", "virtual_key.read", "virtual_key.write", "provider.read", "provider.write",
-    "provider.health.read", "provider.health.probe", "provider_error_map.read", "model.read",
-    "model.write", "model_price.read", "routing.read", "routing.write", "model_quality.read",
-    "model_quality.write", "request_log.read", "request_explanation.read", "webhook.manage",
-    "system.config.read", "config.transfer.read", "config.transfer.write",
-    "policy_template.read", "policy_template.apply",
+    "console.basic.read",
+    "dashboard.read",
+    "environment.read",
+    "environment.write",
+    "project.read",
+    "project.write",
+    "virtual_key.read",
+    "virtual_key.write",
+    "provider.read",
+    "provider.write",
+    "provider.health.read",
+    "provider.health.probe",
+    "provider_error_map.read",
+    "model.read",
+    "model.write",
+    "model_price.read",
+    "routing.read",
+    "routing.write",
+    "model_quality.read",
+    "model_quality.write",
+    "request_log.read",
+    "request_explanation.read",
+    "webhook.manage",
+    "system.config.read",
+    "config.transfer.read",
+    "config.transfer.write",
+    "policy_template.read",
+    "policy_template.apply",
+    "file.read",
+    "batch.read",
+    "batch.write",
 }
 
 # 这些集合是产品授权上限和新租户默认值；运行时必须读取租户矩阵，绝不能在矩阵损坏时回落此处。

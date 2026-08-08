@@ -100,7 +100,49 @@ def load_outstanding_reserved_cny_micros(
         # 大量异常预留不能越过统一金额边界；失败关闭比截断或浮点退化更安全。
         if total > MAX_BUDGET_CNY_MICROS:
             raise ValueError("budget reservation total invalid")
+    # 0067 is optional during mixed-version rollout. Once present, only unallocated hold balance
+    # plus active/possible allocations count; original hold totals would double count settled work.
+    if _table_exists(connection, "batch_budget_holds"):
+        hold_rows = connection.execute(
+            """
+            SELECT remaining_cost_cny FROM batch_budget_holds
+            WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
+              AND status IN ('active','reconciliation')
+            ORDER BY rowid ASC
+            """,
+            (tenant_id, budget_rule_id, budget_date),
+        )
+        for row in hold_rows:
+            total += _reservation_cny_to_micros(row[0])
+            if total > MAX_BUDGET_CNY_MICROS:
+                raise ValueError("budget reservation total invalid")
+    if _table_exists(connection, "batch_budget_allocations"):
+        allocation_rows = connection.execute(
+            """
+            SELECT reserved_cost_cny FROM batch_budget_allocations
+            WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
+              AND status IN ('active','reconciliation')
+            ORDER BY rowid ASC
+            """,
+            (tenant_id, budget_rule_id, budget_date),
+        )
+        for row in allocation_rows:
+            total += _reservation_cny_to_micros(row[0])
+            if total > MAX_BUDGET_CNY_MICROS:
+                raise ValueError("budget reservation total invalid")
     return total
+
+
+def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    """Check an immutable internal table name without interpolating request data."""
+
+    return (
+        connection.execute(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def _reservation_cny_to_micros(value: object) -> int:

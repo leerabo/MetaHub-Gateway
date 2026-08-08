@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -251,6 +251,7 @@ def resolve_model_route_plan(
     project_id: str | None = None,
     request_kind: str | None = None,
     payload: dict[str, Any] | None = None,
+    trusted_token_estimate: TokenEstimate | None = None,
 ) -> GatewayRoutePlan:
     """解析冻结 RoutingPolicy，并在满足 PRD-036 条件时附加请求后备用候选。
 
@@ -271,9 +272,14 @@ def resolve_model_route_plan(
         project_id=project_id,
         request_kind=request_kind,
         payload=payload,
+        trusted_token_estimate=trusted_token_estimate,
     )
     if persisted_plan is not None:
-        return persisted_plan
+        return (
+            replace(persisted_plan, token_estimate=trusted_token_estimate)
+            if trusted_token_estimate is not None
+            else persisted_plan
+        )
 
     initial = resolve_model_route(
         config,
@@ -288,7 +294,11 @@ def resolve_model_route_plan(
     initial_role = "fallback" if initial.routing_reason == "alias.fallback" else "primary"
     # 直接模型和 PRD-035 预检切换均不属于“主调用失败后切换”，不能再附加请求期策略。
     if initial.routing_reason != "alias.default" or initial.model_alias_id is None:
-        return GatewayRoutePlan(initial_route=initial, initial_role=initial_role)
+        return GatewayRoutePlan(
+            initial_route=initial,
+            initial_role=initial_role,
+            token_estimate=trusted_token_estimate,
+        )
 
     try:
         connection = _connect(config)
@@ -314,7 +324,11 @@ def resolve_model_route_plan(
         ).fetchone()
         # 策略、别名或备用目标任一缺失时保持单路由，不允许根据残缺配置猜测执行动作。
         if policy is None or alias_row is None or not alias_row["fallback_model_id"]:
-            return GatewayRoutePlan(initial_route=initial, initial_role="primary")
+            return GatewayRoutePlan(
+                initial_route=initial,
+                initial_role="primary",
+                token_estimate=trusted_token_estimate,
+            )
 
         fallback_row = _load_model_route_by_id(
             connection,
@@ -331,7 +345,11 @@ def resolve_model_route_plan(
             )
             or fallback_row["model_id"] == initial.model_id
         ):
-            return GatewayRoutePlan(initial_route=initial, initial_role="primary")
+            return GatewayRoutePlan(
+                initial_route=initial,
+                initial_role="primary",
+                token_estimate=trusted_token_estimate,
+            )
 
         conditions = _parse_fallback_conditions(policy["condition_expr"])
         fallback = _route_from_row(
@@ -350,6 +368,7 @@ def resolve_model_route_plan(
             fallback_policy_id=str(policy["fallback_policy_id"]),
             fallback_policy_version=int(policy["version"]),
             fallback_conditions=conditions,
+            token_estimate=trusted_token_estimate,
         )
     # legacy SQL 锁或查询中断属于可重试依赖故障，统一为快照不可用且隐藏 SQL/路径。
     except sqlite3.OperationalError as exc:
@@ -374,6 +393,7 @@ def _resolve_persisted_alias_route_plan(
     project_id: str | None,
     request_kind: str | None,
     payload: dict[str, Any] | None,
+    trusted_token_estimate: TokenEstimate | None,
 ) -> GatewayRoutePlan | None:
     """尝试在一个事务中解析 0036 持久 RoutingPolicy；非 Alias/缺 Policy 返回 None。"""
 
@@ -468,7 +488,11 @@ def _resolve_persisted_alias_route_plan(
         selection = select_routing_candidates(
             routing_mode,
             candidate_inputs,
-            token_estimator=(lambda: estimate_request_tokens(request_kind or "", payload or {})),
+            token_estimator=lambda: _routing_request_token_estimate(
+                request_kind,
+                payload,
+                trusted_token_estimate=trusted_token_estimate,
+            ),
             price_loader=lambda eligible: _load_routing_prices(
                 connection,
                 tenant_id,
@@ -549,6 +573,19 @@ def _resolve_persisted_alias_route_plan(
         raise ApiError("gateway.routing_snapshot_invalid") from exc
     finally:
         connection.close()
+
+
+def _routing_request_token_estimate(
+    request_kind: str | None,
+    payload: dict[str, Any] | None,
+    *,
+    trusted_token_estimate: TokenEstimate | None,
+) -> TokenEstimate:
+    """Use the immutable Batch estimate before considering decrypted request content."""
+
+    if trusted_token_estimate is not None:
+        return trusted_token_estimate
+    return estimate_request_tokens(request_kind or "", payload or {})
 
 
 def _validated_routing_policy(row: sqlite3.Row) -> tuple[str, str, int]:

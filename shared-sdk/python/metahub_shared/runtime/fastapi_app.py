@@ -136,9 +136,19 @@ def create_service_app(
             if request.url.path == "/internal/chat/completions"
             else None
         )
+        batch_internal_tokens = (
+            tuple(request.headers.getlist("X-MetaHub-Internal-Batch-Token"))
+            if request.url.path == "/internal/batch/chat/completions"
+            else ()
+        )
         sensitive_values = tuple(
             value
-            for value in (invitation_token, adapter_internal_token, chat_internal_token)
+            for value in (
+                invitation_token,
+                adapter_internal_token,
+                chat_internal_token,
+                *batch_internal_tokens,
+            )
             if value is not None
         )
         # 链路 Header 与 Bearer credential 碰撞时先换成内部 ID，后续错误、响应和
@@ -458,10 +468,15 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # 公共 Chat 的成功正文和治理错误都可能关联 Prompt/Response；会话风险预检还会在
         # Provider 调用与业务响应构造前失败，因此必须由最外层对所有状态码禁止缓存。
         response.headers["Cache-Control"] = "no-store"
+    elif path == "/batch-jobs" or path.startswith("/batch-jobs/"):
+        # Batch responses expose tenant-private job, task, cost and result state. Apply the
+        # private cache boundary to success and every middleware-generated error response.
+        response.headers["Cache-Control"] = "no-store, private"
     elif (
         path == "/chat"
         or path.startswith("/chat/")
         or path == "/internal/chat/completions"
+        or path == "/internal/batch/chat/completions"
     ):
         # Chat 响应可能含本次 assistant 正文、治理摘要或内部认证结果；业务异常会重建
         # Response，因此所有状态码都必须由最外层路径策略统一禁止缓存。

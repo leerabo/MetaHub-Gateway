@@ -7,23 +7,34 @@
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import time
-from datetime import UTC, datetime
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
-from metahub_shared.runtime.routing_policy import estimate_request_tokens as estimate_token_shape
+from metahub_shared.runtime.routing_policy import (
+    TokenEstimate,
+)
+from metahub_shared.runtime.routing_policy import (
+    estimate_request_tokens as estimate_token_shape,
+)
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
 from metahub_gateway.routing.models import GatewayRoute
 
 from .models import RateLimitHit, RateLimitRule
-from .store import RateLimitCounterStore, RateLimitStoreUnavailable, RedisRateLimitStore
+from .store import (
+    BatchRateLimitDimension,
+    RateLimitCounterStore,
+    RateLimitStoreUnavailable,
+    RedisRateLimitStore,
+)
 
 logger = logging.getLogger("metahub.gateway.rate_limits")
 
@@ -75,6 +86,8 @@ async def enforce_virtual_key_rate_limit(
     request_kind: str,
     request_id: str,
     trace_id: str,
+    batch_lane: bool = False,
+    batch_token_estimate: TokenEstimate | None = None,
 ) -> RateLimitLease | None:
     """执行 Virtual Key 级 RPM、TPM 和并发准入判断。
 
@@ -101,6 +114,77 @@ async def enforce_virtual_key_rate_limit(
 
     try:
         await store.ping()
+        if batch_lane:
+            if batch_token_estimate is None:
+                raise ApiError("batch.execution_invalid")
+            estimated_tokens = batch_token_estimate.total_tokens
+            reserve_percent = getattr(config, "batch_realtime_reserve_percent", 25)
+            dimensions: list[BatchRateLimitDimension] = []
+            for limit_type, configured_limit, key, amount, ttl in (
+                ("rpm", rule.rpm_limit, _window_key(rule, "rpm"), 1, WINDOW_TTL_SECONDS),
+                (
+                    "tpm",
+                    rule.tpm_limit,
+                    _window_key(rule, "tpm"),
+                    estimated_tokens,
+                    WINDOW_TTL_SECONDS,
+                ),
+                (
+                    "concurrency",
+                    rule.concurrency_limit,
+                    _concurrency_key(rule),
+                    1,
+                    CONCURRENCY_TTL_SECONDS,
+                ),
+            ):
+                if configured_limit is None:
+                    continue
+                reserve = max(1, math.ceil(configured_limit * reserve_percent / 100))
+                ceiling = configured_limit - reserve
+                if ceiling <= 0:
+                    _raise_exceeded(
+                        rule,
+                        route,
+                        endpoint,
+                        request_id,
+                        trace_id,
+                        limit_type,
+                        amount,
+                        ceiling,
+                        window_seconds=(
+                            None if limit_type == "concurrency" else WINDOW_SECONDS
+                        ),
+                    )
+                dimensions.append(
+                    BatchRateLimitDimension(
+                        limit_type=limit_type,
+                        key=key,
+                        amount=amount,
+                        ceiling=ceiling,
+                        ttl_seconds=ttl,
+                    )
+                )
+            decision = await store.try_acquire_batch_limits(tuple(dimensions))
+            if not decision.allowed:
+                _raise_exceeded(
+                    rule,
+                    route,
+                    endpoint,
+                    request_id,
+                    trace_id,
+                    decision.limit_type or "rpm",
+                    decision.current,
+                    decision.limit,
+                    window_seconds=(
+                        None
+                        if decision.limit_type == "concurrency"
+                        else WINDOW_SECONDS
+                    ),
+                )
+            concurrency_key = (
+                _concurrency_key(rule) if rule.concurrency_limit is not None else None
+            )
+            return RateLimitLease(store=store, concurrency_key=concurrency_key)
         if rule.rpm_limit is not None:
             current = await store.increment_window(
                 _window_key(rule, "rpm"),

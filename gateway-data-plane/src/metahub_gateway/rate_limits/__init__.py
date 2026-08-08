@@ -5,9 +5,17 @@ PRD-022 只暴露 Virtual Key 级 RPM、TPM 和并发限制；后续租户级、
 """
 
 from .service import RateLimitLease, enforce_virtual_key_rate_limit, get_rate_limit_store
-from .store import InMemoryRateLimitStore, RateLimitStoreUnavailable, RedisRateLimitStore
+from .store import (
+    BatchRateLimitDecision,
+    BatchRateLimitDimension,
+    InMemoryRateLimitStore,
+    RateLimitStoreUnavailable,
+    RedisRateLimitStore,
+)
 
 __all__ = [
+    "BatchRateLimitDecision",
+    "BatchRateLimitDimension",
     "InMemoryRateLimitStore",
     "RateLimitLease",
     "RateLimitStoreUnavailable",

@@ -65,6 +65,47 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  batch-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_control.batch_jobs.worker_main"]
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:/app/control-plane-api/src
+      METAHUB_SERVICE_NAME: batch-worker
+      METAHUB_ENV: ${METAHUB_ENV:-dev}
+      METAHUB_LOG_LEVEL: ${METAHUB_LOG_LEVEL:-INFO}
+      METAHUB_DATABASE_URL: ${METAHUB_DATABASE_URL:?set METAHUB_DATABASE_URL in .env.compose}
+      METAHUB_GATEWAY_API_BASE_URL: ${METAHUB_GATEWAY_API_BASE_URL:-http://gateway:8000}
+      METAHUB_INTERNAL_BATCH_TOKEN: ${METAHUB_INTERNAL_BATCH_TOKEN:?set METAHUB_INTERNAL_BATCH_TOKEN in .env.compose}
+      METAHUB_BATCH_ENCRYPTION_SECRET: ${METAHUB_BATCH_ENCRYPTION_SECRET:?set METAHUB_BATCH_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_FILE_ENCRYPTION_SECRET: ${METAHUB_FILE_ENCRYPTION_SECRET:?set METAHUB_FILE_ENCRYPTION_SECRET in .env.compose}
+      METAHUB_FILE_STORAGE_ROOT: ${METAHUB_FILE_STORAGE_ROOT:-.data/compose/file-storage}
+      METAHUB_BATCH_WORKER_ENABLED: ${METAHUB_BATCH_WORKER_ENABLED:-true}
+      METAHUB_BATCH_POLL_INTERVAL_SECONDS: ${METAHUB_BATCH_POLL_INTERVAL_SECONDS:-1}
+      METAHUB_BATCH_GLOBAL_CONCURRENCY: ${METAHUB_BATCH_GLOBAL_CONCURRENCY:-2}
+      METAHUB_BATCH_TENANT_CONCURRENCY: ${METAHUB_BATCH_TENANT_CONCURRENCY:-1}
+      METAHUB_BATCH_LEASE_SECONDS: ${METAHUB_BATCH_LEASE_SECONDS:-90}
+      METAHUB_BATCH_HEARTBEAT_SECONDS: ${METAHUB_BATCH_HEARTBEAT_SECONDS:-30}
+    volumes:
+      - metahub-sqlite:/app/.data/compose
+      - metahub-logs:/app/.logs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    depends_on:
+      gateway:
+        condition: service_healthy
+      control-api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+
   console:
     build:
       context: ../..

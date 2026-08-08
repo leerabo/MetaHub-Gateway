@@ -85,9 +85,26 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-071 - 输出侧安全检测与流式滑窗`
 - `PRD-072 - 文件上传与文本解析基础`
 - `PRD-073 - 隐藏 Prompt Injection 检测`
+- `PRD-074 - 批量任务 Scheduler 与 Worker`
 
 最近进展：
 
+- `PRD-074 - 批量任务 Scheduler 与 Worker` 已完成：Shared Batch 合同与 canonical 价格 wire、
+  0067/RBAC revision 10、tenant-qualified BatchJob/BatchTask/Attempt、Control API、独立 Scheduler/Worker、
+  短事务 lease/heartbeat/Reaper、预算 hold/allocation、Gateway 一次性 grant 与实时优先 gate、加密结果、
+  RequestLog/Usage/FinOps、`batch_job.created/completed` source-outbox、PAGE-104 和 Compose 均已落地。
+  实现后复核修正了同秒公平轮转、已知失败的 Reaper 语义、无 Attempt 取消/截止、Worker 能力边界、
+  Webhook pending 的 `source_request_id` 恢复、统一错误体解析，以及 Control/Gateway 单价精度漂移；
+  Shared 现统一输出固定 12 位单价，真实 Control route plan 已直接通过 Gateway strict validator。
+  正式 Runtime 在空 SQLite 上通过 `67/0067`、`integrity_check=ok`、外键违规 0、实时 busy 不触达
+  Provider、过期 lease 恢复、取消、撤权、成本/用量/失败追踪、Control 停机 outbox 恢复和全部自建进程
+  清理；23 个数据库/对象/日志文件中的 Provider Key、Token、Prompt、文件正文和 Response 明文命中为 0。
+  PAGE-104 Chromium `1280x720`、`390x844` 列表和移动创建弹窗均无横向溢出、重叠或文本溢出，
+  结果关闭清理、迟到响应隔离和未授权入口裁剪通过。详见
+  [PRD-074 设计](docs/prd/PRD-074-batch-scheduler-worker.md)、
+  [Batch API](docs/api/batch-jobs.md)、[PRD-074 测试记录](docs/testing/PRD-074-tests.md)、
+  [Runtime](.artifacts/prd074-runtime/prd074_20260808T105000Z_runtime_final2) 和
+  [Browser](.artifacts/prd074-browser/prd074_20260808T094300Z_page104)。
 - `PRD-073 - 隐藏 Prompt Injection 检测`的设计、两轮编码前自审、Shared TXT/DOCX/PDF 检测、
   固定版本离线 OCR、Control 扫描/报告/CSV/模型准入、PAGE-103、0065 安全事实与 RBAC revision 9、
   后端 tenant/双权限/统一错误和 7 字段安全 Webhook 均已实现。实现后安全终审关闭 PDF
@@ -156,11 +173,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 当前下一项：
 
 - Excel 的 `01_PRD总表`、`03_M2-M3扩展交付`、页面、API、数据对象、Webhook 与验收用例表已交叉确认：
-  PRD-073 之后的下一条权威未完成项是
-  `PRD-074 | M2-企业增强 | P2 | 批处理调度 | 异步批处理 Scheduler 与 Worker`，对应 PAGE-104、
-  `POST /batch-jobs`、`GET /batch-jobs/{id}`、`POST /batch-jobs/{id}/cancel`、BatchJob/BatchTask、
-  `batch_job.created/completed` 与 TC-0147/0148。PRD-073 已完整收口，下一轮从 PRD-074 的设计与
-  两轮自审开始；总体目标仍为 `all_108_prds_complete=false`。
+  PRD-074 已完整收口，其后的下一条权威未完成项是
+  `PRD-075 | M2-企业增强 | P2 | 模型评测 | 模型 A/B 测试与质量评估`，对应 PAGE-105、
+  `POST /experiments`、`GET /experiments/{id}/results`、ModelExperiment/ExperimentResult、
+  `experiment.completed` 与 TC-0149/0150；范围是可控流量比例、样本请求、反馈收集，以及成本、延迟、
+  成功率和满意度对比，不做自动训练。下一轮从 PRD-075 的设计与两轮自审开始；总体目标仍为
+  `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

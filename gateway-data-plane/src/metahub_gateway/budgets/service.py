@@ -10,7 +10,7 @@ import logging
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, DecimalException, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, Decimal, DecimalException, InvalidOperation, localcontext
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -23,6 +23,12 @@ from metahub_shared.runtime.budget_blocks import (
     get_active_budget_block,
     release_active_budget_blocks,
 )
+from metahub_shared.runtime.budget_reservations import (
+    ensure_budget_reservation,
+    get_budget_reservation,
+    release_request_budget_reservations,
+    set_request_budget_reservations_outstanding,
+)
 from metahub_shared.runtime.budget_scopes import build_budget_scope_id
 from metahub_shared.runtime.budget_spend import (
     MAX_BUDGET_CNY_MICROS,
@@ -30,12 +36,6 @@ from metahub_shared.runtime.budget_spend import (
     BudgetSpendAmounts,
     BudgetSpendUnavailableError,
     load_budget_spend_amounts,
-)
-from metahub_shared.runtime.budget_reservations import (
-    ensure_budget_reservation,
-    get_budget_reservation,
-    release_request_budget_reservations,
-    set_request_budget_reservations_outstanding,
 )
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
@@ -48,7 +48,8 @@ from metahub_shared.runtime.routing_policy import (
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
-from metahub_gateway.routing.models import GatewayRoute
+from metahub_gateway.batch import TrustedBatchContext
+from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
 from metahub_gateway.usage.ledger import RequestLogContext
 
 from .models import BudgetDecision, BudgetGuardResult, BudgetRule, EstimatedRequestCost
@@ -92,11 +93,28 @@ def enforce_budget_guard(
     fallback_route: GatewayRoute | None = None,
     routing_token_estimate: TokenEstimate | None = None,
     routing_price_as_of: datetime | None = None,
+    batch_context: TrustedBatchContext | None = None,
+    route_plan: GatewayRoutePlan | None = None,
 ) -> BudgetGuardResult | None:
     """执行租户、项目、兼容 Application 与 Virtual Key 的逐层日预算准入检查。
 
     预算检查只读取安全元数据和 token/成本估算；不会记录 Prompt、Response、Authorization、Provider Key 或 Virtual Key 明文。
     """
+
+    if batch_context is not None:
+        if route_plan is None:
+            raise ApiError("batch.execution_invalid")
+        return _enforce_batch_budget_coverage(
+            config,
+            auth_context,
+            payload,
+            request_kind=request_kind,
+            request_id=request_id,
+            trace_id=trace_id,
+            route_plan=route_plan,
+            token_estimate=routing_token_estimate,
+            batch_context=batch_context,
+        )
 
     connection: sqlite3.Connection | None = None
     blocking: BudgetDecision | None = None
@@ -243,6 +261,187 @@ def enforce_budget_guard(
         ),
         scope_events=tuple(pending_scope_events.values()),
     )
+
+
+def _enforce_batch_budget_coverage(
+    config: AppConfig,
+    auth_context: GatewayAuthContext,
+    payload: dict[str, Any],
+    *,
+    request_kind: str,
+    request_id: str,
+    trace_id: str,
+    route_plan: GatewayRoutePlan,
+    token_estimate: TokenEstimate | None,
+    batch_context: TrustedBatchContext,
+) -> BudgetGuardResult | None:
+    """Validate frozen Batch allocations without creating ordinary request reservations."""
+
+    if (
+        batch_context.tenant_id != auth_context.tenant_id
+        or batch_context.request_id != request_id
+        or batch_context.trace_id != trace_id
+    ):
+        raise ApiError("batch.execution_invalid")
+    _validate_batch_route_coverage(route_plan, batch_context)
+    if token_estimate is None:
+        raise ApiError("batch.execution_invalid")
+    estimate_tokens = token_estimate
+    expected_cost = _batch_frozen_route_cost(batch_context, estimate_tokens)
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect_database(config.database_url)
+        connection.execute("BEGIN IMMEDIATE")
+        rules = _load_budget_rules(
+            connection,
+            auth_context.tenant_id,
+            auth_context.environment_id,
+            auth_context.virtual_key_id,
+            auth_context.project_id,
+            auth_context.application_id,
+        )
+        budget_date, _start_utc, _end_utc = _budget_window()
+        rows = connection.execute(
+            """
+            SELECT allocation.batch_budget_allocation_id,allocation.budget_rule_id,
+                   allocation.budget_date,allocation.reserved_cost_cny,
+                   allocation.route_plan_hash,allocation.execution_outcome,
+                   allocation.charge_state,allocation.status,
+                   allocation.batch_job_id,allocation.batch_task_id,
+                   hold.tenant_id AS hold_tenant_id,hold.batch_job_id AS hold_job_id,
+                   hold.budget_rule_id AS hold_rule_id,hold.budget_date AS hold_budget_date,
+                   hold.status AS hold_status
+            FROM batch_budget_allocations allocation
+            JOIN batch_budget_holds hold
+              ON hold.tenant_id=allocation.tenant_id
+             AND hold.batch_budget_hold_id=allocation.batch_budget_hold_id
+            WHERE allocation.tenant_id=? AND allocation.batch_attempt_id=?
+              AND allocation.budget_date=(
+                SELECT MAX(latest.budget_date)
+                FROM batch_budget_allocations latest
+                WHERE latest.tenant_id=allocation.tenant_id
+                  AND latest.batch_attempt_id=allocation.batch_attempt_id
+              )
+            ORDER BY allocation.budget_rule_id
+            """,
+            (auth_context.tenant_id, batch_context.batch_attempt_id),
+        ).fetchall()
+        row_by_rule = {str(row["budget_rule_id"]): row for row in rows}
+        context_by_rule = {item.budget_rule_id: item for item in batch_context.allocations}
+        expected_rule_ids = {rule.budget_rule_id for rule in rules}
+        if (
+            len(row_by_rule) != len(rows)
+            or set(row_by_rule) != expected_rule_ids
+            or set(context_by_rule) != expected_rule_ids
+        ):
+            raise ApiError("batch.execution_invalid")
+        expected_text = _money_text(expected_cost)
+        for rule in rules:
+            row = row_by_rule[rule.budget_rule_id]
+            trusted = context_by_rule[rule.budget_rule_id]
+            if (
+                str(row["batch_budget_allocation_id"])
+                != trusted.batch_budget_allocation_id
+                or str(row["budget_date"]) != budget_date
+                or trusted.budget_date != budget_date
+                or str(row["reserved_cost_cny"]) != trusted.reserved_cost_cny
+                or _money_text(_decimal_value(row["reserved_cost_cny"])) != expected_text
+                or str(row["route_plan_hash"]) != batch_context.route_plan_hash
+                or str(row["execution_outcome"]) != "not_invoked"
+                or str(row["charge_state"]) != "none"
+                or str(row["status"]) != "active"
+                or str(row["batch_job_id"]) != batch_context.batch_job_id
+                or str(row["batch_task_id"]) != batch_context.batch_task_id
+                or str(row["hold_tenant_id"]) != auth_context.tenant_id
+                or str(row["hold_job_id"]) != batch_context.batch_job_id
+                or str(row["hold_rule_id"]) != rule.budget_rule_id
+                or str(row["hold_budget_date"]) != budget_date
+                or str(row["hold_status"]) not in {"active", "settled"}
+            ):
+                raise ApiError("batch.execution_invalid")
+            if get_active_budget_block(
+                connection,
+                tenant_id=auth_context.tenant_id,
+                budget_rule_id=rule.budget_rule_id,
+                budget_date=budget_date,
+            ) is not None:
+                raise ApiError("batch.budget_exceeded")
+        connection.commit()
+    except ApiError:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        raise
+    except (DbError, sqlite3.Error, DecimalException, ValueError, OverflowError) as exc:
+        if connection is not None and connection.in_transaction:
+            connection.rollback()
+        logger.warning(
+            "batch.budget_coverage_unavailable",
+            extra={
+                "event": "batch.budget_coverage_unavailable",
+                "tenant_id": auth_context.tenant_id,
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "error_code": "batch.worker_unavailable",
+                "payload": {"exception_type": exc.__class__.__name__},
+            },
+        )
+        raise ApiError("batch.worker_unavailable") from None
+    finally:
+        if connection is not None:
+            connection.close()
+    return BudgetGuardResult(
+        decision=None,
+        initial_estimated_cost_cny=expected_cost,
+        fallback_estimated_cost_cny=Decimal("0"),
+    )
+
+
+def _validate_batch_route_coverage(
+    plan: GatewayRoutePlan,
+    context: TrustedBatchContext,
+) -> None:
+    """Require the dynamic Gateway plan to stay inside the frozen ordered candidate plan."""
+
+    frozen = context.route
+    actual = plan.initial_route
+    if (
+        actual.model_id != frozen.default.model_id
+        or actual.provider_id != frozen.default.provider_id
+    ):
+        raise ApiError("batch.execution_invalid")
+    expected_fallback = frozen.fallback
+    actual_fallback = plan.fallback_route
+    if (expected_fallback is None) != (actual_fallback is None):
+        raise ApiError("batch.execution_invalid")
+    if expected_fallback is not None and actual_fallback is not None and (
+        actual_fallback.model_id != expected_fallback.model_id
+        or actual_fallback.provider_id != expected_fallback.provider_id
+    ):
+        raise ApiError("batch.execution_invalid")
+
+
+def _batch_frozen_route_cost(
+    context: TrustedBatchContext,
+    token_estimate: TokenEstimate,
+) -> Decimal:
+    """Calculate the exact worst-case amount from frozen candidate prices."""
+
+    try:
+        with localcontext() as decimal_context:
+            decimal_context.prec = 64
+            total = sum(
+                (
+                    Decimal(token_estimate.input_tokens)
+                    * Decimal(candidate.input_price_per_1k)
+                    + Decimal(token_estimate.output_tokens)
+                    * Decimal(candidate.output_price_per_1k)
+                )
+                / Decimal(1000)
+                for candidate in context.route.candidates
+            )
+            return total.quantize(MONEY_QUANT, rounding=ROUND_CEILING)
+    except (DecimalException, ValueError, OverflowError) as exc:
+        raise ApiError("batch.execution_invalid") from exc
 
 def load_policy_budget_remaining(
     config: AppConfig,

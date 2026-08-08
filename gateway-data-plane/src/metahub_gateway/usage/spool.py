@@ -57,7 +57,7 @@ _SCHEMA_VERSION = 1
 # 文件信封版本保持 v1；内部 Usage payload 精确兼容 v1-v5。v5 只增加经过严格
 # 校验的输出扫描 ID/状态/结算意图，不包含正文、pattern 或命中片段；未知未来版本仍
 # 失败关闭，避免旧进程忽略尚未完成安全审查的新字段。
-_SUPPORTED_PAYLOAD_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
+_SUPPORTED_PAYLOAD_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 _LOWER_HEX = frozenset("0123456789abcdef")
 
 

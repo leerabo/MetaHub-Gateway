@@ -1573,6 +1573,40 @@ checksum、三服务和双视口页面复验均已写入测试记录；旧 `65/0
 BatchJob/BatchTask、三个 BatchJob API、`batch_job.created/completed` 和 TC-0147/0148。
 全部 108 条 PRD 仍在进行，`all_108_prds_complete=false`。
 
+## PRD-074 批量任务 Scheduler 与 Worker 目录（已完成）
+
+- `shared-sdk/python/metahub_shared/batch/`：冻结 Batch operation、owner-bound payload/result 加密与 HMAC，
+  以及 Control/Gateway 共用的 12 位 canonical 单价 wire；Provider Key、Token、Prompt 和 Response 不进入
+  repr、日志或公开证据。
+- `control-plane-api/src/metahub_control/batch_jobs/`：提供 tenant-qualified BatchJob/BatchTask API、
+  后端 RBAC、文件安全准入、路由/价格冻结、预算 hold、同秒公平 Scheduler、短事务 lease/heartbeat、
+  独立 Worker、崩溃 Reaper、结果读取、取消和人工对账。
+- `gateway-data-plane/src/metahub_gateway/api/internal_batch.py` 与 `batch/`：只接受内部 Batch Token 和
+  一次性 grant，实时优先 gate 在读取 grant/正文前可直接返回 busy；消费事务复核 actor/RBAC、owner、
+  lease、route、allocation 和 deadline，再复用完整 Gateway 治理链并先持久化加密结果。
+- `control-plane-api/src/metahub_control/webhooks/{scheduler.py,service.py}`：Control lifespan 恢复
+  `batch_job.created/completed` source/outbox；pending resume 从不可变 Batch event 严格恢复
+  `source_request_id` 和完整身份，Worker 不持有 Webhook Secret。
+- `infra/migrations/0067_batch_scheduler_worker.sql/.down.sql`：新增 Batch Job/Task/Attempt、预算
+  hold/allocation、grant、tenant scheduler cursor、event/outbox 及 owner/状态/租约/金额/不可变/down guard；
+  RBAC catalog revision 10 为 64 个 permission templates、173 条角色模板关系。
+- `console-web/src/features/batch-jobs/` 与 `src/lib/batchJobs.js`：实现 PAGE-104 列表、状态/进度、
+  创建、取消、失败原因和显式结果读取；使用 owner/generation/Abort、先清理后中止和后端权限导航裁剪。
+- `docs/api/batch-jobs.md`、`docs/prd/PRD-074-batch-scheduler-worker.md` 与
+  `docs/testing/PRD-074-tests.md`：分别保存公开 API、两轮编码前自审与实现后复核、最终测试记录。
+- `scripts/acceptance/prd074-runtime-acceptance.py`：在仓库内空 SQLite、固定回环 Gateway/Control、
+  本地 OpenAI-compatible Provider/Webhook stub 和独立 Worker 上验证实时优先、恢复、取消、撤权、
+  RequestLog/Usage/FinOps、成本、outbox、隐私与进程清理；工作目录独占且失败运行不复用。
+- `.artifacts/prd074-runtime/prd074_20260808T105000Z_runtime_final2/`：只保留脱敏 Runtime JSON 与
+  SHA-256；`status=passed`、`67/0067`、完整性 ok、外键违规 0、23 个文件明文命中 0。
+- `.artifacts/prd074-browser/prd074_20260808T094300Z_page104/`：只保留脱敏 Browser JSON、三张
+  被 manifest 引用的 Chromium 截图和 SHA-256；桌面/移动/移动创建均无横向溢出、重叠或文本溢出。
+
+Excel 总表、M2/M3 交付、PAGE-105、API、数据对象、Webhook 和验收用例共同确认，下一条权威未完成项为
+`PRD-075 | M2-企业增强 | P2 | 模型评测 | 模型 A/B 测试与质量评估`；对应
+`POST /experiments`、`GET /experiments/{id}/results`、ModelExperiment/ExperimentResult、
+`experiment.completed` 和 TC-0149/0150。`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

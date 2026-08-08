@@ -66,10 +66,10 @@ def _build_event(payload: dict[str, object]):
 def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     """验证权限目录边界：仅 Admin、Developer 和 Viewer 默认获得独立 chat.use。"""
 
-    # PRD-073 把产品目录提升到 revision 9；本回归只证明原 chat.use 与 Prompt 模板边界继续存在。
+    # PRD-074 把产品目录提升到 revision 10；本回归只证明原 Chat/模板边界继续存在。
     # 文件安全扫描权限由独立 PRD-073 测试覆盖，不能据此改变 Chat 的角色授权。
-    assert CATALOG_REVISION == 9
-    assert len(PERMISSION_CODES) == 62
+    assert CATALOG_REVISION == 10
+    assert len(PERMISSION_CODES) == 64
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["admin"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["developer"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
@@ -81,13 +81,13 @@ def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     assert "prompt_template.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.read" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.write" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
-    # PRD-073 为四类角色增加文件安全扫描权限，hash 必须使用 revision 9 的完整矩阵；
+    # hash 必须使用 revision 10 的完整矩阵；
     # 本用例随后仍逐项冻结 Chat 与 Prompt 模板原有边界，避免目录升级掩盖越权。
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
-        "e098913e46c2f1512960a9ff91f8aec5f8ccd6267d414404a07c9f591079a319"
+        "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["developer"]) == (
-        "a55457236abcd09c3d42d57f50e636494c5d8ec7ddd92a33f2f94fb95f7ed15f"
+        "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["viewer"]) == (
         "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9"

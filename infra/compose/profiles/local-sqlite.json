@@ -6,6 +6,7 @@
   "services": {
     "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
     "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "batch-worker": { "enabled": true, "ports": [], "health": null },
     "console": { "enabled": true, "port": 5173, "health": "/" },
     "redis": { "enabled": false, "port": 6379 },
     "postgres": { "enabled": false, "port": 5432 },

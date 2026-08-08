@@ -34,35 +34,35 @@ from metahub_shared.runtime.webhooks import (
     build_webhook_event,
 )
 
-# 当前 revision 9 的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
-REVISION_9_HASHES = {
-    "admin": "e098913e46c2f1512960a9ff91f8aec5f8ccd6267d414404a07c9f591079a319",
-    "developer": "a55457236abcd09c3d42d57f50e636494c5d8ec7ddd92a33f2f94fb95f7ed15f",
+# 当前 revision 10 的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
+REVISION_10_HASHES = {
+    "admin": "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262",
+    "developer": "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30",
     "viewer": "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9",
     "finance_admin": "96b0c1f87a2e3d47e11b9d54b878d282814af589ddf7672a9d2a68cc1da97114",
     "security_admin": "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6",
-    "ops_admin": "6f1fddb0cb1774760bc3efc88193968f364add4e91df1a2490ff6a4104fc154b",
+    "ops_admin": "72a396186bd78f79cbbeadab59ba322d2088640f37787377bb74c034486b65c6",
 }
 
 
 def test_file_permissions_are_current_revision_and_role_bounded() -> None:
     """权限主流程：目录、风险级别、默认角色与 canonical hash 必须精确一致。"""
 
-    assert CATALOG_REVISION == 9
-    assert len(PERMISSION_CODES) == 62
+    assert CATALOG_REVISION == 10
+    assert len(PERMISSION_CODES) == 64
     assert PERMISSION_BY_CODE["file.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["file.write"].risk_level == "write"
-    for role_code in ("admin", "developer", "viewer", "security_admin"):
+    for role_code in ("admin", "developer", "viewer", "security_admin", "ops_admin"):
         assert "file.read" in ROLE_GRANTABLE_PERMISSIONS[role_code]
     for role_code in ("admin", "developer", "viewer"):
         assert "file.write" in ROLE_GRANTABLE_PERMISSIONS[role_code]
-    for role_code in ("finance_admin", "ops_admin"):
+    for role_code in ("finance_admin",):
         assert not {"file.read", "file.write"} & ROLE_GRANTABLE_PERMISSIONS[role_code]
     assert "file.write" not in ROLE_GRANTABLE_PERMISSIONS["security_admin"]
     assert {
         role_code: permission_matrix_sha256(permission_codes)
         for role_code, permission_codes in ROLE_GRANTABLE_PERMISSIONS.items()
-    } == REVISION_9_HASHES
+    } == REVISION_10_HASHES
 
 
 def test_auth_package_exports_file_dependencies() -> None:

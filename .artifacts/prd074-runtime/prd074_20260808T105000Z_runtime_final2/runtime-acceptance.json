@@ -1,0 +1,103 @@
+{
+  "all_108_prds_complete": false,
+  "authorization": {
+    "provider_calls_after_revoke": 0,
+    "revoked_failure_code": "batch.authorization_revoked"
+  },
+  "database": {
+    "foreign_key_violations": 0,
+    "integrity_check": "ok",
+    "jobs": {
+      "cancelled": 1,
+      "completed": 2,
+      "failed": 1
+    },
+    "migration": {
+      "catalog_revision": 10,
+      "count": 67,
+      "highest": "0067"
+    },
+    "queued_cancel_provider_calls": 0,
+    "recovered_completed_outbox": true,
+    "revoked_attempt_count": 0,
+    "revoked_failure_code": "batch.authorization_revoked"
+  },
+  "executed_at": "2026-08-08T10:49:22Z",
+  "fixed_loopback_ports": {
+    "control": 18741,
+    "gateway": 18740,
+    "provider_stub": 18742,
+    "webhook_stub": 18743
+  },
+  "http": {
+    "cache_control": "no-store, private",
+    "queued_cancel_status": 200,
+    "result_matched_in_memory": true,
+    "result_status": 200,
+    "tasks_status": 200,
+    "upload_and_security_scan_count": 4
+  },
+  "outbox_recovery": {
+    "active_drain_invoked": false,
+    "control_lifespan_recovered_delivery": true,
+    "not_delivered_during_outage": true,
+    "source_committed_while_control_stopped": true
+  },
+  "owner_chain": {
+    "allocations": 1,
+    "attempts": 1,
+    "finops_rows": 1,
+    "grants": 3,
+    "owner_chain_complete": true,
+    "posted_cost_nonzero": true,
+    "request_logs": 1,
+    "routing_attempts": 1,
+    "usage_rows": 1
+  },
+  "prd": "PRD-074",
+  "privacy": {
+    "encodings_per_value": 3,
+    "plaintext_hits": 0,
+    "scanned_files": 23,
+    "service_log_files_scanned": 14
+  },
+  "processes": {
+    "control_initial": "owned_and_stopped",
+    "control_recovery": "owned_and_stopped",
+    "gateway": "owned_and_stopped",
+    "worker_initial": "owned_and_stopped",
+    "worker_outbox": "owned_and_stopped",
+    "worker_recovery": "owned_and_stopped",
+    "worker_revoked": "owned_and_stopped"
+  },
+  "provider_stub": {
+    "batch_calls": 2,
+    "invalid_calls": 0,
+    "max_concurrency": 1,
+    "realtime_calls": 1
+  },
+  "realtime_priority": {
+    "attempt_count": 0,
+    "grant_consumed": false,
+    "grant_rotations": 2,
+    "prepared_attempt_preserved": true,
+    "provider_not_invoked": true,
+    "realtime_never_waited_for_batch": true,
+    "realtime_status": 200
+  },
+  "run_id": "prd074_20260808T105000Z_runtime_final2",
+  "status": "passed",
+  "webhook_stub": {
+    "completed": 4,
+    "created": 4,
+    "forbidden_field_hits": 0,
+    "invalid": 0,
+    "signature_failures": 0
+  },
+  "worker_recovery": {
+    "expired_lease_reaped": true,
+    "owned_worker_stopped": true,
+    "provider_duplicate_calls": 0,
+    "same_prepared_attempt_recovered": true
+  }
+}

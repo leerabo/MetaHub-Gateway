@@ -1139,3 +1139,73 @@ def require_file_security_scanner(
         authorization,
         ("file.read", "file.security.scan"),
     )
+
+
+def require_batch_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require the current database permission snapshot to contain ``batch.read``."""
+
+    return _require_request_permissions(request, authorization, ("batch.read",))
+
+
+def require_batch_writer(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require the current database permission snapshot to contain ``batch.write``."""
+
+    return _require_request_permissions(request, authorization, ("batch.write",))
+
+
+def require_batch_creator(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require both Batch mutation and file-read authority before parsing a create body."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("batch.write", "file.read"),
+    )
+
+
+def require_batch_canceller(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require read and write authority because cancellation returns the current job fact."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("batch.read", "batch.write"),
+    )
+
+
+def require_batch_task_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require access to both a Batch task and its file-derived projections."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("batch.read", "file.read"),
+    )
+
+
+def require_batch_reconciler(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require Batch visibility and FinOps write authority for possible-cost resolution."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("batch.read", "billing.finops.write"),
+    )

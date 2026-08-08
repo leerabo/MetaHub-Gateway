@@ -572,8 +572,10 @@ async def test_internal_chat_auth_binding_single_consume_and_endpoint_split(
     assert facts["endpoint"] == "chat/completions"
     assert facts["audit_endpoint"] == "/internal/chat/completions"
     assert facts["request_kind"] == "chat"
-    assert facts["trusted_auth_context"].tenant_id == tenant_id
-    assert facts["trusted_payload"] == {
+    invocation = facts["trusted_invocation"]
+    assert invocation.source == "enterprise_chat"
+    assert invocation.auth_context.tenant_id == tenant_id
+    assert invocation.payload == {
         "model": "prd066-gateway-chat",
         "messages": [{"role": "user", "content": PROMPT_CANARY}],
         "stream": False,

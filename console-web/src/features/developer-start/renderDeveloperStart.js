@@ -19,6 +19,7 @@ import { renderIntentSecurity } from "../intent-security/renderIntentSecurity.js
 import { renderSessionRisks } from "../session-risks/renderSessionRisks.js";
 import { renderFiles } from "../files/renderFiles.js";
 import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
+import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -405,6 +406,14 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-103 只消费 strict 报告；扫描命令、报告读取、tenant 与模型准入均由后端再次校验。
       return renderFileSecuritySection(
         options.fileSecurityState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "batch-jobs":
+      // PAGE-104 uses an owner-bound state; public routes still recheck RBAC and tenant ownership.
+      return renderBatchJobsSection(
+        options.batchJobsState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -820,6 +829,18 @@ function renderFileSecuritySection(state, authContext, consoleShellState, i18n) 
   return html
     ? `
       <section class="panel file-security-panel" aria-labelledby="file-security-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** Render PAGE-104 only when its exact backend navigation owner remains current. */
+function renderBatchJobsSection(state, authContext, consoleShellState, i18n) {
+  const html = renderBatchJobs(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel batch-jobs-panel" aria-labelledby="batch-jobs-title">
         ${html}
       </section>
     `

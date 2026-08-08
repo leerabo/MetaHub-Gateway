@@ -51,7 +51,11 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 from pydantic import ValidationError
 
-from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.auth import (
+    AuthContext,
+    require_actor_transaction_permissions,
+    require_transaction_permission,
+)
 
 from .models import (
     FileSecurityFindingInfo,
@@ -63,6 +67,8 @@ logger = logging.getLogger("metahub.control.file_security")
 
 # ID、指纹、链路、格式集合与 SQL 投影共同冻结租户 owner 和报告完整性读取边界。
 _FILE_ID = re.compile(r"^file_[0-9a-f]{32}$")
+_BATCH_JOB_ID = re.compile(r"^bjob_[0-9a-f]{32}$")
+_BATCH_TASK_ID = re.compile(r"^btsk_[0-9a-f]{32}$")
 _SCAN_ID = re.compile(r"^fscn_[0-9a-f]{32}$")
 _FINGERPRINT = re.compile(r"^hmac-sha256:[0-9a-f]{64}$")
 _CHAIN_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -80,7 +86,7 @@ SELECT
   file.tenant_id,file.file_id,file.status AS file_status,file.file_extension,
   file.content_fingerprint,file.original_object_key,file.dlp_scan_status,
   extract.file_extract_id,extract.status AS extract_status,extract.extractor_version,
-  extract.text_fingerprint,extract.extracted_object_key
+  extract.text_fingerprint,extract.extracted_object_key,extract.estimated_tokens
 FROM uploaded_files file
 LEFT JOIN file_extracts extract
   ON extract.tenant_id=file.tenant_id AND extract.file_id=file.file_id
@@ -122,6 +128,23 @@ class _PersistedFinding:
     draft: SecurityFindingDraft = field(repr=False)
     evidence_fingerprint: str = field(repr=False)
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class BatchFileAdmission:
+    """Safe pre-decryption facts used by the Batch create transaction."""
+
+    file_id: str
+    estimated_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchFileContextSnapshot:
+    """Owner and admission facts captured on each side of external Blob I/O."""
+
+    submitted_by_user_id: str
+    owner: _FileSecurityOwner
+    scan_id: str
 
 
 class OcrBackendPool:
@@ -512,6 +535,213 @@ def build_file_model_context(
     # 动态边界派生失败不能返回未包装正文，必须按 Shared 固定错误关闭。
     except FileSecurityError as exc:
         raise ApiError(exc.code) from None
+
+
+def validate_file_for_batch_admission(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    file_id: object,
+) -> BatchFileAdmission:
+    """Validate a ready, token-estimated, security-allowed file without decrypting it.
+
+    The caller must already hold the Batch create transaction and have rechecked
+    ``batch.write + file.read``. Cross-tenant, missing, incomplete, and owner-drifted files use
+    fixed Batch errors and no file name, object key, finding evidence, or content leaves this
+    boundary.
+    """
+
+    if not connection.in_transaction:
+        raise ApiError("batch.worker_unavailable")
+    normalized_file_id = _normalize_file_id(file_id)
+    try:
+        row = connection.execute(
+            _OWNER_SELECT,
+            (tenant_id, normalized_file_id),
+        ).fetchone()
+        if row is None:
+            raise ApiError("batch.file_not_ready")
+        try:
+            owner = _owner_from_row(row)
+        except ApiError:
+            raise ApiError("batch.file_not_ready") from None
+        estimated_tokens = row["estimated_tokens"]
+        if type(estimated_tokens) is not int or estimated_tokens < 0:
+            raise ApiError("batch.file_not_ready")
+        scan_row = _select_authoritative_scan(
+            connection,
+            owner.tenant_id,
+            owner.file_id,
+            owner=owner,
+        )
+        if scan_row is None:
+            raise ApiError("batch.file_security_blocked")
+        report = _report_response(
+            connection,
+            scan_row,
+            request_id="batch-admission",
+            trace_id="batch-admission",
+            reused=True,
+        ).report
+        if not (
+            report.status == "passed"
+            and report.coverage_status == "complete"
+            and report.model_access_status == "allowed"
+        ):
+            raise ApiError("batch.file_security_blocked")
+        return BatchFileAdmission(
+            file_id=normalized_file_id,
+            estimated_tokens=estimated_tokens,
+        )
+    except ApiError:
+        raise
+    except (FileSecurityError, ValidationError):
+        raise ApiError("batch.file_security_blocked") from None
+    except sqlite3.Error:
+        raise ApiError("batch.worker_unavailable") from None
+
+
+def build_file_model_context_for_batch(
+    config: AppConfig,
+    *,
+    tenant_id: object,
+    batch_job_id: object,
+    batch_task_id: object,
+) -> BoundedFileContext:
+    """Build a bounded context for a durable Batch owner with live actor authorization.
+
+    Job, task, file, and submitting actor are recovered from one tenant-qualified owner graph.
+    Two short read snapshots surround Blob I/O: both validate the current full RBAC matrix,
+    tenant owner, and authoritative PRD-073 report, while filesystem read, AES-GCM verification,
+    and bounded-context construction run without a SQLite transaction. Browser sessions and HTTP
+    actor fields are deliberately not accepted.
+    """
+
+    if type(tenant_id) is not str or not tenant_id:
+        raise ApiError("batch.task_not_found")
+    if type(batch_job_id) is not str or _BATCH_JOB_ID.fullmatch(batch_job_id) is None:
+        raise ApiError("batch.task_not_found")
+    if type(batch_task_id) is not str or _BATCH_TASK_ID.fullmatch(batch_task_id) is None:
+        raise ApiError("batch.task_not_found")
+    secret = _file_secret(config)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        before = _load_batch_file_context_snapshot(
+            connection,
+            tenant_id=tenant_id,
+            batch_job_id=batch_job_id,
+            batch_task_id=batch_task_id,
+        )
+        connection.commit()
+
+        # Filesystem I/O, decryption, and text framing must never retain a SQLite lock.
+        text = _read_extracted_blob_text(config, before.owner, secret=secret)
+        bounded = build_bounded_file_context(
+            text,
+            secret=secret,
+            tenant_id=before.owner.tenant_id,
+            file_id=before.owner.file_id,
+            scan_id=before.scan_id,
+            extract_fingerprint=before.owner.extract_fingerprint,
+        )
+
+        connection.execute("BEGIN")
+        after = _load_batch_file_context_snapshot(
+            connection,
+            tenant_id=tenant_id,
+            batch_job_id=batch_job_id,
+            batch_task_id=batch_task_id,
+        )
+        if after != before:
+            raise ApiError("batch.file_security_blocked")
+        connection.commit()
+        return bounded
+    except ApiError:
+        connection.rollback()
+        raise
+    except (FileSecurityError, FileContractError, UnicodeError, ValidationError):
+        connection.rollback()
+        raise ApiError("batch.worker_unavailable") from None
+    except sqlite3.Error:
+        connection.rollback()
+        raise ApiError("batch.worker_unavailable") from None
+    finally:
+        connection.close()
+
+
+def _load_batch_file_context_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    batch_job_id: str,
+    batch_task_id: str,
+) -> _BatchFileContextSnapshot:
+    """Read one transaction-bound Batch actor, file owner, and allowed security report."""
+
+    if not connection.in_transaction:
+        raise ApiError("batch.worker_unavailable")
+    durable_owner = connection.execute(
+        """
+        SELECT job.submitted_by_user_id,task.file_id
+        FROM batch_jobs job
+        JOIN batch_tasks task
+          ON task.tenant_id=job.tenant_id AND task.batch_job_id=job.batch_job_id
+        WHERE job.tenant_id=? AND job.batch_job_id=? AND task.batch_task_id=?
+        """,
+        (tenant_id, batch_job_id, batch_task_id),
+    ).fetchone()
+    if durable_owner is None:
+        raise ApiError("batch.task_not_found")
+    submitted_by_user_id = str(durable_owner["submitted_by_user_id"])
+    try:
+        require_actor_transaction_permissions(
+            connection,
+            tenant_id=tenant_id,
+            user_id=submitted_by_user_id,
+            permission_codes=("batch.write", "file.read"),
+            unavailable_error_code="batch.worker_unavailable",
+        )
+    except ApiError as exc:
+        if exc.code == "auth.permission_denied":
+            raise ApiError("batch.authorization_revoked") from None
+        raise
+    file_row = connection.execute(
+        _OWNER_SELECT,
+        (tenant_id, durable_owner["file_id"]),
+    ).fetchone()
+    if file_row is None:
+        raise ApiError("batch.file_not_ready")
+    try:
+        owner = _owner_from_row(file_row)
+    except ApiError:
+        raise ApiError("batch.file_not_ready") from None
+    scan_row = _select_authoritative_scan(
+        connection,
+        owner.tenant_id,
+        owner.file_id,
+        owner=owner,
+    )
+    if scan_row is None:
+        raise ApiError("batch.file_security_blocked")
+    report = _report_response(
+        connection,
+        scan_row,
+        request_id="batch-worker",
+        trace_id="batch-worker",
+        reused=True,
+    ).report
+    if not (
+        report.status == "passed"
+        and report.coverage_status == "complete"
+        and report.model_access_status == "allowed"
+    ):
+        raise ApiError("batch.file_security_blocked")
+    return _BatchFileContextSnapshot(
+        submitted_by_user_id=submitted_by_user_id,
+        owner=owner,
+        scan_id=report.scan_id,
+    )
 
 
 def _load_owner_for_scan(

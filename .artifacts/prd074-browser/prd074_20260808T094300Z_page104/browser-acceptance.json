@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "run_id": "prd074_20260808T094300Z_page104",
+  "generated_at": "2026-08-08T09:56:03Z",
+  "status": "passed",
+  "prd": "PRD-074",
+  "page": "PAGE-104",
+  "browser": {
+    "engine": "Chromium",
+    "version": "151.0.7922.76",
+    "executable_scope": "C:/MetaHub/.tools/chrome-portable/chrome.exe",
+    "network_scope": "fixed_loopback_static_harness"
+  },
+  "viewports": [
+    {
+      "name": "desktop",
+      "width": 1280,
+      "height": 720,
+      "horizontal_overflow": 0,
+      "overlap_count": 0,
+      "text_overflow_count": 0,
+      "screenshot": "desktop-cdp-1280x720.png"
+    },
+    {
+      "name": "mobile",
+      "width": 390,
+      "height": 844,
+      "horizontal_overflow": 0,
+      "overlap_count": 0,
+      "text_overflow_count": 0,
+      "screenshot": "mobile-cdp-390x844.png"
+    },
+    {
+      "name": "mobile_create",
+      "width": 390,
+      "height": 844,
+      "horizontal_overflow": 0,
+      "overlap_count": 0,
+      "text_overflow_count": 0,
+      "screenshot": "mobile-create-cdp-390x844.png"
+    }
+  ],
+  "interaction_contracts": {
+    "result_hydrated_once": true,
+    "result_cleared_before_abort": true,
+    "late_response_isolated": true,
+    "unauthorized_result_buttons": 0
+  },
+  "pixel_checks": {
+    "dimensions_match": true,
+    "nonblank": true,
+    "sampled_color_floor": 100,
+    "minimum_observed_sampled_colors": 1317
+  },
+  "privacy": {
+    "provider_key_present": false,
+    "token_present": false,
+    "prompt_present": false,
+    "provider_response_present": false,
+    "file_body_present": false
+  },
+  "all_108_prds_complete": false
+}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from metahub_shared.runtime.fastapi_app import create_service_app
 
+from metahub_gateway.api.internal_batch import router as internal_batch_router
 from metahub_gateway.api.internal_chat import router as internal_chat_router
 from metahub_gateway.api.openai_compatible import router as openai_compatible_router
 from metahub_gateway.cache_affinity import install_cache_affinity_recovery
@@ -29,6 +30,7 @@ app = create_service_app(
 )
 app.include_router(openai_compatible_router)
 app.include_router(internal_chat_router)
+app.include_router(internal_batch_router)
 app.include_router(feedback_router)
 # mask 能力先做纯内存自检再进入 readiness；默认门禁关闭时不会改变旧部署健康状态。
 install_policy_mask_runtime(app)

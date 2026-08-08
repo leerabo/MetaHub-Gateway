@@ -36,7 +36,7 @@ EXPECTED_VERSIONS = [f"{version:04d}" for version in range(1, 55)]
 
 # 配置迁移使用独立读写权限，不能由 Provider、Model 等普通领域 CRUD 权限推导。
 TRANSFER_CODES = frozenset({"config.transfer.read", "config.transfer.write"})
-# PRD-062 的 0054 历史态固定为 revision 2；PRD-073 后共享目录已升到 revision 9，
+# PRD-062 的 0054 历史态固定为 revision 2；PRD-074 后共享目录已升到 revision 10，
 # 因此专项显式排除 Chat、Prompt、策略、意图、会话风险、文件与安全扫描权限，不能改写历史迁移。
 PRD062_LATER_PERMISSION_CODES = frozenset(
     {
@@ -52,6 +52,8 @@ PRD062_LATER_PERMISSION_CODES = frozenset(
         "file.read",
         "file.write",
         "file.security.scan",
+        "batch.read",
+        "batch.write",
     }
 )
 PRD062_PERMISSION_CODES = frozenset(
@@ -217,9 +219,9 @@ def test_prd062_fresh_repeat_and_new_tenant_default_matrix(tmp_path: Path) -> No
     seed = apply_seed_data(database_url)
 
     connection = connect_database(database_url)
-    # 当前运行目录包含 PRD-066..072 的十一项后续权限；数据库子集仍冻结 0054 的 50 项快照。
-    assert CATALOG_REVISION == 9
-    assert len(PERMISSION_CATALOG) == 62
+    # 当前运行目录还包含 Chat、模板、风险、文件与 Batch 权限；数据库子集仍冻结 0054 的 50 项快照。
+    assert CATALOG_REVISION == 10
+    assert len(PERMISSION_CATALOG) == 64
     assert len(PRD062_PERMISSION_CODES) == 50
     assert {
         definition.code
@@ -282,7 +284,10 @@ def test_prd062_0053_upgrade_custom_matrix_and_empty_roundtrip(tmp_path: Path) -
     through_0053 = _migration_subset(tmp_path / "migrations-through-0053", 53)
     through_0054 = _migration_subset(tmp_path / "migrations-through-0054", 54)
     database_url = _sqlite_url(tmp_path / "prd062-upgrade-roundtrip.db")
-    assert apply_migrations(database_url, migrations_dir=through_0053).applied == EXPECTED_VERSIONS[:-1]
+    assert (
+        apply_migrations(database_url, migrations_dir=through_0053).applied
+        == EXPECTED_VERSIONS[:-1]
+    )
     seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
     actor = _admin(connection, seed.tenant_id)

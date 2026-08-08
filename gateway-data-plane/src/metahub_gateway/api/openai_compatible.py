@@ -50,6 +50,11 @@ from metahub_shared.session_risk import (
 from starlette.datastructures import Headers
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext, authenticate_virtual_key
+from metahub_gateway.batch import (
+    RealtimeGatewayLease,
+    TrustedGatewayInvocation,
+    get_batch_gateway_gate,
+)
 from metahub_gateway.budgets import (
     BudgetExhaustedError,
     BudgetGuardResult,
@@ -233,9 +238,7 @@ async def verify_adapter_contract_probe_identity(request: Request) -> JSONRespon
     正文的最小成功事实。租户不匹配沿用统一鉴权错误，避免形成租户存在性枚举接口。
     """
 
-    auth_context = authenticate_virtual_key(
-        _config(request), request.headers.get("Authorization")
-    )
+    auth_context = authenticate_virtual_key(_config(request), request.headers.get("Authorization"))
     _ensure_environment_active(auth_context)
     declared_tenants = tuple(request.headers.getlist(_CONTRACT_PROBE_TENANT_HEADER))
     if (
@@ -358,17 +361,15 @@ async def _handle_gateway_request(
     endpoint: str,
     request_kind: str,
     audit_endpoint: str | None = None,
-    trusted_auth_context: GatewayAuthContext | None = None,
-    trusted_payload: dict[str, Any] | None = None,
-    trusted_session_risk_candidates: tuple[SessionRiskRequestIdentity, ...] | None = None,
+    trusted_invocation: TrustedGatewayInvocation | None = None,
 ) -> JSONResponse | StreamingResponse:
     """处理一次网关请求并保证成功/失败都尽量写入调用日志。
 
     request_model 单独保存，是为了在路由失败或能力校验失败时仍能把用户请求的
     模型名写入 request_logs；日志上下文只包含安全元数据，不携带 Prompt/Input。
 
-    ``trusted_auth_context``、``trusted_payload`` 与 ``trusted_session_risk_candidates``
-    只能由已消费 PRD-066 单次 grant 的内部路由成组传入。``endpoint`` 始终是发给
+    ``trusted_invocation`` 只能由已消费单次 grant 的内部路由构造；其来源枚举确保
+    Enterprise Chat 与 Batch 的身份、正文和结算事实不能半组合。``endpoint`` 始终是发给
     Provider Adapter 的相对路径，
     ``audit_endpoint`` 只覆盖 RequestLog/接收日志中的入口身份，避免把内部 URL 发往上游。
     """
@@ -383,23 +384,46 @@ async def _handle_gateway_request(
     rate_limit_lease: RateLimitLease | None = None
     policy_lease: PolicySnapshotLeaseDecision | None = None
     budget_guard_result: BudgetGuardResult | None = None
+    realtime_gateway_lease: RealtimeGatewayLease | None = None
     request_claimed = False
     log_endpoint = audit_endpoint or endpoint
 
     try:
-        # 可信身份和固定正文必须来自同一次 grant 消费，任一缺失都代表服务端边界被破坏。
-        if (
-            (trusted_auth_context is None) != (trusted_payload is None)
-            or (trusted_auth_context is None) != (trusted_session_risk_candidates is None)
+        if trusted_invocation is not None and not isinstance(
+            trusted_invocation, TrustedGatewayInvocation
         ):
-            # 可信身份和正文必须来自同一次 grant 消费；只注入其中一项属于服务端编排错误。
-            raise ApiError("chat.gateway_unavailable")
-        if trusted_auth_context is not None and request.headers.get("Authorization") is not None:
+            raise ApiError("gateway.auth_invalid")
+        if trusted_invocation is not None and request.headers.get("Authorization") is not None:
             # 内部调用不接受 Virtual Key Bearer 冒充，避免出现两个相互冲突的身份来源。
-            raise ApiError("chat.execution_invalid")
-        auth_context = trusted_auth_context or authenticate_virtual_key(
-            config, request.headers.get("Authorization")
+            raise ApiError(
+                "batch.execution_invalid"
+                if trusted_invocation.source == "batch"
+                else "chat.execution_invalid"
+            )
+        trusted_batch = (
+            trusted_invocation.batch
+            if trusted_invocation is not None and trusted_invocation.source == "batch"
+            else None
         )
+        auth_context = (
+            trusted_invocation.auth_context
+            if trusted_invocation is not None
+            else authenticate_virtual_key(config, request.headers.get("Authorization"))
+        )
+        # Batch already owns a dedicated slot. Other traffic is admitted to the realtime
+        # gate only after its backend identity is trusted, so unauthenticated requests cannot
+        # suppress scheduler work or extend the realtime cooldown.
+        if trusted_invocation is None or trusted_invocation.source != "batch":
+            try:
+                realtime_gateway_lease = await get_batch_gateway_gate(
+                    request.app.state,
+                    batch_concurrency=getattr(config, "batch_gateway_concurrency", 1),
+                    realtime_cooldown_milliseconds=(
+                        getattr(config, "batch_realtime_cooldown_milliseconds", 250)
+                    ),
+                ).enter_realtime()
+            except (RuntimeError, ValueError) as exc:
+                raise ApiError("gateway.request_log_unavailable") from exc
         # tenant_id 只取自已认证 Virtual Key；正文尚未读取，因此客户端不能影响租约归属。
         # 当前请求只获取一次，主调用、Fallback 与流式握手都复用 Request.state 中的同一引用。
         await _acquire_provider_error_map_lease(request, auth_context.tenant_id)
@@ -423,16 +447,27 @@ async def _handle_gateway_request(
         if request_log_context is None:  # pragma: no cover - 已认证上下文按类型不可能为空。
             raise ApiError("gateway.request_log_unavailable")
         request_log_context = _context_with_policy_lease(request_log_context, policy_lease)
+        if trusted_invocation is not None and trusted_invocation.batch is not None:
+            batch = trusted_invocation.batch
+            if (
+                batch.request_id != request_log_context.request_id
+                or batch.trace_id != request_log_context.trace_id
+            ):
+                raise ApiError("batch.execution_invalid")
+            request_log_context = replace(
+                request_log_context,
+                batch_job_id=batch.batch_job_id,
+                batch_task_id=batch.batch_task_id,
+                batch_attempt_id=batch.batch_attempt_id,
+                batch_route_plan_hash=batch.route_plan_hash,
+            )
         claim_gateway_request(config, request_log_context)
         request_claimed = True
         declared_contract_tenants = _contract_probe_tenant_declarations(request)
         # 声明头只用于合同探测；重复行与逗号合并值都不能由框架替调用方选择其一。
-        if (
-            len(declared_contract_tenants) > 1
-            or (
-                len(declared_contract_tenants) == 1
-                and declared_contract_tenants[0] != auth_context.tenant_id
-            )
+        if len(declared_contract_tenants) > 1 or (
+            len(declared_contract_tenants) == 1
+            and declared_contract_tenants[0] != auth_context.tenant_id
         ):
             # 沿用不暴露租户存在性的统一鉴权错误，同时由 request_logs 记录真实租户和链路。
             raise ApiError("gateway.auth_invalid")
@@ -447,8 +482,8 @@ async def _handle_gateway_request(
         # 必须在读取 Prompt 前点查。
         # Embeddings 不建立 session score，但仍需执行同 Key 的人工冻结 overlay，防止换接口绕过。
         session_risk_candidates = (
-            trusted_session_risk_candidates
-            if trusted_session_risk_candidates is not None
+            trusted_invocation.session_risk_candidates
+            if trusted_invocation is not None
             else (
                 resolve_public_session_risk_candidates(request, config, auth_context)
                 if request_kind == "chat"
@@ -482,8 +517,8 @@ async def _handle_gateway_request(
         # 内部入口已经对 grant/history 做过 exact-set 和有界校验；这里复制顶层映射，
         # 后续治理只能看到固定 model/messages/stream，不能读回 grant 或客户端身份字段。
         payload = (
-            dict(trusted_payload)
-            if trusted_payload is not None
+            dict(trusted_invocation.payload)
+            if trusted_invocation is not None
             else await _read_json_body(request)
         )
         request_model = _model_alias(payload)
@@ -516,7 +551,7 @@ async def _handle_gateway_request(
             raise policy_error
 
         # mask 只能在最终策略允许继续后、解析任何路由前执行；返回新 payload 保证内部 Chat
-        # 调用方传入的 trusted_payload 和客户端 JSON 对象都不会被原地修改。
+        # 调用方传入的 trusted invocation 和客户端 JSON 对象都不会被原地修改。
         request_log_context, payload = apply_policy_mask_payload(
             config,
             request_log_context,
@@ -545,6 +580,11 @@ async def _handle_gateway_request(
             # routing_reason 与 request_logs 摘要表达，不能发明会被数据库拒绝的新枚举。
             route_plan = GatewayRoutePlan(initial_route=route, initial_role="primary")
         else:
+            trusted_routing_kwargs = (
+                {"trusted_token_estimate": trusted_batch.token_estimate}
+                if trusted_batch is not None
+                else {}
+            )
             route_plan = resolve_model_route_plan(
                 config,
                 tenant_id=auth_context.tenant_id,
@@ -557,8 +597,11 @@ async def _handle_gateway_request(
                 project_id=auth_context.project_id,
                 request_kind=request_kind,
                 payload=payload,
+                **trusted_routing_kwargs,
             )
             route = route_plan.initial_route
+        if trusted_batch is not None:
+            route_plan = replace(route_plan, token_estimate=trusted_batch.token_estimate)
         # RoutingPolicy 运行事件只引用已提交 Decision；有界队列满或未就绪不能反压主请求。
         if route_plan.policy_selected_event is not None:
             enqueue_runtime_event(request.app.state, route_plan.policy_selected_event)
@@ -684,6 +727,10 @@ async def _handle_gateway_request(
             request_kind=request_kind,
             request_id=_request_id(request),
             trace_id=_trace_id(request),
+            batch_lane=(trusted_invocation is not None and trusted_invocation.source == "batch"),
+            batch_token_estimate=(
+                trusted_batch.token_estimate if trusted_batch is not None else None
+            ),
         )
         budget_guard_result = enforce_budget_guard(
             config,
@@ -702,6 +749,8 @@ async def _handle_gateway_request(
             ),
             routing_token_estimate=route_plan.token_estimate,
             routing_price_as_of=route_plan.routing_as_of,
+            batch_context=trusted_batch,
+            route_plan=route_plan,
         )
         if budget_guard_result is not None and budget_guard_result.scope_events:
             # 事件事实已由 Guard 提交；入队失败不能反压 Provider 或改变 alert_only 准入。
@@ -710,7 +759,9 @@ async def _handle_gateway_request(
             request_log_context,
             budget_guard_result.decision if budget_guard_result is not None else None,
         )
-        if budget_guard_result is not None:
+        if budget_guard_result is not None and not (
+            trusted_invocation is not None and trusted_invocation.source == "batch"
+        ):
             # Guard 已创建规则级预留；Provider 尚未调用，默认未知分项为 0，网络尝试后再提升。
             request_log_context = replace(
                 request_log_context,
@@ -869,6 +920,8 @@ async def _handle_gateway_request(
     finally:
         if rate_limit_lease is not None:
             await rate_limit_lease.release()
+        if realtime_gateway_lease is not None:
+            await realtime_gateway_lease.release()
 
 
 async def _non_stream_response_with_fallback(
@@ -1272,9 +1325,7 @@ def _context_with_prepared_output_safety_scan(
         output_safety_scan_id=scan.output_safety_scan_id,
         output_safety_scan_status=scan.scan_status,
         output_safety_decision="none" if scan.scan_status == "not_configured" else None,
-        billing_disposition=(
-            "not_required" if scan.scan_status == "not_configured" else None
-        ),
+        billing_disposition=("not_required" if scan.scan_status == "not_configured" else None),
     )
 
 
@@ -1486,6 +1537,13 @@ def _complete_non_stream_response(
         )
         # 公开错误只携带固定安全码和已脱敏上下文，绝不附加 Provider 响应正文。
         raise error
+    if context.batch_attempt_id is not None:
+        # Internal Batch result persistence needs only bounded token counts when Usage was spooled.
+        # The assistant payload remains in the immediate response object and is never put on state.
+        request.state.batch_gateway_usage = (
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
     return JSONResponse(
         content=response.payload,
         headers=_contract_probe_tenant_headers(request, context.tenant_id),
@@ -1912,9 +1970,7 @@ def _context_with_session_risk_error(
         session_risk_status="failed",
         session_risk_score_id=None,
         session_risk_scope_type=(
-            identity.scope.scope_type
-            if identity is not None
-            else context.session_risk_scope_type
+            identity.scope.scope_type if identity is not None else context.session_risk_scope_type
         ),
         session_risk_state=None,
         session_risk_reason_code=reason_code,

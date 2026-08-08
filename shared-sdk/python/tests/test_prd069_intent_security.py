@@ -23,17 +23,17 @@ from metahub_shared.runtime.webhooks import build_webhook_event
 
 
 def test_intent_classification_permission_is_separate_and_role_bounded() -> None:
-    """权限合同：敏感正文入口仍只授予 Admin/SecurityAdmin，且兼容当前 revision 9。"""
+    """权限合同：敏感正文入口仍只授予 Admin/SecurityAdmin，且兼容当前 revision 10。"""
 
-    assert CATALOG_REVISION == 9
-    assert len(PERMISSION_CODES) == 62
+    assert CATALOG_REVISION == 10
+    assert len(PERMISSION_CODES) == 64
     assert PERMISSION_BY_CODE["intent_risk.classify"].risk_level == "write"
     for role_code in ("admin", "security_admin"):
         assert "intent_risk.classify" in ROLE_GRANTABLE_PERMISSIONS[role_code]
     for role_code in ("developer", "viewer", "finance_admin", "ops_admin"):
         assert "intent_risk.classify" not in ROLE_GRANTABLE_PERMISSIONS[role_code]
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
-        "e098913e46c2f1512960a9ff91f8aec5f8ccd6267d414404a07c9f591079a319"
+        "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["security_admin"]) == (
         "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6"

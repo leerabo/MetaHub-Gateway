@@ -2,10 +2,18 @@
 
 from .routes import router
 from .scheduler import install_file_security_event_scheduler
-from .service import build_file_model_context
+from .service import (
+    BatchFileAdmission,
+    build_file_model_context,
+    build_file_model_context_for_batch,
+    validate_file_for_batch_admission,
+)
 
 __all__ = [
+    "BatchFileAdmission",
     "build_file_model_context",
+    "build_file_model_context_for_batch",
     "install_file_security_event_scheduler",
     "router",
+    "validate_file_for_batch_admission",
 ]

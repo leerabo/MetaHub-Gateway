@@ -377,10 +377,10 @@ def test_session_risk_config_rejects_missing_or_invalid_keyring(
 
 
 def test_session_risk_permissions_are_separate_and_role_bounded() -> None:
-    """revision 9 精确包含 62 项，原风险读/处置权限仍只授予两个安全角色。"""
+    """revision 10 精确包含 64 项，原风险读/处置权限仍只授予两个安全角色。"""
 
-    assert CATALOG_REVISION == 9
-    assert len(PERMISSION_CODES) == 62
+    assert CATALOG_REVISION == 10
+    assert len(PERMISSION_CODES) == 64
     assert PERMISSION_BY_CODE["session_risk.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["session_risk.manage"].risk_level == "critical"
     for role_code in ("admin", "security_admin"):
@@ -393,7 +393,7 @@ def test_session_risk_permissions_are_separate_and_role_bounded() -> None:
             "session_risk.manage",
         } & ROLE_GRANTABLE_PERMISSIONS[role_code]
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
-        "e098913e46c2f1512960a9ff91f8aec5f8ccd6267d414404a07c9f591079a319"
+        "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
     )
     assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["security_admin"]) == (
         "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6"

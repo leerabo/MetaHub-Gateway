@@ -79,6 +79,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "files": "console.page_viewed",
     # PAGE-103 访问事件只证明页面被打开，文件 ID、报告、finding 和扫描结果均不得进入载荷。
     "file-security": "console.page_viewed",
+    # PAGE-104 page events never carry job/task/file IDs, names, costs, failures, or result text.
+    "batch-jobs": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -568,6 +570,17 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看当前租户文件的隐藏 Prompt Injection 检测结果并按权限发起扫描。",
         "先上传并解析文件，再在此执行安全扫描或查看已有报告。",
         121,
+    ),
+    NavigationDefinition(
+        "batch-jobs",
+        "批处理任务",
+        "开发者",
+        "batch-jobs",
+        # Read opens PAGE-104; create, cancel, task diagnostics, and result routes use stricter guards.
+        ("batch.read",),
+        "查看异步批处理任务、进度、固定失败原因和成本摘要。",
+        "提交前确认文件安全准入、模型价格和预算均可用。",
+        122,
     ),
     NavigationDefinition(
         "debug-console",

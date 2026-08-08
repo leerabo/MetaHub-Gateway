@@ -424,13 +424,14 @@ def test_migrate_empty_database_and_repeat_is_idempotent(tmp_path: Path) -> None
         "0064",
         "0065",
         "0066",
+        "0067",
     ]
     assert first.applied == expected_versions
     assert second.applied == []
     assert second.skipped == expected_versions
     assert table_count(database_url, "tenants") == 0
     assert table_count(database_url, "roles") == 0
-    assert table_count(database_url, "schema_migrations") == 66
+    assert table_count(database_url, "schema_migrations") == 67
     columns = {
         row["name"]
         for row in connect_database(database_url).execute("PRAGMA table_info(virtual_keys)").fetchall()
@@ -3744,9 +3745,9 @@ def test_webhook_replay_migration_preserves_original_and_drops_replay_on_rollbac
 
     # 0047 会为该 failed original 建立治理事实；完整升级后必须停在当前头，不能绕过 down guard。
     reapplied = apply_current_migrations(database_url)
-    # 该用例从真实 0030 历史重新升级，必须走到当前正式迁移头 0066；
+    # 该用例从真实 0030 历史重新升级，必须走到当前正式迁移头 0067；
     # 固定完整连续区间可同时防止后续迁移被静默跳过或出现版本断档。
-    assert reapplied.applied == [f"{version:04d}" for version in range(31, 67)]
+    assert reapplied.applied == [f"{version:04d}" for version in range(31, 68)]
     assert connection.execute(
         "SELECT delivery_kind, secret_version FROM webhook_deliveries WHERE webhook_delivery_id='whd_00000000000000000000000000420001'"
     ).fetchone()["delivery_kind"] == "original"
@@ -3814,8 +3815,8 @@ def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_owners
 
     # 历史失败投递在 0047 被接管为死信后属于正式治理事实，测试应保留当前完整栈顶。
     upgraded = apply_current_migrations(database_url)
-    # 升级结果必须覆盖 0031 到当前正式迁移头 0066，不能继续沿用 PRD-049 时的旧上界。
-    assert upgraded.applied == [f"{version:04d}" for version in range(31, 67)]
+    # 升级结果必须覆盖 0031 到当前正式迁移头 0067，不能继续沿用 PRD-049 时的旧上界。
+    assert upgraded.applied == [f"{version:04d}" for version in range(31, 68)]
     delivery = connection.execute(
         "SELECT delivery_kind, secret_version, status FROM webhook_deliveries WHERE webhook_delivery_id='whd_00000000000000000000000000420003'"
     ).fetchone()
