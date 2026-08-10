@@ -534,6 +534,58 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="experiment",
     ),
+    # Response Cache 错误只描述策略、CAS、配置或原子结算边界；不得拼接 tag、data class、
+    # Cache Key、Prompt、Response、Credential、金额或底层数据库异常。
+    "response_cache.policy_not_found": ErrorSpec(
+        404,
+        "Response Cache policy was not found.",
+        "Refresh the current tenant model alias list and select an existing policy owner.",
+        owner="response_cache",
+    ),
+    "response_cache.version_conflict": ErrorSpec(
+        409,
+        "Response Cache policy version conflicts with the current version.",
+        "Refresh the policy and retry with its current expected version.",
+        owner="response_cache",
+    ),
+    "response_cache.request_conflict": ErrorSpec(
+        409,
+        "Response Cache idempotency key conflicts with another request.",
+        "Use a new idempotency key for a different cache management intent.",
+        owner="response_cache",
+    ),
+    "response_cache.input_invalid": ErrorSpec(
+        422,
+        "Response Cache request is invalid.",
+        "Use the documented exact fields, headers, limits, and machine-code values.",
+        owner="response_cache",
+    ),
+    "response_cache.query_invalid": ErrorSpec(
+        422,
+        "Response Cache query is invalid.",
+        "Use only the documented limit and cursor query fields.",
+        owner="response_cache",
+    ),
+    "response_cache.configuration_unavailable": ErrorSpec(
+        503,
+        "Response Cache configuration is unavailable.",
+        "Check the feature state, independent key versions, and service configuration.",
+        owner="response_cache",
+    ),
+    "response_cache.unavailable": ErrorSpec(
+        503,
+        "Response Cache management is temporarily unavailable.",
+        "Retry after the cache policy store and event outbox recover.",
+        retryable=True,
+        owner="response_cache",
+    ),
+    "gateway.response_cache_settlement_unavailable": ErrorSpec(
+        503,
+        "Response Cache hit settlement is temporarily unavailable.",
+        "Use the request id to confirm recovery before starting a new request.",
+        retryable=True,
+        owner="response_cache",
+    ),
     "config_transfer.query_invalid": ErrorSpec(
         422,
         "Configuration transfer query is invalid.",

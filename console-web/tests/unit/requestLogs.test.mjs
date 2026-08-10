@@ -68,6 +68,8 @@ const requestLogPayload = {
 
 const detailPayload = {
   request_log: {
+    // PRD-076 nullable 字段本身属于详情 exact 合同；历史请求以明确 null 表示没有缓存事实。
+    response_cache: null,
     log: {
       ...requestLogPayload.request_logs[0],
       budget_status: "exhausted",
@@ -908,4 +910,3 @@ test("PRD-055 SavedFilter restore keeps terminal stage and rejects injected stag
   }, requestLogAuthContext("tenant_a", "user_a", "session_a", 1));
   assert.doesNotMatch(html, /STAGE_XSS|<script>/);
 });
-

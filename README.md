@@ -87,9 +87,28 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-073 - 隐藏 Prompt Injection 检测`
 - `PRD-074 - 批量任务 Scheduler 与 Worker`
 - `PRD-075 - 模型 A/B 测试与质量评估`
+- `PRD-076 - Response Cache 可选能力`
 
 最近进展：
 
+- `PRD-076 - Response Cache 可选能力` 已完成：Shared 加密/合同、0069/RBAC revision 12、
+  tenant-qualified Policy/Key Generation/Entry/Fill/Tag/Request Fact/Hit/Invalidation/Event/Outbox、
+  Gateway 精确资格判定与单写者填充、Control CAS API 与恢复调度、Usage/FinOps/预算/RequestLog 投影、
+  PAGE-106、维护 CLI 和部署配置均已落地。最终专项为 Shared `39 passed`、Gateway `29 passed`、
+  0069 `5 passed`、Control `9 passed`、维护 `11 passed`、Runtime 合同 `35 passed`、Browser 合同
+  `20 passed`；Console 全量 `734 passed`、lint `230 files passed`。这些分组存在包含关系，不相加冒充
+  一次根级全量。
+  `prd076-final-20260811-06` 从空 SQLite 完成 fresh/repeat/down/re-up：`69/0069 -> 68/0068 -> 69/0069`，
+  各阶段均 `integrity_check=ok`、FK 0；真实回环服务覆盖 miss/fill/hit、并发单填充、TTL、隔离、收费、
+  预算阻断、失效、Control 停机恢复、commit-unknown、failure/usage spool 和 down guard，最终 pending、
+  quarantine 与 sidecar 均为 0，148 个文件的敏感明文命中为 0。PAGE-106 Browser 批次
+  `prd076-browser-final-20260811-24` 在 `1280x720`、`390x844` 覆盖空/配置/编辑/冲突/失效/撤权和
+  RequestLog hit；9 张截图非空，布局溢出、重叠、外部请求、异常 Console、运行文件明文命中均为 0，
+  10 项 manifest SHA-256 全匹配。详见
+  [PRD-076 设计](docs/prd/PRD-076-response-cache-optional-capability.md)、
+  [Response Cache API](docs/api/response-cache.md)、[PRD-076 测试记录](docs/testing/PRD-076-tests.md)、
+  [Runtime](.artifacts/prd076-runtime/prd076-final-20260811-06) 和
+  [Browser](.artifacts/prd076-browser/prd076-browser-final-20260811-24)。
 - `PRD-075 - 模型 A/B 测试与质量评估` 已完成：Shared Experiment 合同、0068/RBAC revision 11、
   tenant-qualified Experiment/Assignment/Execution/Outcome/Settlement/Result、Control API 与
   Scheduler/Reaper、Gateway 真实流量精确分桶、`experiment.completed` outbox、PAGE-105 和部署配置均已落地。
@@ -189,9 +208,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 PRD 总表、M2/M3 交付、PAGE-105、API、数据对象、Webhook 与 TC-0149/0150 已交叉确认并由
-  PRD-075 实际实现和验收关闭。PRD-075 之后的下一条未完成项必须在本条提交推送后重新交叉确认，
-  不仅凭连续编号推断，也不在本提交混入后续实现。总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 78 行、`03_M2-M3扩展交付` 第 14 行、PAGE-107、API、AssistantQuery/
+  AssistantAudit、`assistant.queried` 与 TC-0153/0154 已和 README、`docs/prd`、`docs/testing` 交叉确认。
+  PRD-076 之后的下一条权威未完成项为
+  `PRD-077 | M2-企业增强 | P2 | 扩展层 | Admin AI助手 | 只读管理员AI助手`。本次提交不启动或混入
+  PRD-077 实现；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

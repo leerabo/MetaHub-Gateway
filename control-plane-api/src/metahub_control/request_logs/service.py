@@ -23,6 +23,7 @@ from metahub_shared.runtime.error_diagnosis import ErrorDiagnosisInfo, diagnose_
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import AuthContext
+from metahub_control.response_cache.models import ResponseCacheRequestLogInfo
 
 from .models import (
     RequestFeedbackInfo,
@@ -365,6 +366,11 @@ def load_request_log_detail_from_connection(
             tenant_id,
             normalized_log_request_id,
         ),
+        response_cache=_load_response_cache_projection(
+            connection,
+            tenant_id,
+            normalized_log_request_id,
+        ),
         budget_evaluations=_load_budget_evaluations(connection, tenant_id, normalized_log_request_id),
         dlp_matches=_load_dlp_matches(connection, tenant_id, normalized_log_request_id),
         intent_risk=_load_intent_risk(
@@ -386,6 +392,111 @@ def load_request_log_detail_from_connection(
         feedback_ineligible_reason=eligibility.reason,
     )
     return detail
+
+
+def _load_response_cache_projection(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    request_id: str,
+) -> ResponseCacheRequestLogInfo | None:
+    """从 tenant-qualified request fact/hit 构造 7.5 exact 白名单，历史请求返回 null。"""
+
+    # 少数旧单元测试使用迁移前的最小手工 schema；没有 0069 表时等价于历史不适用请求。
+    if connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='response_cache_request_facts'"
+    ).fetchone() is None:
+        return None
+    row = connection.execute(
+        """
+        SELECT
+          fact.tenant_id,fact.request_id,fact.trace_id,fact.cache_policy_id,
+          fact.cache_policy_version,fact.status,fact.response_cache_hit_id,
+          fact.hit,fact.charge_cache_hits,
+          hit.tenant_id AS hit_tenant_id,hit.request_id AS hit_request_id,
+          hit.trace_id AS hit_trace_id,hit.cache_policy_id AS hit_cache_policy_id,
+          hit.cache_policy_version AS hit_cache_policy_version,
+          hit.charge_cache_hits AS hit_charge_cache_hits,
+          hit.source_generation_cost_status,hit.source_generation_cost_cny_micros,
+          hit.current_reference_cost_status,hit.current_reference_cost_cny_micros,
+          hit.saved_cost_status,hit.saved_cost_cny_micros,
+          hit.billed_cost_status,hit.billed_cost_cny_micros
+        FROM response_cache_request_facts fact
+        LEFT JOIN response_cache_hits hit
+          ON hit.tenant_id=fact.tenant_id
+         AND hit.response_cache_hit_id=fact.response_cache_hit_id
+         AND hit.request_id=fact.request_id
+        WHERE fact.tenant_id=? AND fact.request_id=?
+        """,
+        (tenant_id, request_id),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        status = str(row["status"])
+        is_hit = bool(row["hit"])
+        policy_id = row["cache_policy_id"]
+        policy_version = row["cache_policy_version"]
+        charge = None if row["charge_cache_hits"] is None else bool(row["charge_cache_hits"])
+        # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+        if str(row["tenant_id"]) != tenant_id or str(row["request_id"]) != request_id:
+            # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+            raise ValueError
+        if is_hit:
+            # hit owner 必须与 fact 的 tenant/request/trace/policy/charge 全镜像，不能拼接半条账务事实。
+            if (
+                row["response_cache_hit_id"] is None
+                or row["hit_tenant_id"] != tenant_id
+                or row["hit_request_id"] != request_id
+                or row["hit_trace_id"] != row["trace_id"]
+                or row["hit_cache_policy_id"] != policy_id
+                or row["hit_cache_policy_version"] != policy_version
+                or bool(row["hit_charge_cache_hits"]) != charge
+            ):
+                # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+                raise ValueError
+            source_status = str(row["source_generation_cost_status"])
+            current_status = str(row["current_reference_cost_status"])
+            saved_status = str(row["saved_cost_status"])
+            billed_status = str(row["billed_cost_status"])
+            source_amount = _response_cache_micros(row["source_generation_cost_cny_micros"])
+            current_amount = _response_cache_micros(row["current_reference_cost_cny_micros"])
+            saved_amount = _response_cache_micros(row["saved_cost_cny_micros"])
+            billed_amount = _response_cache_micros(row["billed_cost_cny_micros"])
+        else:
+            source_status = current_status = saved_status = billed_status = "not_applicable"
+            source_amount = current_amount = saved_amount = billed_amount = None
+        return ResponseCacheRequestLogInfo(
+            tenant_id=tenant_id,
+            status=status,
+            hit=is_hit,
+            charge_cache_hits=charge,
+            cache_policy_id=None if policy_id is None else str(policy_id),
+            cache_policy_version=None if policy_version is None else int(policy_version),
+            source_generation_cost_status=source_status,
+            source_generation_cost_cny=source_amount,
+            current_reference_cost_status=current_status,
+            current_reference_cost_cny=current_amount,
+            saved_cost_status=saved_status,
+            saved_cost_cny=saved_amount,
+            billed_cost_status=billed_status,
+            billed_cost_cny=billed_amount,
+        )
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    except (TypeError, ValueError):
+        # 损坏或跨 owner 的财务投影不能降级为 cache miss/null，否则会隐藏收费完整性故障。
+        raise ApiError("response_cache.unavailable") from None
+
+
+def _response_cache_micros(value: object) -> str | None:
+    """把非负整数微元转换为 exact 六位 CNY 字符串，避免 float 精度漂移。"""
+
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+        raise ValueError("invalid response cache amount")
+    major, minor = divmod(value, 1_000_000)
+    return f"{major}.{minor:06d}"
 
 
 def _load_intent_risk(

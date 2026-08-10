@@ -1653,6 +1653,43 @@ Excel 总表、M2/M3 交付、PAGE-105、API、数据对象、Webhook 和验收�
 PRD-075 已通过设计、自审、实现、专项、必要回归、迁移、Runtime、Browser、中文注释和提交前安全门禁；
 该结论只关闭本条，`all_108_prds_complete=false`。
 
+## PRD-076 Response Cache 可选能力目录（已完成）
+
+- `shared-sdk/python/metahub_shared/response_cache/`：冻结 tenant-qualified cache identity、策略/失效合同、
+  HMAC key 与 AES-GCM envelope；敏感正文和密钥不进入 repr、日志或公开证据。
+- `gateway-data-plane/src/metahub_gateway/response_cache/`：实现资格判定、generation fence、单写者 fill lease、
+  加密 Entry、TTL/标签校验、hit settlement 和 crash-safe failure spool；`api/openai_compatible.py` 在完整安全
+  闸门后接入，实验、stream、direct model、Policy route 与不可信 data class 明确旁路。
+- `control-plane-api/src/metahub_control/response_cache/`：提供当前租户 Policy GET/PATCH、失效 API、
+  后端独立 read/write/invalidate 权限、CAS/幂等、Audit、Webhook source/outbox 和 lifespan 恢复；跨租户与
+  不存在保持同形，统一错误保留 request_id。
+- `infra/migrations/0069_response_cache_optional_capability.sql/.down.sql`：新增 Policy、Key Generation、Entry、
+  Fill、Tag、Request Fact、Hit、Invalidation、Event/Outbox 及 owner/不可变/down guard；保真扩展 Usage、
+  Output Safety 与 Audit，RBAC catalog 提升到 revision 12。
+- `console-web/src/features/cache-policies/`、`src/lib/responseCache.js` 与 RequestLog renderer：实现 PAGE-106
+  配置、版本冲突显式 rebase、标签/全部失效、独立权限、owner/generation/Abort 清理及命中成本投影；
+  desktop/mobile 均使用稳定网格和可达 Dialog actions。
+- `scripts/maintenance/`：提供停机后 Response Cache key rotation 与 guarded down；先复核配置、spool、
+  schema/trigger 和禁用状态，再以事务清理并执行迁移，不接受隐式在线破坏。
+- `shared-sdk/python/tests/test_prd076_response_cache_contracts.py`、
+  `gateway-data-plane/tests/**/*prd076*.py`、`control-plane-api/tests/**/*prd076*.py`、
+  `scripts/maintenance/tests/test_response_cache_maintenance.py` 与
+  `console-web/tests/unit/prd076ResponseCache.test.mjs`：覆盖合同、资格/隔离、并发、计费、权限、恢复、迁移、
+  维护和 Console 生命周期；最终计数见测试记录。
+- `docs/prd/PRD-076-response-cache-optional-capability.md`、`docs/api/response-cache.md` 与
+  `docs/testing/PRD-076-tests.md`：分别保存冻结设计及两轮自审、公开 API/错误/Webhook 合同和最终测试记录。
+- `scripts/acceptance/prd076-runtime-acceptance.py` 与
+  `.artifacts/prd076-runtime/prd076-final-20260811-06/`：空 SQLite 往返迁移和真实回环服务验收；最终 JSON
+  SHA-256 为 `2fcfe8579b40a6d13ed9addc09193074ac036bb9d8f80ed3b12ee3dd98ffe19d`，148 个文件明文命中 0。
+- `scripts/acceptance/prd076-browser-acceptance.mjs` 与
+  `.artifacts/prd076-browser/prd076-browser-final-20260811-24/`：保存脱敏 Browser JSON、9 张 PAGE-106
+  截图和 manifest；双视口布局、UI mutation、动态撤权、RequestLog hit、隐私和 owned-process 清理通过。
+
+Excel 总表、M2/M3 交付、PAGE-107、API、AssistantQuery/AssistantAudit、`assistant.queried` 和
+TC-0153/0154 共同确认，下一条权威未完成项为
+`PRD-077 | M2-企业增强 | P2 | 扩展层 | Admin AI助手 | 只读管理员AI助手`。本条不实现 PRD-077，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

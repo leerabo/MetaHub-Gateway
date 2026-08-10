@@ -20,6 +20,11 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
 from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
+from metahub_shared.response_cache import (
+    ResponseCacheContractError,
+    VersionedResponseCacheSecret,
+    validate_secret_keyring,
+)
 
 from .logging import is_sensitive_key
 
@@ -36,6 +41,20 @@ DEFAULT_CACHE_AFFINITY_HMAC_SECRET = (
 )
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
+)
+# Response Cache 的四个根域分别服务 cache identity、entry 密文、Control 幂等 owner 和
+# commit-unknown failure spool。公开开发值只用于 dev/test；生产即使版本不同也禁止复用。
+DEFAULT_RESPONSE_CACHE_HMAC_SECRET = (
+    "dev-only-change-me-metahub-response-cache-hmac-secret-2026"
+)
+DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET = (
+    "dev-only-change-me-metahub-response-cache-encryption-secret-2026"
+)
+DEFAULT_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET = (
+    "dev-only-change-me-metahub-response-cache-control-idempotency-secret-2026"
+)
+DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET = (
+    "dev-only-change-me-metahub-response-cache-failure-spool-secret-2026"
 )
 # 企业 Chat 的 Control -> Gateway 身份使用独立密钥域。默认值仅服务于本机回环开发，
 # 生产环境必须显式覆盖，且该值永远不能进入配置摘要、repr、日志或 API 响应。
@@ -62,6 +81,26 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_SERVICE_MODE": "internal_only",
     "METAHUB_AUTH_TOKEN_SECRET": "dev-only-change-me-metahub-auth-secret",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
+    # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
+    "METAHUB_RESPONSE_CACHE_ENABLED": "false",
+    "METAHUB_RESPONSE_CACHE_HMAC_VERSION": "1",
+    "METAHUB_RESPONSE_CACHE_HMAC_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_ENCRYPTION_VERSION": "1",
+    "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_VERSION": "1",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_VERSION": "",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_VERSION": "1",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_VERSION": "",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_SECRET": "",
+    "METAHUB_RESPONSE_CACHE_MAX_READY_ENTRIES_PER_TENANT": "10000",
+    "METAHUB_RESPONSE_CACHE_MAX_PLAINTEXT_BYTES": "1048576",
+    "METAHUB_RESPONSE_CACHE_FILL_LEASE_SECONDS": "90",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT": ".data/response-cache-failure-spool",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_POLL_INTERVAL_SECONDS": "2",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_CLAIM_LEASE_SECONDS": "60",
     # 空默认值让生产与未启用 Chat 的部署保持可启动；load 阶段仅在 dev/test 回环环境
     # 注入公开的本地开发值，内部 Chat 入口遇到生产缺失值必须失败关闭。
     "METAHUB_INTERNAL_CHAT_TOKEN": "",
@@ -345,6 +384,39 @@ class AppConfig(BaseModel):
     auth_token_secret: str = Field(exclude=True, repr=False)
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
+    # Response Cache 的部署级总开关默认关闭；四个根密钥均从 repr/model_dump 排除。
+    # Control/failure spool 的 previous pair 只服务受控轮换读取，永远不能成为新写入 key。
+    response_cache_enabled: bool = False
+    response_cache_hmac_version: int = 1
+    response_cache_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
+    response_cache_encryption_version: int = 1
+    response_cache_encryption_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    response_cache_control_idempotency_version: int = 1
+    response_cache_control_idempotency_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    response_cache_control_idempotency_previous_version: int | None = None
+    response_cache_control_idempotency_previous_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    response_cache_failure_spool_version: int = 1
+    response_cache_failure_spool_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    response_cache_failure_spool_previous_version: int | None = None
+    response_cache_failure_spool_previous_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    response_cache_max_ready_entries_per_tenant: int = 10_000
+    response_cache_max_plaintext_bytes: int = 1_048_576
+    response_cache_fill_lease_seconds: int = 90
+    response_cache_failure_spool_root: str = Field(
+        default=".data/response-cache-failure-spool", exclude=True, repr=False
+    )
+    response_cache_failure_spool_poll_interval_seconds: int = 2
+    response_cache_failure_spool_claim_lease_seconds: int = 60
     # spool 路径可能暴露宿主机目录结构，因此与数据库 URL 一样禁止进入 model_dump/repr。
     # HMAC 复用 auth_token_secret 但在实现中使用独立域分隔，不能直接对正文签名。
     finops_usage_spool_root: str = Field(
@@ -416,6 +488,88 @@ class AppConfig(BaseModel):
     output_safety_interval_tokens: int = 32
     output_safety_window_tokens: int = 256
     output_safety_max_full_text_code_points: int = 262_144
+
+    @property
+    def response_cache_hmac_key(self) -> VersionedResponseCacheSecret | None:
+        """返回 active cache-key HMAC key；缺失时由业务边界固定旁路或 503。"""
+
+        # 缺失 active Secret 时业务分支必须旁路或 503，不能回退其他 HMAC 域。
+        if self.response_cache_hmac_secret is None:
+            return None
+        # DTO 的 Secret 字段已从 repr 隐藏，调用方只在受控密码学栈内解包。
+        return VersionedResponseCacheSecret(
+            self.response_cache_hmac_version,
+            self.response_cache_hmac_secret,
+        )
+
+    @property
+    def response_cache_encryption_key(self) -> VersionedResponseCacheSecret | None:
+        """返回 active entry 加密密钥 DTO，同时继续以 ``repr=False`` 保护根 Secret。"""
+
+        # 缺失加密根密钥时绝不回退 Auth、File 或 Batch 根域，缓存能力保持不可用。
+        if self.response_cache_encryption_secret is None:
+            return None
+        # 版本与 Secret 作为一体传给 HKDF，避免调用方错配配置中的两个独立字段。
+        return VersionedResponseCacheSecret(
+            self.response_cache_encryption_version,
+            self.response_cache_encryption_secret,
+        )
+
+    @property
+    def response_cache_control_idempotency_keyring(
+        self,
+    ) -> tuple[VersionedResponseCacheSecret, ...]:
+        """返回 active-first Control 幂等验证 keyring，旧版本只用于查询历史 owner。"""
+
+        # 没有 active key 就不能安全生成或查询幂等 owner，空 tuple 明确表示配置不可用。
+        if self.response_cache_control_idempotency_secret is None:
+            return ()
+        keys = [
+            VersionedResponseCacheSecret(
+                self.response_cache_control_idempotency_version,
+                self.response_cache_control_idempotency_secret,
+            )
+        ]
+        # previous 必须在 load 阶段成对校验；这里只按 active-first 顺序暴露只读验证材料。
+        if (
+            self.response_cache_control_idempotency_previous_version is not None
+            and self.response_cache_control_idempotency_previous_secret is not None
+        ):
+            keys.append(
+                VersionedResponseCacheSecret(
+                    self.response_cache_control_idempotency_previous_version,
+                    self.response_cache_control_idempotency_previous_secret,
+                )
+            )
+        return tuple(keys)
+
+    @property
+    def response_cache_failure_spool_keyring(
+        self,
+    ) -> tuple[VersionedResponseCacheSecret, ...]:
+        """返回 active-first failure spool 验证 keyring，旧版本仅用于恢复既有记录。"""
+
+        # 缺失 active key 时不能签名 outcome-unknown 记录，也不能猜测使用 retained key。
+        if self.response_cache_failure_spool_secret is None:
+            return ()
+        keys = [
+            VersionedResponseCacheSecret(
+                self.response_cache_failure_spool_version,
+                self.response_cache_failure_spool_secret,
+            )
+        ]
+        # 恢复器按顺序尝试 active 与 retained version，新写入始终只取第一项。
+        if (
+            self.response_cache_failure_spool_previous_version is not None
+            and self.response_cache_failure_spool_previous_secret is not None
+        ):
+            keys.append(
+                VersionedResponseCacheSecret(
+                    self.response_cache_failure_spool_previous_version,
+                    self.response_cache_failure_spool_previous_secret,
+                )
+            )
+        return tuple(keys)
 
 
 class ServiceInfo(BaseModel):
@@ -579,6 +733,100 @@ def load_app_config(service_name: str) -> AppConfig:
     # 本地默认值只保证开箱验收；生产缺失保持 None，由文件 API 固定返回 503。
     file_encryption_secret = configured_file_encryption_secret or (
         DEFAULT_FILE_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
+    )
+    response_cache_enabled = _boolean(values, "METAHUB_RESPONSE_CACHE_ENABLED")
+    response_cache_hmac_version = _positive_int(
+        values, "METAHUB_RESPONSE_CACHE_HMAC_VERSION"
+    )
+    response_cache_encryption_version = _positive_int(
+        values, "METAHUB_RESPONSE_CACHE_ENCRYPTION_VERSION"
+    )
+    response_cache_control_idempotency_version = _positive_int(
+        values, "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_VERSION"
+    )
+    response_cache_control_idempotency_previous_version = _optional_positive_int(
+        values, "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_VERSION"
+    )
+    response_cache_failure_spool_version = _positive_int(
+        values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_VERSION"
+    )
+    response_cache_failure_spool_previous_version = _optional_positive_int(
+        values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_VERSION"
+    )
+    configured_response_cache_hmac_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_HMAC_SECRET"
+    )
+    configured_response_cache_encryption_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET"
+    )
+    configured_response_cache_control_idempotency_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET"
+    )
+    configured_response_cache_failure_spool_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET"
+    )
+    # 四个公开占位值只服务 dev/test 的真实迁移和运行验收；prod 无论功能开关状态
+    # 都不自动生成密钥，避免不同副本静默形成不可恢复的独立缓存域。
+    response_cache_hmac_secret = configured_response_cache_hmac_secret or (
+        DEFAULT_RESPONSE_CACHE_HMAC_SECRET if environment in {"dev", "test"} else None
+    )
+    response_cache_encryption_secret = configured_response_cache_encryption_secret or (
+        DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET
+        if environment in {"dev", "test"}
+        else None
+    )
+    response_cache_control_idempotency_secret = (
+        configured_response_cache_control_idempotency_secret
+        or (
+            DEFAULT_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET
+            if environment in {"dev", "test"}
+            else None
+        )
+    )
+    response_cache_failure_spool_secret = (
+        configured_response_cache_failure_spool_secret
+        or (
+            DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET
+            if environment in {"dev", "test"}
+            else None
+        )
+    )
+    # previous Secret 不得注入开发默认值；它只在明确轮换窗口中验证已有 owner/spool。
+    response_cache_control_idempotency_previous_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_SECRET"
+    )
+    response_cache_failure_spool_previous_secret = _raw_optional_value(
+        values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_SECRET"
+    )
+    response_cache_max_ready_entries_per_tenant = _bounded_int(
+        values,
+        "METAHUB_RESPONSE_CACHE_MAX_READY_ENTRIES_PER_TENANT",
+        minimum=1,
+        maximum=1_000_000,
+    )
+    response_cache_max_plaintext_bytes = _bounded_int(
+        values,
+        "METAHUB_RESPONSE_CACHE_MAX_PLAINTEXT_BYTES",
+        minimum=1_024,
+        maximum=1_048_576,
+    )
+    response_cache_fill_lease_seconds = _bounded_int(
+        values,
+        "METAHUB_RESPONSE_CACHE_FILL_LEASE_SECONDS",
+        minimum=10,
+        maximum=3_600,
+    )
+    response_cache_failure_spool_poll_interval_seconds = _bounded_int(
+        values,
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_POLL_INTERVAL_SECONDS",
+        minimum=1,
+        maximum=60,
+    )
+    response_cache_failure_spool_claim_lease_seconds = _bounded_int(
+        values,
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_CLAIM_LEASE_SECONDS",
+        minimum=10,
+        maximum=3_600,
     )
     session_risk_enabled = _boolean(values, "METAHUB_SESSION_RISK_ENABLED")
     session_risk_hmac_version = _positive_int(
@@ -776,6 +1024,44 @@ def load_app_config(service_name: str) -> AppConfig:
         lease_seconds=batch_lease_seconds,
         heartbeat_seconds=batch_heartbeat_seconds,
     )
+    _validate_response_cache_config(
+        environment=environment,
+        enabled=response_cache_enabled,
+        hmac_version=response_cache_hmac_version,
+        hmac_secret=response_cache_hmac_secret,
+        encryption_version=response_cache_encryption_version,
+        encryption_secret=response_cache_encryption_secret,
+        control_version=response_cache_control_idempotency_version,
+        control_secret=response_cache_control_idempotency_secret,
+        control_previous_version=(
+            response_cache_control_idempotency_previous_version
+        ),
+        control_previous_secret=(
+            response_cache_control_idempotency_previous_secret
+        ),
+        failure_spool_version=response_cache_failure_spool_version,
+        failure_spool_secret=response_cache_failure_spool_secret,
+        failure_spool_previous_version=(
+            response_cache_failure_spool_previous_version
+        ),
+        failure_spool_previous_secret=(
+            response_cache_failure_spool_previous_secret
+        ),
+        forbidden_secrets=(
+            auth_token_secret,
+            cache_affinity_hmac_secret,
+            internal_config_token,
+            internal_chat_token,
+            internal_batch_token,
+            batch_encryption_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+            session_risk_hmac_secret,
+            session_risk_previous_hmac_secret,
+            *provider_api_keys.values(),
+        ),
+    )
     # 先保留既有快照配置错误优先级，再校验新增 Prompt HMAC 门禁，便于运维逐项修复启动配置。
     _validate_cache_affinity_hmac_secret(
         service_name=service_name,
@@ -905,6 +1191,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "session_risk_enabled": session_risk_enabled,
             "file_processing_enabled": file_encryption_secret is not None,
             "batch_worker_enabled": batch_worker_enabled,
+            "response_cache_enabled": response_cache_enabled,
         },
         config_items=config_items,
         warnings=warnings,
@@ -984,6 +1271,47 @@ def load_app_config(service_name: str) -> AppConfig:
         file_security_max_total_pixels=file_security_max_total_pixels,
         auth_token_secret=auth_token_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
+        response_cache_enabled=response_cache_enabled,
+        response_cache_hmac_version=response_cache_hmac_version,
+        response_cache_hmac_secret=response_cache_hmac_secret,
+        response_cache_encryption_version=response_cache_encryption_version,
+        response_cache_encryption_secret=response_cache_encryption_secret,
+        response_cache_control_idempotency_version=(
+            response_cache_control_idempotency_version
+        ),
+        response_cache_control_idempotency_secret=(
+            response_cache_control_idempotency_secret
+        ),
+        response_cache_control_idempotency_previous_version=(
+            response_cache_control_idempotency_previous_version
+        ),
+        response_cache_control_idempotency_previous_secret=(
+            response_cache_control_idempotency_previous_secret
+        ),
+        response_cache_failure_spool_version=response_cache_failure_spool_version,
+        response_cache_failure_spool_secret=response_cache_failure_spool_secret,
+        response_cache_failure_spool_previous_version=(
+            response_cache_failure_spool_previous_version
+        ),
+        response_cache_failure_spool_previous_secret=(
+            response_cache_failure_spool_previous_secret
+        ),
+        response_cache_max_ready_entries_per_tenant=(
+            response_cache_max_ready_entries_per_tenant
+        ),
+        response_cache_max_plaintext_bytes=response_cache_max_plaintext_bytes,
+        response_cache_fill_lease_seconds=response_cache_fill_lease_seconds,
+        response_cache_failure_spool_root=(
+            _validated_response_cache_failure_spool_root(
+                _value(values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT")
+            )
+        ),
+        response_cache_failure_spool_poll_interval_seconds=(
+            response_cache_failure_spool_poll_interval_seconds
+        ),
+        response_cache_failure_spool_claim_lease_seconds=(
+            response_cache_failure_spool_claim_lease_seconds
+        ),
         finops_usage_spool_root=_validated_local_spool_root(
             _value(values, "METAHUB_FINOPS_USAGE_SPOOL_ROOT")
         ),
@@ -1247,6 +1575,7 @@ def _validated_local_spool_root(value: str) -> str:
     """
 
     raw = str(value or "").strip()
+    # 路径只允许有界本地目录；原值不能进入错误文本，以免暴露宿主目录结构。
     if (
         not raw
         or len(raw) > 1024
@@ -1268,6 +1597,43 @@ def _validated_local_spool_root(value: str) -> str:
             code="infra.config_invalid",
             message="METAHUB_FINOPS_USAGE_SPOOL_ROOT cannot be a filesystem root.",
             suggestion="Choose a dedicated child directory for the Gateway spool.",
+        )
+    return str(normalized)
+
+
+def _validated_response_cache_failure_spool_root(value: str) -> str:
+    """规范化只保存固定失败 owner 的 Response Cache 本地恢复目录。
+
+    路径本身可能暴露宿主结构，所以错误只点名配置键；UNC、控制字符和文件系统根会
+    扩大恢复扫描边界，必须在 worker 创建目录前失败关闭。
+    """
+
+    raw = str(value or "").strip()
+    if (
+        not raw
+        or len(raw) > 1024
+        or any(ord(character) < 32 for character in raw)
+        or raw.startswith(("\\\\", "//"))
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=(
+                "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT must be a bounded local path."
+            ),
+            suggestion="Use a Gateway service-account-owned local recovery directory.",
+        )
+    candidate = Path(raw).expanduser()
+    absolute = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    normalized = Path(os.path.abspath(absolute))
+    if normalized == Path(normalized.anchor):
+        # 根目录既无法证明 owner 独占，也会让 quarantine/清理误触及无关文件。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=(
+                "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT cannot be a filesystem root."
+            ),
+            suggestion="Choose a dedicated child directory for cache recovery records.",
         )
     return str(normalized)
 
@@ -1389,6 +1755,227 @@ def _read_provider_api_keys(values: dict[str, ConfigValue]) -> dict[str, str]:
     return keys
 
 
+def _validate_response_cache_config(
+    *,
+    environment: EnvironmentName,
+    enabled: bool,
+    hmac_version: int,
+    hmac_secret: str | None,
+    encryption_version: int,
+    encryption_secret: str | None,
+    control_version: int,
+    control_secret: str | None,
+    control_previous_version: int | None,
+    control_previous_secret: str | None,
+    failure_spool_version: int,
+    failure_spool_secret: str | None,
+    failure_spool_previous_version: int | None,
+    failure_spool_previous_secret: str | None,
+    forbidden_secrets: tuple[str | None, ...],
+) -> None:
+    """校验 Response Cache 四个独立根域及两个 retained verification keyring。
+
+    功能关闭允许生产部署不持有这些 Secret；一旦任一 active Secret 存在，就必须四项完整，
+    防止后续只切开关时用部分密钥读写。所有错误均使用固定配置描述，不回显 Secret、摘要或
+    与哪个业务域发生冲突。
+    """
+
+    active = (
+        hmac_secret,
+        encryption_secret,
+        control_secret,
+        failure_spool_secret,
+    )
+    # 功能已启用却缺任一根域时必须在启动期失败关闭，不能等首次请求再回退其他 Secret。
+    if enabled and any(secret is None for secret in active):
+        # 已启用能力若缺密钥，启动时就失败关闭；运行时不能回退 Auth 或缓存亲和密钥。
+        raise ConfigError(
+            code="infra.config_missing",
+            message="Enabled Response Cache secret configuration is incomplete.",
+            suggestion="Configure all four independent Response Cache secrets and restart.",
+        )
+    # 即使功能关闭，部分 active 配置也会在未来只切开关时造成不一致，必须作为错误拒绝。
+    if any(secret is None for secret in active) and any(
+        secret is not None for secret in active
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Response Cache active secrets must be configured as one complete set.",
+            suggestion="Configure all four independent secrets or clear the partial set.",
+        )
+
+    control_previous_complete = (
+        control_previous_version is not None and control_previous_secret is not None
+    )
+    if control_previous_complete != (
+        control_previous_version is not None or control_previous_secret is not None
+    ):
+        # previous version/Secret 缺一会让跨轮换 owner 查询漏读，不能静默忽略半组配置。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Response Cache Control previous key configuration is incomplete.",
+            suggestion="Configure both previous version and secret, or clear both values.",
+        )
+    failure_previous_complete = (
+        failure_spool_previous_version is not None
+        and failure_spool_previous_secret is not None
+    )
+    # failure spool retained version/Secret 缺一会导致已落盘记录在轮换后无法验证。
+    if failure_previous_complete != (
+        failure_spool_previous_version is not None
+        or failure_spool_previous_secret is not None
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Response Cache failure spool previous key configuration is incomplete.",
+            suggestion="Configure both previous version and secret, or clear both values.",
+        )
+    if (control_previous_complete or failure_previous_complete) and any(
+        secret is None for secret in active
+    ):
+        # retained key 没有 active 写入 key 时不存在明确轮换方向，必须拒绝含糊 keyring。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Response Cache previous keys require a complete active secret set.",
+            suggestion="Configure the active key set before retaining previous verification keys.",
+        )
+    # 生产关闭且完全未配置是允许状态，业务接口据此固定报告配置不可用。
+    if all(secret is None for secret in active):
+        return
+
+    assert all(secret is not None for secret in active)
+    hmac_secret_value = hmac_secret
+    encryption_secret_value = encryption_secret
+    control_secret_value = control_secret
+    failure_spool_secret_value = failure_spool_secret
+    assert hmac_secret_value is not None
+    assert encryption_secret_value is not None
+    assert control_secret_value is not None
+    assert failure_spool_secret_value is not None
+    control_keyring = [VersionedResponseCacheSecret(control_version, control_secret_value)]
+    if control_previous_complete:
+        assert control_previous_version is not None
+        assert control_previous_secret is not None
+        control_keyring.append(
+            VersionedResponseCacheSecret(
+                control_previous_version,
+                control_previous_secret,
+            )
+        )
+    failure_keyring = [
+        VersionedResponseCacheSecret(failure_spool_version, failure_spool_secret_value)
+    ]
+    if failure_previous_complete:
+        assert failure_spool_previous_version is not None
+        assert failure_spool_previous_secret is not None
+        failure_keyring.append(
+            VersionedResponseCacheSecret(
+                failure_spool_previous_version,
+                failure_spool_previous_secret,
+            )
+        )
+    response_secrets = (
+        hmac_secret_value,
+        encryption_secret_value,
+        control_secret_value,
+        failure_spool_secret_value,
+        control_previous_secret,
+        failure_spool_previous_secret,
+    )
+    for secret in response_secrets:
+        # previous 可选为空；非空项都必须执行与 active 相同的强度和编码门禁。
+        if secret is None:
+            continue
+        try:
+            encoded = secret.encode("utf-8")
+        # 孤立 surrogate 无法跨进程形成同一 key，错误中也不能回显原 Secret。
+        except UnicodeEncodeError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Response Cache secret encoding is invalid.",
+                suggestion="Configure independent high-entropy UTF-8 secrets.",
+            ) from None
+        # 部署 Secret 限定 32..512 UTF-8 bytes 且无空白/控制字符，避免 Header/env 解析漂移。
+        if (
+            not 32 <= len(encoded) <= 512
+            or any(character.isspace() or ord(character) < 32 for character in secret)
+        ):
+            # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Response Cache secret does not meet security requirements.",
+                suggestion="Use 32-512 byte secrets without whitespace or control characters.",
+            )
+    try:
+        # 单元素 keyring 同样执行 UTF-8、32..512 bytes、空白和控制字符门禁。
+        validate_secret_keyring(
+            (VersionedResponseCacheSecret(hmac_version, hmac_secret_value),)
+        )
+        validate_secret_keyring(
+            (VersionedResponseCacheSecret(encryption_version, encryption_secret_value),)
+        )
+        validate_secret_keyring(tuple(control_keyring))
+        validate_secret_keyring(tuple(failure_keyring))
+    # 纯合同层错误统一转为配置错误，启动日志只显示配置键级修复方向。
+    except ResponseCacheContractError:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Response Cache key configuration does not meet security requirements.",
+            suggestion="Use distinct positive versions and independent 32-512 byte secrets.",
+        ) from None
+
+    encoded_response_secrets = [
+        secret.encode("utf-8") for secret in response_secrets if secret is not None
+    ]
+    for index, candidate in enumerate(encoded_response_secrets):
+        # active/previous 任意两项都必须物理不同，版本号变化不能掩盖 Secret 复用。
+        if any(
+            hmac.compare_digest(candidate, other)
+            for other in encoded_response_secrets[index + 1 :]
+        ):
+            # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Response Cache secrets must use independent key domains.",
+                suggestion="Replace every reused active or previous Response Cache secret.",
+            )
+        for forbidden in forbidden_secrets:
+            # 缺失的其他能力 Secret 不参与比较，也不能被当作空字符串密钥。
+            if forbidden is None:
+                continue
+            try:
+                forbidden_bytes = forbidden.encode("utf-8")
+            # 其他域的编码错误由其专用配置门禁处理，此处只负责安全域等值比较。
+            except (AttributeError, UnicodeEncodeError):
+                # 其他配置域仍由自己的门禁报告非法编码；这里不能回显或改写其值。
+                continue
+            # 与 Auth/Provider/File/Batch 等任一根域相同都会扩大单点泄露半径。
+            if hmac.compare_digest(candidate, forbidden_bytes):
+                raise ConfigError(
+                    code="infra.config_invalid",
+                    message="Response Cache secrets must not reuse another security domain.",
+                    suggestion="Configure dedicated Response Cache secrets and restart.",
+                )
+
+    if environment == "prod":
+        development_values = {
+            DEFAULT_RESPONSE_CACHE_HMAC_SECRET,
+            DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET,
+            DEFAULT_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET,
+            DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET,
+        }
+        # 显式复制开发占位到 prod 仍是不安全配置，不能因来源变成 env/file 而放行。
+        if any(secret in development_values for secret in response_secrets if secret is not None):
+            # 公开仓库占位可用于本地验收，但绝不能因显式复制进 prod 而被视为有效配置。
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Response Cache development secrets must be replaced in prod.",
+                suggestion="Configure independent production secrets and restart all services.",
+            )
+
+
 def _validate_cache_affinity_hmac_secret(
     *,
     service_name: str,
@@ -1501,6 +2088,25 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS",
         "METAHUB_AUTH_TOKEN_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+        "METAHUB_RESPONSE_CACHE_ENABLED",
+        "METAHUB_RESPONSE_CACHE_HMAC_VERSION",
+        "METAHUB_RESPONSE_CACHE_HMAC_SECRET",
+        "METAHUB_RESPONSE_CACHE_ENCRYPTION_VERSION",
+        "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET",
+        "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_VERSION",
+        "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET",
+        "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_VERSION",
+        "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_PREVIOUS_SECRET",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_VERSION",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_VERSION",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_PREVIOUS_SECRET",
+        "METAHUB_RESPONSE_CACHE_MAX_READY_ENTRIES_PER_TENANT",
+        "METAHUB_RESPONSE_CACHE_MAX_PLAINTEXT_BYTES",
+        "METAHUB_RESPONSE_CACHE_FILL_LEASE_SECONDS",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_POLL_INTERVAL_SECONDS",
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_CLAIM_LEASE_SECONDS",
         "METAHUB_FINOPS_USAGE_SPOOL_ROOT",
         "METAHUB_FINOPS_USAGE_SPOOL_POLL_INTERVAL_SECONDS",
         "METAHUB_FINOPS_USAGE_SPOOL_CLAIM_LEASE_SECONDS",
@@ -2550,6 +3156,7 @@ def _is_sensitive_config_key(key: str) -> bool:
         or "database_url" in normalized
         or "redis_url" in normalized
         or normalized == "metahub_finops_usage_spool_root"
+        or normalized == "metahub_response_cache_failure_spool_root"
         or normalized.endswith("_url_with_password")
     )
 

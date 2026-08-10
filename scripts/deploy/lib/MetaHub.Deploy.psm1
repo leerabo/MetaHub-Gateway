@@ -341,6 +341,10 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-batch-encryption-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-response-cache-hmac-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-response-cache-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-response-cache-control-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-response-cache-spool-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-admin-password" = $adminPassword
     "replace-with-generated-provider-placeholder" = "placeholder-" + (New-MetaHubLocalSecret -Length 12)
     "replace-with-generated-virtual-key" = "mhv_dev_" + (New-MetaHubLocalSecret -Length 24)

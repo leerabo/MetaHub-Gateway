@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from metahub_shared.runtime.fastapi_app import create_service_app
+from starlette.requests import Request
 
 from .adapter_contracts import install_adapter_contract_event_scheduler
 from .adapter_contracts import router as adapter_contracts_router
@@ -58,6 +59,8 @@ from .request_explanations import install_request_explanation_scheduler
 from .request_explanations import router as request_explanations_router
 from .request_logs import install_request_log_query_event_scheduler
 from .request_logs.routes import router as request_logs_router
+from .response_cache import install_response_cache_outbox_scheduler
+from .response_cache import router as response_cache_router
 from .session_risks import router as session_risks_router
 from .tenants.routes import router as tenant_router
 from .usage.routes import router as usage_router
@@ -84,6 +87,19 @@ app = create_service_app(
         "X-Content-Type-Options",
     ),
 )
+
+
+@app.middleware("http")
+async def response_cache_private_cache_boundary(request: Request, call_next):
+    """让 Response Cache 的认证、校验与业务错误和成功响应共享 no-store/private。"""
+
+    response = await call_next(request)
+    if request.url.path == "/cache-policies" or request.url.path == "/cache/invalidate":
+        # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
+        response.headers["Cache-Control"] = "no-store, private"
+    return response
+
+
 app.include_router(auth_router)
 app.include_router(batch_jobs_router)
 app.include_router(adapter_contracts_router)
@@ -126,6 +142,7 @@ app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
 app.include_router(request_logs_router)
+app.include_router(response_cache_router)
 app.include_router(session_risks_router)
 app.include_router(request_explanations_router)
 app.include_router(usage_router)
@@ -142,3 +159,4 @@ install_webhook_replay_scheduler(app)
 install_file_security_event_scheduler(app)
 install_adapter_contract_event_scheduler(app)
 install_experiment_scheduler(app)
+install_response_cache_outbox_scheduler(app)

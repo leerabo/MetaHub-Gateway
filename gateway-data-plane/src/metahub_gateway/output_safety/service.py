@@ -522,7 +522,8 @@ def _ensure_blocked_event(
         checkpoint_count=terminal.checkpoint_count,
         dlp_rule_id=terminal.dlp_rule_id or "",
         detector_version=DETECTOR_VERSION,
-        billing_disposition="dispute_pending",
+        # Provider 与 cache-only candidate 共用 event schema，但账务处置必须精确继承终态。
+        billing_disposition=terminal.billing_disposition,  # type: ignore[arg-type]
         occurred_at=occurred_at,
     )
     connection.execute(
@@ -579,8 +580,12 @@ def _validate_terminal(
     if terminal.exposure_state not in {"none", "partial", "complete", "unknown"}:
         # 暴露边界只能使用冻结枚举，任意文本状态可能误导已发送内容是否可撤回。
         raise OutputSafetyStoreError("output_safety.exposure_invalid")
-    if terminal.billing_disposition not in {"not_required", "dispute_pending"}:
-        # 数据面只能标记待复核或无需复核，不能伪造已经完成财务冲正的状态。
+    if terminal.billing_disposition not in {
+        "not_required",
+        "dispute_pending",
+        "not_billable_response_cache_candidate",
+    }:
+        # 数据面只能标记待复核、cache-only 不计费或无需复核，不能伪造已完成财务冲正。
         raise OutputSafetyStoreError("output_safety.billing_disposition_invalid")
     if (
         terminal.scanned_token_count > terminal.observed_output_token_count
@@ -647,13 +652,26 @@ def _validate_terminal(
                 and _effective_rule_matches_snapshot(scan, terminal)
             )
         else:
+            cache_only_not_billable = (
+                terminal.billing_disposition
+                == "not_billable_response_cache_candidate"
+                and scan.scan_mode == "non_stream_full"
+                and scan.stream_session_id is None
+                and terminal.exposure_state == "none"
+                and terminal.emitted_token_count == 0
+                and terminal.emitted_sse_event_count == 0
+                and terminal.emitted_bytes == 0
+            )
             valid = (
                 terminal.action == "block"
                 and bool(terminal.dlp_rule_id)
                 and terminal.rule_type in {"keyword", "regex"}
                 and terminal.match_count >= 1
                 and terminal.exposure_state in {"none", "partial"}
-                and terminal.billing_disposition == "dispute_pending"
+                and (
+                    terminal.billing_disposition == "dispute_pending"
+                    or cache_only_not_billable
+                )
                 and _effective_rule_matches_snapshot(scan, terminal)
             )
         if not valid:
@@ -785,7 +803,7 @@ def _validate_rule_row(**values: object) -> None:
         # 任一规则元数据损坏都会使冻结顺序和匹配语义不可证明，不能静默跳过该行。
         raise OutputSafetyStoreError("output_safety.rule_row_invalid")
     expected_hash = "sha256:" + hashlib.sha256(
-        f"{rule_type}:{pattern}".encode("utf-8")
+        f"{rule_type}:{pattern}".encode()
     ).hexdigest()
     if pattern_hash != expected_hash:
         # pattern 与治理版本摘要不一致表示数据库事实被污染，必须在 Provider 前失败关闭。
@@ -881,7 +899,7 @@ def _assert_event_matches(
         terminal.checkpoint_count,
         terminal.dlp_rule_id,
         DETECTOR_VERSION,
-        "dispute_pending",
+        terminal.billing_disposition,
         occurred_at,
     )
     actual = (

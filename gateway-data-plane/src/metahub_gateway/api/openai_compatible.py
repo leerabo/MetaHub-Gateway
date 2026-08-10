@@ -116,6 +116,21 @@ from metahub_gateway.providers.base import (
 from metahub_gateway.providers.factory import adapter_for_route
 from metahub_gateway.providers.openai_compatible import estimate_stream_usage
 from metahub_gateway.rate_limits import RateLimitLease, enforce_virtual_key_rate_limit
+from metahub_gateway.response_cache.models import (
+    PreparedResponseCache,
+    ResponseCacheFillLease,
+)
+from metahub_gateway.response_cache.repository import (
+    commit_response_cache_fill,
+    prepare_response_cache,
+    release_response_cache_fill,
+)
+from metahub_gateway.response_cache.settlement import (
+    PreparedResponseCacheSettlement,
+    fail_response_cache_candidate,
+    freeze_response_cache_reference,
+    settle_response_cache_candidate,
+)
 from metahub_gateway.routing.attempts import (
     RoutingAttempt,
     create_routing_attempt,
@@ -393,6 +408,10 @@ async def _handle_gateway_request(
     realtime_gateway_lease: RealtimeGatewayLease | None = None
     experiment_guard: ExperimentExecutionGuard | None = None
     experiment_stream_handed_off = False
+    prepared_response_cache: PreparedResponseCache | None = None
+    response_cache_fill_lease: ResponseCacheFillLease | None = None
+    response_cache_terminal_owned = False
+    request_received_logged = False
     request_claimed = False
     log_endpoint = audit_endpoint or endpoint
 
@@ -792,26 +811,248 @@ async def _handle_gateway_request(
                 trusted_batch.token_estimate if trusted_batch is not None else None
             ),
         )
-        budget_guard_result = enforce_budget_guard(
+        policy_snapshot = policy_lease.snapshot
+        prepared_response_cache = prepare_response_cache(
             config,
-            auth_context,
-            route,
-            payload,
-            endpoint=endpoint,
+            context=request_log_context,
+            route=route,
+            payload=payload,
             request_kind=request_kind,
-            request_id=_request_id(request),
-            trace_id=_trace_id(request),
-            # 流式请求不会执行 PRD-036 Fallback，因此预算也只能预留实际初始候选。
-            fallback_route=(
-                route_plan.fallback_route
-                if not (request_kind == "chat" and payload.get("stream") is True)
+            public_virtual_key=trusted_invocation is None,
+            internal_invocation=trusted_invocation is not None,
+            policy_decision=policy_result.decision,
+            experiment_disposition=(
+                experiment_resolution.response_cache_disposition
+                if experiment_resolution is not None
+                else "not_in_scope"
+            ),
+            policy_snapshot_id=(
+                policy_snapshot.policy_snapshot_id
+                if policy_snapshot is not None
                 else None
             ),
-            routing_token_estimate=route_plan.token_estimate,
-            routing_price_as_of=route_plan.routing_as_of,
-            batch_context=trusted_batch,
-            route_plan=route_plan,
+            policy_snapshot_version=policy_lease.snapshot_version,
+            policy_snapshot_status=policy_lease.status,
         )
+        response_cache_fill_lease = prepared_response_cache.fill_lease
+        output_safety_scan: PreparedOutputSafetyScan | None = None
+        provider_budget_resolved = False
+
+        if prepared_response_cache.candidate is not None:
+            try:
+                prepared_settlement: PreparedResponseCacheSettlement | None = (
+                    freeze_response_cache_reference(
+                        config,
+                        context=request_log_context,
+                        route=route,
+                        candidate=prepared_response_cache.candidate,
+                        policy_snapshot_id=(
+                            policy_snapshot.policy_snapshot_id
+                            if policy_snapshot is not None
+                            else None
+                        ),
+                        policy_snapshot_version=policy_lease.snapshot_version,
+                        policy_snapshot_status=policy_lease.status,
+                    )
+                )
+            # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+            except ApiError:
+                # freeze 自身会收口 settlement_failed 或写 outcome-unknown spool；外层不得覆盖。
+                response_cache_terminal_owned = True
+                raise
+            if prepared_settlement is not None:
+                pre_cache_budget_context = request_log_context
+                try:
+                    budget_guard_result = enforce_budget_guard(
+                        config,
+                        auth_context,
+                        route,
+                        payload,
+                        endpoint=endpoint,
+                        request_kind=request_kind,
+                        request_id=_request_id(request),
+                        trace_id=_trace_id(request),
+                        trusted_initial_estimate=prepared_settlement.trusted_estimate,
+                    )
+                # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                except ApiError as exc:
+                    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                    if isinstance(exc, BudgetExhaustedError):
+                        request_log_context = apply_budget_decision(
+                            request_log_context, exc.budget_decision
+                        )
+                        _enqueue_budget_scope_events(request.app.state, exc.scope_events)
+                    failed = fail_response_cache_candidate(
+                        config,
+                        context=request_log_context,
+                        prepared=prepared_settlement,
+                        output_safety_scan=None,
+                        output_safety_terminal=None,
+                        error_code=exc.code,
+                        latency_ms=_latency_ms(started),
+                    )
+                    response_cache_terminal_owned = failed.settlement_owned
+                    if failed.ownership_unknown:
+                        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                        raise ApiError(
+                            failed.error_code or "gateway.response_cache_settlement_unavailable"
+                        ) from exc
+                    raise
+                if budget_guard_result is not None and budget_guard_result.scope_events:
+                    _enqueue_budget_scope_events(
+                        request.app.state, budget_guard_result.scope_events
+                    )
+                request_log_context = apply_budget_decision(
+                    request_log_context,
+                    budget_guard_result.decision if budget_guard_result is not None else None,
+                )
+                if budget_guard_result is not None:
+                    request_log_context = replace(
+                        request_log_context,
+                        budget_reservation_outstanding_cny="0",
+                    )
+                _log_request_received(
+                    request,
+                    auth_context,
+                    log_endpoint,
+                    request_model,
+                    route,
+                    False,
+                )
+                request_received_logged = True
+                try:
+                    output_safety_scan = prepare_output_safety_scan(
+                        config,
+                        tenant_id=request_log_context.tenant_id,
+                        request_id=request_log_context.request_id,
+                        trace_id=request_log_context.trace_id,
+                        scan_mode="non_stream_full",
+                    )
+                # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                except ApiError as exc:
+                    failed = fail_response_cache_candidate(
+                        config,
+                        context=request_log_context,
+                        prepared=prepared_settlement,
+                        output_safety_scan=None,
+                        output_safety_terminal=None,
+                        error_code=exc.code,
+                        latency_ms=_latency_ms(started),
+                    )
+                    response_cache_terminal_owned = failed.settlement_owned
+                    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                    raise ApiError(
+                        failed.error_code or "gateway.response_cache_settlement_unavailable"
+                    ) from exc
+                request_log_context = _context_with_prepared_output_safety_scan(
+                    request_log_context,
+                    output_safety_scan,
+                )
+                output_safety_terminal = _response_cache_output_safety_terminal(
+                    config,
+                    request_log_context,
+                    prepared_response_cache,
+                    output_safety_scan,
+                )
+                if (
+                    output_safety_terminal is not None
+                    and output_safety_terminal.scan_status == "unavailable"
+                ):
+                    cache_result = fail_response_cache_candidate(
+                        config,
+                        context=request_log_context,
+                        prepared=prepared_settlement,
+                        output_safety_scan=output_safety_scan,
+                        output_safety_terminal=output_safety_terminal,
+                        error_code="gateway.output_safety_unavailable",
+                        latency_ms=_latency_ms(started),
+                    )
+                else:
+                    cache_result = settle_response_cache_candidate(
+                        config,
+                        context=request_log_context,
+                        route=route,
+                        prepared=prepared_settlement,
+                        output_safety_scan=output_safety_scan,
+                        output_safety_terminal=output_safety_terminal,
+                        latency_ms=_latency_ms(started),
+                    )
+                if cache_result.status == "hit":
+                    if cache_result.payload is None or not cache_result.settlement_owned:
+                        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                        raise ValueError("response_cache_hit_result_invalid")
+                    return JSONResponse(
+                        content=cache_result.payload,
+                        headers=_contract_probe_tenant_headers(
+                            request, request_log_context.tenant_id
+                        ),
+                    )
+                if cache_result.status in {"hit_blocked", "unavailable"}:
+                    response_cache_terminal_owned = cache_result.settlement_owned
+                    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                    raise ApiError(
+                        cache_result.error_code
+                        or "gateway.response_cache_settlement_unavailable"
+                    )
+                if cache_result.status != "stale" or cache_result.settlement_owned:
+                    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                    raise ValueError("response_cache_settlement_result_invalid")
+
+                # 二次验证 stale 时尚未提交 scan terminal；丢弃 cache 预算摘要，在同一预算
+                # 写事务内以普通主备估算替换旧预留，并复用唯一 pending Output Safety owner。
+                request_log_context = pre_cache_budget_context
+                try:
+                    budget_guard_result = enforce_budget_guard(
+                        config,
+                        auth_context,
+                        route,
+                        payload,
+                        endpoint=endpoint,
+                        request_kind=request_kind,
+                        request_id=_request_id(request),
+                        trace_id=_trace_id(request),
+                        fallback_route=route_plan.fallback_route,
+                        routing_token_estimate=route_plan.token_estimate,
+                        routing_price_as_of=route_plan.routing_as_of,
+                        replace_existing_reservations=True,
+                    )
+                # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                except ApiError as exc:
+                    request_log_context = _finalize_non_stream_without_output(
+                        config,
+                        request_log_context,
+                        output_safety_scan,
+                    )
+                    exc.request_log_context = request_log_context
+                    raise
+                request_log_context = _context_with_prepared_output_safety_scan(
+                    request_log_context,
+                    output_safety_scan,
+                )
+                provider_budget_resolved = True
+
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        if not provider_budget_resolved:
+            budget_guard_result = enforce_budget_guard(
+                config,
+                auth_context,
+                route,
+                payload,
+                endpoint=endpoint,
+                request_kind=request_kind,
+                request_id=_request_id(request),
+                trace_id=_trace_id(request),
+                # 流式请求不会执行 PRD-036 Fallback，因此预算也只能预留实际初始候选。
+                fallback_route=(
+                    route_plan.fallback_route
+                    if not (request_kind == "chat" and payload.get("stream") is True)
+                    else None
+                ),
+                routing_token_estimate=route_plan.token_estimate,
+                routing_price_as_of=route_plan.routing_as_of,
+                batch_context=trusted_batch,
+                route_plan=route_plan,
+            )
         if budget_guard_result is not None and budget_guard_result.scope_events:
             # 事件事实已由 Guard 提交；入队失败不能反压 Provider 或改变 alert_only 准入。
             _enqueue_budget_scope_events(request.app.state, budget_guard_result.scope_events)
@@ -827,14 +1068,15 @@ async def _handle_gateway_request(
                 request_log_context,
                 budget_reservation_outstanding_cny="0",
             )
-        _log_request_received(
-            request,
-            auth_context,
-            log_endpoint,
-            request_model,
-            route,
-            payload.get("stream") is True,
-        )
+        if not request_received_logged:
+            _log_request_received(
+                request,
+                auth_context,
+                log_endpoint,
+                request_model,
+                route,
+                payload.get("stream") is True,
+            )
 
         if request_kind == "chat" and payload.get("stream") is True:
             # PRD-036 明确只处理非流式请求；流式握手和输出阶段均沿用单候选路径。
@@ -863,8 +1105,7 @@ async def _handle_gateway_request(
             rate_limit_lease = None
             return streaming_response
 
-        output_safety_scan: PreparedOutputSafetyScan | None = None
-        if request_kind == "chat":
+        if request_kind == "chat" and output_safety_scan is None:
             # 非流式 Chat 在任何 Provider attempt 前先提交 pending owner 并冻结同租户输出规则。
             # Embeddings 没有 Chat 文本投影，继续沿用原 Usage v4 合同，不伪造输出扫描事实。
             output_safety_scan = prepare_output_safety_scan(
@@ -889,6 +1130,7 @@ async def _handle_gateway_request(
             budget_guard_result=budget_guard_result,
             output_safety_scan=output_safety_scan,
             experiment_guard=experiment_guard,
+            response_cache_fill_lease=response_cache_fill_lease,
         )
     # asyncio.CancelledError 继承 BaseException，不会进入下面的 ApiError/Exception 分支。
     # 必须先完成已经 claim 的请求审计与预算结算，再保留取消语义交给 ASGI 服务器。
@@ -962,6 +1204,10 @@ async def _handle_gateway_request(
         raise
     # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
     except ApiError as exc:
+        if response_cache_terminal_owned:
+            # Cache settlement/failure 已经原子提交终态或写入 outcome-unknown spool；
+            # 普通错误路径再次写 RequestLog/预算会覆盖 owner 或把未知 commit 误判为回滚。
+            raise
         context = (
             getattr(exc, "request_log_context", None)
             or request_log_context
@@ -1061,6 +1307,12 @@ async def _handle_gateway_request(
     finally:
         if experiment_guard is not None and not experiment_stream_handed_off:
             await experiment_guard.stop()
+        if response_cache_fill_lease is not None and request_log_context is not None:
+            release_response_cache_fill(
+                config,
+                lease=response_cache_fill_lease,
+                context=request_log_context,
+            )
         if rate_limit_lease is not None:
             await rate_limit_lease.release()
         if realtime_gateway_lease is not None:
@@ -1113,6 +1365,7 @@ async def _non_stream_response_with_fallback(
     budget_guard_result: BudgetGuardResult | None,
     output_safety_scan: PreparedOutputSafetyScan | None = None,
     experiment_guard: ExperimentExecutionGuard | None = None,
+    response_cache_fill_lease: ResponseCacheFillLease | None = None,
 ) -> JSONResponse:
     """执行最多主、备各一次的非流式上游状态机。
 
@@ -1324,6 +1577,17 @@ async def _non_stream_response_with_fallback(
         output_safety_scan=output_safety_scan,
         require_request_log=experiment_guard is not None,
     )
+    if response_cache_fill_lease is not None and first_request is not None:
+        # 只有 initial route 的成功 RequestLog 与 Usage/FinOps 已在主库提交后才尝试写缓存；
+        # commit 内部会再次核对 Credential owner，失败或 spooled Usage 只跳过 fill。
+        commit_response_cache_fill(
+            config,
+            lease=response_cache_fill_lease,
+            context=final_context,
+            route=initial,
+            provider_request=first_request,
+            response=first_response,
+        )
     if experiment_guard is not None:
         try:
             finalized = await experiment_guard.finalize(
@@ -1565,6 +1829,60 @@ def _context_with_output_safety_terminal(
         output_safety_decision=terminal.decision,
         billing_disposition=terminal.billing_disposition,
     )
+
+
+def _response_cache_output_safety_terminal(
+    config: AppConfig,
+    context: RequestLogContext,
+    prepared: PreparedResponseCache,
+    scan: PreparedOutputSafetyScan,
+) -> OutputSafetyTerminalState | None:
+    """按当前冻结规则扫描 cache candidate，但不在 settlement 前提交或交付正文。"""
+
+    candidate = prepared.candidate
+    if candidate is None:
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise ValueError("response_cache_candidate_missing")
+    if scan.scan_status == "not_configured":
+        return None
+    if scan.scan_status != "pending":
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise ApiError("gateway.output_safety_unavailable")
+    try:
+        decision = scan_full_output(
+            scan.snapshot,
+            candidate.payload,
+            max_codepoints=config.output_safety_max_full_text_code_points,
+        )
+        return OutputSafetyTerminalState.from_response_cache_decision(
+            decision,
+            observed_output_token_count=candidate.owner.output_tokens,
+        )
+    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+    except OutputSafetyError as exc:
+        return OutputSafetyTerminalState.unavailable(
+            exc.reason_code,
+            observed_output_token_count=candidate.owner.output_tokens,
+            exposure_state="none",
+        )
+    except Exception as exc:
+        # 未知扫描故障只记录异常类型和可信 owner；缓存正文、规则与摘要均不得进入日志。
+        logger.warning(
+            "response_cache.output_safety_scan_failed",
+            extra={
+                "event": "response_cache.output_safety_scan_failed",
+                "tenant_id": context.tenant_id,
+                "request_id": context.request_id,
+                "trace_id": context.trace_id,
+                "error_code": "gateway.output_safety_unavailable",
+                "payload": {"exception_type": exc.__class__.__name__},
+            },
+        )
+        return OutputSafetyTerminalState.unavailable(
+            "output_safety.evidence_unavailable",
+            observed_output_token_count=candidate.owner.output_tokens,
+            exposure_state="none",
+        )
 
 
 def _context_without_output_safety(context: RequestLogContext) -> RequestLogContext:
@@ -2955,7 +3273,8 @@ async def _stream_response(
                 enqueue_runtime_event(client_request.app.state, build_stream_timeout_event(session))
             _log_stream_failure(session_context, error_code, include_exception=False)
             if experiment_guard is not None:
-                # 实验请求必须等日志、用量与 Outcome 收敛后再交付唯一错误，持久化降级可以覆盖公开错误码。
+                # 实验请求必须等日志、用量与 Outcome 收敛后再交付唯一错误；
+                # 持久化降级可以覆盖公开错误码。
                 deferred_experiment_error = True
             else:
                 stream_error_emitted = True
@@ -3044,7 +3363,8 @@ async def _stream_response(
             )
             _log_stream_failure(session_context, error_code, include_exception=True)
             if experiment_guard is not None:
-                # 通用异常也不能在实验终态前抢先写客户端；最终错误统一由 shielded finalizer 之后发送。
+                # 通用异常也不能在实验终态前抢先写客户端；
+                # 最终错误统一由 shielded finalizer 之后发送。
                 deferred_experiment_error = True
             else:
                 stream_error_emitted = True

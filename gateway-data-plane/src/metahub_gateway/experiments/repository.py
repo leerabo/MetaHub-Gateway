@@ -84,7 +84,9 @@ def resolve_experiment_route(
         # by the caller, so absence of an exact canonical Alias is an authoritative bypass.
         if alias is None or str(alias["status"]) != "active":
             connection.rollback()
-            return ExperimentRouteResolution.bypass()
+            return ExperimentRouteResolution.bypass(
+                response_cache_disposition="not_in_scope"
+            )
 
         experiment = connection.execute(
             """
@@ -97,11 +99,15 @@ def resolve_experiment_route(
         ).fetchone()
         if experiment is None:
             connection.rollback()
-            return ExperimentRouteResolution.bypass()
+            return ExperimentRouteResolution.bypass(
+                response_cache_disposition="not_in_scope"
+            )
         if now >= _parse_db_time(experiment["sampling_deadline_at"]):
             _end_expired_sampling(connection, experiment, now_db)
             connection.commit()
-            return ExperimentRouteResolution.bypass()
+            return ExperimentRouteResolution.bypass(
+                response_cache_disposition="not_in_scope"
+            )
 
         expected_key_fingerprint = build_experiment_key_fingerprint(
             config.auth_token_secret,
@@ -122,7 +128,10 @@ def resolve_experiment_route(
         )
         if buckets.sample_bucket >= int(experiment["traffic_sample_bps"]):
             connection.rollback()
-            return ExperimentRouteResolution.bypass()
+            # 未采样仍属于活跃实验总体；允许普通 Provider 路由，但必须显式禁止 Response Cache。
+            return ExperimentRouteResolution.bypass(
+                response_cache_disposition="active_scope_bypass"
+            )
 
         plan = calculate_variant_targets(
             int(experiment["target_sample_count"]),

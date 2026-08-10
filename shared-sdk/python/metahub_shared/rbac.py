@@ -44,7 +44,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 不能把 revision 6 的目录静默当成完整权限矩阵。
 # PRD-075 增加在线模型实验读写权限后提升目录版本；认证层会拒绝仍停留 revision 10 的旧投影，
 # 不能把 Shared 默认矩阵当成运行时回退授权，更不能用前端导航代替后端动态矩阵。
-CATALOG_REVISION: Final[int] = 11
+# PRD-076 再把 Response Cache 的读取、策略写入与主动失效拆成三个独立权限；目录版本提升后，
+# 运行时仍须逐请求从当前 tenant 数据库恢复实际矩阵，不能因 Shared 中存在默认值而放宽授权。
+CATALOG_REVISION: Final[int] = 12
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -410,6 +412,29 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "创建影响当前租户在线 Alias 流量的不可变模型 A/B 实验。",
         "critical",
     ),
+    # Response Cache 的读取、策略变更与主动失效影响面不同，必须独立授权；读取权限只返回
+    # 安全策略摘要，任何权限都不允许读取缓存正文、Prompt 指纹或密钥材料。
+    PermissionDefinition(
+        "response_cache.read",
+        "response_cache",
+        "读取响应缓存策略",
+        "读取当前租户 Response Cache 的安全策略、状态和节省金额摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "response_cache.write",
+        "response_cache",
+        "管理响应缓存策略",
+        "创建或修改当前租户 Response Cache 的显式启用、TTL、收费和标签策略。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "response_cache.invalidate",
+        "response_cache",
+        "失效响应缓存",
+        "按当前租户的受控选择器推进围栏并主动失效 Response Cache。",
+        "critical",
+    ),
     PermissionDefinition(
         "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
     ),
@@ -479,6 +504,9 @@ _FINANCE = {
     "billing.anomaly.write",
     "policy_template.read",
     "policy_template.apply",
+    "response_cache.read",
+    "response_cache.write",
+    "response_cache.invalidate",
 }
 _SECURITY = {
     "console.basic.read",

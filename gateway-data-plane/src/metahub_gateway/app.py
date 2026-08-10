@@ -18,6 +18,9 @@ from metahub_gateway.feedback.routes import router as feedback_router
 from metahub_gateway.intent_security import install_intent_security_dispatcher
 from metahub_gateway.policies import install_policy_snapshot_cache
 from metahub_gateway.policies.redaction import install_policy_mask_runtime
+from metahub_gateway.response_cache.failure_spool import (
+    install_response_cache_failure_recovery,
+)
 from metahub_gateway.usage.spool import install_usage_spool_recovery
 
 # 数据面是模型调用热路径。本 PRD 只创建空壳和健康接口，后续鉴权、限流、预算、
@@ -44,6 +47,9 @@ install_intent_security_dispatcher(app)
 # Usage 恢复必须在事件队列创建后运行，才能只为本次新建分录入队；退出时先停恢复 worker，
 # 再由事件 dispatcher 有界排空，避免 shutdown 期间继续产生新事件。
 install_usage_spool_recovery(app)
+# Response Cache 的 commit-unknown 恢复只读取无正文 owner 记录；必须在 Usage/事件基础设施
+# 就绪后启动，退出时则先停止该 worker，避免 shutdown 期间继续形成失败终态。
+install_response_cache_failure_recovery(app)
 # Policy 快照 scheduler 与事件 worker 都通过 lifespan 组合安装；后安装者必须包裹而非覆盖
 # 前一生命周期，确保启动、退出和异常清理均有确定顺序。
 install_policy_snapshot_cache(app)

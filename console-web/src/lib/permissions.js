@@ -56,6 +56,10 @@ export const PERMISSIONS = Object.freeze({
   // PAGE-105 读取与创建独立授权；创建还需 Project/Environment/Routing/Model 读取组合权限。
   EXPERIMENT_READ: "experiment.read",
   EXPERIMENT_WRITE: "experiment.write",
+  // PAGE-106 读取、策略写入和缓存失效三项能力独立；按钮投影不能替代 Control API 实时 RBAC。
+  RESPONSE_CACHE_READ: "response_cache.read",
+  RESPONSE_CACHE_WRITE: "response_cache.write",
+  RESPONSE_CACHE_INVALIDATE: "response_cache.invalidate",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

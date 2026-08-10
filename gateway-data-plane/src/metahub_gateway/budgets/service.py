@@ -95,6 +95,8 @@ def enforce_budget_guard(
     routing_price_as_of: datetime | None = None,
     batch_context: TrustedBatchContext | None = None,
     route_plan: GatewayRoutePlan | None = None,
+    trusted_initial_estimate: EstimatedRequestCost | None = None,
+    replace_existing_reservations: bool = False,
 ) -> BudgetGuardResult | None:
     """执行租户、项目、兼容 Application 与 Virtual Key 的逐层日预算准入检查。
 
@@ -103,6 +105,9 @@ def enforce_budget_guard(
     """
 
     if batch_context is not None:
+        if trusted_initial_estimate is not None or replace_existing_reservations:
+            # Batch 的冻结 allocation 是独立 owner，不能与普通请求预留替换协议混用。
+            raise ApiError("batch.execution_invalid")
         # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
         if route_plan is None:
             # 预算必须覆盖冻结路由的最坏成本；证据缺失或不一致时拒绝执行，禁止低估。
@@ -139,6 +144,13 @@ def enforce_budget_guard(
             auth_context.project_id,
             auth_context.application_id,
         )
+        if replace_existing_reservations:
+            _remove_replaceable_request_reservations(
+                connection,
+                tenant_id=auth_context.tenant_id,
+                request_id=request_id,
+                trace_id=trace_id,
+            )
         if not rules:
             connection.commit()
             return None
@@ -146,18 +158,25 @@ def enforce_budget_guard(
         # canonical 估算器，避免预算与路由分别维护字符遍历规则。
         token_estimate = routing_token_estimate or estimate_request_tokens(request_kind, payload)
         price_as_of = routing_price_as_of or _utcnow()
-        initial_estimate = _estimate_request_cost(
-            connection,
-            route,
-            request_kind,
-            payload,
-            token_estimate=token_estimate,
-            price_as_of=price_as_of,
+        initial_estimate = (
+            _validated_trusted_estimate(trusted_initial_estimate)
+            if trusted_initial_estimate is not None
+            else _estimate_request_cost(
+                connection,
+                route,
+                request_kind,
+                payload,
+                token_estimate=token_estimate,
+                price_as_of=price_as_of,
+            )
         )
         # 非流式 Fallback 最坏情况下主备上游都产生账单，准入金额必须覆盖两次估算总和。
         fallback_estimate: EstimatedRequestCost | None = None
         estimate = initial_estimate
         if fallback_route is not None:
+            if trusted_initial_estimate is not None:
+                # Cache candidate 不会调用 Provider；其冻结估算不能被当作主路由价格与备用相加。
+                raise ApiError("gateway.budget_unavailable")
             fallback_estimate = _estimate_request_cost(
                 connection,
                 fallback_route,
@@ -598,6 +617,77 @@ def finalize_request_budget_reservations(
     finally:
         if connection is not None:
             connection.close()
+
+
+def _remove_replaceable_request_reservations(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """在当前写事务内移除尚未终结的同请求预留，为新的准入估算腾出 owner。
+
+    该入口只用于 cache candidate 在 settlement 二次验证后转为普通 Provider miss。
+    已写入 outstanding 或 trace 不一致表示 owner 已进入其他终态，必须失败关闭而不能覆盖。
+    """
+
+    rows = connection.execute(
+        """
+        SELECT budget_rule_id,trace_id,outstanding_cost_cny
+        FROM budget_reservations
+        WHERE tenant_id=? AND request_id=?
+        ORDER BY budget_rule_id
+        """,
+        (tenant_id, request_id),
+    ).fetchall()
+    if any(
+        str(row["trace_id"]) != trace_id or row["outstanding_cost_cny"] is not None
+        for row in rows
+    ):
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise sqlite3.IntegrityError("budget_reservation_replacement_invalid")
+    rule_ids = {str(row["budget_rule_id"]) for row in rows}
+    removed = release_request_budget_reservations(
+        connection,
+        tenant_id=tenant_id,
+        request_id=request_id,
+        budget_rule_ids=rule_ids,
+    )
+    if removed != len(rows):
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise sqlite3.IntegrityError("budget_reservation_replacement_lost")
+
+
+def _validated_trusted_estimate(estimate: EstimatedRequestCost) -> EstimatedRequestCost:
+    """验证缓存层冻结的 token/金额 DTO，不重新读取 Prompt 或当前价格。"""
+
+    if (
+        not isinstance(estimate, EstimatedRequestCost)
+        or isinstance(estimate.input_tokens, bool)
+        or not isinstance(estimate.input_tokens, int)
+        or estimate.input_tokens < 0
+        or isinstance(estimate.output_tokens, bool)
+        or not isinstance(estimate.output_tokens, int)
+        or estimate.output_tokens < 0
+        or type(estimate.price_available) is not bool
+        or not isinstance(estimate.cost_cny, Decimal)
+    ):
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise ApiError("gateway.budget_unavailable")
+    try:
+        normalized = _quantize_budget_money(estimate.cost_cny)
+        _cny_to_micros(normalized, allow_zero=True)
+    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+    except (DecimalException, OverflowError, ValueError) as exc:
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise ApiError("gateway.budget_unavailable") from exc
+    if normalized != estimate.cost_cny or (
+        not estimate.price_available and normalized != Decimal("0")
+    ):
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        raise ApiError("gateway.budget_unavailable")
+    return estimate
 
 
 def _load_budget_rules(

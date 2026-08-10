@@ -1,0 +1,184 @@
+{
+  "access_control": {
+    "backend_navigation_contains_response_cache": true,
+    "finance_read_status": 200,
+    "finance_revoked_status": 403,
+    "request_id_preserved": true,
+    "viewer_status": 403
+  },
+  "all_108_prds_complete": false,
+  "billing": {
+    "budget_block_provider_delta": 0,
+    "budget_exhaustion_blocked_before_provider": true,
+    "budget_reservations": 3,
+    "budget_reservations_zero": 3,
+    "charge_off_zero": true,
+    "charge_on_positive": true,
+    "charged_billed_micros": 2600,
+    "charged_saved_micros": 0,
+    "finops_usage_charge_rows": 3,
+    "free_billed_micros": 0,
+    "free_saved_micros": 2600,
+    "hit_requests": 3,
+    "logical_usage_rows": 3
+  },
+  "cache_flow": {
+    "charged_hit_status": "hit",
+    "charged_projection": {
+      "billed_cost_status": "known",
+      "charge_cache_hits": true,
+      "current_reference_cost_status": "known",
+      "hit": true,
+      "saved_cost_status": "known",
+      "source_generation_cost_status": "known",
+      "status": "hit"
+    },
+    "concurrent_fill_owner_count": 1,
+    "concurrent_non_owner_count": 1,
+    "concurrent_single_fill_owner": true,
+    "free_hit_status": "hit",
+    "free_miss_status": "fill_stored",
+    "free_projection": {
+      "billed_cost_status": "known",
+      "charge_cache_hits": false,
+      "current_reference_cost_status": "known",
+      "hit": true,
+      "saved_cost_status": "known",
+      "source_generation_cost_status": "known",
+      "status": "hit"
+    },
+    "hit_provider_delta": 0,
+    "miss_fill_hit": true,
+    "outage_projection": {
+      "billed_cost_status": "known",
+      "charge_cache_hits": false,
+      "current_reference_cost_status": "known",
+      "hit": true,
+      "saved_cost_status": "known",
+      "source_generation_cost_status": "known",
+      "status": "hit"
+    },
+    "provider_calls": 13,
+    "ttl_boundary_miss": true
+  },
+  "cleanup": {
+    "fixed_ports_released": true,
+    "only_owned_processes_stopped": true,
+    "sqlite_sidecars_remaining": 0
+  },
+  "database": {
+    "entries_ready": 1,
+    "fact_status_counts": {
+      "fill_skipped": 1,
+      "fill_stored": 11,
+      "hit": 3,
+      "miss_non_owner": 1
+    },
+    "foreign_key_violations": 0,
+    "hits": 3,
+    "integrity_check": "ok",
+    "invalidations": 5,
+    "latest_migration": "0069",
+    "migration_count": 69,
+    "outbox_status_counts": {
+      "dispatched": 8
+    },
+    "rbac_revision": 12
+  },
+  "generated_at": "2026-08-10T19:53:34Z",
+  "invalidation": {
+    "all_deleted": 1,
+    "tag_count": 1,
+    "tag_deleted": 2,
+    "webhook_invalidations": 5
+  },
+  "isolation": {
+    "prompt_miss": true,
+    "resolved_model_miss": true,
+    "same_model_data_class_miss": true,
+    "second_tenant_legal_miss": true,
+    "tenant_header_provider_calls": 0,
+    "tenant_header_status": 401,
+    "tenant_mismatch_rejected": true,
+    "virtual_key_miss": true
+  },
+  "migration_roundtrip": {
+    "down": {
+      "foreign_key_violations": 0,
+      "integrity_check": "ok",
+      "latest_migration": "0068",
+      "migration_count": 68,
+      "rolled_back": "0069"
+    },
+    "fresh_up": {
+      "foreign_key_violations": 0,
+      "integrity_check": "ok",
+      "latest_migration": "0069",
+      "migration_count": 69
+    },
+    "re_up": {
+      "applied": [
+        "0069"
+      ],
+      "foreign_key_violations": 0,
+      "integrity_check": "ok",
+      "latest_migration": "0069",
+      "migration_count": 69
+    },
+    "repeat_noop": {
+      "applied_count": 0,
+      "foreign_key_violations": 0,
+      "integrity_check": "ok",
+      "latest_migration": "0069",
+      "migration_count": 69,
+      "skipped_count": 69
+    }
+  },
+  "prd": "PRD-076",
+  "privacy": {
+    "files_scanned": 148,
+    "plaintext_matches": 0,
+    "sqlite_sidecars_remaining": 0
+  },
+  "privacy_canaries": {
+    "database_and_screenshot_flows_separated": true,
+    "non_database_categories": 31,
+    "non_database_files_scanned": 146,
+    "non_database_plaintext_matches": 0,
+    "storage_categories": 25
+  },
+  "recovery": {
+    "commit_unknown_recovered": true,
+    "control_outage_source_pending": true,
+    "control_restart_dispatched": true,
+    "control_stopped_before_hit": true,
+    "down_guard_blocked": true,
+    "down_guard_database_unchanged": true,
+    "down_guard_schema_unchanged": true,
+    "failure_spool_pending": 0,
+    "failure_spool_processing": 0,
+    "failure_spool_quarantine": 0,
+    "failure_spool_record_created": true,
+    "outbox_leased": 0,
+    "outbox_pending": 0,
+    "restart_delivered": true,
+    "source_committed_during_outage": true,
+    "usage_spool_pending": 0
+  },
+  "schema_version": 1,
+  "services": {
+    "console_feature": 200,
+    "console_index": 200,
+    "control_initial_health": 200,
+    "control_recovery_health": 200,
+    "gateway_health": 200
+  },
+  "source_provenance": {
+    "algorithm": "sha256",
+    "migration_0069_down": "de07092922464720e868bede787a33260b44d885e2f329a2c19e46a3367fe434",
+    "migration_0069_up": "272efe48a42312dbbd622ae20368df8782c3ca0f9db27d98d97406e0fe8d82f6",
+    "migration_set": "54dbcfc17ab941c0471a7a3881394006901c6faf20b6d7a651d11b865d02a823",
+    "runtime_acceptance": "81c9ed6d0dd76bd82b10db6f58488898cb8c353ee600017eee9b169b0ea052e6",
+    "runtime_helper": "8ecd292313a9b0e515e92d0056cb1bcbc3ef930a0059c38e6ebe42e2e1a3d6e1"
+  }
+}

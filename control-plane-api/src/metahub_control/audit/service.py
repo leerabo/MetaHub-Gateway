@@ -108,6 +108,11 @@ ACTION_OBJECT_TYPES = {
     # projection is deliberately limited to immutable local owners and integer configuration;
     # the user-facing name and all request-level facts remain outside AuditLog.
     "experiment.created": "experiment",
+    # Response Cache 管理动作只审计策略安全快照和失效计数；entry、正文、摘要与账务 owner
+    # 均由领域事实表保存，不能复制进通用 AuditLog。
+    "response_cache.policy_created": "response_cache_policy",
+    "response_cache.policy_updated": "response_cache_policy",
+    "response_cache.invalidated": "response_cache_invalidation",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -149,6 +154,29 @@ CONFIG_TRANSFER_TOTAL_LIMIT = 5_000
 # 对象级字段白名单是审计入库的主要安全边界。新增领域字段必须在设计审查后显式加入，
 # 不能通过序列化数据库整行或请求 DTO 的方式自动扩展。
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
+    "response_cache_policy": frozenset(
+        {
+            "status",
+            "data_class",
+            "ttl_seconds",
+            "charge_cache_hits",
+            "tags",
+            "version",
+            "invalidation_generation",
+        }
+    ),
+    "response_cache_invalidation": frozenset(
+        {
+            "cache_invalidation_id",
+            "scope",
+            "match_mode",
+            "tag_count",
+            "matched_entry_count",
+            "deleted_entry_count",
+            "fenced_fill_count",
+            "reason_code",
+        }
+    ),
     "experiment": frozenset(
         {
             "experiment_id",
@@ -251,7 +279,8 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "status",
         }
     ),
-    # scan_scope 会改变输入、输出两条安全热路径，必须进入不可抵赖审计；摘要仍只保存枚举和不可逆正文哈希。
+    # scan_scope 会改变输入、输出两条安全热路径，必须进入不可抵赖审计；
+    # 摘要仍只保存枚举和不可逆正文哈希。
     "dlp_rule": frozenset(
         {
             "name",
@@ -1078,7 +1107,11 @@ def _expected_changed_fields(
             if action == "config.imported"
             else CONFIG_EXPORT_AUDIT_FIELDS
         )
-        if before or set(after) != expected or not _valid_config_transfer_audit_counts(action, after):
+        if (
+            before
+            or set(after) != expected
+            or not _valid_config_transfer_audit_counts(action, after)
+        ):
             # 配置迁移是一次性完整事实；动作字段混用、缺字段或非法计数都使事实不可复核。
             raise ValueError("config_transfer_summary")
         return tuple(sorted(expected))

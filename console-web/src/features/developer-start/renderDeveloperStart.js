@@ -21,6 +21,7 @@ import { renderFiles } from "../files/renderFiles.js";
 import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
+import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -335,6 +336,13 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "model-prices":
       // 价格页面只做前端内容调度，金额校验、租户隔离和写权限由后端接口执行。
       return renderModelPricesSection(options.modelPricesState, options.modelsState, options.authContext);
+    case "response-cache":
+      // PAGE-106 只消费后端授权 owner 的安全策略摘要；真实读写与失效权限由每次 Control API 复核。
+      return renderResponseCacheSection(
+        options.responseCacheState,
+        options.authContext,
+        options.consoleShellState,
+      );
     case "model-aliases":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderModelAliasesSection(options.modelAliasesState, options.modelsState, options.authContext, options.environmentState);
@@ -862,6 +870,18 @@ function renderExperimentsSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel experiments-panel" aria-labelledby="experiments-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** 仅在 response_cache.read 导航 owner 精确匹配时渲染 PAGE-106，失权时不保留空壳 DOM。 */
+function renderResponseCacheSection(state, authContext, consoleShellState) {
+  const html = renderResponseCache(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel response-cache-panel" aria-labelledby="response-cache-title">
         ${html}
       </section>
     `

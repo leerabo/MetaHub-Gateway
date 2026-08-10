@@ -1,9 +1,12 @@
+/** 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。 */
+
 import { renderRequestFeedbackSection } from "../request-feedback/renderRequestFeedback.js";
 import {
   authorizationIdentitySnapshot,
   hasPermission,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { normalizeResponseCacheRequestLogInfo } from "../../lib/responseCache.js";
 
 // PAGE-082 只把后端稳定公开标识写入一次性 handoff 属性，非法 ID/目录版本降级为纯文本。
 const TENANT_ERROR_MAP_REFERENCE_PATTERN = /^pem_[0-9a-f]{32}$/;
@@ -916,6 +919,7 @@ export function renderRequestLogDetail(detail, error, feedbackState, authContext
       ${renderDetailSummary(log)}
       ${renderRequestFeedbackSection(feedbackState, authContext, i18n)}
       ${renderCacheAffinitySelections(detail.request_log.cache_affinity_selections ?? [])}
+      ${renderResponseCacheEvidence(detail.request_log.response_cache ?? null, log.tenant_id)}
       ${renderPolicySnapshotDecision(log)}
       ${renderDlpDecision(log, detail.request_log.dlp_matches ?? [])}
       ${renderIntentRisk(detail.request_log.intent_risk, log.request_id)}
@@ -931,6 +935,78 @@ export function renderRequestLogDetail(detail, error, feedbackState, authContext
       ${renderUsage(detail.request_log.usage ?? [])}
     </div>
   `;
+}
+
+// PAGE-106 RequestLog 扩展只解释后端冻结枚举，不能从 Provider cache_tokens 或亲和选择推导命中。
+const RESPONSE_CACHE_STATUS_LABELS = Object.freeze({
+  disabled: "未启用",
+  ineligible: "请求不适用",
+  bypassed_experiment: "实验范围旁路",
+  unavailable_bypass: "缓存不可用，已旁路",
+  corrupt_miss: "缓存损坏，按未命中处理",
+  miss_owner: "未命中，已取得填充租约",
+  miss_non_owner: "未命中，其他请求正在填充",
+  fill_stored: "未命中，已写入缓存",
+  fill_skipped: "未命中，未写入缓存",
+  hit: "命中",
+  hit_blocked: "命中候选被输出安全阻断",
+  settlement_failed: "命中结算失败",
+});
+// 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+const RESPONSE_CACHE_COST_STATUS_LABELS = Object.freeze({
+  known: "已确认",
+  unavailable: "证据不可用",
+  not_applicable: "不适用",
+});
+
+/**
+ * 渲染独立 Response Cache 事实与四组财务证据。
+ * extra/missing/type/tenant/金额等式任一异常都只显示固定合同错误，不读取或回显未知字段。
+ */
+export function renderResponseCacheEvidence(value, tenantId) {
+  const normalized = normalizeResponseCacheRequestLogInfo(value, String(tenantId ?? ""));
+  if (normalized === null) {
+    return `
+      <section class="request-log-subsection response-cache-evidence">
+        <div class="response-cache-evidence-heading"><h4>Response Cache</h4><span>无缓存事实</span></div>
+      </section>
+    `;
+  }
+  if (normalized === undefined) {
+    return `
+      <section class="request-log-subsection response-cache-evidence is-invalid" role="alert">
+        <div class="response-cache-evidence-heading"><h4>Response Cache</h4><span>投影不可用</span></div>
+        <code>response_cache.response_invalid</code>
+      </section>
+    `;
+  }
+  const hitLabel = normalized.hit ? "命中" : "未命中 / 旁路";
+  return `
+    <section class="request-log-subsection response-cache-evidence" data-response-cache-status="${escapeAttribute(normalized.status)}">
+      <div class="response-cache-evidence-heading">
+        <h4>Response Cache</h4>
+        <span class="response-cache-hit-state tone-${normalized.hit ? "hit" : "miss"}">${hitLabel}</span>
+      </div>
+      <dl class="request-log-detail-grid response-cache-cost-grid">
+        ${renderPair("状态", RESPONSE_CACHE_STATUS_LABELS[normalized.status] ?? normalized.status)}
+        ${renderPair("策略版本", normalized.cache_policy_version === null ? "-" : `v${normalized.cache_policy_version}`)}
+        ${renderPair("命中收费", normalized.charge_cache_hits === null ? "-" : booleanLabel(normalized.charge_cache_hits))}
+        ${renderResponseCacheCostPair("源请求生成成本", normalized.source_generation_cost_status, normalized.source_generation_cost_cny)}
+        ${renderResponseCacheCostPair("当前参考成本", normalized.current_reference_cost_status, normalized.current_reference_cost_cny)}
+        ${renderResponseCacheCostPair("本次节省", normalized.saved_cost_status, normalized.saved_cost_cny)}
+        ${renderResponseCacheCostPair("本次计费", normalized.billed_cost_status, normalized.billed_cost_cny)}
+      </dl>
+    </section>
+  `;
+}
+
+/** 金额和证据状态保持同一格显示，unknown 不伪造成 0 元。 */
+function renderResponseCacheCostPair(label, status, amount) {
+  const formatted = status === "known" ? `¥${amount}` : "-";
+  return renderPair(
+    label,
+    `${formatted} · ${RESPONSE_CACHE_COST_STATUS_LABELS[status] ?? status}`,
+  );
 }
 
 // 输出安全展示只解释后端冻结枚举，不从错误码、DLP 当前规则或已发送字节反向推导扫描结论。

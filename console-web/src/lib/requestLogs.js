@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { normalizeResponseCacheRequestLogInfo } from "./responseCache.js";
 
 /**
  * 查询当前登录用户可见的调用日志列表。
@@ -157,10 +158,42 @@ function savedFilterBody({ name, filters, sortBy, sortDirection }) {
  * request_id 来自服务端日志列表或用户输入，encodeURIComponent 防止路径注入。
  */
 export async function getRequestLog({ controlApiUrl, token, requestId, signal }) {
-  return requestLogsRequest(`${controlApiUrl}/request-logs/${encodeURIComponent(requestId)}`, {
+  const payload = await requestLogsRequest(`${controlApiUrl}/request-logs/${encodeURIComponent(requestId)}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal,
   });
+  const tenantId = String(payload?.request_log?.log?.tenant_id ?? "");
+  // PRD-076 起 nullable 字段本身也属于 exact 合同；缺字段不能与明确 null 的历史/不适用事实混同。
+  if (!payload?.request_log || !Object.hasOwn(payload.request_log, "response_cache")) {
+    throw new AuthApiError({
+      status: 502,
+      code: "response_cache.response_invalid",
+      message: "响应缓存响应合同不完整",
+      requestId: payload?.request_id ?? "-",
+      traceId: payload?.trace_id ?? "-",
+    });
+  }
+  const responseCache = normalizeResponseCacheRequestLogInfo(
+    payload.request_log.response_cache,
+    tenantId,
+  );
+  if (responseCache === undefined) {
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    throw new AuthApiError({
+      status: 502,
+      code: "response_cache.response_invalid",
+      message: "响应缓存响应合同不完整",
+      requestId: payload?.request_id ?? "-",
+      traceId: payload?.trace_id ?? "-",
+    });
+  }
+  return {
+    ...payload,
+    request_log: {
+      ...payload.request_log,
+      response_cache: responseCache,
+    },
+  };
 }
 
 /**

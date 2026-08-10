@@ -7,14 +7,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-import metahub_gateway.api.openai_compatible as openai_api
 import httpx
+import metahub_gateway.api.openai_compatible as openai_api
 import pytest
 from httpx import ASGITransport, AsyncClient
 from metahub_gateway.api.openai_compatible import router as openai_compatible_router
@@ -33,6 +34,11 @@ from metahub_shared.runtime.policy_snapshot import (
 # 以下测试密钥只用于 OpenAI-compatible 主链路夹具，断言请求失败也会进入日志。
 VIRTUAL_KEY = "mhv_prd009_virtual_key"
 PROVIDER_KEY = "sk-prd009-provider-secret"
+CACHE_TEST_PROMPT = "prd076 synthetic cache prompt 6f34d9b1"
+CACHE_TEST_RESPONSE = "prd076 synthetic cache response 8ac217e4"
+CACHE_TEST_HMAC_SECRET = "prd076-hmac-test-secret-" + "h" * 40
+CACHE_TEST_ENCRYPTION_SECRET = "prd076-encryption-test-secret-" + "e" * 40
+CACHE_TEST_FAILURE_SPOOL_SECRET = "prd076-spool-test-secret-" + "s" * 40
 
 
 class StaticPolicySnapshotCache:
@@ -154,6 +160,48 @@ def sqlite_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def count_plaintext_matches(
+    connection: sqlite3.Connection,
+    canaries: tuple[bytes, ...],
+) -> int:
+    """Scan declared SQLite TEXT/BLOB columns without exposing matched values.
+
+    该测试冻结缓存路径的租户、并发、计费和失败合同，避免回归泄露敏感数据。 当前定义负责 count_plaintext_matches 对应步骤。"""
+
+    matches = 0
+    tables = connection.execute(
+        """
+        SELECT name
+        FROM sqlite_schema
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name
+        """
+    ).fetchall()
+    for table_row in tables:
+        table_name = str(table_row["name"])
+        quoted_table = '"' + table_name.replace('"', '""') + '"'
+        columns = []
+        for column in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall():
+            declared_type = str(column["type"] or "").upper()
+            if declared_type == "BLOB" or any(
+                marker in declared_type for marker in ("CHAR", "CLOB", "TEXT")
+            ):
+                column_name = str(column["name"])
+                columns.append('"' + column_name.replace('"', '""') + '"')
+        if not columns:
+            continue
+        for row in connection.execute(f"SELECT {','.join(columns)} FROM {quoted_table}"):
+            for value in row:
+                if isinstance(value, str):
+                    encoded = value.encode("utf-8", errors="strict")
+                elif isinstance(value, (bytes, bytearray, memoryview)):
+                    encoded = bytes(value)
+                else:
+                    continue
+                matches += sum(encoded.count(canary) for canary in canaries)
+    return matches
+
+
 def build_gateway_app():
     """build_gateway_app：说明该定义的测试或脚本职责。
 
@@ -221,6 +269,10 @@ def fake_upstream():
                     self.wfile.write(b"data: [DONE]\n\n")
                     self.wfile.flush()
                     return
+                prompt = body.get("messages", [{}])[0].get("content")
+                response_content = (
+                    CACHE_TEST_RESPONSE if prompt == CACHE_TEST_PROMPT else "pong"
+                )
                 self._json(
                     {
                         "id": "chatcmpl_prd009",
@@ -229,7 +281,7 @@ def fake_upstream():
                         "choices": [
                             {
                                 "index": 0,
-                                "message": {"role": "assistant", "content": "pong"},
+                                "message": {"role": "assistant", "content": response_content},
                                 "finish_reason": "stop",
                             }
                         ],
@@ -317,6 +369,76 @@ def prepare_database(
     )
     connection.commit()
     return database_url
+
+
+def enable_response_cache_for_default_chat(database_url: str) -> str:
+    """为真实 Gateway 测试创建一个已确认的 enabled CachePolicy。"""
+
+    connection = connect_database(database_url)
+    owner = connection.execute(
+        """
+        SELECT user.user_id,user.tenant_id,environment.environment_id,environment.code,
+               model.model_id
+        FROM users user
+        JOIN environments environment ON environment.tenant_id=user.tenant_id
+        JOIN models model ON model.tenant_id=user.tenant_id
+        WHERE user.role='admin' AND user.status='active'
+          AND environment.code='dev' AND environment.status='active'
+          AND model.model_alias='default-chat' AND model.status='active'
+        ORDER BY user.created_at LIMIT 1
+        """
+    ).fetchone()
+    assert owner is not None
+    connection.execute(
+        """
+        INSERT INTO model_aliases(
+          model_alias_id,tenant_id,alias,environment,environment_id,default_model_id,
+          status,created_by,created_at,updated_at
+        ) VALUES('alias_prd076_gateway',?,'default-chat',?,?,?,'active',?,
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        """,
+        (
+            owner["tenant_id"],
+            owner["code"],
+            owner["environment_id"],
+            owner["model_id"],
+            owner["user_id"],
+        ),
+    )
+    alias = connection.execute(
+        """
+        SELECT model_alias_id
+        FROM model_aliases
+        WHERE tenant_id=? AND alias='default-chat' AND environment='dev' AND status='active'
+        """,
+        (owner["tenant_id"],),
+    ).fetchone()
+    assert alias is not None
+    cache_policy_id = "rcp_" + "7" * 32
+    connection.execute(
+        """
+        INSERT INTO response_cache_policies(
+          cache_policy_id,tenant_id,model_alias_id,status,data_class,ttl_seconds,
+          charge_cache_hits,tags_json,single_data_class_confirmed,
+          data_class_confirmed_by,data_class_confirmed_version,version,
+          invalidation_generation,created_by,updated_by,created_at,updated_at
+        ) VALUES(?,?,?,'enabled','test-public',300,0,'[]',1,?,1,1,1,?,?,
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        """,
+        (
+            cache_policy_id,
+            owner["tenant_id"],
+            alias["model_alias_id"],
+            owner["user_id"],
+            owner["user_id"],
+            owner["user_id"],
+        ),
+    )
+    connection.commit()
+    # 该测试冻结缓存路径的租户、并发、计费和失败合同，避免回归泄露敏感数据。
+    return str(owner["tenant_id"])
 
 
 def configure_prd036_fallback_alias(database_url: str) -> None:
@@ -525,6 +647,97 @@ async def test_chat_completion_json_records_request_and_usage(
     assert "hello private prompt" not in persisted
     assert VIRTUAL_KEY not in persisted
     assert PROVIDER_KEY not in persisted
+
+
+@pytest.mark.anyio
+async def test_response_cache_miss_fill_hit_calls_provider_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """第二个等价请求必须从已结算缓存返回，不能再次调用 Provider。"""
+
+    upstream_url, captured = fake_upstream
+    monkeypatch.setenv("METAHUB_RESPONSE_CACHE_ENABLED", "true")
+    monkeypatch.setenv("METAHUB_RESPONSE_CACHE_HMAC_SECRET", CACHE_TEST_HMAC_SECRET)
+    monkeypatch.setenv(
+        "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET", CACHE_TEST_ENCRYPTION_SECRET
+    )
+    monkeypatch.setenv(
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET",
+        CACHE_TEST_FAILURE_SPOOL_SECRET,
+    )
+    monkeypatch.setenv(
+        "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT",
+        str(tmp_path / "response-cache-failure-spool"),
+    )
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    tenant_id = enable_response_cache_for_default_chat(database_url)
+    app = build_gateway_app()
+    payload = {
+        "model": "default-chat",
+        "messages": [{"role": "user", "content": CACHE_TEST_PROMPT}],
+        "temperature": 0.2,
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd076_cache_miss",
+                "X-Trace-ID": "trc_prd076_cache_miss",
+                "X-MetaHub-Contract-Tenant-ID": tenant_id,
+            },
+            json=payload,
+        )
+        second = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd076_cache_hit",
+                "X-Trace-ID": "trc_prd076_cache_hit",
+                "X-MetaHub-Contract-Tenant-ID": tenant_id,
+            },
+            json=payload,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    responses_match = second.content == first.content
+    provider_call_count = len(captured)
+    assert responses_match is True
+    assert provider_call_count == 1
+    connection = connect_database(database_url)
+    try:
+        facts = connection.execute(
+            """
+            SELECT request_id,status
+            FROM response_cache_request_facts
+            WHERE tenant_id=? AND request_id IN (?,?)
+            ORDER BY request_id
+            """,
+            (tenant_id, "req_prd076_cache_miss", "req_prd076_cache_hit"),
+        ).fetchall()
+        assert {row["request_id"]: row["status"] for row in facts} == {
+            "req_prd076_cache_hit": "hit",
+            "req_prd076_cache_miss": "fill_stored",
+        }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM response_cache_entries WHERE tenant_id=?", (tenant_id,)
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM response_cache_hits WHERE tenant_id=?", (tenant_id,)
+        ).fetchone()[0] == 1
+        plaintext_matches = count_plaintext_matches(
+            connection,
+            (CACHE_TEST_PROMPT.encode("utf-8"), CACHE_TEST_RESPONSE.encode("utf-8")),
+        )
+        assert plaintext_matches == 0
+    finally:
+        connection.close()
 
 
 @pytest.mark.anyio

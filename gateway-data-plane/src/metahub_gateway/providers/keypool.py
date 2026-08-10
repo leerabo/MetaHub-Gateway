@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import sqlite3
 from dataclasses import dataclass, field
@@ -14,6 +16,13 @@ from datetime import UTC, datetime, timedelta
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import decrypt_provider_key
+from metahub_shared.response_cache import (
+    CredentialResponseScope,
+    VersionedResponseCacheSecret,
+    build_environment_credential_scope,
+    build_managed_credential_scope,
+    build_none_credential_scope,
+)
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.keypool import (
@@ -55,6 +64,153 @@ class ProviderKeyPoolSnapshot:
     """
 
     state: KeyPoolState
+
+
+def snapshot_response_cache_credential_scope(
+    config: AppConfig,
+    connection: sqlite3.Connection,
+    route: GatewayRoute,
+    *,
+    hmac_key: VersionedResponseCacheSecret,
+    as_of: datetime,
+) -> CredentialResponseScope | None:
+    """无副作用冻结 Response Cache 唯一 Credential 响应域。
+
+    返回 ``None`` 表示当前 KeyPool 无法证明只有一个响应域，调用方必须旁路缓存。函数不解密
+    托管 Key、不更新选择时间、不记录 Credential ID/fingerprint；真正 Provider miss 仍使用既有
+    ``select_provider_key``，fill commit 再按实际选择结果回验冻结 scope。
+    """
+
+    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+    if route.provider_auth_type == "none":
+        return build_none_credential_scope(
+            key=hmac_key,
+            tenant_id=route.tenant_id,
+            provider_id=route.provider_id,
+            provider_auth_type=route.provider_auth_type,
+            scope_version=1,
+        )
+    rows = connection.execute(
+        """
+        SELECT provider_credential_id,key_fingerprint,encrypted_key,status,
+               rate_limited_until,probe_health_status,probe_last_tested_at
+        FROM provider_credentials
+        WHERE tenant_id=? AND provider_id=?
+        ORDER BY provider_credential_id
+        """,
+        (route.tenant_id, route.provider_id),
+    ).fetchall()
+    managed_rows = [
+        row for row in rows if str(row["encrypted_key"] or "").startswith("aesgcm-v1:")
+    ]
+    if managed_rows:
+        selectable = tuple(
+            row
+            for row in managed_rows
+            if _row_is_selectable(row, stale_seconds=config.provider_health_stale_seconds)
+        )
+        if len(selectable) != 1:
+            # 多成员可能对应不同上游账号或过滤配置；本期禁止只摘要 pool 后共享响应。
+            return None
+        row = selectable[0]
+        return build_managed_credential_scope(
+            key=hmac_key,
+            tenant_id=route.tenant_id,
+            provider_id=route.provider_id,
+            provider_auth_type=route.provider_auth_type,
+            scope_version=1,
+            selectable_credential_count=1,
+            credential_id=str(row["provider_credential_id"]),
+            credential_key_fingerprint=str(row["key_fingerprint"]),
+            # 现有 Credential 行没有独立业务 version；key fingerprint 已绑定实际 Secret，
+            # 本期 schema version=1，未来若新增 version 必须同时提升 scope_version。
+            credential_version=1,
+        )
+
+    environment_key = _environment_provider_key(
+        config,
+        connection,
+        tenant_id=route.tenant_id,
+        provider_id=route.provider_id,
+        provider_code=route.provider_code,
+        route_base_url=route.provider_base_url,
+    )
+    if not environment_key:
+        return None
+    # 环境 Key 明文只在当前栈用于 keyed fingerprint；digest 后立即丢弃且不进入任何对象或日志。
+    environment_fingerprint = hmac.new(
+        hmac_key.secret.encode("utf-8"),
+        b"metahub/response-cache/environment-credential/v1\x00"
+        + environment_key.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    del environment_key
+    return build_environment_credential_scope(
+        key=hmac_key,
+        tenant_id=route.tenant_id,
+        provider_id=route.provider_id,
+        provider_auth_type=route.provider_auth_type,
+        scope_version=1,
+        environment_key_fingerprint=environment_fingerprint,
+    )
+
+
+def response_cache_scope_matches_provider_selection(
+    config: AppConfig,
+    connection: sqlite3.Connection,
+    route: GatewayRoute,
+    *,
+    scope_kind: str,
+    provider_credential_id: str | None,
+    provider_key_source: str | None,
+    as_of: datetime,
+) -> bool:
+    """证明实际 Provider 选择仍属于 lookup 时冻结的唯一 Credential 响应域。
+
+    本函数只返回布尔值，不向调用方暴露 Credential ID、fingerprint 或 Secret。托管模式必须
+    恰好存在一个当前可选成员，且该成员就是实际请求使用的数据库 Credential；这样旧成员在
+    Provider 调用期间被替换后，迟到 fill 只能丢失 lease，不能写入新响应域。
+    """
+
+    if scope_kind == "none":
+        return (
+            route.provider_auth_type == "none"
+            and provider_credential_id is None
+            and provider_key_source is None
+        )
+    if scope_kind == "environment":
+        # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+        return provider_credential_id is None and provider_key_source == "environment"
+    # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+    if scope_kind != "managed" or provider_key_source != "database":
+        return False
+    rows = connection.execute(
+        """
+        SELECT provider_credential_id,key_fingerprint,encrypted_key,status,
+               rate_limited_until,probe_health_status,probe_last_tested_at
+        FROM provider_credentials
+        WHERE tenant_id=? AND provider_id=?
+        ORDER BY provider_credential_id
+        """,
+        (route.tenant_id, route.provider_id),
+    ).fetchall()
+    selectable = tuple(
+        row
+        for row in rows
+        if str(row["encrypted_key"] or "").startswith("aesgcm-v1:")
+        and _row_is_selectable(
+            row,
+            stale_seconds=config.provider_health_stale_seconds,
+            now=as_of,
+        )
+    )
+    return (
+        len(selectable) == 1
+        and provider_credential_id is not None
+        and hmac.compare_digest(
+            str(selectable[0]["provider_credential_id"]), provider_credential_id
+        )
+    )
 
 
 def snapshot_provider_key_pool(

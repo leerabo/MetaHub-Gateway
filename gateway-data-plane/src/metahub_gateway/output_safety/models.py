@@ -6,7 +6,7 @@ Provider 凭据和底层异常文本都不属于持久化合同，也不得后�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from metahub_shared.output_safety import OutputRuleSnapshot, OutputScanDecision
@@ -28,7 +28,11 @@ OutputSafetyScanStatus = Literal[
 ]
 OutputSafetyDecision = Literal["none", "clean", "matched", "blocked", "unknown"]
 OutputSafetyExposureState = Literal["none", "partial", "complete", "unknown"]
-OutputSafetyBillingDisposition = Literal["not_required", "dispute_pending"]
+OutputSafetyBillingDisposition = Literal[
+    "not_required",
+    "dispute_pending",
+    "not_billable_response_cache_candidate",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +98,7 @@ class OutputSafetyTerminalState:
         emitted_sse_event_count: int,
         emitted_bytes: int,
         exposure_state: OutputSafetyExposureState,
-    ) -> "OutputSafetyTerminalState":
+    ) -> OutputSafetyTerminalState:
         """把 Shared 无正文判定转换成 completed 持久终态。
 
         参数：Shared 判定，以及 Gateway 分别观察和交付给下游的计数。
@@ -122,7 +126,36 @@ class OutputSafetyTerminalState:
         )
 
     @classmethod
-    def not_applicable(cls) -> "OutputSafetyTerminalState":
+    def from_response_cache_decision(
+        cls,
+        decision: OutputScanDecision,
+        *,
+        observed_output_token_count: int,
+    ) -> OutputSafetyTerminalState:
+        """构造非流式 Response Cache candidate 的完整扫描终态。
+
+        缓存正文仍须按当前规则重新扫描，但在 settlement commit 前没有任何字节交付，
+        也没有发生 Provider 网络成本。因此 blocked 只能标记为 cache-only 不计费，不能进入
+        Provider 成本争议；allow/log-only 继续使用普通 ``not_required`` 语义。
+        """
+
+        terminal = cls.from_scan_decision(
+            decision,
+            observed_output_token_count=observed_output_token_count,
+            emitted_token_count=0 if decision.decision == "blocked" else observed_output_token_count,
+            emitted_sse_event_count=0,
+            emitted_bytes=0,
+            exposure_state="none" if decision.decision == "blocked" else "complete",
+        )
+        if decision.decision != "blocked":
+            return terminal
+        return replace(
+            terminal,
+            billing_disposition="not_billable_response_cache_candidate",
+        )
+
+    @classmethod
+    def not_applicable(cls) -> OutputSafetyTerminalState:
         """构造 Provider 未产生可扫描成功输出时的固定终态。"""
 
         return cls(scan_status="not_applicable", decision="none")
@@ -138,7 +171,7 @@ class OutputSafetyTerminalState:
         emitted_sse_event_count: int = 0,
         emitted_bytes: int = 0,
         exposure_state: OutputSafetyExposureState = "unknown",
-    ) -> "OutputSafetyTerminalState":
+    ) -> OutputSafetyTerminalState:
         """构造检测器或流完整性不可证明时的失败关闭终态。
 
         ``previous_decision`` 只允许保留此前已确认的 matched 元数据；clean 不能在尾窗未完成时保留，
@@ -191,7 +224,10 @@ class OutputSafetyEventRecord:
     checkpoint_count: int
     dlp_rule_id: str
     detector_version: str
-    billing_disposition: Literal["dispute_pending"]
+    billing_disposition: Literal[
+        "dispute_pending",
+        "not_billable_response_cache_candidate",
+    ]
     occurred_at: str
 
 

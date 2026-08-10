@@ -1594,6 +1594,8 @@ def fail_pending_webhook_event_deliveries(
         "webhook.payload_invalid": "Source payload validation failed.",
     }
     allowed_event_types = {
+        "cache.hit",
+        "cache.invalidated",
         "experiment.completed",
         "file.prompt_injection_detected",
     }
@@ -1829,6 +1831,17 @@ def _validated_pending_delivery_body(
             )
 
             source_request_id = recover_experiment_completed_source_request_id(
+                connection,
+                envelope,
+            )
+        elif envelope.get("event_type") in {"cache.hit", "cache.invalidated"}:
+            # Response Cache 的 request owner 不进入公开信封；恢复必须重新绑定 immutable
+            # hit/invalidation source，不能使用 outbox worker request_id 掩盖 source 漂移。
+            from metahub_control.response_cache.outbox import (
+                recover_response_cache_source_request_id,
+            )
+
+            source_request_id = recover_response_cache_source_request_id(
                 connection,
                 envelope,
             )

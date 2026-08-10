@@ -17,6 +17,13 @@ from uuid import uuid4
 from .connection import connect_database
 from .errors import DbError
 
+# 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+EXPECTED_VERSION_ROLLBACK_PREFIX = """-- metahub:expected-version-rollback-v1
+PRAGMA foreign_keys = OFF;
+PRAGMA legacy_alter_table = ON;
+BEGIN IMMEDIATE;"""
+EXPECTED_VERSION_ROLLBACK_SUFFIX = "COMMIT;\nPRAGMA foreign_keys = ON;\n"
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -108,6 +115,7 @@ def rollback_last_migration(
     *,
     migrations_dir: Path | None = None,
     confirm_prod: bool = False,
+    expected_version: str | None = None,
 ) -> MigrationResult:
     """回滚最近一次已应用迁移。
 
@@ -121,6 +129,8 @@ def rollback_last_migration(
             "Rollback in prod requires explicit confirmation.",
             "Pass --confirm-prod only after backup and approval.",
         )
+    if expected_version is not None:
+        _validate_expected_version(expected_version)
     run_id = f"dbr_{uuid4().hex}"
     connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
     try:
@@ -128,6 +138,7 @@ def rollback_last_migration(
             connection,
             run_id=run_id,
             migrations_dir=migrations_dir,
+            expected_version=expected_version,
         )
     finally:
         # 回滚可能在“无已应用版本”处提前返回，也可能因缺少 down SQL 或执行 SQL 失败；
@@ -140,6 +151,7 @@ def _rollback_last_migration_with_connection(
     *,
     run_id: str,
     migrations_dir: Path | None,
+    expected_version: str | None = None,
 ) -> MigrationResult:
     """在已登记生命周期的连接内执行最近版本回滚，连接关闭统一由公开入口负责。"""
 
@@ -149,7 +161,11 @@ def _rollback_last_migration_with_connection(
         "SELECT version, name FROM schema_migrations WHERE status='applied' ORDER BY version DESC LIMIT 1"
     ).fetchone()
     if not row:
+        if expected_version is not None:
+            raise _migration_version_mismatch()
         return MigrationResult(run_id=run_id, applied=[], skipped=[], rolled_back=None)
+    if expected_version is not None and row["version"] != expected_version:
+        raise _migration_version_mismatch()
     down_path = directory / f"{row['version']}_{row['name']}.down.sql"
     if not down_path.exists():
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
@@ -160,21 +176,27 @@ def _rollback_last_migration_with_connection(
         )
     started = time.perf_counter()
     try:
-        connection.executescript(down_path.read_text(encoding="utf-8"))
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        connection.execute(
-            """
-            UPDATE schema_migrations
-            SET status='rolled_back', applied_at=datetime('now'), execution_time_ms=?, error_message=NULL
-            WHERE version=?
-            """,
-            (elapsed_ms, row["version"]),
-        )
-        connection.commit()
+        down_sql = down_path.read_text(encoding="utf-8")
+        if expected_version is not None:
+            down_sql = _inject_expected_version_guard(down_sql, expected_version)
+        connection.executescript(down_sql)
+        if expected_version is None:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            connection.execute(
+                """
+                UPDATE schema_migrations
+                SET status='rolled_back', applied_at=datetime('now'), execution_time_ms=?, error_message=NULL
+                WHERE version=?
+                """,
+                (elapsed_ms, row["version"]),
+            )
+            connection.commit()
     # 回滚脚本的 SQL 或提交失败时统一撤销显式事务，避免保留半完成结构。
     except sqlite3.Error as exc:
         # 必须在抛出统一错误前 rollback，调用方后续复用连接也不能提交中间 DDL。
         connection.rollback()
+        if expected_version is not None and str(exc) == "db_migration_version_mismatch":
+            raise _migration_version_mismatch() from exc
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         raise DbError(
             "db.migration_failed",
@@ -182,6 +204,104 @@ def _rollback_last_migration_with_connection(
             "Inspect the rollback SQL and database state.",
         ) from exc
     return MigrationResult(run_id=run_id, applied=[], skipped=[], rolled_back=row["version"])
+
+
+def _inject_expected_version_guard(sql: str, expected_version: str) -> str:
+    """把 owner 复查与版本终态写入 down 的同一个受信事务。"""
+
+    _validate_expected_version(expected_version)
+    if (
+        not sql.startswith(EXPECTED_VERSION_ROLLBACK_PREFIX)
+        or sql.count("BEGIN IMMEDIATE;") != 1
+        or sql.count("COMMIT;") != 1
+        or not sql.endswith(EXPECTED_VERSION_ROLLBACK_SUFFIX)
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise DbError(
+            "db.migration_failed",
+            "Expected-version rollback requires a trusted immediate transaction.",
+            "Use a reviewed down migration with the trusted rollback prefix.",
+        )
+    expected_literal = "'" + expected_version.replace("'", "''") + "'"
+    guard = f"""
+
+DROP TABLE IF EXISTS temp.metahub_rollback_expected_version_guard;
+CREATE TEMP TABLE metahub_rollback_expected_version_guard(
+  actual_version TEXT,
+  expected_version TEXT NOT NULL,
+  started_at_julian REAL NOT NULL
+);
+CREATE TEMP TRIGGER metahub_rollback_expected_version_guard_abort
+BEFORE INSERT ON metahub_rollback_expected_version_guard FOR EACH ROW
+WHEN NEW.actual_version IS NOT NEW.expected_version
+BEGIN SELECT RAISE(ABORT,'db_migration_version_mismatch'); END;
+INSERT INTO metahub_rollback_expected_version_guard(
+  actual_version,expected_version,started_at_julian
+)
+SELECT (
+  SELECT version FROM schema_migrations
+  WHERE status='applied' ORDER BY version DESC LIMIT 1
+), {expected_literal}, julianday('now');
+DROP TRIGGER metahub_rollback_expected_version_guard_abort;
+"""
+    terminal = f"""
+
+-- DDL 与版本终态必须在同一写锁事务提交；任何状态写失败都会回滚整段 down。
+DROP TABLE IF EXISTS temp.metahub_rollback_status_guard;
+CREATE TEMP TABLE metahub_rollback_status_guard(issue_count INTEGER NOT NULL);
+CREATE TEMP TRIGGER metahub_rollback_status_guard_abort
+BEFORE INSERT ON metahub_rollback_status_guard FOR EACH ROW
+WHEN NEW.issue_count!=0
+BEGIN SELECT RAISE(ABORT,'db_migration_status_update_failed'); END;
+UPDATE schema_migrations
+SET status='rolled_back', applied_at=datetime('now'),
+    execution_time_ms=MAX(0,CAST(ROUND(
+      (julianday('now')-(
+        SELECT started_at_julian
+        FROM temp.metahub_rollback_expected_version_guard
+      ))*86400000
+    ) AS INTEGER)),
+    error_message=NULL
+WHERE version={expected_literal} AND status='applied';
+INSERT INTO metahub_rollback_status_guard(issue_count)
+VALUES(CASE WHEN changes()=1 THEN 0 ELSE 1 END);
+DROP TRIGGER metahub_rollback_status_guard_abort;
+DROP TABLE metahub_rollback_status_guard;
+DROP TABLE metahub_rollback_expected_version_guard;
+"""
+    guarded = sql.replace(
+        EXPECTED_VERSION_ROLLBACK_PREFIX,
+        EXPECTED_VERSION_ROLLBACK_PREFIX + guard,
+        1,
+    )
+    return guarded[: -len(EXPECTED_VERSION_ROLLBACK_SUFFIX)] + terminal + EXPECTED_VERSION_ROLLBACK_SUFFIX
+
+
+def _validate_expected_version(expected_version: str) -> None:
+    """限制原子回滚 owner 为仓库使用的四位 ASCII 迁移版本。"""
+
+    if (
+        type(expected_version) is not str
+        or len(expected_version) != 4
+        or not expected_version.isascii()
+        or not expected_version.isdigit()
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise DbError(
+            "db.migration_failed",
+            "Expected rollback version is invalid.",
+            "Use the four-digit version from the reviewed migration owner.",
+        )
+
+
+def _migration_version_mismatch() -> DbError:
+    """返回不包含实际版本或路径的固定失败坐标。"""
+
+    return DbError(
+        "db.migration_version_mismatch",
+        "The applied migration does not match the expected rollback version.",
+        "Refresh migration state and use the owner-specific maintenance command.",
+    )
 
 
 def _ensure_schema_migrations(connection: sqlite3.Connection) -> None:

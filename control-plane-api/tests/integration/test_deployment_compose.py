@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 # 部署测试需要稳定定位仓库根目录和 PowerShell 可执行文件，避免依赖调用者的工作目录。
 ROOT = Path(__file__).resolve().parents[3]
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
@@ -123,6 +122,11 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
     assert "replace-with-generated-auth-token-secret" in env_template
     assert "replace-with-generated-internal-batch-token" in env_template
     assert "replace-with-generated-batch-encryption-secret" in env_template
+    assert "replace-with-generated-response-cache-hmac-secret" in env_template
+    assert "replace-with-generated-response-cache-encryption-secret" in env_template
+    assert "replace-with-generated-response-cache-control-secret" in env_template
+    assert "replace-with-generated-response-cache-spool-secret" in env_template
+    assert "METAHUB_RESPONSE_CACHE_ENABLED=false" in env_template
     assert "MetaHubLocal!2026" not in env_template
     assert "sk-" not in env_template
     assert "METAHUB_DATABASE_URL=sqlite:///./.data/compose/metahub.db" in env_template
@@ -243,10 +247,15 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_AUTH_TOKEN_SECRET=" in generated_env
     assert "METAHUB_INTERNAL_BATCH_TOKEN=" in generated_env
     assert "METAHUB_BATCH_ENCRYPTION_SECRET=" in generated_env
+    assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" in generated_env
+    assert "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET=" in generated_env
+    assert "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET=" in generated_env
+    assert "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET=" in generated_env
     assert "METAHUB_POSTGRES_PASSWORD=" in generated_env
     assert "METAHUB_MINIO_SECRET_KEY=" in generated_env
     assert "METAHUB_POSTGRES_PASSWORD=" not in completed.stdout
     assert "METAHUB_MINIO_SECRET_KEY=" not in completed.stdout
+    assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" not in completed.stdout
     assert not list(tmp_path.glob(".metahub-env-*"))
 
     deploy_module = (ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1").read_text(

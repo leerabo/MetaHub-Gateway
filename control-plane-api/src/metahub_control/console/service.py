@@ -331,6 +331,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         82,
     ),
     NavigationDefinition(
+        "response-cache",
+        "响应缓存",
+        "调用与成本",
+        "response-cache",
+        ("response_cache.read",),
+        "查看模型别名的可选响应缓存策略、收费状态与安全失效入口。",
+        "尚未配置响应缓存策略；选择一个 active 模型别名后再显式启用。",
+        83,
+    ),
+    NavigationDefinition(
         "budgets",
         "预算中心",
         "调用与成本",

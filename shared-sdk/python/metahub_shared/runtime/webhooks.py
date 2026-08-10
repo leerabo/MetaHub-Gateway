@@ -53,6 +53,10 @@ WEBHOOK_EVENT_TYPES = {
     "route.fallback_triggered",
     "route.policy_selected",
     "cache.affinity_selected",
+    # Response Cache 只外发已原子结算的 hit 与业务失效安全摘要，正文、digest、tag value、
+    # Credential 和 source owner 永远不属于订阅合同。
+    "cache.hit",
+    "cache.invalidated",
     "model.feedback_recorded",
     "feedback.created",
     "stream.timeout",
@@ -244,6 +248,12 @@ def build_webhook_event(
     elif event_type == "cache.affinity_selected":
         # 运行选择和配置变化共用事件名，由 trigger 冻结两套互斥且不含 Prompt 摘要的字段合同。
         _validate_cache_affinity_selected_payload(safe_payload)
+    elif event_type == "cache.hit":
+        # hit 事件精确绑定四组独立成本事实；金额只能是六位 CNY 或不可用 null。
+        _validate_response_cache_hit_payload(safe_payload)
+    elif event_type == "cache.invalidated":
+        # 失效事件只披露范围、固定 reason 和安全计数，不外发 selector 或 tag value。
+        _validate_response_cache_invalidated_payload(safe_payload)
     elif event_type == "model.feedback_recorded":
         # PRD-048 只外发管理员人工先验真实变化；自动调用统计不得制造高频反馈事件。
         _validate_model_feedback_recorded_payload(safe_payload)
@@ -321,6 +331,8 @@ def build_webhook_event(
         "policy.dry_run_executed",
         "route.policy_selected",
         "cache.affinity_selected",
+        "cache.hit",
+        "cache.invalidated",
         "model.feedback_recorded",
         "feedback.created",
         "budget.scope_exceeded",
@@ -367,6 +379,19 @@ def build_webhook_event(
             actor_id=actor_id,
             object_id=object_id,
             trace_id=trace_id,
+        )
+    elif event_type in {"cache.hit", "cache.invalidated"}:
+        # 两类 source event 共用 rcev_ 前缀，但 object/actor 矩阵由 event type 严格区分。
+        _validate_response_cache_envelope(
+            event_type,
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
         )
     elif event_type == "model.feedback_recorded":
         _validate_model_feedback_recorded_envelope(
@@ -723,6 +748,215 @@ def _validate_persistent_event_id(event_id: str | None) -> None:
         or any(character.isspace() or ord(character) < 32 for character in event_id)
     ):
         # 持久事件 ID 不合法时必须失败关闭，不能生成随机 ID 掩盖幂等事实损坏。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_response_cache_hit_payload(payload: dict[str, Any]) -> None:
+    """校验 ``cache.hit`` 的 exact 字段、四组成本证据和收费等式。
+
+    source generation 只描述历史成本；saved 必须由本次 current-reference 与 billed 的整数
+    微元相减得到。任何 unknown 字段、指数金额或把 unavailable 冒充 0 都失败关闭。
+    """
+
+    expected = {
+        "schema_version",
+        "cache_hit_id",
+        "cache_policy_id",
+        "cache_policy_version",
+        "charge_cache_hits",
+        "source_generation_cost_status",
+        "source_generation_cost_cny",
+        "current_reference_cost_status",
+        "current_reference_cost_cny",
+        "saved_cost_status",
+        "saved_cost_cny",
+        "billed_cost_status",
+        "billed_cost_cny",
+    }
+    # exact-set 防止未来 owner、digest、正文或调试字段未经审计进入客户订阅事件。
+    if set(payload) != expected:
+        raise ValueError("webhook.payload_invalid")
+    # schema、领域 ID、policy version 与收费标志必须使用精确 wire 类型并保持有界。
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["cache_hit_id"], prefix="rch_")
+        or not _is_prefixed_lower_hex_id(payload["cache_policy_id"], prefix="rcp_")
+        or type(payload["cache_policy_version"]) is not int
+        or not 1 <= payload["cache_policy_version"] <= 2_147_483_647
+        or type(payload["charge_cache_hits"]) is not bool
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+
+    source = _response_cache_amount_micros(payload, "source_generation_cost")
+    current = _response_cache_amount_micros(payload, "current_reference_cost")
+    saved = _response_cache_amount_micros(payload, "saved_cost")
+    billed = _response_cache_amount_micros(payload, "billed_cost")
+    # source 独立于本次收费等式，但调用 helper 可证明它不是 not_applicable 或伪造零值。
+    del source
+    expected_saved = None if current is None or billed is None else current - billed
+    # 负节省说明 reference/billed 价格 owner 错绑，不能裁剪为零后继续发送。
+    if expected_saved is not None and expected_saved < 0:
+        raise ValueError("webhook.payload_invalid")
+    # saved 必须由同一次结算的整数微元现算，不能相信数据库或调用方自报值。
+    if saved != expected_saved:
+        raise ValueError("webhook.payload_invalid")
+    # 收费开关决定 billed 证据矩阵，两种模式均不能省略正式 Usage/FinOps 事实。
+    if payload["charge_cache_hits"]:
+        # 收费 hit 必须复用同一 reference snapshot；两者状态和值均必须逐字相等。
+        if (
+            payload["current_reference_cost_status"]
+            != payload["billed_cost_status"]
+            or current != billed
+        ):
+            # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+            raise ValueError("webhook.payload_invalid")
+    # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+    elif billed != 0 or payload["billed_cost_status"] != "known":
+        # 免费 hit 仍有正式零价账务事实；unavailable/null 不能伪装成“未收费”。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _response_cache_amount_micros(
+    payload: dict[str, Any],
+    prefix: str,
+) -> int | None:
+    """把缓存 fixed-six CNY 文本严格还原为非负 signed-64 微元并验证证据状态。"""
+
+    status = payload[f"{prefix}_status"]
+    value = payload[f"{prefix}_cny"]
+    # unavailable 只能与 null 配对，绝不能把缺价转换为可计费的零元事实。
+    if status == "unavailable" and value is None:
+        return None
+    # known 必须携带普通十进制字符串，其他状态不属于 cache.hit Webhook。
+    if status != "known" or type(value) is not str:
+        raise ValueError("webhook.payload_invalid")
+    integer, separator, fraction = value.partition(".")
+    # 金额拒绝指数、符号、前导零和非六位小数，确保跨语言解析只有一种结果。
+    if (
+        separator != "."
+        or not integer
+        or not integer.isascii()
+        or not integer.isdecimal()
+        or (len(integer) > 1 and integer.startswith("0"))
+        or len(fraction) != 6
+        or not fraction.isascii()
+        or not fraction.isdecimal()
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+    micros = int(integer) * 1_000_000 + int(fraction)
+    # 超出 SQLite signed-64 的金额无法与持久 hit owner 对照，必须在签名前拒绝。
+    if micros > 9_223_372_036_854_775_807:
+        raise ValueError("webhook.payload_invalid")
+    return micros
+
+
+def _validate_response_cache_invalidated_payload(payload: dict[str, Any]) -> None:
+    """校验 ``cache.invalidated`` 的 exact 范围、reason 和有界安全计数。"""
+
+    expected = {
+        "schema_version",
+        "cache_invalidation_id",
+        "scope",
+        "match_mode",
+        "tag_count",
+        "matched_entry_count",
+        "deleted_entry_count",
+        "fenced_fill_count",
+        "reason_code",
+    }
+    # exact-set 明确禁止 selector/tag value、Cache Key 或其他内部失效材料进入事件。
+    if set(payload) != expected:
+        raise ValueError("webhook.payload_invalid")
+    # 对象、scope、match mode 与 reason 必须与迁移 CHECK 的固定集合完全一致。
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(
+            payload["cache_invalidation_id"], prefix="rci_"
+        )
+        or payload["scope"] not in {"all", "tags"}
+        or payload["match_mode"] != "all"
+        or payload["reason_code"]
+        not in {
+            "manual_finops",
+            "manual_security",
+            "manual_configuration",
+            "manual_other",
+            "policy_changed",
+            "system_corrupt",
+            "system_output_blocked",
+        }
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+    count_fields = (
+        "tag_count",
+        "matched_entry_count",
+        "deleted_entry_count",
+        "fenced_fill_count",
+    )
+    # 所有计数拒绝 bool、负数和 SQLite 范围外整数，避免 wire/数据库解释分叉。
+    if any(
+        type(payload[field]) is not int
+        or not 0 <= payload[field] <= 9_223_372_036_854_775_807
+        for field in count_fields
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+    # all/tags 的 tag_count 互斥关系和 deleted<=matched 必须可由持久 owner 重建。
+    if (
+        payload["tag_count"] > 16
+        or (payload["scope"] == "all" and payload["tag_count"] != 0)
+        or (payload["scope"] == "tags" and payload["tag_count"] < 1)
+        or payload["deleted_entry_count"] > payload["matched_entry_count"]
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_response_cache_envelope(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把缓存事件绑定到持久 rcev_ source owner、租户、操作者和操作链路。"""
+
+    object_field = "cache_hit_id" if event_type == "cache.hit" else "cache_invalidation_id"
+    # 信封必须逐字绑定 source event、租户、对象与操作链路，不能回退随机 event ID。
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="rcev_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or object_id != payload[object_field]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or occurred_at.tzinfo is None
+    ):
+        # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
+        raise ValueError("webhook.payload_invalid")
+    # hit 是 Gateway 系统事实且 actor 固定为空；用户身份不能冒充运行时事件来源。
+    if event_type == "cache.hit":
+        if actor_id is not None:
+            # cache hit 是 Gateway 运行时事实，不能把 Virtual Key 或请求用户伪装为 actor。
+            raise ValueError("webhook.payload_invalid")
+        return
+    system_reason = payload["reason_code"] in {
+        "system_corrupt",
+        "system_output_blocked",
+    }
+    if (system_reason and actor_id is not None) or (
+        not system_reason and not _is_bounded_safe_text(actor_id, maximum=160)
+    ):
+        # 手动/Policy 变化保留可信 Session actor；系统安全淘汰只能使用 null actor。
         raise ValueError("webhook.payload_invalid")
 
 
@@ -1290,7 +1524,8 @@ def _validate_output_blocked_payload(payload: dict[str, Any]) -> None:
         or payload["scan_status"] != "completed"
         or payload["decision"] != "blocked"
         or payload["error_code"] != "content_policy_violation"
-        or payload["billing_disposition"] != "dispute_pending"
+        or payload["billing_disposition"]
+        not in {"dispute_pending", "not_billable_response_cache_candidate"}
         or payload["detector_version"] != "output-safety-dlp-v1"
     ):
         # 该事件只表达已完成的 block；matched/unavailable 不能冒充对外阻断事实。
@@ -1308,6 +1543,14 @@ def _validate_output_blocked_payload(payload: dict[str, Any]) -> None:
         or (exposure_state == "partial" and emitted < 1)
     ):
         # 暴露状态与已放行 Token 必须相互证明，bool 也不能借 int 子类关系通过。
+        raise ValueError("webhook.payload_invalid")
+    if payload["billing_disposition"] == "not_billable_response_cache_candidate" and (
+        payload["scan_mode"] != "non_stream_full"
+        or exposure_state != "none"
+        or emitted != 0
+    ):
+        # 只有未调用 Provider、未向客户端暴露任何内容的 cache candidate 才能标记不计费；
+        # 流式或 partial 事实仍必须沿用真实 Provider 成本争议路径。
         raise ValueError("webhook.payload_invalid")
     if not _is_canonical_utc_second(payload["occurred_at"]):
         raise ValueError("webhook.payload_invalid")

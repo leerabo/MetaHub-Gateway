@@ -12,6 +12,8 @@ from typing import Any, Literal
 from metahub_shared.runtime.error_diagnosis import ErrorDiagnosisInfo
 from pydantic import BaseModel, Field
 
+from metahub_control.response_cache.models import ResponseCacheRequestLogInfo
+
 
 class RequestLogOutputSafetySummary(BaseModel):
     """调用日志列表中的输出安全最小摘要。
@@ -456,6 +458,8 @@ class RequestLogDetail(BaseModel):
     usage: list[RequestLogUsageInfo]
     routing_attempts: list[RequestLogRoutingAttempt]
     cache_affinity_selections: list[RequestLogCacheAffinitySelection]
+    # Response Cache 只暴露 7.5 exact 财务投影；entry、tag、data class 与 source owner 不得加入。
+    response_cache: ResponseCacheRequestLogInfo | None
     budget_evaluations: list[RequestLogBudgetEvaluation]
     dlp_matches: list[RequestLogDlpMatch]
     intent_risk: RequestLogIntentRisk

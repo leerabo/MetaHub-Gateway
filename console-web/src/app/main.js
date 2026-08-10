@@ -66,6 +66,17 @@ import {
   isExperimentAbortError,
 } from "../features/experiments/experimentPageState.js";
 import { renderExperiments } from "../features/experiments/renderExperiments.js";
+import {
+  bindResponseCacheInteractions,
+  clearResponseCacheDom,
+} from "../features/cache-policies/bindResponseCache.js";
+import {
+  createResponseCachePageState,
+  isResponseCacheAbortError,
+  responseCachePageOwner,
+  responseCacheReadIdentitySnapshot,
+} from "../features/cache-policies/responseCachePageState.js";
+import { renderResponseCache } from "../features/cache-policies/renderResponseCache.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -295,6 +306,12 @@ import {
   getExperimentResults,
   listExperiments,
 } from "../lib/experiments.js";
+import {
+  createResponseCacheIdempotencyKey,
+  invalidateResponseCache,
+  listResponseCachePolicies,
+  updateResponseCachePolicy,
+} from "../lib/responseCache.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -579,6 +596,8 @@ const batchJobPageState = createBatchJobPageState({
 });
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
+// PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
+const responseCachePageState = createResponseCachePageState({ clearDom: clearResponseCacheDom });
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -715,6 +734,10 @@ if (app && globalThis.window) {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
       }
+      if (nextItemId !== "response-cache") {
+        // PAGE-106 的策略草稿、Dialog、cursor 和幂等 owner 不得越过 hash 导航边界。
+        responseCachePageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -746,6 +769,7 @@ if (app && globalThis.window) {
       fileSecurityPageState.clear();
       batchJobPageState.clear();
       experimentPageState.clear();
+      responseCachePageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -864,6 +888,7 @@ async function start() {
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
+    clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -939,6 +964,7 @@ async function performRefresh() {
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
+    clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1127,6 +1153,17 @@ async function performRefresh() {
     // 定时刷新已重新校验 Session、RBAC 指纹和后端导航；同 owner 草稿仅阻止 DOM 替换。
     return;
   }
+  // PAGE-106 只属于后端确认的 response-cache 导航；owner 漂移先清 DOM/state，再允许新 owner fresh GET。
+  if (consoleShellState?.activeNavigationItemId !== "response-cache") {
+    responseCachePageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && responseCachePageState.blocksShellDomReplacement()
+    && responseCachePageState.enter(currentResponseCacheOwner(consoleShellState))
+  ) {
+    // 后台已完成 auth/navigation 复核；同 owner 草稿、冲突或 Dialog 仅阻止普通 DOM replacement。
+    return;
+  }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
     webhookDeadLetterPageState.clear();
@@ -1223,6 +1260,11 @@ async function performRefresh() {
     return;
   }
   const modelPricesState = await loadModelPricesState();
+  // PAGE-106 只在后端授权导航激活时读取 Alias 策略；其他页面不预取策略或 selector。
+  const responseCacheState = await loadResponseCacheState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   // 模型价格属于成本治理数据，认证失败时必须停止后续模型配置读取。
   if (!authSession.token) {
     return;
@@ -1438,6 +1480,7 @@ async function performRefresh() {
     intentSecurityState: intentSecurityPageState.snapshot(),
     policySnapshotsState: policySnapshotsRenderState,
     modelPricesState,
+    responseCacheState,
     modelAliasesState,
     // 读取后的其他接口可能较慢；渲染前重新取快照，避免期间发生的选择或保存被旧对象重建 DOM 覆盖。
     routingPoliciesState: consoleShellState?.activeNavigationItemId === "routing-policies"
@@ -1623,6 +1666,7 @@ function renderLogin(error, requestId) {
   fileSecurityPageState.clear();
   batchJobPageState.clear();
   experimentPageState.clear();
+  responseCachePageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1961,6 +2005,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     fileSecurityPageState.clear();
     batchJobPageState.clear();
     experimentPageState.clear();
+    responseCachePageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -4130,6 +4175,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFileSecurityPageInteractions(consoleShellState);
   bindBatchJobsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
+  bindResponseCachePageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -5576,6 +5622,249 @@ function handleExperimentAuthenticationFailure(error) {
 
 /** 只有 canonical auth.permission_denied 代表撤权，业务型 403 继续作为固定错误展示。 */
 function isExperimentPermissionRevocation(error) {
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
+}
+
+/** 构造 PAGE-106 实时 owner；完整权限集合和 fingerprint 只用于内存等值比较。 */
+function currentResponseCacheOwner(consoleShellState, mode = "read") {
+  const owner = responseCachePageOwner(authSession.context, consoleShellState, { mode });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "response-cache")) return null;
+  return owner;
+}
+
+/** 绑定 Alias、草稿、CAS rebase 和缓存失效动作；每个回调都会重新读取实时 owner。 */
+function bindResponseCachePageInteractions(consoleShellState) {
+  const owner = currentResponseCacheOwner(consoleShellState);
+  if (!responseCachePageState.enter(owner)) return;
+  bindResponseCacheInteractions({
+    currentEditor: () => responseCachePageState.snapshot().editor,
+    async onRefresh() {
+      await refreshResponseCachePanel(consoleShellState);
+    },
+    async onPreviousPage() {
+      if (responseCachePageState.previousPage()) await refreshResponseCachePanel(consoleShellState);
+    },
+    async onNextPage() {
+      if (responseCachePageState.nextPage()) await refreshResponseCachePanel(consoleShellState);
+    },
+    async onSelect(modelAliasId) {
+      if (responseCachePageState.selectAlias(modelAliasId)) {
+        renderCurrentResponseCachePanel(consoleShellState);
+      }
+    },
+    async onDraft(request) {
+      if (responseCachePageState.replaceDraft(request)) {
+        renderCurrentResponseCachePanel(consoleShellState);
+      }
+    },
+    async onDiscard() {
+      if (responseCachePageState.discardDraft()) {
+        renderCurrentResponseCachePanel(consoleShellState);
+      }
+    },
+    async onRebase() {
+      await refreshResponseCachePanel(consoleShellState, { rebase: true });
+    },
+    async onSave(request) {
+      await submitResponseCachePolicy(request, consoleShellState);
+    },
+    async onOpenInvalidation() {
+      const opened = responseCachePageState.openInvalidation(
+        currentResponseCacheOwner(consoleShellState, "invalidate"),
+      );
+      if (opened) {
+        refreshSequence += 1;
+        renderCurrentResponseCachePanel(consoleShellState);
+      }
+      return opened;
+    },
+    async onCloseInvalidation() {
+      const closed = responseCachePageState.closeInvalidation(
+        currentResponseCacheOwner(consoleShellState, "invalidate"),
+      );
+      if (closed) renderCurrentResponseCachePanel(consoleShellState);
+      return closed;
+    },
+    async onInvalidate(request) {
+      await submitResponseCacheInvalidation(request, consoleShellState);
+    },
+  });
+}
+
+/** 局部重建 PAGE-106 面板；无权 owner 会由状态机先擦除旧租户 DOM。 */
+function renderCurrentResponseCachePanel(consoleShellState) {
+  const owner = currentResponseCacheOwner(consoleShellState);
+  if (!responseCachePageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".response-cache-panel");
+  if (!panel) return false;
+  const html = renderResponseCache(
+    responseCachePageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+  );
+  if (!html) {
+    responseCachePageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindResponseCachePageInteractions(consoleShellState);
+  return true;
+}
+
+/** 显式局部 GET 推进全局代次，防止旧整页刷新在稍后覆盖当前草稿或 Dialog。 */
+async function refreshResponseCachePanel(consoleShellState, { rebase = false } = {}) {
+  const owner = currentResponseCacheOwner(consoleShellState);
+  if (!responseCachePageState.enter(owner)) return null;
+  const refreshId = ++refreshSequence;
+  renderCurrentResponseCachePanel(consoleShellState);
+  const state = await loadResponseCacheState(consoleShellState, refreshId, { rebase });
+  if (!state || refreshId !== refreshSequence) return null;
+  return renderCurrentResponseCachePanel(consoleShellState) ? state : null;
+}
+
+/** 提交完整 CAS 策略；未知结果的稳定幂等键只由状态机 operation 闭包保存。 */
+async function submitResponseCachePolicy(request, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentResponseCacheOwner(consoleShellState, "write");
+  // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+  if (!token || !owner) {
+    responseCachePageState.clear();
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (!token) renderLogin();
+    return null;
+  }
+  responseCachePageState.replaceDraft(request);
+  const operation = responseCachePageState.beginSave(
+    owner,
+    request,
+    createResponseCacheIdempotencyKey,
+  );
+  if (!operation) return responseCachePageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentResponseCachePanel(consoleShellState);
+  let finished = false;
+  /** 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。 */
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    responseCachePageState.finishSave(operation);
+  };
+  try {
+    const response = await updateResponseCachePolicy({
+      controlApiUrl,
+      token,
+      tenantId: owner.tenantId,
+      request: operation.request,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentResponseCacheOwner(consoleShellState, "write");
+    if (!responseCachePageState.acceptSave(operation, response, currentOwner)) return null;
+    finish();
+    renderCurrentResponseCachePanel(consoleShellState);
+    return responseCachePageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentResponseCacheOwner(consoleShellState, "write");
+    if (
+      !responseCachePageState.isSaveCurrent(operation, currentOwner)
+      || isResponseCacheAbortError(error)
+    ) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (handleResponseCacheAuthenticationFailure(error)) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (isResponseCachePermissionRevocation(error)) {
+      responseCachePageState.clear();
+      finish();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    responseCachePageState.rejectSave(operation, error, currentOwner);
+    renderCurrentResponseCachePanel(consoleShellState);
+    return responseCachePageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** 提交全量或 all-match selector 失效；成功后 fresh GET 重建所有 ready count。 */
+async function submitResponseCacheInvalidation(request, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentResponseCacheOwner(consoleShellState, "invalidate");
+  // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+  if (!token || !owner) {
+    responseCachePageState.clear();
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = responseCachePageState.beginInvalidation(
+    owner,
+    request,
+    createResponseCacheIdempotencyKey,
+  );
+  if (!operation) return responseCachePageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentResponseCachePanel(consoleShellState);
+  let finished = false;
+  /** 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。 */
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    responseCachePageState.finishInvalidation(operation);
+  };
+  try {
+    const response = await invalidateResponseCache({
+      controlApiUrl,
+      token,
+      tenantId: owner.tenantId,
+      request: operation.request,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentResponseCacheOwner(consoleShellState, "invalidate");
+    if (!responseCachePageState.acceptInvalidation(operation, response, currentOwner)) return null;
+    finish();
+    // 失效计数提交后立即 fresh GET，不能继续展示失效前的 ready_entry_count。
+    const refreshed = await refreshResponseCachePanel(consoleShellState);
+    return refreshed ?? responseCachePageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentResponseCacheOwner(consoleShellState, "invalidate");
+    if (
+      !responseCachePageState.isInvalidationCurrent(operation, currentOwner)
+      || isResponseCacheAbortError(error)
+    ) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (handleResponseCacheAuthenticationFailure(error)) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (isResponseCachePermissionRevocation(error)) {
+      responseCachePageState.clear();
+      finish();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    responseCachePageState.rejectInvalidation(operation, error, currentOwner);
+    renderCurrentResponseCachePanel(consoleShellState);
+    return responseCachePageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** 当前 owner 的 401 才能清 Session；旧 generation 已在调用方提前拒绝。 */
+function handleResponseCacheAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  responseCachePageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+/** canonical permission_denied 表示后端已撤权，必须重读 auth/navigation 而非仅隐藏按钮。 */
+function isResponseCachePermissionRevocation(error) {
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
@@ -7536,6 +7825,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "experiments") {
     // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
     experimentPageState.clear();
+  }
+  if (itemId !== "response-cache") {
+    // 导航请求前销毁 PAGE-106 草稿、失效 Dialog、私有 cursor 与全部异步票据。
+    responseCachePageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -12647,6 +12940,54 @@ async function loadExperimentDetailState(
     experimentPageState.finishResults(resultsOperation);
   }
 }
+
+/** 在同一授权 owner 下读取 PAGE-106 策略；普通 GET 不能覆盖 dirty/conflict 草稿。 */
+async function loadResponseCacheState(
+  consoleShellState,
+  refreshId,
+  { rebase = false } = {},
+) {
+  const owner = currentResponseCacheOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !responseCachePageState.enter(owner)) return null;
+  const operation = responseCachePageState.beginLoad(owner, { rebase });
+  if (!operation) return responseCachePageState.snapshot();
+  try {
+    const response = await listResponseCachePolicies({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      limit: 50,
+      cursor: operation.cursor,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = responseCachePageState.acceptLoad(
+      operation,
+      response,
+      currentResponseCacheOwner(consoleShellState),
+    );
+    return accepted ? responseCachePageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentResponseCacheOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !responseCachePageState.isLoadCurrent(operation, currentOwner)
+      || isResponseCacheAbortError(error)
+    ) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (handleResponseCacheAuthenticationFailure(error)) return null;
+    // 控制台只展示后端授权的脱敏事实，身份或权限变化时必须清除旧页面数据。
+    if (isResponseCachePermissionRevocation(error)) {
+      responseCachePageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    responseCachePageState.rejectLoad(operation, error, currentOwner);
+    return responseCachePageState.snapshot();
+  } finally {
+    responseCachePageState.finishLoad(operation);
+  }
+}
 /**
  * 身份边界变化时清除预算页面全部会话内事实。
  * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
@@ -13642,6 +13983,13 @@ function clearBatchJobStateOnIdentityChange(previous, current) {
 function clearExperimentStateOnIdentityChange(previous, current) {
   if (experimentReadIdentitySnapshot(previous) !== experimentReadIdentitySnapshot(current)) {
     experimentPageState.clear();
+  }
+}
+
+/** tenant、Session 或完整 RBAC snapshot 变化时销毁 PAGE-106 策略、草稿与 Dialog。 */
+function clearResponseCacheStateOnIdentityChange(previous, current) {
+  if (responseCacheReadIdentitySnapshot(previous) !== responseCacheReadIdentitySnapshot(current)) {
+    responseCachePageState.clear();
   }
 }
 /**

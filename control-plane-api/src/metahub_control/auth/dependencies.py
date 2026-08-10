@@ -51,6 +51,76 @@ def require_current_user(
     return authenticate_bearer(request.app.state.config, authorization)
 
 
+def _response_cache_authorization(request: Request) -> str | None:
+    """从 raw ASGI Header 恢复唯一 Bearer 值，拒绝框架可能折叠的重复凭据。"""
+
+    values = [
+        value
+        for key, value in request.scope.get("headers", ())
+        if key.lower() == b"authorization"
+    ]
+    if not values:
+        return None
+    if len(values) != 1:
+        # 重复 Authorization 属于固定 HTTP 合同错误，绝不能任选一个 Token 继续认证。
+        raise ApiError("response_cache.input_invalid")
+    try:
+        authorization = values[0].decode("ascii", errors="strict")
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    except UnicodeError:
+        # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+        raise ApiError("response_cache.input_invalid") from None
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    if request.headers.get("authorization") != authorization or "," in authorization:
+        # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+        raise ApiError("response_cache.input_invalid")
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    return authorization
+
+
+def _require_response_cache_permissions(
+    request: Request,
+    permission_codes: tuple[str, ...],
+) -> AuthContext:
+    """在读取 query/body 前完成 Response Cache 的实时 Session 与复合 RBAC 校验。"""
+
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    return _require_request_permissions(
+        request,
+        _response_cache_authorization(request),
+        permission_codes,
+    )
+
+
+def require_response_cache_reader(request: Request) -> AuthContext:
+    """要求当前 Session 具有 Response Cache 读取权限。
+
+    控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。 当前定义负责 require_response_cache_reader 对应步骤。"""
+
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    return _require_response_cache_permissions(request, ("response_cache.read",))
+
+
+def require_response_cache_writer(request: Request) -> AuthContext:
+    """要求当前 Session 同时具有 Response Cache 读取与策略写权限。"""
+
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    return _require_response_cache_permissions(
+        request,
+        ("response_cache.read", "response_cache.write"),
+    )
+
+
+def require_response_cache_invalidator(request: Request) -> AuthContext:
+    """要求当前 Session 同时具有读取与危险失效权限。"""
+
+    # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    return _require_response_cache_permissions(
+        request,
+        ("response_cache.read", "response_cache.invalidate"),
+    )
+
+
 def require_current_admin(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

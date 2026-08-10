@@ -19,6 +19,11 @@ from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
 ExperimentExposure = Literal["not_exposed", "exposed", "unknown"]
 ExperimentGatewayOutcome = Literal["success", "failed", "unresolved"]
 ExperimentSettlementDisposition = Literal["pending", "not_exposed", "unavailable"]
+ResponseCacheDisposition = Literal[
+    "not_in_scope",
+    "active_scope_bypass",
+    "unresolved",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,19 +44,36 @@ class ExperimentExecutionHandle:
 
 @dataclass(frozen=True, slots=True)
 class ExperimentRouteResolution:
-    """一次公开 Chat 的权威实验解析结果，明确区分旁路、选中与固定失败。"""
+    """一次公开 Chat 的权威实验解析结果，明确区分旁路、选中与固定失败。
+
+    ``response_cache_disposition`` 没有默认值，目的是迫使每条实验解析分支显式说明
+    后续 Response Cache 能否介入。活跃实验即使未采样也必须旁路缓存，否则命中会改变
+    实验总体 exposure、延迟和成本基线。
+    """
 
     matched: bool
+    response_cache_disposition: ResponseCacheDisposition
     route_plan: GatewayRoutePlan | None = None
     execution: ExperimentExecutionHandle | None = None
     failed_route: GatewayRoute | None = None
     error_code: str | None = None
 
     @classmethod
-    def bypass(cls) -> ExperimentRouteResolution:
-        """表示数据库权威证明当前请求无需实验，允许继续普通路由。"""
+    def bypass(
+        cls,
+        *,
+        response_cache_disposition: Literal["not_in_scope", "active_scope_bypass"],
+    ) -> ExperimentRouteResolution:
+        """返回未分配实验臂的结果，并要求调用者明确缓存处置。
 
-        return cls(matched=False)
+        ``not_in_scope`` 只用于权威证明没有活跃实验；``active_scope_bypass`` 用于活跃
+        实验的未采样请求。二者都继续普通路由，但只有前者可由 PRD-076 再做资格判断。
+        """
+
+        return cls(
+            matched=False,
+            response_cache_disposition=response_cache_disposition,
+        )
 
     @classmethod
     def selected(
@@ -61,7 +83,12 @@ class ExperimentRouteResolution:
     ) -> ExperimentRouteResolution:
         """返回唯一实验候选路由及 execution handle，禁止携带任何跨臂回退计划。"""
 
-        return cls(matched=True, route_plan=route_plan, execution=execution)
+        return cls(
+            matched=True,
+            response_cache_disposition="active_scope_bypass",
+            route_plan=route_plan,
+            execution=execution,
+        )
 
     @classmethod
     def failed(
@@ -71,7 +98,12 @@ class ExperimentRouteResolution:
     ) -> ExperimentRouteResolution:
         """保留已分配 arm 的安全失败 route，使 RequestLog 可追踪但禁止调用 Provider。"""
 
-        return cls(matched=True, failed_route=route, error_code=error_code)
+        return cls(
+            matched=True,
+            response_cache_disposition="active_scope_bypass",
+            failed_route=route,
+            error_code=error_code,
+        )
 
 
 @dataclass(slots=True)
