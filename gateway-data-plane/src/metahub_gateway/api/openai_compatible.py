@@ -76,6 +76,11 @@ from metahub_gateway.dlp import (
 )
 from metahub_gateway.dlp.models import DlpDecision
 from metahub_gateway.events import enqueue_runtime_event
+from metahub_gateway.experiments import (
+    ExperimentExecutionGuard,
+    SqliteExperimentExecutionStore,
+    resolve_experiment_route,
+)
 from metahub_gateway.intent_security import (
     IntentSecurityError,
     apply_intent_decision,
@@ -145,6 +150,7 @@ from metahub_gateway.usage.ledger import (
     RequestLogContext,
     UsageLedgerWriteResult,
     claim_gateway_request,
+    record_request_log,
     safe_record_request_log,
     safe_record_usage_ledger,
 )
@@ -385,6 +391,8 @@ async def _handle_gateway_request(
     policy_lease: PolicySnapshotLeaseDecision | None = None
     budget_guard_result: BudgetGuardResult | None = None
     realtime_gateway_lease: RealtimeGatewayLease | None = None
+    experiment_guard: ExperimentExecutionGuard | None = None
+    experiment_stream_handed_off = False
     request_claimed = False
     log_endpoint = audit_endpoint or endpoint
 
@@ -397,7 +405,6 @@ async def _handle_gateway_request(
             raise ApiError("gateway.auth_invalid")
         # 内部身份与 Authorization 不能同时存在，避免两个租户 owner 在热路径发生歧义。
         if trusted_invocation is not None and request.headers.get("Authorization") is not None:
-            # 内部调用不接受 Virtual Key Bearer 冒充，避免出现两个相互冲突的身份来源。
             raise ApiError(
                 "batch.execution_invalid"
                 if trusted_invocation.source == "batch"
@@ -565,8 +572,56 @@ async def _handle_gateway_request(
             request_kind=request_kind,
         )
 
+        experiment_resolution = None
+        # 在线实验只接管公开 Chat 的 canonical Alias；内部 Chat、Batch、
+        # Embeddings、Policy route_to 和没有完整 Project/Environment 的 Key 必须继续旁路。
+        if (
+            trusted_invocation is None
+            and request_kind == "chat"
+            and policy_result.decision != "route_to"
+            and auth_context.project_id
+            and auth_context.environment_id
+        ):
+            experiment_resolution = resolve_experiment_route(
+                config,
+                tenant_id=auth_context.tenant_id,
+                request_id=_request_id(request),
+                trace_id=_trace_id(request),
+                virtual_key_id=auth_context.virtual_key_id,
+                project_id=auth_context.project_id,
+                application_id=auth_context.application_id,
+                environment_id=auth_context.environment_id,
+                environment_code=auth_context.environment,
+                requested_model=request_model,
+                streaming=payload.get("stream") is True,
+            )
+            # 冻结臂不可执行时仍保留同臂安全 owner，但绝不能转入普通 resolver 或另一臂。
+            if experiment_resolution.error_code is not None:
+                # 失败路由只补齐 RequestLog 的安全模型归属，不代表允许发送 Provider 请求。
+                if experiment_resolution.failed_route is not None:
+                    route = experiment_resolution.failed_route
+                    request_log_context = _context_for_route(request_log_context, route)
+                # 仅抛固定实验错误码，底层配置、Endpoint 和 HMAC 摘要均不得进入响应。
+                raise ApiError(experiment_resolution.error_code)
+
+        # 命中实验时只使用不可变的单候选路由，禁止跨 variant Fallback 污染归因。
+        if experiment_resolution is not None and experiment_resolution.matched:
+            if (
+                experiment_resolution.route_plan is None
+                or experiment_resolution.execution is None
+            ):
+                # 命中实验却缺少路由或 execution handle 表示原子 owner 图不完整，必须失败关闭。
+                raise ApiError("gateway.experiment_unavailable")
+            route_plan = experiment_resolution.route_plan
+            route = route_plan.initial_route
+            experiment_guard = ExperimentExecutionGuard(
+                config,
+                SqliteExperimentExecutionStore(config),
+                experiment_resolution.execution,
+            )
+            await experiment_guard.start()
         # route_to 仅解析策略指定的租户内目标，不继承客户端别名原有的运行时 Fallback。
-        if policy_result.decision == "route_to":
+        elif policy_result.decision == "route_to":
             route = resolve_policy_target_route(
                 config,
                 tenant_id=auth_context.tenant_id,
@@ -802,7 +857,9 @@ async def _handle_gateway_request(
                     if budget_guard_result is not None
                     else Decimal("0")
                 ),
+                experiment_guard=experiment_guard,
             )
+            experiment_stream_handed_off = experiment_guard is not None
             rate_limit_lease = None
             return streaming_response
 
@@ -831,10 +888,16 @@ async def _handle_gateway_request(
             request_started=started,
             budget_guard_result=budget_guard_result,
             output_safety_scan=output_safety_scan,
+            experiment_guard=experiment_guard,
         )
     # asyncio.CancelledError 继承 BaseException，不会进入下面的 ApiError/Exception 分支。
     # 必须先完成已经 claim 的请求审计与预算结算，再保留取消语义交给 ASGI 服务器。
     except asyncio.CancelledError as exc:
+        if experiment_guard is not None and experiment_guard.terminal_committed:
+            # Guard 已在独立 task 中确定提交唯一 Outcome；此时取消位于 CAS 线性化点之后，
+            # 必须继续传播，但绝不能把已提交 success 的 RequestLog 反向改写为 failed。
+            raise
+        guard_response_code = _consume_experiment_guard_cancellation(experiment_guard)
         context = (
             getattr(exc, "request_log_context", None)
             or request_log_context
@@ -846,15 +909,19 @@ async def _handle_gateway_request(
                 request_model=request_model,
             )
         )
-        cancellation_code = _cancellation_error_code(exc)
+        cancellation_code = guard_response_code or _cancellation_error_code(exc)
+        request_log_error: str | None = None
         if context is not None and request_claimed:
-            safe_record_request_log(
+            request_log_error = _record_request_log_terminal(
                 config,
                 context,
                 status="failed",
                 error_code=cancellation_code,
                 latency_ms=_latency_ms(started),
+                require_terminal=experiment_guard is not None,
             )
+        elif experiment_guard is not None:
+            request_log_error = "gateway.request_log_unavailable"
         # Provider 可能已经收到请求，因此使用内层状态机附带的保守 outstanding 金额结算；
         # 未进入 Provider 的取消仍保持 claim 时写入的 0，不会凭空产生费用。
         if (
@@ -870,6 +937,28 @@ async def _handle_gateway_request(
                 trace_id=_trace_id(request),
                 outstanding_cost_cny=Decimal(context.budget_reservation_outstanding_cny),
             )
+        if experiment_guard is not None:
+            cleanup = (
+                _finalize_experiment_failure(
+                    experiment_guard,
+                    error_code=(
+                        experiment_guard.interruption_error_code or cancellation_code
+                    ),
+                    latency_ms=_latency_ms(started),
+                    cancelled=True,
+                )
+                if request_log_error is None
+                else experiment_guard.stop()
+            )
+            await _run_stream_finalizer_shielded(
+                cleanup,
+                # Guard-only cancel 已由 helper 精确消费；此时清理期间新到达的
+                # ASGI/客户端取消必须重新抛出。None 表示仍有外部取消在传播。
+                cancellation_already_active=guard_response_code is None,
+            )
+        if guard_response_code is not None:
+            # heartbeat 主动取消只用于打断本地 Provider 等待；收口完成后必须恢复统一 HTTP envelope。
+            raise ApiError(request_log_error or guard_response_code) from None
         raise
     # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
     except ApiError as exc:
@@ -889,6 +978,7 @@ async def _handle_gateway_request(
             # 402 返回前重投已提交稳定事件；队列故障不会覆盖预算错误或数据库事实。
             _enqueue_budget_scope_events(request.app.state, exc.scope_events)
 
+        request_log_error: str | None = None
         if context is not None and request_claimed:
             # 错误态是用户可见反馈入口，需要保留后端 request_id 便于排查。
             if isinstance(exc, DlpBlockedError):
@@ -900,13 +990,16 @@ async def _handle_gateway_request(
             if isinstance(exc, BudgetExhaustedError):
                 # 预算阻断的详细原因来自数据面预算模块，写入 request_logs 便于控制台解释。
                 context = apply_budget_decision(context, exc.budget_decision)
-            safe_record_request_log(
+            request_log_error = _record_request_log_terminal(
                 config,
                 context,
                 status="failed",
                 error_code=exc.code,
                 latency_ms=_latency_ms(started),
+                require_terminal=experiment_guard is not None,
             )
+        elif experiment_guard is not None:
+            request_log_error = "gateway.request_log_unavailable"
         # 只有 Guard 已成功创建预留才结算；尝试状态机在上下文中携带实际仍未知的上游分项。
         if (
             request_claimed
@@ -921,12 +1014,91 @@ async def _handle_gateway_request(
                 trace_id=_trace_id(request),
                 outstanding_cost_cny=Decimal(context.budget_reservation_outstanding_cny),
             )
+        # 只有失败日志已可靠落盘时才能提交实验失败 Outcome，避免恢复链出现相反终态。
+        if experiment_guard is not None and request_log_error is None:
+            await _finalize_experiment_failure(
+                experiment_guard,
+                error_code=experiment_guard.interruption_error_code or exc.code,
+                latency_ms=_latency_ms(started),
+            )
+        # RequestLog 仍不可用时必须用固定错误阻断响应，不能假装本次失败已可追踪。
+        if request_log_error is not None:
+            raise ApiError(request_log_error) from exc
         raise
+    except Exception as exc:
+        # 未预期本地异常不得把已分配执行留成无界等待；实验请求
+        # 收口为固定不可用码，非实验请求保持既有全局 500 语义。
+        if experiment_guard is None:
+            raise
+        context = request_log_context or _partial_request_log_context(
+            request,
+            auth_context,
+            route,
+            endpoint=log_endpoint,
+            request_model=request_model,
+        )
+        request_log_error: str | None = None
+        if context is not None and request_claimed:
+            request_log_error = _record_request_log_terminal(
+                config,
+                context,
+                status="failed",
+                error_code="gateway.experiment_unavailable",
+                latency_ms=_latency_ms(started),
+                require_terminal=True,
+            )
+        else:
+            request_log_error = "gateway.request_log_unavailable"
+        # 未知本地异常也只有在固定失败日志成功后才允许关闭对应实验 execution。
+        if request_log_error is None:
+            await _finalize_experiment_failure(
+                experiment_guard,
+                error_code="gateway.experiment_unavailable",
+                latency_ms=_latency_ms(started),
+            )
+        # 未分类异常只转换为固定实验码，禁止将异常正文、凭据或 Provider 响应透传给客户端。
+        raise ApiError(request_log_error or "gateway.experiment_unavailable") from exc
     finally:
+        if experiment_guard is not None and not experiment_stream_handed_off:
+            await experiment_guard.stop()
         if rate_limit_lease is not None:
             await rate_limit_lease.release()
         if realtime_gateway_lease is not None:
             await realtime_gateway_lease.release()
+
+
+async def _finalize_experiment_failure(
+    guard: ExperimentExecutionGuard,
+    *,
+    error_code: str,
+    latency_ms: int,
+    cancelled: bool = False,
+) -> bool:
+    """在客户端失败已确定后收口实验 execution/outcome。
+
+    Provider 响应或已归一化错误会保留独立暴露与质量事实；只有未得到
+    任何上游证据时才标记本地失败。数据库 CAS 失败返回 false，由租约 reaper
+    保守恢复，不用第二个错误覆盖已确定的客户端结果。
+    """
+
+    effective_code = guard.interruption_error_code or error_code
+    if not (
+        guard.facts.provider_response_received
+        or guard.facts.provider_error_received
+    ):
+        guard.mark_local_failure()
+    if effective_code == "gateway.experiment_execution_timeout":
+        reason = "execution_timeout"
+    elif cancelled:
+        reason = "cancelled"
+    else:
+        reason = "gateway_failed"
+    return await guard.finalize(
+        gateway_outcome="failed",
+        outcome_reason=reason,
+        error_code=effective_code,
+        latency_ms=latency_ms,
+    )
 
 
 async def _non_stream_response_with_fallback(
@@ -940,6 +1112,7 @@ async def _non_stream_response_with_fallback(
     request_started: float,
     budget_guard_result: BudgetGuardResult | None,
     output_safety_scan: PreparedOutputSafetyScan | None = None,
+    experiment_guard: ExperimentExecutionGuard | None = None,
 ) -> JSONResponse:
     """执行最多主、备各一次的非流式上游状态机。
 
@@ -947,6 +1120,9 @@ async def _non_stream_response_with_fallback(
     只有 Adapter 明确给出的超时、429、5xx 且命中策略时才创建第二次尝试。
     """
 
+    # 实验臂必须精确路由，任何带 fallback 的计划都表示 owner 图已漂移。
+    if experiment_guard is not None and plan.fallback_route is not None:
+        raise ApiError("gateway.experiment_unavailable")
     initial = plan.initial_route
     first_attempt = create_routing_attempt(
         config,
@@ -962,6 +1138,8 @@ async def _non_stream_response_with_fallback(
             else None
         ),
     )
+    if experiment_guard is not None:
+        experiment_guard.bind_attempt(first_attempt.routing_attempt_id)
     first_request: ProviderRequest | None = None
     first_started = time.perf_counter()
     try:
@@ -978,9 +1156,20 @@ async def _non_stream_response_with_fallback(
             routing_attempt_id=first_attempt.routing_attempt_id,
             stream_session_id=None,
         )
-        first_response = await first_adapter.send_non_stream(first_request)
+        if experiment_guard is not None:
+            # Provider Request 和 KeyPool Selection 已在本地构造完毕；网络发送前
+            # 必须取得最终围栏，败者不得调用 Adapter。
+            await experiment_guard.acquire_send_permission()
+            first_response = await experiment_guard.run_provider_call(
+                lambda: first_adapter.send_non_stream(first_request)
+            )
+            experiment_guard.mark_response(latency_ms=_latency_ms(first_started))
+        else:
+            first_response = await first_adapter.send_non_stream(first_request)
     # 当前 Task 被取消时网络请求可能已经发出；必须先终结 attempt/Selection，再原样传播取消。
     except asyncio.CancelledError as caught:
+        if experiment_guard is not None:
+            experiment_guard.mark_local_failure()
         interrupted_error = _local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE)
         safe_complete_routing_attempt(
             config,
@@ -1021,6 +1210,11 @@ async def _non_stream_response_with_fallback(
     except Exception as caught:
         exc = _normalized_provider_exception(caught)
         first_error = _attempt_error(exc)
+        if experiment_guard is not None:
+            experiment_guard.mark_provider_error(
+                first_error,
+                latency_ms=_latency_ms(first_started),
+            )
         quality_eligible = is_quality_observation_eligible_error(first_error)
         safe_complete_routing_attempt(
             config,
@@ -1121,14 +1315,33 @@ async def _non_stream_response_with_fallback(
         fallback_triggered=False,
         attempt_count=1,
     )
-    return _complete_non_stream_response(
+    response = _complete_non_stream_response(
         config,
         final_context,
         first_response,
         request=request,
         request_started=request_started,
         output_safety_scan=output_safety_scan,
+        require_request_log=experiment_guard is not None,
     )
+    if experiment_guard is not None:
+        try:
+            finalized = await experiment_guard.finalize(
+                gateway_outcome="success",
+                outcome_reason="completed",
+                error_code=None,
+                latency_ms=_latency_ms(request_started),
+            )
+        # 取消可能落在 Outcome CAS 两侧，必须保留原信号并由 Guard 的提交事实裁决。
+        except asyncio.CancelledError as exc:
+            # success CAS 前的取消由外层按最终 Attempt 上下文提交 failed/cancelled；
+            # CAS 后取消则由 Guard 的 terminal_committed 阻止任何反向日志改写。
+            _attach_cancellation_context(exc, final_context)
+            raise
+        if not finalized:
+            # 客户端成功只能在 Outcome 与结算终态提交后返回，CAS 丢失时不得伪造成功。
+            raise ApiError("gateway.experiment_unavailable")
+    return response
 
 
 async def _execute_fallback_attempt(
@@ -1397,6 +1610,7 @@ def _complete_non_stream_response(
     request: Request,
     request_started: float,
     output_safety_scan: PreparedOutputSafetyScan | None,
+    require_request_log: bool = False,
 ) -> JSONResponse:
     """扫描最终非流式响应，结算真实 Usage，并返回响应或统一安全错误。
 
@@ -1456,12 +1670,13 @@ def _complete_non_stream_response(
         # 安全证据事务失败后仍须保存真实 Usage，但不能携带未提交的扫描四元组。
         except ApiError as exc:
             billing_context = _context_without_output_safety(context)
-            safe_record_request_log(
+            request_log_error = _record_request_log_terminal(
                 config,
                 context,
                 status="failed",
                 error_code="gateway.output_safety_unavailable",
                 latency_ms=_latency_ms(request_started),
+                require_terminal=require_request_log,
             )
             committed = safe_record_usage_ledger(
                 config,
@@ -1471,6 +1686,24 @@ def _complete_non_stream_response(
             )
             _enqueue_finops_ledger_event(request.app.state, committed, billing_context)
             exc.request_log_context = context
+            # 首次失败日志不可用时仅在 Usage 已持久后重试，不能提前丢弃账单事实。
+            if request_log_error is not None:
+                # Provider Usage 已可靠处理后再次尝试固定失败终态；仍失败时不能把
+                # Output Safety 错误误写成已完整追踪的客户端结果。
+                request_log_error = _record_request_log_terminal(
+                    config,
+                    context,
+                    status="failed",
+                    error_code="gateway.output_safety_unavailable",
+                    latency_ms=_latency_ms(request_started),
+                    require_terminal=True,
+                )
+            # 固定失败日志再次失败说明终态仍不可证明，必须返回日志不可用而非政策错误。
+            if request_log_error is not None:
+                terminal_error = ApiError(request_log_error)
+                terminal_error.request_log_context = context
+                # 对外只抛固定日志错误和安全上下文，原 Output Safety 异常仅保留为内部 cause。
+                raise terminal_error from exc
             raise
         context = _context_with_output_safety_terminal(
             context,
@@ -1483,12 +1716,13 @@ def _complete_non_stream_response(
         context = _context_with_prepared_output_safety_scan(context, output_safety_scan)
 
     request_status = "failed" if safety_error_code is not None else "success"
-    safe_record_request_log(
+    request_log_error = _record_request_log_terminal(
         config,
         context,
         status=request_status,
         error_code=safety_error_code,
         latency_ms=_latency_ms(request_started),
+        require_terminal=require_request_log,
     )
     usage_committed = True
     if output_safety_scan is None:
@@ -1532,6 +1766,27 @@ def _complete_non_stream_response(
                 durability,
                 context,
             )
+
+    # Provider Usage 已处理后才重试严格日志，防止审计故障跳过真实成本记录。
+    if request_log_error is not None:
+        # 首次严格日志连接失败不能跳过真实 Provider Usage。Usage 已提交或 fsync
+        # spool 后允许一次幂等重试；仍失败则阻断正文并交给外层/lease reaper 收口。
+        request_log_error = _record_request_log_terminal(
+            config,
+            context,
+            status=request_status,
+            error_code=safety_error_code,
+            latency_ms=_latency_ms(request_started),
+            require_terminal=True,
+        )
+    # 二次日志仍失败时阻断正文，并把已持久或待恢复的成本上下文交给外层处理。
+    if request_log_error is not None:
+        error = ApiError(request_log_error)
+        error.request_log_context = (
+            context if usage_committed else _context_with_deferred_budget_settlement(context)
+        )
+        # 严格日志终态仍不可用时禁止返回 Provider 正文，只传播固定平台错误与安全上下文。
+        raise error
 
     # 只有 Usage durability 已判定后才抛安全错误，确保账单和 Webhook 的先后门禁稳定。
     if safety_error_code is not None:
@@ -1822,6 +2077,31 @@ def _cancellation_error_code(error: asyncio.CancelledError) -> str:
     }:
         return candidate
     return _REQUEST_CANCELLATION_ERROR_CODE
+
+
+def _consume_experiment_guard_cancellation(
+    guard: ExperimentExecutionGuard | None,
+) -> str | None:
+    """只消费 Guard 对当前 owner 发出的单次取消，并返回固定实验错误码。
+
+    ``interruption_error_code`` 只说明租约或截止已失败，不能证明当前
+    ``CancelledError`` 的来源。只有 Guard 的 owner marker 与当前 task 一致时才减去
+    一次计数；若仍有取消计数则返回 ``None``，让真实断连或重复取消继续传播。
+    """
+
+    # 只有当前 Guard 确认发出的取消才可消费；外部断连和重复取消必须继续传播。
+    if guard is None or guard.interruption_error_code is None:
+        return None
+    task = asyncio.current_task()
+    if task is None or task.cancelling() <= 0:
+        return None
+    if not guard.consume_owner_cancellation(task):
+        return None
+    # 精确减去 Guard 自己发出的一个请求；剩余计数一律属于外部/重复取消。
+    task.uncancel()
+    if task.cancelling() > 0:
+        return None
+    return guard.interruption_error_code
 
 
 def _context_for_attempt(
@@ -2174,6 +2454,7 @@ async def _stream_response(
     cache_affinity_context: CacheAffinityRouteContext | None = None,
     enable_output_safety: bool = False,
     budget_initial_estimated_cost_cny: Decimal = Decimal("0"),
+    experiment_guard: ExperimentExecutionGuard | None = None,
 ) -> StreamingResponse:
     """执行可审计的 SSE 透传、块间看门狗和客户端断开清理。
 
@@ -2187,10 +2468,15 @@ async def _stream_response(
         context,
         inter_token_timeout_ms=int(timeout_seconds * 1000),
     )
+    if experiment_guard is not None:
+        experiment_guard.bind_stream(session.stream_session_id)
     session_context = replace(context, stream_session_id=session.stream_session_id)
     output_safety_scan: PreparedOutputSafetyScan | None = None
     selection_handle = (
         provider_request.cache_affinity_selection if provider_request is not None else None
+    )
+    stream_termination_marker = (
+        provider_request.stream_termination_marker if provider_request is not None else None
     )
     try:
         if enable_output_safety:
@@ -2228,9 +2514,21 @@ async def _stream_response(
                 stream_session_id=session.stream_session_id,
             )
             selection_handle = provider_request.cache_affinity_selection
-        upstream_response = await adapter.send_stream(provider_request)
+            stream_termination_marker = provider_request.stream_termination_marker
+        if experiment_guard is not None:
+            # StreamSession 和 Provider Request 都已建立完整 owner；只在 lease 围栏
+            # CAS 成功后允许发出握手，避免把本地构造失败误计为上游暴露。
+            await experiment_guard.acquire_send_permission()
+            upstream_response = await experiment_guard.run_provider_call(
+                lambda: adapter.send_stream(provider_request)
+            )
+            experiment_guard.mark_stream_handshake()
+        else:
+            upstream_response = await adapter.send_stream(provider_request)
     # 握手尚未返回 StreamingResponse，取消必须把 starting 会话写成固定本地失败并释放 Selection。
     except asyncio.CancelledError as exc:
+        if experiment_guard is not None:
+            experiment_guard.mark_local_failure()
         output_terminal = _stream_not_applicable_terminal(output_safety_scan)
         finalized = safe_finish_stream_session(
             config,
@@ -2262,7 +2560,12 @@ async def _stream_response(
         _attach_cancellation_context(
             exc,
             cancellation_context,
-            error_code=LOCAL_STREAM_PROCESSING_ERROR_CODE,
+            error_code=(
+                experiment_guard.interruption_error_code
+                if experiment_guard is not None
+                and experiment_guard.interruption_error_code is not None
+                else LOCAL_STREAM_PROCESSING_ERROR_CODE
+            ),
         )
         raise
     # Adapter 已归一化的握手错误必须先结束会话，再交给统一 JSON 异常处理器。
@@ -2270,6 +2573,11 @@ async def _stream_response(
         # 握手前统一错误仍由 FastAPI JSON handler 返回；先提交会话终态再交给外层写 request_logs。
         session_error_code, quality_eligible = _stream_session_handshake_facts(exc)
         provider_error = exc.normalized_error if isinstance(exc, UpstreamApiError) else None
+        if experiment_guard is not None:
+            experiment_guard.mark_provider_error(
+                provider_error,
+                latency_ms=_latency_ms(started),
+            )
         fact_kwargs = (
             {"error": provider_error}
             if provider_error is not None and provider_error.evidence is not None
@@ -2310,6 +2618,8 @@ async def _stream_response(
         )
         raise
     except Exception as exc:
+        if experiment_guard is not None:
+            experiment_guard.mark_local_failure()
         # Adapter 未归一化异常没有可信上游归因，必须使用本地处理码并排除质量统计。
         output_terminal = _stream_not_applicable_terminal(output_safety_scan)
         finalized = safe_finish_stream_session(
@@ -2344,30 +2654,44 @@ async def _stream_response(
     # active 审计闸门失败时已建立的上游连接必须立即关闭，禁止向下游发送响应头。
     except ApiError as exc:
         # 上游已经连接但审计状态无法推进时必须 Fail Closed，不能开始无法确认状态的下游流。
-        await _safe_close_stream_response(upstream_response, session_context)
-        output_terminal = _stream_not_applicable_terminal(output_safety_scan)
-        finalized = safe_finish_stream_session(
-            config,
-            session,
-            status="upstream_failed",
-            error_code="gateway.stream_session_unavailable",
-            quality_observation_eligible=False,
-            **_stream_output_safety_finish_kwargs(output_safety_scan, output_terminal),
-        )
-        safe_finalize_cache_affinity_selection(
-            config,
-            selection_handle,
-            succeeded=False,
-        )
-        terminal_context = _context_after_stream_output_safety(
-            session_context,
-            output_safety_scan,
-            output_terminal,
-            finalized=finalized,
-        )
-        exc.request_log_context = _context_with_budget_outstanding(
-            _stream_terminal_context(terminal_context, "upstream_failed", finalized=finalized),
-            budget_initial_estimated_cost_cny,
+        active_error = exc
+
+        async def finalize_inactive_stream() -> None:
+            """在独立取消边界内关闭 2xx 连接并终结尚未 active 的 Session owner。"""
+
+            await _safe_close_stream_response(upstream_response, session_context)
+            output_terminal = _stream_not_applicable_terminal(output_safety_scan)
+            finalized = safe_finish_stream_session(
+                config,
+                session,
+                status="upstream_failed",
+                error_code="gateway.stream_session_unavailable",
+                quality_observation_eligible=False,
+                **_stream_output_safety_finish_kwargs(output_safety_scan, output_terminal),
+            )
+            safe_finalize_cache_affinity_selection(
+                config,
+                selection_handle,
+                succeeded=False,
+            )
+            terminal_context = _context_after_stream_output_safety(
+                session_context,
+                output_safety_scan,
+                output_terminal,
+                finalized=finalized,
+            )
+            active_error.request_log_context = _context_with_budget_outstanding(
+                _stream_terminal_context(
+                    terminal_context,
+                    "upstream_failed",
+                    finalized=finalized,
+                ),
+                budget_initial_estimated_cost_cny,
+            )
+
+        await _run_stream_finalizer_shielded(
+            finalize_inactive_stream(),
+            cancellation_already_active=False,
         )
         raise
     # StreamingResponse 必须是 ASGI receive 的唯一消费者；其断连监听把信号桥接给块读取状态机。
@@ -2384,7 +2708,18 @@ async def _stream_response(
         session_error_code: str | None = None
         collector = _SseUsageCollector(adapter)
         safety_gate_enabled = bool(output_safety_scan and output_safety_scan.configured)
-        framer = BoundedSseEventFramer() if safety_gate_enabled else None
+        # 实验流即使没有输出安全规则，也要识别并暂存 `[DONE]`；只有全部持久化
+        # 终态提交后才能把协议终止标记交给客户端。
+        framer = (
+            BoundedSseEventFramer()
+            if safety_gate_enabled or experiment_guard is not None
+            else None
+        )
+        raw_termination_observer = (
+            _SseTerminationMarkerObserver(stream_termination_marker)
+            if framer is None and stream_termination_marker is not None
+            else None
+        )
         scanner = (
             SlidingOutputScanner(
                 output_safety_scan.snapshot,
@@ -2400,12 +2735,30 @@ async def _stream_response(
         output_terminal: OutputSafetyTerminalState | None = None
         scan_finished = False
         deferred_safety_error = False
+        deferred_experiment_error = False
+        stream_error_emitted = False
+        deferred_done_frame: bytes | None = None
+        # None 明确表示 Generic/custom profile 以 clean EOF 结束；非空标记必须真实观察到。
+        termination_marker_seen = stream_termination_marker is None
+        experiment_finalized = False
         upstream_iterator = upstream_response.iter_bytes().__aiter__()
         read_task: asyncio.Task[bytes] | None = None
         disconnect_task: asyncio.Task[None] | None = None
         cancellation_in_flight = False
+        stream_owner_task = asyncio.current_task()
+        terminal_cancellation_observed = asyncio.Event()
+        if experiment_guard is not None:
+            # StreamingResponse body 由新的 ASGI task 消费，心跳取消 owner 必须
+            # 从已返回的握手 task 转移到真正持有上游连接的 body task。
+            experiment_guard.attach_current_task()
         try:
             while True:
+                if experiment_guard is not None:
+                    try:
+                        experiment_guard.raise_if_interrupted()
+                    # 租约或绝对截止失效必须立刻切入内部流终止，不能继续读取或发送正文。
+                    except ApiError as exc:
+                        raise _ExperimentStreamInterrupted(exc.code) from None
                 read_task = asyncio.create_task(
                     anext(upstream_iterator), name="gateway-stream-read"
                 )
@@ -2414,9 +2767,12 @@ async def _stream_response(
                     name="gateway-stream-disconnect",
                 )
                 # 任一条件完成就立即判定；每个网络块都会重置既有 inter-token watchdog。
+                read_timeout = timeout_seconds
+                if experiment_guard is not None:
+                    read_timeout = min(read_timeout, experiment_guard.remaining_seconds)
                 done, _pending = await asyncio.wait(
                     {read_task, disconnect_task},
-                    timeout=timeout_seconds,
+                    timeout=read_timeout,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if disconnect_task in done:
@@ -2432,14 +2788,23 @@ async def _stream_response(
                         chunk = read_task.result()
                     except StopAsyncIteration:
                         read_task = None
-                        if framer is not None and scanner is not None:
-                            # EOF 必须先证明没有残缺 event，再执行强制尾窗；
-                            # 通过后才能声明 completed。
+                        if framer is not None:
+                            # EOF 必须先证明没有残缺 event；启用扫描时还要执行强制尾窗，
+                            # 两者通过后才能声明 completed。
                             framer.finish()
+                        if raw_termination_observer is not None:
+                            # raw passthrough 不重分块；EOF 只清除 observer 的有界残留，
+                            # 只有此前结束于空行的精确 data event 才能证明终止标记完整。
+                            termination_marker_seen = raw_termination_observer.finish()
+                        if scanner is not None:
                             output_decision = scanner.finish()
                             scan_finished = True
                             if output_decision.decision == "blocked":
                                 raise _OutputSafetyBlocked(output_decision) from None
+                        if not termination_marker_seen:
+                            # OpenAI profile 缺 `[DONE]` 是上游协议不完整，不能提交客户端 success。
+                            upstream_read_failed = True
+                            raise _UpstreamStreamIncomplete from None
                         break
                     except Exception:
                         # 只有上游 iterator 的异常才具备 Provider 质量归因资格。
@@ -2451,12 +2816,21 @@ async def _stream_response(
                     await _cancel_stream_task(disconnect_task)
                     read_task = None
                     disconnect_task = None
+                    if experiment_guard is not None:
+                        try:
+                            experiment_guard.raise_if_interrupted()
+                        # 看门狗到期后再次区分实验租约中断，确保返回冻结实验错误码。
+                        except ApiError as exc:
+                            raise _ExperimentStreamInterrupted(exc.code) from None
                     # 看门狗超时使用内部控制异常切换终态，不能继续等待或发送未知正文。
                     raise _UpstreamStreamTimedOut
 
-                if framer is None or scanner is None:
+                if framer is None:
                     # 零输出规则保持 PRD-070 raw passthrough 与宽容 Usage parser，
                     # 不能改变网络兼容性。
+                    if raw_termination_observer is not None:
+                        # observer 只读取有界行前缀并返回布尔事实，绝不缓存、记录或改写正文。
+                        termination_marker_seen = raw_termination_observer.feed(chunk)
                     collector.feed(chunk)
                     session.note_chunk(chunk)
                     yield chunk
@@ -2466,14 +2840,24 @@ async def _stream_response(
                 for frame in framer.feed(chunk):
                     # 完整 event 先计入 Provider observed Usage，再扫描；命中 frame 不计入 emitted。
                     collector.observe_frame(frame)
-                    if frame.is_done:
-                        output_decision = scanner.finish()
-                        scan_finished = True
-                        decision = output_decision
-                    else:
-                        decision = scanner.feed_sse_frame(frame.fragments)
+                    decision: OutputScanDecision | None = None
+                    if scanner is not None:
+                        if frame.is_done:
+                            output_decision = scanner.finish()
+                            scan_finished = True
+                            decision = output_decision
+                        else:
+                            decision = scanner.feed_sse_frame(frame.fragments)
                     if decision is not None and decision.decision == "blocked":
                         raise _OutputSafetyBlocked(decision)
+                    if frame.data_text == stream_termination_marker:
+                        termination_marker_seen = True
+                    if frame.is_done and experiment_guard is not None:
+                        # `[DONE]` 表示客户端逻辑成功终态，必须等 shielded finalizer
+                        # 证明全部持久化事实后再发送；失败路径改发唯一 SSE error。
+                        deferred_done_frame = frame.raw_bytes
+                        done_seen = True
+                        break
                     session.note_chunk(frame.raw_bytes)
                     emitted_counter.observe_fragments(frame.fragments)
                     if frame.fragments:
@@ -2570,7 +2954,43 @@ async def _stream_response(
             if session_finalized and client_request is not None:
                 enqueue_runtime_event(client_request.app.state, build_stream_timeout_event(session))
             _log_stream_failure(session_context, error_code, include_exception=False)
-            yield _stream_error_event(error_code, session_context)
+            if experiment_guard is not None:
+                # 实验请求必须等日志、用量与 Outcome 收敛后再交付唯一错误，持久化降级可以覆盖公开错误码。
+                deferred_experiment_error = True
+            else:
+                stream_error_emitted = True
+                yield _stream_error_event(error_code, session_context)
+        except _ExperimentStreamInterrupted as interrupted:
+            # 实验绝对截止或 lease 丢失发生在 HTTP 200 之后时，只能终止
+            # 上游并延迟输出一个标准 SSE error，禁止伪造 JSON 504 或 [DONE]。
+            status = "failed"
+            stream_status = (
+                "timed_out"
+                if interrupted.error_code == "gateway.experiment_execution_timeout"
+                else "upstream_failed"
+            )
+            error_code = interrupted.error_code
+            session_error_code = error_code
+            await _safe_close_stream_response(upstream_response, session_context)
+            if scanner is not None:
+                output_terminal = _stream_unavailable_terminal(
+                    scanner,
+                    emitted_counter,
+                    observed_output_token_count=collector.observed_output_token_count,
+                    emitted_sse_event_count=emitted_sse_event_count,
+                    emitted_bytes=session.bytes_sent,
+                    reason_code="output_safety.stream_incomplete",
+                )
+            session_finalized = safe_finish_stream_session(
+                config,
+                session,
+                status=stream_status,
+                error_code=error_code,
+                quality_observation_eligible=False,
+                **_stream_output_safety_finish_kwargs(output_safety_scan, output_terminal),
+            )
+            deferred_experiment_error = True
+            _log_stream_failure(session_context, error_code, include_exception=False)
         except _ClientStreamDisconnected:
             status = "failed"
             stream_status = "client_disconnected"
@@ -2579,13 +2999,29 @@ async def _stream_response(
             _log_stream_failure(session_context, error_code, include_exception=False)
         # ASGI 取消与显式断连使用同一清理终态，但取消信号仍需在最终收口后向上传播。
         except asyncio.CancelledError:
+            interruption_code = _consume_experiment_guard_cancellation(experiment_guard)
             status = "failed"
-            stream_status = "client_disconnected"
-            error_code = "gateway.client_disconnected"
-            session_error_code = error_code
-            cancellation_in_flight = True
-            _log_stream_failure(session_context, error_code, include_exception=False)
-            raise
+            if interruption_code is not None:
+                # 心跳主动取消不是客户断连；屏蔽收口后仍要把固定实验
+                # 错误送给仍存活的 SSE 客户端。
+                stream_status = (
+                    "timed_out"
+                    if interruption_code == "gateway.experiment_execution_timeout"
+                    else "upstream_failed"
+                )
+                error_code = interruption_code
+                session_error_code = interruption_code
+                deferred_experiment_error = True
+                _log_stream_failure(session_context, error_code, include_exception=False)
+            else:
+                # helper 已精确减去可能存在的一次 Guard cancel；None 表示至少
+                # 还有一个外部取消，shielded 清理后必须传播给 ASGI 调用栈。
+                cancellation_in_flight = True
+                stream_status = "client_disconnected"
+                error_code = "gateway.client_disconnected"
+                session_error_code = error_code
+                _log_stream_failure(session_context, error_code, include_exception=False)
+                raise
         except GeneratorExit:
             status = "failed"
             stream_status = "client_disconnected"
@@ -2607,16 +3043,23 @@ async def _stream_response(
                 else LOCAL_STREAM_PROCESSING_ERROR_CODE
             )
             _log_stream_failure(session_context, error_code, include_exception=True)
-            yield _stream_error_event(error_code, session_context)
+            if experiment_guard is not None:
+                # 通用异常也不能在实验终态前抢先写客户端；最终错误统一由 shielded finalizer 之后发送。
+                deferred_experiment_error = True
+            else:
+                stream_error_emitted = True
+                yield _stream_error_event(error_code, session_context)
         finally:
 
             async def finalize_body_state() -> None:
                 """在 shield 内提交 scan/session、Usage/争议并释放全部请求资源。"""
 
                 nonlocal session_finalized, output_terminal, error_code
+                nonlocal status, deferred_experiment_error, experiment_finalized
                 await _cancel_stream_task(read_task)
                 await _cancel_stream_task(disconnect_task)
                 await _safe_close_stream_response(upstream_response, session_context)
+                final_context = session_context
                 try:
                     if scanner is not None and output_terminal is None:
                         if (
@@ -2661,6 +3104,12 @@ async def _stream_response(
                                 output_terminal,
                             ),
                         )
+                    # Session 终态是客户端可见逻辑终态的一部分；即使 Provider 已完整返回，
+                    # 也不能在缺少该事实时把实验 Gateway Outcome 冻结为成功。
+                    if experiment_guard is not None and not session_finalized:
+                        status = "failed"
+                        error_code = LOCAL_STREAM_PROCESSING_ERROR_CODE
+                        deferred_experiment_error = True
                     # 输出策略是 Gateway 本地判定，Provider 已成功产出；亲和状态不得因此受罚。
                     safe_finalize_cache_affinity_selection(
                         config,
@@ -2684,24 +3133,61 @@ async def _stream_response(
                         output_terminal,
                         finalized=session_finalized,
                     )
-                    safe_record_request_log(
-                        config,
-                        final_context,
-                        status=status,
-                        error_code=error_code,
-                        latency_ms=_latency_ms(started),
-                    )
-                    if output_safety_scan is None:
-                        committed = safe_record_usage_ledger(
+                    if experiment_guard is None:
+                        safe_record_request_log(
                             config,
                             final_context,
-                            usage.as_ledger_payload(),
+                            status=status,
+                            error_code=error_code,
+                            latency_ms=_latency_ms(started),
                         )
-                        _enqueue_finops_ledger_event(
-                            client_request.app.state,
-                            committed,
+                    else:
+                        request_log_error = _record_experiment_stream_request_log(
+                            config,
                             final_context,
+                            status=status,
+                            error_code=error_code,
+                            latency_ms=_latency_ms(started),
                         )
+                        # RequestLog 终态缺失会改变客户端逻辑结果，实验必须降为可追踪失败。
+                        # 流终态日志缺失会改变客户端结果，必须降为失败并阻止 success Outcome。
+                        if request_log_error is not None:
+                            status = "failed"
+                            error_code = request_log_error
+                            deferred_experiment_error = True
+                    if output_safety_scan is None:
+                        if experiment_guard is None:
+                            committed = safe_record_usage_ledger(
+                                config,
+                                final_context,
+                                usage.as_ledger_payload(),
+                            )
+                            _enqueue_finops_ledger_event(
+                                client_request.app.state,
+                                committed,
+                                final_context,
+                            )
+                        else:
+                            # 实验结果必须区分已入账、可恢复 spool 和完全丢失；
+                            # 未知返回值不得把 Provider success 冒充为客户端成功。
+                            usage_result = _record_experiment_stream_usage(
+                                config,
+                                final_context,
+                                usage.as_ledger_payload(),
+                            )
+                            if (
+                                not isinstance(usage_result, UsageLedgerWriteResult)
+                                or usage_result.durability not in {"committed", "spooled"}
+                            ):
+                                status = "failed"
+                                error_code = "finops.usage_record_unavailable"
+                                deferred_experiment_error = True
+                            else:
+                                _enqueue_finops_ledger_event(
+                                    client_request.app.state,
+                                    usage_result.committed,
+                                    final_context,
+                                )
                     else:
                         # 原子终结失败时不能把 pending 写入 v5；去掉四字段后仍可靠
                         # 保存真实 Provider Usage。
@@ -2711,11 +3197,19 @@ async def _stream_response(
                             or (session_finalized and output_terminal is not None)
                             else _context_without_output_safety(final_context)
                         )
-                        result = safe_record_usage_ledger(
-                            config,
-                            billing_context,
-                            usage.as_ledger_payload(),
-                            return_durability=True,
+                        result = (
+                            _record_experiment_stream_usage(
+                                config,
+                                billing_context,
+                                usage.as_ledger_payload(),
+                            )
+                            if experiment_guard is not None
+                            else safe_record_usage_ledger(
+                                config,
+                                billing_context,
+                                usage.as_ledger_payload(),
+                                return_durability=True,
+                            )
                         )
                         # 显式 durability 对象才允许发布 FinOps 或安全事件，未知返回类型失败关闭。
                         if isinstance(result, UsageLedgerWriteResult):
@@ -2742,22 +3236,159 @@ async def _stream_response(
                             # 已开始的流无法改 HTTP 状态；Usage 丢失时 FinOps 错误必须覆盖政策错误。
                             if deferred_safety_error and result.durability == "lost":
                                 error_code = "finops.usage_record_unavailable"
-                                safe_record_request_log(
-                                    config,
-                                    final_context,
-                                    status="failed",
-                                    error_code=error_code,
-                                    latency_ms=_latency_ms(started),
-                                )
+                                if experiment_guard is None:
+                                    safe_record_request_log(
+                                        config,
+                                        final_context,
+                                        status="failed",
+                                        error_code=error_code,
+                                        latency_ms=_latency_ms(started),
+                                    )
                         # 返回类型异常同样表示 durability 无法证明，延迟安全错误升级为 FinOps 失败。
                         elif deferred_safety_error:
                             error_code = "finops.usage_record_unavailable"
+                        if experiment_guard is not None and (
+                            not isinstance(result, UsageLedgerWriteResult)
+                            or result.durability not in {"committed", "spooled"}
+                        ):
+                            status = "failed"
+                            error_code = "finops.usage_record_unavailable"
+                            deferred_experiment_error = True
+                # 已开始的流无法改 HTTP 状态；任何未被上方显式归类的固定领域错误
+                # 都必须先降为 Gateway failure，再由统一 SSE envelope 返回。
+                except ApiError as exc:
+                    status = "failed"
+                    error_code = exc.code
+                    deferred_experiment_error = True
+                    logger.warning(
+                        "experiment.stream_persistence_failed",
+                        extra={
+                            "event": "experiment.stream_persistence_failed",
+                            "request_id": session_context.request_id,
+                            "trace_id": session_context.trace_id,
+                            "tenant_id": session_context.tenant_id,
+                            "error_code": exc.code,
+                        },
+                    )
+                except Exception as exc:
+                    # 未分类本地异常只记录类型，不允许正文、Provider 响应或凭据进入日志。
+                    status = "failed"
+                    error_code = "gateway.experiment_unavailable"
+                    deferred_experiment_error = True
+                    logger.warning(
+                        "experiment.stream_persistence_failed",
+                        extra={
+                            "event": "experiment.stream_persistence_failed",
+                            "request_id": session_context.request_id,
+                            "trace_id": session_context.trace_id,
+                            "tenant_id": session_context.tenant_id,
+                            "error_code": "gateway.experiment_unavailable",
+                            "payload": {"exception_type": exc.__class__.__name__},
+                        },
+                    )
                 finally:
+                    if experiment_guard is not None:
+                        if status == "success" and (
+                            terminal_cancellation_observed.is_set()
+                            or (
+                                stream_owner_task is not None
+                                and stream_owner_task.cancelling() > 0
+                            )
+                        ):
+                            # body owner 的取消计数由 Task.cancel 同步增加，因此 cleanup task
+                            # 可在 Outcome CAS 前无竞态读取。该点之后的新取消属于 CAS 后取消，
+                            # 只传播而不再改写已经提交的 success RequestLog/Outcome。
+                            status = "failed"
+                            error_code = (
+                                experiment_guard.interruption_error_code
+                                or "gateway.client_disconnected"
+                            )
+                            deferred_experiment_error = True
+                        quality_eligible = bool(
+                            stream_status == "completed"
+                            or (
+                                stream_status == "timed_out"
+                                and error_code != "gateway.experiment_execution_timeout"
+                            )
+                            or (stream_status == "upstream_failed" and upstream_read_failed)
+                        )
+                        experiment_guard.mark_stream_terminal(
+                            quality_eligible=quality_eligible,
+                            quality_succeeded=stream_status == "completed",
+                            latency_ms=_latency_ms(started),
+                        )
+                        # Usage、Output Safety、Session 等后续步骤可能已把候选 success
+                        # 降为 failure。Outcome CAS 前必须再次严格提交当前最终状态，不能
+                        # 依赖前置父行或忽略失败改写结果。
+                        request_log_error = _record_experiment_stream_request_log(
+                            config,
+                            final_context,
+                            status=status,
+                            error_code=error_code,
+                            latency_ms=_latency_ms(started),
+                        )
+                        # 最终流日志缺失会改变客户端成功语义，必须在 Outcome CAS 前降为失败。
+                        if request_log_error is not None:
+                            status = "failed"
+                            error_code = request_log_error
+                            deferred_experiment_error = True
+                            experiment_finalized = False
+                            # 没有一致 RequestLog 时禁止提交失败 Outcome；停止续租后由
+                            # reaper 按 Session/Usage owner 图保守恢复。
+                            await experiment_guard.stop()
+                        else:
+                            finalized = await experiment_guard.finalize(
+                                gateway_outcome=(
+                                    "success" if status == "success" else "failed"
+                                ),
+                                outcome_reason=(
+                                    "completed"
+                                    if status == "success"
+                                    else "execution_timeout"
+                                    if error_code == "gateway.experiment_execution_timeout"
+                                    else "cancelled"
+                                    if error_code == "gateway.client_disconnected"
+                                    else "gateway_failed"
+                                ),
+                                error_code=error_code,
+                                latency_ms=_latency_ms(started),
+                            )
+                            experiment_finalized = finalized
+                        # 日志存在但 Outcome CAS 未提交时必须反写固定失败，禁止发送暂存终止帧。
+                        if request_log_error is None and not experiment_finalized:
+                            # Outcome CAS 未提交时不能发送暂存 `[DONE]`；把 RequestLog 改为
+                            # 客户可见失败，供 lease reaper 从完整 owner 图保守恢复。
+                            status = "failed"
+                            error_code = "gateway.experiment_unavailable"
+                            deferred_experiment_error = True
+                            rewrite_error = _record_experiment_stream_request_log(
+                                config,
+                                final_context,
+                                status="failed",
+                                error_code=error_code,
+                                latency_ms=_latency_ms(started),
+                            )
+                            # 失败反写仍不可用时只保留安全固定码，后续由 Reaper 保守识别。
+                            if rewrite_error is not None:
+                                # CAS 未提交时不存在失败 Outcome；改写仍失败只能保留
+                                # request-log-unavailable，并由 reaper 避免推断客户端成功。
+                                error_code = rewrite_error
+                            logger.warning(
+                                "experiment.stream_finalize_deferred",
+                                extra={
+                                    "event": "experiment.stream_finalize_deferred",
+                                    "request_id": session_context.request_id,
+                                    "trace_id": session_context.trace_id,
+                                    "tenant_id": session_context.tenant_id,
+                                    "error_code": "gateway.experiment_unavailable",
+                                },
+                            )
                     await _safe_release_rate_limit_lease(rate_limit_lease, session_context)
 
             await _run_stream_finalizer_shielded(
                 finalize_body_state(),
                 cancellation_already_active=cancellation_in_flight,
+                cancellation_observed_event=terminal_cancellation_observed,
             )
 
         # 仅在连接仍存在时发送唯一安全 SSE error；断连后只保留数据库和 Usage 终态。
@@ -2776,6 +3407,24 @@ async def _stream_response(
                 already_emitted=(emitted_counter.has_content if blocked_committed else None),
                 emitted_token_count=(emitted_counter.token_count if blocked_committed else None),
             )
+        # 实验流开始后仅发送一次不含上游正文的标准 SSE error；断连时只写数据库终态。
+        elif (
+            deferred_experiment_error
+            and not stream_error_emitted
+            and not disconnect_event.is_set()
+        ):
+            yield _stream_error_event(
+                error_code or "gateway.experiment_unavailable",
+                session_context,
+            )
+        elif (
+            experiment_guard is not None
+            and experiment_finalized
+            and deferred_done_frame is not None
+            and not disconnect_event.is_set()
+        ):
+            # 全部终态已经提交后才交付成功终止标记；其字节不回写已冻结 Session。
+            yield deferred_done_frame
 
     return _GatewayStreamingResponse(
         body(),
@@ -2829,6 +3478,7 @@ async def _run_stream_finalizer_shielded(
     finalizer: Coroutine[Any, Any, None],
     *,
     cancellation_already_active: bool,
+    cancellation_observed_event: asyncio.Event | None = None,
 ) -> None:
     """在断连 cancel scope 外完成流清理，并正确保留原始取消语义。
 
@@ -2840,6 +3490,12 @@ async def _run_stream_finalizer_shielded(
 
     cancellation_observed = False
     current_task = asyncio.current_task()
+    if (
+        cancellation_observed_event is not None
+        and current_task is not None
+        and current_task.cancelling() > 0
+    ):
+        cancellation_observed_event.set()
     # 清理任务在 shield 作用域内创建，使其不继承 Starlette 已取消 task group 的有效取消边界。
     with anyio.CancelScope(shield=True):
         cleanup_task = asyncio.create_task(
@@ -2852,11 +3508,17 @@ async def _run_stream_finalizer_shielded(
             # 直接 Task.cancel 不受 AnyIO shield 控制；记录后继续等待独立清理任务完成。
             except asyncio.CancelledError:
                 cancellation_observed = True
+                if cancellation_observed_event is not None:
+                    # 与 cleanup task 共享单调事件，使其在 Outcome CAS 前把晚到取消
+                    # 线性化为 failed/cancelled，而不是提交 success 后再丢弃 `[DONE]`。
+                    cancellation_observed_event.set()
                 continue
         # result() 不产生新的 await，能够在已取消作用域内可靠观察清理异常和避免任务告警。
         cleanup_task.result()
 
     cancellation_requested = bool(current_task and current_task.cancelling())
+    if cancellation_requested and cancellation_observed_event is not None:
+        cancellation_observed_event.set()
     if (cancellation_observed or cancellation_requested) and not cancellation_already_active:
         # 正常输出期间新到达的取消必须在清理完成后传播，不能被 shield 永久吞掉。
         raise asyncio.CancelledError
@@ -2920,8 +3582,285 @@ def _safe_finish_stream_usage(
         return collector.fallback_usage()
 
 
+def _record_experiment_stream_request_log(
+    config: AppConfig,
+    context: RequestLogContext,
+    *,
+    status: str,
+    error_code: str | None,
+    latency_ms: int,
+) -> str | None:
+    """提交实验流的最终 RequestLog，并把失败转换为可返回的固定错误码。"""
+
+    return _record_experiment_request_log_terminal(
+        config,
+        context,
+        status=status,
+        error_code=error_code,
+        latency_ms=latency_ms,
+        log_event="experiment.stream_request_log_failed",
+    )
+
+
+def _record_experiment_request_log_terminal(
+    config: AppConfig,
+    context: RequestLogContext,
+    *,
+    status: str,
+    error_code: str | None,
+    latency_ms: int,
+    log_event: str = "experiment.request_log_failed",
+) -> str | None:
+    """严格提交实验 RequestLog；失败只返回固定码和安全诊断元数据。
+
+    调用方必须检查返回值：非空时不能提交与该日志不一致的 Experiment Outcome。
+    Provider Key、Token、Prompt、Response、Endpoint 和异常正文均不会进入日志。
+    """
+
+    try:
+        _record_experiment_request_log_required(
+            config,
+            context,
+            status=status,
+            error_code=error_code,
+            latency_ms=latency_ms,
+        )
+    # 已规范化 RequestLog 错误只返回固定 code，日志不记录异常正文或请求内容。
+    except ApiError as exc:
+        logger.warning(
+            log_event,
+            extra={
+                "event": log_event,
+                "request_id": context.request_id,
+                "trace_id": context.trace_id,
+                "tenant_id": context.tenant_id,
+                "error_code": exc.code,
+            },
+        )
+        return exc.code
+    except Exception as exc:
+        logger.warning(
+            log_event,
+            extra={
+                "event": log_event,
+                "request_id": context.request_id,
+                "trace_id": context.trace_id,
+                "tenant_id": context.tenant_id,
+                "error_code": "gateway.request_log_unavailable",
+                "payload": {"exception_type": exc.__class__.__name__},
+            },
+        )
+        return "gateway.request_log_unavailable"
+    return None
+
+
+def _record_request_log_terminal(
+    config: AppConfig,
+    context: RequestLogContext,
+    *,
+    status: str,
+    error_code: str | None,
+    latency_ms: int,
+    require_terminal: bool,
+) -> str | None:
+    """按请求类型选择严格实验 writer 或既有普通请求 best-effort writer。"""
+
+    if require_terminal:
+        return _record_experiment_request_log_terminal(
+            config,
+            context,
+            status=status,
+            error_code=error_code,
+            latency_ms=latency_ms,
+        )
+    safe_record_request_log(
+        config,
+        context,
+        status=status,
+        error_code=error_code,
+        latency_ms=latency_ms,
+    )
+    return None
+
+
+def _record_experiment_request_log_required(
+    config: AppConfig,
+    context: RequestLogContext,
+    *,
+    status: str,
+    error_code: str | None,
+    latency_ms: int,
+) -> None:
+    """严格提交实验 RequestLog，并把非领域异常收敛为固定可重试错误。"""
+
+    try:
+        record_request_log(
+            config,
+            context,
+            status=status,
+            error_code=error_code,
+            latency_ms=latency_ms,
+        )
+    # 已归一化领域错误必须原样保留，不能被下方未知异常映射覆盖。
+    except ApiError:
+        raise
+    # 未分类数据库或替身异常统一折叠为日志不可用，禁止泄露底层错误正文。
+    except Exception as exc:
+        raise ApiError("gateway.request_log_unavailable") from exc
+
+
+def _record_experiment_stream_usage(
+    config: AppConfig,
+    context: RequestLogContext,
+    usage: object,
+) -> UsageLedgerWriteResult | None:
+    """返回实验流 Usage 的明确 durability，任何不确定结果都按丢失处理。
+
+    Provider Usage 可能在 RequestLog 或主库故障后仍可进入安全 spool；此辅助函数不记录
+    Token、Prompt、Response 或底层异常正文，只把调用方需要的三态事实留在内存中。
+    """
+
+    try:
+        result = safe_record_usage_ledger(
+            config,
+            context,
+            usage,
+            return_durability=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "experiment.stream_usage_failed",
+            extra={
+                "event": "experiment.stream_usage_failed",
+                "request_id": context.request_id,
+                "trace_id": context.trace_id,
+                "tenant_id": context.tenant_id,
+                "error_code": "finops.usage_record_unavailable",
+                "payload": {"exception_type": exc.__class__.__name__},
+            },
+        )
+        return None
+    return result if isinstance(result, UsageLedgerWriteResult) else None
+
+
 class _UpstreamStreamTimedOut(Exception):
     """内部控制流：当前上游块等待超过配置阈值。"""
+
+
+class _UpstreamStreamIncomplete(Exception):
+    """冻结协议要求终止标记但 Provider 仅返回 EOF，不携带任何上游正文。"""
+
+
+class _SseTerminationMarkerObserver:
+    """在 raw passthrough 旁路中有界观察完整 SSE 终止事件。
+
+    该观察器只保留当前行的短前缀、data 行数量和精确匹配布尔值，不保存完整事件或正文。
+    网络块仍由调用方原样立即发送；这里既不执行 JSON 解析，也不改变 Generic/custom EOF 语义。
+    """
+
+    def __init__(self, marker: str) -> None:
+        """冻结单行 UTF-8 marker，并初始化跨块行状态。"""
+
+        marker_bytes = marker.encode("utf-8", errors="strict")
+        if not marker_bytes or b"\r" in marker_bytes or b"\n" in marker_bytes:
+            # Adapter profile 是服务端冻结配置；非法 marker 属于编程错误，不能宽松匹配。
+            raise ValueError("gateway_stream_termination_marker_invalid")
+        self._marker = marker_bytes
+        # 精确 marker data 行最长为 ``data: `` + marker + 可选 CR；多留一个字节即可证明不相等。
+        self._line_limit = max(32, len(marker_bytes) + 8)
+        self._line = bytearray()
+        self._line_overflow = False
+        self._data_line_count = 0
+        self._marker_candidate = False
+        self._seen = False
+
+    def feed(self, chunk: bytes) -> bool:
+        """消费任意网络分块并返回是否已观察到完整 marker event。"""
+
+        if self._seen:
+            return True
+        offset = 0
+        while offset < len(chunk):
+            newline = chunk.find(b"\n", offset)
+            if newline < 0:
+                self._append_line_fragment(chunk[offset:])
+                break
+            self._append_line_fragment(chunk[offset:newline])
+            self._finish_line()
+            offset = newline + 1
+            if self._seen:
+                break
+        return self._seen
+
+    def finish(self) -> bool:
+        """在 EOF 清除残留；未以空行结束的半个 event 不能成为终止证明。"""
+
+        self._line.clear()
+        self._line_overflow = False
+        self._reset_event()
+        return self._seen
+
+    def _append_line_fragment(self, fragment: bytes) -> None:
+        """只保留判定 field 与短 marker 所需的有界行前缀。"""
+
+        if self._line_overflow:
+            return
+        remaining = self._line_limit - len(self._line)
+        if len(fragment) <= remaining:
+            self._line.extend(fragment)
+            return
+        self._line.extend(fragment[:remaining])
+        self._line_overflow = True
+
+    def _finish_line(self) -> None:
+        """按 SSE 行语义更新当前 event，但不解析或保存普通 data 正文。"""
+
+        line = bytes(self._line)
+        overflow = self._line_overflow
+        self._line.clear()
+        self._line_overflow = False
+        if not overflow and line.endswith(b"\r"):
+            line = line[:-1]
+        if not overflow and not line:
+            if self._data_line_count == 1 and self._marker_candidate:
+                self._seen = True
+            self._reset_event()
+            return
+        # 超长行只需识别它是否是 data 字段；未知字段和注释不会改变 event data。
+        if overflow:
+            if line.startswith(b"data:"):
+                self._observe_data(None)
+            return
+        field, separator, value = line.partition(b":")
+        if field != b"data":
+            return
+        if not separator:
+            value = b""
+        elif value.startswith(b" "):
+            value = value[1:]
+        self._observe_data(value)
+
+    def _observe_data(self, value: bytes | None) -> None:
+        """把 data 行折叠成不含正文的精确单行 marker 候选。"""
+
+        self._data_line_count += 1
+        self._marker_candidate = self._data_line_count == 1 and value == self._marker
+
+    def _reset_event(self) -> None:
+        """清除当前 event 的短期匹配状态，避免候选标记污染下一个事件。"""
+
+        self._data_line_count = 0
+        self._marker_candidate = False
+
+
+class _ExperimentStreamInterrupted(Exception):
+    """内部控制流：实验绝对截止或租约围栏已经失效。"""
+
+    def __init__(self, error_code: str) -> None:
+        """保存固定实验错误码供 SSE 终态使用，不携带 Provider 异常或响应正文。"""
+
+        super().__init__(error_code)
+        self.error_code = error_code
 
 
 class _ClientStreamDisconnected(Exception):

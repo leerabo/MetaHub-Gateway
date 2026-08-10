@@ -100,6 +100,34 @@ def _claimed_context(config: SimpleNamespace, suffix: str) -> RequestLogContext:
     return context
 
 
+def test_legacy_claim_without_complete_scope_skips_experiment_scope_owner(
+    intent_config: SimpleNamespace,
+) -> None:
+    """旧普通调用缺 Project/Environment 时仍 claim，但绝不能获得实验 scope owner。"""
+
+    context = _claimed_context(intent_config, "legacy_scope_compat")
+    connection = connect_database(intent_config.database_url)
+    try:
+        claim = connection.execute(
+            """
+            SELECT 1 FROM gateway_request_claims
+            WHERE tenant_id=? AND request_id=?
+            """,
+            (intent_config.tenant_id, context.request_id),
+        ).fetchone()
+        scope = connection.execute(
+            """
+            SELECT 1 FROM gateway_request_scope_claims
+            WHERE tenant_id=? AND request_id=?
+            """,
+            (intent_config.tenant_id, context.request_id),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert claim is not None
+    assert scope is None
+
+
 def _chat(text: str) -> dict[str, object]:
     """构造只含单条合成 user 文本的最小 Chat payload。"""
 
@@ -692,7 +720,7 @@ def test_usage_spool_v4_restores_session_and_legacy_versions_use_safe_defaults()
     assert restored_v1.intent_risk_schedule_status == "disabled"
     assert restored_v1.session_risk_status == "not_applicable"
     with pytest.raises(ValueError, match="finops_spool_payload_version_invalid"):
-        _deserialize_usage_spool_record({**current, "schema_version": 6})
+        _deserialize_usage_spool_record({**current, "schema_version": 7})
     with pytest.raises(ValueError, match="finops_spool_payload_invalid"):
         _deserialize_usage_spool_record(
             {**current, "context": {**current["context"], "unexpected": "field"}}

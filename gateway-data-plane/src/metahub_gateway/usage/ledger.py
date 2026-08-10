@@ -489,6 +489,7 @@ def claim_gateway_request(config: AppConfig, context: RequestLogContext) -> None
         # claim 是 Provider 前审计闸门，连接失败必须转换为统一可重试错误，不能进入上游。
         raise ApiError("gateway.request_log_unavailable") from exc
     try:
+        claimed_at = _to_db_time(_utcnow())
         connection.execute(
             """
             INSERT INTO gateway_request_claims(
@@ -504,9 +505,32 @@ def claim_gateway_request(config: AppConfig, context: RequestLogContext) -> None
                 context.virtual_key_id,
                 context.snapshot_version,
                 context.policy_snapshot_status,
-                _to_db_time(_utcnow()),
+                claimed_at,
             ),
         )
+        if _has_complete_experiment_scope(context):
+            # 实验只认认证阶段已完整冻结的 Project/Environment；旧调用缺字段时保留普通 claim，
+            # 但不从可变 Virtual Key 反查补猜 scope，也就不可能获得实验 Assignment。
+            connection.execute(
+                """
+                INSERT INTO gateway_request_scope_claims(
+                  tenant_id, request_id, trace_id, virtual_key_id,
+                  project_id, application_id, environment_id, environment_code, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    context.tenant_id,
+                    context.request_id,
+                    context.trace_id,
+                    context.virtual_key_id,
+                    context.project_id,
+                    context.application_id,
+                    context.environment_id,
+                    context.environment_code,
+                    claimed_at,
+                ),
+            )
         connection.commit()
     # 唯一性或外键约束失败需要进一步区分客户端重用与审计基础设施损坏。
     except sqlite3.IntegrityError as exc:
@@ -537,6 +561,18 @@ def claim_gateway_request(config: AppConfig, context: RequestLogContext) -> None
         raise ApiError("gateway.request_log_unavailable") from exc
     finally:
         connection.close()
+
+
+def _has_complete_experiment_scope(context: RequestLogContext) -> bool:
+    """仅在认证上下文具备实验所需完整 owner 时创建不可变 scope claim。"""
+
+    required = (
+        context.virtual_key_id,
+        context.project_id,
+        context.environment_id,
+        context.environment_code,
+    )
+    return all(isinstance(value, str) and bool(value) for value in required)
 
 
 def record_request_log(
@@ -1577,7 +1613,7 @@ def _deserialize_usage_spool_record(
         payload,
         frozenset({"schema_version", "context", "usage", "estimate"}),
     )
-    # v1-v4 是升级前合法证据；缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
+    # v1-v6 均为已审查的升级证据；历史版本缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
     record_version = record["schema_version"]
     if record_version not in {1, 2, 3, 4, 5, _SPOOL_RECORD_SCHEMA_VERSION}:
         raise ValueError("finops_spool_payload_version_invalid")
@@ -2541,6 +2577,7 @@ def _ensure_replay_request_log(
     ):
         # Request Log 的 insert trigger 也会复核，但这里给恢复状态机一个稳定内部故障码。
         raise sqlite3.IntegrityError("finops_spool_request_claim_mismatch")
+    is_experiment_request = _has_complete_experiment_assignment(connection, context)
     values = {
         "request_id": context.request_id,
         "tenant_id": context.tenant_id,
@@ -2598,6 +2635,11 @@ def _ensure_replay_request_log(
         "final_routing_attempt_id": context.final_routing_attempt_id,
         "stream_session_id": context.stream_session_id,
         "stream_status": context.stream_status,
+        # 实验执行缺失 RequestLog 表示 Gateway 终态未完成；spool 只能恢复成本，不能伪造成功。
+        "request_status": "failed" if is_experiment_request else "success",
+        "request_error_code": (
+            "gateway.experiment_unavailable" if is_experiment_request else None
+        ),
         "observed_at": observed_at,
     }
     connection.execute(
@@ -2626,7 +2668,8 @@ def _ensure_replay_request_log(
           :endpoint, :request_model, :resolved_model, :provider_code, :snapshot_version,
           :policy_snapshot_status, :policy_decision, :policy_reason_code, :policy_id,
           :policy_action_type, :policy_target_model_id,
-          :policy_mask_policy_id, :policy_mask_applied, 'success', NULL, NULL,
+          :policy_mask_policy_id, :policy_mask_applied,
+          :request_status, :request_error_code, NULL,
           :budget_status, :budget_rule_id, :budget_scope_type, :budget_scope_id,
           :budget_action, :budget_reason_code, :budget_current_cost_cny, :budget_limit_cny,
           :dlp_status, :dlp_rule_id, :dlp_action, :dlp_match_count, :dlp_reason_code,
@@ -2641,6 +2684,72 @@ def _ensure_replay_request_log(
         """,
         values,
     )
+
+
+def _has_complete_experiment_assignment(
+    connection: sqlite3.Connection,
+    context: RequestLogContext,
+) -> bool:
+    """识别 tenant-qualified 完整实验 owner；半事实或身份漂移必须失败关闭。"""
+
+    assigned = connection.execute(
+        """
+        SELECT 1 FROM experiment_assignments
+        WHERE tenant_id=? AND request_id=?
+        """,
+        (context.tenant_id, context.request_id),
+    ).fetchone()
+    if assigned is None:
+        return False
+    complete = connection.execute(
+        """
+        SELECT 1
+        FROM experiment_assignments assignment
+        JOIN gateway_request_scope_claims scope
+          ON scope.tenant_id=assignment.tenant_id
+         AND scope.request_id=assignment.request_id
+        JOIN experiment_request_executions execution
+          ON execution.tenant_id=assignment.tenant_id
+         AND execution.assignment_id=assignment.assignment_id
+         AND execution.execution_id=assignment.execution_id
+         AND execution.experiment_id=assignment.experiment_id
+         AND execution.request_id=assignment.request_id
+        JOIN experiment_usage_settlements settlement
+          ON settlement.tenant_id=assignment.tenant_id
+         AND settlement.assignment_id=assignment.assignment_id
+         AND settlement.usage_settlement_id=assignment.usage_settlement_id
+         AND settlement.experiment_id=assignment.experiment_id
+         AND settlement.request_id=assignment.request_id
+         AND settlement.model_id=assignment.model_id
+         AND settlement.provider_id=assignment.provider_id
+        WHERE assignment.tenant_id=? AND assignment.request_id=?
+          AND assignment.trace_id=? AND assignment.virtual_key_id=?
+          AND assignment.model_id=? AND assignment.provider_id=?
+          AND assignment.provider_code=?
+          AND scope.trace_id=? AND scope.virtual_key_id=?
+          AND scope.project_id IS ? AND scope.application_id IS ?
+          AND scope.environment_id IS ? AND scope.environment_code IS ?
+        """,
+        (
+            context.tenant_id,
+            context.request_id,
+            context.trace_id,
+            context.virtual_key_id,
+            context.model_id,
+            context.provider_id,
+            context.provider_code,
+            context.trace_id,
+            context.virtual_key_id,
+            context.project_id,
+            context.application_id,
+            context.environment_id,
+            context.environment_code,
+        ),
+    ).fetchone()
+    if complete is None:
+        # HMAC 正确也不能把残缺 Assignment 或另一 owner 的 spool 当作普通请求恢复成功。
+        raise sqlite3.IntegrityError("finops_spool_experiment_owner_mismatch")
+    return True
 
 
 def _restore_captured_estimate(

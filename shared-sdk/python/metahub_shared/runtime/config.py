@@ -81,6 +81,14 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_BATCH_MAX_PENDING_JOBS_PER_TENANT": "100",
     "METAHUB_BATCH_MAX_PENDING_TASKS_PER_TENANT": "10000",
     "METAHUB_BATCH_MAX_RESULT_BYTES": "1048576",
+    # 在线实验不新增 secret；调度、租约和硬截止均为有界部署事实，客户端不能覆盖。
+    "METAHUB_EXPERIMENT_SCHEDULER_INTERVAL_SECONDS": "5",
+    "METAHUB_EXPERIMENT_FINALIZER_LEASE_SECONDS": "90",
+    "METAHUB_EXPERIMENT_EXECUTION_LEASE_SECONDS": "90",
+    "METAHUB_EXPERIMENT_EXECUTION_HEARTBEAT_SECONDS": "20",
+    "METAHUB_EXPERIMENT_SCHEDULER_BATCH_LIMIT": "20",
+    "METAHUB_EXPERIMENT_EXECUTION_MAX_SECONDS": "3600",
+    "METAHUB_EXPERIMENT_SETTLEMENT_GRACE_SECONDS": "3600",
     # 会话风险默认关闭，避免升级后旧部署因尚未配置 Redis/keyring 改变既有 Chat 行为。
     # 版本可以进入脱敏配置摘要；两项 secret 必须始终按敏感字段屏蔽。
     "METAHUB_SESSION_RISK_ENABLED": "false",
@@ -189,7 +197,7 @@ class ConfigError(ValueError):
 
     def __init__(self, code: str, message: str, suggestion: str) -> None:
         """在 运行配置 内部复用 init 辅助逻辑，集中处理边界值和错误映射。
-        
+
         边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
         """
 
@@ -214,7 +222,7 @@ class ConfigValue:
 
 class EnvironmentInfo(BaseModel):
     """承载 运行配置 的 EnvironmentInfo 数据结构，明确跨模块传递时允许出现的字段。
-    
+
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
@@ -228,7 +236,7 @@ class EnvironmentInfo(BaseModel):
 
 class ConfigItemSummary(BaseModel):
     """承载 运行配置 的 ConfigItemSummary 数据结构，明确跨模块传递时允许出现的字段。
-    
+
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
@@ -241,7 +249,7 @@ class ConfigItemSummary(BaseModel):
 
 class ConfigSummary(BaseModel):
     """承载 运行配置 的 ConfigSummary 数据结构，明确跨模块传递时允许出现的字段。
-    
+
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
@@ -298,6 +306,13 @@ class AppConfig(BaseModel):
     batch_max_pending_jobs_per_tenant: int = 100
     batch_max_pending_tasks_per_tenant: int = 10_000
     batch_max_result_bytes: int = 1_048_576
+    experiment_scheduler_interval_seconds: int = 5
+    experiment_finalizer_lease_seconds: int = 90
+    experiment_execution_lease_seconds: int = 90
+    experiment_execution_heartbeat_seconds: int = 20
+    experiment_scheduler_batch_limit: int = 20
+    experiment_execution_max_seconds: int = 3600
+    experiment_settlement_grace_seconds: int = 3600
     # 多轮风险开关与 key 版本是部署级合同；secret 使用独立根域且绝不能进入序列化、repr、
     # 配置摘要明文或业务日志。previous 只服务于受控轮换，不得自动替代缺失 current。
     session_risk_enabled: bool = False
@@ -635,6 +650,58 @@ def load_app_config(service_name: str) -> AppConfig:
         minimum=1024,
         maximum=1_048_576,
     )
+    experiment_scheduler_interval_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_SCHEDULER_INTERVAL_SECONDS",
+        minimum=1,
+        maximum=60,
+    )
+    experiment_finalizer_lease_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_FINALIZER_LEASE_SECONDS",
+        minimum=30,
+        maximum=300,
+    )
+    experiment_execution_lease_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_EXECUTION_LEASE_SECONDS",
+        minimum=30,
+        maximum=300,
+    )
+    experiment_execution_heartbeat_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_EXECUTION_HEARTBEAT_SECONDS",
+        minimum=5,
+        maximum=60,
+    )
+    # heartbeat 必须严格小于 lease/3，确保抖动后仍至少保留两次续租机会。
+    if 3 * experiment_execution_heartbeat_seconds >= experiment_execution_lease_seconds:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=(
+                "METAHUB_EXPERIMENT_EXECUTION_HEARTBEAT_SECONDS must be lower "
+                "than one third of METAHUB_EXPERIMENT_EXECUTION_LEASE_SECONDS."
+            ),
+            suggestion="Lower the heartbeat interval or increase the execution lease.",
+        )
+    experiment_scheduler_batch_limit = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_SCHEDULER_BATCH_LIMIT",
+        minimum=1,
+        maximum=100,
+    )
+    experiment_execution_max_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_EXECUTION_MAX_SECONDS",
+        minimum=60,
+        maximum=86_400,
+    )
+    experiment_settlement_grace_seconds = _bounded_int(
+        values,
+        "METAHUB_EXPERIMENT_SETTLEMENT_GRACE_SECONDS",
+        minimum=60,
+        maximum=86_400,
+    )
     _validate_policy_snapshot_config(
         service_name=service_name,
         environment=environment,
@@ -860,6 +927,13 @@ def load_app_config(service_name: str) -> AppConfig:
         batch_max_pending_jobs_per_tenant=batch_max_pending_jobs_per_tenant,
         batch_max_pending_tasks_per_tenant=batch_max_pending_tasks_per_tenant,
         batch_max_result_bytes=batch_max_result_bytes,
+        experiment_scheduler_interval_seconds=experiment_scheduler_interval_seconds,
+        experiment_finalizer_lease_seconds=experiment_finalizer_lease_seconds,
+        experiment_execution_lease_seconds=experiment_execution_lease_seconds,
+        experiment_execution_heartbeat_seconds=experiment_execution_heartbeat_seconds,
+        experiment_scheduler_batch_limit=experiment_scheduler_batch_limit,
+        experiment_execution_max_seconds=experiment_execution_max_seconds,
+        experiment_settlement_grace_seconds=experiment_settlement_grace_seconds,
         session_risk_enabled=session_risk_enabled,
         session_risk_hmac_version=session_risk_hmac_version,
         session_risk_hmac_secret=session_risk_hmac_secret,
@@ -1091,7 +1165,7 @@ def config_loaded_log_payload(config: AppConfig) -> dict[str, object]:
 
 def _merge_config_values() -> dict[str, ConfigValue]:
     """在 运行配置 内部复用 merge config values 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1130,7 +1204,7 @@ def _merge_config_values() -> dict[str, ConfigValue]:
 
 def _overlay_file(values: dict[str, ConfigValue], path: Path) -> None:
     """在 运行配置 内部复用 overlay file 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1141,7 +1215,7 @@ def _overlay_file(values: dict[str, ConfigValue], path: Path) -> None:
 
 def _parse_env_file(path: Path) -> dict[str, str]:
     """解析 运行配置 的 parse env file 数据，把数据库或外部输入转换为内部稳定类型。
-    
+
     边界：解析失败要么返回空值口径，要么抛统一错误，不能把底层异常透出给 API。
     """
 
@@ -1233,7 +1307,7 @@ def _validated_file_storage_root(value: str) -> str:
 
 def _read_environment(values: dict[str, ConfigValue]) -> EnvironmentName:
     """在 运行配置 内部复用 read environment 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1252,7 +1326,7 @@ def _read_environment(values: dict[str, ConfigValue]) -> EnvironmentName:
 
 def _read_service_mode(values: dict[str, ConfigValue]) -> ServiceMode:
     """在 运行配置 内部复用 read service mode 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1270,7 +1344,7 @@ def _read_service_mode(values: dict[str, ConfigValue]) -> ServiceMode:
 
 def _read_provider_base_urls(values: dict[str, ConfigValue]) -> dict[str, str]:
     """在 运行配置 内部复用 read provider base urls 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1296,7 +1370,7 @@ def _read_provider_base_urls(values: dict[str, ConfigValue]) -> dict[str, str]:
 
 def _read_provider_api_keys(values: dict[str, ConfigValue]) -> dict[str, str]:
     """在 运行配置 内部复用 read provider api keys 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1372,7 +1446,7 @@ def _validate_cache_affinity_hmac_secret(
 
 def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummary]:
     """在 运行配置 内部复用 build config items 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -1403,6 +1477,13 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_BATCH_MAX_PENDING_JOBS_PER_TENANT",
         "METAHUB_BATCH_MAX_PENDING_TASKS_PER_TENANT",
         "METAHUB_BATCH_MAX_RESULT_BYTES",
+        "METAHUB_EXPERIMENT_SCHEDULER_INTERVAL_SECONDS",
+        "METAHUB_EXPERIMENT_FINALIZER_LEASE_SECONDS",
+        "METAHUB_EXPERIMENT_EXECUTION_LEASE_SECONDS",
+        "METAHUB_EXPERIMENT_EXECUTION_HEARTBEAT_SECONDS",
+        "METAHUB_EXPERIMENT_SCHEDULER_BATCH_LIMIT",
+        "METAHUB_EXPERIMENT_EXECUTION_MAX_SECONDS",
+        "METAHUB_EXPERIMENT_SETTLEMENT_GRACE_SECONDS",
         "METAHUB_SESSION_RISK_ENABLED",
         "METAHUB_SESSION_RISK_HMAC_VERSION",
         "METAHUB_SESSION_RISK_HMAC_SECRET",
@@ -2161,7 +2242,7 @@ def _is_loopback_hostname(hostname: str) -> bool:
 
 def _build_config_item(key: str, item: ConfigValue | None) -> ConfigItemSummary:
     """在 运行配置 内部复用 build config item 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2194,7 +2275,7 @@ def _build_warnings(
     values: dict[str, ConfigValue],
 ) -> list[str]:
     """在 运行配置 内部复用 build warnings 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2218,7 +2299,7 @@ def _build_warnings(
 
 def _ensure_no_secret_preview(items: list[ConfigItemSummary]) -> None:
     """在 运行配置 内部复用 ensure no secret preview 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2241,7 +2322,7 @@ def _ensure_no_secret_preview(items: list[ConfigItemSummary]) -> None:
 
 def _split_origins(raw: str | None) -> list[str]:
     """在 运行配置 内部复用 split origins 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2253,7 +2334,7 @@ def _split_origins(raw: str | None) -> list[str]:
 
 def _value(values: dict[str, ConfigValue], key: str) -> str:
     """在 运行配置 内部复用 value 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2264,7 +2345,7 @@ def _value(values: dict[str, ConfigValue], key: str) -> str:
 
 def _optional_value(values: dict[str, ConfigValue], key: str) -> str | None:
     """在 运行配置 内部复用 optional value 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2291,7 +2372,7 @@ def _optional_positive_int(values: dict[str, ConfigValue], key: str) -> int | No
 
 def _positive_int(values: dict[str, ConfigValue], key: str) -> int:
     """在 运行配置 内部复用 positive int 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2440,7 +2521,7 @@ def _bounded_hour(values: dict[str, ConfigValue], key: str) -> int:
 
 def _config_profile(values: dict[str, ConfigValue]) -> str:
     """在 运行配置 内部复用 config profile 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2455,7 +2536,7 @@ def _config_profile(values: dict[str, ConfigValue]) -> str:
 
 def _is_sensitive_config_key(key: str) -> bool:
     """在 运行配置 内部复用 is sensitive config key 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2475,7 +2556,7 @@ def _is_sensitive_config_key(key: str) -> bool:
 
 def _looks_like_http_url(value: str) -> bool:
     """在 运行配置 内部复用 looks like http url 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
@@ -2485,7 +2566,7 @@ def _looks_like_http_url(value: str) -> bool:
 
 def _preview_value(value: str) -> str:
     """生成 运行配置 可安全展示或落日志的 preview value 内容。
-    
+
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
 

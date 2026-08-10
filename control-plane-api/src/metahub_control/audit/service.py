@@ -17,8 +17,8 @@ from uuid import uuid4
 
 from fastapi import Request
 from metahub_shared.db.connection import connect_database
-from metahub_shared.rbac import ROLE_CODES
 from metahub_shared.db.errors import DbError
+from metahub_shared.rbac import ROLE_CODES
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.policy_dsl import ALLOWED_VARIABLES
@@ -104,6 +104,10 @@ ACTION_OBJECT_TYPES = {
     "prompt_template.created": "prompt_template",
     "prompt_template.updated": "prompt_template",
     "prompt_template.version_published": "prompt_template_version",
+    # Online experiment creation is a governance action over live Alias traffic. The audit
+    # projection is deliberately limited to immutable local owners and integer configuration;
+    # the user-facing name and all request-level facts remain outside AuditLog.
+    "experiment.created": "experiment",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -145,6 +149,22 @@ CONFIG_TRANSFER_TOTAL_LIMIT = 5_000
 # 对象级字段白名单是审计入库的主要安全边界。新增领域字段必须在设计审查后显式加入，
 # 不能通过序列化数据库整行或请求 DTO 的方式自动扩展。
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
+    "experiment": frozenset(
+        {
+            "experiment_id",
+            "project_id",
+            "environment_id",
+            "model_alias_id",
+            "model_a_id",
+            "model_b_id",
+            "target_sample_count",
+            "traffic_sample_bps",
+            "model_a_allocation_bps",
+            "sampling_duration_seconds",
+            "feedback_collection_enabled",
+            "feedback_window_seconds",
+        }
+    ),
     "config_transfer": frozenset(
         CONFIG_IMPORT_AUDIT_FIELDS | CONFIG_EXPORT_AUDIT_FIELDS
     ),

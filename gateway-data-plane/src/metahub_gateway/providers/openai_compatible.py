@@ -150,6 +150,7 @@ class OpenAICompatibleAdapter:
             adapter_name=self.name,
             adapter_version=spec.adapter_version,
             adapter_catalog_hash=CATALOG_HASH,
+            stream_termination_marker=spec.stream_profile.termination_marker,
             endpoint=endpoint,
             url=upstream_url(route, endpoint),
             headers=upstream_headers(spec, auth_type, selected_key),

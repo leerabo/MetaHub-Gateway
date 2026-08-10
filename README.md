@@ -86,9 +86,26 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-072 - 文件上传与文本解析基础`
 - `PRD-073 - 隐藏 Prompt Injection 检测`
 - `PRD-074 - 批量任务 Scheduler 与 Worker`
+- `PRD-075 - 模型 A/B 测试与质量评估`
 
 最近进展：
 
+- `PRD-075 - 模型 A/B 测试与质量评估` 已完成：Shared Experiment 合同、0068/RBAC revision 11、
+  tenant-qualified Experiment/Assignment/Execution/Outcome/Settlement/Result、Control API 与
+  Scheduler/Reaper、Gateway 真实流量精确分桶、`experiment.completed` outbox、PAGE-105 和部署配置均已落地。
+  最终受影响回归为 Shared/Provider `180 passed`、Gateway `204 passed`、Control/0068 `120 passed`、
+  Runtime 验收器 `21 passed`；Console 全量 `723 passed`、lint `225 files passed`。这些分组可能覆盖相邻合同，
+  不把它们相加冒充一次根级全量。
+  `prd075-final-20260810T011951Z` 从空库完成 fresh/repeat/down/re-up，四阶段均 `integrity_check=ok`、FK 0；
+  三个实验全部 completed，A/B 各四次调用，失败/用量/成本可追踪，Control 停机后恢复 finalizer 与 Webhook，
+  outbox pending 0，145 个受控文件的随机明文 canary 命中 0。PAGE-105 Browser 批次
+  `prd075-final-20260809T234829Z` 在 `1280x720`、`390x844` 验证两张冻结结果卡、UI 点击创建、独立 API
+  幂等/冲突合同及动态撤权后的 DOM/state 清理与后端 403；11 张截图非空，13 项 manifest SHA-256 全匹配。
+  详见
+  [PRD-075 设计](docs/prd/PRD-075-model-ab-testing-quality-evaluation.md)、
+  [Experiment API](docs/api/experiments.md)、[PRD-075 测试记录](docs/testing/PRD-075-tests.md) 和
+  [Runtime](.artifacts/prd075-runtime/prd075-final-20260810T011951Z)、
+  [Browser](.artifacts/prd075-browser/prd075-final-20260809T234829Z)。
 - `PRD-074 - 批量任务 Scheduler 与 Worker` 已完成：Shared Batch 合同与 canonical 价格 wire、
   0067/RBAC revision 10、tenant-qualified BatchJob/BatchTask/Attempt、Control API、独立 Scheduler/Worker、
   短事务 lease/heartbeat/Reaper、预算 hold/allocation、Gateway 一次性 grant 与实时优先 gate、加密结果、
@@ -172,13 +189,9 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表`、`03_M2-M3扩展交付`、页面、API、数据对象、Webhook 与验收用例表已交叉确认：
-  PRD-074 已完整收口，其后的下一条权威未完成项是
-  `PRD-075 | M2-企业增强 | P2 | 模型评测 | 模型 A/B 测试与质量评估`，对应 PAGE-105、
-  `POST /experiments`、`GET /experiments/{id}/results`、ModelExperiment/ExperimentResult、
-  `experiment.completed` 与 TC-0149/0150；范围是可控流量比例、样本请求、反馈收集，以及成本、延迟、
-  成功率和满意度对比，不做自动训练。下一轮从 PRD-075 的设计与两轮自审开始；总体目标仍为
-  `all_108_prds_complete=false`。
+- Excel 的 PRD 总表、M2/M3 交付、PAGE-105、API、数据对象、Webhook 与 TC-0149/0150 已交叉确认并由
+  PRD-075 实际实现和验收关闭。PRD-075 之后的下一条未完成项必须在本条提交推送后重新交叉确认，
+  不仅凭连续编号推断，也不在本提交混入后续实现。总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -234,6 +247,9 @@ AuditLog/source event、固定接受审计脱敏、0051/0052 和 PAGE-087。迁�
   `GET /adapter-contract-runs/{run_id}`；内部上报与 Session 读取分离鉴权，所有租户归属、实时
   `provider.health.read`、统一错误、request_id/trace_id 和 no-store 均由后端执行；真实 HTTP 的
   admin/developer、viewer 403、匿名 401、跨租户 404 和 Outbox 恢复已通过。
+  PRD-075 已注册 `POST /experiments`、`GET /experiments`、`GET /experiments/{experiment_id}` 和
+  `GET /experiments/{experiment_id}/results`；接口只从 Session 恢复 tenant/actor，并以后端实时 RBAC、
+  tenant-qualified owner、统一错误与 request_id/trace_id 执行隔离，公开响应不包含请求级正文或 Provider 凭据。
 - 健康检查：`/health/live` 不依赖外部资源，`/health/ready` 检查数据库等依赖。
 - 控制台：`console-web`，提供统一主框架、角色化导航、Environment 设置、项目与应用、Virtual Key 环境绑定、模型别名、PAGE-076 预算中心（`tenant/project/virtual_key` 三级，Application 仅作用链兼容）、环境用量/日志、admin-only 用量 CSV 导出与异步任务轮询、管理操作审计、Provider 与 KeyPool、Provider 健康状态、模型目录、DLP、admin-only 策略管理/编辑器、快照发布/上一版回滚历史及策略模拟器、Webhook、快速开始、API 调试台和错误诊断等治理页面；PRD-048 已把 PAGE-068 扩展为四种模式和五字段质量配置，并新增 PAGE-069 模型评分页。admin 可维护人工评分，developer 只读，viewer 无 DOM/预取；RequestLog 展示请求时冻结的公式、版本、证据、分量和总分，不用当前 Score 回算历史。PRD-049 新增 PAGE-070 日志详情反馈与 PAGE-071 反馈报表，admin/developer 可提交或读取，viewer 无 DOM/预取；异步 owner、迟到响应和筛选后 DOM 收敛均有门禁。PRD-050 在 2026-07-24 的变更前全量基线为 Console `354/354`、lint `118 files`；当前 Browser 验收器局部修复只执行定向回归，最终 45 张真实 Chrome PNG 覆盖三角色与 1280/900/390 三档视口。 PRD-051 新增 PAGE-074 正式账本与 PAGE-075 用量详情；调整/冲正仅 admin 可见且后端再次校验，双视口真实 Browser 已验证布局、焦点、草稿销毁和隐私。PRD-056 新增 PAGE-081 错误码管理，并在 PAGE-082 既有日志详情展示冻结 attempt/session Fact；admin 可编辑、developer 只读、viewer 无导航/DOM/预取，409、焦点、注销和双视口均已真实验收。
   PRD-063 的 PAGE-090 展示冻结 Adapter 规范目录；PRD-064 的 PAGE-091 已实现契约运行摘要、筛选、分页和

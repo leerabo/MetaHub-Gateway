@@ -34,7 +34,7 @@ from metahub_shared.runtime.webhooks import (
     build_webhook_event,
 )
 
-# 当前 revision 10 的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
+# revision 10 前 64 项的六角色摘要是迁移和 Shared canonical JSON 共同冻结的发布合同。
 REVISION_10_HASHES = {
     "admin": "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262",
     "developer": "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30",
@@ -46,10 +46,15 @@ REVISION_10_HASHES = {
 
 
 def test_file_permissions_are_current_revision_and_role_bounded() -> None:
-    """权限主流程：目录、风险级别、默认角色与 canonical hash 必须精确一致。"""
+    """权限主流程：旧目录投影、风险级别和默认角色边界必须保持一致。"""
 
-    assert CATALOG_REVISION == 10
-    assert len(PERMISSION_CODES) == 64
+    assert CATALOG_REVISION >= 10
+    # PRD-075 权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
+    legacy_permission_codes = frozenset(PERMISSION_CODES) - {
+        "experiment.read",
+        "experiment.write",
+    }
+    assert len(legacy_permission_codes) == 64
     assert PERMISSION_BY_CODE["file.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["file.write"].risk_level == "write"
     for role_code in ("admin", "developer", "viewer", "security_admin", "ops_admin"):
@@ -60,7 +65,7 @@ def test_file_permissions_are_current_revision_and_role_bounded() -> None:
         assert not {"file.read", "file.write"} & ROLE_GRANTABLE_PERMISSIONS[role_code]
     assert "file.write" not in ROLE_GRANTABLE_PERMISSIONS["security_admin"]
     assert {
-        role_code: permission_matrix_sha256(permission_codes)
+        role_code: permission_matrix_sha256(permission_codes & legacy_permission_codes)
         for role_code, permission_codes in ROLE_GRANTABLE_PERMISSIONS.items()
     } == REVISION_10_HASHES
 

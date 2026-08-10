@@ -1735,7 +1735,7 @@ def _terminal_stage(status: str, error_code: object) -> str:
     if code.startswith("gateway.upstream_") or code in {
         "gateway.execution_interrupted", "gateway.stream_not_supported",
         "gateway.stream_session_unavailable", "gateway.client_disconnected",
-        "gateway.stream_processing_unavailable",
+        "gateway.stream_processing_unavailable", "gateway.experiment_execution_timeout",
     }:
         return "provider"
     if code in {
@@ -1745,6 +1745,7 @@ def _terminal_stage(status: str, error_code: object) -> str:
         "gateway.routing_policy_invalid", "gateway.routing_snapshot_unavailable",
         "gateway.routing_snapshot_invalid", "gateway.routing_decision_unavailable",
         "gateway.routing_attempt_unavailable", "gateway.fallback_unavailable",
+        "gateway.experiment_unavailable", "gateway.experiment_variant_unavailable",
     }:
         return "routing"
     return "unknown"

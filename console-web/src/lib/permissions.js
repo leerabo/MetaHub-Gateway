@@ -53,6 +53,9 @@ export const PERMISSIONS = Object.freeze({
   // PAGE-104 read/write are independent; task results additionally require current file.read.
   BATCH_READ: "batch.read",
   BATCH_WRITE: "batch.write",
+  // PAGE-105 读取与创建独立授权；创建还需 Project/Environment/Routing/Model 读取组合权限。
+  EXPERIMENT_READ: "experiment.read",
+  EXPERIMENT_WRITE: "experiment.write",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

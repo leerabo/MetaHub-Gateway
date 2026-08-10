@@ -20,6 +20,7 @@ import { renderSessionRisks } from "../session-risks/renderSessionRisks.js";
 import { renderFiles } from "../files/renderFiles.js";
 import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
+import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -346,6 +347,13 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.modelQualityScoresState,
         options.authContext,
         options.modelQualityScoreFilters,
+      );
+    case "experiments":
+      // PAGE-105 只展示后端权威实验与统计；浏览器不从请求日志或反馈自行重算结果。
+      return renderExperimentsSection(
+        options.experimentsState,
+        options.authContext,
+        options.consoleShellState,
       );
     case "projects":
       // Project/Application 只是业务归属视图，真实租户和写权限仍由后端接口校验。
@@ -842,6 +850,18 @@ function renderBatchJobsSection(state, authContext, consoleShellState, i18n) {
   return html
     ? `
       <section class="panel batch-jobs-panel" aria-labelledby="batch-jobs-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** 仅在 experiment.read 导航 owner 精确匹配时渲染 PAGE-105，失权时不保留空壳 DOM。 */
+function renderExperimentsSection(state, authContext, consoleShellState) {
+  const html = renderExperiments(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel experiments-panel" aria-labelledby="experiments-title">
         ${html}
       </section>
     `

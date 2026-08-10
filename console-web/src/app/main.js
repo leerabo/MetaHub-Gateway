@@ -55,6 +55,17 @@ import {
   createBatchJobPageState,
   isBatchAbortError,
 } from "../features/batch-jobs/batchJobPageState.js";
+import {
+  bindExperimentInteractions,
+  clearExperimentDom,
+} from "../features/experiments/bindExperiments.js";
+import {
+  createExperimentPageState,
+  experimentPageOwner,
+  experimentReadIdentitySnapshot,
+  isExperimentAbortError,
+} from "../features/experiments/experimentPageState.js";
+import { renderExperiments } from "../features/experiments/renderExperiments.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -278,6 +289,12 @@ import {
   listBatchJobs,
   listBatchTasks,
 } from "../lib/batchJobs.js";
+import {
+  createExperiment,
+  getExperiment,
+  getExperimentResults,
+  listExperiments,
+} from "../lib/experiments.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -538,6 +555,8 @@ let errorMapBodyOverflow = null;
 let refreshSequence = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
 let activeRefreshCount = 0;
+// 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
+let nextRefreshIsBackground = false;
 let usageFilters = { limit: 20, offset: 0 };
 let usageActionError = null;
 // CSV 导出状态只驻留当前认证会话内存；controller 和 generation 防止离页后的旧轮询覆盖新会话页面。
@@ -558,6 +577,8 @@ const fileSecurityPageState = createFileSecurityPageState();
 const batchJobPageState = createBatchJobPageState({
   clearResultDom: () => clearBatchResultDom(globalThis.document),
 });
+// PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
+const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -690,6 +711,10 @@ if (app && globalThis.window) {
         // PAGE-104 必须先擦除可见结果正文，再取消列表、详情和写请求。
         batchJobPageState.clear();
       }
+      if (nextItemId !== "experiments") {
+        // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
+        experimentPageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -720,6 +745,7 @@ if (app && globalThis.window) {
       filePageState.clear();
       fileSecurityPageState.clear();
       batchJobPageState.clear();
+      experimentPageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -837,6 +863,7 @@ async function start() {
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
+    clearExperimentStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -887,6 +914,8 @@ async function refresh() {
  */
 async function performRefresh() {
   const refreshId = ++refreshSequence;
+  const isBackgroundRefresh = nextRefreshIsBackground;
+  nextRefreshIsBackground = false;
   // Token 与刷新序号共同构成本轮 owner；只冻结公开的会话句柄，不复制用户上下文或任何业务敏感数据。
   const refreshToken = authSession.token;
   // 刷新入口仍以有效登录态为第一边界，序号不能替代认证校验。
@@ -909,6 +938,7 @@ async function performRefresh() {
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
+    clearExperimentStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1085,6 +1115,18 @@ async function performRefresh() {
   if (consoleShellState?.activeNavigationItemId !== "batch-jobs") {
     batchJobPageState.clear();
   }
+  // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
+  if (consoleShellState?.activeNavigationItemId !== "experiments") {
+    experimentPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    &&
+    experimentPageState.blocksShellDomReplacement()
+    && experimentPageState.enter(currentExperimentOwner(consoleShellState))
+  ) {
+    // 定时刷新已重新校验 Session、RBAC 指纹和后端导航；同 owner 草稿仅阻止 DOM 替换。
+    return;
+  }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
     webhookDeadLetterPageState.clear();
@@ -1152,7 +1194,9 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
-  const environmentState = await loadEnvironmentState();
+  // PAGE-105 缺任一创建依赖时不得预取四类候选；其他页面保持既有共享目录加载行为。
+  const loadExperimentCreateResources = shouldLoadExperimentCreateResources(consoleShellState);
+  const environmentState = loadExperimentCreateResources ? await loadEnvironmentState() : null;
   // Environment 是 Key、别名和预算的共同依赖，认证失败时必须停止后续配置读取。
   if (!authSession.token) {
     return;
@@ -1163,7 +1207,7 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
-  const modelsState = await loadModelsState();
+  const modelsState = loadExperimentCreateResources ? await loadModelsState() : null;
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
@@ -1199,7 +1243,7 @@ async function performRefresh() {
         navigation: "routing-policies",
       })
     : null;
-  const modelAliasesState = await loadModelAliasesState();
+  const modelAliasesState = loadExperimentCreateResources ? await loadModelAliasesState() : null;
   if (routingPolicyRefreshTicket) {
     if (modelAliasesState?.state === "ok") {
       routingPolicyPageMemory.acceptRefresh(routingPolicyRefreshTicket, modelAliasesState.model_aliases);
@@ -1228,7 +1272,7 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
-  const projectState = await loadProjectState();
+  const projectState = loadExperimentCreateResources ? await loadProjectState() : null;
   // 项目归属会影响 Key 创建和日志/用量筛选，认证失败时必须停止后续渲染。
   if (!authSession.token) {
     return;
@@ -1275,6 +1319,19 @@ async function performRefresh() {
     modelAliasesState,
   });
   // Batch loader 确认 Session 失效后必须停止，不能继续读取实验租户事实。
+  if (!authSession.token) {
+    return;
+  }
+  // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
+  const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
+    projectState,
+    environmentState,
+    modelAliasesState,
+    modelsState,
+  }, {
+    preserveFinalOnStatisticsUnavailable: isBackgroundRefresh,
+  });
+  // 实验 loader 确认 Session 失效后必须停止全部后续控制面读取。
   if (!authSession.token) {
     return;
   }
@@ -1402,6 +1459,7 @@ async function performRefresh() {
     filesState,
     fileSecurityState,
     batchJobsState,
+    experimentsState,
     budgetState,
     dlpState,
     webhookState,
@@ -1533,6 +1591,8 @@ if (app && globalThis.window) {
     if (document.querySelector(".console-shell")?.dataset.activeNavigation === "webhook-dead-letters") {
       return;
     }
+    // PAGE-105 后台轮询仍需重新校验 Session/RBAC/navigation，但同 owner 时不得替换 Dialog 草稿 DOM。
+    nextRefreshIsBackground = true;
     void refresh();
   }, 15000);
 }
@@ -1562,6 +1622,7 @@ function renderLogin(error, requestId) {
   filePageState.clear();
   fileSecurityPageState.clear();
   batchJobPageState.clear();
+  experimentPageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1899,6 +1960,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     filePageState.clear();
     fileSecurityPageState.clear();
     batchJobPageState.clear();
+    experimentPageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -4067,6 +4129,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFilesPageInteractions(consoleShellState);
   bindFileSecurityPageInteractions(consoleShellState);
   bindBatchJobsPageInteractions(consoleShellState);
+  bindExperimentsPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -5341,6 +5404,178 @@ function handleBatchAuthenticationFailure(error) {
 /** 识别后端认证或撤权失败并清空受保护页面状态，前端不自行降级授权。 */
 function isBatchPermissionRevocation(error) {
   // 页面鉴权或所有者快照失效时清理状态；前端不得恢复后端已撤销权限。
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
+}
+
+/** 构造 PAGE-105 实时 owner；权限 fingerprint 仅用于内存比较，绝不进入 DOM。 */
+function currentExperimentOwner(consoleShellState, mode = "read") {
+  const owner = experimentPageOwner(authSession.context, consoleShellState, { mode });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "experiments")) return null;
+  return owner;
+}
+
+/**
+ * 决定共享资源目录是否可以读取。
+ * PAGE-105 必须拥有完整创建 composite owner 才加载 Project/Environment/Alias/Model 候选；
+ * 其他导航继续沿用各目录自身的后端权限校验和既有加载流程。
+ */
+function shouldLoadExperimentCreateResources(consoleShellState) {
+  return consoleShellState?.activeNavigationItemId !== "experiments"
+    || Boolean(currentExperimentOwner(consoleShellState, "create"));
+}
+
+/** 绑定列表、详情、分页和一个只驻留 Dialog closure 的创建意图。 */
+function bindExperimentsPageInteractions(consoleShellState) {
+  const owner = currentExperimentOwner(consoleShellState);
+  if (!experimentPageState.enter(owner)) return;
+  bindExperimentInteractions({
+    async onFilter(status) {
+      if (experimentPageState.setStatus(status)) await refresh();
+    },
+    async onRefresh() {
+      await refresh();
+    },
+    async onPreviousPage() {
+      if (experimentPageState.previousPage()) await refresh();
+    },
+    async onNextPage() {
+      if (experimentPageState.nextPage()) await refresh();
+    },
+    async onSelect(experimentId) {
+      if (experimentPageState.selectExperiment(experimentId)) {
+        await refreshSelectedExperimentPanel(consoleShellState);
+      }
+    },
+    async onOpenCreate() {
+      const opened = experimentPageState.openCreate(
+        currentExperimentOwner(consoleShellState, "create"),
+      );
+      if (opened) refreshSequence += 1;
+      return opened;
+    },
+    async onCloseCreate() {
+      return experimentPageState.closeCreate(
+        currentExperimentOwner(consoleShellState, "create"),
+      );
+    },
+    async onCreate(request, idempotencyKey) {
+      return submitExperiment(request, idempotencyKey, consoleShellState);
+    },
+  });
+}
+
+/**
+ * 只重建当前 PAGE-105 面板并重新绑定面板内事件；owner 不完整时状态机会先擦除旧租户 DOM。
+ * 外层 Console Shell、导航和其他页面数据不参与详情点击，避免无关慢接口阻塞选中反馈。
+ */
+function renderCurrentExperimentPanel(consoleShellState) {
+  const owner = currentExperimentOwner(consoleShellState);
+  if (!experimentPageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".experiments-panel");
+  if (!panel) return false;
+  const html = renderExperiments(
+    experimentPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+  );
+  if (!html) {
+    experimentPageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindExperimentsPageInteractions(consoleShellState);
+  return true;
+}
+
+/**
+ * 详情点击推进全局刷新代次，再用 detail/results 两条独立 generation lane 局部读取并渲染。
+ * 因此旧整页刷新、旧实验响应、离页或 tenant/RBAC owner 漂移都不能覆盖当前选择。
+ */
+async function refreshSelectedExperimentPanel(consoleShellState) {
+  const owner = currentExperimentOwner(consoleShellState);
+  if (
+    !experimentPageState.enter(owner)
+    || !experimentPageState.snapshot().selectedExperimentId
+  ) return null;
+  const refreshId = ++refreshSequence;
+  if (!renderCurrentExperimentPanel(consoleShellState)) return null;
+  const state = await loadExperimentDetailState(consoleShellState, refreshId);
+  if (!state || refreshId !== refreshSequence) return null;
+  return renderCurrentExperimentPanel(consoleShellState) ? state : null;
+}
+
+/** 提交不可变实验；UUIDv4 只由绑定闭包传入且不会写入全局页面状态。 */
+async function submitExperiment(request, idempotencyKey, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentExperimentOwner(consoleShellState, "create");
+  // Token 或 composite owner 缺失时先销毁草稿与幂等状态，绝不尝试 POST。
+  if (!token || !owner) {
+    experimentPageState.clear();
+    // 缺 Token 说明当前 Session 已结束，页面必须立即返回登录态。
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = experimentPageState.beginCreate(owner);
+  if (!operation) return experimentPageState.snapshot();
+  refreshSequence += 1;
+  let finished = false;
+  /** 只结束本次 POST ticket；try/catch/finally 的重复调用保持幂等。 */
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    experimentPageState.finishCreate(operation);
+  };
+  try {
+    const response = await createExperiment({
+      controlApiUrl,
+      token,
+      idempotencyKey,
+      request,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentExperimentOwner(consoleShellState, "create");
+    if (!experimentPageState.acceptCreate(operation, response, currentOwner)) return null;
+    finish();
+    await refresh();
+    return experimentPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentExperimentOwner(consoleShellState, "create");
+    // owner 漂移或主动 abort 的旧异常不能覆盖新身份页面。
+    if (
+      !experimentPageState.isCreateCurrent(operation, currentOwner)
+      || isExperimentAbortError(error)
+    ) return null;
+    // 当前 owner 的 401 才能清 Session，其他业务失败继续显示固定错误。
+    if (handleExperimentAuthenticationFailure(error)) return null;
+    // canonical permission_denied 表示矩阵已撤权，先清状态再刷新后端导航。
+    if (isExperimentPermissionRevocation(error)) {
+      experimentPageState.clear();
+      finish();
+      await refresh();
+      return null;
+    }
+    experimentPageState.rejectCreate(operation, error, currentOwner);
+    return experimentPageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** 仅在当前实验 owner 收到 401 时清除 Session，旧回调不能注销新身份。 */
+function handleExperimentAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  experimentPageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+/** 只有 canonical auth.permission_denied 代表撤权，业务型 403 继续作为固定错误展示。 */
+function isExperimentPermissionRevocation(error) {
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
@@ -7297,6 +7532,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "batch-jobs") {
     // 导航请求前同步擦除结果 DOM，再使 PAGE-104 的 GET/POST ticket 全部失效。
     batchJobPageState.clear();
+  }
+  if (itemId !== "experiments") {
+    // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
+    experimentPageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -12262,6 +12501,152 @@ async function loadBatchJobDetailState(consoleShellState, refreshId) {
     batchJobPageState.finishDetail(operation);
   }
 }
+
+/** 在同一授权 owner 下读取 PAGE-105 列表，并裁剪可用创建候选。 */
+async function loadExperimentsState(
+  consoleShellState,
+  refreshId,
+  resourceStates,
+  { preserveFinalOnStatisticsUnavailable = false } = {},
+) {
+  const owner = currentExperimentOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !experimentPageState.enter(owner)) return null;
+  const operation = experimentPageState.beginList(owner, refreshId);
+  if (!operation) return null;
+  let accepted = false;
+  try {
+    const response = await listExperiments({
+      controlApiUrl,
+      token: authSession.token,
+      ...experimentPageState.listQuery(),
+      limit: 50,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const optionPayload = owner.canCreate
+      ? {
+          projects: resourceStates?.projectState?.state === "ok"
+            ? resourceStates.projectState.projects
+            : null,
+          environments: resourceStates?.environmentState?.state === "ok"
+            ? resourceStates.environmentState.environments
+            : null,
+          modelAliases: resourceStates?.modelAliasesState?.state === "ok"
+            ? resourceStates.modelAliasesState.model_aliases
+            : null,
+          models: resourceStates?.modelsState?.state === "ok"
+            ? resourceStates.modelsState.models
+            : null,
+          requestId: [
+            resourceStates?.projectState,
+            resourceStates?.environmentState,
+            resourceStates?.modelAliasesState,
+            resourceStates?.modelsState,
+          ].find((state) => state?.state === "error")?.requestId ?? "-",
+        }
+      : undefined;
+    accepted = experimentPageState.acceptList(
+      operation,
+      response,
+      currentExperimentOwner(consoleShellState),
+      refreshId,
+      optionPayload,
+    );
+  } catch (error) {
+    const currentOwner = currentExperimentOwner(consoleShellState);
+    // 列表旧代次、owner 漂移或主动 abort 都不允许回写错误状态。
+    if (
+      refreshId !== refreshSequence
+      || !experimentPageState.isListCurrent(operation, currentOwner)
+      || isExperimentAbortError(error)
+    ) return null;
+    // 当前 owner 的认证失败切断 Session；旧回调已在上方被 generation 拒绝。
+    if (handleExperimentAuthenticationFailure(error)) return null;
+    // 后端确认撤权时同步销毁 cursor/详情/创建候选，并异步刷新导航。
+    if (isExperimentPermissionRevocation(error)) {
+      experimentPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    experimentPageState.rejectList(operation, error, currentOwner);
+    return experimentPageState.snapshot();
+  } finally {
+    experimentPageState.finishList(operation);
+  }
+  if (!accepted || refreshId !== refreshSequence) return null;
+  if (!experimentPageState.snapshot().selectedExperimentId) {
+    return experimentPageState.snapshot();
+  }
+  await loadExperimentDetailState(consoleShellState, refreshId, {
+    preserveFinalOnStatisticsUnavailable,
+  });
+  return refreshId === refreshSequence ? experimentPageState.snapshot() : null;
+}
+
+/** 同时读取详情和后端权威统计；浏览器不合并请求级 Usage、Feedback 或 FinOps 事实。 */
+async function loadExperimentDetailState(
+  consoleShellState,
+  refreshId,
+  { preserveFinalOnStatisticsUnavailable = false } = {},
+) {
+  const owner = currentExperimentOwner(consoleShellState);
+  const detailOperation = experimentPageState.beginDetail(owner, refreshId);
+  const resultsOperation = experimentPageState.beginResults(owner, refreshId);
+  if (!detailOperation || !resultsOperation) return null;
+  try {
+    const [detail, results] = await Promise.all([
+      getExperiment({
+        controlApiUrl,
+        token: authSession.token,
+        experimentId: detailOperation.experimentId,
+        signal: detailOperation.controller.signal,
+      }),
+      getExperimentResults({
+        controlApiUrl,
+        token: authSession.token,
+        experimentId: resultsOperation.experimentId,
+        signal: resultsOperation.controller.signal,
+      }),
+    ]);
+    if (refreshId !== refreshSequence) return null;
+    experimentPageState.acceptDetail(
+      detailOperation,
+      resultsOperation,
+      detail,
+      results,
+      currentExperimentOwner(consoleShellState),
+    );
+    return experimentPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentExperimentOwner(consoleShellState);
+    // 详情与结果共享 owner；旧代次或 abort 不能留下半份错误或统计。
+    if (
+      refreshId !== refreshSequence
+      || !experimentPageState.isDetailCurrent(detailOperation, currentOwner)
+      || !experimentPageState.isResultsCurrent(resultsOperation, currentOwner)
+      || isExperimentAbortError(error)
+    ) return null;
+    // 当前 owner 的 401 统一退出登录，不能继续显示旧租户详情。
+    if (handleExperimentAuthenticationFailure(error)) return null;
+    // 读取权限撤回时立即清除详情和结果，再重新获取后端导航快照。
+    if (isExperimentPermissionRevocation(error)) {
+      experimentPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    experimentPageState.rejectDetail(
+      detailOperation,
+      resultsOperation,
+      error,
+      currentOwner,
+      { preserveFinalOnStatisticsUnavailable },
+    );
+    return experimentPageState.snapshot();
+  } finally {
+    experimentPageState.finishDetail(detailOperation);
+    experimentPageState.finishResults(resultsOperation);
+  }
+}
 /**
  * 身份边界变化时清除预算页面全部会话内事实。
  * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
@@ -13250,6 +13635,13 @@ function clearFileSecurityStateOnIdentityChange(previous, current) {
 function clearBatchJobStateOnIdentityChange(previous, current) {
   if (batchReadIdentitySnapshot(previous) !== batchReadIdentitySnapshot(current)) {
     batchJobPageState.clear();
+  }
+}
+
+/** tenant、Session、RBAC revision 或 experiment.read owner 变化时销毁全部 PAGE-105 内存事实。 */
+function clearExperimentStateOnIdentityChange(previous, current) {
+  if (experimentReadIdentitySnapshot(previous) !== experimentReadIdentitySnapshot(current)) {
+    experimentPageState.clear();
   }
 }
 /**

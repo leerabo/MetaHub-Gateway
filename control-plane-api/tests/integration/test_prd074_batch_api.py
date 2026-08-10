@@ -64,7 +64,7 @@ def prd074_api_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     定义：prd074_api_template。
     固定租户隔离、权限拒绝、失败追踪和回退边界。
 
-    Build one closed revision-10 template with two tenants and a Batch binding.
+    Build one current-schema template with two tenants and a closed Batch binding.
     """
 
     root = tmp_path_factory.mktemp("prd074-api-template")
@@ -73,7 +73,9 @@ def prd074_api_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     previous = os.environ.get("METAHUB_SEED_ADMIN_PASSWORD")
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = ADMIN_PASSWORD
     try:
-        assert apply_migrations(database_url).applied[-1] == "0067"
+        applied = apply_migrations(database_url).applied
+        # API 相邻回归消费当前完整 schema；0067 专项另行冻结精确 up/down 历史。
+        assert "0067" in applied
         seed = apply_seed_data(database_url)
     finally:
         if previous is None:

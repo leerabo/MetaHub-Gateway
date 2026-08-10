@@ -88,6 +88,8 @@ WEBHOOK_EVENT_TYPES = {
     # operation parameters, prompts, responses, grants, leases, and route plans stay internal.
     "batch_job.created",
     "batch_job.completed",
+    # 实验完成事件只披露冻结结果可重建的 owner 与整数计数，不披露名称或请求级事实。
+    "experiment.completed",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -299,6 +301,9 @@ def build_webhook_event(
     elif event_type in {"batch_job.created", "batch_job.completed"}:
         # PRD-074 只接受 Batch source row 冻结的任务计数与金额摘要。
         _validate_batch_job_event_payload(event_type, safe_payload)
+    elif event_type == "experiment.completed":
+        # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
+        _validate_experiment_completed_payload(safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -337,6 +342,7 @@ def build_webhook_event(
         "file.prompt_injection_detected",
         "batch_job.created",
         "batch_job.completed",
+        "experiment.completed",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -561,6 +567,18 @@ def build_webhook_event(
     elif event_type in {"batch_job.created", "batch_job.completed"}:
         # Batch source event 必须绑定同租户 Job、持久事件、actor 和原始操作链路。
         _validate_batch_job_event_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == "experiment.completed":
+        # 完成事件必须复用首次创建 actor/request/trace，scheduler 或重放 worker 不能冒充来源。
+        _validate_experiment_completed_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -798,6 +816,118 @@ def _validate_batch_job_event_envelope(
         or occurred_at.tzinfo is None
     ):
         # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_experiment_completed_payload(payload: dict[str, Any]) -> None:
+    """校验实验完成 Webhook 的聚合结果边界，拒绝样本正文和未知字段。
+
+    校验 ``experiment.completed`` 的精确安全结果摘要。
+    """
+
+    expected = {
+        "schema_version",
+        "experiment_id",
+        "project_id",
+        "environment_id",
+        "model_alias_id",
+        "model_a_id",
+        "model_b_id",
+        "status",
+        "completion_reason",
+        "assigned_count",
+        "model_a_assigned_count",
+        "model_b_assigned_count",
+        "gateway_success_count",
+        "gateway_failure_count",
+        "unresolved_count",
+        "cost_unknown_count",
+        "feedback_count",
+        "facts_version",
+        "facts_through_at",
+    }
+    if set(payload) != expected:
+        # exact-set 防止名称、请求 owner、HMAC 指纹或 Provider 配置混入订阅事件。
+        raise ValueError("webhook.payload_invalid")
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["experiment_id"], prefix="exp_")
+        or any(
+            not _is_bounded_safe_text(payload[field], maximum=128)
+            for field in (
+                "project_id",
+                "environment_id",
+                "model_alias_id",
+                "model_a_id",
+                "model_b_id",
+            )
+        )
+        or payload["model_a_id"] == payload["model_b_id"]
+        or payload["status"] != "completed"
+        or payload["completion_reason"]
+        not in {"target_reached", "sampling_deadline_reached"}
+        or not _is_canonical_utc_second(payload["facts_through_at"])
+    ):
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
+        raise ValueError("webhook.payload_invalid")
+
+    count_fields = (
+        "assigned_count",
+        "model_a_assigned_count",
+        "model_b_assigned_count",
+        "gateway_success_count",
+        "gateway_failure_count",
+        "unresolved_count",
+        "cost_unknown_count",
+        "feedback_count",
+    )
+    if any(
+        type(payload[field]) is not int or not 0 <= payload[field] <= 100_000
+        for field in count_fields
+    ):
+        # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
+        raise ValueError("webhook.payload_invalid")
+    assigned = payload["assigned_count"]
+    if (
+        payload["model_a_assigned_count"] + payload["model_b_assigned_count"]
+        != assigned
+        or payload["gateway_success_count"]
+        + payload["gateway_failure_count"]
+        + payload["unresolved_count"]
+        != assigned
+        or payload["cost_unknown_count"] > assigned
+        or payload["feedback_count"] > assigned
+        or type(payload["facts_version"]) is not int
+        or not 0 <= payload["facts_version"] <= 9_223_372_036_854_775_807
+    ):
+        # 计数必须能由同一 Experiment 与 A/B Result 精确重建，不能接受近似汇总。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_experiment_completed_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把完成摘要绑定到持久 Experiment source event 与首次创建链路。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="exev_")
+        or not _is_bounded_safe_text(tenant_id, maximum=128)
+        or not _is_bounded_safe_text(actor_id, maximum=128)
+        or object_id != payload["experiment_id"]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=160)
+        or occurred_at.tzinfo is None
+    ):
+        # 重试与死信重放只能恢复原 source owner，不能生成替代 actor 或链路。
         raise ValueError("webhook.payload_invalid")
 
 

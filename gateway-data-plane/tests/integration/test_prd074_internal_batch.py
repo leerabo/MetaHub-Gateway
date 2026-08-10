@@ -41,6 +41,7 @@ from metahub_gateway.usage.ledger import (
     record_request_log,
     replay_usage_spool_record,
 )
+from metahub_gateway.usage.spool import UsageSpool
 from metahub_shared.batch import (
     BATCH_OPERATION_TEMPLATE_VERSION,
     BatchEnvelopeOwner,
@@ -85,7 +86,10 @@ def migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     database = tmp_path_factory.mktemp("prd074-gateway-template") / "template.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url, migrations_dir=MIGRATIONS_DIR).applied[-1] == "0067"
+    applied = apply_migrations(database_url, migrations_dir=MIGRATIONS_DIR).applied
+    # 相邻回归必须在当前完整 schema 上运行；只冻结 Batch 自身的 0067 已实际应用，
+    # 不能因后续 PRD 合法新增迁移就让所有 Batch 行为测试在夹具阶段失败。
+    assert "0067" in applied
     apply_seed_data(database_url)
     return database
 
@@ -104,6 +108,10 @@ def _config(
     monkeypatch.setenv("METAHUB_DATABASE_URL", _url(database))
     monkeypatch.setenv("METAHUB_BATCH_ENCRYPTION_SECRET", SECRET)
     monkeypatch.setenv("METAHUB_INTERNAL_BATCH_TOKEN", "test-only-internal-batch-token-00000001")
+    monkeypatch.setenv(
+        "METAHUB_FINOPS_USAGE_SPOOL_ROOT",
+        str(database.parent / f"{database.stem}-finops-spool"),
+    )
     return load_app_config("gateway-data-plane")
 
 
@@ -886,6 +894,10 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
     assert guard.initial_estimated_cost_cny == Decimal("0.007840")
 
     record = _spooled_usage_record(config, execution, values)
+    # PRD-075 扩展版本白名单后，真实 Batch v6 必须仍可由文件队列原子存储并幂等重放。
+    spool = UsageSpool(config)
+    assert spool.store(record) is True
+    assert spool.store(record) is False
     _persist_encrypted_result(
         config,
         execution,

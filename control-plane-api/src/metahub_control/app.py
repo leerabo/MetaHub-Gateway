@@ -30,6 +30,8 @@ from .enterprise_chat.routes import router as enterprise_chat_router
 from .environments.routes import router as environments_router
 from .error_maps import install_provider_error_map_scheduler
 from .error_maps import router as error_maps_router
+from .experiments import install_experiment_scheduler
+from .experiments import router as experiments_router
 from .feedback.routes import router as feedback_router
 from .file_security import install_file_security_event_scheduler
 from .file_security import router as file_security_router
@@ -98,6 +100,7 @@ app.include_router(dlp_router)
 app.include_router(environments_router)
 app.include_router(enterprise_chat_router)
 app.include_router(error_maps_router)
+app.include_router(experiments_router)
 app.include_router(feedback_router)
 app.include_router(files_router)
 app.include_router(file_security_router)
@@ -138,3 +141,4 @@ install_audit_export_scheduler(app)
 install_webhook_replay_scheduler(app)
 install_file_security_event_scheduler(app)
 install_adapter_contract_event_scheduler(app)
+install_experiment_scheduler(app)

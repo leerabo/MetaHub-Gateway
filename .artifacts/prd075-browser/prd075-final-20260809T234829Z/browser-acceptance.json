@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "run_id": "prd075-final-20260809T234829Z",
+  "generated_at": "2026-08-10T00:05:09Z",
+  "status": "passed",
+  "prd": "PRD-075",
+  "page": "PAGE-105",
+  "browser": {
+    "engine": "Chromium",
+    "surface": "in_app_browser",
+    "network_scope": "fixed_loopback_runtime_harness",
+    "control_origin": "http://127.0.0.1:8001",
+    "gateway_origin": "http://127.0.0.1:8000",
+    "console_origin": "http://localhost:5173"
+  },
+  "viewports": [
+    {
+      "name": "desktop",
+      "css_width": 1280,
+      "css_height": 720,
+      "png_width": 1265,
+      "png_height": 712,
+      "horizontal_overflow": 0,
+      "overlap_count": 0,
+      "text_overflow_count": 0,
+      "result_card_count": 2,
+      "results_are_final": true,
+      "dialog_inside_horizontal": true,
+      "dialog_actions_reachable": true,
+      "screenshots": [
+        "desktop-list-1280x720.png",
+        "desktop-results-1280x720.png",
+        "desktop-result-cards-1280x720.png",
+        "desktop-create-dialog-1280x720.png",
+        "desktop-before-revoke-1280x720.png",
+        "desktop-after-revoke-1280x720.png"
+      ]
+    },
+    {
+      "name": "mobile",
+      "css_width": 390,
+      "css_height": 844,
+      "png_width": 375,
+      "png_height": 812,
+      "horizontal_overflow": 0,
+      "overlap_count": 0,
+      "text_overflow_count": 0,
+      "result_card_count": 2,
+      "results_are_final": true,
+      "dialog_scroll_is_internal": true,
+      "dialog_overflow_y": "auto",
+      "dialog_scroll_height": 994,
+      "dialog_client_height": 827,
+      "dialog_actions_reachable": true,
+      "screenshots": [
+        "mobile-list-390x844.png",
+        "mobile-results-a-390x844.png",
+        "mobile-results-b-390x844.png",
+        "mobile-create-dialog-top-390x844.png",
+        "mobile-create-dialog-actions-390x844.png"
+      ]
+    }
+  ],
+  "interaction_contracts": {
+    "ui_click_create_succeeded": true,
+    "ui_created_experiment_name": "PRD075 browser final create",
+    "ui_created_row_present": true,
+    "list_item_count_before_api_helper": 4,
+    "selected_completed_experiment": true,
+    "selected_experiment_name": "PRD075 runtime experiment 3",
+    "result_card_count": 2,
+    "results_are_final": true,
+    "facts_version": 7,
+    "create_dialog_initial_focus": "name",
+    "create_dialog_close_restores_focus": true,
+    "mobile_dialog_actions_reachable": true
+  },
+  "api_contracts": {
+    "evidence_file": "browser-contract-api.json",
+    "scope": "isolated API helper; distinct from the UI click-create proof",
+    "first_create_status": 201,
+    "same_body_same_key_replay_status": 201,
+    "same_body_same_key_replayed_same_owner": true,
+    "changed_body_same_key_status": 409,
+    "changed_body_same_key_code": "experiment.idempotency_conflict",
+    "changed_body_new_key_status": 201,
+    "changed_body_new_key_created_new_owner": true,
+    "all_success_responses_are_private_no_store": true
+  },
+  "revocation_contracts": {
+    "live_role_after_revocation": "developer",
+    "backend_status": 403,
+    "backend_error_code": "auth.permission_denied",
+    "backend_request_id": "prd075-browser-revoke-results-final",
+    "response_header_request_id_matches": true,
+    "experiment_navigation_count": 0,
+    "experiment_panel_count": 0,
+    "experiment_dom_count": 0,
+    "fallback_navigation": "overview",
+    "fallback_hash": "",
+    "permission_restore_status": 200,
+    "permission_matrix_restored": true
+  },
+  "pixel_checks": {
+    "all_screenshots_nonblank": true,
+    "screenshot_count": 11,
+    "minimum_sampled_color_count": 1710,
+    "minimum_variance_sum": 1710.4
+  },
+  "privacy": {
+    "provider_key_present": false,
+    "token_present": false,
+    "password_present": false,
+    "prompt_present": false,
+    "provider_response_present": false,
+    "private_browser_contract_state_removed": true
+  },
+  "all_108_prds_complete": false
+}

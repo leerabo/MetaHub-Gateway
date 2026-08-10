@@ -65,6 +65,8 @@ class ProviderRequest:
     adapter_version: str = ""
     # 目录 hash 与版本共同绑定本次网络请求，排障时可精确核对页面、迁移 seed 和执行制品。
     adapter_catalog_hash: str = ""
+    # 可空终止标记随 Adapter spec 一起冻结；None 表示该兼容协议以 clean EOF 合法结束。
+    stream_termination_marker: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

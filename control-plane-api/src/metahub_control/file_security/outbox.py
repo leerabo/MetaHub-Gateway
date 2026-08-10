@@ -824,6 +824,7 @@ def _fail_pending_original_deliveries(
         connection,
         tenant_id=tenant_id,
         event_id=event_id,
+        event_type="file.prompt_injection_detected",
         updated_at=updated_at,
         failure_code=failure_code,
     )

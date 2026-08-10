@@ -1,0 +1,137 @@
+{
+  "access_control": {
+    "backend_navigation_contains_experiments": true,
+    "cross_tenant_status": 404,
+    "request_id_preserved": true,
+    "viewer_status": 403
+  },
+  "all_108_prds_complete": false,
+  "cleanup": {
+    "fixed_ports_released": true,
+    "only_owned_processes_stopped": true
+  },
+  "database": {
+    "experiments": {
+      "assigned": 8,
+      "completed": 3,
+      "count": 3,
+      "model_a": 4,
+      "model_b": 4
+    },
+    "foreign_key_violations": 0,
+    "integrity_check": "ok",
+    "latest_migration": "0068",
+    "migration_count": 68,
+    "migration_roundtrip": {
+      "down": {
+        "foreign_key_violations": 0,
+        "integrity_check": "ok",
+        "latest_migration": "0067",
+        "migration_count": 67,
+        "rolled_back": "0068"
+      },
+      "fresh_up": {
+        "foreign_key_violations": 0,
+        "integrity_check": "ok",
+        "latest_migration": "0068",
+        "migration_count": 68
+      },
+      "re_up": {
+        "applied": [
+          "0068"
+        ],
+        "foreign_key_violations": 0,
+        "integrity_check": "ok",
+        "latest_migration": "0068",
+        "migration_count": 68
+      },
+      "repeat_noop": {
+        "applied_count": 0,
+        "foreign_key_violations": 0,
+        "integrity_check": "ok",
+        "latest_migration": "0068",
+        "migration_count": 68,
+        "skipped_count": 68
+      }
+    },
+    "outbox_pending": 0,
+    "outcomes": {
+      "count": 8,
+      "failed": 1,
+      "succeeded": 7,
+      "unresolved": 0
+    },
+    "permission_count": 66,
+    "rbac_revision": 11,
+    "result_rows": 6,
+    "settlements": {
+      "count": 8,
+      "pending": 0,
+      "recorded": 7,
+      "unavailable": 1
+    }
+  },
+  "generated_at": "2026-08-10T01:23:56Z",
+  "prd": "PRD-075",
+  "privacy": {
+    "files_scanned": 145,
+    "plaintext_matches": 0,
+    "sqlite_sidecars_remaining": 0
+  },
+  "provider_a": {
+    "auth_mismatches": 0,
+    "calls": 4,
+    "failures": 0,
+    "invalid": 0
+  },
+  "provider_b": {
+    "auth_mismatches": 0,
+    "calls": 4,
+    "failures": 1,
+    "invalid": 0
+  },
+  "recovery": {
+    "control_stopped_before_finalization": true,
+    "gateway_facts_committed_during_outage": true,
+    "restart_completed_and_delivered": true
+  },
+  "results": {
+    "first": {
+      "assigned": 4,
+      "frozen_repeat_equal": true,
+      "gateway_success": 4,
+      "is_final": true
+    },
+    "second": {
+      "assigned": 2,
+      "gateway_failure": 1,
+      "is_final": true
+    },
+    "third": {
+      "assigned": 2,
+      "is_final": true,
+      "recovered_after_control_restart": true
+    }
+  },
+  "schema_version": 1,
+  "services": {
+    "console_feature": 200,
+    "console_index": 200,
+    "control_initial_health": 200,
+    "control_recovery_health": 200,
+    "gateway_health": 200
+  },
+  "source_provenance": {
+    "algorithm": "sha256",
+    "migration_0068_down": "b73f6b75af0ddbf8db7ff774a6da2aa890d06b4de58133e3aa4f42624b1e1804",
+    "migration_0068_up": "a2cd7cd1c2e93511c79928ba6452415cb2d8738ae2b48fb6b20d6c8adaf7f3e0",
+    "migration_set": "b78603792fb7eae76b45d7ae3a91319144341f97e8ebd072e83d454546136af0",
+    "runtime_acceptance": "8ecd292313a9b0e515e92d0056cb1bcbc3ef930a0059c38e6ebe42e2e1a3d6e1"
+  },
+  "webhook": {
+    "completed": 3,
+    "forbidden_hits": 0,
+    "invalid": 0,
+    "signature_failures": 0
+  }
+}

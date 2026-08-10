@@ -23,19 +23,28 @@ from metahub_shared.runtime.webhooks import build_webhook_event
 
 
 def test_intent_classification_permission_is_separate_and_role_bounded() -> None:
-    """权限合同：敏感正文入口仍只授予 Admin/SecurityAdmin，且兼容当前 revision 10。"""
+    """权限合同：后续目录仍只能把敏感正文入口授予 Admin/SecurityAdmin。"""
 
-    assert CATALOG_REVISION == 10
-    assert len(PERMISSION_CODES) == 64
+    assert CATALOG_REVISION >= 10
+    # PRD-075 权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
+    legacy_permission_codes = frozenset(PERMISSION_CODES) - {
+        "experiment.read",
+        "experiment.write",
+    }
+    assert len(legacy_permission_codes) == 64
     assert PERMISSION_BY_CODE["intent_risk.classify"].risk_level == "write"
     for role_code in ("admin", "security_admin"):
         assert "intent_risk.classify" in ROLE_GRANTABLE_PERMISSIONS[role_code]
     for role_code in ("developer", "viewer", "finance_admin", "ops_admin"):
         assert "intent_risk.classify" not in ROLE_GRANTABLE_PERMISSIONS[role_code]
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["admin"] & legacy_permission_codes
+    ) == (
         "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["security_admin"]) == (
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["security_admin"] & legacy_permission_codes
+    ) == (
         "28cc5f8be8a582475d14b9d68f72ba2d0284c0755fe4c43412c613d175c4ffa6"
     )
 

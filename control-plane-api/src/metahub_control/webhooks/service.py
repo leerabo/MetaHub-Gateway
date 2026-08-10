@@ -1578,6 +1578,7 @@ def fail_pending_webhook_event_deliveries(
     *,
     tenant_id: object,
     event_id: object,
+    event_type: object,
     updated_at: str,
     failure_code: str,
 ) -> int:
@@ -1592,12 +1593,18 @@ def fail_pending_webhook_event_deliveries(
         "webhook.delivery_unavailable": "Source delivery attempts are exhausted.",
         "webhook.payload_invalid": "Source payload validation failed.",
     }
+    allowed_event_types = {
+        "experiment.completed",
+        "file.prompt_injection_detected",
+    }
     if (
         not connection.in_transaction
         or type(tenant_id) is not str
         or not tenant_id
         or type(event_id) is not str
         or not event_id
+        or type(event_type) is not str
+        or event_type not in allowed_event_types
         or failure_code not in summaries
     ):
         # 只有持有 source 写事务的内部 worker 能终结 intent，参数漂移时不能自行开启新事务。
@@ -1611,7 +1618,7 @@ def fail_pending_webhook_event_deliveries(
             UPDATE webhook_deliveries
             SET status='failed',error_code=?,error_summary=?,next_retry_at=NULL,updated_at=?
             WHERE tenant_id=? AND event_id=?
-              AND event_type='file.prompt_injection_detected'
+              AND event_type=?
               AND delivery_kind='original' AND status='pending'
             """,
             (
@@ -1620,16 +1627,17 @@ def fail_pending_webhook_event_deliveries(
                 updated_at,
                 tenant_id,
                 event_id,
+                event_type,
             ),
         )
         remaining = connection.execute(
             """
             SELECT COUNT(*) FROM webhook_deliveries
             WHERE tenant_id=? AND event_id=?
-              AND event_type='file.prompt_injection_detected'
+              AND event_type=?
               AND delivery_kind='original' AND status='pending'
             """,
-            (tenant_id, event_id),
+            (tenant_id, event_id, event_type),
         ).fetchone()[0]
         if remaining != 0:
             # source 一旦终态就不会再次领取；任何残留 pending 都必须让整个事务回滚。
@@ -1813,6 +1821,17 @@ def _validated_pending_delivery_body(
             # Batch request_id 只存在于不可变生命周期事件中。恢复必须重新绑定同租户的
             # event、Job、actor、trace、发生时间和完整公开摘要，禁止回退到 outbox worker ID。
             source_request_id = _batch_job_source_request_id(connection, envelope)
+        elif envelope.get("event_type") == "experiment.completed":
+            # The source request is intentionally absent from the public envelope. Rebuild it
+            # only from the immutable Experiment, Result and source Event owner graph.
+            from metahub_control.experiments.outbox import (
+                recover_experiment_completed_source_request_id,
+            )
+
+            source_request_id = recover_experiment_completed_source_request_id(
+                connection,
+                envelope,
+            )
         elif envelope.get("event_type") == "file.prompt_injection_detected":
             # 文件安全 request_id 不进入公开七字段 payload；pending 恢复必须从同 tenant
             # 不可变 source/scan/finding 重新取得，禁止用 worker request_id 或占位值绕过绑定。

@@ -42,9 +42,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 权限目录版本只描述产品级目录结构，不可替代租户角色自身的 permission_revision。
 # PRD-070 新增高危会话读取与处置边界后提升目录版本；认证层会据此发现旧迁移并失败关闭，
 # 不能把 revision 6 的目录静默当成完整权限矩阵。
-# PRD-074 增加 Batch 读写独立权限后提升目录版本；认证层会拒绝仍停留 revision 9 的旧投影，
-# 不能把 Shared 默认矩阵当成运行时回退授权。
-CATALOG_REVISION: Final[int] = 10
+# PRD-075 增加在线模型实验读写权限后提升目录版本；认证层会拒绝仍停留 revision 10 的旧投影，
+# 不能把 Shared 默认矩阵当成运行时回退授权，更不能用前端导航代替后端动态矩阵。
+CATALOG_REVISION: Final[int] = 11
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -394,6 +394,22 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "创建、取消和执行当前租户受治理的异步批量任务。",
         "write",
     ),
+    # 在线实验会改变真实请求路由，读取与创建必须拆分；write 使用 critical 风险提示，
+    # 但最终授权仍由 Control 从当前 tenant 的数据库矩阵逐请求验证。
+    PermissionDefinition(
+        "experiment.read",
+        "experiment",
+        "读取模型实验",
+        "读取当前租户模型 A/B 实验的安全配置、进度和权威结果。",
+        "read",
+    ),
+    PermissionDefinition(
+        "experiment.write",
+        "experiment",
+        "创建模型实验",
+        "创建影响当前租户在线 Alias 流量的不可变模型 A/B 实验。",
+        "critical",
+    ),
     PermissionDefinition(
         "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
     ),
@@ -435,6 +451,8 @@ _DEVELOPER = {
     "file.security.scan",
     "batch.read",
     "batch.write",
+    "experiment.read",
+    "experiment.write",
 }
 _VIEWER = {
     "console.basic.read",
@@ -522,6 +540,8 @@ _OPS = {
     "file.read",
     "batch.read",
     "batch.write",
+    "experiment.read",
+    "experiment.write",
 }
 
 # 这些集合是产品授权上限和新租户默认值；运行时必须读取租户矩阵，绝不能在矩阵损坏时回落此处。

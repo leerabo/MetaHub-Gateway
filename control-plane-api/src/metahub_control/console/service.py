@@ -1,7 +1,7 @@
-"""模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
+"""按数据库权限快照生成控制台导航、保存用户偏好并记录安全页面事件。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
-来源文件：control-plane-api/src/metahub_control/console/service.py
+所有入口都由当前 tenant 的实时权限矩阵过滤；客户端 hash、角色名和前端隐藏状态不能扩大授权。
+事件只接收固定枚举与脱敏 payload，不保存页面业务数据、Provider Key 或 Token。
 """
 
 from __future__ import annotations
@@ -81,6 +81,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "file-security": "console.page_viewed",
     # PAGE-104 page events never carry job/task/file IDs, names, costs, failures, or result text.
     "batch-jobs": "console.page_viewed",
+    # PAGE-105 只记录页面访问，实验名称、模型指标、分桶和请求级 owner 均不得进入事件载荷。
+    "experiments": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -267,6 +269,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看模型成功率、错误率、平均延迟和人工质量先验。",
         "先积累真实调用样本，再由管理员按业务效果维护人工评分。",
         62,
+    ),
+    NavigationDefinition(
+        "experiments",
+        "模型评测",
+        "配置",
+        "experiments",
+        ("experiment.read",),
+        "查看在线 A/B 实验的不可变配置、采样进度和后端权威质量结果。",
+        "尚无模型实验，可在具备完整创建权限后配置两个可执行模型进行对比。",
+        63,
     ),
     NavigationDefinition(
         "projects",
@@ -494,7 +506,8 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "开发者",
         "sdk-examples",
         ("developer_portal.read",),
-        "下载 Python 与 JavaScript/Node OpenAI-compatible 示例，覆盖流式调用、超时、重试和 request_id。",
+        "下载 Python 与 JavaScript/Node OpenAI-compatible 示例，"
+        "覆盖流式调用、超时、重试和 request_id。",
         "示例只使用 Virtual Key 环境变量；下载接口会再次执行后端权限和租户校验。",
         105,
     ),
@@ -576,7 +589,7 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "批处理任务",
         "开发者",
         "batch-jobs",
-        # Read opens PAGE-104; create, cancel, task diagnostics, and result routes use stricter guards.
+        # PAGE-104 读取权限只开放页面；创建、取消、任务诊断和结果接口仍使用更严格的后端组合权限。
         ("batch.read",),
         "查看异步批处理任务、进度、固定失败原因和成本摘要。",
         "提交前确认文件安全准入、模型价格和预算均可用。",
@@ -635,7 +648,8 @@ def get_console_navigation(
 ) -> ConsoleNavigationResponse:
     """读取当前用户可见的控制台导航。
 
-    租户和角色只来自 AuthContext；requested_active_item_id 只是 UI 请求，必须经过后端导航可见性校验。
+    租户和角色只来自 AuthContext；requested_active_item_id 只是 UI 请求，
+    必须经过后端导航可见性校验。
     """
 
     connection = _connect(config)
@@ -705,7 +719,9 @@ def update_user_preferences(
         else current.active_navigation_item_id
     )
     sidebar_collapsed = (
-        bool(payload.sidebar_collapsed) if payload.sidebar_collapsed is not None else current.sidebar_collapsed
+        bool(payload.sidebar_collapsed)
+        if payload.sidebar_collapsed is not None
+        else current.sidebar_collapsed
     )
     now = _to_db_time(_utcnow())
     connection.execute(
@@ -724,7 +740,12 @@ def update_user_preferences(
     )
     connection.commit()
     return UserPreferenceResponse(
-        preference=_load_preference(connection, context.user.tenant_id, context.user.user_id, items),
+        preference=_load_preference(
+            connection,
+            context.user.tenant_id,
+            context.user.user_id,
+            items,
+        ),
         request_id=request_id,
         trace_id=trace_id,
     )
@@ -1054,7 +1075,8 @@ def _ensure_preference(
 
     row = connection.execute(
         """
-        SELECT preference_id, tenant_id, user_id, active_navigation_item_id, sidebar_collapsed, created_at, updated_at
+        SELECT preference_id, tenant_id, user_id, active_navigation_item_id,
+               sidebar_collapsed, created_at, updated_at
         FROM user_preferences
         WHERE tenant_id=? AND user_id=?
         """,
@@ -1065,7 +1087,8 @@ def _ensure_preference(
         connection.execute(
             """
             INSERT INTO user_preferences(
-              preference_id, tenant_id, user_id, active_navigation_item_id, sidebar_collapsed, created_at, updated_at
+              preference_id, tenant_id, user_id, active_navigation_item_id,
+              sidebar_collapsed, created_at, updated_at
             )
             VALUES(?, ?, ?, ?, 0, ?, ?)
             """,
@@ -1112,7 +1135,8 @@ def _load_preference(
 
     row = connection.execute(
         """
-        SELECT preference_id, tenant_id, user_id, active_navigation_item_id, sidebar_collapsed, created_at, updated_at
+        SELECT preference_id, tenant_id, user_id, active_navigation_item_id,
+               sidebar_collapsed, created_at, updated_at
         FROM user_preferences
         WHERE tenant_id=? AND user_id=?
         """,

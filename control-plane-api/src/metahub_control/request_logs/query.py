@@ -21,9 +21,10 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from metahub_control.auth import AuthContext
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+
+from metahub_control.auth import AuthContext
 
 from .models import RequestLogListResponse
 from .service import _connect, _request_log_info
@@ -114,7 +115,7 @@ TERMINAL_STAGE_SQL = """CASE
     OR rl.error_code IN (
       'gateway.execution_interrupted','gateway.stream_not_supported',
       'gateway.stream_session_unavailable','gateway.client_disconnected',
-      'gateway.stream_processing_unavailable'
+      'gateway.stream_processing_unavailable','gateway.experiment_execution_timeout'
     ) THEN 'provider'
   WHEN rl.error_code IN (
     'gateway.model_missing','gateway.messages_missing','gateway.input_missing',
@@ -122,7 +123,8 @@ TERMINAL_STAGE_SQL = """CASE
     'gateway.provider_not_found','gateway.provider_unhealthy','gateway.no_route_available',
     'gateway.routing_policy_invalid','gateway.routing_snapshot_unavailable',
     'gateway.routing_snapshot_invalid','gateway.routing_decision_unavailable',
-    'gateway.routing_attempt_unavailable','gateway.fallback_unavailable'
+    'gateway.routing_attempt_unavailable','gateway.fallback_unavailable',
+    'gateway.experiment_unavailable','gateway.experiment_variant_unavailable'
   ) THEN 'routing'
   WHEN rl.error_code='gateway.request_log_unavailable' THEN 'logs_and_webhooks'
   ELSE 'unknown'

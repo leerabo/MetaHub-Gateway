@@ -67,7 +67,9 @@ def prd074_worker_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     previous = os.environ.get("METAHUB_SEED_ADMIN_PASSWORD")
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = "Prd074WorkerTestOnly!2026"
     try:
-        assert apply_migrations(database_url).applied[-1] == "0067"
+        applied = apply_migrations(database_url).applied
+        # Worker 相邻回归必须覆盖后续迁移共存，精确 0067 栈顶由迁移专项负责。
+        assert "0067" in applied
         apply_seed_data(database_url)
     finally:
         if previous is None:

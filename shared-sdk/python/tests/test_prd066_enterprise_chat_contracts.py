@@ -66,10 +66,14 @@ def _build_event(payload: dict[str, object]):
 def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     """验证权限目录边界：仅 Admin、Developer 和 Viewer 默认获得独立 chat.use。"""
 
-    # PRD-074 把产品目录提升到 revision 10；本回归只证明原 Chat/模板边界继续存在。
-    # 文件安全扫描权限由独立 PRD-073 测试覆盖，不能据此改变 Chat 的角色授权。
-    assert CATALOG_REVISION == 10
-    assert len(PERMISSION_CODES) == 64
+    # 本回归冻结 revision 10 已发布的 64 项投影；PRD-075 的领域权限按规范目录位置插入，
+    # 因此必须按稳定 code 排除，不能假设新权限只追加在元组末尾。
+    assert CATALOG_REVISION >= 10
+    legacy_permission_codes = frozenset(PERMISSION_CODES) - {
+        "experiment.read",
+        "experiment.write",
+    }
+    assert len(legacy_permission_codes) == 64
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["admin"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["developer"]
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
@@ -81,15 +85,20 @@ def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     assert "prompt_template.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.read" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.write" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
-    # hash 必须使用 revision 10 的完整矩阵；
-    # 本用例随后仍逐项冻结 Chat 与 Prompt 模板原有边界，避免目录升级掩盖越权。
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
+    # 只投影 revision 10 的权限计算历史 hash；PRD-075 追加的 Experiment 权限不能污染旧合同。
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["admin"] & legacy_permission_codes
+    ) == (
         "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["developer"]) == (
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["developer"] & legacy_permission_codes
+    ) == (
         "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["viewer"]) == (
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["viewer"] & legacy_permission_codes
+    ) == (
         "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9"
     )
 

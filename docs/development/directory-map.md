@@ -1607,6 +1607,52 @@ Excel 总表、M2/M3 交付、PAGE-105、API、数据对象、Webhook 和验收�
 `POST /experiments`、`GET /experiments/{id}/results`、ModelExperiment/ExperimentResult、
 `experiment.completed` 和 TC-0149/0150。`all_108_prds_complete=false`。
 
+## PRD-075 模型 A/B 测试与质量评估目录（已完成）
+
+- `shared-sdk/python/metahub_shared/experiments/`：冻结采样与 variant 独立 HMAC 域、exact A/B 配额、
+  actor-scoped 幂等、route-config fingerprint、整数统计和 `experiment.completed` 安全 payload；RBAC
+  revision 11 与统一错误目录仍由 Shared runtime 提供。
+- `control-plane-api/src/metahub_control/experiments/`：提供 tenant-qualified 创建/列表/详情/结果 API、
+  五权限事务内复核、稳定私有 cursor、Scheduler、finalizer、execution/settlement Reaper、250ms 统计快照
+  和可恢复 source/outbox；Reaper 仅在 tenant/request/model/provider owner 完整匹配时降级残留 success
+  RequestLog，owner 缺失或冲突会在 Outcome 前失败并回滚整个事务。跨 tenant 与不存在同形，前端入口不构成授权。
+- `gateway-data-plane/src/metahub_gateway/experiments/` 与 `api/openai_compatible.py`：仅让符合条件的公开
+  Virtual Key Chat 进入实验，原子创建 Assignment/Execution/Settlement，冻结 exact Model/Provider route，
+  以 generation/lease/send fence 保护流/非流终态，并继续记录 RequestLog、Usage、FinOps 与失败事实；OpenAI
+  raw passthrough 使用有界、无正文留存且不重分块的 `[DONE]` observer，Generic/custom NULL marker 保持 clean EOF
+  兼容，active 审计失败由 shielded cleanup 关闭响应、Session 和 Cache Affinity owner。实验 timeout/通用异常
+  不在持久化前抢先发送，Session/RequestLog/Usage/Outcome 收口后只交付一个最终 SSE error；普通流保留即时
+  error 时序并以已发送标记阻止 finalizer 重复交付。
+- `infra/migrations/0068_model_ab_testing_quality_evaluation.sql/.down.sql`：新增 request scope claim、
+  Experiment、Assignment、Execution、Outcome、Settlement、Feedback Attribution、Result、Event/Outbox 和
+  scheduler cursor；复合 tenant owner、deferred closure、状态/不可变 trigger 与原子 down guard 完整，
+  RBAC catalog 提升到 revision 11、66 个 permissions、179 条 canonical 关系。所有认证请求保留普通 claim；
+  只有同时具备 Virtual Key、Project、Environment ID 和规范 environment code 时才写实验 scope claim。
+- `console-web/src/features/experiments/` 与 `src/lib/experiments.js`：实现 PAGE-105 列表、不可变配置详情、
+  A/B 权威结果和创建 Dialog，使用 permission owner、generation 与独立 Abort lanes 拒绝迟到响应；
+  desktop/mobile Browser 已验证详情、最终结果、焦点、移动滚动、后台刷新和撤权清理。
+- `shared-sdk/python/tests/test_prd075_experiment_contracts.py`、
+  `gateway-data-plane/tests/**/*prd075*.py`、`control-plane-api/tests/**/*prd075*.py` 和
+  `console-web/tests/unit/prd075Experiments.test.mjs`：覆盖 Shared、Gateway、Control、迁移、Console 的
+  主流程、异常、权限、跨租户、并发、恢复、回退和隐私合同；最终受影响回归为 Shared/Provider `180 passed`、
+  Gateway `204 passed`、Control/0068 `120 passed`、Runtime 验收器 `21 passed`，Console `723 passed`、
+  lint `225 files passed`，分组不相加冒充一次根级全量。
+- `docs/prd/PRD-075-model-ab-testing-quality-evaluation.md`、`docs/api/experiments.md` 与
+  `docs/testing/PRD-075-tests.md`：分别保存冻结设计及两轮自审、公开 API/错误/Webhook 合同和最终测试记录。
+- `scripts/acceptance/prd075-runtime-acceptance.py`：在仓库内隔离 SQLite、固定回环 Control/Gateway/Console、
+  两个 OpenAI-compatible Provider 和 Webhook 上验证 A/B 配额、Provider 失败、成本/用量、撤权/跨租户、
+  Control 停机恢复、outbox、隐私和 owned-process 清理；还在空库执行 0068 fresh/repeat/down/re-up，
+  不保存 Prompt/Response 或真实凭据。
+- `.artifacts/prd075-runtime/prd075-final-20260810T011951Z/`：最终脱敏 Runtime JSON 与 SHA-256；四阶段迁移
+  完整性均 ok、外键违规 0，服务、失败/成本追踪和停机恢复通过，outbox pending 0，145 个受控文件随机明文
+  canary 命中 0，SQLite sidecar 0。
+- `.artifacts/prd075-browser/prd075-final-20260809T234829Z/`：最终 Browser 主 JSON、独立 API helper JSON、
+  11 张非空 PAGE-105 截图和 SHA-256；13 项 manifest 全匹配，双视口无横向溢出/重叠/文本溢出，UI 创建、
+  幂等/冲突、新 owner、撤权清理与后端 403 均通过。
+
+PRD-075 已通过设计、自审、实现、专项、必要回归、迁移、Runtime、Browser、中文注释和提交前安全门禁；
+该结论只关闭本条，`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

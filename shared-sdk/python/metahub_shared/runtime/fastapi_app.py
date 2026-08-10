@@ -472,6 +472,10 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Batch responses expose tenant-private job, task, cost and result state. Apply the
         # private cache boundary to success and every middleware-generated error response.
         response.headers["Cache-Control"] = "no-store, private"
+    elif path == "/experiments" or path.startswith("/experiments/"):
+        # Experiment configuration and result snapshots are tenant-private. Authentication,
+        # validation, owner and infrastructure failures must share the same cache boundary.
+        response.headers["Cache-Control"] = "no-store, private"
     elif (
         path == "/chat"
         or path.startswith("/chat/")

@@ -20,8 +20,8 @@ from metahub_shared.runtime.policy_snapshot import (
 def test_policy_template_permissions_are_separate_and_role_bounded() -> None:
     """权限主流程：四个职责管理员获得模板能力，Developer/Viewer 不得获得页面或应用权限。"""
 
-    # 当前共享目录已由 PRD-074 提升到 revision 10；本测试只冻结模板权限原有边界。
-    assert CATALOG_REVISION == 10
+    # 后续目录可以追加权限；本测试只冻结 revision 10 已发布的模板权限边界。
+    assert CATALOG_REVISION >= 10
     assert PERMISSION_BY_CODE["policy_template.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["policy_template.apply"].risk_level == "critical"
     for role_code in ("admin", "finance_admin", "security_admin", "ops_admin"):

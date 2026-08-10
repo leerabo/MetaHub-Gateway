@@ -1,0 +1,139 @@
+{
+  "all_108_prds_complete": false,
+  "api_idempotency": {
+    "cache_control_private": true,
+    "changed_body_new_key_new_owner": true,
+    "changed_body_new_key_status": 201,
+    "changed_body_same_key_code": "experiment.idempotency_conflict",
+    "changed_body_same_key_status": 409,
+    "distinct_request_ids": true,
+    "first_idempotent_replay": false,
+    "first_status": 201,
+    "replay_idempotent_replay": true,
+    "replay_status": 201,
+    "same_experiment_owner": true
+  },
+  "pixel_checks": {
+    "all_screenshots_nonblank": true,
+    "minimum_sampled_color_count": 1710,
+    "minimum_variance_sum": 1710.4,
+    "screenshot_count": 11
+  },
+  "privacy": {
+    "credential_fields_written_to_public_evidence": false,
+    "prompt_or_response_fields_present": false,
+    "token_fields_written_to_public_evidence": false
+  },
+  "rbac_revocation": {
+    "developer_baseline_status": 200,
+    "matrix_restored": true,
+    "response_header_request_id_matches": true,
+    "restored_status": 200,
+    "revoked_error_code": "auth.permission_denied",
+    "revoked_request_id": "prd075-browser-revoke-results-final",
+    "revoked_status": 403
+  },
+  "run_id": "prd075-final-20260809T234829Z",
+  "schema_version": 1,
+  "screenshots": [
+    {
+      "byte_length": 77331,
+      "file": "desktop-after-revoke-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 3174,
+      "sha256": "89efba5dea4fe19bd23eadb99c49426a6e5262c071d938e473927e1d29937d99",
+      "variance_sum": 3201.42,
+      "width": 1265
+    },
+    {
+      "byte_length": 82284,
+      "file": "desktop-before-revoke-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 3213,
+      "sha256": "0afd9b6c752a2f860a5458266e0a32741fe3256eab5998c0dda7320bdca7372c",
+      "variance_sum": 3067.59,
+      "width": 1265
+    },
+    {
+      "byte_length": 59381,
+      "file": "desktop-create-dialog-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 1879,
+      "sha256": "a9b1f4e2d0b56236b775ccd76f6c7f6dc9aec846fcd22c86f13f6b6800e1bd49",
+      "variance_sum": 14550.28,
+      "width": 1265
+    },
+    {
+      "byte_length": 86536,
+      "file": "desktop-list-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 3247,
+      "sha256": "40587e94a7700341d96dd0e79ae4be87a36a200a035d5a97b1d83a93af0c980d",
+      "variance_sum": 2977.15,
+      "width": 1265
+    },
+    {
+      "byte_length": 86961,
+      "file": "desktop-result-cards-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 2879,
+      "sha256": "2fdc6766f53ca091f4de2b0b14e3eb1820cd26492145a2adc0de49f2d1068932",
+      "variance_sum": 2704.61,
+      "width": 1265
+    },
+    {
+      "byte_length": 93794,
+      "file": "desktop-results-1280x720.png",
+      "height": 712,
+      "sampled_color_count": 3245,
+      "sha256": "6b5237c495b05eb8549343e5c3faaa47b55bb06763da1dddc5ff555eee19f1b3",
+      "variance_sum": 3350.57,
+      "width": 1265
+    },
+    {
+      "byte_length": 27225,
+      "file": "mobile-create-dialog-actions-390x844.png",
+      "height": 812,
+      "sampled_color_count": 1878,
+      "sha256": "d95f5ecae709d61d03bb1dc1a6c5fdec12822f94b47804024eff6d793791ad3f",
+      "variance_sum": 6524.05,
+      "width": 375
+    },
+    {
+      "byte_length": 27310,
+      "file": "mobile-create-dialog-top-390x844.png",
+      "height": 812,
+      "sampled_color_count": 1710,
+      "sha256": "753baadd3015c2f4bac86e99c806a93c1e2a2a1b63910deb4c4d16992494eeff",
+      "variance_sum": 5737.13,
+      "width": 375
+    },
+    {
+      "byte_length": 30922,
+      "file": "mobile-list-390x844.png",
+      "height": 812,
+      "sampled_color_count": 3215,
+      "sha256": "3703c1baf70d837e573e1df084e222ebac1d89fadb2883f33d489fad33ebac5d",
+      "variance_sum": 4928.45,
+      "width": 375
+    },
+    {
+      "byte_length": 30578,
+      "file": "mobile-results-a-390x844.png",
+      "height": 812,
+      "sampled_color_count": 2929,
+      "sha256": "2d6e3f559068ff167a898b27c596738e9cb24ffde2d3792a54f95cdfd4a24f3e",
+      "variance_sum": 2854.73,
+      "width": 375
+    },
+    {
+      "byte_length": 23838,
+      "file": "mobile-results-b-390x844.png",
+      "height": 812,
+      "sampled_color_count": 2133,
+      "sha256": "ed34d42b54b0a1546910b814729e82fdc01845b88b85f32d38a6adb511e9d5cc",
+      "variance_sum": 1710.4,
+      "width": 375
+    }
+  ]
+}

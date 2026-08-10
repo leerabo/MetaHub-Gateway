@@ -66,28 +66,31 @@ def _owner(**changes: object) -> BatchEnvelopeOwner:
     return BatchEnvelopeOwner(**values)  # type: ignore[arg-type]
 
 
-def test_revision_10_batch_permissions_and_frozen_hashes() -> None:
-    """验证批处理场景。
+def test_current_catalog_preserves_batch_permission_boundaries() -> None:
+    """后续目录 revision 可以增加权限，但不得移除或扩大 PRD-074 的 Batch 授权边界。"""
 
-    定义：test_revision_10_batch_permissions_and_frozen_hashes。
-    固定租户隔离、权限拒绝、失败追踪和回退边界。
-    """
-    assert CATALOG_REVISION == 10
-    assert len(PERMISSION_CODES) == 64
+    assert CATALOG_REVISION >= 10
+    # PRD-075 权限按领域位置插入；按 code 排除后必须仍是 revision 10 的完整 64 项矩阵。
+    legacy_permission_codes = frozenset(PERMISSION_CODES) - {
+        "experiment.read",
+        "experiment.write",
+    }
+    assert len(legacy_permission_codes) == 64
+    assert {"batch.read", "batch.write"} <= set(PERMISSION_CODES)
     for role in ("admin", "developer", "ops_admin"):
         assert {"batch.read", "batch.write"} <= ROLE_GRANTABLE_PERMISSIONS[role]
     for role in ("viewer", "finance_admin", "security_admin"):
         assert not {"batch.read", "batch.write"} & ROLE_GRANTABLE_PERMISSIONS[role]
     assert "file.read" in ROLE_GRANTABLE_PERMISSIONS["ops_admin"]
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
-        "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
-    )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["developer"]) == (
-        "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30"
-    )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["ops_admin"]) == (
-        "72a396186bd78f79cbbeadab59ba322d2088640f37787377bb74c034486b65c6"
-    )
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["admin"] & legacy_permission_codes
+    ) == "ca6468544f0c3b9d3b52180786bc812e29e854a51e160d792a6536ba0c491262"
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["developer"] & legacy_permission_codes
+    ) == "89e9455fe2abf258658f2571128c392cdb79d95b525980b7ac653135fd6a7b30"
+    assert permission_matrix_sha256(
+        ROLE_GRANTABLE_PERMISSIONS["ops_admin"] & legacy_permission_codes
+    ) == "72a396186bd78f79cbbeadab59ba322d2088640f37787377bb74c034486b65c6"
 
 
 def test_operation_contract_is_exact_and_renders_untrusted_boundary() -> None:

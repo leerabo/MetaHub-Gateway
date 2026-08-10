@@ -451,6 +451,100 @@ I18N_MESSAGES: tuple[I18nMessage, ...] = (
         "Routing decision unavailable",
         "errors",
     ),
+    I18nMessage(
+        "error.experiment.input_invalid.label", "zh-CN", "实验请求不合法", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.input_invalid.label",
+        "en-US",
+        "Invalid experiment request",
+        "errors",
+    ),
+    I18nMessage(
+        "error.experiment.query_invalid.label", "zh-CN", "实验查询不合法", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.query_invalid.label", "en-US", "Invalid experiment query", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.idempotency_required.label", "zh-CN", "实验幂等键缺失", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.idempotency_required.label",
+        "en-US",
+        "Experiment idempotency key required",
+        "errors",
+    ),
+    I18nMessage(
+        "error.experiment.model_invalid.label", "zh-CN", "实验模型配置不合法", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.model_invalid.label", "en-US", "Invalid experiment models", "errors"
+    ),
+    I18nMessage("error.experiment.not_found.label", "zh-CN", "实验不存在", "errors"),
+    I18nMessage(
+        "error.experiment.not_found.label", "en-US", "Experiment not found", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.idempotency_conflict.label", "zh-CN", "实验幂等键冲突", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.idempotency_conflict.label",
+        "en-US",
+        "Experiment idempotency conflict",
+        "errors",
+    ),
+    I18nMessage(
+        "error.experiment.scope_conflict.label", "zh-CN", "实验作用域冲突", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.scope_conflict.label", "en-US", "Experiment scope conflict", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.unavailable.label", "zh-CN", "实验服务暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.unavailable.label",
+        "en-US",
+        "Experiment service unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.experiment.statistics_unavailable.label", "zh-CN", "实验统计暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.experiment.statistics_unavailable.label",
+        "en-US",
+        "Experiment statistics unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.gateway.experiment_unavailable.label", "zh-CN", "实验路由事实暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.gateway.experiment_unavailable.label",
+        "en-US",
+        "Experiment routing unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.gateway.experiment_variant_unavailable.label", "zh-CN", "实验分组暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.gateway.experiment_variant_unavailable.label",
+        "en-US",
+        "Experiment variant unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.gateway.experiment_execution_timeout.label", "zh-CN", "实验执行已超时", "errors"
+    ),
+    I18nMessage(
+        "error.gateway.experiment_execution_timeout.label",
+        "en-US",
+        "Experiment execution timed out",
+        "errors",
+    ),
     # 调用日志高级查询与个人保存筛选提供中英文短标签；code 与 ErrorSpec 英文详情继续保持
     # 稳定，前端只把这些静态标签用于展示，不能据此替代后端权限或错误分支判断。
     I18nMessage("error.request_log.not_found.label", "zh-CN", "调用日志不存在", "errors"),
