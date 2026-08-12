@@ -51,6 +51,9 @@ ROLE_DASHBOARD_PAYLOAD_ALLOWED_KEYS = {
 # 事件枚举与导航入口一一绑定，防止调用方把高价值事件伪造到其他页面。
 EVENT_TYPE_BY_NAVIGATION = {
     "overview": "dashboard.viewed",
+    # PAGE-107 页面事件只保存 shell 元数据；问题、回答与来源值仅存在浏览器活动内存，
+    # 专用助手审计图也只保存枚举、计数和链路 owner，不能借 page_viewed 复制正文。
+    "admin-assistant": "console.page_viewed",
     "migration-guide": "migration.guide_viewed",
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
@@ -139,6 +142,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看本地服务状态、MVP 边界和下一步引导。",
         "先确认 Gateway、Control API 和 Console 都处于可用状态。",
         10,
+    ),
+    NavigationDefinition(
+        "admin-assistant",
+        "管理助手",
+        "总览",
+        "admin-assistant",
+        ("admin_assistant.query",),
+        "使用可验证数据来源查询用量、错误、成本和策略摘要。",
+        "选择一个只读问题开始查询。",
+        11,
     ),
     NavigationDefinition(
         "tenant",

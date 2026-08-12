@@ -60,6 +60,8 @@ export const PERMISSIONS = Object.freeze({
   RESPONSE_CACHE_READ: "response_cache.read",
   RESPONSE_CACHE_WRITE: "response_cache.write",
   RESPONSE_CACHE_INVALIDATE: "response_cache.invalidate",
+  // PAGE-107 只授予进入只读助手的基础能力；任何来源事实仍要求对应页面的原始读取权限。
+  ADMIN_ASSISTANT_QUERY: "admin_assistant.query",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

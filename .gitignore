@@ -30,7 +30,9 @@ infra/compose/.env.compose
 *.db
 *.db-*
 *.sqlite
+*.sqlite-*
 *.sqlite3
+*.sqlite3-*
 
 # 历史运行证据含数据库、日志和浏览器 profile，只保留在本机；当前 PRD 的脱敏小型制品单独白名单。
 artifacts/
@@ -132,3 +134,18 @@ artifacts/
 !.artifacts/prd076-browser/prd076-browser-final-20260811-24/request-log-hit-mobile-390x844.png
 !.artifacts/prd076-browser/prd076-browser-final-20260811-24/version-conflict-desktop-1280x720.png
 !.artifacts/prd076-browser/prd076-browser-final-20260811-24/viewer-denied-desktop-1280x720.png
+!.artifacts/prd077-runtime/
+.artifacts/prd077-runtime/*
+!.artifacts/prd077-runtime/prd077-final-20260812-04/
+.artifacts/prd077-runtime/prd077-final-20260812-04/*
+!.artifacts/prd077-runtime/prd077-final-20260812-04/SHA256SUMS.txt
+!.artifacts/prd077-runtime/prd077-final-20260812-04/runtime-acceptance.json
+!.artifacts/prd077-browser/
+.artifacts/prd077-browser/*
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/
+.artifacts/prd077-browser/prd077-browser-final-20260812-05/*
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/browser-summary.json
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/empty-desktop-1280x720.png
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/empty-mobile-390x844.png
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/runtime-summary.json
+!.artifacts/prd077-browser/prd077-browser-final-20260812-05/sha256-manifest.json

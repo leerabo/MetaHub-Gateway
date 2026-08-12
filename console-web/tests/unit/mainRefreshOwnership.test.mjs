@@ -50,21 +50,17 @@ test("late current-user response is rejected before identity or storage writebac
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const refresh = sourceSection(source, "async function performRefresh()", "function renderLogin(");
   const frozenTokenIndex = refresh.indexOf("const refreshToken = authSession.token;");
+  const ownerClosureIndex = refresh.indexOf("const refreshOwnerCurrent = () =>", frozenTokenIndex);
   const currentUserAwaitIndex = refresh.indexOf("await getCurrentUser({ controlApiUrl, token: refreshToken })");
-  const ownerGateIndex = refresh.indexOf(
-    "refreshId !== refreshSequence || authSession.token !== refreshToken",
-    currentUserAwaitIndex,
-  );
+  const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent())", currentUserAwaitIndex);
   const identityWriteIndex = refresh.indexOf("clearBudgetStateOnIdentityChange", currentUserAwaitIndex);
   const storageWriteIndex = refresh.indexOf("saveAuthSession(refreshToken, context)", currentUserAwaitIndex);
   const catchIndex = refresh.indexOf("} catch (error)", storageWriteIndex);
-  const catchOwnerGateIndex = refresh.indexOf(
-    "refreshId !== refreshSequence || authSession.token !== refreshToken",
-    catchIndex,
-  );
+  const catchOwnerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent())", catchIndex);
   const catchClearIndex = refresh.indexOf("clearAuthSession();", catchIndex);
 
-  assert.ok(frozenTokenIndex > 0 && frozenTokenIndex < currentUserAwaitIndex);
+  assert.ok(frozenTokenIndex > 0 && frozenTokenIndex < ownerClosureIndex);
+  assert.ok(ownerClosureIndex < currentUserAwaitIndex);
   assert.ok(currentUserAwaitIndex < ownerGateIndex && ownerGateIndex < identityWriteIndex);
   assert.ok(ownerGateIndex < storageWriteIndex);
   assert.ok(catchIndex < catchOwnerGateIndex && catchOwnerGateIndex < catchClearIndex);

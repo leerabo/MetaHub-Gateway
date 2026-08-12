@@ -1690,6 +1690,51 @@ TC-0153/0154 共同确认，下一条权威未完成项为
 `PRD-077 | M2-企业增强 | P2 | 扩展层 | Admin AI助手 | 只读管理员AI助手`。本条不实现 PRD-077，
 `all_108_prds_complete=false`。
 
+## PRD-077 只读管理员 AI 助手目录（已完成）
+
+- `shared-sdk/python/metahub_shared/admin_assistant/`：冻结四类有界自然语言意图、只读动作闸门、
+  tenant-safe typed claim/source 图、内部 href allowlist 和确定性回答 renderer；Shared runtime 同时提供
+  RBAC revision 13、统一错误目录、`assistant.queried` exact payload 与安全配置。
+- `control-plane-api/src/metahub_control/admin_assistant/`：提供 `POST /admin-assistant/query`、严格 wire、
+  tenant-first 来源 repository、原子 Query/Audit/AuditLog/event 持久化、source outbox 与 lifespan
+  scheduler；`auth/`、`audit/`、`console/` 和 `webhooks/` 接入仅认证依赖、事务权限复核、安全摘要、
+  PAGE-107 导航和提交后恢复。
+- Control execution runtime 按 app/event loop 持有认证/来源 read-stage 与最终/终态 write-stage 两条长期
+  SQLite WAL/FULL 连接，并以独立有限 admission、入口绝对 deadline、progress handler、shielded worker
+  和 teardown rollback/close 关闭排队、取消、迟到提交与文件句柄泄漏；`last_seen` 与治理图同事务提交。
+- `infra/migrations/0070_read_only_admin_ai_assistant.sql/.down.sql`：新增 tenant-qualified
+  AssistantQuery、AssistantAudit、event source/outbox、AuditLog owner/immutable/down guard，并把 RBAC
+  catalog 提升到 revision 13；默认角色扩展与自定义矩阵、0069 AuditLog rowid/sequence/schema 保真由
+  迁移专项约束。
+- `console-web/src/features/admin-assistant/`、`src/lib/adminAssistant.js`、`src/lib/healthRequest.js` 及
+  Console shell/i18n/styles：实现 PAGE-107 问题输入、claim/source/redaction、四个可执行示例、
+  owner/generation/Abort 清理、动态撤权、来源权限交集和 desktop/mobile 稳定布局；问题与回答不进入
+  HTML 模板、Storage、日志或持久证据。
+- `shared-sdk/python/tests/test_prd077_admin_assistant.py`、
+  `control-plane-api/tests/integration/test_prd077_*.py`、
+  `console-web/tests/unit/prd077AdminAssistant.test.mjs` 与 `scripts/acceptance/tests/test_prd077_*`：覆盖
+  Shared/0070/outbox、Control、Runtime/Browser harness、PAGE-107 Console、权限、租户、deadline、并发、
+  恢复、隐私和 owner cleanup；已知通过结果及重叠边界见测试记录，不能相加冒充根级全量。
+- `docs/prd/PRD-077-read-only-admin-ai-assistant.md`、`docs/api/admin-assistant.md` 与
+  `docs/testing/PRD-077-tests.md`：分别保存冻结设计及两轮自审、公开 API/错误/Webhook 合同和最终测试记录。
+- `scripts/acceptance/prd077-runtime-acceptance.py`、`prd077-browser-harness.py` 与
+  `prd077-browser-acceptance.mjs`：固定仓库内临时目录、loopback、source provenance、隐私扫描、原子证据
+  发布和 owner-safe cleanup。
+- `.artifacts/prd077-runtime/prd077-final-20260812-04/`：从空 SQLite 完成
+  `70/0070 -> 70/0070 -> 69/0069 -> 70/0070`；四阶段完整性均为 ok、外键违规 0。真实 Control 覆盖
+  四类查询、租户/RBAC、只读阻断、20 并发、来源故障及停服恢复，最终 outbox、owner process、sidecar
+  与敏感明文残留为 0；主 JSON SHA-256 为
+  `c4903b6c542051164d8ce9298b61581620423ac9782141e9d9a1340be9993f4b`。
+- `.artifacts/prd077-browser/prd077-browser-final-20260812-05/`：保存脱敏 Browser/Runtime summary、桌面与
+  移动清空态截图及 SHA-256 manifest；PAGE-107 的四类查询、来源权限、动态撤权、后端 403、来源防篡改、
+  取消/迟到/登出和双视口布局通过。manifest 精确库存和全部摘要经独立重算匹配，截图已经人工复核。
+
+PRD-077 的设计、实现、专项、必要回归、迁移、Runtime、Browser、中文注释和提交前安全门禁均已通过。
+Excel 总表第 79 行、M2/M3 交付第 15 行、PAGE-108/109、审批 API、ApprovalTask、
+`approval.created`/`approval.timeout` 与 TC-0155/0156 共同确认，PRD-077 之后的下一条权威未完成项为
+`PRD-078 | M2-企业增强 | P2 | 扩展层 | 移动审批 | 移动端/企微钉钉审批入口`。本次不启动或混入
+PRD-078；`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

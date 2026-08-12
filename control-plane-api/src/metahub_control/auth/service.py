@@ -10,6 +10,8 @@ import logging
 import math
 import sqlite3
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -52,13 +54,13 @@ __all__ = (
     "SECURITY_ADMIN_ROLE",
     "VIEWER_ROLE",
     "RoleCode",
+    "refresh_transaction_authentication",
     "require_transaction_permission",
 )
 
 # 固定假哈希用于不存在账号时做一次密码校验，降低账号枚举时的明显时序差异。
 _DUMMY_PASSWORD_HASH = (
-    "pbkdf2_sha256$200000$AAAAAAAAAAAAAAAAAAAAAA==$"
-    "9JrZB7v3Jps9SMpi45e5yM/OXh+1xPzXD7fF22bWm6w="
+    "pbkdf2_sha256$200000$AAAAAAAAAAAAAAAAAAAAAA==$9JrZB7v3Jps9SMpi45e5yM/OXh+1xPzXD7fF22bWm6w="
 )
 
 
@@ -82,7 +84,6 @@ class AuthContext:
 
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
-
 
     user: AuthUser
     tenant: AuthTenant
@@ -130,9 +131,8 @@ def login_admin(
 
     normalized_email = email.strip().lower()
     normalized_tenant = (
-        (tenant_slug or config.default_tenant_slug).strip()
-        or config.default_tenant_slug
-    )
+        tenant_slug or config.default_tenant_slug
+    ).strip() or config.default_tenant_slug
     now = _utcnow()
     connection = _connect(config)
     tenant = _tenant_by_slug(connection, normalized_tenant)
@@ -258,102 +258,238 @@ def authenticate_bearer(
     *,
     monotonic_deadline: float | None = None,
     deadline_error_code: str = "feedback.unavailable",
+    connection: sqlite3.Connection | None = None,
+    update_last_seen: bool = True,
+    invalidate_connection: Callable[[sqlite3.Connection], None] | None = None,
 ) -> AuthContext:
     """从 Authorization Header 中恢复已登录用户上下文。
 
     ``monotonic_deadline`` 仅供具有端点级硬预算的内部依赖传入；设置后，Session 查询和
-    ``last_seen`` 写入共用剩余 SQLite 锁等待，耗尽时转换为指定公开错误码。无论认证
-    成功或失败都关闭连接，避免高频鉴权累积文件句柄和未完成事务。
+    ``last_seen`` 写入共用剩余 SQLite 锁等待与 progress handler，耗尽时转换为指定公开错误码。
+    调用方可把 ``last_seen`` 延迟到自己的最终治理事务；默认连接由本函数关闭，显式传入
+    连接由调用方的 request 或 app runtime owner 关闭。
     """
 
     token = _extract_bearer(authorization)
     claims = decode_access_token(token, config.auth_token_secret)
     deadline = _normalize_auth_deadline(monotonic_deadline, deadline_error_code)
-    connection = _connect(config)
+    owns_connection = connection is None
+    if connection is None:
+        connection = _connect(config)
+    connection_invalid = False
+
+    def mark_connection_invalid() -> None:
+        """记录 deadline 装配/恢复失败，交由 finally 在当前 slot owner 内退休。"""
+
+        nonlocal connection_invalid
+        connection_invalid = True
+
     try:
-        if deadline is not None:
-            # SQLite busy_timeout 采用剩余预算的整数毫秒；认证不能使用驱动默认 5 秒等待。
-            remaining_ms = _remaining_auth_deadline_ms(deadline, deadline_error_code)
-            connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
-        row = connection.execute(
-            """
-            SELECT
-              s.session_id, s.tenant_id, s.user_id, s.token_jti, s.token_hash, s.status,
-              s.expires_at, u.email, u.display_name, u.role, u.status AS user_status,
-              t.slug AS tenant_slug, t.name AS tenant_name, t.status AS tenant_status
-            FROM sessions s
-            JOIN users u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
-            JOIN tenants t ON t.tenant_id = s.tenant_id
-            WHERE s.session_id=? AND s.token_jti=? AND s.tenant_id=? AND s.user_id=?
-            """,
-            (claims.session_id, claims.jti, claims.tenant_id, claims.user_id),
-        ).fetchone()
-        if not row:
-            # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露有效性细节。
-            raise ApiError("auth.token_invalid")
-        if row["token_hash"] != hash_token(token):
-            raise ApiError("auth.token_invalid")
-        if row["status"] != "active":
-            # 撤销状态由服务端权威 Session 决定，不能只相信 Token 内 claims。
-            raise ApiError("auth.session_revoked")
-
-        now = _utcnow()
-        expires_at = _parse_datetime(row["expires_at"])
-        if not expires_at or expires_at <= now:
-            connection.execute(
-                "UPDATE sessions SET status='expired', updated_at=? WHERE session_id=?",
-                (_to_db_time(now), row["session_id"]),
-            )
-            connection.commit()
-            # 过期 Token 使用稳定认证错误，不披露 Session 行或数据库状态。
-            raise ApiError("auth.token_expired")
-        if row["user_status"] != "active" or row["tenant_status"] != "active":
-            raise ApiError("auth.token_invalid")
-
-        snapshot = _load_permission_snapshot(
+        with _authentication_sqlite_deadline(
             connection,
-            tenant_id=row["tenant_id"],
-            user_id=row["user_id"],
-            role_code=row["role"],
-            unavailable_error_code=(
-                deadline_error_code
-                if deadline is not None
-                else "rbac.unavailable"
-            ),
-        )
-
-        # 只有身份和矩阵都复核成功后才刷新 last_seen，损坏矩阵不能伪装成成功认证。
-        connection.execute(
-            "UPDATE sessions SET last_seen_at=?, updated_at=? WHERE session_id=?",
-            (_to_db_time(now), _to_db_time(now), row["session_id"]),
-        )
-        connection.commit()
-
-        user = _auth_user(row, snapshot)
-        tenant = AuthTenant(
-            tenant_id=row["tenant_id"],
-            slug=row["tenant_slug"],
-            name=row["tenant_name"],
-        )
-        session = AuthSession(session_id=row["session_id"], expires_at=expires_at)
-        # 租户状态或租户筛选是隔离边界，命中异常时必须立即截断。
-        return AuthContext(
-            user=user,
-            tenant=tenant,
-            session=session,
-            token=token,
-            token_jti=row["token_jti"],
-        )
+            deadline=deadline,
+            error_code=deadline_error_code,
+            invalidate_connection=mark_connection_invalid,
+        ):
+            # 认证结果只能在同一 deadline handler 内构造，返回前还会再次核对绝对期限。
+            return _authenticate_bearer_context(
+                connection,
+                claims=claims,
+                token=token,
+                deadline=deadline,
+                deadline_error_code=deadline_error_code,
+                update_last_seen=update_last_seen,
+            )
     # Session SQL 或提交失败时先撤销事务；端点级预算路径再折叠为稳定依赖错误。
     except sqlite3.Error as exc:
-        connection.rollback()
+        connection_invalid = connection_invalid or deadline is not None
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        # 连回滚状态都不可用时，长期连接必须被标记污染并从 runtime 退休。
+        except sqlite3.Error:
+            connection_invalid = True
         if deadline is not None:
             # 有端点预算时锁等待、I/O 和提交故障统一失败关闭，不泄露 SQL 或数据库路径。
             raise ApiError(deadline_error_code) from exc
         # 普通控制面认证也必须使用稳定 503，而不能让 SQL 文本或数据库路径穿透响应。
         raise ApiError("rbac.unavailable") from exc
     finally:
-        connection.close()
+        if owns_connection:
+            try:
+                connection.close()
+            # 独占认证连接关闭失败不能覆盖已经归一的认证或数据库错误。
+            except sqlite3.Error:
+                pass
+        elif connection_invalid:
+            if invalidate_connection is not None:
+                try:
+                    invalidate_connection(connection)
+                # owner callback 失败后直接关闭污染句柄，不能把异常回传成敏感内部错误。
+                except Exception:
+                    # callback 失败也不能让污染句柄继续留在调用者可见路径。
+                    try:
+                        connection.close()
+                    # close 再失败也只保留原固定错误，调用方不得继续持有该连接。
+                    except sqlite3.Error:
+                        pass
+            else:
+                try:
+                    connection.close()
+                # 无 owner callback 时仍尽力关闭污染句柄，并保持原认证错误优先。
+                except sqlite3.Error:
+                    pass
+
+
+@contextmanager
+def _authentication_sqlite_deadline(
+    connection: sqlite3.Connection,
+    *,
+    deadline: float | None,
+    error_code: str,
+    invalidate_connection: Callable[[], None] | None = None,
+) -> Iterator[None]:
+    """让认证锁等待、SQL 执行和 handler 清理落入同一 SQLite 错误边界。"""
+
+    if deadline is None:
+        yield
+        return
+    remaining_ms = _remaining_auth_deadline_ms(deadline, error_code)
+    previous_timeout_ms: int | None = None
+    timeout_changed = False
+    handler_install_attempted = False
+    first_error: sqlite3.Error | None = None
+
+    def remember(exc: sqlite3.Error) -> None:
+        """保留最早 SQLite 状态错误，同时通知长期连接 owner 后续退休该句柄。"""
+
+        nonlocal first_error
+        # 只保留最早连接状态错误，后续 handler/PRAGMA 清理失败不能改写因果顺序。
+        if first_error is None:
+            first_error = exc
+        if invalidate_connection is not None:
+            invalidate_connection()
+
+    try:
+        previous_timeout_row = connection.execute("PRAGMA busy_timeout").fetchone()
+        # 无法读取旧锁预算时不能在长期共享连接上盲目覆盖并留下跨请求状态。
+        if previous_timeout_row is None:
+            raise sqlite3.OperationalError("busy timeout unavailable")
+        previous_timeout_ms = int(previous_timeout_row[0])
+        connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
+        timeout_changed = True
+        handler_install_attempted = True
+        connection.set_progress_handler(
+            lambda: 1 if time.monotonic() >= deadline else 0,
+            1_000,
+        )
+        yield
+    # PRAGMA、类型转换或 handler 安装失败都污染长期连接，统一记为 SQLite 状态错误。
+    except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+        # 非 SQLite 类型漂移折叠为固定本地错误，避免把驱动值或对象正文带出认证层。
+        if not isinstance(exc, sqlite3.Error):
+            exc = sqlite3.OperationalError("busy timeout invalid")
+        remember(exc)
+    finally:
+        if handler_install_attempted:
+            try:
+                connection.set_progress_handler(None, 0)
+            # handler 无法移除时连接可能继续跨请求中断 SQL，必须通知 owner 退休。
+            except sqlite3.Error as exc:
+                remember(exc)
+        if timeout_changed and previous_timeout_ms is not None:
+            try:
+                connection.execute(f"PRAGMA busy_timeout={previous_timeout_ms}")
+            # 原锁预算恢复失败会泄漏跨请求状态，同样标记长期连接不可复用。
+            except sqlite3.Error as exc:
+                remember(exc)
+    # 清理阶段首错必须在 contextmanager 退出后传播，不能把污染连接当作认证成功。
+    if first_error is not None:
+        # 上层统一映射为固定依赖错误，同时按 callback 摘除长期连接引用。
+        raise first_error
+
+
+def _authenticate_bearer_context(
+    connection: sqlite3.Connection,
+    *,
+    claims: TokenClaims,
+    token: str,
+    deadline: float | None,
+    deadline_error_code: str,
+    update_last_seen: bool,
+) -> AuthContext:
+    """在已装配 deadline 的连接上恢复实时 Session 与权限矩阵。"""
+
+    row = connection.execute(
+        """
+        SELECT
+          s.session_id, s.tenant_id, s.user_id, s.token_jti, s.token_hash, s.status,
+          s.expires_at, u.email, u.display_name, u.role, u.status AS user_status,
+          t.slug AS tenant_slug, t.name AS tenant_name, t.status AS tenant_status
+        FROM sessions s
+        JOIN users u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
+        JOIN tenants t ON t.tenant_id = s.tenant_id
+        WHERE s.session_id=? AND s.token_jti=? AND s.tenant_id=? AND s.user_id=?
+        """,
+        (claims.session_id, claims.jti, claims.tenant_id, claims.user_id),
+    ).fetchone()
+    if not row:
+        # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露有效性细节。
+        raise ApiError("auth.token_invalid")
+    if row["token_hash"] != hash_token(token):
+        raise ApiError("auth.token_invalid")
+    if row["status"] != "active":
+        # 撤销状态由服务端权威 Session 决定，不能只相信 Token 内 claims。
+        raise ApiError("auth.session_revoked")
+
+    now = _utcnow()
+    expires_at = _parse_datetime(row["expires_at"])
+    if not expires_at or expires_at <= now:
+        if update_last_seen:
+            # 普通认证继续收敛过期状态；PAGE-107 read-stage 把所有写入留给最终治理事务。
+            connection.execute(
+                "UPDATE sessions SET status='expired', updated_at=? WHERE session_id=?",
+                (_to_db_time(now), row["session_id"]),
+            )
+            connection.commit()
+        # 过期 Token 使用稳定认证错误，不披露 Session 行或数据库状态。
+        raise ApiError("auth.token_expired")
+    if row["user_status"] != "active" or row["tenant_status"] != "active":
+        raise ApiError("auth.token_invalid")
+
+    snapshot = _load_permission_snapshot(
+        connection,
+        tenant_id=row["tenant_id"],
+        user_id=row["user_id"],
+        role_code=row["role"],
+        unavailable_error_code=(
+            deadline_error_code if deadline is not None else "rbac.unavailable"
+        ),
+    )
+
+    if update_last_seen:
+        # 普通 API 仍在认证成功后立即刷新；PAGE-107 会把该写入并入最终不可变审计事务。
+        connection.execute(
+            "UPDATE sessions SET last_seen_at=?, updated_at=? WHERE session_id=?",
+            (_to_db_time(now), _to_db_time(now), row["session_id"]),
+        )
+        connection.commit()
+
+    context = AuthContext(
+        user=_auth_user(row, snapshot),
+        tenant=AuthTenant(
+            tenant_id=row["tenant_id"],
+            slug=row["tenant_slug"],
+            name=row["tenant_name"],
+        ),
+        session=AuthSession(session_id=row["session_id"], expires_at=expires_at),
+        token=token,
+        token_jti=row["token_jti"],
+    )
+    if deadline is not None:
+        # SQL 之间的 Python 校验也消耗入口预算，迟到结果不得在 handler 清除后返回成功。
+        _remaining_auth_deadline_ms(deadline, deadline_error_code)
+    return context
 
 
 def _normalize_auth_deadline(
@@ -396,7 +532,6 @@ def current_user_response(
     不能相信前端传入的权限边界。
     """
 
-
     return MeResponse(
         user=context.user,
         tenant=context.tenant,
@@ -414,7 +549,6 @@ def logout_current_session(config: AppConfig, context: AuthContext) -> None:
 
     边界：仅更新会话状态，不记录明文 Token，也不影响其他有效会话。
     """
-
 
     now = _utcnow()
     connection = _connect(config)
@@ -457,14 +591,17 @@ def require_permission(context: AuthContext, permission_code: str) -> AuthContex
     return context
 
 
-def require_transaction_permission(
+def refresh_transaction_authentication(
     connection: sqlite3.Connection,
     context: AuthContext,
-    permission_code: str,
     *,
     unavailable_error_code: str,
 ) -> AuthContext:
-    """在调用方现有事务内重读身份 owner 和权限矩阵并要求指定权限。
+    """在调用方现有事务内重读 Session owner 和完整权限矩阵。
+
+    该入口只刷新可信认证上下文，不授予任何业务权限。需要执行受保护操作的调用方
+    仍须使用 ``require_permission``；它主要供必须审计“已认证但缺少业务权限”的
+    安全拒绝路径使用。
 
     参数：已开启事务的数据库连接、路由依赖恢复的可信认证上下文、稳定权限码，以及
     当前业务域使用的数据库不可用错误码。返回：使用事务内最新角色矩阵构造的新上下文。
@@ -531,6 +668,114 @@ def require_transaction_permission(
         token=context.token,
         token_jti=context.token_jti,
     )
+    return live_context
+
+
+def refresh_transaction_authentication_fingerprint(
+    connection: sqlite3.Connection,
+    context: AuthContext,
+    *,
+    unavailable_error_code: str,
+) -> AuthContext:
+    """在短写事务内复核 Session owner 与角色 revision/hash，不重扫完整目录。
+
+    调用前的普通认证和来源事务已经完整校验目录、角色上限、关系与矩阵哈希。这里在
+    ``BEGIN IMMEDIATE`` 保护下只重读会变化的 Session/actor/role 身份和授权指纹；调用方还
+    必须在同一事务精确查询本次所需 grant，才能提交已构造的业务事实。
+    """
+
+    # 指纹复核只能发生在调用方持有的最终写事务内，避免认证与事实提交之间再次漂移。
+    if not connection.in_transaction:
+        raise ApiError(unavailable_error_code)
+    tenant_id = context.user.tenant_id
+    # AuthContext 内部 owner 不一致也按越权处理，不能使用其中任一 tenant 继续查询。
+    if tenant_id != context.tenant.tenant_id:
+        raise ApiError("auth.permission_denied")
+    owner = connection.execute(
+        """
+        SELECT user.role,role.permission_revision,role.matrix_sha256,
+               role.is_permission_immutable
+        FROM sessions session
+        JOIN users user
+          ON user.tenant_id=session.tenant_id AND user.user_id=session.user_id
+        JOIN tenants tenant ON tenant.tenant_id=session.tenant_id
+        JOIN roles role ON role.tenant_id=user.tenant_id AND role.code=user.role
+        WHERE session.tenant_id=? AND session.user_id=? AND session.session_id=?
+          AND session.token_jti=? AND session.token_hash=?
+          AND session.status='active' AND julianday(session.expires_at)>julianday(?)
+          AND user.status='active' AND tenant.status='active' AND role.status='active'
+        """,
+        (
+            tenant_id,
+            context.user.user_id,
+            context.session.session_id,
+            context.token_jti,
+            hash_token(context.token),
+            _to_db_time(_utcnow()),
+        ),
+    ).fetchone()
+    # Session、用户、租户或角色任一失效都必须丢弃旧认证快照与已构造回答。
+    if owner is None:
+        raise ApiError("auth.permission_denied")
+    role_code = owner["role"]
+    revision = owner["permission_revision"]
+    matrix_sha256 = owner["matrix_sha256"]
+    expected_immutable = 1 if role_code == ADMIN_ROLE else 0
+    if (
+        type(role_code) is not str
+        or role_code not in ROLE_CODES
+        or type(revision) is not int
+        or revision < 1
+        or type(matrix_sha256) is not str
+        or len(matrix_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in matrix_sha256)
+        or owner["is_permission_immutable"] != expected_immutable
+    ):
+        # 角色 revision、矩阵摘要或不可变标记损坏时失败关闭，不能回退到 Shared 默认权限。
+        raise ApiError("rbac.matrix_integrity_failed")
+    fingerprint = authorization_fingerprint(
+        tenant_id=tenant_id,
+        user_id=context.user.user_id,
+        role=role_code,
+        permission_revision=revision,
+        matrix_sha256=matrix_sha256,
+    )
+    # 只有指纹逐字未变时才保留前置完整快照中的权限集合；漂移上下文只可用于写拒绝审计。
+    permission_codes = (
+        context.permission_codes if fingerprint == context.authorization_fingerprint else ()
+    )
+    live_user = context.user.model_copy(
+        update={
+            "role": role_code,
+            "permission_codes": permission_codes,
+            "permission_revision": revision,
+            "authorization_fingerprint": fingerprint,
+        }
+    )
+    # 只返回同 tenant 的实时身份指纹；实际业务 grant 仍由调用方在本事务逐项查询。
+    return AuthContext(
+        user=live_user,
+        tenant=context.tenant,
+        session=context.session,
+        token=context.token,
+        token_jti=context.token_jti,
+    )
+
+
+def require_transaction_permission(
+    connection: sqlite3.Connection,
+    context: AuthContext,
+    permission_code: str,
+    *,
+    unavailable_error_code: str,
+) -> AuthContext:
+    """在调用方现有事务内刷新认证上下文并要求一个实时业务权限。"""
+
+    live_context = refresh_transaction_authentication(
+        connection,
+        context,
+        unavailable_error_code=unavailable_error_code,
+    )
     # 最终仍走全域统一权限 helper，确保未知权限码和缺权分别保持既有完整性错误与 403 口径。
     return require_permission(live_context, permission_code)
 
@@ -590,6 +835,7 @@ def require_any_permission(context: AuthContext, permission_codes: tuple[str, ..
         # 认证和矩阵事实任一异常都必须失败关闭，禁止回退 Token claim 或默认角色权限。
         raise ApiError("auth.permission_denied")
     return context
+
 
 def _load_permission_snapshot(
     connection: sqlite3.Connection,
@@ -834,6 +1080,7 @@ def _load_tenant_permission_catalog(
     # 认证和矩阵事实任一异常都必须失败关闭，禁止回退 Token claim 或默认角色权限。
     return permission_by_id
 
+
 def _load_role_permission_codes(
     connection: sqlite3.Connection,
     *,
@@ -901,12 +1148,12 @@ def _load_role_permission_codes(
         # 重复或目录外 code 不能在计算哈希前静默去重，否则损坏关系会伪装成合法矩阵。
         raise ApiError("rbac.matrix_integrity_failed") from exc
 
+
 def _connect(config: AppConfig) -> sqlite3.Connection:
     """创建 控制面认证与会话 所需的数据库连接，并把基础设施异常映射到统一错误模型。
 
     边界：调用方只看到业务错误码，不直接暴露数据库路径、SQL 或连接细节。
     """
-
 
     try:
         return connect_database(config.database_url)
@@ -921,7 +1168,6 @@ def _tenant_by_slug(connection: sqlite3.Connection, slug: str) -> sqlite3.Row | 
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     return connection.execute(
         "SELECT tenant_id, slug, name, status FROM tenants WHERE slug=?",
@@ -938,7 +1184,6 @@ def _user_by_email(
 
     该辅助逻辑集中处理边界值和错误映射，不得绕过租户隔离、统一错误码或脱敏约束。
     """
-
 
     return connection.execute(
         """
@@ -962,7 +1207,6 @@ def _record_failed_login(
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     failed_count = int(user["failed_login_count"] or 0) + 1
     locked_until = None
@@ -989,7 +1233,6 @@ def _record_successful_login(
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     connection.execute(
         """
@@ -1022,7 +1265,6 @@ def _auth_user(row: sqlite3.Row, snapshot: PermissionSnapshot) -> AuthUser:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     # 关键控制流影响权限、审计或错误归因，必须保留统一错误语义。
     return AuthUser(
         user_id=row["user_id"],
@@ -1042,7 +1284,6 @@ def _extract_bearer(authorization: str | None) -> str:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     # 认证请求是访问控制边界，调用方必须透传统一错误和 request_id。
     if not authorization:
         # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
@@ -1060,7 +1301,6 @@ def _verify_password(password: str, password_hash: str) -> bool:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     try:
         return verify_password(password, password_hash)
     # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
@@ -1074,7 +1314,6 @@ def _fake_password_check(password: str) -> None:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     _verify_password(password, _DUMMY_PASSWORD_HASH)
 
 
@@ -1083,7 +1322,6 @@ def _parse_datetime(value: object) -> datetime | None:
 
     边界：解析失败要么返回空值口径，要么抛统一错误，不能把底层异常透出给 API。
     """
-
 
     if not value:
         return None
@@ -1101,7 +1339,6 @@ def _to_db_time(value: datetime) -> str:
     边界：统一时间口径可避免分页、审计和测试在时区上产生歧义。
     """
 
-
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
@@ -1111,7 +1348,6 @@ def _utcnow() -> datetime:
     边界：所有状态更新时间共用该口径，避免同一事务内出现混合时间格式。
     """
 
-
     return datetime.now(UTC).replace(microsecond=0)
 
 
@@ -1120,7 +1356,6 @@ def _safe_user_agent(user_agent: str | None) -> str | None:
 
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
-
 
     if not user_agent:
         return None
@@ -1132,7 +1367,6 @@ def _safe_client_host(client_host: str | None) -> str | None:
 
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
-
 
     if not client_host:
         return None
@@ -1151,7 +1385,6 @@ def _log_login_failed(
     已知账号使用租户内 ``actor_id`` 关联，未知账号保持为空；无论哪种失败都不得复制邮箱、密码或
     其他攻击者可控登录字段，避免认证探测把个人信息写入集中日志。
     """
-
 
     logger.warning(
         "auth.login_failed",

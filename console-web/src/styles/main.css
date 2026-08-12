@@ -3397,6 +3397,411 @@ h3 {
   }
 }
 
+/* PAGE-107 管理助手：页面是只读工作台，输入与回答保持稳定双栏，不使用嵌套卡片。 */
+.admin-assistant-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.admin-assistant {
+  min-width: 0;
+  color: var(--ink);
+}
+
+.admin-assistant-toolbar,
+.admin-assistant-title-row,
+.admin-assistant-section-heading,
+.admin-assistant-form-actions {
+  display: flex;
+  align-items: center;
+}
+
+.admin-assistant-toolbar {
+  min-height: 72px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-assistant-toolbar > div,
+.admin-assistant-title-row,
+.admin-assistant-section-heading > * {
+  min-width: 0;
+}
+
+.admin-assistant-title-row {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-assistant-toolbar h2,
+.admin-assistant-section-heading h3,
+.admin-assistant-answer h4 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.admin-assistant-toolbar h2 {
+  font-size: 1.18rem;
+}
+
+.admin-assistant-toolbar p,
+.admin-assistant-section-heading > span {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.admin-assistant-readonly {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid #4f7767;
+  border-radius: 4px;
+  color: #315e4d;
+  background: #eef7f2;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.admin-assistant-icon-command {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.admin-assistant-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+  min-height: 500px;
+}
+
+.admin-assistant-composer,
+.admin-assistant-result {
+  min-width: 0;
+  padding-top: 18px;
+}
+
+.admin-assistant-composer {
+  padding-right: 20px;
+}
+
+.admin-assistant-result {
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+
+.admin-assistant-section-heading {
+  min-height: 32px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.admin-assistant-section-heading h3,
+.admin-assistant-answer h4 {
+  font-size: 0.94rem;
+}
+
+.admin-assistant-suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.admin-assistant-suggestions button {
+  min-width: 0;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  text-align: left;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-suggestions button:hover:not(:disabled),
+.admin-assistant-sources a:hover {
+  border-color: var(--accent);
+}
+
+.admin-assistant form {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-assistant textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 168px;
+  max-height: 310px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-form-actions {
+  min-height: 40px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-assistant-form-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 92px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.admin-assistant-form-actions .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.admin-assistant button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.admin-assistant button:focus-visible,
+.admin-assistant textarea:focus-visible,
+.admin-assistant-sources a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.admin-assistant-live {
+  min-height: 20px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.admin-assistant-empty,
+.admin-assistant-error {
+  display: grid;
+  align-content: center;
+  min-height: 330px;
+  padding: 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.admin-assistant-error {
+  gap: 8px;
+  border-style: solid;
+  border-color: #b65b63;
+  background: #fff5f5;
+  color: #7d2d35;
+}
+
+.admin-assistant-error p,
+.admin-assistant-error div {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-error div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.admin-assistant-answer,
+.admin-assistant-summary,
+.admin-assistant-claims,
+.admin-assistant-recommendations,
+.admin-assistant-sources,
+.admin-assistant-redactions,
+.admin-assistant-chain {
+  min-width: 0;
+}
+
+.admin-assistant-summary {
+  margin: 0 0 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-claims {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.admin-assistant-claims > div {
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-assistant-claims dt,
+.admin-assistant-chain dt {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.admin-assistant-claims dd,
+.admin-assistant-chain dd {
+  min-width: 0;
+  margin: 4px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-recommendations,
+.admin-assistant-sources,
+.admin-assistant-redactions,
+.admin-assistant-chain {
+  margin-top: 18px;
+}
+
+.admin-assistant-recommendations ul,
+.admin-assistant-sources ul,
+.admin-assistant-redactions ul {
+  display: grid;
+  gap: 7px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-assistant-recommendations li,
+.admin-assistant-redactions li {
+  padding-left: 14px;
+  border-left: 3px solid #7f8c99;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-sources a,
+.admin-assistant-source-static {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.admin-assistant-source-static {
+  color: var(--muted);
+  background: var(--surface-subtle);
+}
+
+.admin-assistant-sources strong,
+.admin-assistant-sources small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-assistant-sources small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.admin-assistant-chain {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.admin-assistant-chain > div,
+.admin-assistant-chain code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .admin-assistant-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-assistant-composer {
+    padding-right: 0;
+  }
+
+  .admin-assistant-result {
+    margin-top: 18px;
+    padding: 18px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .admin-assistant-toolbar,
+  .admin-assistant-section-heading {
+    align-items: flex-start;
+  }
+
+  .admin-assistant-suggestions,
+  .admin-assistant-claims,
+  .admin-assistant-chain {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-assistant-empty,
+  .admin-assistant-error {
+    min-height: 220px;
+  }
+}
+
+@media (max-width: 390px) {
+  .admin-assistant-toolbar {
+    gap: 10px;
+  }
+
+  .admin-assistant-form-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-assistant-form-actions button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* 用户与邀请管理区继续沿用控制台紧凑操作布局，与上方 PAGE-107 只读工作台保持职责分隔。 */
 .users-heading-actions {
   display: flex;
   flex-wrap: wrap;

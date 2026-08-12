@@ -187,6 +187,9 @@ DEFAULT_CONFIG: dict[str, str] = {
     # 默认开启只扫描 0045 的 indexed source 状态，不会把 Webhook 网络调用放进 GET 热路径。
     "METAHUB_REQUEST_LOG_QUERY_EVENT_ENABLED": "true",
     "METAHUB_REQUEST_LOG_QUERY_EVENT_POLL_INTERVAL_SECONDS": "2",
+    # 管理助手 outbox 默认恢复投递；关闭开关只暂停 drain，不能跳过 Query/Audit/event 原子写入。
+    "METAHUB_ADMIN_ASSISTANT_EVENT_ENABLED": "true",
+    "METAHUB_ADMIN_ASSISTANT_EVENT_POLL_INTERVAL_SECONDS": "2",
     # 成本异常检测默认关闭，避免旧部署升级后未经容量评估就启动历史账本扫描。
     # 规则参数使用整数毫单位/微元，禁止浮点配置改变阈值边界。
     "METAHUB_COST_ANOMALY_ENABLED": "false",
@@ -451,6 +454,9 @@ class AppConfig(BaseModel):
     # 查询事件 worker 只领取 0045 source outbox；配置不能由租户请求覆盖，避免绕过审计投递。
     request_log_query_event_enabled: bool = True
     request_log_query_event_poll_interval_seconds: int = 2
+    # 助手事件 worker 只领取 0070 AssistantAudit outbox；部署开关不能由租户请求覆盖。
+    admin_assistant_event_enabled: bool = True
+    admin_assistant_event_poll_interval_seconds: int = 2
     # 检测器只读取正式账本；开关与门限均为部署级配置，不能由租户请求动态覆盖。
     cost_anomaly_enabled: bool = False
     cost_anomaly_poll_interval_seconds: int = 30
@@ -1089,6 +1095,15 @@ def load_app_config(service_name: str) -> AppConfig:
         minimum=1,
         maximum=60,
     )
+    admin_assistant_event_enabled = _boolean(
+        values, "METAHUB_ADMIN_ASSISTANT_EVENT_ENABLED"
+    )
+    admin_assistant_event_poll_interval_seconds = _bounded_int(
+        values,
+        "METAHUB_ADMIN_ASSISTANT_EVENT_POLL_INTERVAL_SECONDS",
+        minimum=1,
+        maximum=60,
+    )
 
     cost_anomaly_enabled = _boolean(values, "METAHUB_COST_ANOMALY_ENABLED")
     cost_anomaly_poll_interval_seconds = _bounded_int(
@@ -1188,6 +1203,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "cost_anomaly_enabled": cost_anomaly_enabled,
             "request_explanation_event_enabled": request_explanation_event_enabled,
             "request_log_query_event_enabled": request_log_query_event_enabled,
+            "admin_assistant_event_enabled": admin_assistant_event_enabled,
             "session_risk_enabled": session_risk_enabled,
             "file_processing_enabled": file_encryption_secret is not None,
             "batch_worker_enabled": batch_worker_enabled,
@@ -1382,6 +1398,10 @@ def load_app_config(service_name: str) -> AppConfig:
         request_log_query_event_enabled=request_log_query_event_enabled,
         request_log_query_event_poll_interval_seconds=(
             request_log_query_event_poll_interval_seconds
+        ),
+        admin_assistant_event_enabled=admin_assistant_event_enabled,
+        admin_assistant_event_poll_interval_seconds=(
+            admin_assistant_event_poll_interval_seconds
         ),
         cost_anomaly_enabled=cost_anomaly_enabled,
         cost_anomaly_poll_interval_seconds=cost_anomaly_poll_interval_seconds,
@@ -2127,6 +2147,8 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_REQUEST_EXPLANATION_EVENT_POLL_INTERVAL_SECONDS",
         "METAHUB_REQUEST_LOG_QUERY_EVENT_ENABLED",
         "METAHUB_REQUEST_LOG_QUERY_EVENT_POLL_INTERVAL_SECONDS",
+        "METAHUB_ADMIN_ASSISTANT_EVENT_ENABLED",
+        "METAHUB_ADMIN_ASSISTANT_EVENT_POLL_INTERVAL_SECONDS",
         "METAHUB_COST_ANOMALY_ENABLED",
         "METAHUB_COST_ANOMALY_POLL_INTERVAL_SECONDS",
         "METAHUB_COST_ANOMALY_SPIKE_MULTIPLIER_MILLIS",

@@ -534,6 +534,71 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="experiment",
     ),
+    # 管理助手错误只携带固定码和安全建议；问题、回答、来源值和底层 SQL 异常不能进入正文。
+    "admin_assistant.request_invalid": ErrorSpec(
+        422,
+        "Admin assistant request is invalid.",
+        "Send the documented exact request with one bounded text question.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.read_only_violation": ErrorSpec(
+        403,
+        "Admin assistant is read-only.",
+        "Use the authorized management page for configuration changes.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.query_unsupported": ErrorSpec(
+        422,
+        "Admin assistant query is unsupported.",
+        "Ask about usage, errors, cost advice, or policy explanation.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.query_ambiguous": ErrorSpec(
+        422,
+        "Admin assistant query is ambiguous.",
+        "Ask one supported question with one rolling time window.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.source_not_found": ErrorSpec(
+        404,
+        "Admin assistant source was not found.",
+        "Verify the request reference in the current tenant and retry.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.rate_limited": ErrorSpec(
+        429,
+        "Admin assistant query rate limit was reached.",
+        "Wait briefly before submitting another bounded query.",
+        retryable=True,
+        owner="admin_assistant",
+    ),
+    "admin_assistant.source_unavailable": ErrorSpec(
+        503,
+        "Admin assistant source is unavailable.",
+        "Retry after the current tenant data sources recover.",
+        retryable=True,
+        owner="admin_assistant",
+    ),
+    "admin_assistant.answer_invalid": ErrorSpec(
+        503,
+        "Admin assistant answer failed validation.",
+        "Contact an administrator to review the assistant source graph.",
+        owner="admin_assistant",
+    ),
+    "admin_assistant.audit_unavailable": ErrorSpec(
+        503,
+        "Admin assistant audit is unavailable.",
+        "Retry after the audit database recovers.",
+        retryable=True,
+        owner="admin_assistant",
+    ),
+    "admin_assistant.event_unavailable": ErrorSpec(
+        503,
+        "Admin assistant event is unavailable.",
+        "Retry event delivery after the outbox recovers.",
+        retryable=True,
+        owner="admin_assistant",
+    ),
     # Response Cache 错误只描述策略、CAS、配置或原子结算边界；不得拼接 tag、data class、
     # Cache Key、Prompt、Response、Credential、金额或底层数据库异常。
     "response_cache.policy_not_found": ErrorSpec(

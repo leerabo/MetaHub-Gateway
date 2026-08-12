@@ -1,0 +1,30 @@
+{
+  "all_108_prds_complete": false,
+  "backend_denied_after_source_revoke": true,
+  "base_permission_retained": true,
+  "console_http_200": true,
+  "control_http_200": true,
+  "database": {
+    "foreign_key_violations": 0,
+    "integrity_check": "ok",
+    "latest_migration": "0070",
+    "migration_count": 70
+  },
+  "finance_source_permission_revoked": true,
+  "gateway_http_200": true,
+  "owned_processes_remaining": 0,
+  "privacy": {
+    "staging_before_summary": {
+      "files_scanned": 3,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    },
+    "work": {
+      "files_scanned": 8,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    }
+  },
+  "schema_version": "prd077-browser-harness-v2",
+  "status": "passed"
+}

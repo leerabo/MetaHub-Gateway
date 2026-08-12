@@ -57,3 +57,33 @@ test("renderSystemStatusPanel displays service readiness and escapes text", () =
   assert.doesNotMatch(html, /<Gateway>/);
   assert.match(html, /&lt;Gateway&gt;/);
 });
+
+test("getSystemHealth retries one live network failure and keeps attempts traceable", async () => {
+  const attempts = new Map();
+  const requestIds = [];
+  globalThis.fetch = async (url, options) => {
+    const key = String(url);
+    const count = attempts.get(key) ?? 0;
+    attempts.set(key, count + 1);
+    requestIds.push(options.headers["X-Request-ID"]);
+    if (key === "http://control.local/health/live" && count === 0) {
+      // 首次存活探测模拟瞬时网络失败，验证后续尝试仍能被独立追踪。
+      throw new Error("transient");
+    }
+    return {
+      ok: true,
+      async json() {
+        if (key.endsWith("/health/live")) return { live: true };
+        if (key.endsWith("/health/ready")) return { ready: true, checks: [] };
+        return { version: "test" };
+      },
+    };
+  };
+  const health = await getSystemHealth({
+    gatewayUrl: "http://gateway.local",
+    controlApiUrl: "http://control.local",
+  });
+  assert.equal(health.services[1].state, "ok");
+  assert.equal(attempts.get("http://control.local/health/live"), 2);
+  assert.equal(new Set(requestIds).size, requestIds.length);
+});

@@ -10,15 +10,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import metahub_shared.db.migrate as migration_module
+import metahub_shared.db.seed as seed_module
 import pytest
-from metahub_shared.db import (
-    apply_migrations as apply_current_migrations,
-    apply_seed_data,
-    connect_database,
-    rollback_last_migration,
-)
+from metahub_shared.db import apply_migrations as apply_current_migrations
+from metahub_shared.db import apply_seed_data, connect_database, rollback_last_migration
 from metahub_shared.db.errors import DbError
-
 
 # 历史总迁移套件冻结在 0040，但 0041 由下方单独覆盖。新增正式迁移后仍要先
 # 完整执行 up，再依据本次真实结果逐版回退，避免维护静态栈顶时漏掉新版本。
@@ -425,13 +421,16 @@ def test_migrate_empty_database_and_repeat_is_idempotent(tmp_path: Path) -> None
         "0065",
         "0066",
         "0067",
+        "0068",
+        "0069",
+        "0070",
     ]
     assert first.applied == expected_versions
     assert second.applied == []
     assert second.skipped == expected_versions
     assert table_count(database_url, "tenants") == 0
     assert table_count(database_url, "roles") == 0
-    assert table_count(database_url, "schema_migrations") == 67
+    assert table_count(database_url, "schema_migrations") == 70
     columns = {
         row["name"]
         for row in connect_database(database_url).execute("PRAGMA table_info(virtual_keys)").fetchall()
@@ -942,6 +941,48 @@ def test_seed_is_idempotent_and_does_not_store_plain_secrets(
     assert "sk-provider-should-not-leak" not in dump
     assert "mhv_virtual_key_should_not_leak" not in dump
     assert "local-placeholder:" in dump
+
+
+def test_seed_closes_connections_on_success_and_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证公开 seed 入口在成功与失败路径都释放自身持有的 SQLite 连接。"""
+
+    database_url = sqlite_url(tmp_path / "seed-connection-lifecycle.db")
+    monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", "SeedLifecycleAdminPassword")
+    monkeypatch.setenv("METAHUB_SEED_PROVIDER_API_KEY", "SeedLifecycleProviderKey")
+    monkeypatch.setenv("METAHUB_SEED_VIRTUAL_KEY", "SeedLifecycleVirtualKey")
+    apply_migrations(database_url)
+
+    opened_connections: list[sqlite3.Connection] = []
+    real_connect = seed_module.connect_database
+
+    def tracked_connect(database_url_value: str | None) -> sqlite3.Connection:
+        """记录 seed 打开的真实连接，供用例逐个证明所有权已经释放。"""
+
+        connection = real_connect(database_url_value)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(seed_module, "connect_database", tracked_connect)
+    apply_seed_data(database_url)
+
+    def fail_seed_run(*_args: object, **_kwargs: object) -> None:
+        """在 seed 末段注入固定数据库错误，验证异常路径仍关闭连接。"""
+
+        # 故障文本固定且不含 seed 私有值，避免测试失败日志泄露临时凭据。
+        raise sqlite3.OperationalError("seed lifecycle probe")
+
+    monkeypatch.setattr(seed_module, "_record_seed_run", fail_seed_run)
+    with pytest.raises(DbError) as failure:
+        apply_seed_data(database_url)
+    assert failure.value.code == "db.seed_failed"
+
+    assert len(opened_connections) == 2
+    for connection in opened_connections:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
 
 def test_migration_checksum_change_is_rejected(tmp_path: Path) -> None:
@@ -3745,7 +3786,7 @@ def test_webhook_replay_migration_preserves_original_and_drops_replay_on_rollbac
 
     # 0047 会为该 failed original 建立治理事实；完整升级后必须停在当前头，不能绕过 down guard。
     reapplied = apply_current_migrations(database_url)
-    # 该用例从真实 0030 历史重新升级，必须走到当前正式迁移头 0067；
+    # 该用例从真实 0030 历史重新升级，必须走到当前正式迁移头 0070；
     # 固定完整连续区间可同时防止后续迁移被静默跳过或出现版本断档。
     assert reapplied.applied == [f"{version:04d}" for version in range(31, 68)]
     assert connection.execute(
@@ -3815,7 +3856,7 @@ def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_owners
 
     # 历史失败投递在 0047 被接管为死信后属于正式治理事实，测试应保留当前完整栈顶。
     upgraded = apply_current_migrations(database_url)
-    # 升级结果必须覆盖 0031 到当前正式迁移头 0067，不能继续沿用 PRD-049 时的旧上界。
+    # 升级结果必须覆盖 0031 到当前正式迁移头 0070，不能继续沿用 PRD-049 时的旧上界。
     assert upgraded.applied == [f"{version:04d}" for version in range(31, 68)]
     delivery = connection.execute(
         "SELECT delivery_kind, secret_version, status FROM webhook_deliveries WHERE webhook_delivery_id='whd_00000000000000000000000000420003'"

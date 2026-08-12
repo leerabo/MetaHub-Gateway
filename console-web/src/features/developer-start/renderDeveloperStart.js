@@ -22,6 +22,7 @@ import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
+import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -340,6 +341,13 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-106 只消费后端授权 owner 的安全策略摘要；真实读写与失效权限由每次 Control API 复核。
       return renderResponseCacheSection(
         options.responseCacheState,
+        options.authContext,
+        options.consoleShellState,
+      );
+    case "admin-assistant":
+      // PAGE-107 只投影完整 query owner；来源链接还会与最新导航及各源域原始权限再次求交。
+      return renderAdminAssistantSection(
+        options.adminAssistantState,
         options.authContext,
         options.consoleShellState,
       );
@@ -882,6 +890,18 @@ function renderResponseCacheSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel response-cache-panel" aria-labelledby="response-cache-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-107 失权时不保留空壳 DOM；前端可见性不能替代 POST 的实时 base/source 权限复核。 */
+function renderAdminAssistantSection(state, authContext, consoleShellState) {
+  const html = renderAdminAssistant(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel admin-assistant-panel" aria-labelledby="admin-assistant-title">
         ${html}
       </section>
     `

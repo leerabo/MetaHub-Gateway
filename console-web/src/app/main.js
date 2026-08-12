@@ -77,6 +77,20 @@ import {
   responseCacheReadIdentitySnapshot,
 } from "../features/cache-policies/responseCachePageState.js";
 import { renderResponseCache } from "../features/cache-policies/renderResponseCache.js";
+import {
+  bindAdminAssistantInteractions,
+  clearAdminAssistantDom,
+} from "../features/admin-assistant/bindAdminAssistant.js";
+import {
+  adminAssistantPageOwner,
+  adminAssistantReadIdentitySnapshot,
+  createAdminAssistantPageState,
+} from "../features/admin-assistant/adminAssistantPageState.js";
+import {
+  ADMIN_ASSISTANT_SUGGESTIONS,
+  hydrateAdminAssistantText,
+  renderAdminAssistant,
+} from "../features/admin-assistant/renderAdminAssistant.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -312,6 +326,10 @@ import {
   listResponseCachePolicies,
   updateResponseCachePolicy,
 } from "../lib/responseCache.js";
+import {
+  adminAssistantSourceAccess,
+  queryAdminAssistant,
+} from "../lib/adminAssistant.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -572,6 +590,8 @@ let errorMapBodyOverflow = null;
 let refreshSequence = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
 let activeRefreshCount = 0;
+// 导航偏好、page-view 与目标刷新共同构成一次交互；定时器不得在中间推进 refreshSequence 淘汰用户点击。
+let activeConsoleNavigationCount = 0;
 // 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
 let nextRefreshIsBackground = false;
 let usageFilters = { limit: 20, offset: 0 };
@@ -598,6 +618,10 @@ const batchJobPageState = createBatchJobPageState({
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
 const responseCachePageState = createResponseCachePageState({ clearDom: clearResponseCacheDom });
+// PAGE-107 的问题、回答、来源与 POST ticket 只属于完整 assistant owner；任何清理都会同步擦除正文 DOM。
+const adminAssistantPageState = createAdminAssistantPageState({
+  clearDom: () => clearAdminAssistantDom(globalThis.document),
+});
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -692,9 +716,10 @@ if (app && globalThis.window) {
     }, { once: true });
     renderPublicInvitation();
   } else {
-    // 地址栏手写 hash 和同页锚点只触发 hashchange；必须重新请求后端导航，及时清理受限入口。
-    bindNavigationHashRefresh(window, refresh);
     window.addEventListener("hashchange", () => {
+      // PAGE-107 的问题、回答和来源属于旧 hash owner；即使新 hash 仍规范化为同一页面，
+      // 也必须先推进 generation 并同步擦除正文，再允许通用导航监听器发起后端复核。
+      adminAssistantPageState.leave();
       // PAGE-088 额外监听同一 hash 边界，同步淘汰旧状态回调；通用监听仍负责重读后端导航。
       providerStatusPageState.clear();
       // PAGE-090 同样不能等待导航 API 返回才失效；手写 hash 离页时立即阻止旧目录写回 DOM。
@@ -757,6 +782,8 @@ if (app && globalThis.window) {
         providerStatusEventWarning = null;
       }
     });
+    // 清理监听器必须先于通用 refresh 注册，确保任何 hashchange 都先销毁私有页面 owner。
+    bindNavigationHashRefresh(window, refresh);
     // 浏览器关闭、刷新或离开页面时同步 abort 活动流并销毁全部一次性凭据。
     window.addEventListener("pagehide", () => {
       gatewayDebugLifecycle.leave();
@@ -770,6 +797,7 @@ if (app && globalThis.window) {
       batchJobPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
+      adminAssistantPageState.leave();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -889,6 +917,7 @@ async function start() {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
+    clearAdminAssistantStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -948,10 +977,16 @@ async function performRefresh() {
     renderLogin();
     return;
   }
+  const refreshOwner = Object.freeze({ generation: refreshId, token: refreshToken });
+  const refreshOwnerCurrent = () => isConsoleNavigationOwnerCurrent(
+    refreshOwner,
+    { generation: refreshSequence, token: authSession.token },
+  );
+  let adminAssistantIdentityChanged = false;
   try {
     const context = await getCurrentUser({ controlApiUrl, token: refreshToken });
     // 注销、新登录或更新一轮刷新都会让旧 owner 失效；必须在写 Storage、身份内存和租户页面状态前丢弃迟到响应。
-    if (refreshId !== refreshSequence || authSession.token !== refreshToken) {
+    if (!refreshOwnerCurrent()) {
       return;
     }
     clearBudgetStateOnIdentityChange(authSession.context, context);
@@ -965,6 +1000,11 @@ async function performRefresh() {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
+    adminAssistantIdentityChanged = (
+      adminAssistantReadIdentitySnapshot(authSession.context)
+      !== adminAssistantReadIdentitySnapshot(context)
+    );
+    clearAdminAssistantStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -999,7 +1039,7 @@ async function performRefresh() {
     authSession = { token: refreshToken, context };
   } catch (error) {
     // 旧请求的认证错误不能清除注销后新建的会话，也不能覆盖当前登录页或新身份页面。
-    if (refreshId !== refreshSequence || authSession.token !== refreshToken) {
+    if (!refreshOwnerCurrent()) {
       return;
     }
     clearAuthSession();
@@ -1008,6 +1048,20 @@ async function performRefresh() {
     return;
   }
   const consoleShellState = await loadConsoleShellState();
+  // 导航读取期间可能发生来源跳转、侧栏切换或新 Session 登录；旧 shell 快照不得清理新页面 owner。
+  if (!refreshOwnerCurrent()) {
+    return;
+  }
+  if (
+    isBackgroundRefresh
+    && !adminAssistantIdentityChanged
+    && consoleShellState?.activeNavigationItemId === "admin-assistant"
+    && adminAssistantPageState.enter(currentAdminAssistantOwner(consoleShellState))
+  ) {
+    // PAGE-107 不预取任何业务事实，空闲态和有正文态的后台刷新都只需重验 auth/navigation。
+    // 身份未漂移且完整 owner 仍成立时立即结束；权限、revision 或 fingerprint 变化继续全页失败关闭重绘。
+    return;
+  }
   if (consoleShellState?.activeNavigationItemId !== "enterprise-chat") {
     // 导航裁剪、非法 hash 或离页必须在任何其他租户读取前销毁 Chat 正文与在途回调。
     clearEnterpriseChatSessionState();
@@ -1164,6 +1218,21 @@ async function performRefresh() {
     // 后台已完成 auth/navigation 复核；同 owner 草稿、冲突或 Dialog 仅阻止普通 DOM replacement。
     return;
   }
+  // PAGE-107 后台刷新仍先重读 auth/navigation；同 owner 有正文时保留 DOM，撤权则 leave 后继续失败关闭。
+  // 上方多个页面 loader 都包含 await；离开旧导航后必须再次核对本轮 owner，禁止旧 overview 快照
+  // 在新 PAGE-107 已经建立 owner 后调用 leave() 并移除刚渲染的根节点。
+  if (!refreshOwnerCurrent()) {
+    return;
+  }
+  if (consoleShellState?.activeNavigationItemId !== "admin-assistant") {
+    adminAssistantPageState.leave();
+  } else if (
+    isBackgroundRefresh
+    && adminAssistantPageState.blocksShellDomReplacement()
+    && adminAssistantPageState.enter(currentAdminAssistantOwner(consoleShellState))
+  ) {
+    return;
+  }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
     webhookDeadLetterPageState.clear();
@@ -1262,6 +1331,8 @@ async function performRefresh() {
   const modelPricesState = await loadModelPricesState();
   // PAGE-106 只在后端授权导航激活时读取 Alias 策略；其他页面不预取策略或 selector。
   const responseCacheState = await loadResponseCacheState(consoleShellState, refreshId);
+  // PAGE-107 首屏只建立内存 owner，不预取事实也不自动 POST；查询必须来自一次明确表单提交。
+  const adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
@@ -1481,6 +1552,7 @@ async function performRefresh() {
     policySnapshotsState: policySnapshotsRenderState,
     modelPricesState,
     responseCacheState,
+    adminAssistantState,
     modelAliasesState,
     // 读取后的其他接口可能较慢；渲染前重新取快照，避免期间发生的选择或保存被旧对象重建 DOM 覆盖。
     routingPoliciesState: consoleShellState?.activeNavigationItemId === "routing-policies"
@@ -1524,6 +1596,10 @@ async function performRefresh() {
   if (consoleShellState?.activeNavigationItemId === "enterprise-chat") {
     hydrateEnterpriseChatText(app, enterpriseChatPageState.snapshot());
   }
+  if (consoleShellState?.activeNavigationItemId === "admin-assistant") {
+    // question/answer 不进入 Shell innerHTML；只在完整 owner 的当前 DOM 上同步注入正文。
+    hydrateAdminAssistantText(app, adminAssistantPageState.snapshot());
+  }
   if (consoleShellState?.activeNavigationItemId === "prompt-templates") {
     // 解密正文与变量草稿只能在当前授权 DOM 就位后通过 textContent/value 注入。
     hydratePromptTemplateSensitiveText(app, promptTemplatePageState.snapshot());
@@ -1555,6 +1631,10 @@ if (app && globalThis.window) {
     }
     // 慢环境中一轮完整读取可能超过 15 秒；后台刷新必须等待空闲，避免持续递增序号淘汰交互反馈。
     if (activeRefreshCount > 0) {
+      return;
+    }
+    // 用户导航在偏好和 page-view 返回前尚未启动 refresh；此窗口也必须阻止后台刷新抢占其 owner。
+    if (activeConsoleNavigationCount > 0) {
       return;
     }
     // 写预算会改变 Gateway 准入；请求未决时不能让定时刷新重建表单并制造第二个提交入口。
@@ -1615,6 +1695,11 @@ if (app && globalThis.window) {
     if (enterpriseChatPageState.blocksRefresh()) {
       return;
     }
+    // PAGE-107 由显式提问、导航和撤权 owner 驱动；活动页禁止 15 秒全壳刷新读取无关预算等模块。
+    // 查询仍由后端实时校验 RBAC，hashchange 仍会执行完整 auth/navigation 刷新。
+    if (document.querySelector(".console-shell")?.dataset.activeNavigation === "admin-assistant") {
+      return;
+    }
     // PAGE-094 激活期间只允许页面内显式刷新；全壳重建会丢失解密正文、焦点和本地 CAS 草稿。
     if (
       document.querySelector(".console-shell")?.dataset.activeNavigation === "prompt-templates"
@@ -1667,6 +1752,8 @@ function renderLogin(error, requestId) {
   batchJobPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
+  // 登录页是 PAGE-107 强边界，问题、回答、来源和迟到 POST 都不能跨 Session 保留。
+  adminAssistantPageState.leave();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -2006,6 +2093,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     batchJobPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
+    adminAssistantPageState.leave();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -4176,6 +4264,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindBatchJobsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
+  bindAdminAssistantPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -5868,6 +5957,154 @@ function isResponseCachePermissionRevocation(error) {
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
+}
+
+/** 构造 PAGE-107 实时 owner；hash 只能限制当前页面，不能替代后端 active navigation 合同。 */
+function currentAdminAssistantOwner(consoleShellState) {
+  const owner = adminAssistantPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "admin-assistant")) return null;
+  return owner;
+}
+
+/**
+ * 绑定 PAGE-107 composer、取消、清空和来源跳转。
+ * 每个回调都重新读取 owner；闭包中的 consoleShellState 只是本轮后端导航快照，不赋予任何源权限。
+ */
+function bindAdminAssistantPageInteractions(consoleShellState) {
+  const owner = currentAdminAssistantOwner(consoleShellState);
+  if (!adminAssistantPageState.enter(owner)) return false;
+  return bindAdminAssistantInteractions({
+    onDraft(question) {
+      if (adminAssistantPageState.setDraft(currentAdminAssistantOwner(consoleShellState), question)) {
+        // 输入发生在慢全页刷新期间时，推进代次阻止旧 snapshot 重建 textarea。
+        refreshSequence += 1;
+        hydrateAdminAssistantText(globalThis.document, adminAssistantPageState.snapshot());
+      }
+    },
+    onSuggestion(index) {
+      const suggestion = ADMIN_ASSISTANT_SUGGESTIONS[index];
+      if (
+        suggestion
+        && adminAssistantPageState.setDraft(currentAdminAssistantOwner(consoleShellState), suggestion)
+      ) {
+        refreshSequence += 1;
+        hydrateAdminAssistantText(globalThis.document, adminAssistantPageState.snapshot());
+        globalThis.document?.querySelector?.("[data-admin-assistant-question]")?.focus?.();
+      }
+    },
+    async onSubmit() {
+      await submitAdminAssistantQuery(consoleShellState);
+    },
+    onCancel() {
+      if (adminAssistantPageState.cancel(currentAdminAssistantOwner(consoleShellState))) {
+        refreshSequence += 1;
+        renderCurrentAdminAssistantPanel(consoleShellState);
+      }
+    },
+    onClear() {
+      if (adminAssistantPageState.clear(currentAdminAssistantOwner(consoleShellState))) {
+        refreshSequence += 1;
+        renderCurrentAdminAssistantPanel(consoleShellState);
+      }
+    },
+    async onOpenSource(index, renderedHref) {
+      const liveOwner = currentAdminAssistantOwner(consoleShellState);
+      const source = adminAssistantPageState.sourceAt(liveOwner, index);
+      const access = adminAssistantSourceAccess(source, authSession.context, consoleShellState);
+      const hrefMatches = access.allowed && renderedHref === access.href;
+
+      // 设计要求 source 点击先同步 leave，再发生任何导航 await；answer 不能在目标页加载期间短暂回填。
+      adminAssistantPageState.leave();
+      const navigationButton = Array.from(globalThis.document?.querySelectorAll?.("[data-console-nav]") ?? [])
+        .find((button) => button.dataset.consoleNav === access.navigationId);
+      if (!hrefMatches || !navigationButton) {
+        await refresh();
+        return;
+      }
+      await switchConsoleNavigation(navigationButton, consoleShellState);
+    },
+  });
+}
+
+/** PAGE-107 局部重绘只输出占位 HTML，随后用 textContent/value 注入当前 owner 的正文。 */
+function renderCurrentAdminAssistantPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".admin-assistant-panel");
+  if (!panel) return false;
+  const owner = currentAdminAssistantOwner(consoleShellState);
+  if (!adminAssistantPageState.enter(owner)) {
+    panel.innerHTML = "";
+    return false;
+  }
+  const html = renderAdminAssistant(
+    adminAssistantPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+  );
+  if (!html) {
+    adminAssistantPageState.leave();
+    panel.innerHTML = "";
+    return false;
+  }
+  panel.innerHTML = html;
+  hydrateAdminAssistantText(panel, adminAssistantPageState.snapshot());
+  bindAdminAssistantPageInteractions(consoleShellState);
+  return true;
+}
+
+/**
+ * 提交一次无幂等重放语义的只读查询。
+ * 只有 state ticket 与实时 owner 同时匹配时才接纳结果；网络结果未知只显示固定状态，不自动重试。
+ */
+async function submitAdminAssistantQuery(consoleShellState) {
+  const token = authSession.token;
+  const owner = currentAdminAssistantOwner(consoleShellState);
+  // Token 或完整 PAGE-107 owner 任一缺失都立即擦除页面，不能依赖按钮隐藏维持授权。
+  if (!token || !adminAssistantPageState.enter(owner)) {
+    adminAssistantPageState.leave();
+    // Session 已失效时回到登录态；owner 漂移但仍有 Token 时由外层刷新重新取得授权事实。
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = adminAssistantPageState.beginQuery(owner);
+  if (!operation) return adminAssistantPageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentAdminAssistantPanel(consoleShellState);
+  try {
+    const response = await queryAdminAssistant({
+      controlApiUrl,
+      token,
+      question: operation.question,
+      signal: operation.signal,
+    });
+    const currentOwner = authSession.token === token
+      ? currentAdminAssistantOwner(consoleShellState)
+      : null;
+    if (!adminAssistantPageState.acceptQuery(operation, response, currentOwner)) return null;
+    renderCurrentAdminAssistantPanel(consoleShellState);
+    return adminAssistantPageState.snapshot();
+  } catch (error) {
+    const currentOwner = authSession.token === token
+      ? currentAdminAssistantOwner(consoleShellState)
+      : null;
+    // 已撤权、切租户或被后续操作淘汰的错误不得恢复旧页面状态。
+    if (!adminAssistantPageState.rejectQuery(operation, error, currentOwner)) return null;
+    // 认证失效必须同时销毁页面正文与本地 Session，再显示固定登录错误。
+    if (error instanceof AuthApiError && error.status === 401) {
+      adminAssistantPageState.leave();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    renderCurrentAdminAssistantPanel(consoleShellState);
+    // 权限失败后必须从后端重取认证与导航快照，以清除可能已撤销的来源链接。
+    if (error instanceof AuthApiError && error.status === 403) {
+      // 403 可能是 base 或任一源权限撤销；必须重读 auth/navigation，不能只保留旧页面并隐藏链接。
+      await refresh();
+    }
+    return adminAssistantPageState.snapshot();
+  }
 }
 /**
  * 绑定 FinOps 筛选、opaque cursor、详情和调整命令。
@@ -7830,6 +8067,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
     // 导航请求前销毁 PAGE-106 草稿、失效 Dialog、私有 cursor 与全部异步票据。
     responseCachePageState.clear();
   }
+  if (itemId !== "admin-assistant") {
+    // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
+    adminAssistantPageState.leave();
+  }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
     webhookDeadLetterPageState.clear();
@@ -7853,6 +8094,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     providerStatusEntrySource = "sidebar";
     providerStatusEventWarning = null;
   }
+  activeConsoleNavigationCount += 1;
   try {
     await updateConsolePreferences({
       controlApiUrl,
@@ -7956,6 +8198,8 @@ async function switchConsoleNavigation(button, consoleShellState) {
     }
     consoleShellActionError = error;
     await refresh();
+  } finally {
+    activeConsoleNavigationCount -= 1;
   }
 }
 
@@ -12988,6 +13232,13 @@ async function loadResponseCacheState(
     responseCachePageState.finishLoad(operation);
   }
 }
+
+/** PAGE-107 不在刷新阶段读取业务事实；这里只建立经过 auth/navigation 双校验的当前页面 owner。 */
+function loadAdminAssistantState(consoleShellState, refreshId) {
+  if (refreshId !== refreshSequence) return null;
+  const owner = currentAdminAssistantOwner(consoleShellState);
+  return adminAssistantPageState.enter(owner) ? adminAssistantPageState.snapshot() : null;
+}
 /**
  * 身份边界变化时清除预算页面全部会话内事实。
  * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
@@ -13990,6 +14241,13 @@ function clearExperimentStateOnIdentityChange(previous, current) {
 function clearResponseCacheStateOnIdentityChange(previous, current) {
   if (responseCacheReadIdentitySnapshot(previous) !== responseCacheReadIdentitySnapshot(current)) {
     responseCachePageState.clear();
+  }
+}
+
+/** tenant、Session、任一权限、revision 或 fingerprint 变化时销毁 PAGE-107 全部正文与在途 POST。 */
+function clearAdminAssistantStateOnIdentityChange(previous, current) {
+  if (adminAssistantReadIdentitySnapshot(previous) !== adminAssistantReadIdentitySnapshot(current)) {
+    adminAssistantPageState.leave();
   }
 }
 /**

@@ -1,3 +1,5 @@
+import { fetchHealthWithNetworkRetry } from "./healthRequest.js";
+
 /**
  * 封装 前端 API 客户端 的 `getServiceStatuses` 调用，统一处理请求参数、认证头和错误对象。
  * 边界：客户端只负责展示和发起请求，真实权限仍由后端 API 校验。
@@ -28,9 +30,7 @@ export async function getServiceStatuses({ gatewayUrl, controlApiUrl, consoleUrl
  */
 async function readHealth(endpoint, name, kind) {
   try {
-    const response = await fetch(endpoint, {
-      headers: { "X-Request-ID": `console_${Date.now()}` },
-    });
+    const response = await fetchHealthWithNetworkRetry(endpoint, `console_${kind}_${Date.now()}`);
     if (!response.ok) {
       // 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
       return { name, kind, state: "error", requestId: response.headers.get("X-Request-ID") ?? "-" };

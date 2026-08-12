@@ -46,7 +46,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 不能把 Shared 默认矩阵当成运行时回退授权，更不能用前端导航代替后端动态矩阵。
 # PRD-076 再把 Response Cache 的读取、策略写入与主动失效拆成三个独立权限；目录版本提升后，
 # 运行时仍须逐请求从当前 tenant 数据库恢复实际矩阵，不能因 Shared 中存在默认值而放宽授权。
-CATALOG_REVISION: Final[int] = 12
+# PRD-077 的助手权限只开放只读入口，不隐含 Usage、FinOps、RequestLog 或 Policy 源域权限；
+# 最终授权仍必须从当前 tenant 的动态角色矩阵逐请求恢复并在审计事务内复核。
+CATALOG_REVISION: Final[int] = 13
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -436,6 +438,13 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "critical",
     ),
     PermissionDefinition(
+        "admin_assistant.query",
+        "admin_assistant",
+        "使用只读管理助手",
+        "查询当前租户的用量、错误、成本或策略安全摘要，不授予任何修改能力。",
+        "read",
+    ),
+    PermissionDefinition(
         "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
     ),
 )
@@ -507,6 +516,7 @@ _FINANCE = {
     "response_cache.read",
     "response_cache.write",
     "response_cache.invalidate",
+    "admin_assistant.query",
 }
 _SECURITY = {
     "console.basic.read",
@@ -535,6 +545,7 @@ _SECURITY = {
     "session_risk.manage",
     "file.read",
     "file.security.scan",
+    "admin_assistant.query",
 }
 _OPS = {
     "console.basic.read",

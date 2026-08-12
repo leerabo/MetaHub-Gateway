@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Header, Request
@@ -38,6 +39,7 @@ def _require_request_permissions(
         require_permission(context, permission_code)
     return context
 
+
 def require_current_user(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
@@ -51,13 +53,92 @@ def require_current_user(
     return authenticate_bearer(request.app.state.config, authorization)
 
 
+async def require_admin_assistant_authentication(request: Request) -> AsyncIterator[AuthContext]:
+    """不读取正文，只为 PAGE-107 恢复可信认证上下文。
+
+    管理助手必须审计“认证成立但缺少 base permission”的 actor，因此本依赖只认证，业务权限
+    留给 endpoint 在正文前校验。首先读取 raw ASGI Header，避免框架把重复 Bearer 合并后任选
+    一个凭据，造成身份歧义或让未授权正文进入 parser。
+    """
+
+    # 延迟导入避免 auth 包初始化与 PAGE-107 route/service 形成模块环；请求执行时模块已完整装配。
+    from metahub_control.admin_assistant.service import (
+        admin_assistant_request_owner,
+        admin_assistant_runtime_read_connection,
+        prepare_admin_assistant_request,
+        release_admin_assistant_request,
+        retire_admin_assistant_runtime_read_connection,
+        run_admin_assistant_worker,
+    )
+
+    budget, runtime = prepare_admin_assistant_request(request)
+    try:
+        values = [
+            value
+            for key, value in request.scope.get("headers", ())
+            if key.lower() == b"authorization"
+        ]
+        # 重复或逗号折叠的 Authorization 身份有歧义，正文解析前即按固定请求错误拒绝。
+        if len(values) > 1 or (values and b"," in values[0]):
+            raise ApiError("admin_assistant.request_invalid")
+        if values:
+            try:
+                authorization = values[0].decode("ascii", errors="strict")
+            # Bearer wire 只允许 ASCII；解码失败不保留原始 Token 字节或其表示。
+            except UnicodeDecodeError as exc:
+                raise ApiError("auth.token_invalid") from exc
+        else:
+            # 无凭据仍交由统一认证器产生标准错误信封和 request_id，不在依赖层自造响应。
+            authorization = None
+        attempt_owner = admin_assistant_request_owner(request)
+
+        # Session SELECT、权限扫描和 admission 排队共用 middleware 入口的 source deadline；
+        # last_seen 延迟到最终治理事务。未建立可信 actor 前预算耗尽时不写 tenant 业务审计。
+        def authenticate_on_runtime_connection() -> AuthContext:
+            """在唯一 read-stage owner 内认证，并让后续来源读取复用同一连接。"""
+
+            connection = admin_assistant_runtime_read_connection(
+                runtime,
+                request.app.state.config,
+                deadline=budget.source_deadline,
+                attempt_owner=attempt_owner,
+            )
+            # 管理助手入口认证保持只读，Session 活跃时间由最终治理事务原子更新。
+            return authenticate_bearer(
+                request.app.state.config,
+                authorization,
+                monotonic_deadline=budget.source_deadline,
+                deadline_error_code="admin_assistant.source_unavailable",
+                connection=connection,
+                update_last_seen=False,
+                invalidate_connection=lambda current: (
+                    retire_admin_assistant_runtime_read_connection(runtime, current)
+                ),
+            )
+
+        context = await run_admin_assistant_worker(
+            authenticate_on_runtime_connection,
+            slots=runtime.auth_slots,
+            dispatcher=runtime.dispatcher,
+            deadline=budget.source_deadline,
+            error_code="admin_assistant.source_unavailable",
+        )
+    except BaseException:
+        # 认证未建立可信 actor 时路由不会执行，必须在依赖边界释放已登记 gate owner。
+        release_admin_assistant_request(request)
+        raise
+    try:
+        # yield dependency 把 owner 生命周期覆盖到 endpoint 完整退出，关闭认证→路由取消缝隙。
+        yield context
+    finally:
+        release_admin_assistant_request(request)
+
+
 def _response_cache_authorization(request: Request) -> str | None:
     """从 raw ASGI Header 恢复唯一 Bearer 值，拒绝框架可能折叠的重复凭据。"""
 
     values = [
-        value
-        for key, value in request.scope.get("headers", ())
-        if key.lower() == b"authorization"
+        value for key, value in request.scope.get("headers", ()) if key.lower() == b"authorization"
     ]
     if not values:
         return None
@@ -95,7 +176,9 @@ def _require_response_cache_permissions(
 def require_response_cache_reader(request: Request) -> AuthContext:
     """要求当前 Session 具有 Response Cache 读取权限。
 
-    控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。 当前定义负责 require_response_cache_reader 对应步骤。"""
+    控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
+    当前定义负责 require_response_cache_reader 对应步骤。
+    """
 
     # 控制面关键分支必须维持租户、权限、审计和统一错误边界，禁止信任客户端归属。
     return _require_response_cache_permissions(request, ("response_cache.read",))
@@ -131,9 +214,7 @@ def require_current_admin(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "user.manage",
-        ),
+        ("user.manage",),
     )
 
 
@@ -166,9 +247,7 @@ def require_virtual_key_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "virtual_key.write",
-        ),
+        ("virtual_key.write",),
     )
 
 
@@ -186,9 +265,7 @@ def require_model_catalog_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "model.read",
-        ),
+        ("model.read",),
     )
 
 
@@ -206,9 +283,7 @@ def require_request_log_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "request_log.read",
-        ),
+        ("request_log.read",),
     )
 
 
@@ -227,11 +302,8 @@ def require_request_explanation_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "request_explanation.read",
-        ),
+        ("request_explanation.read",),
     )
-
 
 
 def require_error_map_reader(
@@ -248,9 +320,7 @@ def require_error_map_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "provider_error_map.read",
-        ),
+        ("provider_error_map.read",),
     )
 
 
@@ -268,9 +338,7 @@ def require_error_map_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "provider_error_map.write",
-        ),
+        ("provider_error_map.write",),
     )
 
 
@@ -287,9 +355,7 @@ def require_usage_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.usage.read",
-        ),
+        ("billing.usage.read",),
     )
 
 
@@ -308,11 +374,8 @@ def require_dashboard_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "dashboard.read",
-        ),
+        ("dashboard.read",),
     )
-
 
 
 def require_project_reader(
@@ -329,9 +392,7 @@ def require_project_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "project.read",
-        ),
+        ("project.read",),
     )
 
 
@@ -351,9 +412,7 @@ def require_feedback_user(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "feedback.use",
-        ),
+        ("feedback.use",),
     )
 
 
@@ -396,9 +455,7 @@ def require_usage_exporter(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.usage.export",
-        ),
+        ("billing.usage.export",),
     )
 
 
@@ -438,9 +495,7 @@ def require_cost_anomaly_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.anomaly.read",
-        ),
+        ("billing.anomaly.read",),
     )
 
 
@@ -458,9 +513,7 @@ def require_cost_anomaly_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.anomaly.write",
-        ),
+        ("billing.anomaly.write",),
     )
 
 
@@ -510,9 +563,7 @@ def require_audit_log_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "audit.read",
-        ),
+        ("audit.read",),
     )
 
 
@@ -530,9 +581,7 @@ def require_audit_exporter(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "audit.export",
-        ),
+        ("audit.export",),
     )
 
 
@@ -550,9 +599,7 @@ def require_model_price_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "model_price.read",
-        ),
+        ("model_price.read",),
     )
 
 
@@ -570,9 +617,7 @@ def require_model_price_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "model_price.write",
-        ),
+        ("model_price.write",),
     )
 
 
@@ -590,9 +635,7 @@ def require_model_quality_score_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "model_quality.read",
-        ),
+        ("model_quality.read",),
     )
 
 
@@ -610,9 +653,7 @@ def require_model_quality_score_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "model_quality.write",
-        ),
+        ("model_quality.write",),
     )
 
 
@@ -629,9 +670,7 @@ def require_project_admin(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "project.write",
-        ),
+        ("project.write",),
     )
 
 
@@ -649,9 +688,7 @@ def require_environment_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "environment.read",
-        ),
+        ("environment.read",),
     )
 
 
@@ -668,9 +705,7 @@ def require_environment_admin(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "environment.write",
-        ),
+        ("environment.write",),
     )
 
 
@@ -688,9 +723,7 @@ def require_budget_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.budget.read",
-        ),
+        ("billing.budget.read",),
     )
 
 
@@ -708,9 +741,7 @@ def require_budget_writer(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "billing.budget.write",
-        ),
+        ("billing.budget.write",),
     )
 
 
@@ -1063,9 +1094,7 @@ def require_webhook_manager(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "webhook.manage",
-        ),
+        ("webhook.manage",),
     )
 
 
@@ -1082,9 +1111,7 @@ def require_developer_portal_reader(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "developer_portal.read",
-        ),
+        ("developer_portal.read",),
     )
 
 
@@ -1103,9 +1130,7 @@ def require_debug_console_user(
     return _require_request_permissions(
         request,
         authorization,
-        (
-            "debug_console.use",
-        ),
+        ("debug_console.use",),
     )
 
 
@@ -1165,9 +1190,7 @@ def require_prompt_template_catalog_user(
 
     context = authenticate_bearer(request.app.state.config, authorization)
     # options 只允许管理侧 read/write 用户，缺权时统一拒绝，避免借候选目录枚举项目或模型。
-    if not {"prompt_template.read", "prompt_template.write"}.intersection(
-        context.permission_codes
-    ):
+    if not {"prompt_template.read", "prompt_template.write"}.intersection(context.permission_codes):
         # 候选目录也属于受保护资源投影，缺少两项管理权限时不能仅凭登录态访问。
         raise ApiError("auth.permission_denied")
     return context

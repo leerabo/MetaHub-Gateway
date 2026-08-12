@@ -2,6 +2,7 @@
 
 from .dependencies import (
     AuthContext,
+    require_admin_assistant_authentication,
     require_audit_exporter,
     require_audit_log_reader,
     require_batch_canceller,
@@ -90,6 +91,8 @@ from .service import (
     SECURITY_ADMIN_ROLE,
     VIEWER_ROLE,
     RoleCode,
+    refresh_transaction_authentication,
+    refresh_transaction_authentication_fingerprint,
     require_actor_transaction_permissions,
     require_permission,
     require_transaction_permission,
@@ -105,6 +108,9 @@ __all__ = [
     "VIEWER_ROLE",
     "AuthContext",
     "RoleCode",
+    "require_admin_assistant_authentication",
+    "refresh_transaction_authentication",
+    "refresh_transaction_authentication_fingerprint",
     "require_actor_transaction_permissions",
     "require_batch_canceller",
     "require_batch_creator",

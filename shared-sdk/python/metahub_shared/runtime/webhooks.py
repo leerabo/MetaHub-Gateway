@@ -94,6 +94,8 @@ WEBHOOK_EVENT_TYPES = {
     "batch_job.completed",
     # 实验完成事件只披露冻结结果可重建的 owner 与整数计数，不披露名称或请求级事实。
     "experiment.completed",
+    # 管理助手事件只外发查询类型、结果和计数；问题、回答和目标 Request 永不进入订阅正文。
+    "assistant.queried",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -147,6 +149,10 @@ WEBHOOK_SENSITIVE_PAYLOAD_KEYS = frozenset(
         "canonical_expression",
         "change_reason",
         "context",
+        "question",
+        "question_hash",
+        "answer",
+        "target_request_id",
     }
 )
 
@@ -314,6 +320,9 @@ def build_webhook_event(
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
+    elif event_type == "assistant.queried":
+        # PRD-077 只接受不可变 Query/Audit 可逐字段重建的七字段安全摘要。
+        _validate_admin_assistant_queried_payload(safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -355,6 +364,7 @@ def build_webhook_event(
         "batch_job.created",
         "batch_job.completed",
         "experiment.completed",
+        "assistant.queried",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -604,6 +614,18 @@ def build_webhook_event(
     elif event_type == "experiment.completed":
         # 完成事件必须复用首次创建 actor/request/trace，scheduler 或重放 worker 不能冒充来源。
         _validate_experiment_completed_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == "assistant.queried":
+        # Query、actor、原始操作链路和 stable source event 必须逐字段绑定，不能在重试时重建身份。
+        _validate_admin_assistant_queried_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -957,6 +979,158 @@ def _validate_response_cache_envelope(
         not system_reason and not _is_bounded_safe_text(actor_id, maximum=160)
     ):
         # 手动/Policy 变化保留可信 Session actor；系统安全淘汰只能使用 null actor。
+        raise ValueError("webhook.payload_invalid")
+
+
+def build_assistant_queried_event(
+    *,
+    tenant_id: str,
+    actor_id: str,
+    assistant_query_id: str,
+    event_id: str,
+    trace_id: str,
+    source_request_id: str,
+    query_type: str,
+    outcome: str,
+    claim_count: int,
+    source_count: int,
+    redaction_count: int,
+    duration_ms: int,
+    timestamp: datetime,
+) -> WebhookEvent:
+    """从持久 AssistantAudit 安全摘要构造 stable ``assistant.queried`` 事件。
+
+    duration bucket 由整数耗时派生，调用方不能自报另一个边界；问题、回答、目标请求和
+    错误正文均不属于参数或 payload。
+    """
+
+    if (
+        type(duration_ms) is not int
+        or duration_ms < 0
+        or duration_ms > 9_223_372_036_854_775_807
+    ):
+        # 耗时必须是有符号六十四位非负整数，bool 与越界值不能进入事件摘要。
+        raise ValueError("webhook.payload_invalid")
+    # 1.5 秒是整个 endpoint 的绝对期限；超时失败仍落入第二个固定 bucket 供容量复核。
+    duration_bucket = "under_1500ms" if duration_ms < 1500 else "at_least_1500ms"
+    return build_webhook_event(
+        tenant_id=tenant_id,
+        event_type="assistant.queried",
+        payload={
+            "schema_version": "assistant-queried-v1",
+            "query_type": query_type,
+            "outcome": outcome,
+            "claim_count": claim_count,
+            "source_count": source_count,
+            "redaction_count": redaction_count,
+            "duration_bucket": duration_bucket,
+        },
+        actor_id=actor_id,
+        object_id=assistant_query_id,
+        trace_id=trace_id,
+        source_request_id=source_request_id,
+        event_id=event_id,
+        timestamp=timestamp,
+    )
+
+
+def _validate_admin_assistant_queried_payload(payload: dict[str, Any]) -> None:
+    """校验管理助手事件的 exact 七字段、状态矩阵与固定脱敏计数。"""
+
+    expected = {
+        "schema_version",
+        "query_type",
+        "outcome",
+        "claim_count",
+        "source_count",
+        "redaction_count",
+        "duration_bucket",
+    }
+    if set(payload) != expected:
+        # exact-set 阻止问题、回答、target request、金额或未来调试字段被签名外发。
+        raise ValueError("webhook.payload_invalid")
+    query_type = payload["query_type"]
+    outcome = payload["outcome"]
+    duration_bucket = payload["duration_bucket"]
+    if (
+        type(payload["schema_version"]) is not str
+        or payload["schema_version"] != "assistant-queried-v1"
+        or type(query_type) is not str
+        or query_type
+        not in {
+            "usage_statistics",
+            "error_explanation",
+            "cost_advice",
+            "policy_explanation",
+            "unknown",
+        }
+        or type(outcome) is not str
+        or outcome
+        not in {
+            "answered",
+            "read_only_blocked",
+            "unsupported",
+            "ambiguous",
+            "permission_denied",
+            "rate_limited",
+            "failed",
+        }
+        or type(duration_bucket) is not str
+        or duration_bucket not in {"under_1500ms", "at_least_1500ms"}
+    ):
+        # 版本、意图、终态和耗时桶任一漂移都会破坏订阅方可验证合同。
+        raise ValueError("webhook.payload_invalid")
+    counts = (
+        payload["claim_count"],
+        payload["source_count"],
+        payload["redaction_count"],
+    )
+    if any(
+        type(value) is not int or not 0 <= value <= 9_223_372_036_854_775_807
+        for value in counts
+    ):
+        # bool 是 int 子类，必须用 exact type 拒绝，避免 true 被下游解释成计数一。
+        raise ValueError("webhook.payload_invalid")
+    if outcome == "answered":
+        expected_redactions = 3 if query_type == "error_explanation" else 2
+        if (
+            query_type == "unknown"
+            or payload["claim_count"] < 1
+            or payload["source_count"] < 1
+            or payload["redaction_count"] != expected_redactions
+        ):
+            # answered 必须有事实、来源及匹配意图的脱敏数，不能发布空壳成功事件。
+            raise ValueError("webhook.payload_invalid")
+        return
+    # 没有公开回答的终态不得伪造 claim/source/redaction 计数来暗示受保护事实存在。
+    if any(value != 0 for value in counts):
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_admin_assistant_queried_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把公开摘要绑定到同租户 AssistantQuery、可信 actor 和原始操作链路。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="asevt_")
+        or not _is_prefixed_lower_hex_id(object_id, prefix="asq_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=160)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+    ):
+        # stable event/object 与可信 owner 任一缺失都失败关闭，重试 worker 不生成替代身份。
         raise ValueError("webhook.payload_invalid")
 
 

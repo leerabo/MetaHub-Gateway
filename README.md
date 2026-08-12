@@ -88,9 +88,23 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-074 - 批量任务 Scheduler 与 Worker`
 - `PRD-075 - 模型 A/B 测试与质量评估`
 - `PRD-076 - Response Cache 可选能力`
+- `PRD-077 - 只读管理员 AI 助手`
 
 最近进展：
 
+- `PRD-077 - 只读管理员 AI 助手` 已完成：Shared 提供有界自然语言 parser、
+  只读动作闸门、typed claim/source 图、RBAC revision 13、统一错误和 `assistant.queried` exact payload；
+  0070 新增 tenant-qualified AssistantQuery、AssistantAudit、event source/outbox 和原子 down guard；Control
+  提供四类确定性只读查询、来源域后端 RBAC、动态撤权、双长期 SQLite WAL/FULL 连接、绝对 deadline、
+  原子 `last_seen`/审计与 lifespan 恢复；PAGE-107 使用 owner/generation/Abort 隔离问题和回答内存。
+  权威 Runtime 从空 SQLite 完成 `70/0070 -> 70/0070 -> 69/0069 -> 70/0070`，四阶段
+  `integrity_check=ok`、外键违规 0；20 个并发 attempt 为 9 个 200 与 11 个受控 503，并留下 20 组唯一审计图，
+  停服恢复后 outbox 清空，明文命中与 SQLite sidecar 均为 0。权威 Browser 实际验证 PAGE-107 的权限、
+  动态撤权、来源导航、防篡改、迟到与登出清理；`1280x720`/`390x844` 无横向溢出、文本溢出或控件重叠，
+  外部请求、私密网络字段及明文命中均为 0。最终证据和分组测试记录见
+  [PRD-077 测试记录](docs/testing/PRD-077-tests.md)，各分组存在重叠，不相加冒充一次根级全量。详见
+  [PRD-077 设计](docs/prd/PRD-077-read-only-admin-ai-assistant.md) 和
+  [管理员 AI 助手 API](docs/api/admin-assistant.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-076 - Response Cache 可选能力` 已完成：Shared 加密/合同、0069/RBAC revision 12、
   tenant-qualified Policy/Key Generation/Entry/Fill/Tag/Request Fact/Hit/Invalidation/Event/Outbox、
   Gateway 精确资格判定与单写者填充、Control CAS API 与恢复调度、Usage/FinOps/预算/RequestLog 投影、
@@ -208,11 +222,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 78 行、`03_M2-M3扩展交付` 第 14 行、PAGE-107、API、AssistantQuery/
-  AssistantAudit、`assistant.queried` 与 TC-0153/0154 已和 README、`docs/prd`、`docs/testing` 交叉确认。
-  PRD-076 之后的下一条权威未完成项为
-  `PRD-077 | M2-企业增强 | P2 | 扩展层 | Admin AI助手 | 只读管理员AI助手`。本次提交不启动或混入
-  PRD-077 实现；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 79 行、`03_M2-M3扩展交付` 第 15 行、PAGE-108 审批中心、PAGE-109
+  移动卡片、`POST /approvals/{id}/approve|reject`、ApprovalTask、`approval.created`、
+  `approval.timeout` 与 TC-0155/0156 已和 README、`docs/prd`、`docs/testing` 交叉确认。PRD-077
+  之后的下一条权威未完成项为
+  `PRD-078 | M2-企业增强 | P2 | 扩展层 | 移动审批 | 移动端/企微钉钉审批入口`，不是仅按编号推断。
+  本次提交不启动或混入 PRD-078；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

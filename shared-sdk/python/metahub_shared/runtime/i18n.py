@@ -452,6 +452,99 @@ I18N_MESSAGES: tuple[I18nMessage, ...] = (
         "errors",
     ),
     I18nMessage(
+        "error.admin_assistant.request_invalid.label", "zh-CN", "管理助手请求不合法", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.request_invalid.label",
+        "en-US",
+        "Invalid admin assistant request",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.read_only_violation.label",
+        "zh-CN",
+        "管理助手仅支持只读查询",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.read_only_violation.label",
+        "en-US",
+        "Admin assistant is read-only",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.query_unsupported.label", "zh-CN", "不支持的助手查询", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.query_unsupported.label",
+        "en-US",
+        "Unsupported assistant query",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.query_ambiguous.label", "zh-CN", "助手查询含义不明确", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.query_ambiguous.label",
+        "en-US",
+        "Ambiguous assistant query",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.source_not_found.label", "zh-CN", "查询来源不存在", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.source_not_found.label",
+        "en-US",
+        "Assistant source not found",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.rate_limited.label", "zh-CN", "助手查询过于频繁", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.rate_limited.label",
+        "en-US",
+        "Assistant query rate limited",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.source_unavailable.label", "zh-CN", "助手来源暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.source_unavailable.label",
+        "en-US",
+        "Assistant source unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.answer_invalid.label", "zh-CN", "助手回答校验失败", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.answer_invalid.label",
+        "en-US",
+        "Invalid assistant answer",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.audit_unavailable.label", "zh-CN", "助手审计暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.audit_unavailable.label",
+        "en-US",
+        "Assistant audit unavailable",
+        "errors",
+    ),
+    I18nMessage(
+        "error.admin_assistant.event_unavailable.label", "zh-CN", "助手事件暂不可用", "errors"
+    ),
+    I18nMessage(
+        "error.admin_assistant.event_unavailable.label",
+        "en-US",
+        "Assistant event unavailable",
+        "errors",
+    ),
+    I18nMessage(
         "error.experiment.input_invalid.label", "zh-CN", "实验请求不合法", "errors"
     ),
     I18nMessage(

@@ -54,7 +54,6 @@ def apply_seed_data(
     """
 
     run_id = f"seed_{uuid4().hex}"
-    connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
     seed = _load_seed(seed_file or Path(os.getenv("METAHUB_SEED_FILE", "infra/seeds/default_seed.json")))
     tenant = seed["tenant"]
     admin = seed["admin"]
@@ -70,6 +69,7 @@ def apply_seed_data(
     credential_secret = configured_secret("METAHUB_SEED_PROVIDER_API_KEY", provider["api_key_placeholder"])
     credential_id = _stable_uuid(f"provider-credential:{tenant_id}:{provider_id}")
 
+    connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
     try:
         _upsert_tenant(connection, tenant_id, tenant)
         _upsert_roles(connection, tenant_id)
@@ -98,6 +98,9 @@ def apply_seed_data(
             f"Seed failed: {exc}",
             "Check migration state and seed input.",
         ) from exc
+    finally:
+        # Seed owns this connection; release the SQLite file handle on every path.
+        connection.close()
 
     return SeedResult(
         run_id=run_id,

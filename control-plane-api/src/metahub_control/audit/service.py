@@ -113,6 +113,9 @@ ACTION_OBJECT_TYPES = {
     "response_cache.policy_created": "response_cache_policy",
     "response_cache.policy_updated": "response_cache_policy",
     "response_cache.invalidated": "response_cache_invalidation",
+    # 只读助手 attempt 是不可变且无正文的治理事实；问题、回答、目标请求、来源值以及
+    # 模型/Token 字段均不得进入通用 AuditLog，只保留类型、终态与有界计数。
+    "admin_assistant.queried": "assistant_query",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -496,6 +499,18 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "definition_size_bytes",
             "variable_count",
             "change_summary_hmac",
+        }
+    ),
+    "assistant_query": frozenset(
+        {
+            "query_type",
+            "outcome",
+            "claim_count",
+            "source_count",
+            "redaction_count",
+            "execution_mode",
+            "model_call_count",
+            "model_cost_status",
         }
     ),
 }
@@ -1101,6 +1116,16 @@ def _expected_changed_fields(
             # Dry-Run 是一次性完整事实，缺字段或伪造 before 都会破坏专用合同。
             raise ValueError("policy_dry_run")
         return tuple(sorted(expected))
+    if action == "admin_assistant.queried":
+        expected = SUMMARY_FIELDS["assistant_query"]
+        if (
+            before
+            or set(after) != expected
+            or not _valid_admin_assistant_audit(after)
+        ):
+            # 管理助手审计必须是完整一次性安全摘要，不能夹带 before 或问题/回答字段。
+            raise ValueError("admin_assistant_summary")
+        return tuple(sorted(expected))
     if action in {"config.imported", "config.exported"}:
         expected = (
             CONFIG_IMPORT_AUDIT_FIELDS
@@ -1117,6 +1142,49 @@ def _expected_changed_fields(
         return tuple(sorted(expected))
     return tuple(
         sorted(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+    )
+
+
+def _valid_admin_assistant_audit(after: dict[str, object]) -> bool:
+    """校验单次助手 attempt 无正文投影的 exact 字段、枚举与计数关系。"""
+
+    query_type = after.get("query_type")
+    outcome = after.get("outcome")
+    if query_type not in {
+        "usage_statistics",
+        "error_explanation",
+        "cost_advice",
+        "policy_explanation",
+        "unknown",
+    } or outcome not in {
+        "answered",
+        "read_only_blocked",
+        "unsupported",
+        "ambiguous",
+        "permission_denied",
+        "rate_limited",
+        "failed",
+    }:
+        return False
+    counts = tuple(
+        after.get(key)
+        for key in ("claim_count", "source_count", "redaction_count")
+    )
+    if any(type(value) is not int or value < 0 for value in counts):
+        return False
+    claim_count, source_count, redaction_count = counts
+    if claim_count > 1000 or source_count > 100 or redaction_count > 100:
+        return False
+    if outcome == "answered":
+        expected_redactions = 3 if query_type == "error_explanation" else 2
+        if claim_count < 1 or source_count < 1 or redaction_count != expected_redactions:
+            return False
+    elif claim_count != 0 or source_count != 0 or redaction_count != 0:
+        return False
+    return (
+        after.get("execution_mode") == "deterministic_read_model_v1"
+        and after.get("model_call_count") == 0
+        and after.get("model_cost_status") == "not_applicable_local"
     )
 
 

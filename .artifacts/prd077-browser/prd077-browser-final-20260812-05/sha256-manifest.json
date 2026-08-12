@@ -1,0 +1,46 @@
+{
+  "schema_version": "prd077-browser-sha256-v1",
+  "status": "passed",
+  "prd_id": "PRD-077",
+  "page_id": "PAGE-107",
+  "files": [
+    {
+      "path": "browser-summary.json",
+      "bytes": 6108,
+      "sha256": "aa49c1aa2f0bd7fd6dd39f3c524ac7a1f8800dc367f067588a4083242ed7f0af"
+    },
+    {
+      "path": "empty-desktop-1280x720.png",
+      "bytes": 72625,
+      "sha256": "0a0a6139308714171b298c868404ee92050083ec42a3bd8d25b82bb5dd3ac9d5"
+    },
+    {
+      "path": "empty-mobile-390x844.png",
+      "bytes": 36378,
+      "sha256": "1f9281c383f6f849b065f64a7df0ea168f62be235bb00e507ca4ddd88a9f7e60"
+    },
+    {
+      "path": "runtime-summary.json",
+      "bytes": 759,
+      "sha256": "4eaa3d88ab36e3163d026d935ba6b08ffcd3bd2e6d0cb17807461ab08697a62d"
+    }
+  ],
+  "source_provenance": {
+    "browser_driver": "72fa9269af81c475b407338c342853144372817302c025a84bcf24155ca96985",
+    "browser_harness": "0229b8c47ab2b0fc6765f7d598547536e06e7bd1606ce15876f3363fcd61019f",
+    "browser_helper_prd056": "b8f86448ed9c6520a6d8b1fe2d49208e00fce5078d4d205532f07c2edd23e4d0",
+    "browser_helper_prd066": "762ffefc6a674c5e168de0b81977caadbc1d493ec33841b7da5b75c7229024e1",
+    "console_dev_server": "1004f2af560b5e20699b0eda5c75110bea540a5024660c32bf3eb4c49894fb38",
+    "console_entry": "de4d46581dd2f27c19257112337267538f34a4c3b60e9fdeb9383cb3b077426a",
+    "control_plane_source_tree": "2ee4ce1d6b472abe4ded608228f545824da9fedac44dcc64b40f3e3a5cb7d68f",
+    "frontend_source_tree": "227e35777c7f3d6b51b31ca8a0d386da90daab1c89cbd4f719c651b08334ff41",
+    "gateway_source_tree": "4ae4fb49948e27d64258b891529cbdde7cc5cd28a4c19f061ca8866d1f848055",
+    "migration_0070_down": "22422f9da5da848ad1945bd116d72e168f0647f914a7d59f2e77f02ee578c33f",
+    "migration_0070_up": "dd54009c3151fd80fbfc698eaf7ccff8ff804acf4d5cc924c74ff0c15b7717ef",
+    "migration_set": "ffa4bdcf668e9d3398e1944f6b8936d28db11776789259827cde2ee5eea77403",
+    "runtime_acceptance": "cea962fbdb317c1feac738d90270a56044d2c35abf82592e848da7a6ab0955fe",
+    "runtime_helper_prd075": "8ecd292313a9b0e515e92d0056cb1bcbc3ef930a0059c38e6ebe42e2e1a3d6e1",
+    "shared_sdk_source_tree": "e0b37b03884a1e9f9b1f19001c76017b3275a19fc33f8ddfebaaa2b8c2da0ceb"
+  },
+  "all_108_prds_complete": false
+}

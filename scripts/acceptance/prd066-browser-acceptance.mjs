@@ -208,8 +208,18 @@ async function readConfiguration(environment = process.env) {
 }
 
 
-/** 浏览器进程只继承启动必需变量，所有可能写入的用户目录都固定到本批次。 */
-function buildBrowserEnvironment(environment, artifactDirectory) {
+/**
+ * 浏览器进程只继承启动必需变量，所有可能写入的用户目录都固定到本批次。
+ *
+ * Chrome 151 在 Windows ARM64 上若同时收到自定义 USERPROFILE 与显式 --user-data-dir，
+ * 会把后者误判为默认目录并禁用远程调试。调用方可仅省略 USERPROFILE；HOME、AppData 与
+ * Temp 仍留在当前批次，显式 Profile 也继续由启动参数固定，避免回落宿主浏览器数据。
+ */
+function buildBrowserEnvironment(
+  environment,
+  artifactDirectory,
+  { omitUserProfile = false } = {},
+) {
   const sanitized = {};
   const allowedName = /^(?:path|pathext|systemroot|windir|comspec|os|number_of_processors|processor_(?:architecture|identifier)|programdata|programfiles(?:\(x86\))?|commonprogramfiles(?:\(x86\))?|lang|lc_[a-z_]+)$/i;
   for (const [key, value] of Object.entries(environment)) {
@@ -221,12 +231,12 @@ function buildBrowserEnvironment(environment, artifactDirectory) {
     TEMP: artifactDirectory,
     TMP: artifactDirectory,
     HOME: browserHome,
-    USERPROFILE: browserHome,
     LOCALAPPDATA: path.join(browserHome, "local"),
     APPDATA: path.join(browserHome, "roaming"),
     HOMEDRIVE: parsedHome.root.replace(/[\\/]$/, ""),
     HOMEPATH: browserHome.slice(parsedHome.root.length - 1),
   });
+  if (!omitUserProfile) sanitized.USERPROFILE = browserHome;
   return sanitized;
 }
 
@@ -280,6 +290,7 @@ function bindCdpRequestGuard(client, pageSession, tracker) {
 function launchEdge(config, tracker) {
   const argumentsList = [
     "--headless=new",
+    ...(config.incognito === true ? ["--incognito"] : []),
     "--disable-gpu",
     // Codex 外层 Windows 沙箱会阻止 Chromium 再创建一层受限 Renderer Token；该开关只用于
     // 本验收器的一次性 headless Edge。外层沙箱、工作区 Profile 和 localhost 请求拦截仍生效，
@@ -308,7 +319,9 @@ function launchEdge(config, tracker) {
   ];
   const child = spawn(config.edgePath, argumentsList, {
     cwd: config.artifactDirectory,
-    env: buildBrowserEnvironment(process.env, config.artifactDirectory),
+    env: buildBrowserEnvironment(process.env, config.artifactDirectory, {
+      omitUserProfile: config.omitUserProfile === true,
+    }),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -475,13 +488,37 @@ class CdpClient {
 }
 
 
+/** 构造 Page target 参数；私有 Context ID 必须原样绑定，不能回落默认 Profile。 */
+function createPageTargetParameters(browserContextId = null) {
+  if (browserContextId !== null) {
+    requireCondition(
+      typeof browserContextId === "string" && browserContextId.length > 0,
+      "browser.context",
+      "invalid",
+    );
+  }
+  return Object.freeze({
+    url: "about:blank",
+    ...(browserContextId === null ? {} : { browserContextId }),
+  });
+}
+
+
 /** 新建独占 Page target、直连其 WebSocket 并启用所需 CDP 域。 */
-async function createPageSession(browserClient, debugPort) {
+async function createPageSession(browserClient, debugPort, browserContextId = null) {
   const { targetId } = await browserClient.send(
     "Target.createTarget",
-    { url: "about:blank" },
+    createPageTargetParameters(browserContextId),
   );
   requireCondition(typeof targetId === "string" && targetId, "browser.target", "missing");
+  if (browserContextId !== null) {
+    const { targetInfo } = await browserClient.send("Target.getTargetInfo", { targetId });
+    requireCondition(
+      targetInfo?.browserContextId === browserContextId,
+      "browser.context",
+      "target_mismatch",
+    );
+  }
   const pageWebSocketUrl = await waitForPageDebugger(debugPort, targetId);
   const pageClient = new CdpClient(pageWebSocketUrl);
   await pageClient.connect();
@@ -498,7 +535,12 @@ async function createPageSession(browserClient, debugPort) {
     throw error;
   }
   // 直连 Page WebSocket 时事件没有扁平 sessionId；undefined 本身就是不可伪造的 owner。
-  return Object.freeze({ client: pageClient, targetId, sessionId: undefined });
+  return Object.freeze({
+    client: pageClient,
+    targetId,
+    sessionId: undefined,
+    browserContextId,
+  });
 }
 
 
@@ -1854,6 +1896,7 @@ export {
   bindCdpRequestGuard,
   buildBrowserEnvironment,
   createPageSession,
+  createPageTargetParameters,
   consumeTrackedRequestMethod,
   evaluate,
   launchEdge,

@@ -13,6 +13,8 @@ from starlette.requests import Request
 from .adapter_contracts import install_adapter_contract_event_scheduler
 from .adapter_contracts import router as adapter_contracts_router
 from .adapter_specs.routes import router as adapter_specs_router
+from .admin_assistant import install_admin_assistant_scheduler
+from .admin_assistant import router as admin_assistant_router
 from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
@@ -85,6 +87,9 @@ app = create_service_app(
         "X-MetaHub-Audit-Export-Row-Count",
         # 文件安全 CSV 已返回 nosniff；浏览器必须能读取该头并执行下载合同验收。
         "X-Content-Type-Options",
+        # PAGE-107 在跨端口 Console 中执行 exact 私有响应门禁，需要读取 CORS
+        # 可能追加 Origin 的 Vary。
+        "Vary",
     ),
 )
 
@@ -94,13 +99,21 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
     """让 Response Cache 的认证、校验与业务错误和成功响应共享 no-store/private。"""
 
     response = await call_next(request)
-    if request.url.path == "/cache-policies" or request.url.path == "/cache/invalidate":
+    if request.url.path in {
+        "/cache-policies",
+        "/cache/invalidate",
+        "/admin-assistant/query",
+    }:
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         response.headers["Cache-Control"] = "no-store, private"
+    if request.url.path == "/admin-assistant/query":
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
     return response
 
 
 app.include_router(auth_router)
+app.include_router(admin_assistant_router)
 app.include_router(batch_jobs_router)
 app.include_router(adapter_contracts_router)
 app.include_router(adapter_specs_router)
@@ -148,6 +161,9 @@ app.include_router(request_explanations_router)
 app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
+# PRD-077 runtime 必须先于其他 scheduler 预建 WAL/FULL 连接；后安装的 lifespan 会在
+# shutdown 时先停止各自 worker，再由本 runtime 最后关闭长期连接。
+install_admin_assistant_scheduler(app)
 install_provider_health_scheduler(app)
 install_usage_export_scheduler(app)
 install_cost_anomaly_scheduler(app)

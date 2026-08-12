@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from starlette.background import BackgroundTasks
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import (
@@ -30,6 +31,9 @@ from .logging import configure_json_logging
 from .request_id import REQUEST_ID_HEADER, TRACE_ID_HEADER, resolve_request_id, resolve_trace_id
 
 logger = logging.getLogger("metahub.runtime")
+
+# 业务路由仅在已提交安全事实后向这里绑定任务；统一错误处理器据此保留响应后的尽力副作用。
+ERROR_RESPONSE_BACKGROUND_TASKS_STATE = "metahub_error_response_background_tasks"
 
 
 def create_service_app(
@@ -107,10 +111,9 @@ def create_service_app(
         # 每个请求进入服务后立刻确定 request_id/trace_id，并在响应头中透出。
         # 二者都存入 request.state，避免并发请求通过全局变量串号。
         """实现 共享运行时 的 request context middleware 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         started = time.perf_counter()
         # 绝对进入时刻供需要 endpoint-wide 预算的业务依赖复用；认证、RBAC 和路由不能
@@ -157,11 +160,13 @@ def create_service_app(
         # 创建正文含邀请邮箱、公开 accept 正文含密码，而 middleware 在读取正文前无法知道
         # 这些值；敏感意图分类正文也可能被攻击者原样复制到链路 Header。上述写入口均不接受
         # 客户端链路 ID，统一生成内部 ID，避免响应头、access log 或持久 source identity 二次回显。
-        sensitive_write_boundary = invitation_token is not None or (
-            request.method == "POST" and request.url.path.rstrip("/") == "/invitations"
-        ) or (
-            request.method == "POST"
-            and request.url.path.rstrip("/") == "/security/classify-intent"
+        sensitive_write_boundary = (
+            invitation_token is not None
+            or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
+            or (
+                request.method == "POST"
+                and request.url.path.rstrip("/") == "/security/classify-intent"
+            )
         )
         incoming_request_id = (
             None if sensitive_write_boundary else request.headers.get(REQUEST_ID_HEADER)
@@ -206,10 +211,9 @@ def create_service_app(
     async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
         # 可预期错误直接按统一错误码返回，不暴露内部实现细节。
         """实现 共享运行时 的 api error handler 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         return _error_response(request, exc)
 
@@ -217,10 +221,9 @@ def create_service_app(
     async def config_error_handler(request: Request, exc: ConfigError) -> JSONResponse:
         # 配置错误在 API 层同样归一，确保调用方永远能拿到 code/request_id/suggestion。
         """实现 共享运行时 的 config error handler 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         return _error_response(
             request,
@@ -231,10 +234,9 @@ def create_service_app(
     async def not_found_handler(request: Request, exc: Exception) -> JSONResponse:
         # Starlette 默认 404 结构不符合本项目契约，所以这里显式转换。
         """实现 共享运行时 的 not found handler 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         return _error_response(request, ApiError("infra.not_found"))
 
@@ -255,11 +257,7 @@ def create_service_app(
         # Starlette 当前使用普通 dict 保存异常头，但这里按大小写不敏感方式匹配，避免
         # 框架升级改变键大小写后丢失标准 Allow；其他头一律不复制。
         allow = next(
-            (
-                value
-                for name, value in (exc.headers or {}).items()
-                if name.lower() == "allow"
-            ),
+            (value for name, value in (exc.headers or {}).items() if name.lower() == "allow"),
             None,
         )
         if allow:
@@ -273,10 +271,9 @@ def create_service_app(
     ) -> JSONResponse:
         # FastAPI 默认 422 不带 request_id/trace_id，统一转成本项目错误结构。
         """实现 共享运行时 的 validation error handler 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         return _error_response(request, ApiError("infra.validation_failed"))
 
@@ -284,16 +281,17 @@ def create_service_app(
     async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
         # 未捕获异常必须进入错误日志，但响应只返回通用错误码，避免泄露堆栈和环境信息。
         """实现 共享运行时 的 unhandled handler 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
 
-
-        # 邀请 path 本身携带凭据，底层异常对象或 traceback 可能再次包含该 path；该路由
-        # 只记录固定错误事实，不附加 exc_info。其他路由保留既有 traceback 排障能力。
+        # 邀请 path 本身携带凭据；管理助手异常对象还可能携带问题、回答或上游正文。
+        # 这两类边界只记录固定错误事实，不附加 exc_info；其他路由保留既有 traceback。
+        safe_path = _safe_log_path(request)
         failure_logger = (
             logger.error
             if _invitation_path_credential(request.url.path) is not None
+            or safe_path == "/admin-assistant/query"
             else logger.exception
         )
         failure_logger(
@@ -303,7 +301,7 @@ def create_service_app(
                 "trace_id": _trace_id(request),
                 "service_name": service_name,
                 "event": "request.failed",
-                "path": _safe_log_path(request),
+                "path": safe_path,
                 "method": request.method,
                 "error_code": "infra.unhandled",
             },
@@ -324,10 +322,9 @@ def create_service_app(
     @app.get("/health")
     async def health(request: Request) -> dict[str, str]:
         """实现 共享运行时 的 health 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         current_config = _config(request)
         return {
@@ -342,10 +339,9 @@ def create_service_app(
     async def internal_health(request: Request) -> dict[str, str]:
         # 内部 health 与 /health 共用轻量检查，不依赖数据库/Redis/Provider。
         """实现 共享运行时 的 internal health 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         current_config = _config(request)
         return {
@@ -360,10 +356,9 @@ def create_service_app(
     async def version(request: Request) -> dict[str, object]:
         # 版本信息用于本地启动页和交付排障，必须带 request_id。
         """实现 共享运行时 的 version 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         info = build_service_info(_config(request), _request_id(request), _trace_id(request))
         return info.model_dump(mode="json")
@@ -385,10 +380,9 @@ def create_service_app(
     @app.get("/health/live")
     async def health_live(request: Request) -> dict[str, object]:
         """实现 共享运行时 的 health live 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         result = build_liveness_result(_config(request), _request_id(request), _trace_id(request))
         return result.model_dump(mode="json")
@@ -396,10 +390,9 @@ def create_service_app(
     @app.get("/health/ready")
     async def health_ready(request: Request) -> JSONResponse:
         """实现 共享运行时 的 health ready 逻辑，保持职责、输入边界和错误码口径清晰。
-        
+
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
-
 
         result = build_readiness_result(
             _config(request),
@@ -415,10 +408,9 @@ def create_service_app(
 
 def _config(request: Request) -> AppConfig:
     """在 共享运行时 内部复用 config 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     return request.app.state.config
 
@@ -458,9 +450,7 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # 单次分类正文只允许存在于调用栈；成功、权限拒绝、校验错误和未处理异常都必须
         # 禁止浏览器及共享代理缓存，不能只依赖业务路由在 200 响应上补 Header。
         response.headers["Cache-Control"] = "no-store"
-    elif path == "/security/session-risks" or path.startswith(
-        "/security/session-risks/"
-    ):
+    elif path == "/security/session-risks" or path.startswith("/security/session-risks/"):
         # 会话风险报表和处置结果属于租户内安全事实；认证、权限与正文校验错误都可能在
         # 路由函数设置响应头之前返回，因此必须在最外层按路径覆盖所有状态码。
         response.headers["Cache-Control"] = "no-store"
@@ -472,6 +462,12 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Batch responses expose tenant-private job, task, cost and result state. Apply the
         # private cache boundary to success and every middleware-generated error response.
         response.headers["Cache-Control"] = "no-store, private"
+    elif path.rstrip("/") == "/admin-assistant/query":
+        # 管理助手的成功、认证拒绝、wire 错误和最外层未捕获异常都可能关联租户私有查询。
+        # 统一在共享异常出口补齐 exact Header，避免 500 绕过 Control 层用户中间件。
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
     elif path == "/experiments" or path.startswith("/experiments/"):
         # Experiment configuration and result snapshots are tenant-private. Authentication,
         # validation, owner and infrastructure failures must share the same cache boundary.
@@ -502,10 +498,7 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         or path == "/v1/adapter-contract-probes/identity"
         or path == "/adapter-contract-runs"
         or path.startswith("/adapter-contract-runs/")
-        or (
-            path.startswith("/internal/tenants/")
-            and path.endswith("/adapter-contract-runs")
-        )
+        or (path.startswith("/internal/tenants/") and path.endswith("/adapter-contract-runs"))
     ):
         # 目录正文、租户激活身份和 probe Key 归属证明都属于授权后的治理状态；权限、校验
         # 和未捕获异常响应也必须由同一最外层路径策略禁止缓存。合同报告还包含 CI 运行和
@@ -583,20 +576,18 @@ def _apply_unhandled_cors_headers(
 
 def _request_id(request: Request) -> str:
     """在 共享运行时 内部复用 request id 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     return getattr(request.state, "request_id", resolve_request_id(None))
 
 
 def _trace_id(request: Request) -> str:
     """在 共享运行时 内部复用 trace id 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     return getattr(request.state, "trace_id", resolve_trace_id(None, _request_id(request)))
 
@@ -612,9 +603,7 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
             "request_id": request_id,
             "trace_id": trace_id,
             "service_name": (
-                _config(request).service_name
-                if hasattr(request.app.state, "config")
-                else ""
+                _config(request).service_name if hasattr(request.app.state, "config") else ""
             ),
             "event": "request.failed",
             "path": _safe_log_path(request),
@@ -631,9 +620,7 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
             "request_id": request_id,
             "trace_id": trace_id,
             "service_name": (
-                _config(request).service_name
-                if hasattr(request.app.state, "config")
-                else ""
+                _config(request).service_name if hasattr(request.app.state, "config") else ""
             ),
             "event": "error.diagnosed",
             "path": _safe_log_path(request),
@@ -645,8 +632,18 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
             "retryable": diagnosis.retryable,
         },
     )
+    background_tasks = getattr(
+        request.state,
+        ERROR_RESPONSE_BACKGROUND_TASKS_STATE,
+        None,
+    )
+    # request.state 可被业务代码写入任意对象；只接受 Starlette 的受控任务容器，避免错误
+    # handler 调用攻击者可控对象，或把非任务状态误挂到响应生命周期。
+    if not isinstance(background_tasks, BackgroundTasks):
+        background_tasks = None
     return JSONResponse(
         status_code=error.http_status,
         content=response.model_dump(),
         headers={REQUEST_ID_HEADER: request_id, TRACE_ID_HEADER: trace_id},
+        background=background_tasks,
     )
