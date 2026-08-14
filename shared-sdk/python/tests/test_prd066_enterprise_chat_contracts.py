@@ -66,12 +66,18 @@ def _build_event(payload: dict[str, object]):
 def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     """验证权限目录边界：仅 Admin、Developer 和 Viewer 默认获得独立 chat.use。"""
 
-    # 本回归冻结 revision 10 已发布的 64 项投影；PRD-075 的领域权限按规范目录位置插入，
+    # 本回归冻结 revision 10 已发布的 64 项投影；后续领域权限按规范目录位置插入，
     # 因此必须按稳定 code 排除，不能假设新权限只追加在元组末尾。
     assert CATALOG_REVISION >= 10
     legacy_permission_codes = frozenset(PERMISSION_CODES) - {
         "experiment.read",
         "experiment.write",
+        "response_cache.read",
+        "response_cache.write",
+        "response_cache.invalidate",
+        "admin_assistant.query",
+        "approval.read",
+        "approval.decide",
     }
     assert len(legacy_permission_codes) == 64
     assert "chat.use" in ROLE_GRANTABLE_PERMISSIONS["admin"]
@@ -85,7 +91,7 @@ def test_chat_permission_catalog_revision_and_default_role_boundaries() -> None:
     assert "prompt_template.use" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.read" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "prompt_template.write" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
-    # 只投影 revision 10 的权限计算历史 hash；PRD-075 追加的 Experiment 权限不能污染旧合同。
+    # 只投影 revision 10 的权限计算历史 hash；后续权限不能污染旧合同。
     assert permission_matrix_sha256(
         ROLE_GRANTABLE_PERMISSIONS["admin"] & legacy_permission_codes
     ) == (

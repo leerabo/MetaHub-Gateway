@@ -1,0 +1,113 @@
+{
+  "all_108_prds_complete": false,
+  "browser": {
+    "desktop": {
+      "background_blocked": true,
+      "decision_completed": true,
+      "finance_budget_only": true,
+      "focus_restored": true,
+      "height": 720,
+      "horizontal_overflow": false,
+      "idle_escape_closed": true,
+      "native_modal": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "standard_initial_focus": true,
+      "tab_forward_wrap": true,
+      "tab_reverse_wrap": true,
+      "text_overflow": false,
+      "width": 1280
+    },
+    "lifecycle": {
+      "late_denial_discarded": true,
+      "late_success_discarded": true,
+      "logout_dialog_closed": true,
+      "logout_password_cleared": true,
+      "logout_root_cleared": true,
+      "logout_storage_cleared": true,
+      "owner_drift_closed": true,
+      "owner_drift_focus_not_restored": true,
+      "owner_drift_password_cleared": true,
+      "permission_revocation_closed": true,
+      "permission_revocation_password_cleared": true,
+      "permission_revocation_root_cleared": true
+    },
+    "mobile": {
+      "busy_cancel_blocked": true,
+      "busy_escape_blocked": true,
+      "busy_native_modal": true,
+      "height": 844,
+      "high_risk_initial_focus": true,
+      "horizontal_overflow": false,
+      "idle_escape_closed": true,
+      "idle_escape_password_cleared": true,
+      "native_modal": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "security_risk_only": true,
+      "step_up_completed": true,
+      "text_overflow": false,
+      "width": 390
+    },
+    "network": {
+      "external_requests": 0,
+      "runtime_exceptions": 0,
+      "unexpected_console_errors": 0
+    },
+    "screenshots": [
+      "finance-standard-modal-desktop-1280x720.png",
+      "security-high-risk-modal-mobile-390x844.png",
+      "security-high-risk-busy-mobile-390x844.png"
+    ],
+    "status": "passed"
+  },
+  "database": {
+    "decision_count": 3,
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "task_status_counts": {
+      "budget_block_release:approved": 1,
+      "budget_block_release:pending": 1,
+      "budget_block_release:rejected": 1,
+      "session_risk_action:approved": 1,
+      "session_risk_action:pending": 2
+    },
+    "writeback_status_counts": {
+      "completed": 3
+    }
+  },
+  "prd_id": "PRD-078",
+  "privacy": {
+    "staging": {
+      "files_scanned": 4,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    },
+    "work": {
+      "files_scanned": 10,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    }
+  },
+  "processes": {
+    "console": "owned_and_stopped",
+    "control": "owned_and_stopped",
+    "gateway": "owned_and_stopped",
+    "harness": "owned_and_stopped",
+    "resp": "owned_and_stopped"
+  },
+  "run_id": "prd078-browser-final-20260814-36",
+  "source_provenance": {
+    "algorithm": "sha256",
+    "approval_api": "443e4e9ad02ce9c57e02cdadae4c2a8d34940f0e6c8e209a76fea13cf3f63b77",
+    "approval_binding": "e792bcbf85362e6120d4b82500fadbee698383c3a373797ef26756871da8c2c6",
+    "approval_render": "a975ce3bae53f02ca513af304d459ed45c73c304ed302197fe29f9939bc3e046",
+    "approval_state": "42cb6f235cb97d59ab6941f7927324918ef0c75cc9e22665819578a36f21c3d8",
+    "approval_styles": "061149021274a832a293cab258a8402fb4a384a51055540e31af329cb96563a5",
+    "browser_acceptance": "435639f870db5e11b165dde70013f5efc5cb08cd8b8ffb081e7d5630cc808fad",
+    "browser_harness": "7d78cfa403d391dbb8ade08ce7c87f7f6d24a241a40c010e5ccfdc0bad12c080",
+    "console_main": "c00aaab730671907bd9c590f5ce98589a85d3c8eaec2aa54df71e4351353096f",
+    "runtime_harness": "68c192f25811ea1bd0d12257bcc46846e4ee782444d3916a4285527fe00051c3"
+  },
+  "status": "passed"
+}

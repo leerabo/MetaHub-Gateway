@@ -424,13 +424,14 @@ def test_migrate_empty_database_and_repeat_is_idempotent(tmp_path: Path) -> None
         "0068",
         "0069",
         "0070",
+        "0071",
     ]
     assert first.applied == expected_versions
     assert second.applied == []
     assert second.skipped == expected_versions
     assert table_count(database_url, "tenants") == 0
     assert table_count(database_url, "roles") == 0
-    assert table_count(database_url, "schema_migrations") == 70
+    assert table_count(database_url, "schema_migrations") == 71
     columns = {
         row["name"]
         for row in connect_database(database_url).execute("PRAGMA table_info(virtual_keys)").fetchall()

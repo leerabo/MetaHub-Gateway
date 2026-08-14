@@ -476,6 +476,97 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="batch",
     ),
+    # 审批错误只暴露稳定状态与恢复建议；密码、二次验证票据、幂等摘要、目标正文、
+    # Webhook Endpoint 与数据库细节都必须留在服务端，不能拼接进统一错误信封。
+    "approval.input_invalid": ErrorSpec(
+        400,
+        "Approval request is invalid.",
+        "Use the documented exact approval fields and bounded values.",
+        owner="approval",
+    ),
+    "approval.idempotency_required": ErrorSpec(
+        400,
+        "Approval idempotency key is required.",
+        "Send one canonical Idempotency-Key for this decision intent.",
+        owner="approval",
+    ),
+    "approval.not_found": ErrorSpec(
+        404,
+        "Approval task was not found.",
+        "Refresh the current tenant approval list.",
+        owner="approval",
+    ),
+    "approval.state_conflict": ErrorSpec(
+        409,
+        "Approval task state changed.",
+        "Refresh the task and submit a decision against its current revision.",
+        owner="approval",
+    ),
+    "approval.idempotency_conflict": ErrorSpec(
+        409,
+        "Approval idempotency key conflicts with another intent.",
+        "Use a new idempotency key for a different approval decision.",
+        owner="approval",
+    ),
+    "approval.target_conflict": ErrorSpec(
+        409,
+        "Approval target changed after the task was created.",
+        "Refresh the target state and create a new approval task when still required.",
+        owner="approval",
+    ),
+    "approval.expired": ErrorSpec(
+        409,
+        "Approval task expired before the decision completed.",
+        "Refresh the task to inspect the timeout decision.",
+        owner="approval",
+    ),
+    "approval.step_up_required": ErrorSpec(
+        403,
+        "Approval step-up verification is required.",
+        "Complete the current task action verification before deciding.",
+        owner="approval",
+    ),
+    "approval.step_up_invalid": ErrorSpec(
+        403,
+        "Approval step-up verification is invalid.",
+        "Restart verification for the current task and action.",
+        owner="approval",
+    ),
+    "approval.step_up_rate_limited": ErrorSpec(
+        429,
+        "Approval step-up verification is temporarily locked.",
+        "Wait for the verification lock to expire before retrying.",
+        retryable=True,
+        owner="approval",
+    ),
+    "approval.capacity_full": ErrorSpec(
+        429,
+        "Approval tenant capacity is full.",
+        "Wait for pending tasks to complete before creating another approval.",
+        retryable=True,
+        owner="approval",
+    ),
+    "approval.unavailable": ErrorSpec(
+        503,
+        "Approval processing is temporarily unavailable.",
+        "Retry after durable approval state and scheduling recover.",
+        retryable=True,
+        owner="approval",
+    ),
+    "approval.writeback_unavailable": ErrorSpec(
+        503,
+        "Approval target writeback is not yet available.",
+        "Use the request id to inspect durable recovery before retrying.",
+        retryable=True,
+        owner="approval",
+    ),
+    "approval.event_unavailable": ErrorSpec(
+        503,
+        "Approval event delivery is temporarily unavailable.",
+        "Retry after the durable approval event worker recovers.",
+        retryable=True,
+        owner="approval",
+    ),
     # 实验错误只暴露稳定对象与恢复语义；name、路由指纹、幂等材料、正文和数据库异常
     # 均留在服务端边界内。
     "experiment.input_invalid": ErrorSpec(

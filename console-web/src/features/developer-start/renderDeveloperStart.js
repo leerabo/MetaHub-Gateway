@@ -23,6 +23,7 @@ import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
+import { renderApprovals } from "../approvals/renderApprovals.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
@@ -348,6 +349,13 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-107 只投影完整 query owner；来源链接还会与最新导航及各源域原始权限再次求交。
       return renderAdminAssistantSection(
         options.adminAssistantState,
+        options.authContext,
+        options.consoleShellState,
+      );
+    case "approvals":
+      // PAGE-108/109 只投影后端 approval.read 导航 owner；行与动作仍分别叠加目标域实时权限。
+      return renderApprovalsSection(
+        options.approvalsState,
         options.authContext,
         options.consoleShellState,
       );
@@ -902,6 +910,18 @@ function renderAdminAssistantSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel admin-assistant-panel" aria-labelledby="admin-assistant-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-108/109 失权时不保留空壳 DOM；任务 ID 只是选择器，不是授权凭据。 */
+function renderApprovalsSection(state, authContext, consoleShellState) {
+  const html = renderApprovals(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel approvals-panel" aria-labelledby="approvals-title">
         ${html}
       </section>
     `

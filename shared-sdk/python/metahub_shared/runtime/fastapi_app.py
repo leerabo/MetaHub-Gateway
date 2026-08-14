@@ -119,18 +119,34 @@ def create_service_app(
         # 绝对进入时刻供需要 endpoint-wide 预算的业务依赖复用；认证、RBAC 和路由不能
         # 分别重置时钟。deadline 全链路统一使用 monotonic，访问延迟继续使用 perf_counter。
         request.state.request_started_monotonic = time.monotonic()
+        authorization_values = tuple(
+            value.decode("latin-1")
+            for name, value in request.scope.get("headers", ())
+            if name.lower() == b"authorization"
+        )
         authorization = request.headers.get("Authorization")
+        authorization_sensitive_values = _sensitive_header_candidates(authorization_values)
         invitation_token = _invitation_path_credential(request.url.path)
         # Adapter 发布 Token 与用户 Bearer 一样属于不可回显凭据；内部激活路径必须在
         # request_id/trace_id 归一前纳入碰撞扫描，防止调用方把 Token 填进链路 Header。
-        adapter_internal_token = (
-            request.headers.get("X-Internal-Token")
+        raw_adapter_internal_tokens = (
+            tuple(
+                value.decode("latin-1")
+                for name, value in request.scope.get("headers", ())
+                if name.lower() == b"x-internal-token"
+            )
             if request.url.path.startswith("/internal/adapter-specs/")
             or (
                 request.url.path.startswith("/internal/tenants/")
-                and request.url.path.endswith("/adapter-contract-runs")
+                and (
+                    request.url.path.endswith("/adapter-contract-runs")
+                    or request.url.path.endswith("/approvals")
+                )
             )
-            else None
+            else ()
+        )
+        adapter_internal_sensitive_values = _sensitive_header_candidates(
+            raw_adapter_internal_tokens
         )
         # 企业 Chat 使用独立服务身份，不能复用 Adapter 或用户 Bearer Token。内部路由
         # 在任何认证结果前都要把该值加入链路 ID 碰撞扫描，避免错误响应头和访问日志回显。
@@ -147,8 +163,9 @@ def create_service_app(
         sensitive_values = tuple(
             value
             for value in (
+                *authorization_sensitive_values,
                 invitation_token,
-                adapter_internal_token,
+                *adapter_internal_sensitive_values,
                 chat_internal_token,
                 *batch_internal_tokens,
             )
@@ -166,6 +183,16 @@ def create_service_app(
             or (
                 request.method == "POST"
                 and request.url.path.rstrip("/") == "/security/classify-intent"
+            )
+            or (
+                request.method == "POST"
+                and request.url.path.startswith("/internal/tenants/")
+                and request.url.path.endswith("/approvals")
+            )
+            or (
+                request.method == "POST"
+                and request.url.path.startswith("/approvals/")
+                and request.url.path.rsplit("/", 1)[-1] in {"step-up", "approve", "reject"}
             )
         )
         incoming_request_id = (
@@ -406,6 +433,23 @@ def create_service_app(
     return app
 
 
+def _sensitive_header_candidates(values: tuple[str, ...]) -> tuple[str, ...]:
+    """提取 raw 敏感 Header 的完整值、逗号分段和分段内 token。"""
+
+    candidates: list[str] = []
+    for value in values:
+        whole = value.strip()
+        if whole:
+            candidates.append(whole)
+        for raw_segment in value.split(","):
+            segment = raw_segment.strip()
+            if not segment:
+                continue
+            candidates.append(segment)
+            candidates.extend(token for token in segment.split() if token)
+    return tuple(dict.fromkeys(candidates))
+
+
 def _config(request: Request) -> AppConfig:
     """在 共享运行时 内部复用 config 辅助逻辑，集中处理边界值和错误映射。
 
@@ -468,6 +512,18 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
         response.headers["Vary"] = "Authorization"
+    elif path == "/approvals" or path.startswith("/approvals/"):
+        # 审批列表、详情、密码二次验证与决策都属于租户私有治理状态。认证、权限、
+        # wire 校验和未捕获异常可能早于路由 Header，因此最外层统一覆盖所有状态码。
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
+    # 内部审批创建使用服务 Token，缓存隔离必须区分服务身份而不是用户 Authorization。
+    elif path.startswith("/internal/tenants/") and path.endswith("/approvals"):
+        # Vary 绑定唯一内部 Token Header，避免代理把不同服务身份的私有响应混用。
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "X-Internal-Token"
     elif path == "/experiments" or path.startswith("/experiments/"):
         # Experiment configuration and result snapshots are tenant-private. Authentication,
         # validation, owner and infrastructure failures must share the same cache boundary.

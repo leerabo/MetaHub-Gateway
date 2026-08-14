@@ -96,6 +96,9 @@ WEBHOOK_EVENT_TYPES = {
     "experiment.completed",
     # 管理助手事件只外发查询类型、结果和计数；问题、回答和目标 Request 永不进入订阅正文。
     "assistant.queried",
+    # 移动审批只外发卡片所需的固定状态、领域枚举、ID 与时间；目标正文和凭据永不出网。
+    "approval.created",
+    "approval.timeout",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -323,6 +326,9 @@ def build_webhook_event(
     elif event_type == "assistant.queried":
         # PRD-077 只接受不可变 Query/Audit 可逐字段重建的七字段安全摘要。
         _validate_admin_assistant_queried_payload(safe_payload)
+    elif event_type in {"approval.created", "approval.timeout"}:
+        # PRD-078 只接受审批卡片的 exact 安全摘要，不允许备注、目标正文或外部平台凭据。
+        _validate_approval_event_payload(event_type, safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -365,6 +371,8 @@ def build_webhook_event(
         "batch_job.completed",
         "experiment.completed",
         "assistant.queried",
+        "approval.created",
+        "approval.timeout",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -626,6 +634,19 @@ def build_webhook_event(
     elif event_type == "assistant.queried":
         # Query、actor、原始操作链路和 stable source event 必须逐字段绑定，不能在重试时重建身份。
         _validate_admin_assistant_queried_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type in {"approval.created", "approval.timeout"}:
+        # 审批 source event 必须绑定同租户任务、原始链路与创建者或固定 timeout scheduler。
+        _validate_approval_event_envelope(
+            event_type,
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1131,6 +1152,120 @@ def _validate_admin_assistant_queried_envelope(
         or occurred_at.tzinfo is None
     ):
         # stable event/object 与可信 owner 任一缺失都失败关闭，重试 worker 不生成替代身份。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_approval_event_payload(event_type: str, payload: dict[str, Any]) -> None:
+    """校验移动审批卡片的 exact v1 安全摘要。
+
+    目标名称、金额、会话摘要、审批备注和任何凭据都不属于此合同；目标类型与动作也必须
+    命中服务端冻结 registry，不能把事件通道扩成任意命令载体。
+    """
+
+    common = {
+        "schema_version",
+        "approval_id",
+        "status",
+        "target_type",
+        "target_action",
+    }
+    if event_type == "approval.created":
+        expected = common | {"risk_level", "requires_step_up", "expires_at", "entry"}
+    elif event_type == "approval.timeout":
+        expected = common | {"resolution_reason", "decided_at"}
+    else:
+        # 外部或持久化输入必须满足精确类型、长度和枚举约束；非法内容统一映射为固定错误。
+        raise ValueError("webhook.payload_invalid")
+    if set(payload) != expected:
+        # exact-set 防止自由备注、目标正文和未来未经审计字段进入签名卡片。
+        raise ValueError("webhook.payload_invalid")
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["approval_id"], prefix="apr_")
+    ):
+        # 外部或持久化输入必须满足精确类型、长度和枚举约束；非法内容统一映射为固定错误。
+        raise ValueError("webhook.payload_invalid")
+
+    target_type = payload["target_type"]
+    target_action = payload["target_action"]
+    target_actions = {
+        "budget_block_release": {"release"},
+        "session_risk_action": {
+            "freeze_session",
+            "freeze_virtual_key",
+            "dismiss",
+            "release_session",
+            "release_virtual_key",
+        },
+    }
+    if (
+        type(target_type) is not str
+        or target_type not in target_actions
+        or type(target_action) is not str
+        or target_action not in target_actions[target_type]
+    ):
+        # 事件绝不能承载 URL、函数名或 registry 外的动态动作。
+        raise ValueError("webhook.payload_invalid")
+
+    if event_type == "approval.created":
+        expected_risk = "standard" if target_type == "budget_block_release" else "high"
+        if (
+            payload["status"] != "pending"
+            or payload["risk_level"] != expected_risk
+            or type(payload["requires_step_up"]) is not bool
+            or payload["requires_step_up"] != (expected_risk == "high")
+            or payload["entry"] != "approval-card"
+            or not _is_canonical_utc_second(payload["expires_at"])
+        ):
+            # 风险等级由 registry 固定派生，调用方不能把高风险会话降级为免验证卡片。
+            raise ValueError("webhook.payload_invalid")
+        return
+
+    if (
+        payload["status"] != "rejected"
+        or payload["resolution_reason"] != "timeout"
+        or not _is_canonical_utc_second(payload["decided_at"])
+    ):
+        # 外部或持久化输入必须满足精确类型、长度和枚举约束；非法内容统一映射为固定错误。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_approval_event_envelope(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把审批卡片绑定到同租户持久 source event 与可信操作者。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="apevt_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or object_id != payload["approval_id"]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+    ):
+        # 外部或持久化输入必须满足精确类型、长度和枚举约束；非法内容统一映射为固定错误。
+        raise ValueError("webhook.payload_invalid")
+    if event_type == "approval.created":
+        if not _is_bounded_safe_text(actor_id, maximum=160):
+            # 创建者是经过内部身份校验的服务或用户；匿名 source 不能生成通知。
+            raise ValueError("webhook.payload_invalid")
+        return
+    if (
+        actor_id != "approval-timeout-scheduler"
+        or _to_iso(occurred_at) != payload["decided_at"]
+    ):
+        # timeout 只能由固定系统 actor 产生，且信封时间必须与终态事实同秒。
         raise ValueError("webhook.payload_invalid")
 
 

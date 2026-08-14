@@ -17,7 +17,13 @@ export function parseNavigationHash(rawHash) {
     return { value: undefined, rejected: true };
   }
   try {
-    const decoded = decodeURIComponent(encoded).trim();
+    const [encodedNavigation, encodedQuery, ...extra] = encoded.split("?");
+    if (extra.length > 0) return { value: undefined, rejected: true };
+    const decoded = decodeURIComponent(encodedNavigation).trim();
+    // PAGE-109 只接受 approvals + 单一 canonical approval_id；其他导航禁止携带 hash query。
+    if (encodedQuery !== undefined && !validApprovalCardQuery(decoded, encodedQuery)) {
+      return { value: undefined, rejected: true };
+    }
     return decoded && decoded.length <= 80
       ? { value: decoded, rejected: false }
       : { value: undefined, rejected: true };
@@ -25,6 +31,30 @@ export function parseNavigationHash(rawHash) {
     // 非法百分号编码必须保留 rejected=true，调用方才能清理 URL 并显式回退概览。
     return { value: undefined, rejected: true };
   }
+}
+
+/** 解析 PAGE-109 受控 hash query；非法值固定为空且不得触发详情请求。 */
+export function parseApprovalCardHash(rawHash) {
+  const encoded = String(rawHash ?? "").replace(/^#/, "").trim();
+  if (!encoded || encoded.length > 80) return "";
+  try {
+    const [encodedNavigation, encodedQuery, ...extra] = encoded.split("?");
+    if (extra.length > 0 || decodeURIComponent(encodedNavigation).trim() !== "approvals") return "";
+    if (!validApprovalCardQuery("approvals", encodedQuery)) return "";
+    return new URLSearchParams(encodedQuery).get("approval_id") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** hash query 不允许重复 key、空值、Token 或任意扩展参数。 */
+function validApprovalCardQuery(navigation, encodedQuery) {
+  if (navigation !== "approvals" || typeof encodedQuery !== "string" || !encodedQuery) return false;
+  const params = new URLSearchParams(encodedQuery);
+  const entries = [...params.entries()];
+  return entries.length === 1
+    && entries[0][0] === "approval_id"
+    && /^apr_[0-9a-f]{32}$/.test(entries[0][1]);
 }
 
 /**

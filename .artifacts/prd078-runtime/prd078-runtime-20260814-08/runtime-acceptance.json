@@ -1,0 +1,116 @@
+{
+  "access_control": {
+    "backend_dual_rbac": true,
+    "cross_tenant_status": 404,
+    "developer_status": 403,
+    "finance_budget_only": true,
+    "internal_missing_status": 401,
+    "private_headers_and_chain_ids": true,
+    "security_session_risk_only": true
+  },
+  "all_108_prds_complete": false,
+  "database": {
+    "decision_count": 5,
+    "event_type_counts": {
+      "approval.created": 5,
+      "approval.timeout": 2
+    },
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "processing_leases": 0,
+    "task_status_counts": {
+      "approved": 2,
+      "rejected": 3
+    },
+    "writeback_status_counts": {
+      "completed": 5
+    }
+  },
+  "decisions": {
+    "budget_approved": 1,
+    "budget_rejected": 1,
+    "exact_replay_single_fact": true,
+    "opposite_intent_status": 409,
+    "session_risk_approved": 1,
+    "step_up_single_use": true,
+    "step_up_wrong_status": 403,
+    "timeout": 2
+  },
+  "executed_at": "2026-08-14T00:31:25Z",
+  "fixed_loopback_ports": {
+    "console": 5173,
+    "control": 8001,
+    "resp": 6389,
+    "webhook": 18880
+  },
+  "migration": {
+    "down": {
+      "count": 70,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0070"
+    },
+    "fresh": {
+      "count": 71,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0071"
+    },
+    "repeat": {
+      "count": 71,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0071"
+    },
+    "reup": {
+      "count": 71,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0071"
+    }
+  },
+  "prd_id": "PRD-078",
+  "privacy": {
+    "files_scanned": 10,
+    "plaintext_matches": 0,
+    "sqlite_sidecars_remaining": 0
+  },
+  "processes": {
+    "console": "owned_and_stopped",
+    "control_initial": "owned_and_stopped",
+    "control_recovery": "owned_and_stopped",
+    "resp": "owned_and_stopped",
+    "webhook": "owned_and_stopped"
+  },
+  "recovery": {
+    "control_stopped_before_timeout": true,
+    "session_risk_writeback_failed_before_resp": true,
+    "session_risk_writeback_recovered_after_restart": true,
+    "timeout_committed_while_control_stopped": true,
+    "timeout_outbox_recovered_after_restart": true
+  },
+  "run_id": "prd078-runtime-20260814-08",
+  "services": {
+    "console_index": 200,
+    "control_initial_health": 200,
+    "control_recovery_health": 200,
+    "resp_tcp": "ready"
+  },
+  "source_provenance": {
+    "algorithm": "sha256",
+    "approval_outbox": "d85c6cbf44a1b25334cd92f5baf59421b6f3b4e416389a793fd2d40c0dd04495",
+    "approval_scheduler": "d77eedf14460d62aaba1210631c69f48e2c79e1a20735eb6bd1c84c7752f52f2",
+    "approval_service": "c8041ae5c60b4d2678234c1ef13ecd11b6e5a0aa42220984bd392a58f873579a",
+    "migration_down": "5c5db41e1665aace6d7898c4e5e15b89ae07e50421aedd0d8c3658516f70553d",
+    "migration_up": "20078670cdd00f1839f6399cc6fef964f762edc6247019074367623c956f0d06",
+    "runtime_acceptance": "68c192f25811ea1bd0d12257bcc46846e4ee782444d3916a4285527fe00051c3"
+  },
+  "status": "passed",
+  "webhook": {
+    "created": 4,
+    "forbidden_hits": 0,
+    "invalid": 0,
+    "signature_failures": 0,
+    "timeout": 1
+  }
+}

@@ -15,6 +15,8 @@ from .adapter_contracts import router as adapter_contracts_router
 from .adapter_specs.routes import router as adapter_specs_router
 from .admin_assistant import install_admin_assistant_scheduler
 from .admin_assistant import router as admin_assistant_router
+from .approvals import install_approval_scheduler
+from .approvals import router as approvals_router
 from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
@@ -114,6 +116,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(admin_assistant_router)
+app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
 app.include_router(adapter_contracts_router)
 app.include_router(adapter_specs_router)
@@ -176,3 +179,4 @@ install_file_security_event_scheduler(app)
 install_adapter_contract_event_scheduler(app)
 install_experiment_scheduler(app)
 install_response_cache_outbox_scheduler(app)
+install_approval_scheduler(app)

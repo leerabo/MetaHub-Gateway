@@ -62,6 +62,9 @@ export const PERMISSIONS = Object.freeze({
   RESPONSE_CACHE_INVALIDATE: "response_cache.invalidate",
   // PAGE-107 只授予进入只读助手的基础能力；任何来源事实仍要求对应页面的原始读取权限。
   ADMIN_ASSISTANT_QUERY: "admin_assistant.query",
+  // PAGE-108/109 的读取与决策独立；每条任务还必须与预算或会话风险目标域权限求交。
+  APPROVAL_READ: "approval.read",
+  APPROVAL_DECIDE: "approval.decide",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

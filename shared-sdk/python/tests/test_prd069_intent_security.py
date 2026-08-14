@@ -26,10 +26,16 @@ def test_intent_classification_permission_is_separate_and_role_bounded() -> None
     """权限合同：后续目录仍只能把敏感正文入口授予 Admin/SecurityAdmin。"""
 
     assert CATALOG_REVISION >= 10
-    # PRD-075 权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
+    # 后续权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
     legacy_permission_codes = frozenset(PERMISSION_CODES) - {
         "experiment.read",
         "experiment.write",
+        "response_cache.read",
+        "response_cache.write",
+        "response_cache.invalidate",
+        "admin_assistant.query",
+        "approval.read",
+        "approval.decide",
     }
     assert len(legacy_permission_codes) == 64
     assert PERMISSION_BY_CODE["intent_risk.classify"].risk_level == "write"

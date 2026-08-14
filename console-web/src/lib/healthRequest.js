@@ -35,22 +35,20 @@ export async function fetchHealthWithNetworkRetry(
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const controller = new AbortController();
     let timeoutHandle;
+    let timedOut = false;
     try {
-      const timeout = new Promise((_, reject) => {
-        timeoutHandle = setTimeoutOperation(() => {
-          controller.abort();
-          reject(healthTimeoutError());
-        }, boundedTimeout);
+      timeoutHandle = setTimeoutOperation(() => {
+        timedOut = true;
+        controller.abort();
+      }, boundedTimeout);
+      // abort 只是请求取消；必须等待当前 fetch 生命周期结算后再重试，避免逻辑 attempt 并发。
+      // CDP 事件仍可能跨请求反序，因此验收账本会按 logical request_id 独立收敛。
+      return await fetchOperation(url, {
+        headers: { "X-Request-ID": `${logicalRequestId}_attempt_${attempt}` },
+        signal: controller.signal,
       });
-      return await Promise.race([
-        fetchOperation(url, {
-          headers: { "X-Request-ID": `${logicalRequestId}_attempt_${attempt}` },
-          signal: controller.signal,
-        }),
-        timeout,
-      ]);
     } catch (error) {
-      lastError = error;
+      lastError = timedOut ? healthTimeoutError() : error;
     } finally {
       if (timeoutHandle !== undefined) clearTimeoutOperation(timeoutHandle);
     }

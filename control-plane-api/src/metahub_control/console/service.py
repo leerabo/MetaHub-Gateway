@@ -54,6 +54,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     # PAGE-107 页面事件只保存 shell 元数据；问题、回答与来源值仅存在浏览器活动内存，
     # 专用助手审计图也只保存枚举、计数和链路 owner，不能借 page_viewed 复制正文。
     "admin-assistant": "console.page_viewed",
+    # PAGE-108/109 页面事件只记录受控 shell 元数据，不携带 task、target、密码或票据。
+    "approvals": "console.page_viewed",
     "migration-guide": "migration.guide_viewed",
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
@@ -152,6 +154,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "使用可验证数据来源查询用量、错误、成本和策略摘要。",
         "选择一个只读问题开始查询。",
         11,
+    ),
+    NavigationDefinition(
+        "approvals",
+        "审批中心",
+        "总览",
+        "approvals",
+        ("approval.read",),
+        "处理当前租户预算阻断与高风险会话操作的审批任务。",
+        "当前没有可见审批任务。",
+        12,
     ),
     NavigationDefinition(
         "tenant",

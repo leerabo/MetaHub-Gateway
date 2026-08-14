@@ -3397,6 +3397,543 @@ h3 {
   }
 }
 
+/* PAGE-108/109 审批工作台：桌面与移动布局共享稳定尺寸，弹窗和长标识不得造成溢出。 */
+.approvals-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.approval-workspace {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.approval-toolbar,
+.approval-toolbar-actions,
+.approval-filters,
+.approval-section-heading,
+.approval-detail-heading,
+.approval-actions,
+.approval-dialog-heading,
+.approval-dialog-actions,
+.approval-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.approval-toolbar,
+.approval-section-heading,
+.approval-detail-heading,
+.approval-dialog-heading {
+  justify-content: space-between;
+}
+
+.approval-toolbar {
+  min-height: 68px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.approval-toolbar h2,
+.approval-section-heading h3,
+.approval-section-heading h4,
+.approval-detail-heading h3,
+.approval-dialog-heading h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.approval-toolbar h2 {
+  font-size: 19px;
+}
+
+.approval-toolbar p,
+.approval-detail-heading .eyebrow,
+.approval-section-heading > span,
+.approval-timeline span,
+.approval-timeline small {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.approval-toolbar-actions {
+  flex: 0 0 auto;
+}
+
+.approval-toolbar .icon-command,
+.approval-dialog .icon-command {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.approval-filters {
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f8fa;
+}
+
+.approval-filters label,
+.approval-dialog label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #3e4958;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.approval-filters select,
+.approval-dialog select,
+.approval-dialog input {
+  min-width: 0;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text);
+  padding: 6px 9px;
+  font: inherit;
+}
+
+.approval-feedback {
+  min-height: 32px;
+  padding: 8px 16px;
+  color: var(--ok);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.approval-feedback:empty {
+  min-height: 0;
+  padding-block: 0;
+}
+
+.approval-feedback.is-error,
+.approval-error {
+  color: var(--danger);
+}
+
+.approval-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.78fr) minmax(0, 1.22fr);
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+
+.approval-list,
+.approval-detail {
+  min-width: 0;
+  padding: 16px;
+}
+
+.approval-list {
+  border-right: 1px solid var(--line);
+}
+
+.approval-list-items {
+  display: grid;
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.approval-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(112px, 0.7fr);
+  gap: 7px 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 82px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  padding: 11px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.approval-list-item:hover,
+.approval-list-item.is-selected {
+  background: #f2faf8;
+}
+
+.approval-list-item.is-selected {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.approval-list-item > span,
+.approval-list-item strong,
+.approval-list-item code,
+.approval-detail code,
+.approval-target-summary dd,
+.approval-error span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-list-item strong,
+.approval-list-item code {
+  display: block;
+}
+
+.approval-list-item code,
+.approval-detail-heading code {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.approval-badges {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.approval-badges b,
+.approval-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 4px;
+  background: #eef1f5;
+  color: #4b5665;
+  padding: 2px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.approval-badges .tone-pending,
+.approval-status.tone-pending {
+  background: #fff3d9;
+  color: #785200;
+}
+
+.approval-badges .tone-approved,
+.approval-status.tone-approved {
+  background: #e8f7ef;
+  color: #09623b;
+}
+
+.approval-badges .tone-rejected,
+.approval-status.tone-rejected {
+  background: #fcecea;
+  color: #9b2c24;
+}
+
+.approval-detail-heading {
+  align-items: flex-start;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.approval-detail-heading > div {
+  min-width: 0;
+}
+
+.approval-detail-heading .eyebrow {
+  text-transform: none;
+}
+
+.approval-card-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.approval-card-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  background: #fff;
+  padding: 11px;
+}
+
+.approval-card-summary span,
+.approval-target-summary dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.approval-card-summary strong {
+  overflow-wrap: anywhere;
+}
+
+/* 审批详情、动作区与对话框保持独立布局；长 request_id 和移动端按钮都必须稳定换行。 */
+.approval-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.approval-command,
+.approval-pager button,
+.approval-dialog-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 104px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text);
+  padding: 7px 13px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.approval-command.approve {
+  border-color: #0d7a4a;
+  background: #0d7a4a;
+  color: #fff;
+}
+
+.approval-command.reject {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.approval-command:disabled,
+.approval-pager button:disabled,
+.approval-dialog button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.approval-list-item:focus-visible,
+.approval-command:focus-visible,
+.approval-pager button:focus-visible,
+.approval-dialog button:focus-visible,
+.approval-filters select:focus-visible,
+.approval-dialog select:focus-visible,
+.approval-dialog input:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.approval-target-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin: 16px 0 0;
+}
+
+.approval-target-summary > div {
+  min-width: 0;
+}
+
+.approval-target-summary dd {
+  margin: 4px 0 0;
+}
+
+.approval-resolution {
+  margin: 14px 0 0;
+  color: var(--muted);
+}
+
+.approval-timeline {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.approval-timeline ol {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding-left: 22px;
+}
+
+.approval-timeline li {
+  padding-left: 3px;
+}
+
+.approval-timeline strong,
+.approval-timeline span,
+.approval-timeline small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.approval-pager {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.approval-pager button {
+  min-width: 88px;
+  min-height: 36px;
+}
+
+.approval-empty,
+.approval-error {
+  padding: 20px 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-error {
+  display: grid;
+  gap: 5px;
+}
+
+.approval-dialog[open] {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: block;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  box-sizing: border-box;
+  margin: auto;
+  border: 1px solid #c9d0d9;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 18px 54px rgba(16, 24, 40, 0.22);
+  padding: 18px;
+}
+
+.approval-dialog::backdrop {
+  background: rgba(21, 28, 38, 0.48);
+}
+
+.approval-dialog form {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.approval-dialog p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-dialog input,
+.approval-dialog select {
+  width: 100%;
+}
+
+.approval-dialog-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.approval-workspace.mode-mobile-card .approval-layout {
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 0;
+}
+
+.approval-workspace.mode-mobile-card .approval-detail {
+  padding-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .approval-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .approval-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .approval-card-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 390px) {
+  .approvals-panel {
+    margin-inline: 0;
+  }
+
+  .approval-toolbar {
+    min-height: 60px;
+    padding: 10px 12px;
+  }
+
+  .approval-toolbar h2 {
+    font-size: 17px;
+  }
+
+  .approval-filters,
+  .approval-list,
+  .approval-detail {
+    padding-inline: 12px;
+  }
+
+  .approval-filters label {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .approval-filters select {
+    width: 100%;
+  }
+
+  .approval-list-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .approval-badges {
+    justify-content: flex-start;
+  }
+
+  .approval-workspace.mode-mobile-card .approval-detail {
+    padding: 10px 12px 16px;
+  }
+
+  .approval-detail-heading {
+    gap: 8px;
+  }
+
+  .approval-status {
+    flex: 0 0 auto;
+  }
+
+  .approval-card-summary,
+  .approval-target-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .approval-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .approval-command {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .approval-dialog[open] {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 14px;
+  }
+
+  .approval-dialog-actions button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
 /* PAGE-107 管理助手：页面是只读工作台，输入与回答保持稳定双栏，不使用嵌套卡片。 */
 .admin-assistant-panel {
   min-width: 0;

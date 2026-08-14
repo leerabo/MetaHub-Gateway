@@ -380,10 +380,16 @@ def test_session_risk_permissions_are_separate_and_role_bounded() -> None:
     """后续目录仍必须保留 revision 10 的风险读写角色边界。"""
 
     assert CATALOG_REVISION >= 10
-    # PRD-075 权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
+    # 后续权限按领域位置插入；按 code 排除后复算 revision 10 的完整旧 hash。
     legacy_permission_codes = frozenset(PERMISSION_CODES) - {
         "experiment.read",
         "experiment.write",
+        "response_cache.read",
+        "response_cache.write",
+        "response_cache.invalidate",
+        "admin_assistant.query",
+        "approval.read",
+        "approval.decide",
     }
     assert len(legacy_permission_codes) == 64
     assert PERMISSION_BY_CODE["session_risk.read"].risk_level == "read"

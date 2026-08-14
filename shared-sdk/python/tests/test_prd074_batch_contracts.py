@@ -70,10 +70,16 @@ def test_current_catalog_preserves_batch_permission_boundaries() -> None:
     """后续目录 revision 可以增加权限，但不得移除或扩大 PRD-074 的 Batch 授权边界。"""
 
     assert CATALOG_REVISION >= 10
-    # PRD-075 权限按领域位置插入；按 code 排除后必须仍是 revision 10 的完整 64 项矩阵。
+    # 后续权限按领域位置插入；按 code 排除后必须仍是 revision 10 的完整 64 项矩阵。
     legacy_permission_codes = frozenset(PERMISSION_CODES) - {
         "experiment.read",
         "experiment.write",
+        "response_cache.read",
+        "response_cache.write",
+        "response_cache.invalidate",
+        "admin_assistant.query",
+        "approval.read",
+        "approval.decide",
     }
     assert len(legacy_permission_codes) == 64
     assert {"batch.read", "batch.write"} <= set(PERMISSION_CODES)

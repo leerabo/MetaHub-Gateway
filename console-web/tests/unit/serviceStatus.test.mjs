@@ -71,10 +71,12 @@ test("getServiceStatuses recovers one transient network failure with a new reque
   assert.equal(new Set(requestIds).size, requestIds.length);
 });
 
-test("fetchHealthWithNetworkRetry bounds two hanging attempts with independent abort signals", async () => {
+test("fetchHealthWithNetworkRetry serializes two timed-out attempts with independent abort signals", async () => {
   const requestIds = [];
   const signals = [];
   let timersCleared = 0;
+  let active = 0;
+  let maxActive = 0;
   const pending = fetchHealthWithNetworkRetry(
     "http://control.local/health/live",
     "bounded_health",
@@ -83,7 +85,16 @@ test("fetchHealthWithNetworkRetry bounds two hanging attempts with independent a
       fetchOperation: async (_url, options) => {
         requestIds.push(options.headers["X-Request-ID"]);
         signals.push(options.signal);
-        return new Promise(() => {});
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        return new Promise((_, reject) => {
+          options.signal.addEventListener("abort", () => {
+            setTimeout(() => {
+              active -= 1;
+              reject(new DOMException("aborted", "AbortError"));
+            }, 5);
+          }, { once: true });
+        });
       },
       setTimeoutOperation(callback) {
         queueMicrotask(callback);
@@ -103,4 +114,69 @@ test("fetchHealthWithNetworkRetry bounds two hanging attempts with independent a
   assert.notEqual(signals[0], signals[1]);
   assert.equal(signals.every((signal) => signal.aborted), true);
   assert.equal(timersCleared, 2);
+  assert.equal(maxActive, 1);
+  assert.equal(active, 0);
+});
+
+test("fetchHealthWithNetworkRetry keeps a late success on attempt one and does not retry", async () => {
+  const requestIds = [];
+  const signals = [];
+  let timersCleared = 0;
+  let resolveFetch;
+  const result = fetchHealthWithNetworkRetry(
+    "http://control.local/health/ready",
+    "late_health",
+    {
+      timeoutMs: 1,
+      fetchOperation: async (_url, options) => {
+        requestIds.push(options.headers["X-Request-ID"]);
+        signals.push(options.signal);
+        return new Promise((resolve) => { resolveFetch = resolve; });
+      },
+      setTimeoutOperation(callback) {
+        queueMicrotask(() => {
+          callback();
+          queueMicrotask(() => resolveFetch({ ok: true }));
+        });
+        return 1;
+      },
+      clearTimeoutOperation() { timersCleared += 1; },
+    },
+  );
+
+  assert.deepEqual(await result, { ok: true });
+  assert.equal(requestIds.length, 1);
+  assert.match(requestIds[0], /_attempt_1$/);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(timersCleared, 1);
+});
+
+test("fetchHealthWithNetworkRetry clears the timer after an immediate success", async () => {
+  let timerCallback;
+  let timersCleared = 0;
+  let signal;
+  const response = await fetchHealthWithNetworkRetry(
+    "http://control.local/version",
+    "healthy",
+    {
+      fetchOperation: async (_url, options) => {
+        signal = options.signal;
+        return { ok: true };
+      },
+      setTimeoutOperation(callback) {
+        timerCallback = callback;
+        return 9;
+      },
+      clearTimeoutOperation(handle) {
+        assert.equal(handle, 9);
+        timersCleared += 1;
+        timerCallback = null;
+      },
+    },
+  );
+
+  assert.deepEqual(response, { ok: true });
+  assert.equal(timersCleared, 1);
+  assert.equal(timerCallback, null);
+  assert.equal(signal.aborted, false);
 });

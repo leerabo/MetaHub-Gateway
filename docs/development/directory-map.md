@@ -1735,6 +1735,43 @@ Excel 总表第 79 行、M2/M3 交付第 15 行、PAGE-108/109、审批 API、Ap
 `PRD-078 | M2-企业增强 | P2 | 扩展层 | 移动审批 | 移动端/企微钉钉审批入口`。本次不启动或混入
 PRD-078；`all_108_prds_complete=false`。
 
+## PRD-078 移动端/企微钉钉审批入口目录（已完成）
+
+- `shared-sdk/python/metahub_shared/approvals/`：独立 versioned HMAC keyring、canonical bytes 与分域 digest；
+  Shared runtime 同时登记 RBAC revision 14、审批统一错误、配置隔离和
+  `approval.created`/`approval.timeout` exact payload。
+- `infra/migrations/0071_mobile_enterprise_approval_entry.sql/.down.sql`：新增 tenant-qualified Task、Decision、
+  step-up challenge/guard、writeback、event source/outbox 和 scheduler lease；迁移以 canonical schema、
+  catalog、业务事实、订阅/delivery 与自定义 grant guard 保护原子 up/down。
+- `control-plane-api/src/metahub_control/approvals/`：有界内部创建、严格 wire、列表/详情、密码 step-up、
+  approve/reject、预算与会话风险固定 target adapter、数据库时钟 timeout、公平 tenant lease、Webhook source
+  outbox 和 Redis writeback 恢复；认证依赖、Console 导航、Audit/Webhook owner 与 lifespan scheduler 完成接入。
+- `console-web/src/lib/approvals.js` 与 `src/features/approvals/`：严格响应 schema、私有缓存 Header、PAGE-108/109
+  列表/详情/移动卡片、倒计时、原生 Dialog、后端 step-up、owner/generation/Abort、动态撤权和敏感内存清理；
+  主 app、shell、health、permissions、developer start 与样式完成有界装配。
+- `shared-sdk/python/tests/test_prd078_approvals.py`、`control-plane-api/tests/**/*prd078*.py`、
+  `console-web/tests/unit/prd078Approvals.test.mjs` 及登录/健康 owner 回归、
+  `scripts/acceptance/tests/test_prd078_*`：覆盖合同、迁移、API、权限/租户、幂等/并发、step-up、timeout、
+  outbox/writeback 恢复、Console 生命周期和证据安全；最终分组结果见测试记录，不能相加冒充根级全量。
+- `docs/prd/PRD-078-mobile-enterprise-approval-entry.md`、`docs/api/approvals.md` 与
+  `docs/testing/PRD-078-tests.md`：保存冻结设计、两轮编码前和两轮实现后自审、公开 API/错误/Webhook
+  合同及最终门禁记录。
+- `scripts/acceptance/prd078-runtime-acceptance.py` 与
+  `.artifacts/prd078-runtime/prd078-runtime-20260814-08/`：从空 SQLite 完成
+  `71/0071 -> 71/0071 -> 70/0070 -> 71/0071`，四阶段完整性 ok、外键违规 0；两类真实目标、三角色、
+  step-up、幂等、timeout、Control 停服恢复、事件和 Redis 回写均通过，主 JSON SHA-256 为
+  `5a3930e775654a3503241a464e37b206d3850db50c45c7b58b5f7fcf5cb43411`。
+- `scripts/acceptance/prd078-browser-harness.py`、`prd078-browser-acceptance.mjs` 与
+  `.artifacts/prd078-browser/prd078-browser-final-20260814-36/`：保存脱敏 Browser JSON、三张桌面/移动截图和
+  SHA-256 manifest；标准/高风险审批、忙碌态、撤权、owner 漂移、迟到响应、登出、网络/Console、像素和
+  布局门禁通过，截图已经人工复核。
+
+PRD-078 的设计、实现、专项、必要回归、迁移、Runtime、Browser、中文注释和提交前安全门禁均已通过。
+Excel 总表第 80 行、M2/M3 交付第 16 行、PAGE-110/111、套餐与额度 API、Plan/QuotaBucket、
+`quota.exhausted`/`trial.expired` 与 TC-0157/0158 共同确认，下一条权威未完成项为
+`PRD-079 | M2-企业增强 | P2 | 扩展层 | 套餐计费 | 套餐、试用与额度类型`。本次不启动 PRD-079，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

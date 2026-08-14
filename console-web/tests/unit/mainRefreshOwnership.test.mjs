@@ -78,3 +78,63 @@ test("background refresh leaves the unauthenticated login form intact", async ()
   assert.ok(invitationGateIndex >= 0);
   assert.ok(invitationGateIndex < authGateIndex && authGateIndex < refreshIndex);
 });
+
+
+test("superseded login success is rejected after each await and before session commit", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const login = sourceSection(source, "function renderLogin(", "/** 生成当前邀请弹窗 owner 输入");
+  const submitIndex = login.indexOf('form?.addEventListener("submit", async (event) => {');
+  const ownerIndex = login.indexOf("const loginOwner = Object.freeze({ generation: ++loginGeneration });", submitIndex);
+  const loginAwaitIndex = login.indexOf("const login = await loginAdmin({", ownerIndex);
+  const loginGateIndex = login.indexOf("if (!loginOwnerCurrent())", loginAwaitIndex);
+  const currentUserAwaitIndex = login.indexOf("const context = await getCurrentUser", loginGateIndex);
+  const currentUserGateIndex = login.indexOf("if (!loginOwnerCurrent())", currentUserAwaitIndex);
+  const commitGateIndex = login.indexOf("if (!loginOwnerCurrent())", currentUserGateIndex + 1);
+  const storageWriteIndex = login.indexOf("saveAuthSession(loginToken, context);", commitGateIndex);
+  const memoryWriteIndex = login.indexOf("authSession = { token: loginToken, context };", storageWriteIndex);
+  const ownerInvalidateIndex = login.indexOf("loginGeneration += 1;", memoryWriteIndex);
+  const refreshInvalidateIndex = login.indexOf("refreshSequence += 1;", ownerInvalidateIndex);
+
+  assert.ok(submitIndex >= 0 && submitIndex < ownerIndex);
+  assert.ok(ownerIndex < loginAwaitIndex && loginAwaitIndex < loginGateIndex);
+  assert.ok(loginGateIndex < currentUserAwaitIndex && currentUserAwaitIndex < currentUserGateIndex);
+  assert.ok(currentUserGateIndex < commitGateIndex && commitGateIndex < storageWriteIndex);
+  assert.ok(storageWriteIndex < memoryWriteIndex && memoryWriteIndex < ownerInvalidateIndex);
+  assert.ok(ownerInvalidateIndex < refreshInvalidateIndex);
+});
+
+
+test("superseded login failure cannot clear or redraw a newer session", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const login = sourceSection(source, "function renderLogin(", "/** 生成当前邀请弹窗 owner 输入");
+  const ownerClosureIndex = login.indexOf("const loginOwnerCurrent = () => (");
+  const generationGateIndex = login.indexOf("loginOwner.generation === loginGeneration", ownerClosureIndex);
+  const sessionGateIndex = login.indexOf("&& !authSession.token", generationGateIndex);
+  const catchIndex = login.indexOf("} catch (err) {");
+  const catchOwnerGateIndex = login.indexOf("if (!loginOwnerCurrent())", catchIndex);
+  const catchClearIndex = login.indexOf("clearAuthSession();", catchOwnerGateIndex);
+  const catchMemoryClearIndex = login.indexOf("authSession = { token: null, context: null };", catchClearIndex);
+  const catchRenderIndex = login.indexOf("renderLogin(authErrorMessage(err)", catchMemoryClearIndex);
+
+  assert.ok(ownerClosureIndex >= 0 && ownerClosureIndex < generationGateIndex);
+  assert.ok(generationGateIndex < sessionGateIndex && sessionGateIndex < catchIndex);
+  assert.ok(catchIndex < catchOwnerGateIndex && catchOwnerGateIndex < catchClearIndex);
+  assert.ok(catchClearIndex < catchMemoryClearIndex && catchMemoryClearIndex < catchRenderIndex);
+});
+
+
+test("login page replacement and each new submit invalidate earlier login owners", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const declarationIndex = source.indexOf("let loginGeneration = 0;");
+  const login = sourceSection(source, "function renderLogin(", "/** 生成当前邀请弹窗 owner 输入");
+  const renderInvalidateIndex = login.indexOf("loginGeneration += 1;");
+  const lifecycleCleanupIndex = login.indexOf("gatewayDebugLifecycle.leave();");
+  const pageRenderIndex = login.indexOf("renderLoginPage(app");
+  const submitIndex = login.indexOf('form?.addEventListener("submit", async (event) => {');
+  const submitInvalidateIndex = login.indexOf("generation: ++loginGeneration", submitIndex);
+
+  assert.ok(declarationIndex >= 0);
+  assert.ok(renderInvalidateIndex >= 0 && renderInvalidateIndex < lifecycleCleanupIndex);
+  assert.ok(renderInvalidateIndex < pageRenderIndex && pageRenderIndex < submitIndex);
+  assert.ok(submitIndex < submitInvalidateIndex);
+});

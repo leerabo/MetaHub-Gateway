@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：shared-sdk/python/metahub_shared/db/migrate.py
 """
 
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -23,6 +25,8 @@ PRAGMA foreign_keys = OFF;
 PRAGMA legacy_alter_table = ON;
 BEGIN IMMEDIATE;"""
 EXPECTED_VERSION_ROLLBACK_SUFFIX = "COMMIT;\nPRAGMA foreign_keys = ON;\n"
+TOP_LEVEL_BEGIN_RE = re.compile(r"(?m)^BEGIN(?: IMMEDIATE)?;[ \t]*$")
+TOP_LEVEL_COMMIT_RE = re.compile(r"(?m)^COMMIT;[ \t]*$")
 
 
 @dataclass(frozen=True)
@@ -158,7 +162,10 @@ def _rollback_last_migration_with_connection(
     directory = migrations_dir or _default_migrations_dir()
     _ensure_schema_migrations(connection)
     row = connection.execute(
-        "SELECT version, name FROM schema_migrations WHERE status='applied' ORDER BY version DESC LIMIT 1"
+        """
+        SELECT version,name FROM schema_migrations
+        WHERE status='applied' ORDER BY version DESC LIMIT 1
+        """
     ).fetchone()
     if not row:
         if expected_version is not None:
@@ -185,7 +192,8 @@ def _rollback_last_migration_with_connection(
             connection.execute(
                 """
                 UPDATE schema_migrations
-                SET status='rolled_back', applied_at=datetime('now'), execution_time_ms=?, error_message=NULL
+                SET status='rolled_back',applied_at=datetime('now'),
+                    execution_time_ms=?,error_message=NULL
                 WHERE version=?
                 """,
                 (elapsed_ms, row["version"]),
@@ -274,7 +282,11 @@ DROP TABLE metahub_rollback_expected_version_guard;
         EXPECTED_VERSION_ROLLBACK_PREFIX + guard,
         1,
     )
-    return guarded[: -len(EXPECTED_VERSION_ROLLBACK_SUFFIX)] + terminal + EXPECTED_VERSION_ROLLBACK_SUFFIX
+    return (
+        guarded[: -len(EXPECTED_VERSION_ROLLBACK_SUFFIX)]
+        + terminal
+        + EXPECTED_VERSION_ROLLBACK_SUFFIX
+    )
 
 
 def _validate_expected_version(expected_version: str) -> None:
@@ -349,46 +361,138 @@ def _apply_one_migration(connection: sqlite3.Connection, migration: MigrationFil
 
     started = time.perf_counter()
     try:
-        connection.executescript(migration.sql)
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        connection.execute(
-            """
-            INSERT INTO schema_migrations(version, name, checksum, status, applied_at, execution_time_ms, error_message)
-            VALUES(?, ?, ?, 'applied', datetime('now'), ?, NULL)
-            ON CONFLICT(version) DO UPDATE SET
-              checksum=excluded.checksum,
-              status='applied',
-              applied_at=excluded.applied_at,
-              execution_time_ms=excluded.execution_time_ms,
-              error_message=NULL
-            """,
-            (migration.version, migration.name, migration.checksum, elapsed_ms),
-        )
-        connection.commit()
+        atomic_sql = _inject_atomic_migration_registration(migration)
+        connection.executescript(atomic_sql or migration.sql)
+        if atomic_sql is None:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            connection.execute(
+                """
+                INSERT INTO schema_migrations(
+                  version,name,checksum,status,applied_at,execution_time_ms,error_message
+                ) VALUES(?,?,?,'applied',datetime('now'),?,NULL)
+                ON CONFLICT(version) DO UPDATE SET
+                  name=excluded.name,
+                  checksum=excluded.checksum,
+                  status='applied',
+                  applied_at=excluded.applied_at,
+                  execution_time_ms=excluded.execution_time_ms,
+                  error_message=NULL
+                """,
+                (migration.version, migration.name, migration.checksum, elapsed_ms),
+            )
+            connection.commit()
     # 正向脚本的 SQL 或提交失败时，先撤销迁移事务，再单独记录失败状态。
     except sqlite3.Error as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         # 失败记录必须在 rollback 之后写入，否则 commit 会连同临时表或部分数据一起提交。
         connection.rollback()
-        connection.execute(
-            """
-            INSERT INTO schema_migrations(version, name, checksum, status, applied_at, execution_time_ms, error_message)
-            VALUES(?, ?, ?, 'failed', datetime('now'), ?, ?)
-            ON CONFLICT(version) DO UPDATE SET
-              status='failed',
-              applied_at=excluded.applied_at,
-              execution_time_ms=excluded.execution_time_ms,
-              error_message=excluded.error_message
-            """,
-            (migration.version, migration.name, migration.checksum, elapsed_ms, str(exc)[:1000]),
-        )
-        connection.commit()
+        _record_failed_migration(connection, migration, elapsed_ms, exc)
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         raise DbError(
             "db.migration_failed",
             f"Migration {migration.version} failed: {exc}",
             "Fix the migration SQL and rerun db:migrate.",
         ) from exc
+
+
+def _inject_atomic_migration_registration(migration: MigrationFile) -> str | None:
+    """把版本登记注入单一顶层事务；无显式事务的旧脚本保持原执行路径。"""
+
+    begin_matches = tuple(TOP_LEVEL_BEGIN_RE.finditer(migration.sql))
+    commit_matches = tuple(TOP_LEVEL_COMMIT_RE.finditer(migration.sql))
+    if not begin_matches and not commit_matches:
+        return None
+    if (
+        len(begin_matches) != 1
+        or len(commit_matches) != 1
+        or begin_matches[0].start() >= commit_matches[0].start()
+    ):
+        # 原子登记只支持一个明确的顶层事务，形状歧义时拒绝改写迁移脚本。
+        raise DbError(
+            "db.migration_failed",
+            "Migration transaction shape is not supported for atomic registration.",
+            "Use one reviewed top-level BEGIN and one final COMMIT.",
+        )
+
+    version = _sqlite_text_literal(migration.version)
+    name = _sqlite_text_literal(migration.name)
+    checksum = _sqlite_text_literal(migration.checksum)
+    registration = f"""
+-- Schema changes and their applied-version fact must become visible together.
+DROP TABLE IF EXISTS temp.metahub_migration_registration_guard;
+CREATE TEMP TABLE metahub_migration_registration_guard(
+  issue_count INTEGER NOT NULL
+);
+CREATE TEMP TRIGGER metahub_migration_registration_guard_abort
+BEFORE INSERT ON metahub_migration_registration_guard FOR EACH ROW
+WHEN NEW.issue_count!=0
+BEGIN SELECT RAISE(ABORT,'db_migration_registration_failed'); END;
+INSERT INTO schema_migrations(
+  version,name,checksum,status,applied_at,execution_time_ms,error_message
+) VALUES({version},{name},{checksum},'applied',datetime('now'),0,NULL)
+ON CONFLICT(version) DO UPDATE SET
+  name=excluded.name,
+  checksum=excluded.checksum,
+  status='applied',
+  applied_at=excluded.applied_at,
+  execution_time_ms=excluded.execution_time_ms,
+  error_message=NULL;
+INSERT INTO metahub_migration_registration_guard(issue_count)
+VALUES(CASE WHEN changes()=1 THEN 0 ELSE 1 END);
+DROP TRIGGER metahub_migration_registration_guard_abort;
+DROP TABLE metahub_migration_registration_guard;
+"""
+    commit_at = commit_matches[0].start()
+    return migration.sql[:commit_at] + registration + migration.sql[commit_at:]
+
+
+def _sqlite_text_literal(value: str) -> str:
+    """生成 SQLite TEXT literal，禁止 NUL 改变脚本边界或底层解析。"""
+
+    # NUL 会越过 SQL 字面量转义边界，迁移元数据必须在脚本拼接前失败关闭。
+    if "\x00" in value:
+        raise DbError(
+            "db.migration_failed",
+            "Migration metadata contains an invalid character.",
+            "Use a migration filename and checksum without NUL characters.",
+        )
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _record_failed_migration(
+    connection: sqlite3.Connection,
+    migration: MigrationFile,
+    elapsed_ms: int,
+    original_error: sqlite3.Error,
+) -> None:
+    """尽力记录失败；登记表自身拒绝写入时不得遮蔽原始迁移错误。"""
+
+    try:
+        connection.execute(
+            """
+            INSERT INTO schema_migrations(
+              version,name,checksum,status,applied_at,execution_time_ms,error_message
+            ) VALUES(?,?,?,'failed',datetime('now'),?,?)
+            ON CONFLICT(version) DO UPDATE SET
+              name=excluded.name,
+              checksum=excluded.checksum,
+              status='failed',
+              applied_at=excluded.applied_at,
+              execution_time_ms=excluded.execution_time_ms,
+              error_message=excluded.error_message
+            """,
+            (
+                migration.version,
+                migration.name,
+                migration.checksum,
+                elapsed_ms,
+                str(original_error)[:1000],
+            ),
+        )
+        connection.commit()
+    # 失败状态只是辅助证据；登记表不可写时回滚，不能覆盖原始迁移异常。
+    except sqlite3.Error:
+        connection.rollback()
 
 
 def _load_migration_files(directory: Path) -> list[MigrationFile]:
@@ -411,7 +515,15 @@ def _load_migration_files(directory: Path) -> list[MigrationFile]:
         version, name = _parse_migration_name(path)
         sql = path.read_text(encoding="utf-8")
         checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
-        migrations.append(MigrationFile(version=version, name=name, path=path, checksum=checksum, sql=sql))
+        migrations.append(
+            MigrationFile(
+                version=version,
+                name=name,
+                path=path,
+                checksum=checksum,
+                sql=sql,
+            )
+        )
     return migrations
 
 

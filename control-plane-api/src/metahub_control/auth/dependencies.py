@@ -926,6 +926,100 @@ def require_session_risk_reader(
     return _require_request_permissions(request, authorization, ("session_risk.read",))
 
 
+def _approval_authorization(request: Request) -> str | None:
+    """从 ASGI 原始 Header 恢复唯一审批 Bearer，不让框架折叠身份。"""
+
+    values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"authorization"
+    ]
+    if not values:
+        # 真正缺失的凭据继续交给统一认证器映射为 auth.token_missing。
+        return None
+    if len(values) != 1 or not values[0] or b"," in values[0]:
+        # 重复、空值或代理逗号折叠都没有唯一用户身份，必须在 query/body 前拒绝。
+        raise ApiError("auth.token_invalid")
+    try:
+        return values[0].decode("ascii", errors="strict")
+    # 非 ASCII Authorization 不得进入 Bearer parser、异常链或任何认证日志。
+    except UnicodeDecodeError:
+        # 原始非法字节统一映射为固定认证错误，避免回显或编码差异泄露。
+        raise ApiError("auth.token_invalid") from None
+
+
+def require_approval_reader(request: Request) -> AuthContext:
+    """要求当前 Session 具备审批入口读取权限。
+
+    该基础权限只允许进入审批域；服务层仍按每条任务的 target type 实时复核预算或
+    会话风险读权限，不能把 ``approval.read`` 当成跨领域数据读取通行证。
+    """
+
+    # 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    return _require_request_permissions(
+        request,
+        _approval_authorization(request),
+        ("approval.read",),
+    )
+
+
+def require_approval_decider(request: Request) -> AuthContext:
+    """要求审批基础读写权限，目标领域写权限由决策事务继续复核。"""
+
+    # 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    return _require_request_permissions(
+        request,
+        _approval_authorization(request),
+        ("approval.read", "approval.decide"),
+    )
+
+
+def require_approval_internal_producer(
+    request: Request,
+) -> None:
+    """验证审批内部生产者，并拒绝服务身份与用户 Bearer 混用。
+
+    v1 使用 Control 已有独立内部配置 Token。比较采用常量时间；路径租户和目标 owner
+    仍由审批服务查询，外部平台通知或请求正文永远不是身份来源。
+    """
+
+    internal_values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"x-internal-token"
+    ]
+    authorization_values = [
+        value
+        for name, value in request.scope.get("headers", ())
+        if name.lower() == b"authorization"
+    ]
+    # 服务身份与用户身份互斥；重复 Header 也必须失败，不能由框架任选或逗号合并。
+    if authorization_values:
+        raise ApiError("auth.internal_token_invalid")
+    configured = request.app.state.config.internal_config_token
+    if not internal_values:
+        # 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+        raise ApiError("auth.internal_token_required")
+    if len(internal_values) != 1 or not internal_values[0] or b"," in internal_values[0]:
+        # 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+        raise ApiError("auth.internal_token_invalid")
+    try:
+        internal_token = internal_values[0].decode("ascii", errors="strict")
+    # 服务 Token 的 wire 合同只允许 ASCII，非法字节不得参与密钥比较或错误记录。
+    except UnicodeDecodeError:
+        # 原始非法 Token 只映射固定错误码，不得进入响应、日志或异常链。
+        raise ApiError("auth.internal_token_invalid") from None
+    expected = configured or ""
+    # 该治理分支必须保持租户隔离和失败关闭，并通过固定错误语义保留请求链路可追踪性。
+    if (
+        not expected
+        or not expected.isascii()
+        or not secrets.compare_digest(internal_token, expected)
+    ):
+        # 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+        raise ApiError("auth.internal_token_invalid")
+
+
 def require_session_risk_manager(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

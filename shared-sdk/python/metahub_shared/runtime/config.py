@@ -67,6 +67,9 @@ DEFAULT_INTERNAL_BATCH_TOKEN = (
 DEFAULT_BATCH_ENCRYPTION_SECRET = (
     "dev-only-change-me-metahub-batch-encryption-secret-2026"
 )
+DEFAULT_APPROVAL_HMAC_SECRET = (
+    "dev-only-change-me-metahub-approval-hmac-secret-2026"
+)
 
 # 运行时启动时间和默认配置集中定义，供健康检查、审计响应和本地默认值复用。
 STARTED_AT = datetime.now(UTC)
@@ -135,6 +138,21 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_SESSION_RISK_HMAC_SECRET": "",
     "METAHUB_SESSION_RISK_PREVIOUS_HMAC_VERSION": "",
     "METAHUB_SESSION_RISK_PREVIOUS_HMAC_SECRET": "",
+    # Approval idempotency, step-up tickets, target fingerprints, and cursors
+    # share one independent root while remaining separated by fixed domains.
+    "METAHUB_APPROVAL_HMAC_VERSION": "1",
+    "METAHUB_APPROVAL_HMAC_SECRET": "",
+    "METAHUB_APPROVAL_PREVIOUS_HMAC_VERSION": "",
+    "METAHUB_APPROVAL_PREVIOUS_HMAC_SECRET": "",
+    "METAHUB_APPROVAL_SCHEDULER_ENABLED": "false",
+    "METAHUB_APPROVAL_SCHEDULER_POLL_INTERVAL_SECONDS": "2",
+    "METAHUB_APPROVAL_SCHEDULER_BATCH_SIZE": "50",
+    "METAHUB_APPROVAL_OUTBOX_ENABLED": "true",
+    "METAHUB_APPROVAL_OUTBOX_POLL_INTERVAL_SECONDS": "2",
+    "METAHUB_APPROVAL_OUTBOX_BATCH_SIZE": "50",
+    "METAHUB_APPROVAL_WRITEBACK_ENABLED": "true",
+    "METAHUB_APPROVAL_WRITEBACK_POLL_INTERVAL_SECONDS": "2",
+    "METAHUB_APPROVAL_WRITEBACK_BATCH_SIZE": "50",
     # Prompt 模板正文必须使用显式独立根密钥；空默认值只让未启用模板的旧部署继续启动，
     # 任何模板发布、读取或调用都会在业务边界固定失败为暂时不可用。
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET": "",
@@ -364,6 +382,24 @@ class AppConfig(BaseModel):
     session_risk_previous_hmac_secret: str | None = Field(
         default=None, exclude=True, repr=False
     )
+    # Approval secrets are excluded from both repr and serialization. The
+    # retained key is verification-only; all new facts use the current key.
+    approval_hmac_version: int = 1
+    approval_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
+    approval_previous_hmac_version: int | None = None
+    approval_previous_hmac_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    approval_max_pending_tasks_per_tenant: int = 1_000
+    approval_scheduler_enabled: bool = False
+    approval_scheduler_poll_interval_seconds: float = 2.0
+    approval_scheduler_batch_size: int = 50
+    approval_outbox_enabled: bool = True
+    approval_outbox_poll_interval_seconds: float = 2.0
+    approval_outbox_batch_size: int = 50
+    approval_writeback_enabled: bool = True
+    approval_writeback_poll_interval_seconds: float = 2.0
+    approval_writeback_batch_size: int = 50
     # 模板正文、变量 schema 和 change summary 共用同一独立根密钥并在实现中分域派生；
     # 缺失值允许非模板功能启动，但模板 API/Gateway 必须失败关闭，绝不回退 Auth/Provider 密钥。
     prompt_template_encryption_secret: str | None = Field(
@@ -848,6 +884,55 @@ def load_app_config(service_name: str) -> AppConfig:
     session_risk_previous_hmac_secret = _raw_optional_value(
         values, "METAHUB_SESSION_RISK_PREVIOUS_HMAC_SECRET"
     )
+    approval_hmac_version = _positive_int(
+        values, "METAHUB_APPROVAL_HMAC_VERSION"
+    )
+    configured_approval_hmac_secret = _raw_optional_value(
+        values, "METAHUB_APPROVAL_HMAC_SECRET"
+    )
+    approval_hmac_secret = configured_approval_hmac_secret or (
+        DEFAULT_APPROVAL_HMAC_SECRET if environment in {"dev", "test"} else None
+    )
+    approval_previous_hmac_version = _optional_positive_int(
+        values, "METAHUB_APPROVAL_PREVIOUS_HMAC_VERSION"
+    )
+    approval_previous_hmac_secret = _raw_optional_value(
+        values, "METAHUB_APPROVAL_PREVIOUS_HMAC_SECRET"
+    )
+    approval_scheduler_enabled = _boolean(
+        values, "METAHUB_APPROVAL_SCHEDULER_ENABLED"
+    )
+    approval_scheduler_poll_interval_seconds = _bounded_float(
+        values,
+        "METAHUB_APPROVAL_SCHEDULER_POLL_INTERVAL_SECONDS",
+        minimum=0.1,
+        maximum=60.0,
+    )
+    approval_scheduler_batch_size = _bounded_int(
+        values, "METAHUB_APPROVAL_SCHEDULER_BATCH_SIZE", minimum=1, maximum=100
+    )
+    approval_outbox_enabled = _boolean(values, "METAHUB_APPROVAL_OUTBOX_ENABLED")
+    approval_outbox_poll_interval_seconds = _bounded_float(
+        values,
+        "METAHUB_APPROVAL_OUTBOX_POLL_INTERVAL_SECONDS",
+        minimum=0.1,
+        maximum=60.0,
+    )
+    approval_outbox_batch_size = _bounded_int(
+        values, "METAHUB_APPROVAL_OUTBOX_BATCH_SIZE", minimum=1, maximum=100
+    )
+    approval_writeback_enabled = _boolean(
+        values, "METAHUB_APPROVAL_WRITEBACK_ENABLED"
+    )
+    approval_writeback_poll_interval_seconds = _bounded_float(
+        values,
+        "METAHUB_APPROVAL_WRITEBACK_POLL_INTERVAL_SECONDS",
+        minimum=0.1,
+        maximum=60.0,
+    )
+    approval_writeback_batch_size = _bounded_int(
+        values, "METAHUB_APPROVAL_WRITEBACK_BATCH_SIZE", minimum=1, maximum=100
+    )
     # 开发默认值只在非生产环境存在；生产缺失保持 None，由内部 Chat 路由按固定 503
     # 失败关闭，不影响未启用该功能的既有控制面和数据面能力启动。
     internal_chat_token = configured_internal_chat_token or (
@@ -1005,6 +1090,33 @@ def load_app_config(service_name: str) -> AppConfig:
         previous_secret=session_risk_previous_hmac_secret,
         auth_token_secret=auth_token_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
+    )
+    _validate_approval_hmac_config(
+        environment=environment,
+        current_version=approval_hmac_version,
+        current_secret=approval_hmac_secret,
+        previous_version=approval_previous_hmac_version,
+        previous_secret=approval_previous_hmac_secret,
+        forbidden_secrets=(
+            auth_token_secret,
+            cache_affinity_hmac_secret,
+            internal_config_token,
+            internal_chat_token,
+            internal_batch_token,
+            batch_encryption_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+            session_risk_hmac_secret,
+            session_risk_previous_hmac_secret,
+            response_cache_hmac_secret,
+            response_cache_encryption_secret,
+            response_cache_control_idempotency_secret,
+            response_cache_control_idempotency_previous_secret,
+            response_cache_failure_spool_secret,
+            response_cache_failure_spool_previous_secret,
+            *provider_api_keys.values(),
+        ),
     )
     _validate_batch_config(
         service_name=service_name,
@@ -1242,6 +1354,23 @@ def load_app_config(service_name: str) -> AppConfig:
         session_risk_hmac_secret=session_risk_hmac_secret,
         session_risk_previous_hmac_version=session_risk_previous_hmac_version,
         session_risk_previous_hmac_secret=session_risk_previous_hmac_secret,
+        approval_hmac_version=approval_hmac_version,
+        approval_hmac_secret=approval_hmac_secret,
+        approval_previous_hmac_version=approval_previous_hmac_version,
+        approval_previous_hmac_secret=approval_previous_hmac_secret,
+        approval_scheduler_enabled=approval_scheduler_enabled,
+        approval_scheduler_poll_interval_seconds=(
+            approval_scheduler_poll_interval_seconds
+        ),
+        approval_scheduler_batch_size=approval_scheduler_batch_size,
+        approval_outbox_enabled=approval_outbox_enabled,
+        approval_outbox_poll_interval_seconds=approval_outbox_poll_interval_seconds,
+        approval_outbox_batch_size=approval_outbox_batch_size,
+        approval_writeback_enabled=approval_writeback_enabled,
+        approval_writeback_poll_interval_seconds=(
+            approval_writeback_poll_interval_seconds
+        ),
+        approval_writeback_batch_size=approval_writeback_batch_size,
         prompt_template_encryption_secret=prompt_template_encryption_secret,
         file_encryption_secret=file_encryption_secret,
         file_storage_root=_validated_file_storage_root(
@@ -2096,6 +2225,19 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_SESSION_RISK_HMAC_SECRET",
         "METAHUB_SESSION_RISK_PREVIOUS_HMAC_VERSION",
         "METAHUB_SESSION_RISK_PREVIOUS_HMAC_SECRET",
+        "METAHUB_APPROVAL_HMAC_VERSION",
+        "METAHUB_APPROVAL_HMAC_SECRET",
+        "METAHUB_APPROVAL_PREVIOUS_HMAC_VERSION",
+        "METAHUB_APPROVAL_PREVIOUS_HMAC_SECRET",
+        "METAHUB_APPROVAL_SCHEDULER_ENABLED",
+        "METAHUB_APPROVAL_SCHEDULER_POLL_INTERVAL_SECONDS",
+        "METAHUB_APPROVAL_SCHEDULER_BATCH_SIZE",
+        "METAHUB_APPROVAL_OUTBOX_ENABLED",
+        "METAHUB_APPROVAL_OUTBOX_POLL_INTERVAL_SECONDS",
+        "METAHUB_APPROVAL_OUTBOX_BATCH_SIZE",
+        "METAHUB_APPROVAL_WRITEBACK_ENABLED",
+        "METAHUB_APPROVAL_WRITEBACK_POLL_INTERVAL_SECONDS",
+        "METAHUB_APPROVAL_WRITEBACK_BATCH_SIZE",
         "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
         "METAHUB_FILE_ENCRYPTION_SECRET",
         "METAHUB_FILE_MAX_UPLOAD_BYTES",
@@ -2655,6 +2797,121 @@ def _validate_file_encryption_secret(
             code="infra.config_invalid",
             message="METAHUB_FILE_ENCRYPTION_SECRET must be replaced in prod.",
             suggestion="Configure a dedicated production file encryption secret.",
+        )
+
+
+def _validate_approval_hmac_config(
+    *,
+    environment: EnvironmentName,
+    current_version: int,
+    current_secret: str | None,
+    previous_version: int | None,
+    previous_secret: str | None,
+    forbidden_secrets: tuple[str | None, ...],
+) -> None:
+    """Validate the independent approval keyring without exposing secrets.
+
+    Production may start without this optional capability, but approval routes
+    and workers then fail closed because ``approval_hmac_secret`` remains None.
+    Any configured key must be strong, complete, ordered, and physically
+    distinct from every existing credential or cryptographic root.
+    ``_validate_approval_hmac_config`` 校验审批运行配置，密钥、租约和容量参数
+    缺失或非法时必须失败关闭。
+    """
+
+    if type(current_version) is not int or current_version < 1:
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval HMAC key version is invalid.",
+            suggestion="Configure a positive integer current HMAC key version.",
+        )
+    # 该治理分支必须保持租户隔离和失败关闭，并通过固定错误语义保留请求链路可追踪性。
+    if (previous_version is None) != (previous_secret is None):
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval previous HMAC version and secret must be configured together.",
+            suggestion="Configure both previous values or remove both values.",
+        )
+    # 审批 HMAC 密钥必须满足独立版本和强度约束；配置缺失或轮换关系非法时立即失败关闭。
+    if current_secret is None:
+        if previous_version is not None:
+            # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Approval current HMAC secret is required for key rotation.",
+                suggestion="Configure an independent current approval HMAC secret.",
+            )
+        return
+    if previous_version is not None and previous_version >= current_version:
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval current HMAC version must be greater than previous version.",
+            suggestion="Increase the current version while retaining the older version.",
+        )
+
+    configured = tuple(
+        secret for secret in (current_secret, previous_secret) if secret is not None
+    )
+    for secret in configured:
+        _validate_approval_hmac_secret(secret)
+        if any(
+            candidate is not None and hmac.compare_digest(secret, candidate)
+            for candidate in forbidden_secrets
+        ):
+            # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Approval HMAC secret must use an independent key domain.",
+                suggestion="Configure a dedicated approval HMAC secret.",
+            )
+    if (
+        previous_secret is not None
+        and hmac.compare_digest(current_secret, previous_secret)
+    ):
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval current and previous HMAC secrets must be different.",
+            suggestion="Rotate to a new independent current secret.",
+        )
+    # 审批 HMAC 密钥必须满足独立版本和强度约束；配置缺失或轮换关系非法时立即失败关闭。
+    if environment == "prod" and current_secret == DEFAULT_APPROVAL_HMAC_SECRET:
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_APPROVAL_HMAC_SECRET must be replaced in prod.",
+            suggestion="Configure a dedicated production approval HMAC secret.",
+        )
+
+
+def _validate_approval_hmac_secret(secret: str) -> None:
+    """Enforce the frozen 32..512 UTF-8 byte approval-secret boundary.
+    ``_validate_approval_hmac_secret`` 校验审批运行配置，密钥、租约和容量参数
+    缺失或非法时必须失败关闭。
+    """
+
+    try:
+        encoded = secret.encode("utf-8")
+    # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+    except UnicodeEncodeError:
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval HMAC secret is invalid.",
+            suggestion="Configure a valid independent UTF-8 secret.",
+        ) from None
+    if (
+        not 32 <= len(encoded) <= 512
+        or any(character.isspace() or ord(character) < 32 for character in secret)
+    ):
+        # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Approval HMAC secret does not meet security requirements.",
+            suggestion="Use a 32-512 byte secret without whitespace or control characters.",
         )
 
 

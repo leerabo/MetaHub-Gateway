@@ -1,0 +1,26 @@
+{
+  "algorithm": "sha256",
+  "all_108_prds_complete": false,
+  "files": [
+    {
+      "bytes": 3695,
+      "name": "browser-acceptance.json",
+      "sha256": "49ca9259490a12663cfbad3d441a4dc90a8a103f98ad5067f20616b20d4b5713"
+    },
+    {
+      "bytes": 90562,
+      "name": "finance-standard-modal-desktop-1280x720.png",
+      "sha256": "d96aabf6afd11d32a55da1828fd1ff1c89c5dddcbfc124ab65191e54cfa9fd1b"
+    },
+    {
+      "bytes": 41548,
+      "name": "security-high-risk-busy-mobile-390x844.png",
+      "sha256": "ea8a297020ee4d79989c624bc8782a237e71be5d6facd90ec84dd7cf720b02eb"
+    },
+    {
+      "bytes": 41336,
+      "name": "security-high-risk-modal-mobile-390x844.png",
+      "sha256": "46cdef4688d94868047efae5f1356c5d2ac71de9d698e5c76a0761fca87583b2"
+    }
+  ]
+}

@@ -89,9 +89,27 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-075 - 模型 A/B 测试与质量评估`
 - `PRD-076 - Response Cache 可选能力`
 - `PRD-077 - 只读管理员 AI 助手`
+- `PRD-078 - 移动端/企微钉钉审批入口`
 
 最近进展：
 
+- `PRD-078 - 移动端/企微钉钉审批入口` 已完成：Shared 提供独立可轮换审批 HMAC 合同、RBAC
+  revision 14、统一错误和 `approval.created/timeout` exact payload；0071 新增全量 tenant-qualified
+  ApprovalTask、Decision、step-up、writeback、scheduler lease 与 source/outbox 事实，并以原子 guard 保护
+  正反迁移。Control 提供有界内部创建、列表/详情、后端密码二次验证、approve/reject、目标域双重实时 RBAC、
+  数据库时钟 timeout、公平租约及事件/Redis 回写恢复；PAGE-108/109 提供桌面审批中心与窄屏单任务卡片，
+  外部企微/钉钉/飞书仅接收既有签名 Webhook 通知，不能成为授权根。最终 Python 专项 `97 passed`，
+  Console/登录 owner/健康状态 `26/26 passed`，Node Browser 合同 `46/46 passed`。权威 Runtime
+  `prd078-runtime-20260814-08` 从空 SQLite 完成
+  `71/0071 -> 71/0071 -> 70/0070 -> 71/0071`，四阶段均 `integrity_check=ok`、外键违规 0；
+  权威 Browser `prd078-browser-final-20260814-36` 在 `1280x720` 与 `390x844` 覆盖标准/高风险审批、
+  step-up、忙碌态、撤权、owner 漂移、迟到响应和登出清理，3 张截图人工复核通过，外部请求、运行异常、
+  布局溢出、重叠和敏感明文命中均为 0。详见
+  [PRD-078 设计](docs/prd/PRD-078-mobile-enterprise-approval-entry.md)、
+  [审批 API](docs/api/approvals.md)、[PRD-078 测试记录](docs/testing/PRD-078-tests.md)、
+  [Runtime](.artifacts/prd078-runtime/prd078-runtime-20260814-08) 和
+  [Browser](.artifacts/prd078-browser/prd078-browser-final-20260814-36)。总体目标仍为
+  `all_108_prds_complete=false`。
 - `PRD-077 - 只读管理员 AI 助手` 已完成：Shared 提供有界自然语言 parser、
   只读动作闸门、typed claim/source 图、RBAC revision 13、统一错误和 `assistant.queried` exact payload；
   0070 新增 tenant-qualified AssistantQuery、AssistantAudit、event source/outbox 和原子 down guard；Control
@@ -222,12 +240,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 79 行、`03_M2-M3扩展交付` 第 15 行、PAGE-108 审批中心、PAGE-109
-  移动卡片、`POST /approvals/{id}/approve|reject`、ApprovalTask、`approval.created`、
-  `approval.timeout` 与 TC-0155/0156 已和 README、`docs/prd`、`docs/testing` 交叉确认。PRD-077
-  之后的下一条权威未完成项为
-  `PRD-078 | M2-企业增强 | P2 | 扩展层 | 移动审批 | 移动端/企微钉钉审批入口`，不是仅按编号推断。
-  本次提交不启动或混入 PRD-078；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 80 行、`03_M2-M3扩展交付` 第 16 行、PAGE-110/111、套餐与额度 API、
+  Plan/QuotaBucket、`quota.exhausted`/`trial.expired` 与 TC-0157/0158 已和 README、`docs/prd`、
+  `docs/testing` 交叉确认。PRD-078 之后的下一条权威未完成项为
+  `PRD-079 | M2-企业增强 | P2 | 扩展层 | 套餐计费 | 套餐、试用与额度类型`，不是仅按编号推断。
+  本次提交不启动或混入 PRD-079；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/webhooks/service.py
 """
 
@@ -1282,7 +1283,13 @@ def rotate_webhook_secret(
         # 提交后无法回读说明数据库状态不可靠，不能返回未确认的 Secret 元数据。
         raise ApiError("webhook.secret_unavailable")
     if audit_record is not None:
-        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        dispatch_audit_recorded(
+            config,
+            context,
+            audit_record,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
     _log_secret_rotated(context, updated, request_id, trace_id)
     # signing_secret 只在本次成功响应出现，Endpoint DTO 永远不含密文和完整签名材料。
     return WebhookSecretRotateResponse(
@@ -1594,6 +1601,8 @@ def fail_pending_webhook_event_deliveries(
         "webhook.payload_invalid": "Source payload validation failed.",
     }
     allowed_event_types = {
+        "approval.created",
+        "approval.timeout",
         "assistant.queried",
         "cache.hit",
         "cache.invalidated",
@@ -1768,11 +1777,17 @@ def _resume_pending_delivery(
             raise
         # attempt 与摘要更新共享事务，SQL 故障时必须整体回滚。
         except sqlite3.Error as exc:
-            # attempt 和 delivery 摘要必须同事务；失败回滚后下次仍从同一序号进行 at-least-once 重试。
+            # attempt 和 delivery 摘要必须同事务；失败回滚后下次仍从同一序号进行
+            # at-least-once 重试。
             connection.rollback()
             raise ApiError("webhook.delivery_unavailable") from exc
         if attempt_result["status"] == "success" or attempt_no >= max_attempts:
-            final_delivery = _delivery_info(connection, tenant_id, delivery_id, include_attempts=True)
+            final_delivery = _delivery_info(
+                connection,
+                tenant_id,
+                delivery_id,
+                include_attempts=True,
+            )
             # 最终 attempt 提交后必须能回读完整 attempts，否则不能返回不确定结果。
             if final_delivery is None:
                 raise ApiError("webhook.delivery_unavailable")
@@ -1858,6 +1873,14 @@ def _validated_pending_delivery_body(
             )
 
             source_request_id = recover_assistant_source_request_id(connection, envelope)
+        elif envelope.get("event_type") in {"approval.created", "approval.timeout"}:
+            # 审批 request_id 不进入公开卡片；恢复只能回到 immutable task/event owner 图，
+            # 禁止用 worker 链路或 delivery 副本替代原创建/timeout 请求。
+            from metahub_control.approvals.outbox import (
+                recover_approval_source_request_id,
+            )
+
+            source_request_id = recover_approval_source_request_id(connection, envelope)
         rebuilt = build_webhook_event(
             tenant_id=envelope["tenant_id"],
             event_type=envelope["event_type"],
@@ -2298,7 +2321,8 @@ def _deliver_event_to_endpoint(
     delivery_id = f"whd_{uuid4().hex}"
     created_at = _to_db_time(_utcnow())
     try:
-        # 与 Secret 轮换共用 BEGIN IMMEDIATE 顺序；intent 创建时重新读取当前行，禁止使用批量查询的陈旧密钥。
+        # 与 Secret 轮换共用 BEGIN IMMEDIATE 顺序；intent 创建时重新读取当前行，
+        # 禁止使用批量查询的陈旧密钥。
         connection.execute("BEGIN IMMEDIATE")
         current_endpoint = _load_endpoint_row(
             connection,
@@ -2449,7 +2473,11 @@ def _send_once(
             "User-Agent": f"MetaHub-Webhook/{config.environment}",
             "X-MetaHub-Event": str(json.loads(body.decode("utf-8")).get("event_type", "")),
             "X-MetaHub-Delivery": delivery_id,
-            "X-MetaHub-Signature": webhook_signature_header(signing_secret, timestamp_seconds, body),
+            "X-MetaHub-Signature": webhook_signature_header(
+                signing_secret,
+                timestamp_seconds,
+                body,
+            ),
         }
         # Webhook 应直接访问客户配置的 Endpoint，避免系统代理污染企业内网回调和本地测试。
         with httpx.Client(
@@ -2458,7 +2486,12 @@ def _send_once(
             trust_env=False,
         ) as client:
             # streaming 响应只读取状态码，客户接收端返回的敏感或超长正文不会进入进程内存。
-            with client.stream("POST", str(endpoint["endpoint_url"]), content=body, headers=headers) as response:
+            with client.stream(
+                "POST",
+                str(endpoint["endpoint_url"]),
+                content=body,
+                headers=headers,
+            ) as response:
                 http_status = response.status_code
         if http_status is not None and 200 <= http_status < 300:
             status = "success"
@@ -2535,12 +2568,17 @@ def _update_delivery_after_attempt(
 ) -> None:
     """根据单次尝试结果更新 delivery 摘要和 Endpoint 最近状态。"""
 
-    delivery_status = "success" if result["status"] == "success" else ("failed" if final else "pending")
+    delivery_status = (
+        "success"
+        if result["status"] == "success"
+        else ("failed" if final else "pending")
+    )
     now = _to_db_time(_utcnow())
     cursor = connection.execute(
         """
         UPDATE webhook_deliveries
-        SET status=?, attempt_count=?, http_status=?, duration_ms=?, error_code=?, error_summary=?, updated_at=?
+        SET status=?, attempt_count=?, http_status=?, duration_ms=?, error_code=?,
+            error_summary=?, updated_at=?
         WHERE tenant_id=? AND webhook_endpoint_id=? AND webhook_delivery_id=?
           AND status='pending' AND attempt_count=? AND secret_version=?
         """,
@@ -2568,7 +2606,8 @@ def _update_delivery_after_attempt(
         connection.execute(
             """
             UPDATE webhook_endpoints
-            SET last_delivery_status=?, last_delivery_at=?, last_success_at=COALESCE(?, last_success_at),
+            SET last_delivery_status=?, last_delivery_at=?,
+                last_success_at=COALESCE(?, last_success_at),
                 last_failure_at=COALESCE(?, last_failure_at), updated_at=?
             WHERE tenant_id=? AND webhook_endpoint_id=?
             """,
@@ -2614,7 +2653,11 @@ def _endpoint_info(
         last_failure_at=_parse_optional_db_time(row["last_failure_at"]),
         created_at=_parse_db_time(row["created_at"]),
         updated_at=_parse_db_time(row["updated_at"]),
-        recent_deliveries=_recent_deliveries(connection, row, event_type=event_type) if include_deliveries else [],
+        recent_deliveries=(
+            _recent_deliveries(connection, row, event_type=event_type)
+            if include_deliveries
+            else []
+        ),
     )
 
 
@@ -2705,14 +2748,20 @@ def _delivery_info_from_row(
     )
 
 
-def _delivery_record_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> WebhookDeliveryRecordInfo:
+def _delivery_record_from_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> WebhookDeliveryRecordInfo:
     """把 delivery 行转换为不含 payload 的详情记录，避免控制台无意回显事件正文。"""
 
     info = _delivery_info_from_row(connection, row, include_attempts=True)
     return WebhookDeliveryRecordInfo.model_validate(info.model_dump(exclude={"payload"}))
 
 
-def _delivery_attempts(connection: sqlite3.Connection, delivery: sqlite3.Row) -> list[WebhookDeliveryAttemptInfo]:
+def _delivery_attempts(
+    connection: sqlite3.Connection,
+    delivery: sqlite3.Row,
+) -> list[WebhookDeliveryAttemptInfo]:
     """读取 delivery 的逐次发送记录，按 attempt_no 升序返回给控制台。"""
 
     rows = connection.execute(
@@ -2742,7 +2791,11 @@ def _delivery_attempts(connection: sqlite3.Connection, delivery: sqlite3.Row) ->
     ]
 
 
-def _load_endpoint_or_404(connection: sqlite3.Connection, tenant_id: str, endpoint_id: str) -> sqlite3.Row:
+def _load_endpoint_or_404(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    endpoint_id: str,
+) -> sqlite3.Row:
     """按当前租户读取 Endpoint，未找到时不区分不存在和跨租户。"""
 
     row = _load_endpoint_row(connection, tenant_id, _normalize_endpoint_id(endpoint_id))
@@ -2752,7 +2805,11 @@ def _load_endpoint_or_404(connection: sqlite3.Connection, tenant_id: str, endpoi
     return row
 
 
-def _load_endpoint_row(connection: sqlite3.Connection, tenant_id: str, endpoint_id: str) -> sqlite3.Row | None:
+def _load_endpoint_row(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    endpoint_id: str,
+) -> sqlite3.Row | None:
     """按 tenant_id + endpoint_id 加载 Endpoint 原始行，供鉴权和投递复用。"""
 
     return connection.execute(
@@ -3026,7 +3083,8 @@ def _validated_stored_envelope(
 
     参数：value 是存量 payload_json，source 是当前租户和 Endpoint 三重校验后的 delivery 行。
     返回：可安全重放的完整事件信封。
-    约束：tenant/event/type/timestamp 任一与数据库索引事实不一致都拒绝出网，避免损坏历史制造审计漂移。
+    约束：tenant/event/type/timestamp 任一与数据库索引事实不一致都拒绝出网，
+    避免损坏历史制造审计漂移。
     """
 
     try:
@@ -3126,7 +3184,12 @@ def _connect(
         raise ApiError(unavailable_code) from exc
 
 
-def _log_endpoint_created(context: AuthContext, row: sqlite3.Row, request_id: str, trace_id: str) -> None:
+def _log_endpoint_created(
+    context: AuthContext,
+    row: sqlite3.Row,
+    request_id: str,
+    trace_id: str,
+) -> None:
     """记录 Endpoint 创建事件，payload 不包含 URL query、secret 明文或签名头。"""
 
     logger.info(
@@ -3156,7 +3219,11 @@ def _log_delivery_result(
 ) -> None:
     """记录 Webhook 投递结果，失败也要可追踪，但不记录 body、签名或响应正文。"""
 
-    event_name = "webhook.delivery_succeeded" if delivery.status == "success" else "webhook.delivery_failed"
+    event_name = (
+        "webhook.delivery_succeeded"
+        if delivery.status == "success"
+        else "webhook.delivery_failed"
+    )
     logger.info(
         event_name,
         extra={
@@ -3272,7 +3339,12 @@ def _log_replay_created(
     )
 
 
-def _log_secret_rotated(context: AuthContext, endpoint: sqlite3.Row, request_id: str, trace_id: str) -> None:
+def _log_secret_rotated(
+    context: AuthContext,
+    endpoint: sqlite3.Row,
+    request_id: str,
+    trace_id: str,
+) -> None:
     """记录 Secret 版本轮换事实，只输出版本和对象 ID，不输出任何密钥材料或 Endpoint URL。"""
 
     logger.info(

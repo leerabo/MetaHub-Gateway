@@ -91,6 +91,19 @@ import {
   hydrateAdminAssistantText,
   renderAdminAssistant,
 } from "../features/admin-assistant/renderAdminAssistant.js";
+import {
+  approvalHasPasswordInput,
+  bindApprovalInteractions,
+  clearApprovalDom,
+  restoreApprovalActionFocus,
+} from "../features/approvals/bindApprovals.js";
+import {
+  approvalPageOwner,
+  approvalReadIdentitySnapshot,
+  createApprovalPageState,
+  isApprovalAbortError,
+} from "../features/approvals/approvalPageState.js";
+import { renderApprovals } from "../features/approvals/renderApprovals.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -203,6 +216,7 @@ import {
   bindNavigationHashRefresh,
   getConsoleNavigation,
   getConsolePreferences,
+  parseApprovalCardHash,
   parseNavigationHash,
   recordConsolePageView,
   resolveVisibleNavigation,
@@ -330,6 +344,13 @@ import {
   adminAssistantSourceAccess,
   queryAdminAssistant,
 } from "../lib/adminAssistant.js";
+import {
+  createApprovalIdempotencyKey,
+  decideApproval,
+  getApproval,
+  listApprovals,
+  stepUpApproval,
+} from "../lib/approvals.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -588,6 +609,8 @@ let errorMapDialogKeydownHandler = null;
 let errorMapBodyOverflow = null;
 // 每次刷新分配递增序号；较早刷新即使更晚返回，也不能覆盖用户已经切换的新页面。
 let refreshSequence = 0;
+// 登录使用独立代次；页面替换、重复提交或新 Session 建立都会淘汰更早的凭据请求回调。
+let loginGeneration = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
 let activeRefreshCount = 0;
 // 导航偏好、page-view 与目标刷新共同构成一次交互；定时器不得在中间推进 refreshSequence 淘汰用户点击。
@@ -621,6 +644,15 @@ const responseCachePageState = createResponseCachePageState({ clearDom: clearRes
 // PAGE-107 的问题、回答、来源与 POST ticket 只属于完整 assistant owner；任何清理都会同步擦除正文 DOM。
 const adminAssistantPageState = createAdminAssistantPageState({
   clearDom: () => clearAdminAssistantDom(globalThis.document),
+});
+// PAGE-108/109 的任务、私有 cursor、动作幂等 owner 与三条异步 lane 只属于完整审批页面 owner。
+let approvalActionFocusReturn = null;
+const approvalPageState = createApprovalPageState({
+  clearDom: () => {
+    approvalActionFocusReturn = null;
+    clearApprovalDom(globalThis.document);
+  },
+  createIdempotencyKey: createApprovalIdempotencyKey,
 });
 let budgetActionError = null;
 let budgetFeedback = "";
@@ -763,6 +795,10 @@ if (app && globalThis.window) {
         // PAGE-106 的策略草稿、Dialog、cursor 和幂等 owner 不得越过 hash 导航边界。
         responseCachePageState.clear();
       }
+      if (nextItemId !== "approvals") {
+        // PAGE-108/109 的任务详情、密码 DOM、cursor 和动作 owner 在 hash 离页时立即销毁。
+        approvalPageState.clear();
+      }
       if (nextItemId === "overview") {
         // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
         roleDashboardEntrySource = "direct_hash";
@@ -798,6 +834,7 @@ if (app && globalThis.window) {
       experimentPageState.clear();
       responseCachePageState.clear();
       adminAssistantPageState.leave();
+      approvalPageState.clear();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -918,6 +955,7 @@ async function start() {
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearAdminAssistantStateOnIdentityChange(authSession.context, context);
+    clearApprovalStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -1005,6 +1043,7 @@ async function performRefresh() {
       !== adminAssistantReadIdentitySnapshot(context)
     );
     clearAdminAssistantStateOnIdentityChange(authSession.context, context);
+    clearApprovalStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1233,6 +1272,17 @@ async function performRefresh() {
   ) {
     return;
   }
+  // PAGE-108/109 只属于后端确认的 approval.read 导航；撤权或离页同步清密码 DOM 和全部 ticket。
+  if (consoleShellState?.activeNavigationItemId !== "approvals") {
+    approvalPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && approvalPageState.blocksShellDomReplacement()
+    && approvalPageState.enter(currentApprovalOwner(consoleShellState))
+  ) {
+    // 同 owner 的确认对话框和未决动作不能被后台全壳刷新重建；auth/navigation 已在上方重新校验。
+    return;
+  }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
   if (consoleShellState?.activeNavigationItemId !== "webhook-dead-letters") {
     webhookDeadLetterPageState.clear();
@@ -1333,6 +1383,8 @@ async function performRefresh() {
   const responseCacheState = await loadResponseCacheState(consoleShellState, refreshId);
   // PAGE-107 首屏只建立内存 owner，不预取事实也不自动 POST；查询必须来自一次明确表单提交。
   const adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
+  // PAGE-108 读取列表；PAGE-109 受控 hash 只读取一个任务，不在其他页面后台预取审批事实。
+  const approvalsState = await loadApprovalsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
@@ -1553,6 +1605,7 @@ async function performRefresh() {
     modelPricesState,
     responseCacheState,
     adminAssistantState,
+    approvalsState,
     modelAliasesState,
     // 读取后的其他接口可能较慢；渲染前重新取快照，避免期间发生的选择或保存被旧对象重建 DOM 覆盖。
     routingPoliciesState: consoleShellState?.activeNavigationItemId === "routing-policies"
@@ -1661,6 +1714,14 @@ if (app && globalThis.window) {
     if (batchJobPageState.blocksShellDomReplacement()) {
       return;
     }
+    // 审批确认可能包含当前密码且 POST 结果可能未知；活动审批页仅允许显式局部刷新。
+    if (
+      document.querySelector(".console-shell")?.dataset.activeNavigation === "approvals"
+      || approvalPageState.blocksShellDomReplacement()
+      || approvalHasPasswordInput()
+    ) {
+      return;
+    }
     // 死信重放/归档结果未知时不得由全页定时刷新重建操作 DOM。
     if (webhookDeadLetterPageState.isActionBusy()) {
       return;
@@ -1730,6 +1791,8 @@ if (app && globalThis.window) {
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
 function renderLogin(error, requestId) {
+  // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
+  loginGeneration += 1;
   // 登录态变化等同于离开调试页，必须取消旧流并使尚未返回的回调失效。
   gatewayDebugLifecycle.leave();
   gatewayDebugState = {};
@@ -1754,6 +1817,8 @@ function renderLogin(error, requestId) {
   responseCachePageState.clear();
   // 登录页是 PAGE-107 强边界，问题、回答、来源和迟到 POST 都不能跨 Session 保留。
   adminAssistantPageState.leave();
+  // 登录页是审批强身份边界，先擦密码和任务事实，再取消 list/detail/action。
+  approvalPageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -1806,6 +1871,12 @@ function renderLogin(error, requestId) {
   const form = document.querySelector("#login-form");
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const loginOwner = Object.freeze({ generation: ++loginGeneration });
+    // 当前提交必须同时持有最新登录代次且尚无新 Session；Token 一旦建立，所有旧回调立即失效。
+    const loginOwnerCurrent = () => (
+      loginOwner.generation === loginGeneration
+      && !authSession.token
+    );
     const data = new FormData(form);
     const button = form.querySelector("button[type='submit']");
     button.disabled = true;
@@ -1817,11 +1888,30 @@ function renderLogin(error, requestId) {
         email: data.get("email"),
         password: data.get("password"),
       });
-      const context = await getCurrentUser({ controlApiUrl, token: login.access_token });
-      saveAuthSession(login.access_token, context);
-      authSession = { token: login.access_token, context };
+      // 页面替换、更新提交或其他登录成功都会淘汰本次 owner；不得继续读取或提交旧 Token。
+      if (!loginOwnerCurrent()) {
+        return;
+      }
+      const loginToken = login.access_token;
+      const context = await getCurrentUser({ controlApiUrl, token: loginToken });
+      // /auth/me 返回后重新核对 owner，避免迟到身份覆盖更新一轮登录建立的 Session。
+      if (!loginOwnerCurrent()) {
+        return;
+      }
+      // Storage 与内存身份写入前执行最终门禁；提交成功后立即淘汰本次及更早登录 owner。
+      if (!loginOwnerCurrent()) {
+        return;
+      }
+      saveAuthSession(loginToken, context);
+      authSession = { token: loginToken, context };
+      loginGeneration += 1;
+      refreshSequence += 1;
       await refresh();
     } catch (err) {
+      // 旧登录失败不得清理更新登录刚写入的 Storage、内存 Session 或已渲染页面。
+      if (!loginOwnerCurrent()) {
+        return;
+      }
       clearAuthSession();
       authSession = { token: null, context: null };
       renderLogin(authErrorMessage(err), err?.requestId);
@@ -2094,6 +2184,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     experimentPageState.clear();
     responseCachePageState.clear();
     adminAssistantPageState.leave();
+    approvalPageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -4265,6 +4356,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindAdminAssistantPageInteractions(consoleShellState);
+  bindApprovalPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -6105,6 +6197,267 @@ async function submitAdminAssistantQuery(consoleShellState) {
     }
     return adminAssistantPageState.snapshot();
   }
+}
+
+/** 构造 PAGE-108/109 当前 owner；hash 任务 ID 只影响选择，不扩大后端导航授权。 */
+function currentApprovalOwner(consoleShellState) {
+  const owner = approvalPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "approvals")) return null;
+  return owner;
+}
+
+/** 绑定筛选、分页、详情和决策；每个回调都重新核对完整 auth/navigation owner。 */
+function bindApprovalPageInteractions(consoleShellState) {
+  const owner = currentApprovalOwner(consoleShellState);
+  if (!approvalPageState.enter(owner)) return false;
+  return bindApprovalInteractions({
+    async onRefresh() {
+      await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
+    },
+    async onBack() {
+      replaceApprovalCardHash("");
+      approvalPageState.syncMobileFocus("");
+      await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
+    },
+    async onFilter(status, targetType) {
+      if (approvalPageState.setFilters(status, targetType)) {
+        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
+      }
+    },
+    async onPrevious() {
+      if (approvalPageState.previousPage()) {
+        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
+      }
+    },
+    async onNext() {
+      if (approvalPageState.nextPage()) {
+        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
+      }
+    },
+    async onSelect(approvalId) {
+      if (!approvalPageState.selectApproval(approvalId)) return;
+      await refreshApprovalDetail(consoleShellState, ++refreshSequence);
+      renderCurrentApprovalPanel(consoleShellState);
+    },
+    onOpenAction(description) {
+      const currentOwner = currentApprovalOwner(consoleShellState);
+      const currentState = approvalPageState.snapshot();
+      if (
+        description?.approvalId !== currentState.selectedApprovalId
+        || description?.approvalId !== currentState.detail?.approval?.approval_id
+      ) return;
+      if (approvalPageState.openAction(currentOwner, description.action)) {
+        approvalActionFocusReturn = Object.freeze({
+          approvalId: description.approvalId,
+          action: description.action,
+          ownerKey: approvalFocusOwnerKey(currentOwner),
+        });
+        refreshSequence += 1;
+        renderCurrentApprovalPanel(consoleShellState);
+      }
+    },
+    onCloseAction(description) {
+      if (!approvalFocusDescriptionMatches(approvalActionFocusReturn, description)) {
+        approvalActionFocusReturn = null;
+      }
+      if (approvalPageState.closeAction()) {
+        refreshSequence += 1;
+        renderCurrentApprovalPanel(consoleShellState);
+      }
+    },
+    isActionBusy() {
+      return approvalPageState.isActionBusy();
+    },
+    onReason(reason) {
+      approvalPageState.setActionReason(reason);
+    },
+    async onSubmitAction(password) {
+      await submitApprovalAction(password, consoleShellState);
+    },
+  });
+}
+
+/** 局部重绘审批面板，避免一次动作或分页重新读取整个控制台的无关模块。 */
+function renderCurrentApprovalPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".approvals-panel");
+  if (!panel) return false;
+  const owner = currentApprovalOwner(consoleShellState);
+  if (!approvalPageState.enter(owner)) {
+    panel.innerHTML = "";
+    return false;
+  }
+  const state = approvalPageState.snapshot();
+  const html = renderApprovals(
+    state,
+    authSession.context,
+    consoleShellState,
+  );
+  if (!html) {
+    approvalPageState.clear();
+    panel.innerHTML = "";
+    return false;
+  }
+  panel.innerHTML = html;
+  bindApprovalPageInteractions(consoleShellState);
+  if (!state.actionOpen && approvalActionFocusReturn) {
+    const description = approvalActionFocusReturn;
+    approvalActionFocusReturn = null;
+    restoreApprovalActionFocus(
+      description,
+      approvalFocusOwnerKey(currentApprovalOwner(consoleShellState)),
+      panel,
+    );
+  }
+  return true;
+}
+
+/** 将审批身份和权限集合序列化为稳定焦点 owner；不保留 DOM、凭据或请求正文。 */
+function approvalFocusOwnerKey(owner) {
+  if (!owner) return "";
+  return JSON.stringify([
+    owner.readIdentity,
+    owner.tenantId,
+    owner.navigationOwner,
+    owner.canDecide === true,
+    [...owner.readableTargets].sort(),
+    [...owner.writableTargets].sort(),
+  ]);
+}
+
+/** 仅当审批任务和动作均一致时复用焦点描述，避免跨任务恢复到错误按钮。 */
+function approvalFocusDescriptionMatches(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.approvalId === right.approvalId
+    && left.action === right.action,
+  );
+}
+
+/** 显式刷新只读取审批列表或 hash 指定详情；不会预取另一个租户或其他目标域。 */
+async function refreshApprovalPanel(consoleShellState, { resetGeneration = false } = {}) {
+  const refreshId = resetGeneration ? ++refreshSequence : refreshSequence;
+  const state = await loadApprovalsState(consoleShellState, refreshId);
+  if (!state || refreshId !== refreshSequence) return state;
+  // A list refresh may preserve the selected task. Refresh its authoritative detail in the
+  // same generation so the right pane cannot retain a stale revision or writeback status.
+  const nextState = state.selectedApprovalId && !state.mobileFocus
+    ? await loadApprovalDetailState(consoleShellState, refreshId)
+    : state;
+  if (nextState && refreshId === refreshSequence) renderCurrentApprovalPanel(consoleShellState);
+  return nextState;
+}
+
+/** 点击列表后只刷新当前详情，并以同一 generation 隔离迟到响应与离页 owner 漂移。 */
+async function refreshApprovalDetail(consoleShellState, refreshId) {
+  if (refreshId !== refreshSequence) return null;
+  // selectApproval 已把 detail 置为 loading；先投影即时反馈，再发起后端读取。
+  renderCurrentApprovalPanel(consoleShellState);
+  const state = await loadApprovalDetailState(consoleShellState, refreshId);
+  if (state && refreshId === refreshSequence) renderCurrentApprovalPanel(consoleShellState);
+  return state;
+}
+
+/** 高风险动作在同一 closure 内先换取票据再提交；密码、票据和幂等键从不进入 state/DOM/Storage。 */
+async function submitApprovalAction(password, consoleShellState) {
+  const token = authSession.token;
+  const owner = currentApprovalOwner(consoleShellState);
+  // 该治理分支必须保持租户隔离和失败关闭，并通过固定错误语义保留请求链路可追踪性。
+  if (!token || !approvalPageState.enter(owner)) {
+    approvalPageState.clear();
+    // 令牌只允许在短生命周期内做摘要和所有权校验；缺失、额外出现或不匹配均固定失败。
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = approvalPageState.beginAction(owner);
+  if (!operation) {
+    renderCurrentApprovalPanel(consoleShellState);
+    return approvalPageState.snapshot();
+  }
+  refreshSequence += 1;
+  renderCurrentApprovalPanel(consoleShellState);
+  let stepUpToken;
+  try {
+    if (operation.requiresStepUp) {
+      const challenge = await stepUpApproval({
+        controlApiUrl,
+        token,
+        approvalId: operation.approvalId,
+        action: operation.action,
+        password,
+        signal: operation.signal,
+      });
+      if (!approvalPageState.isCurrentOperation("action", operation, currentApprovalOwner(consoleShellState))) {
+        return null;
+      }
+      stepUpToken = challenge.step_up_token;
+    }
+    const response = await decideApproval({
+      controlApiUrl,
+      token,
+      approvalId: operation.approvalId,
+      action: operation.action,
+      expectedRevision: operation.expectedRevision,
+      reasonCode: operation.reasonCode,
+      idempotencyKey: operation.idempotencyKey,
+      ...(stepUpToken === undefined ? {} : { stepUpToken }),
+      signal: operation.signal,
+    });
+    const currentOwner = authSession.token === token
+      ? currentApprovalOwner(consoleShellState)
+      : null;
+    if (!approvalPageState.acceptAction(operation, response, currentOwner)) return null;
+    renderCurrentApprovalPanel(consoleShellState);
+    return approvalPageState.snapshot();
+  } catch (error) {
+    const currentOwner = authSession.token === token
+      ? currentApprovalOwner(consoleShellState)
+      : null;
+    if (
+      !approvalPageState.isCurrentOperation("action", operation, currentOwner)
+      || isApprovalAbortError(error)
+    ) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (handleApprovalAuthenticationFailure(error)) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (isApprovalPermissionRevocation(error)) {
+      approvalPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    approvalPageState.rejectAction(operation, error, currentOwner);
+    renderCurrentApprovalPanel(consoleShellState);
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (error instanceof AuthApiError && error.status === 409) {
+      globalThis.window?.setTimeout?.(
+        () => void refreshApprovalPanel(consoleShellState, { resetGeneration: true }),
+        0,
+      );
+    }
+    return approvalPageState.snapshot();
+  } finally {
+    password = undefined;
+    stepUpToken = undefined;
+    approvalPageState.finishAction(operation);
+  }
+}
+
+/** 当前 owner 的 401 才能清 Session；旧 generation 已在调用方提前拒绝。 */
+function handleApprovalAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  approvalPageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+/** 只有 canonical permission_denied 表示撤权；step-up 业务 403 必须留在当前 Dialog。 */
+function isApprovalPermissionRevocation(error) {
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
 }
 /**
  * 绑定 FinOps 筛选、opaque cursor、详情和调整命令。
@@ -8071,6 +8424,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
     // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
     adminAssistantPageState.leave();
   }
+  if (itemId !== "approvals") {
+    // 导航请求前同步擦除审批密码、任务详情、cursor 与动作 ticket；迟到响应不能越过页面边界。
+    approvalPageState.clear();
+  }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
     webhookDeadLetterPageState.clear();
@@ -8252,6 +8609,22 @@ function replaceNavigationHash(itemId) {
     return;
   }
   const nextHash = itemId ? `#${encodeURIComponent(itemId)}` : "";
+  globalThis.history.replaceState(
+    null,
+    "",
+    `${globalThis.location.pathname}${globalThis.location.search}${nextHash}`,
+  );
+}
+
+/** PAGE-109 只允许 canonical approval_id 进入 hash；返回中心时恢复无 query 的 approvals 路由。 */
+function replaceApprovalCardHash(approvalId) {
+  if (!globalThis.history || !globalThis.location) return;
+  const normalized = /^apr_[0-9a-f]{32}$/.test(String(approvalId ?? ""))
+    ? approvalId
+    : "";
+  const nextHash = normalized
+    ? `#approvals?approval_id=${encodeURIComponent(normalized)}`
+    : "#approvals";
   globalThis.history.replaceState(
     null,
     "",
@@ -13239,6 +13612,100 @@ function loadAdminAssistantState(consoleShellState, refreshId) {
   const owner = currentAdminAssistantOwner(consoleShellState);
   return adminAssistantPageState.enter(owner) ? adminAssistantPageState.snapshot() : null;
 }
+
+/** PAGE-108/109 只在审批导航激活时读取；移动 hash 直达时跳过列表并只请求一个任务。 */
+async function loadApprovalsState(consoleShellState, refreshId) {
+  const owner = currentApprovalOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !approvalPageState.enter(owner)) return null;
+  const mobileApprovalId = parseApprovalCardHash(globalThis.location?.hash);
+  approvalPageState.syncMobileFocus(mobileApprovalId);
+  if (mobileApprovalId) {
+    return loadApprovalDetailState(consoleShellState, refreshId);
+  }
+  const operation = approvalPageState.beginList(owner, refreshId);
+  if (!operation) return approvalPageState.snapshot();
+  try {
+    const query = approvalPageState.listQuery();
+    const response = await listApprovals({
+      controlApiUrl,
+      token: authSession.token,
+      status: query.status,
+      targetType: query.targetType,
+      limit: 50,
+      cursor: query.cursor,
+      signal: operation.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = approvalPageState.acceptList(
+      operation,
+      response,
+      currentApprovalOwner(consoleShellState),
+      refreshId,
+    );
+    return accepted ? approvalPageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentApprovalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !approvalPageState.isCurrentOperation("list", operation, currentOwner)
+      || isApprovalAbortError(error)
+    ) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (handleApprovalAuthenticationFailure(error)) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (isApprovalPermissionRevocation(error)) {
+      approvalPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    approvalPageState.rejectList(operation, error, currentOwner);
+    return approvalPageState.snapshot();
+  } finally {
+    approvalPageState.finishList(operation);
+  }
+}
+
+/** 读取当前选中或 PAGE-109 hash 指定任务；跨租户、无权和不存在统一由后端返回同形 404。 */
+async function loadApprovalDetailState(consoleShellState, refreshId) {
+  const owner = currentApprovalOwner(consoleShellState);
+  const operation = approvalPageState.beginDetail(owner, refreshId);
+  if (!operation) return approvalPageState.snapshot();
+  try {
+    const response = await getApproval({
+      controlApiUrl,
+      token: authSession.token,
+      approvalId: operation.approvalId,
+      signal: operation.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = approvalPageState.acceptDetail(
+      operation,
+      response,
+      currentApprovalOwner(consoleShellState),
+      refreshId,
+    );
+    return accepted ? approvalPageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentApprovalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !approvalPageState.isCurrentOperation("detail", operation, currentOwner)
+      || isApprovalAbortError(error)
+    ) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (handleApprovalAuthenticationFailure(error)) return null;
+    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
+    if (isApprovalPermissionRevocation(error)) {
+      approvalPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    approvalPageState.rejectDetail(operation, error, currentOwner);
+    return approvalPageState.snapshot();
+  } finally {
+    approvalPageState.finishDetail(operation);
+  }
+}
 /**
  * 身份边界变化时清除预算页面全部会话内事实。
  * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
@@ -14248,6 +14715,13 @@ function clearResponseCacheStateOnIdentityChange(previous, current) {
 function clearAdminAssistantStateOnIdentityChange(previous, current) {
   if (adminAssistantReadIdentitySnapshot(previous) !== adminAssistantReadIdentitySnapshot(current)) {
     adminAssistantPageState.leave();
+  }
+}
+
+/** tenant、Session、任一权限、revision 或 fingerprint 变化时销毁审批任务、密码 DOM 和动作票据。 */
+function clearApprovalStateOnIdentityChange(previous, current) {
+  if (approvalReadIdentitySnapshot(previous) !== approvalReadIdentitySnapshot(current)) {
+    approvalPageState.clear();
   }
 }
 /**

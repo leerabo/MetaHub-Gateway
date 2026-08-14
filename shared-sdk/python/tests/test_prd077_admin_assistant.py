@@ -432,11 +432,11 @@ def test_answer_graph_rejects_unreferenced_source_and_free_recommendation_messag
 
 
 def test_rbac_revision_13_grants_only_three_default_roles() -> None:
-    """冻结 revision 13 权限总量、授权矩阵哈希及仅三个默认角色的新增授权。"""
+    """冻结 PRD-077 子集及其三角色授权，同时允许后续目录追加权限。"""
 
-    assert CATALOG_REVISION == 13
-    assert len(PERMISSION_CODES) == 70
-    assert sum(len(values) for values in ROLE_GRANTABLE_PERMISSIONS.values()) == 188
+    assert CATALOG_REVISION >= 13
+    assert len(PERMISSION_CODES) >= 70
+    assert sum(len(values) for values in ROLE_GRANTABLE_PERMISSIONS.values()) >= 188
     definition = PERMISSION_BY_CODE["admin_assistant.query"]
     assert (definition.category, definition.risk_level) == ("admin_assistant", "read")
     granted = {
@@ -448,13 +448,26 @@ def test_rbac_revision_13_grants_only_three_default_roles() -> None:
     assert "admin_assistant.query" not in ROLE_GRANTABLE_PERMISSIONS[DEVELOPER_ROLE]
     assert "admin_assistant.query" not in ROLE_GRANTABLE_PERMISSIONS[VIEWER_ROLE]
     assert "admin_assistant.query" not in ROLE_GRANTABLE_PERMISSIONS[OPS_ADMIN_ROLE]
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS[ADMIN_ROLE]) == (
+    admin_prd077 = {
+        code for code in ROLE_GRANTABLE_PERMISSIONS[ADMIN_ROLE] if not code.startswith("approval.")
+    }
+    finance_prd077 = {
+        code
+        for code in ROLE_GRANTABLE_PERMISSIONS[FINANCE_ADMIN_ROLE]
+        if not code.startswith("approval.")
+    }
+    security_prd077 = {
+        code
+        for code in ROLE_GRANTABLE_PERMISSIONS[SECURITY_ADMIN_ROLE]
+        if not code.startswith("approval.")
+    }
+    assert permission_matrix_sha256(admin_prd077) == (
         "0012b8538dcabe652d054716a350bd7abf5003c0bcca3a8021e830928afd295d"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS[FINANCE_ADMIN_ROLE]) == (
+    assert permission_matrix_sha256(finance_prd077) == (
         "63691295710ed938c153dedd989d83412694b1b0b26b7fa83658d90a08a99ce8"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS[SECURITY_ADMIN_ROLE]) == (
+    assert permission_matrix_sha256(security_prd077) == (
         "38148a7c165b4c2122a37209f88e3beee2c913d56a151b579d765f4f9c4a4656"
     )
 

@@ -48,7 +48,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 运行时仍须逐请求从当前 tenant 数据库恢复实际矩阵，不能因 Shared 中存在默认值而放宽授权。
 # PRD-077 的助手权限只开放只读入口，不隐含 Usage、FinOps、RequestLog 或 Policy 源域权限；
 # 最终授权仍必须从当前 tenant 的动态角色矩阵逐请求恢复并在审计事务内复核。
-CATALOG_REVISION: Final[int] = 13
+# PRD-078 把审批入口与目标域权限拆开：read/decide 只表达审批职责，Control 仍须实时
+# 复核预算或会话风险的目标权限，不能让审批权限成为跨域写入后门。
+CATALOG_REVISION: Final[int] = 14
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -445,6 +447,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "read",
     ),
     PermissionDefinition(
+        "approval.read",
+        "approval",
+        "读取审批任务",
+        "读取当前租户内同时满足目标域授权的审批任务与安全审计摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "approval.decide",
+        "approval",
+        "处理审批任务",
+        "批准或拒绝当前租户审批任务，且仍须满足目标域写权限与二次验证。",
+        "critical",
+    ),
+    PermissionDefinition(
         "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
     ),
 )
@@ -517,6 +533,8 @@ _FINANCE = {
     "response_cache.write",
     "response_cache.invalidate",
     "admin_assistant.query",
+    "approval.read",
+    "approval.decide",
 }
 _SECURITY = {
     "console.basic.read",
@@ -546,6 +564,8 @@ _SECURITY = {
     "file.read",
     "file.security.scan",
     "admin_assistant.query",
+    "approval.read",
+    "approval.decide",
 }
 _OPS = {
     "console.basic.read",
