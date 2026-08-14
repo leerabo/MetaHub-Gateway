@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from metahub_shared.runtime.config import ConfigError, load_app_config
 from metahub_shared.runtime.errors import ERROR_SPECS
 from metahub_shared.runtime.i18n import error_label
@@ -92,6 +91,8 @@ def _ledger_payload(*, entry_type: str) -> dict[str, object]:
         "normalized_cny": "1.000000",
         "cny_normalization_status": "normalized",
         "quota_type": "paid",
+        "quota_allocation_class": "not_applicable" if is_reversal else "unallocated",
+        "quota_allocation_count": 0,
         "source_request_id": None if is_reversal else "req_prd051_usage",
         "price_snapshot_id": None,
         "price_schema_version": None,

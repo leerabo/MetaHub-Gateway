@@ -78,6 +78,25 @@ import {
 } from "../features/cache-policies/responseCachePageState.js";
 import { renderResponseCache } from "../features/cache-policies/renderResponseCache.js";
 import {
+  bindPlanManagementInteractions,
+  bindQuotaManagementInteractions,
+  clearPlanManagementDom,
+  clearQuotaManagementDom,
+} from "../features/plan-billing/bindPlanBilling.js";
+import {
+  createPlanPageState,
+  createQuotaPageState,
+  isPlanBillingAbortError,
+  planPageOwner,
+  planReadIdentitySnapshot,
+  quotaPageOwner,
+  quotaReadIdentitySnapshot,
+} from "../features/plan-billing/planBillingPageState.js";
+import {
+  renderPlanManagement,
+  renderQuotaManagement,
+} from "../features/plan-billing/renderPlanBilling.js";
+import {
   bindAdminAssistantInteractions,
   clearAdminAssistantDom,
 } from "../features/admin-assistant/bindAdminAssistant.js";
@@ -340,6 +359,12 @@ import {
   listResponseCachePolicies,
   updateResponseCachePolicy,
 } from "../lib/responseCache.js";
+import {
+  createQuotaAdjustment,
+  getCurrentPlan,
+  getQuotaBuckets,
+  patchCurrentPlan,
+} from "../lib/planBilling.js";
 import {
   adminAssistantSourceAccess,
   queryAdminAssistant,
@@ -641,6 +666,10 @@ const batchJobPageState = createBatchJobPageState({
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
 const responseCachePageState = createResponseCachePageState({ clearDom: clearResponseCacheDom });
+// PAGE-110 的 Plan CAS 草稿和确认 Dialog 只属于完整 plan.read owner。
+const planManagementPageState = createPlanPageState({ clearDom: clearPlanManagementDom });
+// PAGE-111 的 reason、幂等键和额度调整 ticket 只驻留完整 quota.read owner 的 Dialog 闭包。
+const quotaManagementPageState = createQuotaPageState({ clearDom: clearQuotaManagementDom });
 // PAGE-107 的问题、回答、来源与 POST ticket 只属于完整 assistant owner；任何清理都会同步擦除正文 DOM。
 const adminAssistantPageState = createAdminAssistantPageState({
   clearDom: () => clearAdminAssistantDom(globalThis.document),
@@ -795,6 +824,14 @@ if (app && globalThis.window) {
         // PAGE-106 的策略草稿、Dialog、cursor 和幂等 owner 不得越过 hash 导航边界。
         responseCachePageState.clear();
       }
+      if (nextItemId !== "plans") {
+        // PAGE-110 的套餐草稿、确认 Dialog 和 CAS ticket 在 hash 离页时立即销毁。
+        planManagementPageState.clear();
+      }
+      if (nextItemId !== "quota-buckets") {
+        // PAGE-111 的 reason、幂等键和调整 ticket 不能越过 hash 导航边界。
+        quotaManagementPageState.clear();
+      }
       if (nextItemId !== "approvals") {
         // PAGE-108/109 的任务详情、密码 DOM、cursor 和动作 owner 在 hash 离页时立即销毁。
         approvalPageState.clear();
@@ -833,6 +870,8 @@ if (app && globalThis.window) {
       batchJobPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
+      planManagementPageState.clear();
+      quotaManagementPageState.clear();
       adminAssistantPageState.leave();
       approvalPageState.clear();
       webhookDeadLetterPageState.clear();
@@ -954,6 +993,7 @@ async function start() {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
+    clearPlanBillingStateOnIdentityChange(authSession.context, context);
     clearAdminAssistantStateOnIdentityChange(authSession.context, context);
     clearApprovalStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
@@ -1038,6 +1078,7 @@ async function performRefresh() {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
+    clearPlanBillingStateOnIdentityChange(authSession.context, context);
     adminAssistantIdentityChanged = (
       adminAssistantReadIdentitySnapshot(authSession.context)
       !== adminAssistantReadIdentitySnapshot(context)
@@ -1257,6 +1298,26 @@ async function performRefresh() {
     // 后台已完成 auth/navigation 复核；同 owner 草稿、冲突或 Dialog 仅阻止普通 DOM replacement。
     return;
   }
+  // PAGE-110 只属于后端确认的 plans 导航；同 owner 草稿、冲突或确认 Dialog 阻止后台全壳替换。
+  if (consoleShellState?.activeNavigationItemId !== "plans") {
+    planManagementPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && planManagementPageState.blocksShellDomReplacement()
+    && planManagementPageState.enter(currentPlanManagementOwner(consoleShellState))
+  ) {
+    return;
+  }
+  // PAGE-111 只属于后端确认的 quota-buckets 导航；busy/dirty Dialog 不得被 15 秒刷新覆盖。
+  if (consoleShellState?.activeNavigationItemId !== "quota-buckets") {
+    quotaManagementPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && quotaManagementPageState.blocksShellDomReplacement()
+    && quotaManagementPageState.enter(currentQuotaManagementOwner(consoleShellState))
+  ) {
+    return;
+  }
   // PAGE-107 后台刷新仍先重读 auth/navigation；同 owner 有正文时保留 DOM，撤权则 leave 后继续失败关闭。
   // 上方多个页面 loader 都包含 await；离开旧导航后必须再次核对本轮 owner，禁止旧 overview 快照
   // 在新 PAGE-107 已经建立 owner 后调用 leave() 并移除刚渲染的根节点。
@@ -1381,6 +1442,16 @@ async function performRefresh() {
   const modelPricesState = await loadModelPricesState();
   // PAGE-106 只在后端授权导航激活时读取 Alias 策略；其他页面不预取策略或 selector。
   const responseCacheState = await loadResponseCacheState(consoleShellState, refreshId);
+  // PAGE-110/111 仅在各自后端授权导航激活时读取，互不预取套餐草稿或额度调整事实。
+  const planManagementState = await loadPlanManagementState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
+  const quotaManagementState = await loadQuotaManagementState(consoleShellState, refreshId);
+  // 额度读取可能清除失效会话，后续页面加载必须在无令牌时立即停止。
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-107 首屏只建立内存 owner，不预取事实也不自动 POST；查询必须来自一次明确表单提交。
   const adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
   // PAGE-108 读取列表；PAGE-109 受控 hash 只读取一个任务，不在其他页面后台预取审批事实。
@@ -1604,6 +1675,8 @@ async function performRefresh() {
     policySnapshotsState: policySnapshotsRenderState,
     modelPricesState,
     responseCacheState,
+    planManagementState,
+    quotaManagementState,
     adminAssistantState,
     approvalsState,
     modelAliasesState,
@@ -1815,6 +1888,8 @@ function renderLogin(error, requestId) {
   batchJobPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
+  planManagementPageState.clear();
+  quotaManagementPageState.clear();
   // 登录页是 PAGE-107 强边界，问题、回答、来源和迟到 POST 都不能跨 Session 保留。
   adminAssistantPageState.leave();
   // 登录页是审批强身份边界，先擦密码和任务事实，再取消 list/detail/action。
@@ -2183,6 +2258,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     batchJobPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
+    planManagementPageState.clear();
+    quotaManagementPageState.clear();
     adminAssistantPageState.leave();
     approvalPageState.clear();
     webhookDeadLetterPageState.clear();
@@ -4355,6 +4432,8 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindBatchJobsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
+  bindPlanManagementPageInteractions(consoleShellState);
+  bindQuotaManagementPageInteractions(consoleShellState);
   bindAdminAssistantPageInteractions(consoleShellState);
   bindApprovalPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
@@ -6046,6 +6125,307 @@ function handleResponseCacheAuthenticationFailure(error) {
 
 /** canonical permission_denied 表示后端已撤权，必须重读 auth/navigation 而非仅隐藏按钮。 */
 function isResponseCachePermissionRevocation(error) {
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
+}
+
+/** 构造 PAGE-110 实时 owner；hash 只能收紧后端导航，不能制造套餐权限。 */
+function currentPlanManagementOwner(consoleShellState, mode = "read") {
+  const owner = planPageOwner(authSession.context, consoleShellState, { mode });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "plans")) return null;
+  return owner;
+}
+
+/** 构造 PAGE-111 实时 owner；quota.write 始终与 quota.read 独立复核。 */
+function currentQuotaManagementOwner(consoleShellState, mode = "read") {
+  const owner = quotaPageOwner(authSession.context, consoleShellState, { mode });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "quota-buckets")) return null;
+  return owner;
+}
+
+/** 绑定 Plan 草稿、确认、CAS 保存和显式重读。 */
+function bindPlanManagementPageInteractions(consoleShellState) {
+  const owner = currentPlanManagementOwner(consoleShellState);
+  if (!planManagementPageState.enter(owner)) return;
+  bindPlanManagementInteractions({
+    currentRevision: () => planManagementPageState.snapshot().plan?.state_revision ?? 0,
+    async onRefresh() {
+      await refreshPlanManagementPanel(consoleShellState);
+    },
+    async onRebase() {
+      await refreshPlanManagementPanel(consoleShellState, { rebase: true });
+    },
+    async onDraft(request) {
+      if (planManagementPageState.replaceDraft(request)) {
+        renderCurrentPlanManagementPanel(consoleShellState);
+      }
+    },
+    async onDiscard() {
+      const writeOwner = currentPlanManagementOwner(consoleShellState, "write");
+      if (planManagementPageState.discardDraft(writeOwner)) {
+        renderCurrentPlanManagementPanel(consoleShellState);
+      }
+    },
+    async onOpenConfirmation(request) {
+      const opened = planManagementPageState.openConfirmation(
+        currentPlanManagementOwner(consoleShellState, "write"),
+        request,
+      );
+      if (opened) {
+        refreshSequence += 1;
+        renderCurrentPlanManagementPanel(consoleShellState);
+      }
+      return opened;
+    },
+    async onCloseConfirmation() {
+      const closed = planManagementPageState.closeConfirmation(
+        currentPlanManagementOwner(consoleShellState, "write"),
+      );
+      if (closed) renderCurrentPlanManagementPanel(consoleShellState);
+      return closed;
+    },
+    async onConfirmSave() {
+      await submitPlanManagement(consoleShellState);
+    },
+  });
+}
+
+/** 局部重建 PAGE-110；失权时先由状态机擦除旧租户 DOM。 */
+function renderCurrentPlanManagementPanel(consoleShellState) {
+  const owner = currentPlanManagementOwner(consoleShellState);
+  if (!planManagementPageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".plans-panel");
+  if (!panel) return false;
+  const html = renderPlanManagement(
+    planManagementPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+    currentI18n,
+  );
+  if (!html) {
+    planManagementPageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindPlanManagementPageInteractions(consoleShellState);
+  return true;
+}
+
+/** 显式 Plan GET 推进全局代次，旧整页刷新不能覆盖当前结果。 */
+async function refreshPlanManagementPanel(consoleShellState, { rebase = false } = {}) {
+  const owner = currentPlanManagementOwner(consoleShellState);
+  if (!planManagementPageState.enter(owner)) return null;
+  const refreshId = ++refreshSequence;
+  renderCurrentPlanManagementPanel(consoleShellState);
+  const state = await loadPlanManagementState(consoleShellState, refreshId, { rebase });
+  if (!state || refreshId !== refreshSequence) return null;
+  return renderCurrentPlanManagementPanel(consoleShellState) ? state : null;
+}
+
+/** 提交 Plan 完整 CAS；未知结果必须重新读取，不能盲重放旧 revision。 */
+async function submitPlanManagement(consoleShellState) {
+  const token = authSession.token;
+  const owner = currentPlanManagementOwner(consoleShellState, "write");
+  // 套餐写入同时要求有效令牌与实时写所有者，任一缺失都清除页面状态。
+  if (!token || !owner) {
+    planManagementPageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = planManagementPageState.beginSave(owner);
+  if (!operation) return planManagementPageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentPlanManagementPanel(consoleShellState);
+  let finished = false;
+  /** 幂等完成当前套餐保存通道，避免成功、异常和 finally 重复清理。 */
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    planManagementPageState.finishSave(operation);
+  };
+  try {
+    const response = await patchCurrentPlan({
+      controlApiUrl,
+      token,
+      tenantId: owner.tenantId,
+      request: operation.request,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentPlanManagementOwner(consoleShellState, "write");
+    if (!planManagementPageState.acceptSave(operation, response, currentOwner)) return null;
+    finish();
+    renderCurrentPlanManagementPanel(consoleShellState);
+    return planManagementPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentPlanManagementOwner(consoleShellState, "write");
+    if (
+      !planManagementPageState.isSaveCurrent(operation, currentOwner)
+      || isPlanBillingAbortError(error)
+    ) return null;
+    // 当前操作的认证失败统一清会话，权限撤销则清页面并重建后端导航。
+    if (handlePlanBillingAuthenticationFailure(error)) return null;
+    if (isPlanBillingPermissionRevocation(error)) {
+      planManagementPageState.clear();
+      finish();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    planManagementPageState.rejectSave(operation, error, currentOwner);
+    finish();
+    renderCurrentPlanManagementPanel(consoleShellState);
+    return planManagementPageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** 绑定 Quota 刷新、调整 Dialog 和同一幂等意图恢复。 */
+function bindQuotaManagementPageInteractions(consoleShellState) {
+  const owner = currentQuotaManagementOwner(consoleShellState);
+  if (!quotaManagementPageState.enter(owner)) return;
+  bindQuotaManagementInteractions({
+    currentBuckets: () => quotaManagementPageState.snapshot().quotaBuckets,
+    async onRefresh() {
+      await refreshQuotaManagementPanel(consoleShellState);
+    },
+    async onOpenAdjustment(quotaType) {
+      const opened = quotaManagementPageState.openAdjustment(
+        currentQuotaManagementOwner(consoleShellState, "write"),
+        quotaType,
+      );
+      if (opened) {
+        refreshSequence += 1;
+        renderCurrentQuotaManagementPanel(consoleShellState);
+      }
+      return opened;
+    },
+    async onCloseAdjustment() {
+      const closed = quotaManagementPageState.closeAdjustment(
+        currentQuotaManagementOwner(consoleShellState, "write"),
+      );
+      if (closed) renderCurrentQuotaManagementPanel(consoleShellState);
+      return closed;
+    },
+    async onSubmitAdjustment(request) {
+      await submitQuotaAdjustment(request, consoleShellState);
+    },
+    async onRetryAdjustment() {
+      await submitQuotaAdjustment(null, consoleShellState, { retry: true });
+    },
+  });
+}
+
+/** 局部重建 PAGE-111；reason 从不作为 render 参数传出状态闭包。 */
+function renderCurrentQuotaManagementPanel(consoleShellState) {
+  const owner = currentQuotaManagementOwner(consoleShellState);
+  if (!quotaManagementPageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".quota-buckets-panel");
+  if (!panel) return false;
+  const html = renderQuotaManagement(
+    quotaManagementPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+    currentI18n,
+  );
+  if (!html) {
+    quotaManagementPageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindQuotaManagementPageInteractions(consoleShellState);
+  return true;
+}
+
+/** 显式 Quota GET 推进全局代次，旧整页刷新不能覆盖调整结果。 */
+async function refreshQuotaManagementPanel(consoleShellState) {
+  const owner = currentQuotaManagementOwner(consoleShellState);
+  if (!quotaManagementPageState.enter(owner)) return null;
+  const refreshId = ++refreshSequence;
+  renderCurrentQuotaManagementPanel(consoleShellState);
+  const state = await loadQuotaManagementState(consoleShellState, refreshId);
+  if (!state || refreshId !== refreshSequence) return null;
+  return renderCurrentQuotaManagementPanel(consoleShellState) ? state : null;
+}
+
+/** 提交额度调整；503 重试复用同一闭包 reason/key，其他失败销毁私有意图。 */
+async function submitQuotaAdjustment(request, consoleShellState, { retry = false } = {}) {
+  const token = authSession.token;
+  const owner = currentQuotaManagementOwner(consoleShellState, "write");
+  // 额度写入同时要求有效令牌与实时写所有者，任一缺失都销毁私有调整意图。
+  if (!token || !owner) {
+    quotaManagementPageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = quotaManagementPageState.beginAdjustment(owner, request, { retry });
+  if (!operation) return quotaManagementPageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentQuotaManagementPanel(consoleShellState);
+  let finished = false;
+  /** 幂等完成当前额度调整通道，避免成功、异常和 finally 重复清理。 */
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    quotaManagementPageState.finishAdjustment(operation);
+  };
+  try {
+    const response = await createQuotaAdjustment({
+      controlApiUrl,
+      token,
+      tenantId: owner.tenantId,
+      request: operation.request,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    const currentOwner = currentQuotaManagementOwner(consoleShellState, "write");
+    if (!quotaManagementPageState.acceptAdjustment(operation, response, currentOwner)) return null;
+    finish();
+    renderCurrentQuotaManagementPanel(consoleShellState);
+    return quotaManagementPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentQuotaManagementOwner(consoleShellState, "write");
+    if (
+      !quotaManagementPageState.isAdjustmentCurrent(operation, currentOwner)
+      || isPlanBillingAbortError(error)
+    ) return null;
+    // 当前操作的认证失败统一清会话，权限撤销则清页面并重建后端导航。
+    if (handlePlanBillingAuthenticationFailure(error)) return null;
+    if (isPlanBillingPermissionRevocation(error)) {
+      quotaManagementPageState.clear();
+      finish();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    quotaManagementPageState.rejectAdjustment(operation, error, currentOwner);
+    finish();
+    // 修订冲突必须重新读取额度事实，不能继续展示或重放陈旧桶版本。
+    if (Number(error?.status) === 409) {
+      return await refreshQuotaManagementPanel(consoleShellState);
+    }
+    renderCurrentQuotaManagementPanel(consoleShellState);
+    return quotaManagementPageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+/** 当前 owner 的 401 才能清 Session；旧 generation 已在调用方提前拒绝。 */
+function handlePlanBillingAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  planManagementPageState.clear();
+  quotaManagementPageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+/** 识别套餐额度权限撤销错误，仅接受固定错误类型、状态和错误码组合。 */
+function isPlanBillingPermissionRevocation(error) {
+  // 权限撤销判断必须精确匹配受控认证错误，普通异常不得触发授权刷新。
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
@@ -8419,6 +8799,14 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "response-cache") {
     // 导航请求前销毁 PAGE-106 草稿、失效 Dialog、私有 cursor 与全部异步票据。
     responseCachePageState.clear();
+  }
+  if (itemId !== "plans") {
+    // 导航请求前销毁 PAGE-110 套餐草稿、确认 Dialog 与 CAS ticket。
+    planManagementPageState.clear();
+  }
+  if (itemId !== "quota-buckets") {
+    // 导航请求前销毁 PAGE-111 reason、幂等键与额度调整 ticket。
+    quotaManagementPageState.clear();
   }
   if (itemId !== "admin-assistant") {
     // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
@@ -13606,6 +13994,92 @@ async function loadResponseCacheState(
   }
 }
 
+/** PAGE-110 只在同一授权 owner 下读取；普通 GET 不覆盖 dirty/conflict 套餐草稿。 */
+async function loadPlanManagementState(
+  consoleShellState,
+  refreshId,
+  { rebase = false } = {},
+) {
+  const owner = currentPlanManagementOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !planManagementPageState.enter(owner)) return null;
+  const operation = planManagementPageState.beginLoad(owner, { rebase });
+  if (!operation) return planManagementPageState.snapshot();
+  try {
+    const response = await getCurrentPlan({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = planManagementPageState.acceptLoad(
+      operation,
+      response,
+      currentPlanManagementOwner(consoleShellState),
+    );
+    return accepted ? planManagementPageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentPlanManagementOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !planManagementPageState.isLoadCurrent(operation, currentOwner)
+      || isPlanBillingAbortError(error)
+    ) return null;
+    // 当前读取的认证失败统一清会话，权限撤销则清页面并重建后端导航。
+    if (handlePlanBillingAuthenticationFailure(error)) return null;
+    if (isPlanBillingPermissionRevocation(error)) {
+      planManagementPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    planManagementPageState.rejectLoad(operation, error, currentOwner);
+    return planManagementPageState.snapshot();
+  } finally {
+    planManagementPageState.finishLoad(operation);
+  }
+}
+
+/** PAGE-111 只在同一授权 owner 下读取；打开或 busy Dialog 时不启动 GET。 */
+async function loadQuotaManagementState(consoleShellState, refreshId) {
+  const owner = currentQuotaManagementOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !quotaManagementPageState.enter(owner)) return null;
+  const operation = quotaManagementPageState.beginLoad(owner);
+  if (!operation) return quotaManagementPageState.snapshot();
+  try {
+    const response = await getQuotaBuckets({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = quotaManagementPageState.acceptLoad(
+      operation,
+      response,
+      currentQuotaManagementOwner(consoleShellState),
+    );
+    return accepted ? quotaManagementPageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentQuotaManagementOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !quotaManagementPageState.isLoadCurrent(operation, currentOwner)
+      || isPlanBillingAbortError(error)
+    ) return null;
+    // 当前读取的认证失败统一清会话，权限撤销则清页面并重建后端导航。
+    if (handlePlanBillingAuthenticationFailure(error)) return null;
+    if (isPlanBillingPermissionRevocation(error)) {
+      quotaManagementPageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    quotaManagementPageState.rejectLoad(operation, error, currentOwner);
+    return quotaManagementPageState.snapshot();
+  } finally {
+    quotaManagementPageState.finishLoad(operation);
+  }
+}
+
 /** PAGE-107 不在刷新阶段读取业务事实；这里只建立经过 auth/navigation 双校验的当前页面 owner。 */
 function loadAdminAssistantState(consoleShellState, refreshId) {
   if (refreshId !== refreshSequence) return null;
@@ -14708,6 +15182,16 @@ function clearExperimentStateOnIdentityChange(previous, current) {
 function clearResponseCacheStateOnIdentityChange(previous, current) {
   if (responseCacheReadIdentitySnapshot(previous) !== responseCacheReadIdentitySnapshot(current)) {
     responseCachePageState.clear();
+  }
+}
+
+/** tenant、Session、权限 revision 或任一套餐/额度授权变化时销毁 PAGE-110/111。 */
+function clearPlanBillingStateOnIdentityChange(previous, current) {
+  if (planReadIdentitySnapshot(previous) !== planReadIdentitySnapshot(current)) {
+    planManagementPageState.clear();
+  }
+  if (quotaReadIdentitySnapshot(previous) !== quotaReadIdentitySnapshot(current)) {
+    quotaManagementPageState.clear();
   }
 }
 

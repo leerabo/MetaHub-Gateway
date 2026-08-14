@@ -48,6 +48,10 @@ from metahub_gateway.output_safety.service import (
     finalize_output_safety_scan_in_transaction,
 )
 from metahub_gateway.providers.keypool import snapshot_response_cache_credential_scope
+from metahub_gateway.quota import (
+    release_request_quota_in_transaction,
+    settle_quota_usage,
+)
 from metahub_gateway.routing.models import GatewayRoute
 from metahub_gateway.usage.ledger import (
     CostEstimate,
@@ -967,6 +971,17 @@ def _write_hit_settlement(
     ):
         # 命中结算必须原子写入缓存事实、用量、成本和预算状态，禁止出现部分成功。
         raise sqlite3.IntegrityError("response_cache_finops_projection_missing")
+    settle_quota_usage(
+        connection,
+        tenant_id=context.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        usage_ledger_id=prepared.ids.usage_ledger_id,
+        finops_ledger_entry_id=prepared.ids.finops_ledger_entry_id,
+        actual_micros=_canonical_charge_micros(charge),
+        # Cache hit 没有第二次 Provider 调用，不能继承动态 fallback 的未决暴露。
+        exposure_outstanding_micros=0,
+    )
     _settle_budget_rows(
         connection,
         tenant_id=context.tenant_id,
@@ -1263,6 +1278,12 @@ def _write_blocked_settlement(
         trace_id=context.trace_id,
         require_existing=context.budget_reservation_outstanding_cny is not None,
     )
+    release_request_quota_in_transaction(
+        connection,
+        tenant_id=context.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+    )
     _fence_output_blocked_entry(config, connection, context, prepared.candidate, now)
     _transition_candidate_fact(
         connection,
@@ -1299,6 +1320,12 @@ def _write_failed_settlement(
         request_id=context.request_id,
         trace_id=context.trace_id,
         require_existing=context.budget_reservation_outstanding_cny is not None,
+    )
+    release_request_quota_in_transaction(
+        connection,
+        tenant_id=context.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
     )
     _transition_candidate_fact(
         connection,
@@ -1391,6 +1418,19 @@ def _settle_budget_rows(
         if updated != len(rows):
             # 命中结算必须原子写入缓存事实、用量、成本和预算状态，禁止出现部分成功。
             raise sqlite3.IntegrityError("response_cache_budget_settlement_lost")
+
+
+def _canonical_charge_micros(charge: sqlite3.Row) -> int | None:
+    """只从 canonical charge 的 CNY 归一化列恢复额度结算金额。"""
+
+    status = charge["cny_normalization_status"]
+    value = charge["normalized_cny_micros"]
+    if status == "unavailable" and value is None:
+        return None
+    # 只有权威归一化的有界整数金额可进入额度结算，其他状态必须关闭处理。
+    if status != "normalized" or type(value) is not int or not 0 <= value <= 10**15:
+        raise sqlite3.IntegrityError("response_cache_quota_amount_invalid")
+    return value
 
 
 def _fence_output_blocked_entry(

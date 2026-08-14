@@ -76,6 +76,11 @@ export const PERMISSIONS = Object.freeze({
   BILLING_BUDGET_WRITE: "billing.budget.write",
   BILLING_ANOMALY_READ: "billing.anomaly.read",
   BILLING_ANOMALY_WRITE: "billing.anomaly.write",
+  // PAGE-110/111 套餐与额度读写四项能力独立授权；前端入口不能替代 Control API 实时 RBAC。
+  BILLING_PLAN_READ: "billing.plan.read",
+  BILLING_PLAN_WRITE: "billing.plan.write",
+  BILLING_QUOTA_READ: "billing.quota.read",
+  BILLING_QUOTA_WRITE: "billing.quota.write",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",

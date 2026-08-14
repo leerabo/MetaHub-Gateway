@@ -22,6 +22,7 @@ from metahub_gateway.providers.base import (
     NormalizedUsage,
     ProviderRequest,
 )
+from metahub_gateway.quota import enforce_quota_guard
 from metahub_gateway.response_cache import (
     PreparedResponseCacheSettlement,
     commit_response_cache_fill,
@@ -79,13 +80,13 @@ def migrated_database_template(tmp_path_factory: pytest.TempPathFactory) -> Path
     database_path = root / "template.sqlite3"
     database_url = f"sqlite:///{database_path.as_posix()}"
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0069"
+    assert result.applied[-1] == "0072"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
         assert connection.execute(
             "SELECT MAX(version) FROM schema_migrations WHERE status='applied'"
-        ).fetchone()[0] == "0069"
+        ).fetchone()[0] == "0072"
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
@@ -265,6 +266,49 @@ def _scenario(
     )
     _store_source_entry(scenario)
     return scenario
+
+
+def _install_prd079_quota_plan(scenario: SettlementScenario) -> None:
+    """给缓存测试租户安装一个仅含 free 余额的 PRD-079 套餐。"""
+
+    plan_id = f"pln_{uuid4().hex}"
+    now = "2026-08-10T00:00:00Z"
+    connection = connect_database(scenario.config.database_url)
+    try:
+        connection.execute(
+            """
+            INSERT INTO plans(
+              plan_id,tenant_id,display_name,base_tier,status,trial_status,
+              trial_started_at,trial_ends_at,trial_cycle,state_revision,
+              quota_generation,created_at,updated_at
+            ) VALUES(?,?,?,'free','active','not_started',NULL,NULL,0,1,1,?,?)
+            """,
+            (plan_id, scenario.tenant_id, "PRD-079 Cache Plan", now, now),
+        )
+        for quota_type in ("trial", "free", "gift", "paid"):
+            granted = 10_000 if quota_type == "free" else 0
+            connection.execute(
+                """
+                INSERT INTO quota_buckets(
+                  quota_bucket_id,tenant_id,plan_id,quota_type,granted_micros,
+                  consumed_micros,reserved_micros,status,expires_at,state_revision,
+                  created_at,updated_at
+                ) VALUES(?,?,?,?,?,0,0,?,NULL,1,?,?)
+                """,
+                (
+                    f"qbk_{uuid4().hex}",
+                    scenario.tenant_id,
+                    plan_id,
+                    quota_type,
+                    granted,
+                    "active" if granted else "exhausted",
+                    now,
+                    now,
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _make_route_unpriced(scenario: SettlementScenario) -> None:
@@ -1168,6 +1212,145 @@ def test_budget_failure_before_scan_closes_request_and_reservation(
         assert connection.execute(
             "SELECT COUNT(*) FROM output_safety_scans WHERE tenant_id=? AND request_id=?",
             (scenario.tenant_id, context.request_id),
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("charge_cache_hits", "actual_micros", "allocation_class", "consumed_micros"),
+    [
+        (False, 0, "unallocated", 0),
+        (True, 2_800, "free", 2_800),
+    ],
+)
+def test_prd079_cache_hit_settles_conservative_quota_reservation(
+    migrated_database_template: Path,
+    tmp_path: Path,
+    charge_cache_hits: bool,
+    actual_micros: int,
+    allocation_class: str,
+    consumed_micros: int,
+) -> None:
+    """缓存命中在同一事务按正式 charge 结算额度，零费用释放全部预留。"""
+
+    scenario = _scenario(
+        migrated_database_template,
+        tmp_path,
+        charge_cache_hits=charge_cache_hits,
+    )
+    _install_prd079_quota_plan(scenario)
+    context, _candidate, prepared = _freeze(scenario, "prd079-quota-hit")
+    guard = enforce_quota_guard(
+        scenario.config,
+        tenant_id=scenario.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        route=scenario.route,
+        payload=scenario.payload,
+        request_kind="chat",
+        trusted_cost_cny=REFERENCE_COST,
+    )
+    assert guard.reservation_id is not None
+    context = replace(context, quota_reservation_outstanding_cny="0")
+    scan = prepare_output_safety_scan(
+        scenario.config,
+        tenant_id=context.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        scan_mode="non_stream_full",
+    )
+    result = settle_response_cache_candidate(
+        scenario.config,
+        context=context,
+        route=scenario.route,
+        prepared=prepared,
+        output_safety_scan=scan,
+        output_safety_terminal=None,
+        latency_ms=2,
+    )
+    assert result.status == "hit"
+
+    connection = connect_database(scenario.config.database_url)
+    try:
+        reservation = connection.execute(
+            """
+            SELECT status,actual_micros,outstanding_micros
+            FROM quota_reservations WHERE tenant_id=? AND request_id=?
+            """,
+            (scenario.tenant_id, context.request_id),
+        ).fetchone()
+        settlement = connection.execute(
+            """
+            SELECT amount_micros,allocation_class,allocation_count,status
+            FROM quota_usage_settlements WHERE tenant_id=? AND request_id=?
+            """,
+            (scenario.tenant_id, context.request_id),
+        ).fetchone()
+        free_bucket = connection.execute(
+            """
+            SELECT consumed_micros,reserved_micros FROM quota_buckets
+            WHERE tenant_id=? AND quota_type='free'
+            """,
+            (scenario.tenant_id,),
+        ).fetchone()
+        assert tuple(reservation) == ("settled", actual_micros, 0)
+        assert tuple(settlement) == (
+            actual_micros,
+            allocation_class,
+            0 if actual_micros == 0 else 1,
+            "settled",
+        )
+        assert tuple(free_bucket) == (consumed_micros, 0)
+    finally:
+        connection.close()
+
+
+def test_prd079_cache_failure_releases_quota_in_terminal_transaction(
+    migrated_database_template: Path,
+    tmp_path: Path,
+) -> None:
+    """缓存失败终态与额度释放一起提交，不能留下并发占用。"""
+
+    scenario = _scenario(migrated_database_template, tmp_path, charge_cache_hits=True)
+    _install_prd079_quota_plan(scenario)
+    context, _candidate, prepared = _freeze(scenario, "prd079-quota-failure")
+    guard = enforce_quota_guard(
+        scenario.config,
+        tenant_id=scenario.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        route=scenario.route,
+        payload=scenario.payload,
+        request_kind="chat",
+        trusted_cost_cny=REFERENCE_COST,
+    )
+    assert guard.reservation_id is not None
+    context = replace(context, quota_reservation_outstanding_cny="0")
+    result = fail_response_cache_candidate(
+        scenario.config,
+        context=context,
+        prepared=prepared,
+        output_safety_scan=None,
+        output_safety_terminal=None,
+        latency_ms=2,
+        error_code="gateway.output_safety_unavailable",
+    )
+    assert result.status == "unavailable"
+
+    connection = connect_database(scenario.config.database_url)
+    try:
+        reservation = connection.execute(
+            """
+            SELECT status,actual_micros FROM quota_reservations
+            WHERE tenant_id=? AND request_id=?
+            """,
+            (scenario.tenant_id, context.request_id),
+        ).fetchone()
+        assert tuple(reservation) == ("released", 0)
+        assert connection.execute(
+            "SELECT SUM(reserved_micros) FROM quota_buckets WHERE tenant_id=?",
+            (scenario.tenant_id,),
         ).fetchone()[0] == 0
     finally:
         connection.close()

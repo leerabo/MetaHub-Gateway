@@ -88,6 +88,9 @@ EVENT_TYPE_BY_NAVIGATION = {
     "batch-jobs": "console.page_viewed",
     # PAGE-105 只记录页面访问，实验名称、模型指标、分桶和请求级 owner 均不得进入事件载荷。
     "experiments": "console.page_viewed",
+    # PAGE-110/111 页面事件只记录 shell 元数据，不携带套餐字段、余额、调整原因或幂等键。
+    "plans": "console.page_viewed",
+    "quota-buckets": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -366,6 +369,26 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         83,
     ),
     NavigationDefinition(
+        "plans",
+        "套餐管理",
+        "调用与成本",
+        "plans",
+        ("billing.plan.read",),
+        "查看当前租户套餐、试用周期和有效层级。",
+        "当前租户尚未创建套餐。",
+        84,
+    ),
+    NavigationDefinition(
+        "quota-buckets",
+        "额度管理",
+        "调用与成本",
+        "quota-buckets",
+        ("billing.quota.read",),
+        "查看四类额度、分类消费和独立未分配成本。",
+        "创建套餐后可查看和调整额度。",
+        85,
+    ),
+    NavigationDefinition(
         "budgets",
         "预算中心",
         "调用与成本",
@@ -373,7 +396,7 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         ("billing.budget.read",),
         "查看租户、Project 与 Virtual Key 三级日预算、有效约束和阻断状态。",
         "先选择 Environment 与可信作用链，再创建三级预算规则。",
-        85,
+        86,
     ),
     NavigationDefinition(
         "cost-anomalies",
@@ -383,7 +406,7 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         ("billing.anomaly.read",),
         "查看确定性规则检测到的成本异常，并执行确认、忽略或临时限流治理。",
         "暂无成本异常；检测器会在正式账本形成可信异常证据后生成告警。",
-        86,
+        87,
     ),
     NavigationDefinition(
         "policies",

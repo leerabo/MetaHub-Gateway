@@ -69,6 +69,9 @@ NORMALIZATION_STATUSES = frozenset({"normalized", "unavailable"})
 POSTING_SOURCES = frozenset({"direct", "spool_replay", "legacy_backfill"})
 LEDGER_STATUSES = frozenset({"posted"})
 QUOTA_TYPES = frozenset({"paid", "free", "trial", "gift"})
+USAGE_QUOTA_ALLOCATION_CLASSES = frozenset(
+    {"paid", "free", "trial", "gift", "mixed", "unallocated"}
+)
 CURRENCIES = frozenset({"CNY", "USD"})
 PRICE_EVIDENCE_STATUSES = frozenset(
     {"priced", "unpriced", "legacy_amount_only", "not_applicable"}
@@ -158,7 +161,10 @@ def list_finops_ledger(
         connection.execute("BEGIN DEFERRED")
         if cursor_state is None:
             maximum = connection.execute(
-                "SELECT COALESCE(MAX(ledger_sequence), 0) FROM finops_ledger_entries WHERE tenant_id=?",
+                """
+                SELECT COALESCE(MAX(ledger_sequence), 0)
+                FROM finops_ledger_entries WHERE tenant_id=?
+                """,
                 (context.user.tenant_id,),
             ).fetchone()
             snapshot_sequence = _non_negative_integer(maximum[0] if maximum else 0)
@@ -198,7 +204,11 @@ def list_finops_ledger(
               scan.billing_disposition AS output_safety_scan_billing_disposition,
               usage.tenant_id AS output_safety_usage_tenant_id,
               usage.request_id AS output_safety_usage_request_id,
-              usage.usage_ledger_id AS output_safety_owner_usage_ledger_id
+              usage.usage_ledger_id AS output_safety_owner_usage_ledger_id,
+              COALESCE(settlement.allocation_class, 'unallocated')
+                AS quota_allocation_class,
+              COALESCE(settlement.allocation_count, 0)
+                AS quota_allocation_count
             FROM finops_ledger_entries le
             LEFT JOIN finops_adjustments a
               ON a.tenant_id=le.tenant_id
@@ -214,6 +224,9 @@ def list_finops_ledger(
             LEFT JOIN usage_ledger usage
               ON usage.tenant_id=dispute.tenant_id
              AND usage.usage_ledger_id=dispute.usage_ledger_id
+            LEFT JOIN quota_usage_settlements settlement
+              ON settlement.tenant_id=le.tenant_id
+             AND settlement.finops_ledger_entry_id=le.finops_ledger_entry_id
             WHERE {where_sql} AND le.ledger_sequence<?
             ORDER BY le.ledger_sequence DESC
             LIMIT ?
@@ -439,7 +452,13 @@ def create_finops_adjustment(
         connection.close()
 
     # 提交成功后四类产物都应完整存在，防御未来修改遗漏事务内赋值。
-    if adjustment_info is None or ledger_info is None or audit_record is None or ledger_event is None:
+    if (
+        adjustment_info is None
+        or ledger_info is None
+        or audit_record is None
+        or ledger_event is None
+    ):
+        # 任一提交后事实缺失都按固定失败关闭，不能返回无法证明完整性的财务结果。
         raise ApiError("finops.adjustment_failed")
     dispatch_audit_recorded(
         config,
@@ -856,6 +875,7 @@ def _ledger_entry_info(row: sqlite3.Row) -> FinOpsLedgerEntryInfo:
         row["posting_source"], POSTING_SOURCES, "finops posting source invalid"
     )
     quota_type = _quota_type(row["quota_type"])
+    allocation_class, allocation_count = _quota_allocation(row, entry_type=entry_type)
     amount = _non_negative_integer(row["amount_micros"])
     normalized_value = row["normalized_cny_micros"]
     normalized_cny = None
@@ -897,6 +917,8 @@ def _ledger_entry_info(row: sqlite3.Row) -> FinOpsLedgerEntryInfo:
         price_snapshot_source=_optional_db_text(row["price_snapshot_source"]),
         posting_source=posting_source,
         quota_type=quota_type,
+        quota_allocation_class=allocation_class,
+        quota_allocation_count=allocation_count,
         usage_ledger_id=_optional_db_identifier(row["usage_ledger_id"]),
         finops_adjustment_id=_optional_db_identifier(row["finops_adjustment_id"]),
         source_request_id=_optional_db_identifier(row["source_request_id"]),
@@ -1073,6 +1095,8 @@ def _ledger_event(row: sqlite3.Row) -> _LedgerEventRecord:
             "normalized_cny": info.normalized_cny,
             "cny_normalization_status": info.cny_normalization_status,
             "quota_type": info.quota_type,
+            "quota_allocation_class": info.quota_allocation_class,
+            "quota_allocation_count": info.quota_allocation_count,
             "source_request_id": info.source_request_id,
             "price_snapshot_id": info.price_snapshot_id,
             "price_schema_version": info.price_schema_version,
@@ -1301,7 +1325,12 @@ def _required_identifier(value: object, error_code: str) -> str:
         type(value) is not str
         or not 1 <= len(value) <= MAX_IDENTIFIER_LENGTH
         or value != value.strip()
-        or any(character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+        or any(
+            character.isspace()
+            or ord(character) < 32
+            or 127 <= ord(character) <= 159
+            for character in value
+        )
     ):
         # 标识会进入租户过滤与审计关联，空白及控制字符可能制造多义或日志污染。
         raise ApiError(error_code)
@@ -1416,6 +1445,34 @@ def _quota_type(value: object) -> str:
     """恢复额度类型，未知值不能进入 API、冲正或事件。"""
 
     return _database_enum(value, QUOTA_TYPES, "finops quota type invalid")
+
+
+def _quota_allocation(row: sqlite3.Row, *, entry_type: str) -> tuple[str, int]:
+    """恢复 Usage 的租户额度分摊摘要；人工分录固定为不适用。"""
+
+    # 人工调整虽会继承历史 quota_type 以保持既有账本合同，但它本身不消耗套餐额度，
+    # 因而不能读取或复用被冲正 Usage 的 Settlement 分摊事实。
+    if entry_type != "usage_charge":
+        return "not_applicable", 0
+
+    allocation_class = _database_enum(
+        row["quota_allocation_class"],
+        USAGE_QUOTA_ALLOCATION_CLASSES,
+        "finops quota allocation class invalid",
+    )
+    allocation_count = _non_negative_integer(row["quota_allocation_count"])
+    valid = (
+        (allocation_class == "unallocated" and allocation_count == 0)
+        or (
+            allocation_class in {"paid", "free", "trial", "gift"}
+            and allocation_count == 1
+        )
+        or (allocation_class == "mixed" and 2 <= allocation_count <= 4)
+    )
+    # 类别与计数必须来自同一 tenant-qualified Settlement；任何矛盾都按账本损坏失败关闭。
+    if not valid:
+        raise ValueError("finops quota allocation invalid")
+    return allocation_class, allocation_count
 
 
 def _base64_encode(value: bytes) -> str:

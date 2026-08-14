@@ -1,0 +1,31 @@
+{
+  "algorithm": "sha256",
+  "all_108_prds_complete": false,
+  "files": [
+    {
+      "bytes": 4003,
+      "name": "browser-acceptance.json",
+      "sha256": "82a5e2b63dbc0f4aefc9c38cd5bf74e25663643a278b0aeeda4c2c4fe57e72cd"
+    },
+    {
+      "bytes": 65896,
+      "name": "page-110-plan-desktop-1280x720.png",
+      "sha256": "5322f57b300c5b8361200de288c196dae73b99900052aead47742bdabb17c109"
+    },
+    {
+      "bytes": 29491,
+      "name": "page-110-plan-mobile-390x844.png",
+      "sha256": "f5afc1eeb9a3516b79f2a27985b59c2c637287372a5320507776e744b5e97b12"
+    },
+    {
+      "bytes": 77422,
+      "name": "page-111-quota-desktop-1280x720.png",
+      "sha256": "b08bf2e87218f6958563c08d6d7df70860e0aebbfb5e71cf688342f89b06700d"
+    },
+    {
+      "bytes": 25425,
+      "name": "page-111-quota-mobile-390x844.png",
+      "sha256": "9b365fe31d217955832ea6e79a1f9864da9e85014ecfcd9a5a251268fd107284"
+    }
+  ]
+}

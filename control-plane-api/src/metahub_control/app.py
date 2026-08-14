@@ -49,6 +49,8 @@ from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
 from .permissions.routes import router as permissions_router
+from .plan_billing import install_plan_billing_scheduler
+from .plan_billing import router as plan_billing_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -105,6 +107,9 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         "/cache-policies",
         "/cache/invalidate",
         "/admin-assistant/query",
+        "/plans",
+        "/quota-buckets",
+        "/quota-adjustments",
     }:
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         response.headers["Cache-Control"] = "no-store, private"
@@ -154,6 +159,7 @@ app.include_router(model_prices_router)
 app.include_router(model_aliases_router)
 app.include_router(model_quality_scores_router)
 app.include_router(permissions_router)
+app.include_router(plan_billing_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
@@ -180,3 +186,4 @@ install_adapter_contract_event_scheduler(app)
 install_experiment_scheduler(app)
 install_response_cache_outbox_scheduler(app)
 install_approval_scheduler(app)
+install_plan_billing_scheduler(app)

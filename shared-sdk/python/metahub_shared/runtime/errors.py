@@ -567,6 +567,83 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="approval",
     ),
+    # 套餐与额度错误只披露稳定恢复语义；余额、幂等摘要、调整原因、SQL 和底层异常
+    # 均留在服务端边界，避免权限差异或跨租户对象存在性被错误正文枚举。
+    "plan.request_invalid": ErrorSpec(
+        422,
+        "Plan request is invalid.",
+        "Use the documented exact Plan fields and current revision.",
+        owner="plan_billing",
+    ),
+    "plan.not_found": ErrorSpec(
+        404,
+        "Plan was not found.",
+        "Refresh the current tenant Plan state.",
+        owner="plan_billing",
+    ),
+    "plan.revision_conflict": ErrorSpec(
+        409,
+        "Plan state changed.",
+        "Refresh the Plan and retry against its current revision.",
+        owner="plan_billing",
+    ),
+    "plan.suspended": ErrorSpec(
+        409,
+        "Plan is suspended.",
+        "Activate the current tenant Plan before changing dependent quota state.",
+        owner="plan_billing",
+    ),
+    "plan.unavailable": ErrorSpec(
+        503,
+        "Plan service is temporarily unavailable.",
+        "Retry after the control-plane database and Plan migration recover.",
+        retryable=True,
+        owner="plan_billing",
+    ),
+    "quota.request_invalid": ErrorSpec(
+        422,
+        "Quota request is invalid.",
+        "Use the documented exact quota fields, amount, and bucket revision.",
+        owner="plan_billing",
+    ),
+    "quota.adjustment_conflict": ErrorSpec(
+        409,
+        "Quota adjustment conflicts with current quota state.",
+        "Refresh the quota buckets and use a new key for a different adjustment intent.",
+        owner="plan_billing",
+    ),
+    "quota.not_found": ErrorSpec(
+        404,
+        "Quota bucket was not found.",
+        "Refresh the current tenant quota state.",
+        owner="plan_billing",
+    ),
+    "quota.unavailable": ErrorSpec(
+        503,
+        "Quota service is temporarily unavailable.",
+        "Retry after durable quota state and scheduling recover.",
+        retryable=True,
+        owner="plan_billing",
+    ),
+    "gateway.plan_suspended": ErrorSpec(
+        402,
+        "The tenant Plan is suspended.",
+        "Ask an authorized billing administrator to activate the Plan.",
+        owner="gateway_quota",
+    ),
+    "gateway.quota_exhausted": ErrorSpec(
+        402,
+        "The tenant quota is exhausted.",
+        "Ask an authorized billing administrator to add quota before retrying.",
+        owner="gateway_quota",
+    ),
+    "gateway.quota_unavailable": ErrorSpec(
+        503,
+        "Quota admission is temporarily unavailable.",
+        "Retry after price and durable quota state recover.",
+        retryable=True,
+        owner="gateway_quota",
+    ),
     # 实验错误只暴露稳定对象与恢复语义；name、路由指纹、幂等材料、正文和数据库异常
     # 均留在服务端边界内。
     "experiment.input_invalid": ErrorSpec(

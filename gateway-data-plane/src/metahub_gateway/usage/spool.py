@@ -54,10 +54,10 @@ _SCHEMA_VERSION = 1
 # 文件信封版本与业务 payload 版本独立演进：v2 只为请求上下文增加不可逆的 mask
 # 审计元数据。Gateway 升级期间必须继续接受已落盘的 v1，同时允许新进程持久化 v2；
 # 未知未来版本仍失败关闭，避免旧进程宽松解释新增敏感字段。
-# 文件信封版本保持 v1；内部 Usage payload 精确兼容 v1-v6。v5 增加经过严格
-# 校验的输出扫描 ID/状态/结算意图，v6 增加 Batch owner 与成本结算证据；两者都不包含
+# 文件信封版本保持 v1；内部 Usage payload 精确兼容 v1-v7。v5 增加经过严格
+# 校验的输出扫描终态，v6 增加 Batch owner，v7 增加额度未决覆盖额；这些版本都不包含
 # 正文、pattern 或命中片段。未知未来版本仍失败关闭，避免旧进程忽略未审查字段。
-_SUPPORTED_PAYLOAD_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+_SUPPORTED_PAYLOAD_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 _LOWER_HEX = frozenset("0123456789abcdef")
 
 

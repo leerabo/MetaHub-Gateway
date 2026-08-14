@@ -22,6 +22,10 @@ import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
+import {
+  renderPlanManagement,
+  renderQuotaManagement,
+} from "../plan-billing/renderPlanBilling.js";
 import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
 import { renderApprovals } from "../approvals/renderApprovals.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
@@ -391,6 +395,22 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "finops-ledger":
       // 正式账本仅消费后端 admin 导航；前端渲染不能替代 /finops 的后端权限与租户校验。
       return renderFinOpsSection(options.finOpsState, options.authContext);
+    case "plans":
+      // PAGE-110 只消费完整 plan.read owner；保存按钮与 PATCH 分别复核实时 plan.write。
+      return renderPlanManagementSection(
+        options.planManagementState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "quota-buckets":
+      // PAGE-111 只消费完整 quota.read owner；调整 Dialog 与 POST 分别复核实时 quota.write。
+      return renderQuotaManagementSection(
+        options.quotaManagementState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
     case "cost-anomalies":
       // 成本异常页仅消费后端 admin 导航和 tenant-qualified DTO；真实治理动作仍由 PATCH 接口校验。
       return renderCostAnomaliesSection(options.costAnomaliesState, options.authContext);
@@ -898,6 +918,30 @@ function renderResponseCacheSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel response-cache-panel" aria-labelledby="response-cache-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-110 失权时不保留套餐表单或上一租户余额 DOM。 */
+function renderPlanManagementSection(state, authContext, consoleShellState, i18n) {
+  const html = renderPlanManagement(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel plans-panel" aria-labelledby="plans-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-111 失权时不保留额度表格、reason Dialog 或调整反馈。 */
+function renderQuotaManagementSection(state, authContext, consoleShellState, i18n) {
+  const html = renderQuotaManagement(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel quota-buckets-panel" aria-labelledby="quota-buckets-title">
         ${html}
       </section>
     `

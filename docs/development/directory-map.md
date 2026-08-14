@@ -1772,6 +1772,44 @@ Excel 总表第 80 行、M2/M3 交付第 16 行、PAGE-110/111、套餐与额度
 `PRD-079 | M2-企业增强 | P2 | 扩展层 | 套餐计费 | 套餐、试用与额度类型`。本次不启动 PRD-079，
 `all_108_prds_complete=false`。
 
+## PRD-079 套餐、试用与额度类型目录（已完成）
+
+- `shared-sdk/python/metahub_shared/quota/`：冻结 CNY 微元、四类额度、ID、事件 payload、FinOps 分摊和
+  Usage spool v7 合同；Shared runtime 同时登记 RBAC revision 15、套餐/额度统一错误和两类 Webhook。
+- `infra/migrations/0072_plan_trial_quota_types.sql/.down.sql`：新增 tenant-qualified Plan、Bucket、
+  Adjustment、Reservation/Item、Settlement/Allocation 与 Event/Outbox，全量复合 owner、守恒、CAS、
+  append-only 和 down fail-closed guard 均在数据库层冻结。
+- `control-plane-api/src/metahub_control/plan_billing/`：提供当前租户 Plan CAS、固定四桶查询、幂等
+  credit/debit 调整、试用到期 scheduler、公平 outbox lease 和 Webhook 恢复；认证依赖、Audit、FinOps、
+  Console 导航、Webhook 与 lifespan 已完成接入。
+- `gateway-data-plane/src/metahub_gateway/quota/`：在 Provider 前按最坏 CNY 成本原子预留，按
+  `trial/free/gift/paid` 顺序消费，并在 canonical Usage/FinOps 事务内结算；失败、outcome unknown、
+  spool、Batch、A/B 和 Response Cache 都复用同一 quota owner 与恢复状态机。
+- `console-web/src/lib/planBilling.js` 与 `src/features/plan-billing/`：PAGE-110/111 严格 wire、独立
+  owner/generation/Abort、套餐草稿、四类报表、额度调整、原生 Dialog、busy Escape 捕获、动态撤权、
+  迟到响应和登出清理；主 app、导航、i18n 和响应式样式完成有界装配。
+- `shared-sdk/python/tests/test_prd079_quota_contracts.py`、`control-plane-api/tests/**/*prd079*.py`、
+  `gateway-data-plane/tests/**/*prd079*.py`、`console-web/tests/unit/prd079PlanBilling.test.mjs` 与
+  `scripts/acceptance/tests/test_prd079_runtime_acceptance.py`：覆盖合同、迁移、API、租户/RBAC、顺序、
+  并发、账务、恢复、Console 生命周期和证据安全；最终分组见测试记录，不能相加冒充根级全量。
+- `docs/prd/PRD-079-plan-trial-quota-types.md`、`docs/api/plan-billing.md`、`docs/api/finops-ledger.md` 与
+  `docs/testing/PRD-079-tests.md`：保存冻结设计、四轮自审、公开 API/错误/Webhook/FinOps 合同及最终门禁。
+- `scripts/acceptance/prd079-runtime-acceptance.py` 与
+  `.artifacts/prd079-runtime/run-agent4-b72e1d/`：从空 SQLite 完成
+  `72/0072 -> 72/0072 -> 71/0071 -> 72/0072`，四阶段完整性 ok、外键违规 0；真实 Control/Gateway/
+  Provider、402 阻断、Usage/FinOps/Settlement、scheduler/outbox 恢复和证据隐私均通过，主 JSON
+  SHA-256 为 `c09609cb3e03941721a4ea4e8c023136b543cec57b8d5efd9aa3ea649ec5ae5d`。
+- `scripts/acceptance/prd079-browser-harness.py`、`prd079-browser-acceptance.mjs` 与
+  `.artifacts/prd079-browser/main-browser-final-20260814-i/`：保存脱敏 Browser JSON、四张桌面/移动截图和
+  SHA-256 manifest；Plan/Quota、Dialog、撤权、迟到响应、登出、网络/Console、像素、布局和进程清理
+  门禁均通过，截图已经人工复核。
+
+PRD-079 的设计、实现、专项、必要回归、迁移、Runtime、Browser、中文注释和提交前安全门禁均已通过。
+Excel 总表第 81 行、M2/M3 交付第 17 行、PAGE-112、账单争议 API、BillingDispute/AdjustmentRecord、
+`billing_dispute.created` 与 TC-0159/0160 共同确认，下一条权威未完成项为
+`PRD-080 | M2-企业增强 | P2 | 扩展层 | 账单争议 | 账单争议与调整流程`。本次不启动 PRD-080，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

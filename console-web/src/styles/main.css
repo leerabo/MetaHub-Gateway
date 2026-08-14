@@ -21323,3 +21323,535 @@ h3 {
     width: 100%;
   }
 }
+
+/* PAGE-110/111 套餐与额度：紧凑表格、CAS 表单和仅驻留内存的调整 Dialog。 */
+.plans-panel,
+.quota-buckets-panel,
+.plan-billing-workspace {
+  min-width: 0;
+}
+
+.plan-billing-workspace {
+  display: grid;
+  gap: 18px;
+}
+
+.plan-billing-toolbar,
+.plan-billing-section-heading,
+.plan-billing-actions,
+.plan-billing-dialog header,
+.plan-billing-dialog-actions,
+.quota-plan-line,
+.quota-overage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plan-billing-toolbar h2,
+.plan-billing-section-heading h3,
+.plan-billing-dialog h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.plan-billing-toolbar h2 {
+  font-size: 1.35rem;
+}
+
+.plan-billing-toolbar > div > span,
+.plan-billing-section-heading > span,
+.quota-plan-line > span,
+.quota-plan-line code,
+.quota-adjustment-row > span,
+.quota-adjustment-row code,
+.quota-overage small {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.plan-billing-icon-command {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 1.2rem;
+}
+
+.plan-billing-feedback,
+.plan-billing-live,
+.plan-billing-readonly,
+.plan-billing-error,
+.plan-billing-empty {
+  min-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.plan-billing-feedback {
+  color: var(--accent-dark);
+  font-size: 0.86rem;
+}
+
+.plan-billing-feedback.is-error {
+  color: var(--danger);
+}
+
+.plan-billing-live,
+.plan-billing-readonly,
+.plan-billing-empty {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.plan-billing-live.is-error,
+.plan-billing-error {
+  color: var(--danger);
+}
+
+.plan-billing-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-block: 1px solid #efc7c3;
+}
+
+.plan-billing-error code {
+  color: inherit;
+}
+
+.plan-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  margin: 0;
+  border-block: 1px solid var(--line);
+}
+
+.plan-summary-strip > div {
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.plan-summary-strip > div:last-child {
+  border-right: 0;
+}
+
+.plan-summary-strip dt,
+.plan-confirm-summary dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.plan-summary-strip dd,
+.plan-confirm-summary dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.plan-editor,
+.quota-table-section,
+.quota-adjustment-history {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.plan-editor form,
+.quota-adjustment-dialog form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.plan-billing-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.plan-billing-field input,
+.plan-billing-field select,
+.plan-billing-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #c7d0da;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.92rem;
+  letter-spacing: 0;
+}
+
+.plan-billing-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.plan-editor .span-2 {
+  grid-column: 1 / -1;
+}
+
+.plan-status-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.plan-status-segmented legend {
+  width: 100%;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.plan-status-segmented label {
+  position: relative;
+}
+
+.plan-status-segmented input {
+  position: absolute;
+  opacity: 0;
+}
+
+.plan-status-segmented span {
+  display: inline-flex;
+  min-width: 84px;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c7d0da;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 6px 12px;
+}
+
+.plan-status-segmented input:checked + span {
+  border-color: var(--accent);
+  background: #e8f5f2;
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.plan-billing-actions,
+.plan-billing-dialog-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.plan-billing-actions button,
+.plan-billing-dialog-actions button,
+.quota-action-cell button {
+  min-height: 38px;
+  border: 1px solid #bfc9d4;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 7px 13px;
+  font-weight: 700;
+}
+
+.plan-billing-actions .primary,
+.plan-billing-dialog-actions .primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.plan-billing-actions button:disabled,
+.plan-billing-dialog-actions button:disabled,
+.plan-billing-icon-command:disabled,
+.quota-action-cell button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.plan-billing-icon-command:focus-visible,
+.plan-billing-actions button:focus-visible,
+.plan-billing-dialog button:focus-visible,
+.plan-billing-field input:focus-visible,
+.plan-billing-field select:focus-visible,
+.plan-billing-field textarea:focus-visible,
+.plan-status-segmented input:focus-visible + span,
+.quota-action-cell button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.quota-plan-line {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding-block: 10px;
+  border-block: 1px solid var(--line);
+}
+
+.quota-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.quota-table {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-table th,
+.quota-table td {
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.quota-table th:first-child,
+.quota-table td:first-child {
+  text-align: left;
+}
+
+.quota-table thead th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.quota-table tbody th {
+  display: table-cell;
+  font-weight: 700;
+}
+
+.quota-type-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 2px;
+}
+
+.quota-type-swatch.tone-paid { background: #0f766e; }
+.quota-type-swatch.tone-free { background: #2563a6; }
+.quota-type-swatch.tone-trial { background: #b45309; }
+.quota-type-swatch.tone-gift { background: #a23b72; }
+
+.quota-overage {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 11px 0;
+  border-block: 1px solid var(--line);
+}
+
+.quota-overage.is-alert {
+  border-color: #e2b38b;
+  color: #8a3f08;
+}
+
+.quota-adjustment-list {
+  display: grid;
+}
+
+.quota-adjustment-row {
+  display: grid;
+  grid-template-columns: 12px minmax(80px, 0.7fr) minmax(130px, 1fr) minmax(170px, 1fr) minmax(100px, 0.7fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.quota-adjustment-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-billing-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  box-sizing: border-box;
+  border: 1px solid #cbd5df;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 18px;
+}
+
+.plan-billing-dialog::backdrop {
+  background: rgba(19, 28, 38, 0.58);
+}
+
+.plan-billing-dialog header {
+  margin-bottom: 16px;
+}
+
+.plan-confirm-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 0 16px;
+  border-block: 1px solid var(--line);
+}
+
+.plan-confirm-summary > div {
+  min-width: 0;
+  padding: 10px;
+}
+
+.quota-unknown-result {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  padding-block: 12px;
+  border-block: 1px solid #e2b38b;
+  color: #8a3f08;
+}
+
+@media (max-width: 1100px) {
+  .plan-summary-strip {
+    grid-template-columns: repeat(3, minmax(110px, 1fr));
+  }
+
+  .plan-summary-strip > div:nth-child(3) {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .plan-billing-toolbar,
+  .plan-billing-section-heading {
+    align-items: flex-start;
+  }
+
+  .plan-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plan-summary-strip > div:nth-child(3) {
+    border-right: 1px solid var(--line);
+  }
+
+  .plan-summary-strip > div:nth-child(even) {
+    border-right: 0;
+  }
+
+  .plan-editor form,
+  .quota-adjustment-dialog form,
+  .plan-confirm-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plan-editor .span-2 {
+    grid-column: auto;
+  }
+
+  .quota-table-scroll {
+    overflow: visible;
+  }
+
+  .quota-table,
+  .quota-table tbody,
+  .quota-table tr,
+  .quota-table th,
+  .quota-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .quota-table thead {
+    display: none;
+  }
+
+  .quota-table tr {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .quota-table th,
+  .quota-table td,
+  .quota-table tbody th {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    border: 0;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .quota-table th::before,
+  .quota-table td::before {
+    content: attr(data-label);
+    flex: 0 0 42%;
+    color: var(--muted);
+    text-align: left;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .quota-action-cell button {
+    width: 100%;
+  }
+
+  .quota-adjustment-row {
+    grid-template-columns: 10px minmax(70px, 0.7fr) minmax(120px, 1fr);
+  }
+
+  .quota-adjustment-row > :nth-child(4),
+  .quota-adjustment-row > :nth-child(5) {
+    grid-column: 2 / -1;
+  }
+}
+
+/* 套餐与额度工作区在极窄视口下改为单列控件，避免操作按钮和状态文本重叠。 */
+@media (max-width: 390px) {
+  .plan-billing-workspace {
+    gap: 14px;
+  }
+
+  .plan-summary-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plan-summary-strip > div,
+  .plan-summary-strip > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .plan-billing-actions,
+  .plan-billing-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .plan-billing-actions button,
+  .plan-billing-dialog-actions button {
+    width: 100%;
+  }
+
+  .plan-status-segmented label,
+  .plan-status-segmented span {
+    flex: 1 1 120px;
+  }
+}

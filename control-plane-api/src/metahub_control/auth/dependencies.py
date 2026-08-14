@@ -868,6 +868,46 @@ def require_finops_writer(
     return _require_request_permissions(request, authorization, ("billing.finops.write",))
 
 
+def require_plan_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前用户可读取本租户套餐；先授权再解析任何业务输入。"""
+
+    # 套餐读取只认当前 Session 的实时权限快照，前端导航可见性不能补权。
+    return _require_request_permissions(request, authorization, ("billing.plan.read",))
+
+
+def require_plan_writer(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前用户可创建或 CAS 修改本租户套餐。"""
+
+    # 套餐写入只认当前 Session 的实时权限快照，角色名称不能替代权限码。
+    return _require_request_permissions(request, authorization, ("billing.plan.write",))
+
+
+def require_quota_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前用户可读取本租户四分类额度和分摊报表。"""
+
+    # 额度读取从认证上下文恢复 tenant，客户端参数和页面状态都不能改变归属。
+    return _require_request_permissions(request, authorization, ("billing.quota.read",))
+
+
+def require_quota_writer(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前用户可创建本租户 append-only 额度调整。"""
+
+    # 额度写入要求后端实时权限，隐藏按钮不能替代服务端授权与租户隔离。
+    return _require_request_permissions(request, authorization, ("billing.quota.write",))
+
+
 def require_provider_health_prober(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

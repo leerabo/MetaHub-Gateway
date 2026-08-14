@@ -657,7 +657,7 @@ def test_spool_accepts_legacy_v1_v2_v3_v4_and_current_v5_payloads(tmp_path: Path
     assert spool.store(legacy) is True
 
     # 未来版本可能新增尚未审查的字段，旧进程不能把它宽松解释为当前合同。
-    unsupported = {**current, "schema_version": 7}
+    unsupported = {**current, "schema_version": 8}
     with pytest.raises(UsageSpoolError, match="finops_spool_payload_version_invalid"):
         spool.store(unsupported)
 

@@ -42,8 +42,8 @@ NORMALIZATION_WARNING_CODES = {
     "provider_currency_missing",
 }
 # spool 使用独立版本号和精确字段集合；未知字段必须失败关闭，避免未来上下文扩展时把敏感值落盘。
-_SPOOL_RECORD_SCHEMA_VERSION = 6
-# v1/v2 字段集必须长期保留用于恢复升级前已 fsync 的待重放记录；各版本使用精确集合，
+_SPOOL_RECORD_SCHEMA_VERSION = 7
+# v1-v6 字段集必须长期保留用于恢复升级前已 fsync 的待重放记录；各版本使用精确集合，
 # 旧记录缺失的安全证据只能解释为“未记录”，不能用宽松默认冒充新版本事实。
 _SPOOL_CONTEXT_FIELDS_V1 = frozenset(
     {
@@ -130,6 +130,9 @@ _SPOOL_CONTEXT_FIELDS_V6 = _SPOOL_CONTEXT_FIELDS_V5 | frozenset(
         "batch_route_plan_hash",
         "batch_allocation_settlement_cny",
     }
+)
+_SPOOL_CONTEXT_FIELDS_V7 = _SPOOL_CONTEXT_FIELDS_V6 | frozenset(
+    {"quota_reservation_outstanding_cny"}
 )
 _SPOOL_USAGE_FIELDS = frozenset(
     {
@@ -223,6 +226,9 @@ class RequestLogContext:
     # 仅在进程内携带预算预留终态覆盖额；不会写入 request_logs 或对外响应。
     # ``None`` 表示本请求没有预算预留，"0" 表示已确认没有未知上游账单。
     budget_reservation_outstanding_cny: str | None = None
+    # Quota 终态指令不进入 request_logs；数据库失败时仅由严格 v7 spool 保存以供原子重放。
+    # None 表示没有额度预留，"0" 表示无未决暴露，正值表示需继续保留的 Provider 覆盖额。
+    quota_reservation_outstanding_cny: str | None = None
     dlp_status: str | None = None
     dlp_rule_id: str | None = None
     dlp_action: str | None = None
@@ -257,8 +263,7 @@ class RequestLogContext:
     output_safety_scan_status: str | None = None
     output_safety_decision: str | None = None
     billing_disposition: str | None = None
-    # Batch owner and settlement fields are internal-only. They are excluded from request_logs and
-    # enter disk only through the exact-set v6 Usage spool contract.
+    # Batch owner 与结算字段不进入 request_logs，仅能通过严格 v6/v7 Usage spool 合同落盘。
     batch_job_id: str | None = None
     batch_task_id: str | None = None
     batch_attempt_id: str | None = None
@@ -427,6 +432,8 @@ class FinOpsLedgerCommitted:
     reversal_of_entry_id: str | None
     actor_user_id: str | None
     created_at: str
+    quota_allocation_class: str = "unallocated"
+    quota_allocation_count: int = 0
 
     def to_webhook_event(self) -> WebhookEvent:
         """构造经过共享严格合同校验的 canonical 账本 Webhook 事件。
@@ -452,6 +459,8 @@ class FinOpsLedgerCommitted:
                 "normalized_cny": self.normalized_cny,
                 "cny_normalization_status": self.cny_normalization_status,
                 "quota_type": self.quota_type,
+                "quota_allocation_class": self.quota_allocation_class,
+                "quota_allocation_count": self.quota_allocation_count,
                 "source_request_id": self.source_request_id,
                 "price_snapshot_id": self.price_snapshot_id,
                 "price_schema_version": self.price_schema_version,
@@ -861,6 +870,10 @@ def record_usage_ledger(
     connection = _connect(config)
     try:
         if replay:
+            # existing 分支此前只有只读查询，SQLite 不会自动开启事务；PRD-079 额度复核和
+            # Batch/输出安全补写都要求与 owner 回读原子完成，因此重放一开始就取得写事务。
+            # 新建分支也复用同一事务，避免 request log、价格快照与 Usage 分段提交。
+            connection.execute("BEGIN IMMEDIATE")
             existing = _load_finops_committed(
                 connection,
                 tenant_id=context.tenant_id,
@@ -875,6 +888,27 @@ def record_usage_ledger(
                 ):
                     # 文件 HMAC 通过后仍必须核对数据库 owner，不能只凭 Usage ID 清理 claim。
                     raise sqlite3.IntegrityError("finops_spool_existing_owner_mismatch")
+                from metahub_gateway.quota import settle_quota_usage
+
+                settle_quota_usage(
+                    connection,
+                    tenant_id=context.tenant_id,
+                    request_id=context.request_id,
+                    trace_id=context.trace_id,
+                    usage_ledger_id=write_intent.usage_ledger_id,
+                    finops_ledger_entry_id=existing.ledger_entry_id,
+                    actual_micros=_normalized_cny_micros(existing),
+                    exposure_outstanding_micros=_quota_exposure_micros(context),
+                )
+                existing = _load_finops_committed(
+                    connection,
+                    tenant_id=context.tenant_id,
+                    usage_ledger_id=write_intent.usage_ledger_id,
+                    created=False,
+                )
+                # 既有 canonical charge 在同租户重载后必须仍可见，否则禁止确认重放。
+                if existing is None:
+                    raise sqlite3.IntegrityError("finops_spool_existing_charge_missing")
                 # commit 后 crash 可能留下既有 charge 但尚未清理 spool；必须复核/补齐唯一 dispute。
                 _ensure_output_safety_billing_evidence(
                     connection,
@@ -1064,6 +1098,29 @@ def record_usage_ledger(
         _validate_usage_projection(
             committed, context=context, intent=write_intent, estimate=estimate
         )
+        from metahub_gateway.quota import settle_quota_usage
+
+        settle_quota_usage(
+            connection,
+            tenant_id=context.tenant_id,
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            usage_ledger_id=write_intent.usage_ledger_id,
+            finops_ledger_entry_id=committed.ledger_entry_id,
+            actual_micros=(
+                _decimal_cny_micros(estimate.cost_cny) if estimate.currency == "CNY" else None
+            ),
+            exposure_outstanding_micros=_quota_exposure_micros(context),
+        )
+        committed = _load_finops_committed(
+            connection,
+            tenant_id=context.tenant_id,
+            usage_ledger_id=write_intent.usage_ledger_id,
+            created=True,
+        )
+        # 额度结算后的财务投影必须在同事务可见，缺失时回滚所有用量事实。
+        if committed is None:
+            raise sqlite3.IntegrityError("finops_usage_projection_missing_after_quota")
         # blocked dispute 与 Usage/正式 charge 共用当前事务；零金额只待复核，不伪造可冲正。
         _ensure_output_safety_billing_evidence(
             connection,
@@ -1524,12 +1581,20 @@ def _serialize_usage_spool_record(
     ):
         # 结算证据必须完整且归属一致；冲突时中止事务，防止重复或错误记账。
         raise ValueError("finops_spool_batch_context_invalid")
-    # Batch always uses v6. Other Chat uses v5 when Output Safety has a complete owner.
-    record_version = 6 if batch_present else (5 if output_safety_values is not None else 4)
+    if context.quota_reservation_outstanding_cny is not None:
+        # v7 在写盘前就验证微元精度与额度上限，不能制造永远无法重放的已签名记录。
+        _spool_quota_exposure_text(context.quota_reservation_outstanding_cny)
+    # 有额度预留时必须使用 v7 保存未决 Provider 覆盖额；否则保留旧版本的最小字段合同。
+    record_version = (
+        7
+        if context.quota_reservation_outstanding_cny is not None
+        else (6 if batch_present else (5 if output_safety_values is not None else 4))
+    )
     context_fields = {
         4: _SPOOL_CONTEXT_FIELDS_V4,
         5: _SPOOL_CONTEXT_FIELDS_V5,
         6: _SPOOL_CONTEXT_FIELDS_V6,
+        7: _SPOOL_CONTEXT_FIELDS_V7,
     }[record_version]
     # 字段集合是显式白名单；RequestLogContext 未来新增字段不会自动落盘。
     context_payload = {name: getattr(context, name) for name in context_fields}
@@ -1613,9 +1678,9 @@ def _deserialize_usage_spool_record(
         payload,
         frozenset({"schema_version", "context", "usage", "estimate"}),
     )
-    # v1-v6 均为已审查的升级证据；历史版本缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
+    # v1-v7 均为已审查的升级证据；历史版本缺少新增摘要只能解释为“未记录”，未来版本仍拒绝。
     record_version = record["schema_version"]
-    if record_version not in {1, 2, 3, 4, 5, _SPOOL_RECORD_SCHEMA_VERSION}:
+    if record_version not in {1, 2, 3, 4, 5, 6, _SPOOL_RECORD_SCHEMA_VERSION}:
         raise ValueError("finops_spool_payload_version_invalid")
     context_fields = {
         1: _SPOOL_CONTEXT_FIELDS_V1,
@@ -1624,6 +1689,7 @@ def _deserialize_usage_spool_record(
         4: _SPOOL_CONTEXT_FIELDS_V4,
         5: _SPOOL_CONTEXT_FIELDS_V5,
         6: _SPOOL_CONTEXT_FIELDS_V6,
+        7: _SPOOL_CONTEXT_FIELDS_V7,
     }[record_version]
     context_value = _spool_mapping(record["context"], context_fields)
     usage_value = _spool_mapping(record["usage"], _SPOOL_USAGE_FIELDS)
@@ -1645,6 +1711,7 @@ def _deserialize_usage_spool_record(
         "budget_current_cost_cny",
         "budget_limit_cny",
         "budget_reservation_outstanding_cny",
+        "quota_reservation_outstanding_cny",
         "dlp_match_count",
         "fallback_triggered",
         "routing_attempt_count",
@@ -1694,7 +1761,8 @@ def _deserialize_usage_spool_record(
             context_value["output_safety_scan_status"],
             context_value["output_safety_decision"],
             context_value["billing_disposition"],
-            allow_absent=False,
+            # v5/v6 明确绑定安全或 Batch 终态；v7 还可服务无扫描的额度恢复路径。
+            allow_absent=record_version == 7,
         )
     )
     budget_current = _spool_optional_decimal_text(
@@ -1704,7 +1772,22 @@ def _deserialize_usage_spool_record(
     reservation_outstanding = _spool_optional_decimal_text(
         context_value["budget_reservation_outstanding_cny"]
     )
-    if record_version == 6:
+    quota_reservation_outstanding = (
+        _spool_quota_exposure_text(context_value["quota_reservation_outstanding_cny"])
+        if record_version == 7
+        else None
+    )
+    batch_values = (
+        context_value["batch_job_id"],
+        context_value["batch_task_id"],
+        context_value["batch_attempt_id"],
+        context_value["batch_route_plan_hash"],
+        context_value["batch_allocation_settlement_cny"],
+    ) if record_version >= 6 else (None, None, None, None, None)
+    batch_present = any(value is not None for value in batch_values)
+    if record_version == 6 or batch_present:
+        if any(value is None for value in batch_values):
+            raise ValueError("finops_spool_payload_invalid")
         batch_job_id = _spool_prefixed_id(context_value["batch_job_id"], prefix="bjob_")
         batch_task_id = _spool_prefixed_id(context_value["batch_task_id"], prefix="btsk_")
         batch_attempt_id = _spool_prefixed_id(
@@ -1728,6 +1811,9 @@ def _deserialize_usage_spool_record(
         batch_attempt_id = None
         batch_route_plan_hash = None
         batch_settlement = None
+    if batch_present and output_safety_context is None:
+        # v7+Batch 仍继承 v6 的完整 Output Safety owner，不能因额度字段升级而放宽。
+        raise ValueError("finops_spool_output_safety_missing")
     context = RequestLogContext(
         tenant_id=tenant_id,
         request_id=request_id,
@@ -1761,6 +1847,7 @@ def _deserialize_usage_spool_record(
         budget_current_cost_cny=budget_current,
         budget_limit_cny=budget_limit,
         budget_reservation_outstanding_cny=reservation_outstanding,
+        quota_reservation_outstanding_cny=quota_reservation_outstanding,
         dlp_status=optional_context["dlp_status"],
         dlp_rule_id=optional_context["dlp_rule_id"],
         dlp_action=optional_context["dlp_action"],
@@ -1850,7 +1937,7 @@ def _deserialize_usage_spool_record(
         normalization_warnings=list(warnings_value),
         captured_estimate=_deserialize_spool_estimate(record["estimate"]),
     )
-    if record_version == 6 and (
+    if batch_present and (
         intent.captured_estimate is None
         or context.batch_allocation_settlement_cny
         != format(intent.captured_estimate.cost_cny, ".6f")
@@ -2318,6 +2405,20 @@ def _spool_optional_decimal_text(value: object) -> str | None:
     return text
 
 
+def _spool_quota_exposure_text(value: object) -> str:
+    """校验 v7 额度覆盖额为必填、可无损换算且不超过数据库微元上限。"""
+
+    text = _spool_optional_decimal_text(value)
+    if text is None:
+        raise ValueError("finops_spool_payload_invalid")
+    try:
+        _decimal_cny_micros(Decimal(text))
+    # spool 边界只返回稳定错误码，不能把原始十进制或底层异常正文带出。
+    except (DecimalException, sqlite3.Error, ValueError) as exc:
+        raise ValueError("finops_spool_payload_invalid") from exc
+    return text
+
+
 def _normalized_usage_payload(
     intent: UsageLedgerIntent,
     estimate: CostEstimate,
@@ -2359,13 +2460,21 @@ def _load_finops_committed(
 
     row = connection.execute(
         """
-        SELECT finops_ledger_entry_id, event_id, tenant_id, entry_type, direction,
-               amount_micros, currency, normalized_cny_micros, cny_normalization_status,
-               quota_type, source_request_id, source_trace_id, operation_trace_id,
-               price_snapshot_id, price_schema_version, price_snapshot_source,
-               price_evidence_status, reversal_of_entry_id, actor_user_id, created_at
-        FROM finops_ledger_entries
-        WHERE tenant_id=? AND usage_ledger_id=?
+        SELECT ledger.finops_ledger_entry_id,ledger.event_id,ledger.tenant_id,
+               ledger.entry_type,ledger.direction,ledger.amount_micros,ledger.currency,
+               ledger.normalized_cny_micros,ledger.cny_normalization_status,
+               ledger.quota_type,ledger.source_request_id,ledger.source_trace_id,
+               ledger.operation_trace_id,ledger.price_snapshot_id,
+               ledger.price_schema_version,ledger.price_snapshot_source,
+               ledger.price_evidence_status,ledger.reversal_of_entry_id,
+               ledger.actor_user_id,ledger.created_at,
+               COALESCE(settlement.allocation_class,'unallocated') AS allocation_class,
+               COALESCE(settlement.allocation_count,0) AS allocation_count
+        FROM finops_ledger_entries ledger
+        LEFT JOIN quota_usage_settlements settlement
+          ON settlement.tenant_id=ledger.tenant_id
+         AND settlement.finops_ledger_entry_id=ledger.finops_ledger_entry_id
+        WHERE ledger.tenant_id=? AND ledger.usage_ledger_id=?
         """,
         (tenant_id, usage_ledger_id),
     ).fetchone()
@@ -2386,6 +2495,8 @@ def _load_finops_committed(
         ),
         cny_normalization_status=str(row["cny_normalization_status"]),
         quota_type=str(row["quota_type"]),
+        quota_allocation_class=str(row["allocation_class"]),
+        quota_allocation_count=int(row["allocation_count"]),
         source_request_id=row["source_request_id"],
         source_trace_id=row["source_trace_id"],
         operation_trace_id=str(row["operation_trace_id"]),
@@ -3420,6 +3531,45 @@ def _log_usage_recorded(
             },
         },
     )
+
+
+def _decimal_cny_micros(value: Decimal) -> int:
+    """将精确非负人民币金额转换为有界整数微元，拒绝近似值。"""
+
+    # 金额必须是有限非负 Decimal，禁止浮点和异常数值进入额度账本。
+    if type(value) is not Decimal or not value.is_finite() or value < 0:
+        raise sqlite3.IntegrityError("quota_actual_amount_invalid")
+    micros_value = value * Decimal(1_000_000)
+    micros = int(micros_value)
+    # 换算必须无精度损失且不超过合同上限，否则整笔用量事务失败。
+    if Decimal(micros) != micros_value or micros > 1_000_000_000_000_000:
+        raise sqlite3.IntegrityError("quota_actual_amount_invalid")
+    return micros
+
+
+def _quota_exposure_micros(context: RequestLogContext) -> int:
+    """把进程内额度未决覆盖额无损转为微元；缺少指令表示没有保留暴露。"""
+
+    value = context.quota_reservation_outstanding_cny
+    if value is None:
+        return 0
+    try:
+        return _decimal_cny_micros(Decimal(value))
+    # 上下文字段只允许固定金额合同，异常原值不得进入错误或日志。
+    except (DecimalException, InvalidOperation, ValueError) as exc:
+        raise sqlite3.IntegrityError("quota_exposure_amount_invalid") from exc
+
+
+def _normalized_cny_micros(committed: FinOpsLedgerCommitted) -> int | None:
+    """仅从权威费用投影恢复重放结算金额，未归一时保持未知。"""
+
+    if committed.cny_normalization_status != "normalized" or committed.normalized_cny is None:
+        return None
+    try:
+        return _decimal_cny_micros(Decimal(committed.normalized_cny))
+    # 投影金额解析失败统一视为账本完整性错误，不回显原始金额文本。
+    except (DecimalException, InvalidOperation, ValueError) as exc:
+        raise sqlite3.IntegrityError("quota_replay_amount_invalid") from exc
 
 
 def _format_micros(value: int) -> str:

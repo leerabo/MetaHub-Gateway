@@ -1608,6 +1608,8 @@ def fail_pending_webhook_event_deliveries(
         "cache.invalidated",
         "experiment.completed",
         "file.prompt_injection_detected",
+        "quota.exhausted",
+        "trial.expired",
     }
     if (
         not connection.in_transaction
@@ -1881,6 +1883,12 @@ def _validated_pending_delivery_body(
             )
 
             source_request_id = recover_approval_source_request_id(connection, envelope)
+        elif envelope.get("event_type") in {"quota.exhausted", "trial.expired"}:
+            # Quota source request identity is private and must be recovered from the
+            # immutable tenant/event owner graph before a pending delivery can resume.
+            from metahub_control.plan_billing.outbox import recover_quota_source_request_id
+
+            source_request_id = recover_quota_source_request_id(connection, envelope)
         rebuilt = build_webhook_event(
             tenant_id=envelope["tenant_id"],
             event_type=envelope["event_type"],

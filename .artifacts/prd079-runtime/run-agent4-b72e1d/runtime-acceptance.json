@@ -1,0 +1,89 @@
+{
+  "all_108_prds_complete": false,
+  "cleanup": {
+    "fixed_ports_released": true,
+    "owned_processes_stopped": true,
+    "sqlite_sidecars_remaining": 0,
+    "work_removed": true
+  },
+  "control": {
+    "backend_rbac_denied": true,
+    "plan_created": true,
+    "quota_types_adjusted": 4,
+    "request_id_contracts": 16
+  },
+  "database": {
+    "foreign_key_violations": 0,
+    "integrity": "ok"
+  },
+  "gateway": {
+    "exhausted_status": 402,
+    "provider_calls": 1,
+    "provider_not_called_after_exhaustion": true,
+    "success_status": 200
+  },
+  "generated_at": "2026-08-14T07:32:47Z",
+  "ledger": {
+    "allocation_rows": 1,
+    "failed_request_tracked": true,
+    "finops_rows": 1,
+    "settlement_rows": 1,
+    "usage_rows": 1
+  },
+  "migration": {
+    "down": {
+      "count": 71,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0071"
+    },
+    "fresh": {
+      "count": 72,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0072"
+    },
+    "repeat": {
+      "count": 72,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0072"
+    },
+    "reup": {
+      "count": 72,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0072"
+    }
+  },
+  "prd_id": "PRD-079",
+  "privacy": {
+    "files_scanned": 8,
+    "plaintext_matches": 0,
+    "sqlite_sidecars_remaining": 0
+  },
+  "recovery": {
+    "outbox_recovered": true,
+    "scheduler_recovered": true,
+    "trial_expired_events": 1
+  },
+  "schema_version": 1,
+  "services": {
+    "control_http": true,
+    "control_restarted": true,
+    "gateway_http": true,
+    "provider_loopback": true
+  },
+  "source_provenance": {
+    "gateway_api": "7c6ccdb371f53efdb5fc04b48cec16dcbd45e41181be208adc3233e8c687f709",
+    "migration_down": "775d46dc342b3bbf7fd73d103d2adbaec9810cb779028b1927111dad4ee5c171",
+    "migration_up": "2af4d3981b8eb62d4d147e56910513116728a852eb1dd14df70576adfd6c570d",
+    "plan_scheduler": "8207ca7a37a134ebc217ed520f0dad129b56df0967e5ddaeadc632780f7d1b60",
+    "plan_service": "b7d4836d13f0d01e5227d11f437466639a501ed3b70c82b869180a5a34ed29b2",
+    "quota_outbox": "8d7cbb7be3046864ceb23c1bb850c56c1faabd40bad38e2489408d60e1187a41",
+    "quota_service": "38e5238652c452cef54c5c1042ac43e8fbb074bfdbbc56e421190d8b1568b575",
+    "runtime_acceptance": "4be3bb59f709647d2bc8ca7142023859c989cb295c91bed3ca31babc9dd4d839",
+    "runtime_helper": "8ecd292313a9b0e515e92d0056cb1bcbc3ef930a0059c38e6ebe42e2e1a3d6e1"
+  },
+  "status": "passed"
+}

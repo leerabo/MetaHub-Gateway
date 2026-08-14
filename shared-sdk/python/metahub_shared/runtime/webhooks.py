@@ -99,6 +99,10 @@ WEBHOOK_EVENT_TYPES = {
     # 移动审批只外发卡片所需的固定状态、领域枚举、ID 与时间；目标正文和凭据永不出网。
     "approval.created",
     "approval.timeout",
+    # 套餐额度事件只外发可复核的金额、层级和周期摘要；Bucket 计数、调整原因、
+    # 请求正文、模型、Provider 与任何凭据都不属于订阅合同。
+    "quota.exhausted",
+    "trial.expired",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -329,6 +333,9 @@ def build_webhook_event(
     elif event_type in {"approval.created", "approval.timeout"}:
         # PRD-078 只接受审批卡片的 exact 安全摘要，不允许备注、目标正文或外部平台凭据。
         _validate_approval_event_payload(event_type, safe_payload)
+    elif event_type in {"quota.exhausted", "trial.expired"}:
+        # PRD-079 只接受 Plan/Event source 可逐字段重建的 exact 安全摘要。
+        _validate_quota_event_payload(event_type, safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -373,6 +380,8 @@ def build_webhook_event(
         "assistant.queried",
         "approval.created",
         "approval.timeout",
+        "quota.exhausted",
+        "trial.expired",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -646,6 +655,19 @@ def build_webhook_event(
     elif event_type in {"approval.created", "approval.timeout"}:
         # 审批 source event 必须绑定同租户任务、原始链路与创建者或固定 timeout scheduler。
         _validate_approval_event_envelope(
+            event_type,
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type in {"quota.exhausted", "trial.expired"}:
+        # 两类额度 source 事件必须绑定同一 Plan、系统 actor、原始链路和发生秒。
+        _validate_quota_event_envelope(
             event_type,
             safe_payload,
             event_id=event_id,
@@ -1266,6 +1288,109 @@ def _validate_approval_event_envelope(
         or _to_iso(occurred_at) != payload["decided_at"]
     ):
         # timeout 只能由固定系统 actor 产生，且信封时间必须与终态事实同秒。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_quota_event_payload(event_type: str, payload: dict[str, Any]) -> None:
+    """校验额度耗尽和试用到期的 exact v1 安全摘要。"""
+
+    if event_type == "quota.exhausted":
+        expected = {
+            "schema_version",
+            "plan_id",
+            "quota_generation",
+            "required_cny",
+            "available_cny",
+            "reason_code",
+            "effective_tier",
+        }
+    elif event_type == "trial.expired":
+        expected = {
+            "schema_version",
+            "plan_id",
+            "trial_cycle",
+            "expired_at",
+            "effective_tier",
+        }
+    else:
+        # 额度校验器只处理固定事件类型，未知类型不能共享宽松载荷合同。
+        raise ValueError("webhook.payload_invalid")
+    # 载荷必须逐字段等于冻结合同，并绑定规范 Plan 标识与版本。
+    if (
+        set(payload) != expected
+        or type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["plan_id"], prefix="pln_")
+    ):
+        # 字段、版本或 Plan 标识不符合冻结合同，应整条拒绝且不回显载荷。
+        raise ValueError("webhook.payload_invalid")
+
+    if event_type == "quota.exhausted":
+        required = payload["required_cny"]
+        available = payload["available_cny"]
+        # 耗尽金额、代际、原因和生效层级均为安全摘要，不允许任何格式漂移。
+        if (
+            type(payload["quota_generation"]) is not int
+            or payload["quota_generation"] < 1
+            or not _is_finops_money_text(required)
+            or not _is_finops_money_text(available)
+            or required == "0.000000"
+            or int(available.replace(".", "")) > int(required.replace(".", ""))
+            or payload["reason_code"] != "quota_exhausted"
+            or payload["effective_tier"] not in {"trial", "free", "paid"}
+        ):
+            # 耗尽摘要任一金额或枚举漂移都必须拒绝，禁止下游错误归因。
+            raise ValueError("webhook.payload_invalid")
+        return
+
+    # 试用到期必须使用固定周期、规范时间和受限生效层级。
+    if (
+        payload["trial_cycle"] != 1
+        or type(payload["trial_cycle"]) is not int
+        or not _is_canonical_utc_second(payload["expired_at"])
+        or payload["effective_tier"] not in {"free", "paid"}
+    ):
+        # 到期周期、时间或层级异常时拒绝事件，避免伪造试用终态。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_quota_event_envelope(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把额度事件绑定到同租户 Plan、固定系统 actor 和原始请求链路。"""
+
+    # 事件信封必须绑定租户、Plan、请求链路和带时区发生时间。
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="qevt_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or object_id != payload["plan_id"]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+    ):
+        # 信封 owner 或链路坐标不完整时禁止发布，防止跨租户事件混淆。
+        raise ValueError("webhook.payload_invalid")
+    if event_type == "quota.exhausted":
+        # 耗尽事件只能由额度准入系统身份发布，禁止客户端伪造 actor。
+        if actor_id != "quota-admission":
+            raise ValueError("webhook.payload_invalid")
+        return
+    # 试用到期仅允许两条系统路径，并要求信封时间与载荷完全一致。
+    if (
+        actor_id not in {"quota-trial-scheduler", "quota-expiry-guard"}
+        or _to_iso(occurred_at) != payload["expired_at"]
+    ):
+        # 系统身份或发生时间不匹配时拒绝发布，载荷不能自行声明终态。
         raise ValueError("webhook.payload_invalid")
 
 
@@ -2824,9 +2949,11 @@ def _validate_finops_ledger_entry_payload(payload: dict[str, Any]) -> None:
         "price_snapshot_source",
         "price_evidence_status",
         "reversal_of_entry_id",
+        "quota_allocation_class",
+        "quota_allocation_count",
     }
     # 精确字段白名单和分录身份共同阻止调整原因、正文或伪造对象混入订阅事件。
-    # 固定九字段阻止完整矩阵、邮箱或未来未知内容被意外签名并发送出控制面。
+    # 固定字段集阻止完整矩阵、邮箱或未来未知内容被意外签名并发送出控制面。
     if set(payload) != expected_fields:
         # 字段集合不一致只返回稳定分类，不能把未知字段名或正文拼进异常。
         raise ValueError("webhook.payload_invalid")
@@ -2890,6 +3017,23 @@ def _validate_finops_ledger_entry_payload(payload: dict[str, Any]) -> None:
         raise ValueError("webhook.payload_invalid")
     # 配额类型影响财务展示和治理统计，未知值不能回退为付费或免费。
     if payload["quota_type"] not in {"paid", "free", "trial", "gift"}:
+        raise ValueError("webhook.payload_invalid")
+    allocation_class = payload["quota_allocation_class"]
+    allocation_count = payload["quota_allocation_count"]
+    # 用量费用必须携带权威分摊分类和有界计数，禁止推测额度归属。
+    if entry_type == "usage_charge":
+        if (
+            allocation_class not in {"paid", "free", "trial", "gift", "mixed", "unallocated"}
+            or type(allocation_count) is not int
+            or not 0 <= allocation_count <= 4
+            or (allocation_class == "unallocated") != (allocation_count == 0)
+            or (allocation_class == "mixed" and allocation_count < 2)
+            or (allocation_class in {"paid", "free", "trial", "gift"} and allocation_count != 1)
+        ):
+            # 分摊分类与计数必须相互一致，否则会污染财务和额度统计。
+            raise ValueError("webhook.payload_invalid")
+    elif allocation_class != "not_applicable" or allocation_count != 0:
+        # 人工 FinOps 调整不消耗租户套餐额度，禁止把历史 quota_type 伪装成真实分摊。
         raise ValueError("webhook.payload_invalid")
     source_request_id = payload["source_request_id"]
     # 可选请求身份仍须有界且无控制字符，避免事件日志和下游索引被污染。

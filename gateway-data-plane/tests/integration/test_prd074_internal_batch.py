@@ -30,6 +30,7 @@ from metahub_gateway.api.internal_batch import (
 from metahub_gateway.budgets import service as budget_service
 from metahub_gateway.budgets.service import enforce_budget_guard
 from metahub_gateway.output_safety.service import prepare_output_safety_scan
+from metahub_gateway.quota import enforce_quota_guard
 from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
 from metahub_gateway.usage.ledger import (
     CostEstimate,
@@ -598,6 +599,47 @@ def _database_copy(template: Path, destination: Path) -> Path:
     return destination
 
 
+def _seed_prd079_quota_plan(database: Path, tenant_id: str) -> None:
+    """为 Batch 回归安装 active Plan，证明冻结成本也进入 PRD-079 额度治理。"""
+
+    now = "2026-08-14T00:00:00Z"
+    plan_id = "pln_" + "e" * 32
+    connection = connect_database(_url(database))
+    connection.execute(
+        """
+        INSERT INTO plans(
+          plan_id,tenant_id,display_name,base_tier,status,trial_status,
+          trial_started_at,trial_ends_at,trial_cycle,state_revision,
+          quota_generation,created_at,updated_at
+        ) VALUES(?,?,?,'paid','active','not_started',NULL,NULL,0,1,1,?,?)
+        """,
+        (plan_id, tenant_id, "PRD-079 Batch quota", now, now),
+    )
+    for marker, quota_type in zip("1234", ("trial", "free", "gift", "paid"), strict=True):
+        granted = 20_000 if quota_type == "free" else 0
+        connection.execute(
+            """
+            INSERT INTO quota_buckets(
+              quota_bucket_id,tenant_id,plan_id,quota_type,granted_micros,
+              consumed_micros,reserved_micros,status,expires_at,state_revision,
+              created_at,updated_at
+            ) VALUES(?,?,?,?,?,0,0,?,NULL,1,?,?)
+            """,
+            (
+                "qbk_" + marker * 32,
+                tenant_id,
+                plan_id,
+                quota_type,
+                granted,
+                "active" if granted else "exhausted",
+                now,
+                now,
+            ),
+        )
+    connection.commit()
+    connection.close()
+
+
 def _add_released_historical_allocation(
     database: Path,
     values: dict[str, str],
@@ -834,6 +876,7 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
     """
     database = _database_copy(migrated_template, tmp_path / "cross-day-latest.sqlite3")
     values = _prepare_execution(database)
+    _seed_prd079_quota_plan(database, values["tenant_id"])
     old_date, old_allocation_id = _add_released_historical_allocation(database, values)
     config = _config(monkeypatch, database)
 
@@ -892,6 +935,21 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
     )
     assert guard is not None
     assert guard.initial_estimated_cost_cny == Decimal("0.007840")
+    quota_guard = enforce_quota_guard(
+        config,
+        tenant_id=batch.tenant_id,
+        request_id=batch.request_id,
+        trace_id=batch.trace_id,
+        route=route,
+        payload=execution.invocation.payload,
+        request_kind="chat",
+        token_estimate=batch.token_estimate,
+        trusted_cost_cny=(
+            guard.initial_estimated_cost_cny + guard.fallback_estimated_cost_cny
+        ),
+    )
+    assert quota_guard.reservation_id is not None
+    assert quota_guard.estimated_micros == 7_840
 
     record = _spooled_usage_record(config, execution, values)
     # PRD-075 扩展版本白名单后，真实 Batch v6 必须仍可由文件队列原子存储并幂等重放。
@@ -917,6 +975,27 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
         """,
         (values["tenant_id"], values["batch_attempt_id"]),
     ).fetchall()
+    quota_reservation = connection.execute(
+        """
+        SELECT status,estimated_micros,actual_micros,outstanding_micros
+        FROM quota_reservations WHERE tenant_id=? AND request_id=?
+        """,
+        (values["tenant_id"], values["request_id"]),
+    ).fetchone()
+    quota_settlement = connection.execute(
+        """
+        SELECT status,amount_micros,allocated_micros,unallocated_micros
+        FROM quota_usage_settlements WHERE tenant_id=? AND request_id=?
+        """,
+        (values["tenant_id"], values["request_id"]),
+    ).fetchone()
+    free_bucket = connection.execute(
+        """
+        SELECT consumed_micros,reserved_micros FROM quota_buckets
+        WHERE tenant_id=? AND quota_type='free'
+        """,
+        (values["tenant_id"],),
+    ).fetchone()
     connection.close()
     assert [tuple(row) for row in allocations] == [
         (old_allocation_id, old_date, "known_failed", "none", "released"),
@@ -928,6 +1007,9 @@ def test_cross_day_grant_coverage_and_usage_settlement_use_latest_allocations(
             "posted",
         ),
     ]
+    assert tuple(quota_reservation) == ("settled", 7_840, 2_000, 0)
+    assert tuple(quota_settlement) == ("settled", 2_000, 2_000, 0)
+    assert tuple(free_bucket) == (2_000, 0)
 
 
 def test_cross_day_failure_after_posted_usage_ignores_historical_release(

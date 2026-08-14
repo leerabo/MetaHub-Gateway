@@ -16,6 +16,7 @@ import copy
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -685,3 +686,27 @@ def test_batch_usage_spool_v6_is_exact_and_excludes_sensitive_content() -> None:
     expanded["context"]["prompt"] = secret_prompt
     with pytest.raises(ValueError, match="finops_spool_payload_invalid"):
         _deserialize_usage_spool_record(expanded)
+
+    quota_payload = _serialize_usage_spool_record(
+        replace(context, quota_reservation_outstanding_cny="0.001000"),
+        intent,
+    )
+    assert quota_payload["schema_version"] == 7
+    quota_restored, _quota_intent = _deserialize_usage_spool_record(quota_payload)
+    assert quota_restored.quota_reservation_outstanding_cny == "0.001000"
+
+    missing_scan = copy.deepcopy(quota_payload)
+    for field in (
+        "output_safety_scan_id",
+        "output_safety_scan_status",
+        "output_safety_decision",
+        "billing_disposition",
+    ):
+        missing_scan["context"][field] = None
+    with pytest.raises(ValueError, match="finops_spool_output_safety_missing"):
+        _deserialize_usage_spool_record(missing_scan)
+
+    drifted_settlement = copy.deepcopy(quota_payload)
+    drifted_settlement["context"]["batch_allocation_settlement_cny"] = "0.000001"
+    with pytest.raises(ValueError, match="finops_spool_payload_invalid"):
+        _deserialize_usage_spool_record(drifted_settlement)

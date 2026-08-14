@@ -70,6 +70,8 @@ cursor 使用 HMAC 绑定版本、当前 tenant、规范筛选、首次读取快
       "price_snapshot_source": "model_price",
       "posting_source": "direct",
       "quota_type": "paid",
+      "quota_allocation_class": "mixed",
+      "quota_allocation_count": 2,
       "usage_ledger_id": "usg_...",
       "finops_adjustment_id": null,
       "source_request_id": "req_...",
@@ -127,6 +129,18 @@ cursor 使用 HMAC 绑定版本、当前 tenant、规范筛选、首次读取快
 - `unpriced`：入账时没有可用价格，使用明确的零价证据快照。
 - `legacy_amount_only`：历史金额可信，但不能按快照单价重算。
 - `not_applicable`：人工调整不适用价格证据；冲正继承目标分录状态。
+
+`quota_allocation_class` 和 `quota_allocation_count` 是 PRD-079 增加的权威额度分摊摘要：
+
+- `usage_charge` 只从同 tenant、同 FinOps Entry 的 `quota_usage_settlements` 派生。单类分摊返回
+  `paid/free/trial/gift` 和 count `1`；跨两至四类返回 `mixed` 和 count `2..4`。
+- `usage_charge` 没有对应 Settlement 时固定返回 `unallocated` 和 count `0`。这表示没有可证明的
+  额度分摊事实，不表示免费，也不能归入 paid。
+- `manual_debit/manual_credit/reversal/gift_credit/trial_credit` 不消耗套餐额度，固定返回
+  `not_applicable` 和 count `0`。冲正即使继承目标分录的历史 `quota_type`，也不继承其 Settlement。
+
+`quota_type` 是 PRD-051 保留的分录分类兼容字段，不是 PRD-079 的分摊证据。报表和页面不得用它
+猜测 Settlement 或 Allocation；应使用上述两个字段，并在需要金额拆分时读取额度域的权威汇总。
 
 响应不包含 Prompt、Response、raw/normalized Usage JSON、Provider Key、Virtual Key 明文、
 Token、Endpoint、Credential/Binding/Scope ID、幂等摘要或原因摘要。
@@ -235,6 +249,8 @@ canonical 事件名固定为 `ledger.entry_created`。架构旧名 `billing.ledg
     "normalized_cny": "0.123456",
     "cny_normalization_status": "normalized",
     "quota_type": "paid",
+    "quota_allocation_class": "mixed",
+    "quota_allocation_count": 2,
     "source_request_id": "req_source_call",
     "price_snapshot_id": "prs_...",
     "price_schema_version": "price-v1",
@@ -249,6 +265,11 @@ canonical 事件名固定为 `ledger.entry_created`。架构旧名 `billing.ledg
 `actor_id` 来自 Session，Usage 为 null。payload 为精确白名单，禁止 reason、Prompt、Response、
 raw Usage、Key、Token、Endpoint 或内部摘要。提交后外部 Webhook 属于尽力投递；接收端故障不
 回滚已确认财务事实。
+
+事件中的 `quota_allocation_class/count` 与 GET DTO 使用同一权威语义：Usage 在正式
+Usage/FinOps/Quota 事务提交后从 tenant-qualified Settlement 构造；无 Settlement 为
+`unallocated/0`；任意人工分录为 `not_applicable/0`。两字段是 exact payload 的必填成员，不能
+省略、从历史 `quota_type` 推测或在下游重算。
 
 ## 5. Usage 持久恢复
 
@@ -320,4 +341,3 @@ Gateway 对存在 OutputSafetyScan 的 Chat Usage 使用 spool v5，额外只保
 billing disposition；无 scan 的请求继续写 v4，reader 精确接受 v1-v5。主库与 spool 双失败时返回
 `finops.usage_record_unavailable`，不派发 `security.output_blocked` Webhook。完整合同见
 [输出侧安全 API](output-safety.md)。
-

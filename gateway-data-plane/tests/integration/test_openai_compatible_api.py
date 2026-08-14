@@ -371,6 +371,115 @@ def prepare_database(
     return database_url
 
 
+def configure_prd079_exhausted_quota_with_budget(database_url: str) -> str:
+    """配置可通过 Budget 但额度为零的套餐，返回默认租户 ID。"""
+
+    connection = connect_database(database_url)
+    try:
+        tenant = connection.execute(
+            "SELECT tenant_id FROM tenants WHERE slug='default'"
+        ).fetchone()
+        assert tenant is not None
+        tenant_id = str(tenant["tenant_id"])
+        environment = connection.execute(
+            "SELECT environment_id FROM environments WHERE tenant_id=? AND code='dev'",
+            (tenant_id,),
+        ).fetchone()
+        assert environment is not None
+        connection.execute(
+            """
+            UPDATE models
+            SET input_price_per_1k='1.000000',output_price_per_1k='1.000000',
+                currency='CNY',price_schema_version='prd079-api-price-v1'
+            WHERE tenant_id=? AND model_alias='default-chat'
+            """,
+            (tenant_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO budget_rules(
+              budget_rule_id,tenant_id,environment_id,scope_type,scope_id,name,
+              daily_budget_cny,warning_threshold_percent,exhausted_threshold_percent,
+              exhausted_action,status,created_at,updated_at
+            ) VALUES('budget_prd079_quota_402',?,?,'tenant',?,'PRD-079 Quota 402',
+                     100,80,100,'block','active',datetime('now'),datetime('now'))
+            """,
+            (tenant_id, environment["environment_id"], tenant_id),
+        )
+        plan_id = "pln_" + "7" * 32
+        now = "2026-08-14T00:00:00Z"
+        connection.execute(
+            """
+            INSERT INTO plans(
+              plan_id,tenant_id,display_name,base_tier,status,trial_status,
+              trial_started_at,trial_ends_at,trial_cycle,state_revision,
+              quota_generation,created_at,updated_at
+            ) VALUES(?,?,'PRD-079 Exhausted Plan','free','active','not_started',
+                     NULL,NULL,0,1,1,?,?)
+            """,
+            (plan_id, tenant_id, now, now),
+        )
+        for sequence, quota_type in enumerate(("trial", "free", "gift", "paid"), start=1):
+            connection.execute(
+                """
+                INSERT INTO quota_buckets(
+                  quota_bucket_id,tenant_id,plan_id,quota_type,granted_micros,
+                  consumed_micros,reserved_micros,status,expires_at,state_revision,
+                  created_at,updated_at
+                ) VALUES(?,?,?,?,0,0,0,'exhausted',NULL,1,?,?)
+                """,
+                (f"qbk_{sequence:032x}", tenant_id, plan_id, quota_type, now, now),
+            )
+        connection.commit()
+        return tenant_id
+    finally:
+        connection.close()
+
+
+def insert_prd079_quota_plan(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    free_grant_micros: int,
+) -> None:
+    """在调用方事务内写入唯一 active 套餐及四类 Bucket，供真实 HTTP 额度测试复用。"""
+
+    plan_id = "pln_" + "8" * 32
+    now = "2026-08-14T00:00:00Z"
+    connection.execute(
+        """
+        INSERT INTO plans(
+          plan_id,tenant_id,display_name,base_tier,status,trial_status,
+          trial_started_at,trial_ends_at,trial_cycle,state_revision,
+          quota_generation,created_at,updated_at
+        ) VALUES(?,?,'PRD-079 Fallback Plan','paid','active','not_started',
+                 NULL,NULL,0,1,1,?,?)
+        """,
+        (plan_id, tenant_id, now, now),
+    )
+    for marker, quota_type in zip("abcd", ("trial", "free", "gift", "paid"), strict=True):
+        granted = free_grant_micros if quota_type == "free" else 0
+        connection.execute(
+            """
+            INSERT INTO quota_buckets(
+              quota_bucket_id,tenant_id,plan_id,quota_type,granted_micros,
+              consumed_micros,reserved_micros,status,expires_at,state_revision,
+              created_at,updated_at
+            ) VALUES(?,?,?,?,?,0,0,?,NULL,1,?,?)
+            """,
+            (
+                "qbk_" + marker * 32,
+                tenant_id,
+                plan_id,
+                quota_type,
+                granted,
+                "active" if granted else "exhausted",
+                now,
+                now,
+            ),
+        )
+
+
 def enable_response_cache_for_default_chat(database_url: str) -> str:
     """为真实 Gateway 测试创建一个已确认的 enabled CachePolicy。"""
 
@@ -975,6 +1084,11 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
         """,
         (tenant["tenant_id"], environment["environment_id"], virtual_key["virtual_key_id"]),
     )
+    insert_prd079_quota_plan(
+        budget_connection,
+        tenant_id=str(tenant["tenant_id"]),
+        free_grant_micros=2_500_000,
+    )
     budget_connection.commit()
     queued_events = []
     monkeypatch.setattr(
@@ -995,14 +1109,31 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
             json={
                 "model": "company-fallback",
                 "messages": [{"role": "user", "content": "sensitive fallback prompt"}],
+                "max_tokens": 1000,
+            },
+        )
+        exhausted = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd079_fallback_exposure_blocked",
+            },
+            json={
+                "model": "company-fallback",
+                "messages": [{"role": "user", "content": "must-not-reach-provider"}],
+                "max_tokens": 1000,
             },
         )
 
     assert response.status_code == 200, response.text
+    assert exhausted.status_code == 402
+    assert exhausted.json()["code"] == "gateway.quota_exhausted"
+    assert exhausted.json()["request_id"] == "req_prd079_fallback_exposure_blocked"
     assert [item["body"]["model"] for item in captured[-2:]] == [
         "upstream-error-model",
         "local-chat-model",
     ]
+    assert len(captured) == 2
     connection = connect_database(database_url)
     attempts = connection.execute(
         "SELECT * FROM routing_attempts WHERE request_id='req_prd036_fallback' ORDER BY attempt_sequence"
@@ -1012,6 +1143,30 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
     ).fetchone()
     usage = connection.execute(
         "SELECT * FROM usage_ledger WHERE request_id='req_prd036_fallback'"
+    ).fetchone()
+    quota_reservation = connection.execute(
+        "SELECT * FROM quota_reservations WHERE request_id='req_prd036_fallback'"
+    ).fetchone()
+    quota_item = connection.execute(
+        """
+        SELECT * FROM quota_reservation_items
+        WHERE tenant_id=? AND quota_reservation_id=?
+        """,
+        (tenant["tenant_id"], quota_reservation["quota_reservation_id"]),
+    ).fetchone()
+    quota_settlement = connection.execute(
+        """
+        SELECT * FROM quota_usage_settlements
+        WHERE tenant_id=? AND request_id='req_prd036_fallback'
+        """,
+        (tenant["tenant_id"],),
+    ).fetchone()
+    quota_bucket = connection.execute(
+        """
+        SELECT consumed_micros,reserved_micros FROM quota_buckets
+        WHERE tenant_id=? AND quota_type='free'
+        """,
+        (tenant["tenant_id"],),
     ).fetchone()
     reservation = connection.execute(
         """
@@ -1032,20 +1187,52 @@ async def test_non_stream_5xx_falls_back_once_and_records_attempt_order(
     assert attempts[1]["estimated_cost_cny"] is not None
     primary_estimate = Decimal(str(attempts[0]["estimated_cost_cny"]))
     fallback_estimate = Decimal(str(attempts[1]["estimated_cost_cny"]))
+    primary_micros = int(primary_estimate * Decimal(1_000_000))
+    fallback_micros = int(fallback_estimate * Decimal(1_000_000))
+    actual_micros = int(Decimal(str(usage["cost_cny"])) * Decimal(1_000_000))
     assert Decimal(str(reservation["reserved_cost_cny"])) == primary_estimate + fallback_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
+    assert quota_reservation["status"] == "exposure_pending"
+    assert quota_reservation["estimated_micros"] == primary_micros + fallback_micros
+    assert quota_reservation["actual_micros"] == actual_micros == 5_000
+    assert quota_reservation["outstanding_micros"] == primary_micros == 1_000_000
+    assert quota_reservation["unallocated_micros"] == 0
+    assert quota_settlement["amount_micros"] == actual_micros
+    assert quota_settlement["exposure_outstanding_micros"] == primary_micros
+    assert quota_settlement["allocated_micros"] == actual_micros
+    assert quota_settlement["unallocated_micros"] == 0
+    assert tuple(
+        quota_item[name]
+        for name in ("reserved_micros", "consumed_micros", "released_micros", "status")
+    ) == (2_000_000, 5_000, 995_000, "exposure_pending")
+    assert tuple(quota_bucket) == (5_000, 1_000_000)
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM quota_reservations
+        WHERE tenant_id=? AND request_id='req_prd079_fallback_exposure_blocked'
+        """,
+        (tenant["tenant_id"],),
+    ).fetchone()[0] == 0
     assert request_log["fallback_triggered"] == 1
     assert request_log["routing_attempt_count"] == 2
     assert request_log["final_routing_attempt_id"] == attempts[1]["routing_attempt_id"]
     assert request_log["resolved_model"] == "default-chat"
     assert usage["routing_attempt_id"] == attempts[1]["routing_attempt_id"]
     # PRD-047 初始策略选择与 PRD-036 请求后切换是两类独立事实，必须分别投递且不能混称。
-    assert [event.event_type for event in queued_events] == [
+    request_events = [
+        event
+        for event in queued_events
+        if (
+            event.payload.get("request_id") == "req_prd036_fallback"
+            or event.payload.get("source_request_id") == "req_prd036_fallback"
+        )
+    ]
+    assert [event.event_type for event in request_events] == [
         "route.policy_selected",
         "route.fallback_triggered",
         "ledger.entry_created",
     ]
-    policy_event, fallback_event, ledger_event = queued_events
+    policy_event, fallback_event, ledger_event = request_events
     assert policy_event.payload["request_id"] == "req_prd036_fallback"
     assert policy_event.payload["routing_mode"] == "fixed"
     assert fallback_event.event_id == f"evt_{attempts[1]['routing_attempt_id']}"
@@ -1078,6 +1265,14 @@ async def test_fallback_attempt_gate_failure_keeps_primary_budget_estimate(
         database_url,
         rule_id="br_prd047_fallback_gate_failure",
     )
+    quota_connection = connect_database(database_url)
+    insert_prd079_quota_plan(
+        quota_connection,
+        tenant_id=tenant_id,
+        free_grant_micros=2_500_000,
+    )
+    quota_connection.commit()
+    quota_connection.close()
     real_create_attempt = openai_api.create_routing_attempt
 
     def fail_second_attempt(*args, **kwargs):
@@ -1137,11 +1332,35 @@ async def test_fallback_attempt_gate_failure_keeps_primary_budget_estimate(
         """,
         (tenant_id,),
     ).fetchone()
+    quota_reservation = connection.execute(
+        """
+        SELECT status,estimated_micros,actual_micros,outstanding_micros
+        FROM quota_reservations
+        WHERE tenant_id=? AND request_id='req_prd047_fallback_gate_failure'
+        """,
+        (tenant_id,),
+    ).fetchone()
+    quota_reserved = connection.execute(
+        "SELECT SUM(reserved_micros) FROM quota_buckets WHERE tenant_id=?",
+        (tenant_id,),
+    ).fetchone()[0]
     assert tuple(attempt)[:2] == ("failed", "unavailable")
     primary_estimate = Decimal(str(attempt["estimated_cost_cny"]))
     assert primary_estimate > 0
     assert Decimal(str(reservation["reserved_cost_cny"])) > primary_estimate
     assert Decimal(str(reservation["outstanding_cost_cny"])) == primary_estimate
+    primary_micros = int(primary_estimate * Decimal(1_000_000))
+    assert tuple(quota_reservation) == (
+        "exposure_pending",
+        primary_micros * 2,
+        None,
+        primary_micros,
+    )
+    assert quota_reserved == primary_micros
+    assert connection.execute(
+        "SELECT COUNT(*) FROM quota_usage_settlements WHERE tenant_id=?",
+        (tenant_id,),
+    ).fetchone()[0] == 0
     assert tuple(request_log) == ("failed", "gateway.fallback_unavailable", 1, 1)
 
 
@@ -1517,6 +1736,88 @@ async def test_fallback_budget_reserves_both_possible_attempts_before_upstream(
     ).fetchone()
     assert attempts["count"] == 0
     assert float(evaluation["estimated_request_cost_cny"]) == pytest.approx(0.2)
+
+
+@pytest.mark.anyio
+async def test_quota_exhaustion_releases_pre_provider_budget_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """PRD-079：Quota 402 在上游调用前把 Budget 预留结算为零并保留安全事件。"""
+
+    upstream_url, captured = fake_upstream
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    tenant_id = configure_prd079_exhausted_quota_with_budget(database_url)
+    request_id = "req_prd079_quota_402"
+    prompt_canary = "prd079 quota 402 private prompt 5f9bc7a1"
+    app = build_gateway_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {VIRTUAL_KEY}", "X-Request-ID": request_id},
+            json={
+                "model": "default-chat",
+                "messages": [{"role": "user", "content": prompt_canary}],
+                "max_tokens": 10,
+            },
+        )
+
+    body = response.json()
+    assert response.status_code == 402
+    assert body["code"] == "gateway.quota_exhausted"
+    assert body["request_id"] == request_id
+    assert captured == []
+
+    connection = connect_database(database_url)
+    try:
+        budget = connection.execute(
+            """
+            SELECT outstanding_cost_cny FROM budget_reservations
+            WHERE tenant_id=? AND request_id=?
+            """,
+            (tenant_id, request_id),
+        ).fetchone()
+        assert budget is not None
+        assert Decimal(str(budget["outstanding_cost_cny"])) == Decimal("0")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM quota_reservations WHERE tenant_id=? AND request_id=?",
+            (tenant_id, request_id),
+        ).fetchone()[0] == 0
+        event = connection.execute(
+            """
+            SELECT event.*,outbox.status AS outbox_status
+            FROM quota_events event
+            JOIN quota_event_outbox outbox
+              ON outbox.tenant_id=event.tenant_id
+             AND outbox.quota_event_id=event.quota_event_id
+            WHERE event.tenant_id=? AND event.source_request_id=?
+            """,
+            (tenant_id, request_id),
+        ).fetchall()
+        assert len(event) == 1
+        assert event[0]["event_type"] == "quota.exhausted"
+        assert event[0]["actor_id"] == "quota-admission"
+        assert event[0]["outbox_status"] == "pending"
+        payload = json.loads(event[0]["payload_json"])
+        assert set(payload) == {
+            "schema_version",
+            "plan_id",
+            "quota_generation",
+            "required_cny",
+            "available_cny",
+            "reason_code",
+            "effective_tier",
+        }
+        assert payload["reason_code"] == "quota_exhausted"
+        assert count_plaintext_matches(
+            connection,
+            (prompt_canary.encode(), PROVIDER_KEY.encode(), VIRTUAL_KEY.encode()),
+        ) == 0
+    finally:
+        connection.close()
 
 
 @pytest.mark.anyio

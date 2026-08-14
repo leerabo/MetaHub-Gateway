@@ -338,7 +338,9 @@ async def _open_unfinished_execution(
         database_url=database_url,
         provider_base_url=provider_base_url,
     )
-    assert apply_migrations(database_url).applied[-1] == "0068"
+    migration_result = apply_migrations(database_url)
+    assert "0068" in migration_result.applied
+    assert migration_result.applied[-1] == "0072"
     graph = _prepare_scope(database_url)
     experiment_id, _token = await _create_experiment(
         graph,
@@ -843,7 +845,9 @@ async def test_partial_traffic_sampling_uses_real_gateway_and_bypasses_unselecte
         database_url=database_url,
         provider_base_url=provider_base_url,
     )
-    assert apply_migrations(database_url).applied[-1] == "0068"
+    migration_result = apply_migrations(database_url)
+    assert "0068" in migration_result.applied
+    assert migration_result.applied[-1] == "0072"
     graph = _prepare_scope(database_url)
     experiment_id, _token = await _create_experiment(
         graph,
@@ -932,7 +936,9 @@ async def test_feedback_attribution_closes_at_fence_and_final_statistics_do_not_
         database_url=database_url,
         provider_base_url=provider_base_url,
     )
-    assert apply_migrations(database_url).applied[-1] == "0068"
+    migration_result = apply_migrations(database_url)
+    assert "0068" in migration_result.applied
+    assert migration_result.applied[-1] == "0072"
     graph = _prepare_scope(database_url)
     experiment_id, admin_token = await _create_experiment(
         graph,
@@ -1135,7 +1141,9 @@ async def test_live_requests_fill_exact_ab_quota_and_publish_traceable_results(
         database_url=database_url,
         provider_base_url=provider_base_url,
     )
-    assert apply_migrations(database_url).applied[-1] == "0068"
+    migration_result = apply_migrations(database_url)
+    assert "0068" in migration_result.applied
+    assert migration_result.applied[-1] == "0072"
     graph = _prepare_scope(database_url)
     experiment_id, admin_token = await _create_experiment(graph)
     gateway = _gateway_app()

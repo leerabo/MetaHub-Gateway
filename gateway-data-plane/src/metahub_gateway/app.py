@@ -18,6 +18,7 @@ from metahub_gateway.feedback.routes import router as feedback_router
 from metahub_gateway.intent_security import install_intent_security_dispatcher
 from metahub_gateway.policies import install_policy_snapshot_cache
 from metahub_gateway.policies.redaction import install_policy_mask_runtime
+from metahub_gateway.quota import install_quota_reconciliation
 from metahub_gateway.response_cache.failure_spool import (
     install_response_cache_failure_recovery,
 )
@@ -50,6 +51,9 @@ install_usage_spool_recovery(app)
 # Response Cache 的 commit-unknown 恢复只读取无正文 owner 记录；必须在 Usage/事件基础设施
 # 就绪后启动，退出时则先停止该 worker，避免 shutdown 期间继续形成失败终态。
 install_response_cache_failure_recovery(app)
+# Usage/Cache 恢复先补齐 canonical charge；额度 worker 随后只处理已经超过 24 小时的残留预留，
+# 有正式 charge 时补结算，无 charge 时释放并保留稳定 reconciliation 终态。
+install_quota_reconciliation(app)
 # Policy 快照 scheduler 与事件 worker 都通过 lifespan 组合安装；后安装者必须包裹而非覆盖
 # 前一生命周期，确保启动、退出和异常清理均有确定顺序。
 install_policy_snapshot_cache(app)

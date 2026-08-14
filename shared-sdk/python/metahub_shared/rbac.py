@@ -50,7 +50,7 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 最终授权仍必须从当前 tenant 的动态角色矩阵逐请求恢复并在审计事务内复核。
 # PRD-078 把审批入口与目标域权限拆开：read/decide 只表达审批职责，Control 仍须实时
 # 复核预算或会话风险的目标权限，不能让审批权限成为跨域写入后门。
-CATALOG_REVISION: Final[int] = 14
+CATALOG_REVISION: Final[int] = 15
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -259,6 +259,28 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "billing",
         "处置成本异常",
         "确认、忽略异常并维护临时限流。",
+        "critical",
+    ),
+    # 套餐配置、额度查询和额度调整是三个不同风险面；写权限必须由后端逐请求校验，
+    # 不能从 FinOps 或前端页面可见性隐式推导。
+    PermissionDefinition(
+        "billing.plan.read", "billing", "读取套餐", "读取当前租户套餐与试用状态。", "read"
+    ),
+    PermissionDefinition(
+        "billing.plan.write",
+        "billing",
+        "管理套餐",
+        "创建或修改当前租户套餐与试用周期。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "billing.quota.read", "billing", "读取额度", "读取当前租户额度桶与分类消费摘要。", "read"
+    ),
+    PermissionDefinition(
+        "billing.quota.write",
+        "billing",
+        "调整额度",
+        "创建当前租户可审计的额度增减事实。",
         "critical",
     ),
     PermissionDefinition(
@@ -527,6 +549,10 @@ _FINANCE = {
     "billing.budget.write",
     "billing.anomaly.read",
     "billing.anomaly.write",
+    "billing.plan.read",
+    "billing.plan.write",
+    "billing.quota.read",
+    "billing.quota.write",
     "policy_template.read",
     "policy_template.apply",
     "response_cache.read",

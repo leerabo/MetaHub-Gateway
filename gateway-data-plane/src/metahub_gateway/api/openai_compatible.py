@@ -115,6 +115,11 @@ from metahub_gateway.providers.base import (
 )
 from metahub_gateway.providers.factory import adapter_for_route
 from metahub_gateway.providers.openai_compatible import estimate_stream_usage
+from metahub_gateway.quota import (
+    QuotaGuardResult,
+    enforce_quota_guard,
+    finalize_request_quota_failure,
+)
 from metahub_gateway.rate_limits import RateLimitLease, enforce_virtual_key_rate_limit
 from metahub_gateway.response_cache.models import (
     PreparedResponseCache,
@@ -405,6 +410,7 @@ async def _handle_gateway_request(
     rate_limit_lease: RateLimitLease | None = None
     policy_lease: PolicySnapshotLeaseDecision | None = None
     budget_guard_result: BudgetGuardResult | None = None
+    quota_guard_result: QuotaGuardResult | None = None
     realtime_gateway_lease: RealtimeGatewayLease | None = None
     experiment_guard: ExperimentExecutionGuard | None = None
     experiment_stream_handed_off = False
@@ -875,6 +881,7 @@ async def _handle_gateway_request(
                         trusted_initial_estimate=prepared_settlement.trusted_estimate,
                     )
                 # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
+                # 额度准入失败时先终结缓存候选，避免留下可复用的未授权响应事实。
                 except ApiError as exc:
                     # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
                     if isinstance(exc, BudgetExhaustedError):
@@ -910,6 +917,43 @@ async def _handle_gateway_request(
                     request_log_context = replace(
                         request_log_context,
                         budget_reservation_outstanding_cny="0",
+                    )
+                try:
+                    quota_guard_result = enforce_quota_guard(
+                        config,
+                        tenant_id=auth_context.tenant_id,
+                        request_id=_request_id(request),
+                        trace_id=_trace_id(request),
+                        route=route,
+                        payload=payload,
+                        request_kind=request_kind,
+                        fallback_route=route_plan.fallback_route,
+                        token_estimate=route_plan.token_estimate,
+                        price_as_of=route_plan.routing_as_of,
+                    )
+                # 额度准入错误需先终结当前缓存候选，避免留下未授权可复用事实。
+                except ApiError as exc:
+                    failed = fail_response_cache_candidate(
+                        config,
+                        context=request_log_context,
+                        prepared=prepared_settlement,
+                        output_safety_scan=None,
+                        output_safety_terminal=None,
+                        error_code=exc.code,
+                        latency_ms=_latency_ms(started),
+                    )
+                    response_cache_terminal_owned = failed.settlement_owned
+                    if failed.ownership_unknown:
+                        # 候选 owner 不确定时返回稳定错误，不能继续路由或覆盖并发终态。
+                        raise ApiError(
+                            failed.error_code
+                            or "gateway.response_cache_settlement_unavailable"
+                        ) from exc
+                    raise
+                if quota_guard_result.reservation_id is not None:
+                    request_log_context = replace(
+                        request_log_context,
+                        quota_reservation_outstanding_cny="0",
                     )
                 _log_request_received(
                     request,
@@ -1063,10 +1107,37 @@ async def _handle_gateway_request(
         if budget_guard_result is not None and not (
             trusted_invocation is not None and trusted_invocation.source == "batch"
         ):
-            # Guard 已创建规则级预留；Provider 尚未调用，默认未知分项为 0，网络尝试后再提升。
+            # Provider 尚未调用，先冻结零费用失败语义；后续网络尝试再提升未知金额。
             request_log_context = replace(
                 request_log_context,
                 budget_reservation_outstanding_cny="0",
+            )
+        quota_guard_result = enforce_quota_guard(
+            config,
+            tenant_id=auth_context.tenant_id,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+            route=route,
+            payload=payload,
+            request_kind=request_kind,
+            fallback_route=(
+                route_plan.fallback_route
+                if not (request_kind == "chat" and payload.get("stream") is True)
+                else None
+            ),
+            token_estimate=route_plan.token_estimate,
+            price_as_of=route_plan.routing_as_of,
+            trusted_cost_cny=(
+                budget_guard_result.initial_estimated_cost_cny
+                + budget_guard_result.fallback_estimated_cost_cny
+                if budget_guard_result is not None
+                else None
+            ),
+        )
+        if quota_guard_result.reservation_id is not None:
+            request_log_context = replace(
+                request_log_context,
+                quota_reservation_outstanding_cny="0",
             )
         if not request_received_logged:
             _log_request_received(
@@ -1179,6 +1250,7 @@ async def _handle_gateway_request(
                 trace_id=_trace_id(request),
                 outstanding_cost_cny=Decimal(context.budget_reservation_outstanding_cny),
             )
+        _finalize_request_quota_failure(config, context, auth_context, request)
         if experiment_guard is not None:
             cleanup = (
                 _finalize_experiment_failure(
@@ -1260,6 +1332,7 @@ async def _handle_gateway_request(
                 trace_id=_trace_id(request),
                 outstanding_cost_cny=Decimal(context.budget_reservation_outstanding_cny),
             )
+        _finalize_request_quota_failure(config, context, auth_context, request)
         # 只有失败日志已可靠落盘时才能提交实验失败 Outcome，避免恢复链出现相反终态。
         if experiment_guard is not None and request_log_error is None:
             await _finalize_experiment_failure(
@@ -1275,6 +1348,12 @@ async def _handle_gateway_request(
         # 未预期本地异常不得把已分配执行留成无界等待；实验请求
         # 收口为固定不可用码，非实验请求保持既有全局 500 语义。
         if experiment_guard is None:
+            _finalize_request_quota_failure(
+                config,
+                request_log_context,
+                auth_context,
+                request,
+            )
             raise
         context = request_log_context or _partial_request_log_context(
             request,
@@ -1295,6 +1374,7 @@ async def _handle_gateway_request(
             )
         else:
             request_log_error = "gateway.request_log_unavailable"
+        _finalize_request_quota_failure(config, context, auth_context, request)
         # 未知本地异常也只有在固定失败日志成功后才允许关闭对应实验 execution。
         if request_log_error is None:
             await _finalize_experiment_failure(
@@ -2468,12 +2548,18 @@ def _context_with_budget_outstanding(
     Budget Guard 的冻结估算，不读取 Provider 响应正文，也不会持久化到 request_logs。
     """
 
-    if context.budget_reservation_outstanding_cny is None:
+    if (
+        context.budget_reservation_outstanding_cny is None
+        and context.quota_reservation_outstanding_cny is None
+    ):
         return context
-    return replace(
-        context,
-        budget_reservation_outstanding_cny=format(outstanding_cost_cny, "f"),
-    )
+    value = format(outstanding_cost_cny, "f")
+    changes: dict[str, str] = {}
+    if context.budget_reservation_outstanding_cny is not None:
+        changes["budget_reservation_outstanding_cny"] = value
+    if context.quota_reservation_outstanding_cny is not None:
+        changes["quota_reservation_outstanding_cny"] = value
+    return replace(context, **changes)
 
 
 def _context_with_deferred_budget_settlement(
@@ -2487,9 +2573,58 @@ def _context_with_deferred_budget_settlement(
     Usage、FinOps 和争议事实原子提交时完成真正结算，因此这里不能直接修改数据库。
     """
 
-    if context.budget_reservation_outstanding_cny is None:
+    if (
+        context.budget_reservation_outstanding_cny is None
+        and context.quota_reservation_outstanding_cny is None
+    ):
         return context
-    return replace(context, budget_reservation_outstanding_cny=None)
+    return replace(
+        context,
+        budget_reservation_outstanding_cny=None,
+        quota_reservation_outstanding_cny=None,
+    )
+
+
+def _finalize_request_quota_failure(
+    config: AppConfig,
+    context: RequestLogContext | None,
+    auth_context: GatewayAuthContext | None,
+    request: Request,
+) -> None:
+    """按已冻结的 Provider 失败覆盖额缩小额度预留，零费用则完整释放。"""
+
+    # 缺少可信请求或认证上下文时无法证明 tenant owner，禁止尝试释放。
+    if context is None or auth_context is None:
+        return
+    outstanding = context.quota_reservation_outstanding_cny
+    if outstanding is None:
+        return
+    try:
+        amount = Decimal(outstanding)
+    except Exception:
+        return
+    if not amount.is_finite() or amount < 0:
+        return
+    try:
+        finalize_request_quota_failure(
+            config,
+            tenant_id=auth_context.tenant_id,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+            outstanding_cost_cny=amount,
+        )
+    # 收口失败不覆盖原请求终态，只记录稳定代码并保留原预留等待恢复。
+    except ApiError:
+        logger.warning(
+            "quota.finalization_failed",
+            extra={
+                "event": "quota.finalization_failed",
+                "tenant_id": auth_context.tenant_id,
+                "request_id": _request_id(request),
+                "trace_id": _trace_id(request),
+                "error_code": "gateway.quota_unavailable",
+            },
+        )
 
 
 def _context_with_session_risk_preflight(

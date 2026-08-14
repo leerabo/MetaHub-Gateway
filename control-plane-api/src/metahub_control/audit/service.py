@@ -116,6 +116,10 @@ ACTION_OBJECT_TYPES = {
     # 只读助手 attempt 是不可变且无正文的治理事实；问题、回答、目标请求、来源值以及
     # 模型/Token 字段均不得进入通用 AuditLog，只保留类型、终态与有界计数。
     "admin_assistant.queried": "assistant_query",
+    # 套餐与额度管理只审计当前租户的状态、精确金额和不可逆原因摘要。
+    "plan.created": "plan",
+    "plan.updated": "plan",
+    "quota.adjustment_created": "quota_adjustment",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -511,6 +515,31 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "execution_mode",
             "model_call_count",
             "model_cost_status",
+        }
+    ),
+    "plan": frozenset(
+        {
+            "display_name",
+            "base_tier",
+            "status",
+            "trial_status",
+            "trial_started_at",
+            "trial_ends_at",
+            "trial_cycle",
+            "state_revision",
+            "quota_generation",
+        }
+    ),
+    "quota_adjustment": frozenset(
+        {
+            "plan_id",
+            "quota_bucket_id",
+            "quota_type",
+            "direction",
+            "amount",
+            "expected_bucket_revision",
+            "resulting_bucket_revision",
+            "reason_sha256",
         }
     ),
 }

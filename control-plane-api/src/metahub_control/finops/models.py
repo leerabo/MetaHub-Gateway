@@ -12,7 +12,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 CurrencyCode = Literal["CNY", "USD"]
 DirectionCode = Literal["debit", "credit"]
 NormalizationStatus = Literal["normalized", "unavailable"]
@@ -92,6 +91,10 @@ class FinOpsLedgerEntryInfo(BaseModel):
     price_snapshot_source: str | None
     posting_source: Literal["direct", "spool_replay", "legacy_backfill"]
     quota_type: Literal["paid", "free", "trial", "gift"]
+    quota_allocation_class: Literal[
+        "paid", "free", "trial", "gift", "mixed", "unallocated", "not_applicable"
+    ]
+    quota_allocation_count: int
     usage_ledger_id: str | None
     finops_adjustment_id: str | None
     source_request_id: str | None

@@ -720,7 +720,7 @@ def test_usage_spool_v4_restores_session_and_legacy_versions_use_safe_defaults()
     assert restored_v1.intent_risk_schedule_status == "disabled"
     assert restored_v1.session_risk_status == "not_applicable"
     with pytest.raises(ValueError, match="finops_spool_payload_version_invalid"):
-        _deserialize_usage_spool_record({**current, "schema_version": 7})
+        _deserialize_usage_spool_record({**current, "schema_version": 8})
     with pytest.raises(ValueError, match="finops_spool_payload_invalid"):
         _deserialize_usage_spool_record(
             {**current, "context": {**current["context"], "unexpected": "field"}}
@@ -1033,6 +1033,16 @@ def _install_order_test_baseline(
         ),
     )
     monkeypatch.setattr(openai_api, "_validate_route_capability", lambda *_args: None)
+    monkeypatch.setattr(
+        openai_api,
+        "prepare_response_cache",
+        lambda *_args, **_kwargs: openai_api.PreparedResponseCache(status="disabled"),
+    )
+    monkeypatch.setattr(
+        openai_api,
+        "enforce_quota_guard",
+        lambda *_args, **_kwargs: openai_api.QuotaGuardResult(None, 0, None),
+    )
     monkeypatch.setattr(
         openai_api,
         "safe_record_request_log",

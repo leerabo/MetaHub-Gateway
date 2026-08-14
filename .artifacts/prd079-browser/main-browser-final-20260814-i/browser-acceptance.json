@@ -1,0 +1,138 @@
+{
+  "all_108_prds_complete": false,
+  "browser": {
+    "all_108_prds_complete": false,
+    "desktop": {
+      "height": 720,
+      "horizontal_overflow_free": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "page_110": true,
+      "page_111": true,
+      "plan_authenticated": true,
+      "plan_busy_escape_blocked": true,
+      "plan_cas_exact": true,
+      "plan_focus_restored": true,
+      "plan_idle_escape_closed": true,
+      "plan_initial_focus": true,
+      "plan_native_modal": true,
+      "plan_saved": true,
+      "plan_tab_forward_wrap": true,
+      "plan_tab_reverse_wrap": true,
+      "quota_report_split": true,
+      "text_overflow_free": true,
+      "width": 1280
+    },
+    "lifecycle": {
+      "backend_rbac_denied": true,
+      "logout_late_response_discarded": true,
+      "logout_root_cleared": true,
+      "logout_storage_cleared": true,
+      "revocation_late_response_discarded": true,
+      "revocation_navigation_cleared": true,
+      "revocation_root_cleared": true
+    },
+    "mobile": {
+      "height": 844,
+      "horizontal_overflow_free": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "page_110": true,
+      "page_111": true,
+      "quota_adjustments_exact": true,
+      "quota_busy_controls_disabled": true,
+      "quota_busy_escape_blocked": true,
+      "quota_focus_restored": true,
+      "quota_idle_escape_closed": true,
+      "quota_initial_focus": true,
+      "quota_native_modal": true,
+      "quota_reason_cleared": true,
+      "quota_report_split": true,
+      "quota_types_exact": true,
+      "text_overflow_free": true,
+      "width": 390
+    },
+    "network": {
+      "console_errors": 0,
+      "external_requests": 0,
+      "forbidden_queries": 0,
+      "login_statuses": [
+        200,
+        200
+      ],
+      "logout_statuses": [
+        200
+      ],
+      "page_errors": 0,
+      "plan_patch_statuses": [
+        200
+      ],
+      "quota_adjustment_statuses": [
+        201,
+        201,
+        201,
+        201
+      ]
+    },
+    "screenshots": [
+      "page-110-plan-desktop-1280x720.png",
+      "page-110-plan-mobile-390x844.png",
+      "page-111-quota-desktop-1280x720.png",
+      "page-111-quota-mobile-390x844.png"
+    ],
+    "status": "passed"
+  },
+  "database": {
+    "adjustment_audit_count": 4,
+    "adjustment_count": 4,
+    "adjustment_types": [
+      "free",
+      "gift",
+      "paid",
+      "trial"
+    ],
+    "bucket_count": 4,
+    "finance_prd079_permissions_after_revocation": 0,
+    "migration": {
+      "count": 72,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0072"
+    },
+    "plan_audit_count": 1,
+    "plan_count": 1
+  },
+  "prd_id": "PRD-079",
+  "privacy": {
+    "staging": {
+      "files_scanned": 5,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    },
+    "work": {
+      "files_scanned": 10,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    }
+  },
+  "processes": {
+    "console": "owned_and_stopped",
+    "control": "owned_and_stopped",
+    "gateway": "owned_and_stopped",
+    "harness": "owned_and_stopped",
+    "resp": "owned_and_stopped"
+  },
+  "run_id": "main-browser-final-20260814-i",
+  "source_provenance": {
+    "algorithm": "sha256",
+    "browser_acceptance": "a047fc1edbc25d327e2f75259758ab7944d166e74266822a53ea3b7b4eefc614",
+    "browser_harness": "b3a7832285d0ebe6d92321854b11cef7361422b3955cba23f6e6decd86657d41",
+    "console_main": "55f68731c54faa8ae99a9ae5021d5e1a224cf8963b8ad4cab80e020b272e612e",
+    "migration_up": "2af4d3981b8eb62d4d147e56910513116728a852eb1dd14df70576adfd6c570d",
+    "plan_billing_binding": "33168926c404db671bfd95bb8b43522c2d4c68c735d011977629d9c2733c3d7c",
+    "plan_billing_render": "be65466fd61bf7b4c75fe86813c8506ec021b7d69e602b13babe680771a60ed1",
+    "plan_billing_state": "f0a06b9be23e242106a1bd5adce461d67ec130fbff9841ff27c4d7297a098682",
+    "plan_billing_styles": "8c5ea3c7bb5146a40ebfaff7449019a064fb4de5e7a1394e3c90bc710a398428"
+  },
+  "status": "passed"
+}
