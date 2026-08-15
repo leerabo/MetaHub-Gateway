@@ -97,6 +97,17 @@ import {
   renderQuotaManagement,
 } from "../features/plan-billing/renderPlanBilling.js";
 import {
+  bindBillingDisputeInteractions,
+  clearBillingDisputeDom,
+  hydrateBillingDisputePrivateText,
+} from "../features/billing-disputes/bindBillingDisputes.js";
+import {
+  billingDisputePageOwner,
+  billingDisputeReadIdentitySnapshot,
+  createBillingDisputePageState,
+} from "../features/billing-disputes/billingDisputePageState.js";
+import { renderBillingDisputes } from "../features/billing-disputes/renderBillingDisputes.js";
+import {
   bindAdminAssistantInteractions,
   clearAdminAssistantDom,
 } from "../features/admin-assistant/bindAdminAssistant.js";
@@ -365,6 +376,13 @@ import {
   getQuotaBuckets,
   patchCurrentPlan,
 } from "../lib/planBilling.js";
+import {
+  createBillingDispute,
+  getBillingDispute,
+  isBillingDisputeAbortError,
+  listBillingDisputes,
+  transitionBillingDispute,
+} from "../lib/billingDisputes.js";
 import {
   adminAssistantSourceAccess,
   queryAdminAssistant,
@@ -670,6 +688,10 @@ const responseCachePageState = createResponseCachePageState({ clearDom: clearRes
 const planManagementPageState = createPlanPageState({ clearDom: clearPlanManagementDom });
 // PAGE-111 的 reason、幂等键和额度调整 ticket 只驻留完整 quota.read owner 的 Dialog 闭包。
 const quotaManagementPageState = createQuotaPageState({ clearDom: clearQuotaManagementDom });
+// PAGE-112 reason/decision text and idempotency keys stay inside this owner-bound state closure.
+const billingDisputePageState = createBillingDisputePageState({
+  clearDom: () => clearBillingDisputeDom(globalThis.document),
+});
 // PAGE-107 的问题、回答、来源与 POST ticket 只属于完整 assistant owner；任何清理都会同步擦除正文 DOM。
 const adminAssistantPageState = createAdminAssistantPageState({
   clearDom: () => clearAdminAssistantDom(globalThis.document),
@@ -832,6 +854,10 @@ if (app && globalThis.window) {
         // PAGE-111 的 reason、幂等键和调整 ticket 不能越过 hash 导航边界。
         quotaManagementPageState.clear();
       }
+      if (nextItemId !== "billing-disputes") {
+        // PAGE-112 的详情自由文本、Dialog 与所有 GET/PATCH 代次不能越过 hash 边界。
+        billingDisputePageState.clear();
+      }
       if (nextItemId !== "approvals") {
         // PAGE-108/109 的任务详情、密码 DOM、cursor 和动作 owner 在 hash 离页时立即销毁。
         approvalPageState.clear();
@@ -872,6 +898,7 @@ if (app && globalThis.window) {
       responseCachePageState.clear();
       planManagementPageState.clear();
       quotaManagementPageState.clear();
+      billingDisputePageState.clear();
       adminAssistantPageState.leave();
       approvalPageState.clear();
       webhookDeadLetterPageState.clear();
@@ -994,6 +1021,7 @@ async function start() {
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
+    clearBillingDisputeStateOnIdentityChange(authSession.context, context);
     clearAdminAssistantStateOnIdentityChange(authSession.context, context);
     clearApprovalStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
@@ -1079,6 +1107,7 @@ async function performRefresh() {
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
+    clearBillingDisputeStateOnIdentityChange(authSession.context, context);
     adminAssistantIdentityChanged = (
       adminAssistantReadIdentitySnapshot(authSession.context)
       !== adminAssistantReadIdentitySnapshot(context)
@@ -1318,6 +1347,16 @@ async function performRefresh() {
   ) {
     return;
   }
+  // PAGE-112 free text and write tickets only belong to the backend-confirmed read navigation owner.
+  if (consoleShellState?.activeNavigationItemId !== "billing-disputes") {
+    billingDisputePageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && billingDisputePageState.blocksShellDomReplacement()
+    && billingDisputePageState.enter(currentBillingDisputeOwner(consoleShellState))
+  ) {
+    return;
+  }
   // PAGE-107 后台刷新仍先重读 auth/navigation；同 owner 有正文时保留 DOM，撤权则 leave 后继续失败关闭。
   // 上方多个页面 loader 都包含 await；离开旧导航后必须再次核对本轮 owner，禁止旧 overview 快照
   // 在新 PAGE-107 已经建立 owner 后调用 leave() 并移除刚渲染的根节点。
@@ -1449,6 +1488,11 @@ async function performRefresh() {
   }
   const quotaManagementState = await loadQuotaManagementState(consoleShellState, refreshId);
   // 额度读取可能清除失效会话，后续页面加载必须在无令牌时立即停止。
+  if (!authSession.token) {
+    return;
+  }
+  // PAGE-112 only loads after backend navigation confirms billing.dispute.read; detail remains explicit.
+  const billingDisputesState = await loadBillingDisputesState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
@@ -1677,6 +1721,7 @@ async function performRefresh() {
     responseCacheState,
     planManagementState,
     quotaManagementState,
+    billingDisputesState,
     adminAssistantState,
     approvalsState,
     modelAliasesState,
@@ -1725,6 +1770,13 @@ async function performRefresh() {
   if (consoleShellState?.activeNavigationItemId === "admin-assistant") {
     // question/answer 不进入 Shell innerHTML；只在完整 owner 的当前 DOM 上同步注入正文。
     hydrateAdminAssistantText(app, adminAssistantPageState.snapshot());
+  }
+  if (consoleShellState?.activeNavigationItemId === "billing-disputes") {
+    // Free text never enters renderDeveloperStart HTML; only an explicit current-owner reveal hydrates textContent.
+    hydrateBillingDisputePrivateText(
+      globalThis.document,
+      billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
+    );
   }
   if (consoleShellState?.activeNavigationItemId === "prompt-templates") {
     // 解密正文与变量草稿只能在当前授权 DOM 就位后通过 textContent/value 注入。
@@ -1890,6 +1942,7 @@ function renderLogin(error, requestId) {
   responseCachePageState.clear();
   planManagementPageState.clear();
   quotaManagementPageState.clear();
+  billingDisputePageState.clear();
   // 登录页是 PAGE-107 强边界，问题、回答、来源和迟到 POST 都不能跨 Session 保留。
   adminAssistantPageState.leave();
   // 登录页是审批强身份边界，先擦密码和任务事实，再取消 list/detail/action。
@@ -2260,6 +2313,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     responseCachePageState.clear();
     planManagementPageState.clear();
     quotaManagementPageState.clear();
+    billingDisputePageState.clear();
     adminAssistantPageState.leave();
     approvalPageState.clear();
     webhookDeadLetterPageState.clear();
@@ -4434,6 +4488,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
   bindQuotaManagementPageInteractions(consoleShellState);
+  bindBillingDisputePageInteractions(consoleShellState);
   bindAdminAssistantPageInteractions(consoleShellState);
   bindApprovalPageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
@@ -6426,6 +6481,256 @@ function handlePlanBillingAuthenticationFailure(error) {
 /** 识别套餐额度权限撤销错误，仅接受固定错误类型、状态和错误码组合。 */
 function isPlanBillingPermissionRevocation(error) {
   // 权限撤销判断必须精确匹配受控认证错误，普通异常不得触发授权刷新。
+  return error instanceof AuthApiError
+    && error.status === 403
+    && error.code === "auth.permission_denied";
+}
+
+/** Build the current PAGE-112 owner; hash can only narrow the backend navigation decision. */
+function currentBillingDisputeOwner(consoleShellState, mode = "read") {
+  const owner = billingDisputePageOwner(authSession.context, consoleShellState, { mode });
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || (hashNavigation && hashNavigation !== "billing-disputes")) return null;
+  return owner;
+}
+
+/** Bind PAGE-112 list/detail, private reveal and owner-checked write commands. */
+function bindBillingDisputePageInteractions(consoleShellState) {
+  const owner = currentBillingDisputeOwner(consoleShellState);
+  if (!billingDisputePageState.enter(owner)) return false;
+  return bindBillingDisputeInteractions({
+    async onRefresh() {
+      await refreshBillingDisputePanel(consoleShellState);
+    },
+    async onFilters(filters) {
+      if (billingDisputePageState.setFilters(currentBillingDisputeOwner(consoleShellState), filters)) {
+        await refreshBillingDisputePanel(consoleShellState);
+      }
+    },
+    async onNextPage() {
+      if (billingDisputePageState.useNextCursor(currentBillingDisputeOwner(consoleShellState))) {
+        await refreshBillingDisputePanel(consoleShellState);
+      }
+    },
+    async onFirstPage() {
+      if (billingDisputePageState.resetCursor(currentBillingDisputeOwner(consoleShellState))) {
+        await refreshBillingDisputePanel(consoleShellState);
+      }
+    },
+    async onSelectDetail(billingDisputeId) {
+      const currentOwner = currentBillingDisputeOwner(consoleShellState);
+      if (!billingDisputePageState.selectDetail(currentOwner, billingDisputeId)) return;
+      const refreshId = ++refreshSequence;
+      renderCurrentBillingDisputePanel(consoleShellState);
+      await loadBillingDisputeDetailState(consoleShellState, refreshId);
+      if (refreshId === refreshSequence) renderCurrentBillingDisputePanel(consoleShellState);
+    },
+    onCloseDetail() {
+      if (billingDisputePageState.closeDetail(currentBillingDisputeOwner(consoleShellState))) {
+        renderCurrentBillingDisputePanel(consoleShellState);
+      }
+    },
+    onReveal(kind) {
+      if (billingDisputePageState.revealText(currentBillingDisputeOwner(consoleShellState), kind)) {
+        refreshSequence += 1;
+        renderCurrentBillingDisputePanel(consoleShellState);
+      }
+    },
+    onCollapse(kind) {
+      if (billingDisputePageState.collapseText(currentBillingDisputeOwner(consoleShellState), kind)) {
+        renderCurrentBillingDisputePanel(consoleShellState);
+      }
+    },
+    onOpenCreate() {
+      if (billingDisputePageState.openCreate(currentBillingDisputeOwner(consoleShellState, "create"))) {
+        refreshSequence += 1;
+        renderCurrentBillingDisputePanel(consoleShellState);
+      }
+    },
+    onOpenAction(action) {
+      const mode = action === "cancel" ? "create" : action === "approve" ? "approve" : "review";
+      if (billingDisputePageState.openAction(currentBillingDisputeOwner(consoleShellState, mode), action)) {
+        refreshSequence += 1;
+        renderCurrentBillingDisputePanel(consoleShellState);
+      }
+    },
+    onCloseDialog() {
+      const closed = billingDisputePageState.closeDialog(currentBillingDisputeOwner(consoleShellState));
+      if (closed) renderCurrentBillingDisputePanel(consoleShellState);
+      return closed;
+    },
+    async onSubmitCreate(request) {
+      await submitBillingDisputeMutation(consoleShellState, request);
+    },
+    async onSubmitAction(request) {
+      await submitBillingDisputeMutation(consoleShellState, request);
+    },
+    async onRetry() {
+      await submitBillingDisputeMutation(consoleShellState, null, { retry: true });
+    },
+  });
+}
+
+/** Re-render PAGE-112 and hydrate explicitly revealed text through textContent. */
+function renderCurrentBillingDisputePanel(consoleShellState) {
+  const owner = currentBillingDisputeOwner(consoleShellState);
+  if (!billingDisputePageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".billing-disputes-panel");
+  if (!panel) return false;
+  const html = renderBillingDisputes(
+    billingDisputePageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+    currentI18n,
+  );
+  if (!html) {
+    billingDisputePageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindBillingDisputePageInteractions(consoleShellState);
+  hydrateBillingDisputePrivateText(
+    globalThis.document,
+    billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
+  );
+  return true;
+}
+
+/** Run an explicit list GET under a new global refresh generation. */
+async function refreshBillingDisputePanel(consoleShellState) {
+  const owner = currentBillingDisputeOwner(consoleShellState);
+  if (!billingDisputePageState.enter(owner)) return null;
+  const refreshId = ++refreshSequence;
+  renderCurrentBillingDisputePanel(consoleShellState);
+  const state = await loadBillingDisputesState(consoleShellState, refreshId);
+  if (!state || refreshId !== refreshSequence) return null;
+  return renderCurrentBillingDisputePanel(consoleShellState) ? state : null;
+}
+
+/** Load one explicitly selected detail; late responses cannot refill another selection. */
+async function loadBillingDisputeDetailState(consoleShellState, refreshId) {
+  const owner = currentBillingDisputeOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !billingDisputePageState.enter(owner)) return null;
+  const operation = billingDisputePageState.beginDetail(owner);
+  if (!operation) return billingDisputePageState.snapshot();
+  try {
+    const response = await getBillingDispute({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      billingDisputeId: operation.billingDisputeId,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = billingDisputePageState.acceptDetail(
+      operation,
+      response,
+      currentBillingDisputeOwner(consoleShellState),
+    );
+    return accepted ? billingDisputePageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentBillingDisputeOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !billingDisputePageState.isDetailCurrent(operation, currentOwner)
+      || isBillingDisputeAbortError(error)
+    ) return null;
+    if (handleBillingDisputeAuthenticationFailure(error)) return null;
+    if (isBillingDisputePermissionRevocation(error)) {
+      billingDisputePageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    billingDisputePageState.rejectDetail(operation, error, currentOwner);
+    return billingDisputePageState.snapshot();
+  } finally {
+    billingDisputePageState.finishDetail(operation);
+  }
+}
+
+/** Submit create or PATCH while keeping reason/decision/key inside the operation closure. */
+async function submitBillingDisputeMutation(consoleShellState, request, { retry = false } = {}) {
+  const dialog = billingDisputePageState.snapshot().dialog;
+  const mode = dialog.kind === "create"
+    ? "create"
+    : dialog.action === "cancel"
+      ? "create"
+      : dialog.action === "approve"
+        ? "approve"
+        : "review";
+  const token = authSession.token;
+  const owner = currentBillingDisputeOwner(consoleShellState, mode);
+  if (!token || !owner) {
+    billingDisputePageState.clear();
+    if (!token) renderLogin();
+    return null;
+  }
+  const operation = billingDisputePageState.beginMutation(owner, request, { retry });
+  if (!operation) return billingDisputePageState.snapshot();
+  refreshSequence += 1;
+  renderCurrentBillingDisputePanel(consoleShellState);
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    billingDisputePageState.finishMutation(operation);
+  };
+  try {
+    const response = operation.kind === "create"
+      ? await createBillingDispute({
+          controlApiUrl,
+          token,
+          tenantId: owner.tenantId,
+          request: operation.request,
+          idempotencyKey: operation.idempotencyKey,
+          signal: operation.controller.signal,
+        })
+      : await transitionBillingDispute({
+          controlApiUrl,
+          token,
+          tenantId: owner.tenantId,
+          billingDisputeId: operation.billingDisputeId,
+          request: operation.request,
+          idempotencyKey: operation.idempotencyKey,
+          signal: operation.controller.signal,
+        });
+    const currentOwner = currentBillingDisputeOwner(consoleShellState, mode);
+    if (!billingDisputePageState.acceptMutation(operation, response, currentOwner)) return null;
+    finish();
+    renderCurrentBillingDisputePanel(consoleShellState);
+    return billingDisputePageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentBillingDisputeOwner(consoleShellState, mode);
+    if (
+      !billingDisputePageState.isMutationCurrent(operation, currentOwner)
+      || isBillingDisputeAbortError(error)
+    ) return null;
+    if (handleBillingDisputeAuthenticationFailure(error)) return null;
+    if (isBillingDisputePermissionRevocation(error)) {
+      billingDisputePageState.clear();
+      finish();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    billingDisputePageState.rejectMutation(operation, error, currentOwner);
+    finish();
+    renderCurrentBillingDisputePanel(consoleShellState);
+    return billingDisputePageState.snapshot();
+  } finally {
+    finish();
+  }
+}
+
+function handleBillingDisputeAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
+  billingDisputePageState.clear();
+  clearAuthSession();
+  authSession = { token: null, context: null };
+  renderLogin(authErrorMessage(error), error.requestId);
+  return true;
+}
+
+function isBillingDisputePermissionRevocation(error) {
   return error instanceof AuthApiError
     && error.status === 403
     && error.code === "auth.permission_denied";
@@ -8807,6 +9112,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "quota-buckets") {
     // 导航请求前销毁 PAGE-111 reason、幂等键与额度调整 ticket。
     quotaManagementPageState.clear();
+  }
+  if (itemId !== "billing-disputes") {
+    // 导航请求前同步擦除 PAGE-112 reason、decision、幂等键和所有异步 owner。
+    billingDisputePageState.clear();
   }
   if (itemId !== "admin-assistant") {
     // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
@@ -14080,6 +14389,47 @@ async function loadQuotaManagementState(consoleShellState, refreshId) {
   }
 }
 
+/** PAGE-112 list loader; no read permission means no hidden prefetch or retained DOM. */
+async function loadBillingDisputesState(consoleShellState, refreshId) {
+  const owner = currentBillingDisputeOwner(consoleShellState);
+  if (refreshId !== refreshSequence || !billingDisputePageState.enter(owner)) return null;
+  const operation = billingDisputePageState.beginList(owner);
+  if (!operation) return billingDisputePageState.snapshot();
+  try {
+    const response = await listBillingDisputes({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      filters: operation.filters,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const accepted = billingDisputePageState.acceptList(
+      operation,
+      response,
+      currentBillingDisputeOwner(consoleShellState),
+    );
+    return accepted ? billingDisputePageState.snapshot() : null;
+  } catch (error) {
+    const currentOwner = currentBillingDisputeOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !billingDisputePageState.isListCurrent(operation, currentOwner)
+      || isBillingDisputeAbortError(error)
+    ) return null;
+    if (handleBillingDisputeAuthenticationFailure(error)) return null;
+    if (isBillingDisputePermissionRevocation(error)) {
+      billingDisputePageState.clear();
+      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      return null;
+    }
+    billingDisputePageState.rejectList(operation, error, currentOwner);
+    return billingDisputePageState.snapshot();
+  } finally {
+    billingDisputePageState.finishList(operation);
+  }
+}
+
 /** PAGE-107 不在刷新阶段读取业务事实；这里只建立经过 auth/navigation 双校验的当前页面 owner。 */
 function loadAdminAssistantState(consoleShellState, refreshId) {
   if (refreshId !== refreshSequence) return null;
@@ -15192,6 +15542,13 @@ function clearPlanBillingStateOnIdentityChange(previous, current) {
   }
   if (quotaReadIdentitySnapshot(previous) !== quotaReadIdentitySnapshot(current)) {
     quotaManagementPageState.clear();
+  }
+}
+
+/** Destroy PAGE-112 on tenant, Session, permission revision, matrix or fingerprint drift. */
+function clearBillingDisputeStateOnIdentityChange(previous, current) {
+  if (billingDisputeReadIdentitySnapshot(previous) !== billingDisputeReadIdentitySnapshot(current)) {
+    billingDisputePageState.clear();
   }
 }
 

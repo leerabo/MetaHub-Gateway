@@ -18,6 +18,7 @@ from metahub_shared.runtime.errors import ApiError
 from .service import (
     AuthContext,
     authenticate_bearer,
+    require_any_permission,
     require_permission,
 )
 
@@ -866,6 +867,41 @@ def require_finops_writer(
 
     # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
     return _require_request_permissions(request, authorization, ("billing.finops.write",))
+
+
+def require_billing_dispute_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require current-tenant billing dispute read permission before parsing input."""
+
+    return _require_request_permissions(request, authorization, ("billing.dispute.read",))
+
+
+def require_billing_dispute_creator(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require both read and create authority for a dispute creation response."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("billing.dispute.read", "billing.dispute.create"),
+    )
+
+
+def require_billing_dispute_mutator(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Admit dispute mutations with read plus at least one action permission."""
+
+    context = _require_request_permissions(request, authorization, ("billing.dispute.read",))
+    return require_any_permission(
+        context,
+        ("billing.dispute.create", "billing.dispute.review"),
+    )
 
 
 def require_plan_reader(

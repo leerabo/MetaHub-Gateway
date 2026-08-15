@@ -21,6 +21,8 @@ from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
 from .batch_jobs import router as batch_jobs_router
+from .billing_disputes import install_billing_dispute_scheduler
+from .billing_disputes import router as billing_disputes_router
 from .budgets.routes import router as budgets_router
 from .config.routes import router as config_router
 from .config_transfer.routes import router as config_transfer_router
@@ -103,14 +105,19 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
     """让 Response Cache 的认证、校验与业务错误和成功响应共享 no-store/private。"""
 
     response = await call_next(request)
-    if request.url.path in {
-        "/cache-policies",
-        "/cache/invalidate",
-        "/admin-assistant/query",
-        "/plans",
-        "/quota-buckets",
-        "/quota-adjustments",
-    }:
+    if (
+        request.url.path
+        in {
+            "/cache-policies",
+            "/cache/invalidate",
+            "/admin-assistant/query",
+            "/plans",
+            "/quota-buckets",
+            "/quota-adjustments",
+        }
+        or request.url.path == "/billing-disputes"
+        or request.url.path.startswith("/billing-disputes/")
+    ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         response.headers["Cache-Control"] = "no-store, private"
     if request.url.path == "/admin-assistant/query":
@@ -123,6 +130,7 @@ app.include_router(auth_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
+app.include_router(billing_disputes_router)
 app.include_router(adapter_contracts_router)
 app.include_router(adapter_specs_router)
 app.include_router(audit_router)
@@ -187,3 +195,4 @@ install_experiment_scheduler(app)
 install_response_cache_outbox_scheduler(app)
 install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
+install_billing_dispute_scheduler(app)

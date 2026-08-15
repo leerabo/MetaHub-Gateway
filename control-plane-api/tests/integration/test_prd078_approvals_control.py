@@ -62,7 +62,7 @@ def _db_time(value: datetime) -> str:
 
 @pytest.fixture(scope="module")
 def prd078_control_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """一次构建完整 0071 seed 模板，后续每个用例复制隔离数据库。"""
+    """一次构建包含 0071 的当前 seed 模板，后续每个用例复制隔离数据库。"""
 
     database = tmp_path_factory.mktemp("prd078-control-template") / "template.sqlite3"
     database_url = _url(database)
@@ -70,7 +70,7 @@ def prd078_control_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = ADMIN_PASSWORD
     try:
         result = apply_migrations(database_url)
-        assert result.applied[-1] == "0071"
+        assert "0071" in result.applied
         apply_seed_data(database_url)
     finally:
         if previous is None:

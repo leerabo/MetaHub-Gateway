@@ -103,6 +103,9 @@ WEBHOOK_EVENT_TYPES = {
     # 请求正文、模型、Provider 与任何凭据都不属于订阅合同。
     "quota.exhausted",
     "trial.expired",
+    # 账单争议只外发创建时冻结的范围类型、条目计数和按币种汇总；request 列表、
+    # 时间范围、reason、价格证据和调整明细均留在 tenant-qualified 权威数据库。
+    "billing_dispute.created",
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -336,6 +339,9 @@ def build_webhook_event(
     elif event_type in {"quota.exhausted", "trial.expired"}:
         # PRD-079 只接受 Plan/Event source 可逐字段重建的 exact 安全摘要。
         _validate_quota_event_payload(event_type, safe_payload)
+    elif event_type == "billing_dispute.created":
+        # PRD-080 只接受 immutable item/source 可重建的七字段创建摘要。
+        _validate_billing_dispute_created_payload(safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -382,6 +388,7 @@ def build_webhook_event(
         "approval.timeout",
         "quota.exhausted",
         "trial.expired",
+        "billing_dispute.created",
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -669,6 +676,18 @@ def build_webhook_event(
         # 两类额度 source 事件必须绑定同一 Plan、系统 actor、原始链路和发生秒。
         _validate_quota_event_envelope(
             event_type,
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == "billing_dispute.created":
+        # source event 必须绑定认证申请人、争议对象和原始创建链路，恢复 worker 不得自造身份。
+        _validate_billing_dispute_created_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1391,6 +1410,77 @@ def _validate_quota_event_envelope(
         or _to_iso(occurred_at) != payload["expired_at"]
     ):
         # 系统身份或发生时间不匹配时拒绝发布，载荷不能自行声明终态。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_billing_dispute_created_payload(payload: dict[str, Any]) -> None:
+    """校验账单争议创建事件的 exact v1 安全摘要。"""
+
+    expected = {
+        "schema_version",
+        "billing_dispute_id",
+        "scope_type",
+        "item_count",
+        "currency_totals",
+        "status",
+        "created_at",
+    }
+    if (
+        set(payload) != expected
+        or type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or not _is_prefixed_lower_hex_id(payload["billing_dispute_id"], prefix="bdsp_")
+        or payload["scope_type"] not in {"request_ids", "time_range"}
+        or type(payload["item_count"]) is not int
+        or not 1 <= payload["item_count"] <= 100
+        or payload["status"] != "submitted"
+        or not _is_canonical_utc_second(payload["created_at"])
+    ):
+        # 字段集合、版本、资源身份或冻结状态任一漂移都拒绝，不能宽松转发未知字段。
+        raise ValueError("webhook.payload_invalid")
+
+    totals = payload["currency_totals"]
+    if (
+        type(totals) is not dict
+        or not 1 <= len(totals) <= 2
+        or not set(totals) <= {"CNY", "USD"}
+        or any(
+            not _is_billing_dispute_aggregate_money_text(
+                value,
+                item_count=payload["item_count"],
+            )
+            for value in totals.values()
+        )
+    ):
+        # 不同币种必须分组且只使用固定六位正金额，禁止 float 或伪造总计键。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_billing_dispute_created_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把创建摘要绑定到持久事件、申请人和原始事务链路。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="bdevt_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != payload["billing_dispute_id"]
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+        or _to_iso(occurred_at) != payload["created_at"]
+    ):
+        # lease worker 或恢复任务不得替换申请人、request/trace、object 或发生时刻。
         raise ValueError("webhook.payload_invalid")
 
 
@@ -3140,6 +3230,28 @@ def _is_finops_money_text(value: object) -> bool:
     ):
         return False
     return int(integer) <= 1_000_000_000
+
+
+def _is_billing_dispute_aggregate_money_text(value: object, *, item_count: int) -> bool:
+    """Validate a canonical positive total bounded by the frozen item count."""
+
+    if type(value) is not str or type(item_count) is not int or not 1 <= item_count <= 100:
+        return False
+    integer, separator, fraction = value.partition(".")
+    if (
+        separator != "."
+        or not 1 <= len(integer) <= 12
+        or len(fraction) != 6
+        or not integer.isascii()
+        or not fraction.isascii()
+        or not integer.isdecimal()
+        or not fraction.isdecimal()
+        or (len(integer) > 1 and integer.startswith("0"))
+    ):
+        return False
+    amount_micros = int(integer) * 1_000_000 + int(fraction)
+    maximum_micros = item_count * 1_000_000_000 * 1_000_000
+    return 0 < amount_micros <= maximum_micros
 
 
 def _validate_cache_affinity_selected_payload(payload: dict[str, Any]) -> None:

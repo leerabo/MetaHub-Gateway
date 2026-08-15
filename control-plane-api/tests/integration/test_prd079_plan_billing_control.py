@@ -61,7 +61,7 @@ def _url(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def prd079_control_template(tmp_path_factory: pytest.TempPathFactory) -> ControlTemplate:
-    """从空库迁移到 0072 一次，后续测试复制数据库以避免重复执行 72 个迁移。"""
+    """从空库迁移到包含 0072 的当前版本，后续测试复制数据库避免重复迁移。"""
 
     root = tmp_path_factory.mktemp("prd079-control-template")
     database = root / "template.sqlite3"
@@ -70,7 +70,7 @@ def prd079_control_template(tmp_path_factory: pytest.TempPathFactory) -> Control
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = ADMIN_PASSWORD
     try:
         result = apply_migrations(database_url)
-        assert result.applied[-1] == "0072"
+        assert "0072" in result.applied
         seed = apply_seed_data(database_url)
     finally:
         if previous is None:

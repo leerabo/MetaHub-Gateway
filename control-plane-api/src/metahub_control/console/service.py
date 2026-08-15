@@ -91,6 +91,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     # PAGE-110/111 页面事件只记录 shell 元数据，不携带套餐字段、余额、调整原因或幂等键。
     "plans": "console.page_viewed",
     "quota-buckets": "console.page_viewed",
+    # PAGE-112 只记录页面访问，不携带争议原因、item、金额、幂等键或审核决定。
+    "billing-disputes": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -387,6 +389,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看四类额度、分类消费和独立未分配成本。",
         "创建套餐后可查看和调整额度。",
         85,
+    ),
+    NavigationDefinition(
+        "billing-disputes",
+        "账单争议",
+        "调用与成本",
+        "billing-disputes",
+        ("billing.dispute.read",),
+        "提交并跟踪账单争议、结算暂缓和追加式费用调整。",
+        "当前没有账单争议。",
+        86,
     ),
     NavigationDefinition(
         "budgets",

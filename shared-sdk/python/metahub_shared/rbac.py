@@ -50,7 +50,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 最终授权仍必须从当前 tenant 的动态角色矩阵逐请求恢复并在审计事务内复核。
 # PRD-078 把审批入口与目标域权限拆开：read/decide 只表达审批职责，Control 仍须实时
 # 复核预算或会话风险的目标权限，不能让审批权限成为跨域写入后门。
-CATALOG_REVISION: Final[int] = 15
+# PRD-080 再拆分账单争议读取、申请与审核权限；批准争议仍须同时实时具备
+# ``billing.finops.write``，不能把争议审核权限当作任意账本写入能力。
+CATALOG_REVISION: Final[int] = 16
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -281,6 +283,27 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "billing",
         "调整额度",
         "创建当前租户可审计的额度增减事实。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "billing.dispute.read",
+        "billing",
+        "读取账单争议",
+        "读取当前租户账单争议、暂缓标记与调整链路。",
+        "read",
+    ),
+    PermissionDefinition(
+        "billing.dispute.create",
+        "billing",
+        "提交账单争议",
+        "提交或取消当前租户本人创建的账单争议。",
+        "write",
+    ),
+    PermissionDefinition(
+        "billing.dispute.review",
+        "billing",
+        "审核账单争议",
+        "审核当前租户账单争议；批准仍需正式账本写权限。",
         "critical",
     ),
     PermissionDefinition(
@@ -553,6 +576,9 @@ _FINANCE = {
     "billing.plan.write",
     "billing.quota.read",
     "billing.quota.write",
+    "billing.dispute.read",
+    "billing.dispute.create",
+    "billing.dispute.review",
     "policy_template.read",
     "policy_template.apply",
     "response_cache.read",

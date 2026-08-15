@@ -1,0 +1,31 @@
+{
+  "algorithm": "sha256",
+  "all_108_prds_complete": false,
+  "files": [
+    {
+      "bytes": 4602,
+      "name": "browser-acceptance.json",
+      "sha256": "a119250da461f04e966c3867f017084d6048eaf53d56877a0fcfef2a653e5193"
+    },
+    {
+      "bytes": 70348,
+      "name": "page-112-approved-desktop-1280x720.png",
+      "sha256": "4ae4bd4b8d1df4eab027c2f3592b6a38bb48ffae202f9c594c1fdd4a6af012a0"
+    },
+    {
+      "bytes": 78368,
+      "name": "page-112-list-desktop-1280x720.png",
+      "sha256": "2d36c079ce123d331ff7d053afcf08395230f84fa39da750fae8909de0940c01"
+    },
+    {
+      "bytes": 29409,
+      "name": "page-112-list-mobile-390x844.png",
+      "sha256": "a11762d0ceac8a64ec046c1c2d517f77e2867141e8612e4793d1dc6b1cc42b1b"
+    },
+    {
+      "bytes": 22142,
+      "name": "page-112-rejected-mobile-390x844.png",
+      "sha256": "6c985913fdf73a4c3dca9d2f9a8fa75a331a07eb46634667087c978edc75731b"
+    }
+  ]
+}

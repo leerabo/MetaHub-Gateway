@@ -644,6 +644,94 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="gateway_quota",
     ),
+    # 账单争议错误只暴露稳定状态与恢复动作；tenant、金额明细、reason、幂等摘要、
+    # outbox lease 和底层 SQL 均不得进入统一错误信封或日志。
+    "billing_dispute.query_invalid": ErrorSpec(
+        422,
+        "Billing dispute query is invalid.",
+        "Use the documented filters, limit, and signed cursor.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.request_invalid": ErrorSpec(
+        422,
+        "Billing dispute request is invalid.",
+        "Use the documented exact fields, canonical amounts, and idempotency key.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.not_found": ErrorSpec(
+        404,
+        "Billing dispute was not found.",
+        "Refresh the current tenant billing dispute list.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.scope_not_found": ErrorSpec(
+        404,
+        "No eligible billed request was found.",
+        "Choose billed requests from the current tenant that still have reversible value.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.scope_too_large": ErrorSpec(
+        422,
+        "Billing dispute scope is too large.",
+        "Narrow the request set or time range to at most one hundred eligible entries.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.hold_conflict": ErrorSpec(
+        409,
+        "A billed entry is already under dispute.",
+        "Refresh the dispute list and resolve the active hold before retrying.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.revision_conflict": ErrorSpec(
+        409,
+        "Billing dispute state changed.",
+        "Refresh the dispute and retry against its current revision.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.transition_invalid": ErrorSpec(
+        409,
+        "Billing dispute transition is invalid.",
+        "Refresh the dispute and choose an action allowed by its current state.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.self_review_forbidden": ErrorSpec(
+        403,
+        "A billing dispute cannot be self-reviewed.",
+        "Ask another authorized billing reviewer to process this dispute.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.adjustment_invalid": ErrorSpec(
+        422,
+        "Billing dispute adjustment is invalid.",
+        "Use unique dispute items and positive canonical amounts within the frozen scope.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.adjustment_conflict": ErrorSpec(
+        409,
+        "Billing dispute adjustment conflicts with current ledger state.",
+        "Refresh the dispute and reversible balances before submitting a new decision.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.idempotency_conflict": ErrorSpec(
+        409,
+        "Billing dispute idempotency key conflicts with another intent.",
+        "Use a new idempotency key for a different dispute operation.",
+        owner="billing_dispute",
+    ),
+    "billing_dispute.integrity_failed": ErrorSpec(
+        503,
+        "Billing dispute integrity verification failed.",
+        "Use the request id to inspect tenant-owned ledger and dispute facts before retrying.",
+        retryable=True,
+        owner="billing_dispute",
+    ),
+    "billing_dispute.unavailable": ErrorSpec(
+        503,
+        "Billing dispute processing is temporarily unavailable.",
+        "Retry after the durable database and event worker recover.",
+        retryable=True,
+        owner="billing_dispute",
+    ),
     # 实验错误只暴露稳定对象与恢复语义；name、路由指纹、幂等材料、正文和数据库异常
     # 均留在服务端边界内。
     "experiment.input_invalid": ErrorSpec(

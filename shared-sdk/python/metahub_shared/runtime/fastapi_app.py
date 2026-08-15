@@ -175,11 +175,14 @@ def create_service_app(
         # access log 均不得泄露。邀请接受把一次性凭据放在 path，因此也必须在
         # 业务路由执行前纳入碰撞检测，不能等数据库校验后才开始脱敏。
         # 创建正文含邀请邮箱、公开 accept 正文含密码，而 middleware 在读取正文前无法知道
-        # 这些值；敏感意图分类正文也可能被攻击者原样复制到链路 Header。上述写入口均不接受
-        # 客户端链路 ID，统一生成内部 ID，避免响应头、access log 或持久 source identity 二次回显。
-        sensitive_write_boundary = (
+        # 这些值；敏感意图分类和账单争议正文也可能被攻击者原样复制到链路 Header。争议
+        # detail 还会返回授权 reason，因此其整个路径前缀都不接受客户端链路 ID。统一生成
+        # 内部 ID，避免响应头、access log 或持久 source identity 二次回显。
+        sensitive_request_boundary = (
             invitation_token is not None
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
+            or request.url.path == "/billing-disputes"
+            or request.url.path.startswith("/billing-disputes/")
             or (
                 request.method == "POST"
                 and request.url.path.rstrip("/") == "/security/classify-intent"
@@ -196,10 +199,10 @@ def create_service_app(
             )
         )
         incoming_request_id = (
-            None if sensitive_write_boundary else request.headers.get(REQUEST_ID_HEADER)
+            None if sensitive_request_boundary else request.headers.get(REQUEST_ID_HEADER)
         )
         incoming_trace_id = (
-            None if sensitive_write_boundary else request.headers.get(TRACE_ID_HEADER)
+            None if sensitive_request_boundary else request.headers.get(TRACE_ID_HEADER)
         )
         request_id = resolve_request_id(
             incoming_request_id,
@@ -312,13 +315,15 @@ def create_service_app(
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
 
-        # 邀请 path 本身携带凭据；管理助手异常对象还可能携带问题、回答或上游正文。
-        # 这两类边界只记录固定错误事实，不附加 exc_info；其他路由保留既有 traceback。
+        # 邀请 path 本身携带凭据；管理助手和账单争议异常对象还可能携带自由文本正文。
+        # 这些边界只记录固定错误事实，不附加 exc_info；其他路由保留既有 traceback。
         safe_path = _safe_log_path(request)
         failure_logger = (
             logger.error
             if _invitation_path_credential(request.url.path) is not None
             or safe_path == "/admin-assistant/query"
+            or safe_path == "/billing-disputes"
+            or safe_path == "/billing-disputes/{billing_dispute_id}"
             else logger.exception
         )
         failure_logger(
@@ -505,6 +510,10 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
     elif path == "/batch-jobs" or path.startswith("/batch-jobs/"):
         # Batch responses expose tenant-private job, task, cost and result state. Apply the
         # private cache boundary to success and every middleware-generated error response.
+        response.headers["Cache-Control"] = "no-store, private"
+    elif path == "/billing-disputes" or path.startswith("/billing-disputes/"):
+        # Dispute detail contains tenant-private billing evidence and authorized free text.
+        # Authentication, validation and unhandled failures must share the same boundary.
         response.headers["Cache-Control"] = "no-store, private"
     elif path.rstrip("/") == "/admin-assistant/query":
         # 管理助手的成功、认证拒绝、wire 错误和最外层未捕获异常都可能关联租户私有查询。

@@ -26,6 +26,7 @@ import {
   renderPlanManagement,
   renderQuotaManagement,
 } from "../plan-billing/renderPlanBilling.js";
+import { renderBillingDisputes } from "../billing-disputes/renderBillingDisputes.js";
 import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
 import { renderApprovals } from "../approvals/renderApprovals.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
@@ -407,6 +408,14 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-111 只消费完整 quota.read owner；调整 Dialog 与 POST 分别复核实时 quota.write。
       return renderQuotaManagementSection(
         options.quotaManagementState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "billing-disputes":
+      // PAGE-112 list/detail requires billing.dispute.read; write commands are projected independently.
+      return renderBillingDisputesSection(
+        options.billingDisputesState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -942,6 +951,18 @@ function renderQuotaManagementSection(state, authContext, consoleShellState, i18
   return html
     ? `
       <section class="panel quota-buckets-panel" aria-labelledby="quota-buckets-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-112 loses its entire DOM when the read/navigation owner is no longer current. */
+function renderBillingDisputesSection(state, authContext, consoleShellState, i18n) {
+  const html = renderBillingDisputes(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel billing-disputes-panel" aria-labelledby="billing-disputes-title">
         ${html}
       </section>
     `

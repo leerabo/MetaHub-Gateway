@@ -1,0 +1,153 @@
+{
+  "all_108_prds_complete": false,
+  "browser": {
+    "all_108_prds_complete": false,
+    "desktop": {
+      "applicant_self_review_blocked": true,
+      "approve_terminal": true,
+      "approved_timeline_exact": true,
+      "height": 720,
+      "horizontal_overflow_free": true,
+      "html_escape_safe": true,
+      "list_rows_exact": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "page_112": true,
+      "partial_adjustment": true,
+      "private_text_collapsed": true,
+      "request_detail_exact": true,
+      "request_scope_created": true,
+      "text_overflow_free": true,
+      "time_scope_created": true,
+      "width": 1280
+    },
+    "lifecycle": {
+      "backend_rbac_denied": true,
+      "logout_late_response_discarded": true,
+      "logout_root_cleared": true,
+      "logout_storage_cleared": true,
+      "registered_private_values": true,
+      "revocation_late_response_discarded": true,
+      "revocation_navigation_cleared": true,
+      "revocation_root_cleared": true
+    },
+    "mobile": {
+      "busy_controls_disabled": true,
+      "busy_escape_blocked": true,
+      "decision_cleared": true,
+      "focus_restored": true,
+      "height": 844,
+      "horizontal_overflow_free": true,
+      "idle_escape_closed": true,
+      "initial_focus": true,
+      "list_rows_exact": true,
+      "native_dialog": true,
+      "nonblank": true,
+      "overlap_count": 0,
+      "page_112": true,
+      "private_text_collapsed": true,
+      "reason_cleared": true,
+      "reject_terminal": true,
+      "rejected_timeline_exact": true,
+      "tab_forward_wrap": true,
+      "tab_reverse_wrap": true,
+      "text_overflow_free": true,
+      "width": 390
+    },
+    "network": {
+      "console_errors": 0,
+      "create_statuses": [
+        201,
+        201
+      ],
+      "detail_successes": 2,
+      "external_requests": 0,
+      "forbidden_queries": 0,
+      "list_successes": 2,
+      "login_statuses": [
+        200,
+        200
+      ],
+      "logout_statuses": [
+        200
+      ],
+      "page_errors": 0,
+      "transition_statuses": [
+        200,
+        200,
+        200,
+        200
+      ]
+    },
+    "screenshots": [
+      "page-112-list-desktop-1280x720.png",
+      "page-112-list-mobile-390x844.png",
+      "page-112-approved-desktop-1280x720.png",
+      "page-112-rejected-mobile-390x844.png"
+    ],
+    "status": "passed"
+  },
+  "database": {
+    "adjustment_link_count": 1,
+    "audit_count": 6,
+    "dispute_count": 2,
+    "event_count": 2,
+    "finance_prd080_permissions_after_revocation": 0,
+    "finops_reversal_count": 1,
+    "item_count": 4,
+    "migration": {
+      "count": 73,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0073"
+    },
+    "released_hold_count": 4,
+    "scope_counts": {
+      "request_ids": 1,
+      "time_range": 1
+    },
+    "status_counts": {
+      "approved": 1,
+      "rejected": 1
+    },
+    "transition_count": 6
+  },
+  "prd_id": "PRD-080",
+  "privacy": {
+    "staging": {
+      "files_scanned": 5,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    },
+    "work_credentials": {
+      "files_scanned": 6,
+      "plaintext_matches": 0,
+      "sqlite_sidecars_remaining": 0
+    },
+    "work_non_database": {
+      "files_scanned": 5,
+      "plaintext_matches": 0
+    }
+  },
+  "processes": {
+    "console": "owned_and_stopped",
+    "control": "owned_and_stopped",
+    "harness": "owned_and_stopped"
+  },
+  "run_id": "prd080-browser-final-20260815-05",
+  "source_provenance": {
+    "algorithm": "sha256",
+    "billing_dispute_api": "8c3e718728dbb18be0a74f5af1dcc00ae1f8b86ba3d84256a1844eab23846360",
+    "billing_dispute_binding": "92c679a0c41c0d084bbd95c891198a73fd4e11d1eed4bc5b1a443acad8e11e4e",
+    "billing_dispute_render": "816490ffc81b64171a76f815fab29840782f61d44ece00849e60b743747a0f6e",
+    "billing_dispute_routes": "da421cee43c46c8cf5cd770be343ec61f4439b5710048495fe0c8d51269bbadf",
+    "billing_dispute_service": "92c6cec664a9f9fbdaa72ac804266f0e2c49359a80e0d41ee560ae4ef9bcaba9",
+    "billing_dispute_state": "3ad06f7877c00de41a42eb656e53dd21719971a87d07aad9363d116737feb10c",
+    "billing_dispute_styles": "b8f3a74577664fbb51be2d1037dd5329fa9859803d9a33d96f78a0f66faa83d7",
+    "browser_acceptance": "f528f1c128a7eb577398cf51fef19946648d548bc4a4c36902edeca53b4af12f",
+    "browser_harness": "27d5a412d819185d3efa9e31d0f39c7fd1cb6e1954010d352e0758942d4f5c06",
+    "console_main": "ccdab3fbf36a75c3c7ae335acb7da31b232be990af88487efb163d5fb660b0fc",
+    "migration_up": "e0c7040b25e02b0cf6687fc7d1a091eb4383107bd39f05eb744bad4d809810da"
+  },
+  "status": "passed"
+}

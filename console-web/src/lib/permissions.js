@@ -81,6 +81,10 @@ export const PERMISSIONS = Object.freeze({
   BILLING_PLAN_WRITE: "billing.plan.write",
   BILLING_QUOTA_READ: "billing.quota.read",
   BILLING_QUOTA_WRITE: "billing.quota.write",
+  // PAGE-112 读取、申请和审核独立授权；approve 仍需与 billing.finops.write 求交。
+  BILLING_DISPUTE_READ: "billing.dispute.read",
+  BILLING_DISPUTE_CREATE: "billing.dispute.create",
+  BILLING_DISPUTE_REVIEW: "billing.dispute.review",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",

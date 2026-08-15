@@ -91,9 +91,27 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-077 - 只读管理员 AI 助手`
 - `PRD-078 - 移动端/企微钉钉审批入口`
 - `PRD-079 - 套餐、试用与额度类型`
+- `PRD-080 - 账单争议与调整流程`
 
 最近进展：
 
+- `PRD-080 - 账单争议与调整流程` 已完成：Shared 发布 RBAC revision 16、统一错误和
+  `billing_dispute.created` exact 事件；0073 新增 tenant-qualified dispute、item、settlement hold、
+  transition、Adjustment link、event/outbox 与公平 scheduler 事实。Control 提供严格列表/详情/创建/CAS
+  审核、后端实时 RBAC、自审阻断、原子 Audit/FinOps reversal 和 Webhook 恢复；PAGE-112 提供 request/time
+  两种申请、审核、部分批准/拒绝、原生 Dialog 与完整 owner 清理。PRD-080 Python 专项 `58 passed`，
+  Console 全量 `815/815`，lint `253 files`，PRD-078/079 当前 0073 兼容回归 `30 passed`。权威 Runtime
+  从空 SQLite 完成 `73/0073 -> 73/0073 -> 72/0072 -> 73/0073`，四阶段均
+  `integrity_check=ok`、外键违规 0，并验证真实 Gateway charge、失败追踪、部分冲正和 Control 崩溃恢复。
+  最终安全复核还锁定零金额 scope 的固定 404、服务端链路 ID、Audit `User-Agent` 脱敏、未知异常固定 503/
+  全路径 no-store，以及多 item 合法汇总金额。权威 Browser `prd080-browser-final-20260815-05` 在
+  `1280x720` 与 `390x844` 覆盖完整 PAGE-112 工作流、动态撤权、迟到响应和登出清理，4 张截图人工复核通过，
+  外部请求、Console/Page error、布局溢出、重叠和敏感明文命中均为 0。详见
+  [PRD-080 设计](docs/prd/PRD-080-billing-dispute-adjustment-workflow.md)、
+  [账单争议 API](docs/api/billing-disputes.md)、[PRD-080 测试记录](docs/testing/PRD-080-tests.md)、
+  [Runtime](.artifacts/prd080-runtime/prd080-runtime-final-20260815-05) 和
+  [Browser](.artifacts/prd080-browser/prd080-browser-final-20260815-05)。总体目标仍为
+  `all_108_prds_complete=false`。
 - `PRD-079 - 套餐、试用与额度类型` 已完成：Shared 发布 RBAC revision 15、四类额度、
   结算分摊、统一错误和 `quota.exhausted`/`trial.expired` 安全事件合同；0072 新增全量
   tenant-qualified Plan、Bucket、Adjustment、Reservation、Settlement、Allocation 与 source/outbox
@@ -259,11 +277,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 81 行、`03_M2-M3扩展交付` 第 17 行、PAGE-112、账单争议 API、
-  BillingDispute/AdjustmentRecord、`billing_dispute.created` 与 TC-0159/0160 已和 README、
-  `docs/prd`、`docs/testing` 的 PRD-079 完成状态交叉确认。PRD-079 之后的下一条权威未完成项为
-  `PRD-080 | M2-企业增强 | P2 | 扩展层 | 账单争议 | 账单争议与调整流程`，不是仅按编号推断。
-  本次提交不启动或混入 PRD-080；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 82 行、`03_M2-M3扩展交付` 第 18 行、PAGE-113、Webhook format API、
+  SecurityEventPayload、`security.event_pushed` 与 TC-0161/0162 已和 README、`docs/prd`、`docs/testing`
+  的 PRD-080 完成状态交叉确认。PRD-080 之后的下一条权威未完成项为
+  `PRD-081 | M2-企业增强 | P2 | 扩展层 | Webhook SIEM | SIEM/安全事件格式`，不是仅按编号推断。
+  本次提交不启动或混入 PRD-081；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

@@ -76,6 +76,15 @@ class FinOpsOutputSafetyDisputeInfo(BaseModel):
     reversal_eligible: bool
 
 
+class FinOpsBillingDisputeHoldInfo(BaseModel):
+    """Minimal active settlement hold overlay for a formal charge."""
+
+    billing_settlement_hold_id: str
+    billing_dispute_id: str
+    billing_dispute_item_id: str
+    status: Literal["active"]
+
+
 class FinOpsLedgerEntryInfo(BaseModel):
     """一条不可变正式分录的安全展示对象。"""
 
@@ -120,6 +129,7 @@ class FinOpsLedgerEntryInfo(BaseModel):
     status: Literal["posted"]
     created_at: datetime
     output_safety_dispute: FinOpsOutputSafetyDisputeInfo | None = None
+    billing_dispute_hold: FinOpsBillingDisputeHoldInfo | None = None
 
 
 class FinOpsCurrencyTotals(BaseModel):
@@ -189,6 +199,7 @@ __all__ = [
     "FinOpsAdjustmentInfo",
     "FinOpsAdjustmentRequest",
     "FinOpsAdjustmentResponse",
+    "FinOpsBillingDisputeHoldInfo",
     "FinOpsCurrencyTotals",
     "FinOpsLedgerEntryInfo",
     "FinOpsLedgerListResponse",

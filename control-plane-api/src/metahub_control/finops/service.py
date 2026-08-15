@@ -38,6 +38,7 @@ from .models import (
     FinOpsActorInfo,
     FinOpsAdjustmentInfo,
     FinOpsAdjustmentResponse,
+    FinOpsBillingDisputeHoldInfo,
     FinOpsCurrencyTotals,
     FinOpsLedgerEntryInfo,
     FinOpsLedgerListResponse,
@@ -137,6 +138,20 @@ class _LedgerEventRecord:
     payload: dict[str, object]
 
 
+@dataclass(frozen=True)
+class FinOpsAdjustmentWriteResult:
+    """由调用方事务持有的一次完整 Adjustment/Entry/Audit 写入结果。
+
+    私有账本事件只供提交后投递；幂等重放不携带新的 Audit 或事件副作用。
+    """
+
+    adjustment: FinOpsAdjustmentInfo
+    ledger_entry: FinOpsLedgerEntryInfo
+    audit_record: AuditRecord | None
+    ledger_event: _LedgerEventRecord | None
+    idempotent_replay: bool
+
+
 def list_finops_ledger(
     config: AppConfig,
     context: AuthContext,
@@ -205,6 +220,11 @@ def list_finops_ledger(
               usage.tenant_id AS output_safety_usage_tenant_id,
               usage.request_id AS output_safety_usage_request_id,
               usage.usage_ledger_id AS output_safety_owner_usage_ledger_id,
+              billing_hold.billing_settlement_hold_id AS billing_hold_id,
+              billing_hold.billing_dispute_id AS billing_hold_dispute_id,
+              billing_hold.billing_dispute_item_id AS billing_hold_item_id,
+              billing_hold.finops_ledger_entry_id AS billing_hold_entry_id,
+              billing_hold.status AS billing_hold_status,
               COALESCE(settlement.allocation_class, 'unallocated')
                 AS quota_allocation_class,
               COALESCE(settlement.allocation_count, 0)
@@ -227,6 +247,10 @@ def list_finops_ledger(
             LEFT JOIN quota_usage_settlements settlement
               ON settlement.tenant_id=le.tenant_id
              AND settlement.finops_ledger_entry_id=le.finops_ledger_entry_id
+            LEFT JOIN billing_settlement_holds billing_hold
+              ON billing_hold.tenant_id=le.tenant_id
+             AND billing_hold.finops_ledger_entry_id=le.finops_ledger_entry_id
+             AND billing_hold.status='active'
             WHERE {where_sql} AND le.ledger_sequence<?
             ORDER BY le.ledger_sequence DESC
             LIMIT ?
@@ -293,145 +317,28 @@ def create_finops_adjustment(
 
     normalized_request_id = _required_identifier(request_id, "finops.adjustment_invalid")
     normalized_trace_id = _required_identifier(trace_id, "finops.adjustment_invalid")
-    normalized = _normalize_adjustment(payload)
-    idempotency_hash = hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
     connection = _connect(config)
-    audit_record: AuditRecord | None = None
-    ledger_event: _LedgerEventRecord | None = None
-    adjustment_info: FinOpsAdjustmentInfo | None = None
-    ledger_info: FinOpsLedgerEntryInfo | None = None
+    result: FinOpsAdjustmentWriteResult | None = None
     try:
         connection.execute("BEGIN IMMEDIATE")
-        recovered = _recover_adjustment(
+        result = write_finops_adjustment_in_transaction(
             connection,
             context,
-            idempotency_hash=idempotency_hash,
-            payload_hash=normalized.payload_sha256,
+            payload,
+            idempotency_key=idempotency_key,
+            audit_request_meta=audit_request_meta,
+            request_id=normalized_request_id,
+            trace_id=normalized_trace_id,
         )
-        if recovered is not None:
+        if result.idempotent_replay:
             connection.rollback()
-            recovered_adjustment, recovered_entry = recovered
             return FinOpsAdjustmentResponse(
-                adjustment=recovered_adjustment,
-                ledger_entry=recovered_entry,
+                adjustment=result.adjustment,
+                ledger_entry=result.ledger_entry,
                 idempotent_replay=True,
                 request_id=normalized_request_id,
                 trace_id=normalized_trace_id,
             )
-
-        derived = _derive_adjustment_entry(connection, context, normalized)
-        now = _to_db_time(_utcnow())
-        adjustment_id = f"fadj_{uuid4().hex}"
-        ledger_id = f"fle_{uuid4().hex}"
-        event_id = f"flevt_{uuid4().hex}"
-        connection.execute(
-            """
-            INSERT INTO finops_adjustments(
-              finops_adjustment_id, tenant_id, adjustment_type, amount_micros,
-              currency, reversal_of_entry_id, related_request_id, reason,
-              reason_sha256, actor_user_id, operation_request_id, operation_trace_id,
-              idempotency_key_sha256, payload_sha256, status, created_at, updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?)
-            """,
-            (
-                adjustment_id,
-                context.user.tenant_id,
-                normalized.adjustment_type,
-                normalized.amount_micros,
-                derived["currency"],
-                normalized.reversal_of_entry_id,
-                normalized.related_request_id,
-                normalized.reason,
-                normalized.reason_sha256,
-                context.user.user_id,
-                normalized_request_id,
-                normalized_trace_id,
-                idempotency_hash,
-                normalized.payload_sha256,
-                now,
-                now,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO finops_ledger_entries(
-              finops_ledger_entry_id, event_id, tenant_id, entry_type, direction,
-              amount_micros, currency, normalized_cny_micros, cny_normalization_status,
-              price_evidence_status, price_snapshot_source, posting_source, quota_type,
-              usage_ledger_id, finops_adjustment_id, source_request_id, source_trace_id,
-              operation_request_id, operation_trace_id, price_snapshot_id,
-              price_schema_version, reversal_of_entry_id, actor_user_id,
-              input_tokens, output_tokens, total_tokens, cache_tokens,
-              model_id, provider_id, virtual_key_id, environment_id, project_id,
-              application_id, estimated, status, created_at, updated_at
-            )
-            VALUES(
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct', ?,
-              NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              0, 0, 0, 0, ?, ?, ?, ?, ?, ?, 0, 'posted', ?, ?
-            )
-            """,
-            (
-                ledger_id,
-                event_id,
-                context.user.tenant_id,
-                normalized.adjustment_type,
-                derived["direction"],
-                normalized.amount_micros,
-                derived["currency"],
-                derived["normalized_cny_micros"],
-                derived["cny_normalization_status"],
-                derived["price_evidence_status"],
-                derived["price_snapshot_source"],
-                derived["quota_type"],
-                adjustment_id,
-                derived["source_request_id"],
-                derived["source_trace_id"],
-                normalized_request_id,
-                normalized_trace_id,
-                derived["price_snapshot_id"],
-                derived["price_schema_version"],
-                normalized.reversal_of_entry_id,
-                context.user.user_id,
-                derived["model_id"],
-                derived["provider_id"],
-                derived["virtual_key_id"],
-                derived["environment_id"],
-                derived["project_id"],
-                derived["application_id"],
-                now,
-                now,
-            ),
-        )
-        row = _load_ledger_entry(connection, context.user.tenant_id, ledger_id)
-        adjustment_row = _load_adjustment(connection, context.user.tenant_id, adjustment_id)
-        ledger_info = _ledger_entry_info(row)
-        adjustment_info = _adjustment_info(adjustment_row)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="finops.adjustment_created",
-            object_type="finops_adjustment",
-            object_id=adjustment_id,
-            object_name=normalized.adjustment_type,
-            before_summary={},
-            after_summary={
-                "adjustment_type": normalized.adjustment_type,
-                "amount": normalized.amount,
-                "currency": derived["currency"],
-                "reversal_of_entry_id": normalized.reversal_of_entry_id,
-                "related_request_id": normalized.related_request_id,
-                "reason_sha256": normalized.reason_sha256,
-            },
-            request_meta=audit_request_meta,
-            request_id=normalized_request_id,
-            trace_id=normalized_trace_id,
-        )
-        # 调整、账本和审计必须同事务存在，缺少审计记录时禁止确认财务事实。
-        if audit_record is None:
-            raise ApiError("finops.adjustment_failed")
-        ledger_event = _ledger_event(row)
         commit_audited_transaction(connection)
     # 所有领域失败都先回滚整笔调整事务，避免留下半条账本或孤立审计记录。
     except ApiError as exc:
@@ -451,31 +358,204 @@ def create_finops_adjustment(
     finally:
         connection.close()
 
-    # 提交成功后四类产物都应完整存在，防御未来修改遗漏事务内赋值。
-    if (
-        adjustment_info is None
-        or ledger_info is None
-        or audit_record is None
-        or ledger_event is None
-    ):
-        # 任一提交后事实缺失都按固定失败关闭，不能返回无法证明完整性的财务结果。
+    if result is None:
         raise ApiError("finops.adjustment_failed")
-    dispatch_audit_recorded(
+    dispatch_finops_adjustment_write(
         config,
         context,
-        audit_record,
+        result,
         request_id=normalized_request_id,
         trace_id=normalized_trace_id,
     )
-    _dispatch_ledger_event(config, ledger_event, normalized_request_id)
-    _log_adjustment_created(context, ledger_info, normalized_request_id, normalized_trace_id)
     return FinOpsAdjustmentResponse(
-        adjustment=adjustment_info,
-        ledger_entry=ledger_info,
+        adjustment=result.adjustment,
+        ledger_entry=result.ledger_entry,
         idempotent_replay=False,
         request_id=normalized_request_id,
         trace_id=normalized_trace_id,
     )
+
+
+def write_finops_adjustment_in_transaction(
+    connection: sqlite3.Connection,
+    context: AuthContext,
+    payload: dict[str, Any],
+    *,
+    idempotency_key: str,
+    audit_request_meta: AuditRequestMeta,
+    request_id: str,
+    trace_id: str,
+) -> FinOpsAdjustmentWriteResult:
+    """在调用方已开启的事务内写入同租户 Adjustment、Entry 与 Audit，不自行提交。"""
+
+    if not connection.in_transaction:
+        raise ApiError("finops.adjustment_failed")
+    normalized_request_id = _required_identifier(request_id, "finops.adjustment_invalid")
+    normalized_trace_id = _required_identifier(trace_id, "finops.adjustment_invalid")
+    normalized = _normalize_adjustment(payload)
+    try:
+        key_bytes = idempotency_key.encode("ascii", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ApiError("finops.adjustment_invalid") from exc
+    if not 8 <= len(key_bytes) <= 128 or any(byte < 33 or byte > 126 for byte in key_bytes):
+        raise ApiError("finops.adjustment_invalid")
+    idempotency_hash = hashlib.sha256(key_bytes).hexdigest()
+    recovered = _recover_adjustment(
+        connection,
+        context,
+        idempotency_hash=idempotency_hash,
+        payload_hash=normalized.payload_sha256,
+    )
+    if recovered is not None:
+        adjustment, entry = recovered
+        return FinOpsAdjustmentWriteResult(
+            adjustment=adjustment,
+            ledger_entry=entry,
+            audit_record=None,
+            ledger_event=None,
+            idempotent_replay=True,
+        )
+    derived = _derive_adjustment_entry(connection, context, normalized)
+    now = _to_db_time(_utcnow())
+    adjustment_id = f"fadj_{uuid4().hex}"
+    ledger_id = f"fle_{uuid4().hex}"
+    event_id = f"flevt_{uuid4().hex}"
+    connection.execute(
+        """
+        INSERT INTO finops_adjustments(
+          finops_adjustment_id, tenant_id, adjustment_type, amount_micros,
+          currency, reversal_of_entry_id, related_request_id, reason,
+          reason_sha256, actor_user_id, operation_request_id, operation_trace_id,
+          idempotency_key_sha256, payload_sha256, status, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?)
+        """,
+        (
+            adjustment_id,
+            context.user.tenant_id,
+            normalized.adjustment_type,
+            normalized.amount_micros,
+            derived["currency"],
+            normalized.reversal_of_entry_id,
+            normalized.related_request_id,
+            normalized.reason,
+            normalized.reason_sha256,
+            context.user.user_id,
+            normalized_request_id,
+            normalized_trace_id,
+            idempotency_hash,
+            normalized.payload_sha256,
+            now,
+            now,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO finops_ledger_entries(
+          finops_ledger_entry_id, event_id, tenant_id, entry_type, direction,
+          amount_micros, currency, normalized_cny_micros, cny_normalization_status,
+          price_evidence_status, price_snapshot_source, posting_source, quota_type,
+          usage_ledger_id, finops_adjustment_id, source_request_id, source_trace_id,
+          operation_request_id, operation_trace_id, price_snapshot_id,
+          price_schema_version, reversal_of_entry_id, actor_user_id,
+          input_tokens, output_tokens, total_tokens, cache_tokens,
+          model_id, provider_id, virtual_key_id, environment_id, project_id,
+          application_id, estimated, status, created_at, updated_at
+        ) VALUES(
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct', ?,
+          NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          0, 0, 0, 0, ?, ?, ?, ?, ?, ?, 0, 'posted', ?, ?
+        )
+        """,
+        (
+            ledger_id,
+            event_id,
+            context.user.tenant_id,
+            normalized.adjustment_type,
+            derived["direction"],
+            normalized.amount_micros,
+            derived["currency"],
+            derived["normalized_cny_micros"],
+            derived["cny_normalization_status"],
+            derived["price_evidence_status"],
+            derived["price_snapshot_source"],
+            derived["quota_type"],
+            adjustment_id,
+            derived["source_request_id"],
+            derived["source_trace_id"],
+            normalized_request_id,
+            normalized_trace_id,
+            derived["price_snapshot_id"],
+            derived["price_schema_version"],
+            normalized.reversal_of_entry_id,
+            context.user.user_id,
+            derived["model_id"],
+            derived["provider_id"],
+            derived["virtual_key_id"],
+            derived["environment_id"],
+            derived["project_id"],
+            derived["application_id"],
+            now,
+            now,
+        ),
+    )
+    row = _load_ledger_entry(connection, context.user.tenant_id, ledger_id)
+    adjustment_row = _load_adjustment(connection, context.user.tenant_id, adjustment_id)
+    ledger_info = _ledger_entry_info(row)
+    adjustment_info = _adjustment_info(adjustment_row)
+    audit_record = record_audit_log(
+        connection,
+        context,
+        action="finops.adjustment_created",
+        object_type="finops_adjustment",
+        object_id=adjustment_id,
+        object_name=normalized.adjustment_type,
+        before_summary={},
+        after_summary={
+            "adjustment_type": normalized.adjustment_type,
+            "amount": normalized.amount,
+            "currency": derived["currency"],
+            "reversal_of_entry_id": normalized.reversal_of_entry_id,
+            "related_request_id": normalized.related_request_id,
+            "reason_sha256": normalized.reason_sha256,
+        },
+        request_meta=audit_request_meta,
+        request_id=normalized_request_id,
+        trace_id=normalized_trace_id,
+    )
+    if audit_record is None:
+        raise ApiError("finops.adjustment_failed")
+    return FinOpsAdjustmentWriteResult(
+        adjustment=adjustment_info,
+        ledger_entry=ledger_info,
+        audit_record=audit_record,
+        ledger_event=_ledger_event(row),
+        idempotent_replay=False,
+    )
+
+
+def dispatch_finops_adjustment_write(
+    config: AppConfig,
+    context: AuthContext,
+    result: FinOpsAdjustmentWriteResult,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> None:
+    """仅投递已提交的 Audit 与账本事件，不再修改任何财务事实。"""
+
+    if result.idempotent_replay:
+        return
+    if result.audit_record is None or result.ledger_event is None:
+        raise ApiError("finops.adjustment_failed")
+    dispatch_audit_recorded(
+        config,
+        context,
+        result.audit_record,
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    _dispatch_ledger_event(config, result.ledger_event, request_id)
+    _log_adjustment_created(context, result.ledger_entry, request_id, trace_id)
 
 
 def _normalize_ledger_query(query: dict[str, str | None]) -> _LedgerQuery:
@@ -904,6 +984,7 @@ def _ledger_entry_info(row: sqlite3.Row) -> FinOpsLedgerEntryInfo:
         entry_type=entry_type,
         amount_micros=amount,
     )
+    billing_dispute_hold = _finops_billing_dispute_hold(row)
     return FinOpsLedgerEntryInfo(
         finops_ledger_entry_id=_required_db_identifier(row["finops_ledger_entry_id"]),
         tenant_id=_required_db_identifier(row["tenant_id"]),
@@ -944,6 +1025,39 @@ def _ledger_entry_info(row: sqlite3.Row) -> FinOpsLedgerEntryInfo:
         status=status,
         created_at=_parse_db_time(row["created_at"]),
         output_safety_dispute=output_safety_dispute,
+        billing_dispute_hold=billing_dispute_hold,
+    )
+
+
+def _finops_billing_dispute_hold(row: sqlite3.Row) -> FinOpsBillingDisputeHoldInfo | None:
+    """校验并投影唯一 active PRD-080 结算暂缓关联；缺列时兼容非列表内部读取。"""
+
+    keys = set(row.keys())
+    if "billing_hold_id" not in keys:
+        return None
+    values = (
+        row["billing_hold_id"],
+        row["billing_hold_dispute_id"],
+        row["billing_hold_item_id"],
+        row["billing_hold_entry_id"],
+        row["billing_hold_status"],
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("billing dispute hold owner invalid")
+    if row["billing_hold_entry_id"] != row["finops_ledger_entry_id"]:
+        raise ValueError("billing dispute hold entry invalid")
+    status = _database_enum(
+        row["billing_hold_status"],
+        frozenset({"active"}),
+        "billing dispute hold status invalid",
+    )
+    return FinOpsBillingDisputeHoldInfo(
+        billing_settlement_hold_id=_required_db_identifier(row["billing_hold_id"]),
+        billing_dispute_id=_required_db_identifier(row["billing_hold_dispute_id"]),
+        billing_dispute_item_id=_required_db_identifier(row["billing_hold_item_id"]),
+        status=status,
     )
 
 
@@ -1585,4 +1699,10 @@ def _log_adjustment_created(
     )
 
 
-__all__ = ["create_finops_adjustment", "list_finops_ledger"]
+__all__ = [
+    "FinOpsAdjustmentWriteResult",
+    "create_finops_adjustment",
+    "dispatch_finops_adjustment_write",
+    "list_finops_ledger",
+    "write_finops_adjustment_in_transaction",
+]

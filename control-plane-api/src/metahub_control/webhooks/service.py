@@ -1604,6 +1604,7 @@ def fail_pending_webhook_event_deliveries(
         "approval.created",
         "approval.timeout",
         "assistant.queried",
+        "billing_dispute.created",
         "cache.hit",
         "cache.invalidated",
         "experiment.completed",
@@ -1889,6 +1890,17 @@ def _validated_pending_delivery_body(
             from metahub_control.plan_billing.outbox import recover_quota_source_request_id
 
             source_request_id = recover_quota_source_request_id(connection, envelope)
+        elif envelope.get("event_type") == "billing_dispute.created":
+            # 争议创建 request_id 不进入公开安全摘要；恢复只能从同租户不可变的
+            # dispute/item/event owner 图取得，禁止用 worker 链路或占位值绕过身份绑定。
+            from metahub_control.billing_disputes.outbox import (
+                recover_billing_dispute_source_request_id,
+            )
+
+            source_request_id = recover_billing_dispute_source_request_id(
+                connection,
+                envelope,
+            )
         rebuilt = build_webhook_event(
             tenant_id=envelope["tenant_id"],
             event_type=envelope["event_type"],

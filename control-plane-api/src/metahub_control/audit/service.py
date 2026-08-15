@@ -120,6 +120,12 @@ ACTION_OBJECT_TYPES = {
     "plan.created": "plan",
     "plan.updated": "plan",
     "quota.adjustment_created": "quota_adjustment",
+    # 账单争议状态迁移只使用固定七字段摘要；自由文本理由与调整明细留在领域表。
+    "billing_dispute.created": "billing_dispute",
+    "billing_dispute.review_started": "billing_dispute",
+    "billing_dispute.approved": "billing_dispute",
+    "billing_dispute.rejected": "billing_dispute",
+    "billing_dispute.cancelled": "billing_dispute",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -453,6 +459,17 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "currency",
             "reversal_of_entry_id",
             "related_request_id",
+            "reason_sha256",
+        }
+    ),
+    "billing_dispute": frozenset(
+        {
+            "status",
+            "state_revision",
+            "scope_type",
+            "item_count",
+            "adjustment_count",
+            "currency_totals_sha256",
             "reason_sha256",
         }
     ),

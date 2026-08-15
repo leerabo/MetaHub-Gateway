@@ -1810,6 +1810,43 @@ Excel 总表第 81 行、M2/M3 交付第 17 行、PAGE-112、账单争议 API、
 `PRD-080 | M2-企业增强 | P2 | 扩展层 | 账单争议 | 账单争议与调整流程`。本次不启动 PRD-080，
 `all_108_prds_complete=false`。
 
+## PRD-080 账单争议与调整流程目录（已完成）
+
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,i18n,webhooks}.py`：发布 RBAC revision 16、
+  三项独立账单争议权限、统一错误和 `billing_dispute.created` exact payload/envelope 合同。
+- `infra/migrations/0073_billing_dispute_adjustment_workflow.sql/.down.sql`：新增 tenant-qualified dispute、item、
+  settlement hold、transition、Adjustment link、event/outbox 和 scheduler tenant 水位；复合 owner、append-only、
+  revision CAS、金额守恒、公平序列与 down fail-closed guard 均由数据库约束。
+- `control-plane-api/src/metahub_control/billing_disputes/`：提供严格列表/详情、request/time 创建、start review、
+  部分 approve、reject/cancel、动态后端 RBAC、自审阻断、Audit、FinOps reversal、稳定 delivery ID outbox 与
+  lifespan scheduler；`auth/`、`audit/`、`finops/`、`console/`、`webhooks/` 和应用 no-store 完成有界接入。
+  专用路由还固定未知异常 503，整条路径生成服务端链路 ID，自由文本无法借 `User-Agent` 进入 Audit。
+- `console-web/src/lib/billingDisputes.js` 与 `src/features/billing-disputes/`：PAGE-112 exact wire、完整身份 owner、
+  generation/Abort、私有 reason vault、列表/详情、原生 Dialog、焦点环、busy Escape、动态撤权、迟到响应和
+  登出清理；主 app、导航、i18n 与双视口样式完成装配。
+- `shared-sdk/python/tests/test_prd080_billing_dispute_contracts.py`、`control-plane-api/tests/**/*prd080*.py`、
+  `console-web/tests/unit/prd080*.test.mjs` 与 `scripts/acceptance/tests/test_prd080_*`：覆盖合同、迁移、API、
+  tenant/RBAC、金额/并发、Audit/FinOps、outbox/scheduler、Console 生命周期、进程清理和证据隐私。
+- `docs/prd/PRD-080-billing-dispute-adjustment-workflow.md`、`docs/api/billing-disputes.md` 与
+  `docs/testing/PRD-080-tests.md`：保存冻结设计、四轮自审、公开 exact API、最终门禁和下一项交叉确认。
+- `scripts/acceptance/prd080-runtime-acceptance.py` 与
+  `.artifacts/prd080-runtime/prd080-runtime-final-20260815-05/`：从空 SQLite 完成
+  `73/0073 -> 73/0073 -> 72/0072 -> 73/0073`，四阶段完整性 ok、外键违规 0；真实 Gateway/Control、
+  request/time scope、部分冲正、失败追踪、Control 崩溃和稳定 delivery ID 恢复通过，主 JSON SHA-256 为
+  `74174e1a88553644e08a9584e54e1e866206b943873630c86ecf09fe7619bfd7`。
+- `scripts/acceptance/prd080-browser-harness.py`、`prd080-browser-acceptance.mjs` 与
+  `.artifacts/prd080-browser/prd080-browser-final-20260815-05/`：保存脱敏 Browser JSON、四张 PAGE-112
+  桌面/移动截图和 manifest；完整工作流、RBAC、自审、焦点、Escape、撤权、迟到、登出、网络、像素、布局、
+  provenance 和 owned-process 清理通过，截图已经人工复核；Browser JSON 与 manifest SHA-256 分别为
+  `a119250da461f04e966c3867f017084d6048eaf53d56877a0fcfef2a653e5193` 和
+  `c0d53161ee0c1463c1cd98cd07d0fa58cd18f8a92b62faf42e71d2935bb12a99`。
+
+PRD-080 的设计、实现、专项、必要回归、迁移、Runtime、Browser 和提交前安全门禁均已通过。Excel 总表
+第 82 行、M2/M3 交付第 18 行、PAGE-113、Webhook format API、SecurityEventPayload、
+`security.event_pushed` 与 TC-0161/0162 共同确认，下一条权威未完成项为
+`PRD-081 | M2-企业增强 | P2 | 扩展层 | Webhook SIEM | SIEM/安全事件格式`。本次不启动 PRD-081，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

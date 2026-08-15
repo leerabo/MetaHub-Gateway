@@ -1,0 +1,110 @@
+{
+  "access_control": {
+    "cross_tenant_status": 404,
+    "developer_status": 403,
+    "error_contract_count": 4,
+    "idempotency_conflict_status": 409,
+    "live_revocation_status": 403
+  },
+  "all_108_prds_complete": false,
+  "cleanup": {
+    "fixed_ports_released": true,
+    "owned_processes_stopped": true,
+    "sqlite_sidecars_remaining": 0,
+    "work_removed": true
+  },
+  "database": {
+    "audit_action_rows": 7,
+    "event_rows": 2,
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "webhook_delivery_rows": 2
+  },
+  "disputes": {
+    "adjustment_count": 1,
+    "approved_count": 1,
+    "partial_approval_exact": true,
+    "rejected_count": 1,
+    "released_hold_count": 4,
+    "request_scope_items": 2,
+    "reversal_count": 1,
+    "time_range_items": 2,
+    "transition_count": 6
+  },
+  "gateway": {
+    "canonical_charge_rows": 4,
+    "canonical_usage_rows": 4,
+    "failed_request_rows": 1,
+    "failure_status_class": 5,
+    "provider_network_calls": 5,
+    "success_status": 200,
+    "successful_requests": 4
+  },
+  "generated_at": "2026-08-15T08:27:35Z",
+  "migration": {
+    "down": {
+      "count": 72,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0072"
+    },
+    "fresh": {
+      "count": 73,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0073"
+    },
+    "repeat": {
+      "count": 73,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0073"
+    },
+    "reup": {
+      "count": 73,
+      "foreign_key_violations": 0,
+      "integrity": "ok",
+      "version": "0073"
+    }
+  },
+  "prd_id": "PRD-080",
+  "privacy": {
+    "files_scanned": 8,
+    "plaintext_matches": 0,
+    "sqlite_sidecars_remaining": 0
+  },
+  "recovery": {
+    "duplicate_deliveries": 2,
+    "exact_payload_schema": true,
+    "initial_failure_committed": true,
+    "outbox_attempts": 2,
+    "outbox_succeeded": 2,
+    "pending_leases": 0,
+    "receiver_deduplicated": true,
+    "signatures_valid": true,
+    "stable_delivery_id": true,
+    "webhook_logical_events": 2,
+    "webhook_network_deliveries": 4
+  },
+  "schema_version": 1,
+  "services": {
+    "control_http": true,
+    "control_restarted": true,
+    "gateway_http": true,
+    "provider_loopback": true,
+    "webhook_loopback": true
+  },
+  "source_provenance": {
+    "dispute_outbox": "fa92f7354780ce44b793443db72f1290db4fbeb04d9b3ba703ff9b0a3ecb4630",
+    "dispute_scheduler": "60989dc1c692e8ad793e2151b1b884dad129c42a4c7512f48a63d59efa3a2747",
+    "dispute_service": "92c6cec664a9f9fbdaa72ac804266f0e2c49359a80e0d41ee560ae4ef9bcaba9",
+    "gateway_api": "7c6ccdb371f53efdb5fc04b48cec16dcbd45e41181be208adc3233e8c687f709",
+    "migration_down": "c1f68e93af07aaa1a3ef43c50d0d51938b3dd82f9cbbc87ab59e0ce97ea40d0d",
+    "migration_up": "e0c7040b25e02b0cf6687fc7d1a091eb4383107bd39f05eb744bad4d809810da",
+    "runtime_acceptance": "9ff4dda163242d31e25045e7241bc03edf02b3e3ab62a5c127d63a7f040d2d24",
+    "runtime_contract": "cd0408dbdd83e0cc7c948cfdff1cb3656902e66cf6812ea29284c4f65909ef8a",
+    "runtime_helper": "4be3bb59f709647d2bc8ca7142023859c989cb295c91bed3ca31babc9dd4d839",
+    "webhook_service": "e5950a8025d51636086ed21124e4891e9f85972b833cbc40062053dc9107d86c"
+  },
+  "status": "passed"
+}

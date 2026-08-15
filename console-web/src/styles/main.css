@@ -3397,6 +3397,652 @@ h3 {
   }
 }
 
+/* PRD-080 PAGE-112: compact finance workspace with an unframed detail band. */
+.billing-disputes-panel,
+.billing-dispute-workspace,
+.billing-dispute-list,
+.billing-dispute-detail {
+  min-width: 0;
+}
+
+.billing-dispute-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.billing-dispute-toolbar,
+.billing-dispute-toolbar-actions,
+.billing-dispute-section-heading,
+.billing-dispute-detail-heading,
+.billing-dispute-actions,
+.billing-dispute-dialog header,
+.billing-dispute-dialog-actions,
+.billing-dispute-pagination,
+.billing-dispute-fact-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.billing-dispute-toolbar h2,
+.billing-dispute-section-heading h3,
+.billing-dispute-section-heading h4,
+.billing-dispute-detail-heading h3,
+.billing-dispute-dialog h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.billing-dispute-toolbar h2 {
+  font-size: 1.35rem;
+}
+
+.billing-dispute-toolbar > div:first-child > span,
+.billing-dispute-section-heading > span,
+.billing-dispute-detail-heading code,
+.billing-dispute-item small,
+.billing-dispute-timeline time,
+.billing-dispute-redacted {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.billing-dispute-toolbar-actions,
+.billing-dispute-actions,
+.billing-dispute-dialog-actions,
+.billing-dispute-pagination,
+.billing-dispute-fact-strip {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.billing-dispute-icon-command {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #c5ced8;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
+.billing-dispute-toolbar button,
+.billing-dispute-filter-actions button,
+.billing-dispute-row-action button,
+.billing-dispute-actions button,
+.billing-dispute-pagination button,
+.billing-dispute-section-heading button,
+.billing-dispute-dialog-actions button {
+  min-height: 38px;
+  border: 1px solid #bcc7d2;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 7px 12px;
+  font-weight: 700;
+}
+
+.billing-dispute-toolbar button.primary,
+.billing-dispute-filter-actions button.primary,
+.billing-dispute-actions button.primary,
+.billing-dispute-dialog-actions button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.billing-dispute-actions button.danger,
+.billing-dispute-dialog-actions button.danger {
+  border-color: #b42318;
+  color: #b42318;
+}
+
+.billing-dispute-toolbar button:disabled,
+.billing-dispute-filter-actions button:disabled,
+.billing-dispute-row-action button:disabled,
+.billing-dispute-actions button:disabled,
+.billing-dispute-pagination button:disabled,
+.billing-dispute-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.billing-dispute-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding-block: 12px;
+  border-block: 1px solid var(--line);
+}
+
+.billing-dispute-filters label,
+.billing-dispute-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.billing-dispute-filters input,
+.billing-dispute-filters select,
+.billing-dispute-field input,
+.billing-dispute-field select,
+.billing-dispute-field textarea,
+.billing-dispute-approval-items input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #c5ced8;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 8px 9px;
+}
+
+.billing-dispute-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.billing-dispute-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.billing-dispute-live {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-filters > .billing-dispute-live {
+  grid-column: 1 / -1;
+}
+
+.billing-dispute-live.is-error,
+.billing-dispute-feedback.is-error,
+.billing-dispute-error {
+  color: var(--danger);
+}
+
+.billing-dispute-feedback,
+.billing-dispute-error,
+.billing-dispute-empty {
+  min-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-feedback {
+  color: var(--accent-dark);
+  font-size: 0.86rem;
+}
+
+.billing-dispute-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-block: 1px solid #efc7c3;
+}
+
+.billing-dispute-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.billing-dispute-layout.has-detail {
+  grid-template-columns: minmax(580px, 1.25fr) minmax(330px, 0.75fr);
+}
+
+.billing-dispute-list,
+.billing-dispute-detail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.billing-dispute-detail {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+
+.billing-dispute-detail-heading > div {
+  min-width: 0;
+}
+
+.billing-dispute-detail-heading code {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.billing-dispute-table {
+  width: 100%;
+  min-width: 790px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.billing-dispute-table th,
+.billing-dispute-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-table th:first-child,
+.billing-dispute-table td:first-child {
+  width: 24%;
+}
+
+.billing-dispute-table th:last-child,
+.billing-dispute-table td:last-child {
+  width: 72px;
+}
+
+.billing-dispute-table tr.is-selected {
+  background: #f0f8f6;
+}
+
+.billing-dispute-status {
+  display: inline-block;
+  min-width: 68px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #eef1f4;
+  color: #344054;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.billing-dispute-status.tone-under_review {
+  background: #fff5d6;
+  color: #7a4d00;
+}
+
+.billing-dispute-status.tone-approved {
+  background: #e7f7ed;
+  color: #157347;
+}
+
+.billing-dispute-status.tone-rejected,
+.billing-dispute-status.tone-cancelled {
+  background: #fdecea;
+  color: #9f2519;
+}
+
+.billing-dispute-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: 1px solid var(--line);
+}
+
+.billing-dispute-summary > div {
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.billing-dispute-summary > div:nth-child(3n) {
+  border-right: 0;
+}
+
+.billing-dispute-summary dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.billing-dispute-summary dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-private-text {
+  padding-block: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.billing-dispute-private-text p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-item-list,
+.billing-dispute-approval-items {
+  display: grid;
+  gap: 8px;
+}
+
+.billing-dispute-item {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.35fr) minmax(100px, 0.8fr) minmax(120px, 1fr) minmax(80px, 0.65fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.billing-dispute-item > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-timeline ol {
+  display: grid;
+  gap: 0;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.billing-dispute-timeline li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 0;
+}
+
+.billing-dispute-timeline li > div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(120px, 1fr) minmax(130px, 0.9fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.billing-dispute-timeline-mark {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border: 2px solid #0f766e;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.billing-dispute-fact-strip {
+  justify-content: flex-start;
+  padding-block: 10px;
+  border-block: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.billing-dispute-fact-strip strong {
+  color: var(--text);
+}
+
+.billing-dispute-dialog {
+  box-sizing: border-box;
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid #c5ced8;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 20px;
+}
+
+.billing-dispute-dialog::backdrop {
+  background: rgba(20, 29, 38, 0.58);
+}
+
+.billing-dispute-dialog form {
+  display: grid;
+  gap: 12px;
+  margin-block: 16px;
+}
+
+.billing-dispute-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.billing-dispute-segmented legend {
+  width: 100%;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.billing-dispute-segmented label {
+  position: relative;
+  flex: 1 1 150px;
+}
+
+.billing-dispute-segmented input {
+  position: absolute;
+  opacity: 0;
+}
+
+.billing-dispute-segmented span {
+  display: block;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid #c5ced8;
+  background: #fff;
+  text-align: center;
+}
+
+.billing-dispute-segmented label:first-of-type span {
+  border-radius: 6px 0 0 6px;
+}
+
+.billing-dispute-segmented label:last-of-type span {
+  border-radius: 0 6px 6px 0;
+}
+
+.billing-dispute-segmented input:checked + span {
+  border-color: var(--accent);
+  background: #e9f6f3;
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+.billing-dispute-time-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.billing-dispute-scope-summary,
+.billing-dispute-unknown {
+  display: block;
+  padding: 10px;
+  border-left: 3px solid #167d74;
+  background: #f0f8f6;
+  color: #24413e;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-approval-items {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.billing-dispute-approval-items label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 0.55fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.billing-dispute-approval-items label > span {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.billing-dispute-dialog button:focus-visible,
+.billing-dispute-filters input:focus-visible,
+.billing-dispute-filters select:focus-visible,
+.billing-dispute-field input:focus-visible,
+.billing-dispute-field textarea:focus-visible,
+.billing-dispute-approval-items input:focus-visible,
+.billing-dispute-segmented input:focus-visible + span {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1360px) {
+  .billing-dispute-layout.has-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .billing-dispute-detail {
+    padding-top: 16px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 960px) {
+  .billing-dispute-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .billing-dispute-filter-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 720px) {
+  .billing-dispute-toolbar,
+  .billing-dispute-detail-heading,
+  .billing-dispute-section-heading {
+    align-items: flex-start;
+  }
+
+  .billing-dispute-table {
+    min-width: 0;
+  }
+
+  .billing-dispute-table thead {
+    display: none;
+  }
+
+  .billing-dispute-table,
+  .billing-dispute-table tbody,
+  .billing-dispute-table tr,
+  .billing-dispute-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .billing-dispute-table tr {
+    padding-block: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .billing-dispute-table td,
+  .billing-dispute-table td:first-child,
+  .billing-dispute-table td:last-child {
+    display: grid;
+    grid-template-columns: minmax(90px, 0.6fr) minmax(0, 1.4fr);
+    width: auto;
+    padding: 5px 0;
+    border: 0;
+  }
+
+  .billing-dispute-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .billing-dispute-row-action::before {
+    content: "" !important;
+  }
+
+  .billing-dispute-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .billing-dispute-summary > div:nth-child(3n) {
+    border-right: 1px solid var(--line);
+  }
+
+  .billing-dispute-summary > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .billing-dispute-item,
+  .billing-dispute-timeline li > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 390px) {
+  .billing-dispute-workspace {
+    gap: 12px;
+  }
+
+  .billing-dispute-toolbar,
+  .billing-dispute-toolbar-actions,
+  .billing-dispute-actions,
+  .billing-dispute-dialog-actions,
+  .billing-dispute-filter-actions,
+  .billing-dispute-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .billing-dispute-toolbar-actions button,
+  .billing-dispute-actions button,
+  .billing-dispute-dialog-actions button,
+  .billing-dispute-filter-actions button,
+  .billing-dispute-pagination button {
+    width: 100%;
+  }
+
+  .billing-dispute-toolbar-actions .billing-dispute-icon-command,
+  .billing-dispute-detail-heading .billing-dispute-icon-command {
+    width: 38px;
+  }
+
+  .billing-dispute-filters,
+  .billing-dispute-time-fields,
+  .billing-dispute-summary,
+  .billing-dispute-approval-items label {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .billing-dispute-summary > div,
+  .billing-dispute-summary > div:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .billing-dispute-dialog {
+    width: calc(100vw - 20px);
+    padding: 14px;
+  }
+}
+
 /* PAGE-108/109 审批工作台：桌面与移动布局共享稳定尺寸，弹窗和长标识不得造成溢出。 */
 .approvals-panel {
   min-width: 0;
