@@ -141,6 +141,7 @@ import {
   webhookDeadLetterIdentitySnapshot,
 } from "../features/webhook-dead-letters/webhookDeadLetterPageState.js";
 import { renderWebhookDeadLetters } from "../features/webhook-dead-letters/renderWebhookDeadLetters.js";
+import { applyWebhookFormatMode } from "../features/webhooks/renderWebhookPanel.js";
 import { renderLoginPage } from "../features/auth/renderLoginPage.js";
 import {
   createEnterpriseChatPageState,
@@ -3635,6 +3636,16 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const webhookForm = document.querySelector("#webhook-form");
+  const syncWebhookFormatMode = () => {
+    const selectedFormat = webhookForm
+      ?.querySelector('input[name="format"]:checked')
+      ?.value;
+    applyWebhookFormatMode(webhookForm, selectedFormat);
+  };
+  for (const formatInput of webhookForm?.querySelectorAll('input[name="format"]') ?? []) {
+    formatInput.addEventListener("change", syncWebhookFormatMode);
+  }
+  syncWebhookFormatMode();
   webhookForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const token = authSession.token;
@@ -3655,6 +3666,11 @@ function bindAuthenticatedEvents(consoleShellState) {
         name: String(data.get("name") ?? ""),
         endpointUrl: String(data.get("endpointUrl") ?? ""),
         eventTypes: data.getAll("eventTypes").map((item) => String(item)),
+        format: String(data.get("format") ?? "json"),
+        securityEventRateLimitPerMinute: optionalNumber(
+          data.get("securityEventRateLimitPerMinute"),
+          60,
+        ),
         timeoutMs: optionalNumber(data.get("timeoutMs"), 5000),
         status: String(data.get("status") ?? "active"),
       });

@@ -6,6 +6,7 @@ const EVENT_TYPE_LABELS = {
   "budget.exhausted": "预算耗尽",
   "security.dlp_matched": "DLP 命中",
   "security.dlp_unavailable": "DLP 不可用",
+  "security.event_pushed": "SIEM 安全事件",
   "gateway.request_failed": "调用失败",
   "webhook.delivery_failed": "Webhook 投递失败",
   "webhook.replayed": "Webhook 已重放",
@@ -46,7 +47,7 @@ export function renderWebhookPanel(webhookState, authContext) {
     <div class="panel-heading webhook-heading">
       <div>
         <h2 id="webhooks-title">Webhook 设置</h2>
-        <p>注册企业系统回调地址，订阅预算、DLP 和调用失败事件；发送记录保留每次重试摘要。</p>
+        <p>管理企业回调与 SIEM 安全事件投递；发送记录保留每次重试摘要。</p>
       </div>
       <span class="webhook-count">${escapeHtml(endpoints.length)} 个 Endpoint</span>
     </div>
@@ -108,6 +109,23 @@ function renderWebhookForm(eventTypes) {
         <span>Endpoint URL</span>
         <input name="endpointUrl" type="url" placeholder="https://ops.example.com/metahub/webhook" required />
       </label>
+      <fieldset class="webhook-format-field">
+        <legend>投递格式</legend>
+        <div class="webhook-format-options">
+          <label>
+            <input class="webhook-format-radio" type="radio" name="format" value="json" checked />
+            <span>JSON</span>
+          </label>
+          <label>
+            <input class="webhook-format-radio" type="radio" name="format" value="cef" />
+            <span>CEF</span>
+          </label>
+        </div>
+      </fieldset>
+      <label class="webhook-security-rate-field">
+        <span>安全事件 / 分钟</span>
+        <input name="securityEventRateLimitPerMinute" type="number" min="1" max="600" step="1" value="60" required />
+      </label>
       <fieldset class="webhook-event-field">
         <legend>订阅事件</legend>
         ${eventTypes.map(renderEventCheckbox).join("")}
@@ -144,6 +162,21 @@ function renderEventCheckbox(eventType) {
       <span>${escapeHtml(EVENT_TYPE_LABELS[eventType] ?? eventType)}</span>
     </label>
   `;
+}
+
+/**
+ * 同步 PAGE-113 格式控件。CEF 只能保留标准 SIEM 事件；切回 JSON 只恢复编辑，不暗自扩订阅。
+ */
+export function applyWebhookFormatMode(form, format) {
+  const normalizedFormat = format === "cef" ? "cef" : "json";
+  for (const input of form?.querySelectorAll?.('input[name="eventTypes"]') ?? []) {
+    const isSecurityEvent = input.value === "security.event_pushed";
+    if (normalizedFormat === "cef") {
+      input.checked = isSecurityEvent;
+    }
+    input.disabled = normalizedFormat === "cef" && !isSecurityEvent;
+  }
+  return normalizedFormat;
 }
 
 /**
@@ -196,6 +229,7 @@ function renderEndpointRow(endpoint, selectedEndpointId) {
         <strong>${escapeHtml(endpoint.name)}</strong>
         <em>${escapeHtml(endpoint.endpoint_url)}</em>
         <code>${escapeHtml(endpoint.webhook_endpoint_id)}</code>
+        ${renderWireMeta(endpoint)}
       </span>
       <span class="webhook-event-list" role="cell" data-label="订阅事件">${(endpoint.event_types ?? []).map(renderEventPill).join("")}</span>
       <span role="cell" data-label="状态"><mark class="status-${escapeAttribute(endpoint.status)}">${escapeHtml(STATUS_LABELS[endpoint.status] ?? endpoint.status)}</mark></span>
@@ -306,6 +340,7 @@ function renderDeliveryRow(delivery) {
         <strong>${escapeHtml(EVENT_TYPE_LABELS[delivery.event_type] ?? delivery.event_type)}</strong>
         <em>${escapeHtml(delivery.event_id)}</em>
         <time datetime="${escapeAttribute(delivery.event_timestamp)}">${escapeHtml(formatDateTime(delivery.event_timestamp))}</time>
+        ${renderWireMeta(delivery)}
       </span>
       <span role="cell" data-label="状态"><mark class="status-${escapeAttribute(delivery.status)}">${escapeHtml(STATUS_LABELS[delivery.status] ?? delivery.status)}</mark></span>
       <span role="cell" data-label="尝试">${escapeHtml(delivery.attempt_count)} / ${escapeHtml(delivery.max_attempts)}${renderAttempts(delivery.attempts ?? [])}</span>
@@ -352,6 +387,20 @@ function renderAttempts(attempts) {
  */
 function renderEventPill(eventType) {
   return `<mark>${escapeHtml(EVENT_TYPE_LABELS[eventType] ?? eventType)}</mark>`;
+}
+
+/** 渲染后端冻结的 wire 格式与安全事件上限，不读取 wire body、签名或 rate claim。 */
+function renderWireMeta(value) {
+  const format = value?.format === "cef" ? "CEF" : "JSON";
+  const limit = Number.isInteger(value?.security_event_rate_limit_per_minute)
+    ? value.security_event_rate_limit_per_minute
+    : "-";
+  return `
+    <span class="webhook-wire-meta">
+      <mark class="webhook-format-badge">${format}</mark>
+      <em>安全事件 ${escapeHtml(limit)} / 分钟</em>
+    </span>
+  `;
 }
 
 /**

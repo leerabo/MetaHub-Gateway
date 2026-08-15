@@ -9,9 +9,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
@@ -37,6 +42,20 @@ logger = logging.getLogger("metahub.provider_keypool")
 
 # Provider Key 冷却时间定义上游限流后的退避边界，避免持续命中同一失效 Key。
 RATE_LIMIT_COOLDOWN_SECONDS = 60
+_RUNTIME_COORDINATE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_PROVIDER_KEY_REQUEST_COORDINATES: ContextVar[tuple[str, str] | None] = ContextVar(
+    "metahub_provider_key_request_coordinates",
+    default=None,
+)
+
+
+class ProviderKeyDecryptAnomaly(Exception):
+    """仅携带失败候选计数和原有公开错误码的进程内控制流。"""
+
+    def __init__(self, candidate_count: int, *, error_code: str) -> None:
+        super().__init__(error_code)
+        self.candidate_count = candidate_count
+        self.error_code = error_code
 
 
 @dataclass(frozen=True)
@@ -279,7 +298,13 @@ def snapshot_provider_key_pool(
     return ProviderKeyPoolSnapshot(state=eligibility.state)
 
 
-def select_provider_key(config: AppConfig, route: GatewayRoute) -> SelectedProviderKey | None:
+def select_provider_key(
+    config: AppConfig,
+    route: GatewayRoute,
+    *,
+    request_id: str | None = None,
+    trace_id: str | None = None,
+) -> SelectedProviderKey | None:
     """为当前路由选择可用 Provider Key。
 
     无认证 Provider 直接返回 None；有托管 Key 时优先从数据库按最少最近使用策略选取，
@@ -290,39 +315,41 @@ def select_provider_key(config: AppConfig, route: GatewayRoute) -> SelectedProvi
     if route.provider_auth_type == "none":
         return None
 
+    coordinates = _provider_key_request_coordinates(request_id, trace_id)
     connection = _connect(config)
-    rows = connection.execute(
-        """
-        SELECT
-          provider_credential_id, encrypted_key, key_prefix, weight, status,
-          last_used_at, rate_limited_until, probe_health_status, probe_last_tested_at
-        FROM provider_credentials
-        WHERE tenant_id=? AND provider_id=?
-        """,
-        (route.tenant_id, route.provider_id),
-    ).fetchall()
-    managed_key_exists = any(str(row["encrypted_key"]).startswith("aesgcm-v1:") for row in rows)
-    candidates = [
-        row
-        for row in rows
-        if _row_is_selectable(row, stale_seconds=config.provider_health_stale_seconds)
-    ]
-    candidates.sort(key=_selection_sort_key)
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+              provider_credential_id, encrypted_key, key_prefix, weight, status,
+              last_used_at, rate_limited_until, probe_health_status, probe_last_tested_at
+            FROM provider_credentials
+            WHERE tenant_id=? AND provider_id=?
+            """,
+            (route.tenant_id, route.provider_id),
+        ).fetchall()
+        managed_key_exists = any(
+            str(row["encrypted_key"]).startswith("aesgcm-v1:") for row in rows
+        )
+        candidates = [
+            row
+            for row in rows
+            if _row_is_selectable(row, stale_seconds=config.provider_health_stale_seconds)
+        ]
+        candidates.sort(key=_selection_sort_key)
+        decrypt_failure_count = 0
 
-    for row in candidates:
-        encrypted_key = str(row["encrypted_key"] or "")
-        # 密钥和令牌处理只能使用哈希或密文，任何路径都不得记录明文。
-        if not encrypted_key.startswith("aesgcm-v1:"):
+        for row in candidates:
+            encrypted_key = str(row["encrypted_key"] or "")
             # 旧数据或测试数据不具备可解密密文，不能把它当成可用托管 Key。
-            continue
-        try:
-            plain_value = decrypt_provider_key(encrypted_key)
-        # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
-        except ValueError:
-            # 解密失败只记脱敏上下文，继续尝试其它 Key，避免单把坏 Key 放大成全局不可用。
-            logger.warning(
-                "provider_key.decrypt_failed",
-                extra={
+            if not encrypted_key.startswith("aesgcm-v1:"):
+                continue
+            try:
+                plain_value = decrypt_provider_key(encrypted_key)
+            except ValueError:
+                decrypt_failure_count += 1
+                # 日志只保留 Provider/模型和可信链路；Credential 标识、前缀、密文及异常均不写入。
+                safe_extra: dict[str, object] = {
                     "event": "provider_key.decrypt_failed",
                     "tenant_id": route.tenant_id,
                     "provider_id": route.provider_id,
@@ -330,39 +357,161 @@ def select_provider_key(config: AppConfig, route: GatewayRoute) -> SelectedProvi
                         "provider_code": route.provider_code,
                         "model_id": route.model_id,
                     },
-                },
+                }
+                if coordinates is not None:
+                    safe_extra["request_id"], safe_extra["trace_id"] = coordinates
+                logger.warning("provider_key.decrypt_failed", extra=safe_extra)
+                continue
+            if decrypt_failure_count and coordinates is not None:
+                _insert_provider_key_anomaly(
+                    connection,
+                    route,
+                    request_id=coordinates[0],
+                    trace_id=coordinates[1],
+                    candidate_count=decrypt_failure_count,
+                )
+            _record_key_selected(connection, route.tenant_id, row["provider_credential_id"])
+            return SelectedProviderKey(
+                provider_credential_id=row["provider_credential_id"],
+                plain_value=plain_value,
+                source="database",
+                key_prefix=row["key_prefix"],
             )
-            continue
-        _record_key_selected(connection, route.tenant_id, row["provider_credential_id"])
-        return SelectedProviderKey(
-            provider_credential_id=row["provider_credential_id"],
-            plain_value=plain_value,
-            source="database",
-            key_prefix=row["key_prefix"],
-        )
 
-    if managed_key_exists:
-        # 只要租户配置了托管 Key，就不再回退环境变量，避免绕过 KeyPool 治理。
+        if managed_key_exists:
+            if decrypt_failure_count and coordinates is not None:
+                _insert_provider_key_anomaly(
+                    connection,
+                    route,
+                    request_id=coordinates[0],
+                    trace_id=coordinates[1],
+                    candidate_count=decrypt_failure_count,
+                )
+                connection.commit()
+            # 只要租户配置了托管 Key，就不再回退环境变量，避免绕过 KeyPool 治理。
+            raise ApiError("provider_key.unavailable")
+
+        env_key = _environment_provider_key(
+            config,
+            connection,
+            tenant_id=route.tenant_id,
+            provider_id=route.provider_id,
+            provider_code=route.provider_code,
+            route_base_url=route.provider_base_url,
+        )
+        if env_key:
+            return SelectedProviderKey(
+                provider_credential_id=None,
+                plain_value=env_key,
+                source="environment",
+                key_prefix=None,
+            )
         raise ApiError("provider_key.unavailable")
+    except sqlite3.Error as exc:
+        connection.rollback()
+        raise ApiError("provider_key.unavailable") from exc
+    finally:
+        connection.close()
 
-    env_key = _environment_provider_key(
-        config,
-        connection,
-        tenant_id=route.tenant_id,
-        provider_id=route.provider_id,
-        provider_code=route.provider_code,
-        route_base_url=route.provider_base_url,
-    )
-    # 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
-    if env_key:
-        return SelectedProviderKey(
-            provider_credential_id=None,
-            plain_value=env_key,
-            source="environment",
-            key_prefix=None,
+
+@contextmanager
+def provider_key_request_context(request_id: str, trace_id: str) -> Iterator[None]:
+    """为旧 Adapter 协议提供并发隔离的可信请求坐标，退出调用栈后立即清除。"""
+
+    coordinates = _validated_runtime_coordinates(request_id, trace_id)
+    token = _PROVIDER_KEY_REQUEST_COORDINATES.set(coordinates)
+    try:
+        yield
+    finally:
+        _PROVIDER_KEY_REQUEST_COORDINATES.reset(token)
+
+
+def persist_provider_key_decrypt_anomaly(
+    config: AppConfig,
+    route: GatewayRoute,
+    *,
+    request_id: str,
+    trace_id: str,
+    candidate_count: int,
+    error_code: str,
+) -> None:
+    """在调用方已回滚较大事务后，用独立短事务保存无 Credential 标识的异常事实。"""
+
+    coordinates = _validated_runtime_coordinates(request_id, trace_id)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _insert_provider_key_anomaly(
+            connection,
+            route,
+            request_id=coordinates[0],
+            trace_id=coordinates[1],
+            candidate_count=candidate_count,
         )
-    # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-    raise ApiError("provider_key.unavailable")
+        connection.commit()
+    except sqlite3.Error as exc:
+        connection.rollback()
+        raise ApiError(error_code) from exc
+    finally:
+        connection.close()
+
+
+def _insert_provider_key_anomaly(
+    connection: sqlite3.Connection,
+    route: GatewayRoute,
+    *,
+    request_id: str,
+    trace_id: str,
+    candidate_count: int,
+) -> None:
+    """在当前租户事务插入最小异常 source；0074 trigger 原子建立标准安全聚合。"""
+
+    if type(candidate_count) is not int or not 1 <= candidate_count <= 1000:
+        raise sqlite3.IntegrityError("provider key anomaly count invalid")
+    occurred_at = _to_db_time(_utcnow())
+    connection.execute(
+        """
+        INSERT INTO provider_key_anomaly_events(
+          provider_key_anomaly_event_id,tenant_id,provider_id,model_id,anomaly_type,
+          request_id,trace_id,candidate_count,occurred_at,created_at
+        ) VALUES(?,?,?,?,'decrypt_failed',?,?,?,?,?)
+        """,
+        (
+            f"pkae_{uuid4().hex}",
+            route.tenant_id,
+            route.provider_id,
+            route.model_id,
+            request_id,
+            trace_id,
+            candidate_count,
+            occurred_at,
+            occurred_at,
+        ),
+    )
+
+
+def _provider_key_request_coordinates(
+    request_id: str | None,
+    trace_id: str | None,
+) -> tuple[str, str] | None:
+    """显式坐标优先；无显式值时读取当前 Adapter 调用栈，直接单元调用保持无 source。"""
+
+    if request_id is None and trace_id is None:
+        return _PROVIDER_KEY_REQUEST_COORDINATES.get()
+    if request_id is None or trace_id is None:
+        raise ApiError("provider_key.unavailable")
+    return _validated_runtime_coordinates(request_id, trace_id)
+
+
+def _validated_runtime_coordinates(request_id: object, trace_id: object) -> tuple[str, str]:
+    if (
+        type(request_id) is not str
+        or _RUNTIME_COORDINATE.fullmatch(request_id) is None
+        or type(trace_id) is not str
+        or _RUNTIME_COORDINATE.fullmatch(trace_id) is None
+    ):
+        raise ApiError("provider_key.unavailable")
+    return request_id, trace_id
 
 
 def mark_provider_key_error(

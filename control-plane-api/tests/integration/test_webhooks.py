@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,10 +17,9 @@ from typing import Any
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
-
+from metahub_control.audit import AuditRequestMeta
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.auth.service import authenticate_bearer
-from metahub_control.audit import AuditRequestMeta
 from metahub_control.webhooks import service as webhook_service
 from metahub_control.webhooks.models import ReplayWebhookRequest
 from metahub_control.webhooks.routes import router as webhooks_router
@@ -116,11 +116,16 @@ class RecordingWebhookHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         signature = self.headers.get("X-MetaHub-Signature", "")
         secret = self.server.signing_secret or ""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = None
         self.server.received.append(
             {
                 "path": self.path,
                 "body": body,
-                "payload": json.loads(body.decode("utf-8")),
+                "payload": payload,
+                "content_type": self.headers.get("Content-Type"),
                 "event": self.headers.get("X-MetaHub-Event"),
                 "signature": signature,
                 "signature_valid": verify_webhook_signature(signature, secret, body) if secret else False,
@@ -194,7 +199,6 @@ async def test_webhook_create_list_test_and_signature(
                     "X-Request-ID": "req_prd025_create",
                 },
                 json={
-                    "tenant_id": "tenant_should_be_ignored",
                     "name": "预算和安全事件",
                     "endpoint_url": server_url(receiver, "/ok"),
                     "event_types": ["budget.threshold_reached", "security.dlp_matched", "gateway.request_failed"],
@@ -225,7 +229,6 @@ async def test_webhook_create_list_test_and_signature(
     assert body["webhook"]["tenant_id"] == tenant_id
     assert body["webhook"]["secret_prefix"] == signing_secret[:12]
     assert body["webhook"]["secret_fingerprint"]
-    assert "tenant_should_be_ignored" not in created.text
     assert tested.status_code == 200, tested.text
     delivery = tested.json()["delivery"]
     assert delivery["status"] == "success"
@@ -250,6 +253,240 @@ async def test_webhook_create_list_test_and_signature(
     assert stored["tenant_id"] == tenant_id
     assert stored["encrypted_secret"].startswith("aesgcm-v1:")
     assert signing_secret not in stored["encrypted_secret"]
+
+
+@pytest.mark.anyio
+async def test_prd081_webhook_exact_wire_cef_and_security_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """PRD-081：权限先于正文，CEF/rate 合同和服务端链路 ID 全部由后端执行。"""
+
+    _database_url, tenant_id = prepare_database(monkeypatch, tmp_path)
+    app = build_control_app()
+    auth_headers: dict[str, str]
+    with RunningWebhookServer() as receiver:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://control",
+        ) as client:
+            developer_token = await login(
+                client,
+                "developer@example.com",
+                DEVELOPER_PASSWORD,
+            )
+            viewer_token = await login(client, "viewer@example.com", VIEWER_PASSWORD)
+            auth_headers = {
+                "Authorization": f"Bearer {developer_token}",
+                "Content-Type": "application/json",
+            }
+            malformed = b'{"name":'
+            anonymous = await client.post(
+                "/webhooks",
+                headers={"Content-Type": "application/json"},
+                content=malformed,
+            )
+            viewer = await client.post(
+                "/webhooks",
+                headers={
+                    "Authorization": f"Bearer {viewer_token}",
+                    "Content-Type": "application/json",
+                },
+                content=malformed,
+            )
+            wrong_content_type = await client.post(
+                "/webhooks",
+                headers={
+                    "Authorization": f"Bearer {developer_token}",
+                    "Content-Type": "text/plain",
+                },
+                content=b"{}",
+            )
+            duplicate_key = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=(
+                    b'{"name":"first","name":"second","endpoint_url":'
+                    b'"http://127.0.0.1/hook","event_types":["security.event_pushed"]}'
+                ),
+            )
+            nested: object = "leaf"
+            for _ in range(9):
+                nested = {"next": nested}
+            deep_body = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=json.dumps(
+                    {
+                        "name": "deep",
+                        "endpoint_url": "http://127.0.0.1/hook",
+                        "event_types": ["security.event_pushed"],
+                        "future": nested,
+                    }
+                ).encode("utf-8"),
+            )
+            node_body = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=json.dumps(
+                    {
+                        "name": "nodes",
+                        "endpoint_url": "http://127.0.0.1/hook",
+                        "event_types": ["security.event_pushed"] * 260,
+                    }
+                ).encode("utf-8"),
+            )
+            oversized = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=json.dumps(
+                    {
+                        "name": "x" * (16 * 1024),
+                        "endpoint_url": "http://127.0.0.1/hook",
+                        "event_types": ["security.event_pushed"],
+                    }
+                ).encode("utf-8"),
+            )
+            format_type = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=json.dumps(
+                    {
+                        "name": "format-type",
+                        "endpoint_url": "http://127.0.0.1/hook",
+                        "event_types": ["security.event_pushed"],
+                        "format": True,
+                    }
+                ).encode("utf-8"),
+            )
+            rate_type = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                content=json.dumps(
+                    {
+                        "name": "rate-type",
+                        "endpoint_url": "http://127.0.0.1/hook",
+                        "event_types": ["security.event_pushed"],
+                        "security_event_rate_limit_per_minute": True,
+                    }
+                ).encode("utf-8"),
+            )
+            rate_range = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                json={
+                    "name": "rate-range",
+                    "endpoint_url": "http://127.0.0.1/hook",
+                    "event_types": ["security.event_pushed"],
+                    "security_event_rate_limit_per_minute": 0,
+                },
+            )
+            mixed_cef = await client.post(
+                "/webhooks",
+                headers=auth_headers,
+                json={
+                    "name": "mixed-cef",
+                    "endpoint_url": "http://127.0.0.1/hook",
+                    "event_types": [
+                        "security.event_pushed",
+                        "security.dlp_matched",
+                    ],
+                    "format": "cef",
+                },
+            )
+            client_request_id = "req_client_body_canary"
+            client_trace_id = "trc_client_body_canary"
+            created = await client.post(
+                "/webhooks",
+                headers={
+                    **auth_headers,
+                    "X-Request-ID": client_request_id,
+                    "X-Trace-ID": client_trace_id,
+                },
+                json={
+                    "name": "CEF SIEM",
+                    "endpoint_url": server_url(receiver, "/cef"),
+                    "event_types": ["security.event_pushed"],
+                    "format": "cef",
+                    "security_event_rate_limit_per_minute": 1,
+                    "timeout_ms": 1000,
+                },
+            )
+            assert created.status_code == 200, created.text
+            created_body = created.json()
+            endpoint_id = created_body["webhook"]["webhook_endpoint_id"]
+            receiver.signing_secret = created_body["signing_secret"]
+            tested = await client.post(
+                f"/webhooks/{endpoint_id}/test",
+                headers={"Authorization": f"Bearer {developer_token}"},
+            )
+            listed = await client.get(
+                "/webhooks?include_deliveries=true",
+                headers={"Authorization": f"Bearer {developer_token}"},
+            )
+
+    assert anonymous.status_code == 401
+    assert viewer.status_code == 403
+    assert viewer.json()["code"] == "auth.permission_denied"
+    for response in (
+        anonymous,
+        viewer,
+        wrong_content_type,
+        duplicate_key,
+        deep_body,
+        node_body,
+        oversized,
+        format_type,
+        rate_type,
+        rate_range,
+        mixed_cef,
+        created,
+        tested,
+        listed,
+    ):
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["X-Request-ID"]
+        assert response.headers["X-Trace-ID"]
+    for response in (
+        wrong_content_type,
+        duplicate_key,
+        deep_body,
+        node_body,
+        oversized,
+    ):
+        assert response.status_code == 422
+        assert response.json()["code"] == "infra.validation_failed"
+    assert format_type.json()["code"] == "webhook.format_invalid"
+    assert rate_type.json()["code"] == "webhook.security_rate_limit_invalid"
+    assert rate_range.json()["code"] == "webhook.security_rate_limit_invalid"
+    assert mixed_cef.json()["code"] == "webhook.format_invalid"
+    assert created_body["request_id"] == created.headers["X-Request-ID"]
+    assert created_body["trace_id"] == created.headers["X-Trace-ID"]
+    assert created_body["request_id"] != client_request_id
+    assert created_body["trace_id"] != client_trace_id
+    assert created_body["webhook"]["tenant_id"] == tenant_id
+    assert created_body["webhook"]["format"] == "cef"
+    assert created_body["webhook"]["security_event_rate_limit_per_minute"] == 1
+    assert created_body["webhook"]["event_types"] == ["security.event_pushed"]
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["delivery"]["format"] == "cef"
+    assert tested.json()["delivery"]["security_event_rate_limit_per_minute"] == 1
+    assert len(receiver.received) == 1
+    received = receiver.received[0]
+    assert received["payload"] is None
+    assert received["content_type"] == "text/plain; charset=utf-8"
+    assert received["event"] == "webhook.test"
+    assert received["body"].startswith(
+        b"CEF:0|MetaHub|AI Gateway|1|webhook.test|Webhook test|1|"
+    )
+    assert received["signature_valid"] is True
+    assert listed.status_code == 200, listed.text
+    listed_endpoint = listed.json()["webhooks"][0]
+    assert listed_endpoint["format"] == "cef"
+    assert listed_endpoint["security_event_rate_limit_per_minute"] == 1
+    for forbidden in ("wire_body_text", "encrypted_secret", "X-MetaHub-Signature"):
+        assert forbidden not in created.text
+        assert forbidden not in listed.text
 
 
 @pytest.mark.anyio
@@ -313,6 +550,16 @@ async def test_webhook_permission_validation_and_timeout_retry(
             headers={"Authorization": f"Bearer {developer_token}"},
             json={"name": "bad", "endpoint_url": "http://127.0.0.1/hook", "event_types": ["unknown.event"]},
         )
+        unknown_field = await client.post(
+            "/webhooks",
+            headers={"Authorization": f"Bearer {developer_token}"},
+            json={
+                "name": "bad",
+                "endpoint_url": "http://127.0.0.1/hook",
+                "event_types": ["gateway.request_failed"],
+                "tenant_id": "tenant_injected",
+            },
+        )
         created = await client.post(
             "/webhooks",
             headers={"Authorization": f"Bearer {developer_token}"},
@@ -344,6 +591,9 @@ async def test_webhook_permission_validation_and_timeout_retry(
     assert invalid_url.json()["code"] == "webhook.endpoint_invalid"
     assert invalid_event.status_code == 422
     assert invalid_event.json()["code"] == "webhook.event_type_invalid"
+    assert unknown_field.status_code == 422
+    assert unknown_field.json()["code"] == "infra.validation_failed"
+    assert unknown_field.json()["request_id"]
     assert viewer_test_denied.status_code == 403
     assert viewer_test_denied.json()["code"] == "auth.permission_denied"
     assert missing.status_code == 404
@@ -804,6 +1054,13 @@ async def test_webhook_replay_rejects_sensitive_or_inconsistent_stored_envelope(
             source = tested.json()["delivery"]
             receiver.received.clear()
             connection = connect_database(database_url)
+            # Simulate legacy/on-disk corruption after proving 0074 normally blocks rewrites.
+            with pytest.raises(sqlite3.IntegrityError, match="webhook_delivery_wire_immutable"):
+                connection.execute(
+                    "UPDATE webhook_deliveries SET payload_json=? WHERE webhook_delivery_id=?",
+                    ("{}", source["webhook_delivery_id"]),
+                )
+            connection.execute("DROP TRIGGER trg_webhook_deliveries_siem_immutable_prd081")
             sensitive_envelope = dict(source["payload"])
             sensitive_envelope["payload"] = {"nested": {"access-token": "must-not-send"}}
             connection.execute(

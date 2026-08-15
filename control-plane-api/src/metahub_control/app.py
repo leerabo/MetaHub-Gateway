@@ -69,6 +69,7 @@ from .request_logs import install_request_log_query_event_scheduler
 from .request_logs.routes import router as request_logs_router
 from .response_cache import install_response_cache_outbox_scheduler
 from .response_cache import router as response_cache_router
+from .security_events import install_security_event_scheduler
 from .session_risks import router as session_risks_router
 from .tenants.routes import router as tenant_router
 from .usage.routes import router as usage_router
@@ -196,3 +197,4 @@ install_response_cache_outbox_scheduler(app)
 install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
 install_billing_dispute_scheduler(app)
+install_security_event_scheduler(app)

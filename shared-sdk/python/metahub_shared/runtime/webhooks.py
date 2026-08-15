@@ -24,6 +24,11 @@ from metahub_shared.rbac import (
 )
 
 from .provider_error_map import TENANT_PROVIDER_ERROR_OUTPUT_CODES
+from .security_events import (
+    SECURITY_EVENT_TYPE,
+    validate_security_event_envelope,
+    validate_security_event_payload,
+)
 
 # Webhook 事件类型白名单定义可订阅治理事件，payload 生成和签名校验必须共享同一集合。
 WEBHOOK_EVENT_TYPES = {
@@ -106,6 +111,8 @@ WEBHOOK_EVENT_TYPES = {
     # 账单争议只外发创建时冻结的范围类型、条目计数和按币种汇总；request 列表、
     # 时间范围、reason、价格证据和调整明细均留在 tenant-qualified 权威数据库。
     "billing_dispute.created",
+    # SIEM 标准事件只外发聚合后的固定安全投影；原 DLP/会话事件仍保留兼容订阅。
+    SECURITY_EVENT_TYPE,
 }
 
 # 架构文档中的旧名称只允许在 Endpoint 配置入口归一化；生产事件、签名正文和投递记录
@@ -342,6 +349,9 @@ def build_webhook_event(
     elif event_type == "billing_dispute.created":
         # PRD-080 只接受 immutable item/source 可重建的七字段创建摘要。
         _validate_billing_dispute_created_payload(safe_payload)
+    elif event_type == SECURITY_EVENT_TYPE:
+        # PRD-081 聚合事件必须使用 exact 字段合同，不能通过通用 JSON 校验自由扩展。
+        safe_payload = validate_security_event_payload(safe_payload)
     elif event_type == "audit.exported":
         # 审计导出事件只外发不可变复核摘要，筛选原文、CSV 和操作者邮箱不得进入信封。
         _validate_audit_exported_payload(safe_payload)
@@ -389,6 +399,7 @@ def build_webhook_event(
         "quota.exhausted",
         "trial.expired",
         "billing_dispute.created",
+        SECURITY_EVENT_TYPE,
         "audit.exported",
         "config.imported",
         "role.permission_changed",
@@ -696,6 +707,21 @@ def build_webhook_event(
             trace_id=trace_id,
             source_request_id=source_request_id,
             occurred_at=occurred_at,
+        )
+    elif event_type == SECURITY_EVENT_TYPE:
+        # 聚合器信封必须绑定稳定 sevt_、固定 actor、窗口结束秒和最后来源请求。
+        validate_security_event_envelope(
+            {
+                "event_id": event_id,
+                "event_type": event_type,
+                "timestamp": _to_iso(occurred_at),
+                "tenant_id": tenant_id,
+                "actor_id": actor_id,
+                "object_id": object_id,
+                "trace_id": trace_id,
+                "payload": safe_payload,
+            },
+            source_request_id=source_request_id,
         )
     elif event_type == "audit.exported":
         # source worker 必须把稳定 aexevt_ 事件绑定到同一 AuditExport、actor、trace 和请求事实。

@@ -16,6 +16,7 @@ from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.security_events import SECURITY_EVENT_TYPE
 
 from . import service as webhook_service
 
@@ -244,6 +245,17 @@ def process_claimed_replay(
         # 生产请求可能在出网期间跨过 lease 到期点；提交前重新取时钟，旧 worker 必须立即失权。
         # 测试显式注入 now 时仍复用固定时间，保证边界用例可确定地推进。
         finish_time = _as_utc(now or _utcnow())
+        if result.status == "pending":
+            # 安全事件满额不是 delivery failure。恢复原语已把精确 UTC minute 写入
+            # delivery.next_retry_at；根死信必须继承该时间并撤销本次零网络 dispatch 计数。
+            return _defer_rate_limited_claim(
+                connection,
+                claim,
+                now=finish_time,
+            )
+        if result.status not in {"success", "failed"}:
+            # 未知状态不能被猜测成失败后破坏根死信；固定错误会走有界 worker 退避。
+            raise ApiError("webhook.replay_unavailable")
         return _finish_claim(
             connection,
             claim,
@@ -359,6 +371,75 @@ def _finish_claim(
             claim.claim_token,
             claim.worker_id,
             now_text,
+        ),
+    )
+    connection.commit()
+    return cursor.rowcount == 1
+
+
+def _defer_rate_limited_claim(
+    connection: sqlite3.Connection,
+    claim: ReplayClaim,
+    *,
+    now: datetime,
+) -> bool:
+    """把零网络 rate deferral 精确投影回根死信，并以完整 owner CAS 释放 lease。
+
+    delivery 是到期时间的唯一权威来源。只有标准安全事件、pending 状态和非空
+    ``next_retry_at`` 能进入该分支；普通 pending 或损坏行不能借此无限规避失败处理。
+    """
+
+    now_text = _to_db_time(now)
+    connection.execute("BEGIN IMMEDIATE")
+    delivery = connection.execute(
+        """
+        SELECT event_type,status,next_retry_at
+        FROM webhook_deliveries
+        WHERE tenant_id=? AND webhook_delivery_id=?
+        """,
+        (claim.tenant_id, claim.replay_delivery_id),
+    ).fetchone()
+    if (
+        delivery is None
+        or delivery["event_type"] != SECURITY_EVENT_TYPE
+        or delivery["status"] != "pending"
+        or delivery["next_retry_at"] is None
+        or str(delivery["next_retry_at"]) <= now_text
+    ):
+        connection.rollback()
+        raise ApiError("webhook.replay_unavailable")
+    due_at = str(delivery["next_retry_at"])
+    cursor = connection.execute(
+        """
+        UPDATE webhook_dead_letter_events
+        SET replay_claim_token=NULL, replay_lease_owner_id=NULL,
+            replay_lease_expires_at=NULL, replay_next_attempt_at=?,
+            replay_dispatch_attempts=replay_dispatch_attempts-1,
+            last_replay_error_code=NULL, updated_at=?
+        WHERE tenant_id=? AND dead_letter_event_id=? AND status='replay_pending'
+          AND current_replay_delivery_id=? AND replay_claim_token=?
+          AND replay_lease_owner_id=? AND replay_lease_expires_at>?
+          AND replay_dispatch_attempts=?
+          AND EXISTS (
+            SELECT 1 FROM webhook_deliveries replay
+            WHERE replay.tenant_id=webhook_dead_letter_events.tenant_id
+              AND replay.webhook_delivery_id=current_replay_delivery_id
+              AND replay.event_type=? AND replay.status='pending'
+              AND replay.next_retry_at=?
+          )
+        """,
+        (
+            due_at,
+            now_text,
+            claim.tenant_id,
+            claim.dead_letter_event_id,
+            claim.replay_delivery_id,
+            claim.claim_token,
+            claim.worker_id,
+            now_text,
+            claim.dispatch_attempt,
+            SECURITY_EVENT_TYPE,
+            due_at,
         ),
     )
     connection.commit()

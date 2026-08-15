@@ -176,14 +176,24 @@ async def test_three_turns_commit_high_risk_and_freeze_as_single_transactions(tm
     try:
         score = connection.execute(
             """
-            SELECT status,score,risky_turn_count,state_revision
+            SELECT session_risk_score_id,status,score,risky_turn_count,state_revision
             FROM session_risk_scores WHERE tenant_id=? AND scope_type='api_session'
               AND scope_key=?
             """,
             (fixture.tenant_id, scope.scope_key),
         ).fetchone()
         assert score is not None
-        assert tuple(score) == ("frozen", 10_000, 3, 3)
+        assert tuple(score)[1:] == ("frozen", 10_000, 3, 3)
+        security_sources = connection.execute(
+            """
+            SELECT category,severity,severity_score,action,outcome,resource_type,
+                   resource_id,source_request_id,source_trace_id,occurrence_count
+            FROM security_event_sources
+            WHERE tenant_id=? AND source_event_type='security.session_high_risk'
+            ORDER BY occurred_at,security_event_source_id
+            """,
+            (fixture.tenant_id,),
+        ).fetchall()
         counts = tuple(
             connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             for table in (
@@ -196,6 +206,32 @@ async def test_three_turns_commit_high_risk_and_freeze_as_single_transactions(tm
     finally:
         connection.close()
     assert counts == (3, 2, 2, 1)
+    assert [tuple(source) for source in security_sources] == [
+        (
+            "session_risk",
+            "high",
+            8,
+            "high_risk",
+            "detected",
+            "session_risk_score",
+            score["session_risk_score_id"],
+            "req_prd070_service_main_2",
+            "trc_prd070_service_main_2",
+            2,
+        ),
+        (
+            "session_risk",
+            "critical",
+            10,
+            "freeze_session",
+            "frozen",
+            "session_risk_score",
+            score["session_risk_score_id"],
+            "req_prd070_service_main_3",
+            "trc_prd070_service_main_3",
+            3,
+        ),
+    ]
     assert state.runtime_event_queue.qsize() == 2
     queued = [state.runtime_event_queue.get_nowait() for _ in range(2)]
     assert [event.payload["status"] for event in queued] == ["high_risk", "frozen"]

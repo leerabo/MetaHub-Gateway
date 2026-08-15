@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/webhooks/routes.py
 """
 
@@ -14,7 +15,6 @@ from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import AuthContext, require_webhook_manager
 
 from .models import (
-    CreateWebhookEndpointRequest,
     ReplayWebhookRequest,
     WebhookDeadLetterArchiveResponse,
     WebhookDeadLetterListResponse,
@@ -37,7 +37,12 @@ from .service import (
     rotate_webhook_secret,
     test_webhook,
 )
-from .wire import REPLAY_DELIVERY_OPENAPI, read_replay_delivery_request
+from .wire import (
+    CREATE_WEBHOOK_OPENAPI,
+    REPLAY_DELIVERY_OPENAPI,
+    read_create_webhook_request,
+    read_replay_delivery_request,
+)
 
 router = APIRouter(tags=["webhooks"])
 
@@ -121,6 +126,7 @@ async def archive_webhook_dead_letter_route(
 @router.get("/webhooks", response_model=WebhookEndpointListResponse)
 async def list_webhooks_route(
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
     status: Annotated[str | None, Query()] = None,
     event_type: Annotated[str | None, Query()] = None,
@@ -128,6 +134,7 @@ async def list_webhooks_route(
 ) -> WebhookEndpointListResponse:
     """读取当前租户 Webhook Endpoint 和发送记录，后端按 tenant_id 与角色做边界控制。"""
 
+    _set_no_store(response)
     return list_webhooks(
         request.app.state.config,
         context,
@@ -139,14 +146,20 @@ async def list_webhooks_route(
     )
 
 
-@router.post("/webhooks", response_model=WebhookEndpointCreateResponse)
+@router.post(
+    "/webhooks",
+    response_model=WebhookEndpointCreateResponse,
+    openapi_extra=CREATE_WEBHOOK_OPENAPI,
+)
 async def create_webhook_route(
     request: Request,
-    payload: CreateWebhookEndpointRequest,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
 ) -> WebhookEndpointCreateResponse:
     """创建当前租户 Webhook Endpoint，signing_secret 只在本次响应中返回一次。"""
 
+    _set_no_store(response)
+    payload = await read_create_webhook_request(request)
     return create_webhook(
         request.app.state.config,
         context,
@@ -160,10 +173,12 @@ async def create_webhook_route(
 async def test_webhook_route(
     webhook_endpoint_id: str,
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
 ) -> WebhookTestResponse:
     """向当前租户某个 Endpoint 发送测试事件，并返回逐次 attempt 摘要。"""
 
+    _set_no_store(response)
     return test_webhook(
         request.app.state.config,
         context,
@@ -173,10 +188,14 @@ async def test_webhook_route(
     )
 
 
-@router.get("/webhooks/{webhook_endpoint_id}/deliveries", response_model=WebhookDeliveryListResponse)
+@router.get(
+    "/webhooks/{webhook_endpoint_id}/deliveries",
+    response_model=WebhookDeliveryListResponse,
+)
 async def list_webhook_deliveries_route(
     webhook_endpoint_id: str,
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
     event_type: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = "all",
@@ -184,6 +203,7 @@ async def list_webhook_deliveries_route(
 ) -> WebhookDeliveryListResponse:
     """读取当前租户指定 Endpoint 最近 100 条以内的投递记录和安全 attempt 摘要。"""
 
+    _set_no_store(response)
     return list_webhook_deliveries(
         request.app.state.config,
         context,
@@ -201,10 +221,12 @@ async def replay_webhook_route(
     webhook_endpoint_id: str,
     payload: ReplayWebhookRequest,
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
 ) -> WebhookReplayResponse:
     """重放当前租户指定 Endpoint 的失败 delivery，相同幂等键不重复出网。"""
 
+    _set_no_store(response)
     return replay_webhook(
         request.app.state.config,
         context,
@@ -216,14 +238,19 @@ async def replay_webhook_route(
     )
 
 
-@router.post("/webhooks/{webhook_endpoint_id}/rotate-secret", response_model=WebhookSecretRotateResponse)
+@router.post(
+    "/webhooks/{webhook_endpoint_id}/rotate-secret",
+    response_model=WebhookSecretRotateResponse,
+)
 async def rotate_webhook_secret_route(
     webhook_endpoint_id: str,
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_webhook_manager)],
 ) -> WebhookSecretRotateResponse:
     """原子轮换当前租户 Endpoint 的 signing secret，新明文只在本次响应返回。"""
 
+    _set_no_store(response)
     # 路由只传可信认证上下文和请求元数据，Secret 生成与租户归属全部留在服务层。
     return rotate_webhook_secret(
         request.app.state.config,

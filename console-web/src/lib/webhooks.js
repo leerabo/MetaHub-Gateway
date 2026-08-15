@@ -28,11 +28,23 @@ export async function listWebhooks({ controlApiUrl, token, status, eventType, in
  * 创建当前租户的 Webhook Endpoint。
  * signing_secret 只会在创建响应中返回一次；前端不能把该明文写入 console 事件或普通列表状态。
  */
-export async function createWebhook({ controlApiUrl, token, name, endpointUrl, eventTypes, status, timeoutMs }) {
+export async function createWebhook({
+  controlApiUrl,
+  token,
+  name,
+  endpointUrl,
+  eventTypes,
+  format = "json",
+  securityEventRateLimitPerMinute = 60,
+  status,
+  timeoutMs,
+}) {
   const payload = compactPayload({
     name,
     endpoint_url: endpointUrl,
     event_types: Array.isArray(eventTypes) ? eventTypes.filter(Boolean) : [],
+    format,
+    security_event_rate_limit_per_minute: securityEventRateLimitPerMinute,
     status,
     timeout_ms: timeoutMs,
   });

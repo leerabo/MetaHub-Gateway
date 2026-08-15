@@ -38,12 +38,18 @@ from metahub_gateway.routing.models import (
     resolve_model_route_plan,
 )
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.security import (
+    encrypt_provider_key,
+    secret_fingerprint,
+    secret_prefix,
+)
 from metahub_shared.runtime.config import AppConfig, load_app_config
 from metahub_shared.runtime.errors import ERROR_SPECS, ApiError
 
 # 固定测试秘密只用于进程内配置。断言、数据库事实和异常文本均不得包含这些值。
 VIRTUAL_KEY = "mhv_prd050_state_machine"
 PROVIDER_KEY = "sk-prd050-state-machine"
+PROVIDER_ENCRYPTION_SECRET = "prd081-affinity-provider-encryption-secret"
 CACHE_SECRET = "prd050-state-machine-hmac-secret-0123456789abcdef"
 AFFINITY_ID = "caf_" + "5" * 32
 ALIAS_ID = "alias_prd050_state_machine"
@@ -98,6 +104,10 @@ def state_graph(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> StateGraph:
     monkeypatch.setenv("METAHUB_SEED_VIRTUAL_KEY", VIRTUAL_KEY)
     monkeypatch.setenv("METAHUB_PROVIDER_LOCAL_OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("METAHUB_PROVIDER_LOCAL_OPENAI_API_KEY", PROVIDER_KEY)
+    monkeypatch.setenv(
+        "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
+        PROVIDER_ENCRYPTION_SECRET,
+    )
     monkeypatch.setenv("METAHUB_CACHE_AFFINITY_HMAC_SECRET", CACHE_SECRET)
     apply_migrations(database_url)
     seed = apply_seed_data(database_url)
@@ -709,6 +719,132 @@ def test_cold_concurrency_creates_one_binding_and_all_selections_are_misses(
         )
     finally:
         connection.close()
+
+
+def test_restore_decrypt_failure_rolls_back_selection_and_persists_safe_anomaly(
+    state_graph: StateGraph,
+) -> None:
+    """幂等恢复的坏密文先回滚亲和事务，再独立保存无 Credential source。"""
+
+    credential_id = "credential-prd081-affinity-sentinel"
+    connection = connect_database(state_graph.database_url)
+    try:
+        connection.execute(
+            "DELETE FROM provider_credentials WHERE tenant_id=? AND provider_id=?",
+            (state_graph.tenant_id, state_graph.provider_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO provider_credentials(
+              provider_credential_id,tenant_id,provider_id,key_fingerprint,encrypted_key,
+              name,key_prefix,weight,status,created_at,updated_at
+            ) VALUES(?,?,?,?,?,'PRD-081 managed',?,100,'active',?,?)
+            """,
+            (
+                credential_id,
+                state_graph.tenant_id,
+                state_graph.provider_id,
+                secret_fingerprint(PROVIDER_KEY),
+                encrypt_provider_key(
+                    PROVIDER_KEY,
+                    encryption_secret=PROVIDER_ENCRYPTION_SECRET,
+                ),
+                secret_prefix(PROVIDER_KEY),
+                _db_time(BASE_TIME),
+                _db_time(BASE_TIME),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    opened = _open_selection(state_graph, 810)
+    connection = connect_database(state_graph.database_url)
+    try:
+        before = connection.execute(
+            """SELECT outcome_status,cache_affinity_binding_id_snapshot,target_generation
+                 FROM cache_affinity_selections
+                 WHERE tenant_id=? AND cache_affinity_selection_id=?""",
+            (
+                state_graph.tenant_id,
+                opened.handle.cache_affinity_selection_id,
+            ),
+        ).fetchone()
+        connection.execute(
+            "UPDATE provider_credentials SET encrypted_key=? WHERE provider_credential_id=?",
+            ("aesgcm-v1:invalid-prd081-affinity-ciphertext", credential_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert opened.plan.cache_affinity_context is not None
+    with pytest.raises(ApiError) as failure:
+        select_provider_access(
+            state_graph.config,
+            opened.plan.initial_route,
+            affinity=opened.plan.cache_affinity_context,
+            request_id=opened.attempt.request_id,
+            trace_id=opened.attempt.trace_id,
+            attempt_sequence=opened.attempt.attempt_sequence,
+            routing_attempt_id=opened.attempt.routing_attempt_id,
+            stream_session_id=None,
+        )
+    assert failure.value.code == "gateway.cache_affinity_unavailable"
+
+    connection = connect_database(state_graph.database_url)
+    try:
+        after = connection.execute(
+            """SELECT outcome_status,cache_affinity_binding_id_snapshot,target_generation
+                 FROM cache_affinity_selections
+                 WHERE tenant_id=? AND cache_affinity_selection_id=?""",
+            (
+                state_graph.tenant_id,
+                opened.handle.cache_affinity_selection_id,
+            ),
+        ).fetchone()
+        anomaly = connection.execute(
+            """SELECT tenant_id,provider_id,model_id,anomaly_type,request_id,trace_id,
+                      candidate_count
+                 FROM provider_key_anomaly_events"""
+        ).fetchone()
+        source = connection.execute(
+            """SELECT source_event_type,action,outcome,resource_type,resource_id,
+                      occurrence_count
+                 FROM security_event_sources"""
+        ).fetchone()
+        anomaly_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(provider_key_anomaly_events)"
+            )
+        }
+    finally:
+        connection.close()
+    assert tuple(after) == tuple(before)
+    assert tuple(anomaly) == (
+        state_graph.tenant_id,
+        state_graph.provider_id,
+        state_graph.model_id,
+        "decrypt_failed",
+        opened.attempt.request_id,
+        opened.attempt.trace_id,
+        1,
+    )
+    assert tuple(source) == (
+        "security.provider_key_anomaly",
+        "decrypt_failed",
+        "rejected",
+        "provider",
+        state_graph.provider_id,
+        1,
+    )
+    assert not anomaly_columns & {
+        "provider_credential_id",
+        "key_prefix",
+        "encrypted_key",
+        "error_message",
+    }
 
 
 def test_expired_lease_renews_and_late_success_warms_without_decrementing_new_lease(

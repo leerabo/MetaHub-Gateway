@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 
 class WebhookDeliveryAttemptInfo(BaseModel):
@@ -44,6 +44,8 @@ class WebhookDeliveryInfo(BaseModel):
     event_type: str
     event_timestamp: datetime
     payload: dict[str, Any]
+    format: str = "json"
+    security_event_rate_limit_per_minute: int = 60
     status: str
     attempt_count: int
     max_attempts: int
@@ -75,6 +77,8 @@ class WebhookDeliveryRecordInfo(BaseModel):
     event_id: str
     event_type: str
     event_timestamp: datetime
+    format: str = "json"
+    security_event_rate_limit_per_minute: int = 60
     status: str
     attempt_count: int
     max_attempts: int
@@ -104,6 +108,8 @@ class WebhookEndpointInfo(BaseModel):
     name: str
     endpoint_url: str
     event_types: list[str]
+    format: str = "json"
+    security_event_rate_limit_per_minute: int = 60
     secret_prefix: str
     secret_fingerprint: str
     secret_version: int = 1
@@ -156,11 +162,15 @@ class CreateWebhookEndpointRequest(BaseModel):
     tenant_id、secret、max_attempts 都由服务端决定，客户端不能通过请求体伪造租户或覆盖签名边界。
     """
 
-    name: str | None = None
-    endpoint_url: str | None = None
-    event_types: list[str] | None = None
-    status: str | None = None
-    timeout_ms: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    name: StrictStr | None = None
+    endpoint_url: StrictStr | None = None
+    event_types: list[StrictStr] | None = None
+    status: StrictStr | None = None
+    timeout_ms: StrictInt | None = None
+    format: StrictStr | None = None
+    security_event_rate_limit_per_minute: StrictInt | None = None
 
 
 class ReplayWebhookRequest(BaseModel):

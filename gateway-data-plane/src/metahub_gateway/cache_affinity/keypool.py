@@ -18,10 +18,13 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
 from metahub_gateway.providers.keypool import (
+    ProviderKeyDecryptAnomaly,
     SelectedProviderKey,
     _environment_provider_key,
+    _insert_provider_key_anomaly,
     _row_is_selectable,
     _selection_sort_key,
+    persist_provider_key_decrypt_anomaly,
     select_provider_key,
 )
 from metahub_gateway.routing.models import GatewayRoute
@@ -67,7 +70,16 @@ def select_provider_access(
     # 未启用亲和时必须完整复用既有租户 KeyPool，不能创建 Selection 或改变错误码。
     if affinity is None:
         # 返回值仅把旧选择结果包装为空句柄，确保旧主流程没有任何亲和副作用。
-        return ProviderAccessSelection(select_provider_key(config, route), None, None)
+        return ProviderAccessSelection(
+            select_provider_key(
+                config,
+                route,
+                request_id=request_id,
+                trace_id=trace_id,
+            ),
+            None,
+            None,
+        )
     _validate_execution_gate_arguments(
         request_id=request_id,
         trace_id=trace_id,
@@ -245,6 +257,18 @@ def select_provider_access(
         )
         return ProviderAccessSelection(selected_key, handle, event)
     # 已分类领域错误要保留 provider_key 或亲和固定错误码，同时回滚当前 Selection 事务。
+    except ProviderKeyDecryptAnomaly as anomaly:
+        if connection is not None:
+            connection.rollback()
+        persist_provider_key_decrypt_anomaly(
+            config,
+            route,
+            request_id=request_id,
+            trace_id=trace_id,
+            candidate_count=anomaly.candidate_count,
+            error_code=anomaly.error_code,
+        )
+        raise ApiError(anomaly.error_code) from None
     except ApiError:
         if connection is not None:
             connection.rollback()
@@ -507,6 +531,7 @@ def _select_key_in_transaction(
     ).fetchall()
     managed_rows = [row for row in rows if str(row["encrypted_key"] or "").startswith("aesgcm-v1:")]
     if managed_rows:
+        decrypt_failure_count = 0
         preferred_id = str(binding["provider_credential_id"] or "")
         candidates = [
             row
@@ -525,6 +550,7 @@ def _select_key_in_transaction(
             # 单把损坏密文只使该候选失格；日志使用真实 request/trace 但禁止 Credential 标识。
             # 继续尝试同租户同 Provider 的下一把托管 Key，不能回退全局环境 Key。
             except ValueError:
+                decrypt_failure_count += 1
                 logger.warning(
                     "provider_key.decrypt_failed",
                     extra={
@@ -540,6 +566,14 @@ def _select_key_in_transaction(
                     },
                 )
                 continue
+            if decrypt_failure_count:
+                _insert_provider_key_anomaly(
+                    connection,
+                    route,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    candidate_count=decrypt_failure_count,
+                )
             return (
                 SelectedProviderKey(
                     provider_credential_id=str(row["provider_credential_id"]),
@@ -550,6 +584,11 @@ def _select_key_in_transaction(
                 "managed",
             )
         # 租户一旦配置托管 Key，全部不合格时必须保留既有 KeyPool 固定错误码并停止。
+        if decrypt_failure_count:
+            raise ProviderKeyDecryptAnomaly(
+                decrypt_failure_count,
+                error_code="provider_key.unavailable",
+            )
         raise ApiError("provider_key.unavailable")
     environment_key = _environment_provider_key(
         config,
@@ -761,9 +800,12 @@ def _restore_existing_selection(
         try:
             plain_value = decrypt_provider_key(str(row["encrypted_key"]))
         # 合法格式但认证标签损坏也已在共享解密边界归一为 ValueError；这里只映射固定错误。
-        except ValueError as exc:
-            # 幂等恢复不能重新选择目标，否则不可变 Selection 与真实 Authorization 会分叉。
-            raise ApiError("gateway.cache_affinity_unavailable") from exc
+        except ValueError:
+            # 外层先回滚读取事务，再用独立短事务持久化安全异常；不能在持写锁时另开连接。
+            raise ProviderKeyDecryptAnomaly(
+                1,
+                error_code="gateway.cache_affinity_unavailable",
+            ) from None
         selected_key = SelectedProviderKey(
             str(credential_id), plain_value, "database", str(row["key_prefix"] or "") or None
         )

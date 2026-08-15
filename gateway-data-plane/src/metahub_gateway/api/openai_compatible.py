@@ -114,6 +114,7 @@ from metahub_gateway.providers.base import (
     quality_observation_error,
 )
 from metahub_gateway.providers.factory import adapter_for_route
+from metahub_gateway.providers.keypool import provider_key_request_context
 from metahub_gateway.providers.openai_compatible import estimate_stream_usage
 from metahub_gateway.quota import (
     QuotaGuardResult,
@@ -2293,7 +2294,10 @@ def _provider_request(
 ) -> ProviderRequest:
     """为一次具体路由重新选择 Key 并构建只属于该 Provider 的请求。"""
 
-    provider_request = adapter.build_request(route, endpoint, payload, config)
+    # 旧 Adapter 方法签名保持不变；ContextVar 只让基础 KeyPool 在当前并发调用栈取得
+    # 服务端 request/trace，用于无 Credential 标识的解密异常事实，退出后立即清除。
+    with provider_key_request_context(_request_id(request), _trace_id(request)):
+        provider_request = adapter.build_request(route, endpoint, payload, config)
     provider_request.error_map_lease = _provider_error_map_lease_for_request(
         request, route.tenant_id
     )

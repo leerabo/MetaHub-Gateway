@@ -45,6 +45,8 @@ AVAILABLE_LOCALES = (
     LocaleInfo(locale="en-US", label="English", native_label="English", default=False),
 )
 I18N_MESSAGES: tuple[I18nMessage, ...] = (
+    I18nMessage("error.webhook.format_invalid.label", "zh-CN", "Webhook 格式不合法", "errors"),
+    I18nMessage("error.webhook.format_invalid.label", "en-US", "Invalid webhook format", "errors"),
     I18nMessage("error.auth.token_missing.label", "zh-CN", "需要登录", "errors"),
     I18nMessage("error.auth.token_missing.label", "en-US", "Sign in required", "errors"),
     I18nMessage("error.auth.permission_denied.label", "zh-CN", "权限不足", "errors"),

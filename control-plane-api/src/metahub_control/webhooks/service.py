@@ -16,7 +16,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -32,6 +32,12 @@ from metahub_shared.db.security import (
 )
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.security_events import (
+    SECURITY_EVENT_TYPE,
+    normalize_webhook_payload_format,
+    security_event_cef_bytes,
+    webhook_test_cef_bytes,
+)
 from metahub_shared.runtime.webhooks import (
     WEBHOOK_EVENT_TYPES,
     WEBHOOK_SUBSCRIBABLE_EVENT_TYPES,
@@ -87,6 +93,9 @@ DEFAULT_TIMEOUT_MS = 5000
 MIN_TIMEOUT_MS = 1000
 MAX_TIMEOUT_MS = 30000
 MAX_ATTEMPTS = 3
+DEFAULT_SECURITY_EVENT_RATE_LIMIT = 60
+MIN_SECURITY_EVENT_RATE_LIMIT = 1
+MAX_SECURITY_EVENT_RATE_LIMIT = 600
 RECENT_DELIVERY_LIMIT = 20
 DETAIL_DELIVERY_LIMIT = 100
 DEAD_LETTER_DEFAULT_LIMIT = 50
@@ -166,6 +175,12 @@ def create_webhook(
     name = _normalize_name(payload.name)
     endpoint_url = _normalize_endpoint_url(config, payload.endpoint_url)
     event_types = _normalize_event_types(payload.event_types)
+    payload_format = _normalize_payload_format(payload.format)
+    security_event_rate_limit = _normalize_security_event_rate_limit(
+        payload.security_event_rate_limit_per_minute
+    )
+    if payload_format == "cef" and event_types != [SECURITY_EVENT_TYPE]:
+        raise ApiError("webhook.format_invalid")
     status = _normalize_status(payload.status or "active")
     timeout_ms = _normalize_timeout_ms(payload.timeout_ms)
     connection = _connect(config)
@@ -186,9 +201,10 @@ def create_webhook(
             INSERT INTO webhook_endpoints(
               webhook_endpoint_id, tenant_id, name, endpoint_url, event_types_json,
               encrypted_secret, secret_prefix, secret_fingerprint, status, timeout_ms,
-              max_attempts, created_by, updated_by, created_at, updated_at
+              max_attempts, created_by, updated_by, created_at, updated_at,
+              payload_format, security_event_rate_limit_per_minute
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 endpoint_id,
@@ -206,6 +222,8 @@ def create_webhook(
                 context.user.user_id,
                 now,
                 now,
+                payload_format,
+                security_event_rate_limit,
             ),
         )
         connection.commit()
@@ -710,7 +728,7 @@ def _create_replay_intent(
         if endpoint is None:
             raise ApiError("webhook.dead_letter_not_found")
         _ensure_endpoint_active(endpoint)
-        safe_envelope = _validated_stored_envelope(
+        _validated_stored_envelope(
             source["payload_json"],
             source=source,
             tenant_id=context.user.tenant_id,
@@ -723,9 +741,10 @@ def _create_replay_intent(
               webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
               event_timestamp, payload_json, status, attempt_count, max_attempts,
               delivery_kind, replayed_from_delivery_id, replay_idempotency_key,
-              replayed_by, replayed_at, secret_version, created_at, updated_at
+              replayed_by, replayed_at, secret_version, created_at, updated_at,
+              payload_format, wire_body_text, security_event_rate_limit_per_minute
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 'replay', ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 'replay', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 replay_delivery_id,
@@ -734,7 +753,7 @@ def _create_replay_intent(
                 source["event_id"],
                 source["event_type"],
                 source["event_timestamp"],
-                _json_dumps(safe_envelope),
+                str(source["payload_json"]),
                 int(endpoint["max_attempts"] or MAX_ATTEMPTS),
                 source_delivery_id,
                 idempotency_key,
@@ -743,6 +762,9 @@ def _create_replay_intent(
                 int(endpoint["secret_version"]),
                 now,
                 now,
+                source["payload_format"],
+                source["wire_body_text"],
+                int(source["security_event_rate_limit_per_minute"]),
             ),
         )
         updated = connection.execute(
@@ -1413,14 +1435,20 @@ def _dispatch_event_with_pending_resume(
                     continue
                 if event.event_type == "webhook.delivery_failed":
                     continue
+                payload_format, wire_body_text, _body = _event_wire(
+                    endpoint,
+                    event,
+                    safe_envelope,
+                )
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO webhook_deliveries(
                       webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
                       event_timestamp, payload_json, status, attempt_count, max_attempts,
-                      secret_version, created_at, updated_at
+                      secret_version, created_at, updated_at, payload_format, wire_body_text,
+                      security_event_rate_limit_per_minute
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         f"whd_{uuid4().hex}",
@@ -1434,6 +1462,9 @@ def _dispatch_event_with_pending_resume(
                         int(endpoint["secret_version"]),
                         now,
                         now,
+                        payload_format,
+                        wire_body_text,
+                        int(endpoint["security_event_rate_limit_per_minute"]),
                     ),
                 )
             existing = _load_original_event_deliveries(connection, tenant_id, event.event_id)
@@ -1511,11 +1542,18 @@ def freeze_webhook_event_delivery_snapshot(
         payload_json = _json_dumps(_safe_payload(event.to_payload()))
         existing = _load_original_event_deliveries(connection, event.tenant_id, event.event_id)
         for delivery in existing:
+            expected_format, expected_wire_text, _body = _event_wire(
+                {"payload_format": delivery["payload_format"]},
+                event,
+                _safe_payload(event.to_payload()),
+            )
             if (
                 delivery["tenant_id"] != event.tenant_id
                 or delivery["event_type"] != event.event_type
                 or delivery["event_timestamp"] != event.timestamp
                 or delivery["payload_json"] != payload_json
+                or delivery["payload_format"] != expected_format
+                or delivery["wire_body_text"] != expected_wire_text
             ):
                 # 0065 遗留子集只有与 immutable source 完全一致时才能作为权威历史保留。
                 raise ApiError("webhook.delivery_unavailable")
@@ -1535,13 +1573,19 @@ def freeze_webhook_event_delivery_snapshot(
                 continue
             endpoint_id = str(endpoint["webhook_endpoint_id"])
             expected_endpoint_ids.add(endpoint_id)
+            payload_format, wire_body_text, _body = _event_wire(
+                endpoint,
+                event,
+                _safe_payload(event.to_payload()),
+            )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO webhook_deliveries(
                   webhook_delivery_id,tenant_id,webhook_endpoint_id,event_id,event_type,
                   event_timestamp,payload_json,status,attempt_count,max_attempts,
-                  delivery_kind,secret_version,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,'pending',0,?,'original',?,?,?)
+                  delivery_kind,secret_version,created_at,updated_at,payload_format,
+                  wire_body_text,security_event_rate_limit_per_minute
+                ) VALUES(?,?,?,?,?,?,?,'pending',0,?,'original',?,?,?,?,?,?)
                 """,
                 (
                     f"whd_{uuid4().hex}",
@@ -1555,16 +1599,26 @@ def freeze_webhook_event_delivery_snapshot(
                     int(endpoint["secret_version"]),
                     frozen_at,
                     frozen_at,
+                    payload_format,
+                    wire_body_text,
+                    int(endpoint["security_event_rate_limit_per_minute"]),
                 ),
             )
         frozen = _load_original_event_deliveries(connection, event.tenant_id, event.event_id)
         frozen_endpoint_ids: set[str] = set()
         for delivery in frozen:
+            expected_format, expected_wire_text, _body = _event_wire(
+                {"payload_format": delivery["payload_format"]},
+                event,
+                _safe_payload(event.to_payload()),
+            )
             if (
                 delivery["tenant_id"] != event.tenant_id
                 or delivery["event_type"] != event.event_type
                 or delivery["event_timestamp"] != event.timestamp
                 or delivery["payload_json"] != payload_json
+                or delivery["payload_format"] != expected_format
+                or delivery["wire_body_text"] != expected_wire_text
             ):
                 # 补齐后再次验证全部 intent，防止唯一键冲突掩盖损坏或跨事件旧行。
                 raise ApiError("webhook.delivery_unavailable")
@@ -1610,6 +1664,7 @@ def fail_pending_webhook_event_deliveries(
         "experiment.completed",
         "file.prompt_injection_detected",
         "quota.exhausted",
+        SECURITY_EVENT_TYPE,
         "trial.expired",
     }
     if (
@@ -1727,6 +1782,13 @@ def _resume_pending_delivery(
                 if finalized is None:
                     raise ApiError("webhook.delivery_unavailable")
                 return _delivery_info_from_row(connection, finalized, include_attempts=True)
+            if not _claim_security_event_rate_slot(connection, delivery, now=_utcnow()):
+                # 满额只推进 next_retry_at；零 attempt、零 Secret 刷新且零网络。
+                connection.commit()
+                deferred = _load_delivery_row(connection, tenant_id, endpoint_id, delivery_id)
+                if deferred is None:
+                    raise ApiError("webhook.delivery_unavailable")
+                return _delivery_info_from_row(connection, deferred, include_attempts=True)
             stored_secret_version = int(delivery["secret_version"])
             current_secret_version = int(endpoint["secret_version"])
             cursor = connection.execute(
@@ -1763,7 +1825,14 @@ def _resume_pending_delivery(
         if source_lease_guard is not None:
             # source 可能包含 20 个 Endpoint；每次最长 30 秒外呼前都必须独立确认 owner 并续租。
             source_lease_guard()
-        attempt_result = _send_once(config, endpoint, body, delivery_id)
+        attempt_result = _send_once(
+            config,
+            endpoint,
+            body,
+            delivery_id,
+            event_type=str(delivery["event_type"]),
+            payload_format=str(delivery["payload_format"]),
+        )
         try:
             _record_attempt(connection, endpoint, delivery_id, attempt_no, attempt_result)
             _update_delivery_after_attempt(
@@ -1901,6 +1970,11 @@ def _validated_pending_delivery_body(
                 connection,
                 envelope,
             )
+        elif envelope.get("event_type") == SECURITY_EVENT_TYPE and isinstance(
+            envelope.get("payload"), dict
+        ):
+            # 标准聚合事件公开 last_request_id，可直接恢复构造期身份且无需查询敏感来源表。
+            source_request_id = envelope["payload"].get("last_request_id")
         rebuilt = build_webhook_event(
             tenant_id=envelope["tenant_id"],
             event_type=envelope["event_type"],
@@ -1918,7 +1992,23 @@ def _validated_pending_delivery_body(
         raise ApiError("webhook.delivery_unavailable") from exc
     if rebuilt != envelope:
         raise ApiError("webhook.delivery_unavailable")
-    return canonical_json_bytes(envelope)
+    try:
+        payload_format = normalize_webhook_payload_format(delivery["payload_format"])
+        if payload_format == "json":
+            expected = canonical_json_bytes(envelope)
+        elif envelope.get("event_type") == SECURITY_EVENT_TYPE:
+            expected = security_event_cef_bytes(envelope)
+        elif envelope.get("event_type") == "webhook.test":
+            expected = webhook_test_cef_bytes(envelope)
+        else:
+            raise ValueError("webhook.format_invalid")
+        stored = str(delivery["wire_body_text"]).encode("utf-8")
+    except (TypeError, UnicodeError, ValueError) as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+    if stored != expected:
+        # 重试和 replay 必须逐字使用 intent 冻结 wire，不能从当前 Endpoint 或调用方重新解释。
+        raise ApiError("webhook.delivery_unavailable")
+    return stored
 
 
 def _batch_job_source_request_id(
@@ -2337,7 +2427,6 @@ def _deliver_event_to_endpoint(
         raise ApiError("webhook.endpoint_not_found")
     payload = event.to_payload()
     safe_payload = _safe_payload(payload)
-    body = canonical_json_bytes(safe_payload)
     delivery_id = f"whd_{uuid4().hex}"
     created_at = _to_db_time(_utcnow())
     try:
@@ -2353,14 +2442,20 @@ def _deliver_event_to_endpoint(
             # Endpoint 在批量读取后被删除时按租户级 404 处理，不泄露历史快照。
             raise ApiError("webhook.endpoint_not_found")
         _ensure_endpoint_active(current_endpoint)
+        payload_format, wire_body_text, body = _event_wire(
+            current_endpoint,
+            event,
+            safe_payload,
+        )
         cursor = connection.execute(
             """
             INSERT OR IGNORE INTO webhook_deliveries(
               webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
               event_timestamp, payload_json, status, attempt_count, max_attempts,
-              secret_version, created_at, updated_at
+              secret_version, created_at, updated_at, payload_format, wire_body_text,
+              security_event_rate_limit_per_minute
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 delivery_id,
@@ -2374,6 +2469,9 @@ def _deliver_event_to_endpoint(
                 int(current_endpoint["secret_version"]),
                 created_at,
                 created_at,
+                payload_format,
+                wire_body_text,
+                int(current_endpoint["security_event_rate_limit_per_minute"]),
             ),
         )
         connection.commit()
@@ -2428,8 +2526,51 @@ def _send_pending_delivery(
     调用前 delivery 必须已提交；网络失败只更新当前 delivery，不撤销管理审计事实。
     """
 
+    delivery_row = _load_delivery_row(
+        connection,
+        str(endpoint["tenant_id"]),
+        str(endpoint["webhook_endpoint_id"]),
+        delivery_id,
+    )
+    if delivery_row is None:
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        current_delivery = _load_delivery_row(
+            connection,
+            str(endpoint["tenant_id"]),
+            str(endpoint["webhook_endpoint_id"]),
+            delivery_id,
+        )
+        if current_delivery is None:
+            raise ApiError("webhook.delivery_unavailable")
+        if not _claim_security_event_rate_slot(connection, current_delivery, now=_utcnow()):
+            connection.commit()
+            deferred = _load_delivery_row(
+                connection,
+                str(endpoint["tenant_id"]),
+                str(endpoint["webhook_endpoint_id"]),
+                delivery_id,
+            )
+            if deferred is None:
+                raise ApiError("webhook.delivery_unavailable")
+            return _delivery_info_from_row(connection, deferred, include_attempts=True)
+        connection.commit()
+    except ApiError:
+        connection.rollback()
+        raise
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        connection.rollback()
+        raise ApiError("webhook.delivery_unavailable") from exc
     for attempt_no in range(1, int(endpoint["max_attempts"] or MAX_ATTEMPTS) + 1):
-        attempt_result = _send_once(config, endpoint, body, delivery_id)
+        attempt_result = _send_once(
+            config,
+            endpoint,
+            body,
+            delivery_id,
+            event_type=str(delivery_row["event_type"]),
+            payload_format=str(delivery_row["payload_format"]),
+        )
         try:
             _record_attempt(
                 connection,
@@ -2467,11 +2608,98 @@ def _send_pending_delivery(
     return delivery
 
 
+def _claim_security_event_rate_slot(
+    connection: sqlite3.Connection,
+    delivery: sqlite3.Row,
+    *,
+    now: datetime,
+) -> bool:
+    """在当前写事务为标准安全 delivery 领取分钟 slot；满额仅延迟。"""
+
+    if delivery["event_type"] != SECURITY_EVENT_TYPE:
+        return True
+    existing = connection.execute(
+        """
+        SELECT 1 FROM webhook_security_rate_claims
+        WHERE tenant_id=? AND webhook_delivery_id=?
+        """,
+        (delivery["tenant_id"], delivery["webhook_delivery_id"]),
+    ).fetchone()
+    if existing is not None:
+        return True
+    current = now.astimezone(UTC).replace(microsecond=0)
+    bucket_started = current.replace(second=0)
+    bucket_ended = bucket_started + timedelta(minutes=1)
+    limit = int(delivery["security_event_rate_limit_per_minute"])
+    slot_number = int(
+        connection.execute(
+            """
+            SELECT COALESCE(MAX(slot_number),0)+1
+            FROM webhook_security_rate_claims
+            WHERE tenant_id=? AND webhook_endpoint_id=? AND bucket_started_at=?
+            """,
+            (
+                delivery["tenant_id"],
+                delivery["webhook_endpoint_id"],
+                _to_db_time(bucket_started),
+            ),
+        ).fetchone()[0]
+    )
+    if slot_number > limit:
+        connection.execute(
+            """
+            UPDATE webhook_deliveries SET next_retry_at=?,updated_at=?
+            WHERE tenant_id=? AND webhook_delivery_id=? AND status='pending'
+              AND attempt_count=?
+            """,
+            (
+                _to_db_time(bucket_ended),
+                _to_db_time(current),
+                delivery["tenant_id"],
+                delivery["webhook_delivery_id"],
+                int(delivery["attempt_count"]),
+            ),
+        )
+        return False
+    connection.execute(
+        """
+        INSERT INTO webhook_security_rate_claims(
+          webhook_security_rate_claim_id,tenant_id,webhook_endpoint_id,webhook_delivery_id,
+          bucket_started_at,bucket_ended_at,slot_number,rate_limit_per_minute,
+          created_at,expires_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "wsrc_" + str(delivery["webhook_delivery_id"])[-32:],
+            delivery["tenant_id"],
+            delivery["webhook_endpoint_id"],
+            delivery["webhook_delivery_id"],
+            _to_db_time(bucket_started),
+            _to_db_time(bucket_ended),
+            slot_number,
+            limit,
+            _to_db_time(current),
+            _to_db_time(bucket_ended + timedelta(days=30)),
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE webhook_deliveries SET next_retry_at=NULL,updated_at=?
+        WHERE tenant_id=? AND webhook_delivery_id=? AND status='pending'
+        """,
+        (_to_db_time(current), delivery["tenant_id"], delivery["webhook_delivery_id"]),
+    )
+    return True
+
+
 def _send_once(
     config: AppConfig,
     endpoint: sqlite3.Row,
     body: bytes,
     delivery_id: str,
+    *,
+    event_type: str,
+    payload_format: str,
 ) -> dict[str, object]:
     """执行一次 HTTP POST，只读取状态码并返回可安全落库的摘要。
 
@@ -2488,10 +2716,15 @@ def _send_once(
     try:
         signing_secret = decrypt_secret(str(endpoint["encrypted_secret"]))
         timestamp_seconds = int(time.time())
+        normalized_format = normalize_webhook_payload_format(payload_format)
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type": (
+                "application/json"
+                if normalized_format == "json"
+                else "text/plain; charset=utf-8"
+            ),
             "User-Agent": f"MetaHub-Webhook/{config.environment}",
-            "X-MetaHub-Event": str(json.loads(body.decode("utf-8")).get("event_type", "")),
+            "X-MetaHub-Event": event_type,
             "X-MetaHub-Delivery": delivery_id,
             "X-MetaHub-Signature": webhook_signature_header(
                 signing_secret,
@@ -2659,6 +2892,10 @@ def _endpoint_info(
         name=row["name"],
         endpoint_url=row["endpoint_url"],
         event_types=_event_types_from_row(row),
+        format=str(row["payload_format"]),
+        security_event_rate_limit_per_minute=int(
+            row["security_event_rate_limit_per_minute"]
+        ),
         secret_prefix=row["secret_prefix"],
         secret_fingerprint=row["secret_fingerprint"],
         secret_version=int(row["secret_version"]),
@@ -2749,6 +2986,10 @@ def _delivery_info_from_row(
         event_type=row["event_type"],
         event_timestamp=_parse_db_time(row["event_timestamp"]),
         payload=_json_loads(row["payload_json"]),
+        format=str(row["payload_format"]),
+        security_event_rate_limit_per_minute=int(
+            row["security_event_rate_limit_per_minute"]
+        ),
         status=row["status"],
         attempt_count=int(row["attempt_count"]),
         max_attempts=int(row["max_attempts"]),
@@ -2941,6 +3182,27 @@ def _normalize_event_types(value: object | None) -> list[str]:
     return normalized
 
 
+def _normalize_payload_format(value: object | None) -> str:
+    """规范化 Endpoint wire 格式；缺省保持历史 JSON。"""
+
+    try:
+        return normalize_webhook_payload_format("json" if value is None else value)
+    except ValueError as exc:
+        raise ApiError("webhook.format_invalid") from exc
+
+
+def _normalize_security_event_rate_limit(value: object | None) -> int:
+    """校验 Endpoint 每分钟标准安全事件上限，不接受 bool 或隐式数值转换。"""
+
+    if value is None:
+        return DEFAULT_SECURITY_EVENT_RATE_LIMIT
+    if type(value) is not int or not (
+        MIN_SECURITY_EVENT_RATE_LIMIT <= value <= MAX_SECURITY_EVENT_RATE_LIMIT
+    ):
+        raise ApiError("webhook.security_rate_limit_invalid")
+    return value
+
+
 def _normalize_optional_event_type(value: object | None) -> str | None:
     """校验可选事件类型筛选条件，空值表示不过滤事件类型。"""
 
@@ -3091,6 +3353,30 @@ def _safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         # 统一为 Endpoint 载荷错误，响应不包含命中的敏感字段路径。
         raise ApiError("webhook.endpoint_invalid") from exc
+
+
+def _event_wire(
+    endpoint: sqlite3.Row | dict[str, object],
+    event: WebhookEvent,
+    safe_envelope: dict[str, Any],
+) -> tuple[str, str, bytes]:
+    """按 Endpoint 格式生成并冻结实际 wire，HMAC 与 HTTP 必须使用同一字节。"""
+
+    try:
+        payload_format = normalize_webhook_payload_format(endpoint["payload_format"])
+        if payload_format == "json":
+            body = canonical_json_bytes(safe_envelope)
+        elif event.event_type == SECURITY_EVENT_TYPE:
+            body = security_event_cef_bytes(safe_envelope)
+        elif event.event_type == "webhook.test":
+            body = webhook_test_cef_bytes(safe_envelope)
+        else:
+            raise ValueError("webhook.format_invalid")
+        wire_body_text = body.decode("utf-8", errors="strict")
+    except (KeyError, TypeError, UnicodeError, ValueError) as exc:
+        # 配置/事件漂移不能退化成 JSON 或替换正文，统一在零网络前失败关闭。
+        raise ApiError("webhook.delivery_unavailable") from exc
+    return payload_format, wire_body_text, body
 
 
 def _validated_stored_envelope(

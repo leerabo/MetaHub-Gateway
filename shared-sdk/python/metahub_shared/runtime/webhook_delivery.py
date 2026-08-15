@@ -46,6 +46,10 @@ def dispatch_runtime_webhook_event(config: AppConfig, event: WebhookEvent) -> in
         for endpoint in rows:
             if event.event_type not in _event_types(endpoint["event_types_json"]):
                 continue
+            # CEF/security.event_pushed 只能由 Control 持久聚合 outbox 发布；
+            # runtime 保持 JSON 事件路径。
+            if str(endpoint["payload_format"]) != "json":
+                continue
             if event.event_type == "webhook.delivery_failed":
                 continue
             matched += 1
@@ -78,7 +82,11 @@ def _deliver_to_endpoint(
             """,
             (event.tenant_id, endpoint["webhook_endpoint_id"]),
         ).fetchone()
-        if current_endpoint is None or event.event_type not in _event_types(current_endpoint["event_types_json"]):
+        if (
+            current_endpoint is None
+            or str(current_endpoint["payload_format"]) != "json"
+            or event.event_type not in _event_types(current_endpoint["event_types_json"])
+        ):
             connection.commit()
             return
         cursor = connection.execute(
@@ -86,9 +94,10 @@ def _deliver_to_endpoint(
             INSERT OR IGNORE INTO webhook_deliveries(
               webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
               event_timestamp, payload_json, status, attempt_count, max_attempts,
-              secret_version, created_at, updated_at
+              secret_version, created_at, updated_at, payload_format, wire_body_text,
+              security_event_rate_limit_per_minute
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, 'json', ?, ?)
             """,
             (
                 delivery_id,
@@ -102,6 +111,8 @@ def _deliver_to_endpoint(
                 int(current_endpoint["secret_version"]),
                 now,
                 now,
+                body.decode("utf-8"),
+                int(current_endpoint["security_event_rate_limit_per_minute"]),
             ),
         )
         connection.commit()

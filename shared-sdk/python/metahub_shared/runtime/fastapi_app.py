@@ -189,6 +189,10 @@ def create_service_app(
             )
             or (
                 request.method == "POST"
+                and request.url.path.rstrip("/") == "/webhooks"
+            )
+            or (
+                request.method == "POST"
                 and request.url.path.startswith("/internal/tenants/")
                 and request.url.path.endswith("/approvals")
             )
@@ -550,6 +554,17 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Prompt 模板错误可能在认证/权限依赖阶段产生，早于业务路由设置响应头；最外层
         # 路径策略必须覆盖 401/403/404/409/422/500/503，避免模板存在性、授权状态或
         # 解密失败结果进入浏览器及共享缓存。正文仍由各路由和服务负责不回显。
+        response.headers["Cache-Control"] = "no-store"
+    elif (
+        path == "/webhooks"
+        or path.startswith("/webhooks/")
+        or path == "/webhook-deliveries"
+        or path.startswith("/webhook-deliveries/")
+        or path == "/webhook-dead-letters"
+        or path.startswith("/webhook-dead-letters/")
+    ):
+        # Endpoint 配置、投递快照与死信均属于租户私有安全状态。认证、RBAC、exact wire
+        # 校验和未捕获异常会在业务路由设置响应头之前返回，因此所有状态码统一禁止缓存。
         response.headers["Cache-Control"] = "no-store"
     elif path == "/config" or path.startswith("/config/"):
         # 配置迁移响应可能包含租户拓扑、校验明细或仅本次可见的 Virtual Key。

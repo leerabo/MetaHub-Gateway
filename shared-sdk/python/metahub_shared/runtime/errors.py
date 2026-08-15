@@ -3069,6 +3069,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Check name, endpoint URL, event types, status, and timeout.",
         owner="webhook",
     ),
+    "webhook.format_invalid": ErrorSpec(
+        422,
+        "Webhook payload format is invalid.",
+        "Use JSON, or use CEF with only the security.event_pushed subscription.",
+        owner="webhook",
+    ),
     "webhook.endpoint_not_found": ErrorSpec(
         404,
         "Webhook endpoint was not found.",

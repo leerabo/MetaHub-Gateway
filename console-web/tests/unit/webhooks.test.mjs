@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderDeveloperStart } from "../../src/features/developer-start/renderDeveloperStart.js";
-import { renderWebhookPanel } from "../../src/features/webhooks/renderWebhookPanel.js";
+import {
+  applyWebhookFormatMode,
+  renderWebhookPanel,
+} from "../../src/features/webhooks/renderWebhookPanel.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import {
   createWebhook,
@@ -17,6 +20,7 @@ import {
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 const mainSource = readFileSync(new URL("../../src/app/main.js", import.meta.url), "utf8");
+const styleSource = readFileSync(new URL("../../src/styles/main.css", import.meta.url), "utf8");
 
 const webhookPayload = {
   webhooks: [
@@ -26,6 +30,8 @@ const webhookPayload = {
       name: "运维告警系统",
       endpoint_url: "https://ops.example.com/metahub/webhook",
       event_types: ["budget.threshold_reached", "security.dlp_matched", "gateway.request_failed"],
+      format: "json",
+      security_event_rate_limit_per_minute: 60,
       secret_prefix: "whsec_abcd",
       secret_fingerprint: "fingerprint_only",
       secret_version: 1,
@@ -45,6 +51,8 @@ const webhookPayload = {
           webhook_endpoint_id: "wh_1",
           event_id: "evt_1",
           event_type: "webhook.test",
+          format: "json",
+          security_event_rate_limit_per_minute: 60,
           event_timestamp: "2026-07-10T08:00:00Z",
           payload: { event_id: "evt_1", tenant_id: "tenant_1", payload: { source: "control-plane-api" } },
           status: "success",
@@ -73,6 +81,7 @@ const webhookPayload = {
     "budget.threshold_reached",
     "budget.exhausted",
     "security.dlp_matched",
+    "security.event_pushed",
     "gateway.request_failed",
   ],
   request_id: "req_webhooks",
@@ -103,7 +112,9 @@ test("webhook client sends list create test detail replay and rotate requests wi
     token: "jwt-token",
     name: "运维告警系统",
     endpointUrl: "https://ops.example.com/metahub/webhook",
-    eventTypes: ["gateway.request_failed", "security.dlp_matched"],
+    eventTypes: ["security.event_pushed"],
+    format: "cef",
+    securityEventRateLimitPerMinute: 17,
     status: "active",
     timeoutMs: 5000,
   });
@@ -142,7 +153,9 @@ test("webhook client sends list create test detail replay and rotate requests wi
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     name: "运维告警系统",
     endpoint_url: "https://ops.example.com/metahub/webhook",
-    event_types: ["gateway.request_failed", "security.dlp_matched"],
+    event_types: ["security.event_pushed"],
+    format: "cef",
+    security_event_rate_limit_per_minute: 17,
     status: "active",
     timeout_ms: 5000,
   });
@@ -245,8 +258,80 @@ test("renderWebhookPanel shows endpoint records and one-time secret only when cr
   assert.match(html, /role="status"/);
   assert.match(html, /data-label="操作"/);
   assert.match(html, /data-webhook-refresh-details="wh_1"/);
+  assert.match(html, /JSON/);
+  assert.match(html, /安全事件 60 \/ 分钟/);
   assert.doesNotMatch(html, /encrypted_secret/);
   assert.doesNotMatch(html, /payload_json|idempotency_key/);
+});
+
+test("PAGE-113 CEF mode immediately narrows subscriptions and JSON does not add them back", () => {
+  const inputs = [
+    { value: "budget.exhausted", checked: true, disabled: false },
+    { value: "security.event_pushed", checked: false, disabled: false },
+    { value: "gateway.request_failed", checked: true, disabled: false },
+  ];
+  const form = {
+    querySelectorAll(selector) {
+      assert.equal(selector, 'input[name="eventTypes"]');
+      return inputs;
+    },
+  };
+
+  assert.equal(applyWebhookFormatMode(form, "cef"), "cef");
+  assert.deepEqual(inputs, [
+    { value: "budget.exhausted", checked: false, disabled: true },
+    { value: "security.event_pushed", checked: true, disabled: false },
+    { value: "gateway.request_failed", checked: false, disabled: true },
+  ]);
+
+  assert.equal(applyWebhookFormatMode(form, "json"), "json");
+  assert.deepEqual(inputs, [
+    { value: "budget.exhausted", checked: false, disabled: false },
+    { value: "security.event_pushed", checked: true, disabled: false },
+    { value: "gateway.request_failed", checked: false, disabled: false },
+  ]);
+  assert.match(mainSource, /formatInput\.addEventListener\("change", syncWebhookFormatMode\)/);
+});
+
+test("PAGE-113 renders format, rate controls and frozen CEF metadata without wire evidence", () => {
+  const cefEndpoint = {
+    ...webhookPayload.webhooks[0],
+    event_types: ["security.event_pushed"],
+    format: "cef",
+    security_event_rate_limit_per_minute: 17,
+  };
+  const html = renderWebhookPanel(
+    {
+      state: "ok",
+      webhooks: { ...webhookPayload, webhooks: [cefEndpoint] },
+      selectedEndpointId: "wh_1",
+      deliveryDetails: {
+        deliveries: [
+          {
+            ...cefEndpoint.recent_deliveries[0],
+            event_type: "security.event_pushed",
+            format: "cef",
+            security_event_rate_limit_per_minute: 17,
+          },
+        ],
+      },
+    },
+    withPermissionSnapshot(
+      { user: { role: "developer" } },
+      [PERMISSIONS.WEBHOOK_MANAGE],
+    ),
+  );
+
+  assert.match(html, /name="format" value="json" checked/);
+  assert.match(html, /name="format" value="cef"/);
+  assert.match(html, /name="securityEventRateLimitPerMinute"[^>]*min="1"[^>]*max="600"/);
+  assert.match(html, /SIEM 安全事件/);
+  assert.match(html, /CEF/);
+  assert.match(html, /安全事件 17 \/ 分钟/);
+  assert.doesNotMatch(html, /wire_body|payload_json|signature|rate_claim/);
+  assert.match(styleSource, /\.webhook-format-options[\s\S]*grid-template-columns: 1fr 1fr/);
+  assert.match(styleSource, /@media \(max-width: 1400px\)[\s\S]*\.webhook-event-field[\s\S]*grid-column: 1 \/ -1/);
+  assert.match(styleSource, /\.webhook-endpoint-name strong,[\s\S]*\.webhook-delivery-row span \{[\s\S]*overflow-wrap: anywhere/);
 });
 
 test("renderWebhookPanel only offers replay for failed records and caps rendered details at one hundred", () => {

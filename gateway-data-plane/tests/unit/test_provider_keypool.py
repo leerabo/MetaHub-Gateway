@@ -434,7 +434,7 @@ def test_affinity_key_decrypt_failure_log_uses_real_request_without_credential(
     monkeypatch.setattr(affinity_keypool_module, "decrypt_provider_key", reject_decrypt)
     caplog.set_level(logging.WARNING, logger="metahub.gateway.cache_affinity")
 
-    with pytest.raises(ApiError) as exc:
+    with pytest.raises(keypool_module.ProviderKeyDecryptAnomaly) as exc:
         affinity_keypool_module._select_key_in_transaction(
             config,
             connection,
@@ -444,7 +444,8 @@ def test_affinity_key_decrypt_failure_log_uses_real_request_without_credential(
             trace_id="trc_affinity_decrypt_log",
         )
 
-    assert exc.value.code == "provider_key.unavailable"
+    assert exc.value.error_code == "provider_key.unavailable"
+    assert exc.value.candidate_count == 1
     records = [record for record in caplog.records if record.getMessage() == "provider_key.decrypt_failed"]
     assert len(records) == 1
     record = records[0]
@@ -458,6 +459,98 @@ def test_affinity_key_decrypt_failure_log_uses_real_request_without_credential(
     assert credential_id not in rendered
     assert short_secret not in rendered
     assert "affinity ciphertext detail must remain private" not in rendered
+
+
+def test_provider_decrypt_anomaly_persists_only_with_trusted_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """坏候选可被下一把 Key 接管，但仅生产链路生成最小安全 source。"""
+
+    database_url, route = prepare_database(monkeypatch, tmp_path)
+    connection = connect_database(database_url)
+    model = connection.execute(
+        """SELECT model_id FROM models
+             WHERE tenant_id=? AND provider_id=? ORDER BY model_id LIMIT 1""",
+        (route.tenant_id, route.provider_id),
+    ).fetchone()
+    assert model is not None
+    anomaly_route = GatewayRoute(
+        **{
+            **route.__dict__,
+            "model_id": str(model["model_id"]),
+        }
+    )
+    corrupt_id = "credential-prd081-corrupt-sentinel"
+    corrupt_secret = "provider-prd081-corrupt-secret"
+    insert_provider_key(database_url, anomaly_route, corrupt_id, corrupt_secret)
+    insert_provider_key(
+        database_url,
+        anomaly_route,
+        "credential-prd081-usable",
+        "provider-prd081-usable-secret",
+    )
+    connection.execute(
+        "UPDATE provider_credentials SET encrypted_key=? WHERE provider_credential_id=?",
+        ("aesgcm-v1:invalid-prd081-ciphertext", corrupt_id),
+    )
+    connection.commit()
+    config = load_app_config("gateway-data-plane")
+
+    selected = select_provider_key(
+        config,
+        anomaly_route,
+        request_id="req_prd081_provider_decrypt",
+        trace_id="trc_prd081_provider_decrypt",
+    )
+    assert selected is not None and selected.source == "database"
+    # 直接调用缺少可信生产坐标时仍可跳过坏候选，但不得制造第二条 source。
+    selected_without_context = select_provider_key(config, anomaly_route)
+    assert selected_without_context is not None
+
+    anomaly = connection.execute(
+        """SELECT tenant_id,provider_id,model_id,anomaly_type,request_id,trace_id,
+                  candidate_count
+             FROM provider_key_anomaly_events"""
+    ).fetchone()
+    source = connection.execute(
+        """SELECT source_event_type,category,severity,severity_score,action,outcome,
+                  resource_type,resource_id,occurrence_count
+             FROM security_event_sources"""
+    ).fetchone()
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(provider_key_anomaly_events)")
+    }
+    assert tuple(anomaly) == (
+        anomaly_route.tenant_id,
+        anomaly_route.provider_id,
+        anomaly_route.model_id,
+        "decrypt_failed",
+        "req_prd081_provider_decrypt",
+        "trc_prd081_provider_decrypt",
+        1,
+    )
+    assert tuple(source) == (
+        "security.provider_key_anomaly",
+        "provider_credential",
+        "critical",
+        9,
+        "decrypt_failed",
+        "rejected",
+        "provider",
+        anomaly_route.provider_id,
+        1,
+    )
+    assert connection.execute(
+        "SELECT COUNT(*) FROM provider_key_anomaly_events"
+    ).fetchone()[0] == 1
+    assert not columns & {
+        "provider_credential_id",
+        "key_prefix",
+        "encrypted_key",
+        "error_message",
+    }
 
 
 def test_keypool_snapshot_is_read_only_and_respects_managed_key_boundary(

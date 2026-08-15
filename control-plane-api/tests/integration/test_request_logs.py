@@ -1284,6 +1284,123 @@ def _insert_prd056_provider_error_fact(
     return fact_id
 
 
+def test_prd081_upstream_auth_fact_creates_security_event_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A real normalized 401 fact must emit the minimal provider security source."""
+
+    database_url, tenant_id = prepare_database(monkeypatch, tmp_path)
+    connection = connect_database(database_url)
+    try:
+        owner = connection.execute(
+            """
+            SELECT provider.provider_id,provider.provider_code,model.model_id,
+                   virtual_key.virtual_key_id
+            FROM providers provider
+            JOIN models model
+              ON model.tenant_id=provider.tenant_id
+             AND model.provider_id=provider.provider_id
+            JOIN virtual_keys virtual_key ON virtual_key.tenant_id=provider.tenant_id
+            WHERE provider.tenant_id=? AND provider.provider_code='local_openai'
+              AND model.model_alias='default-chat'
+            ORDER BY virtual_key.virtual_key_id LIMIT 1
+            """,
+            (tenant_id,),
+        ).fetchone()
+        assert owner is not None
+        connection.execute(
+            """
+            INSERT INTO gateway_request_claims(
+              tenant_id,request_id,trace_id,virtual_key_id,
+              snapshot_version,policy_snapshot_status,claimed_at
+            ) VALUES(?,?,?, ?,NULL,'disabled',?)
+            """,
+            (
+                tenant_id,
+                "req_prd081_auth_fact",
+                "trc_prd081_auth_fact",
+                owner["virtual_key_id"],
+                "2026-08-15T02:00:00Z",
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO routing_attempts(
+              routing_attempt_id,tenant_id,request_id,trace_id,attempt_sequence,
+              attempt_role,trigger_type,model_id,internal_model_id,provider_id,
+              provider_code,status,error_code,error_category,upstream_http_status,
+              retryable,latency_ms,usage_status,created_at,completed_at,updated_at
+            ) VALUES(
+              'rta_prd081_auth',?,?,?,1,'primary','initial',?,
+              'default-chat',?,?,'failed','gateway.upstream_auth_failed','other',
+              401,0,9,'unavailable',?,?,?
+            )
+            """,
+            (
+                tenant_id,
+                "req_prd081_auth_fact",
+                "trc_prd081_auth_fact",
+                owner["model_id"],
+                owner["provider_id"],
+                owner["provider_code"],
+                "2026-08-15T02:00:00Z",
+                "2026-08-15T02:00:01Z",
+                "2026-08-15T02:00:01Z",
+            ),
+        )
+        fact_id = _insert_prd056_provider_error_fact(
+            connection,
+            tenant_id=tenant_id,
+            request_id="req_prd081_auth_fact",
+            trace_id="trc_prd081_auth_fact",
+            routing_attempt_id="rta_prd081_auth",
+            provider_id=str(owner["provider_id"]),
+            model_id=str(owner["model_id"]),
+            provider_code=str(owner["provider_code"]),
+            upstream_http_status=401,
+            raw_body=b'{"error":{"code":"invalid_api_key"}}',
+            owner_terminal_error_code="gateway.upstream_auth_failed",
+            created_at="2026-08-15T02:00:01Z",
+        )
+        fact = connection.execute(
+            """SELECT normalized_output_error_code FROM provider_error_facts
+               WHERE tenant_id=? AND provider_error_fact_id=?""",
+            (tenant_id, fact_id),
+        ).fetchone()
+        source = connection.execute(
+            """
+            SELECT source_event_type,source_object_id,category,severity,
+                   severity_score,action,outcome,resource_type,resource_id,
+                   source_request_id,source_trace_id,occurrence_count
+            FROM security_event_sources
+            WHERE tenant_id=? AND source_object_id=?
+            """,
+            (tenant_id, fact_id),
+        ).fetchone()
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert fact is not None
+    assert fact["normalized_output_error_code"] == "gateway.upstream_auth_failed"
+    assert source is not None
+    assert tuple(source) == (
+        "security.provider_key_anomaly",
+        fact_id,
+        "provider_credential",
+        "critical",
+        9,
+        "authentication_failed",
+        "rejected",
+        "provider",
+        owner["provider_id"],
+        "req_prd081_auth_fact",
+        "trc_prd081_auth_fact",
+        1,
+    )
+
+
 def _prepare_prd056_request_log_facts(database_url: str, tenant_id: str) -> tuple[str, str]:
     """为 attempt 与 stream 两个真实详情挂载点准备同租户冻结事实。
 

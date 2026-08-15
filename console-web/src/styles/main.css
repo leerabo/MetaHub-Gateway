@@ -9763,7 +9763,7 @@ h3 {
   gap: 10px;
 }
 
-/* PRD-025/042 Webhook 样式：管理 Endpoint、一次性签名密钥、详情筛选和可审计重放记录。 */
+/* PRD-025/042/081 Webhook 样式：管理 Endpoint、SIEM 格式、一次性签名密钥和可审计重放记录。 */
 .webhook-heading {
   align-items: flex-start;
   gap: 16px;
@@ -9798,6 +9798,7 @@ h3 {
 }
 
 .webhook-form label,
+.webhook-format-field,
 .webhook-event-field {
   display: grid;
   gap: 6px;
@@ -9808,8 +9809,72 @@ h3 {
   grid-column: span 2;
 }
 
+.webhook-format-field {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.webhook-format-field > legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.webhook-format-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.webhook-format-options label {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  cursor: pointer;
+}
+
+.webhook-format-options label + label {
+  border-left: 1px solid #cbd5e1;
+}
+
+.webhook-format-options .webhook-format-radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  opacity: 0;
+}
+
+.webhook-format-options .webhook-format-radio + span {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  color: #475569;
+  font-weight: 800;
+  place-items: center;
+}
+
+.webhook-format-options .webhook-format-radio:checked + span {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.webhook-format-options .webhook-format-radio:focus-visible + span {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
 .webhook-event-field {
-  grid-column: span 2;
+  grid-column: span 3;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -9832,10 +9897,15 @@ h3 {
   font-size: 12px;
 }
 
+.webhook-event-field input:disabled + span {
+  color: #94a3b8;
+}
+
 .webhook-form span,
 .webhook-endpoint-name em,
 .webhook-endpoint-name code,
 .webhook-secret-meta em,
+.webhook-wire-meta em,
 .webhook-delivery-row em,
 .webhook-delivery-row time {
   color: #64748b;
@@ -10001,6 +10071,19 @@ h3 {
   min-width: 0;
 }
 
+.webhook-wire-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.webhook-wire-meta .webhook-format-badge {
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
 .webhook-endpoint-name strong,
 .webhook-endpoint-name em,
 .webhook-endpoint-name code,
@@ -10008,9 +10091,8 @@ h3 {
 .webhook-secret-meta em,
 .webhook-delivery-row span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .webhook-event-list {
@@ -10087,6 +10169,10 @@ h3 {
   .webhook-endpoint-row,
   .webhook-delivery-row {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .webhook-event-field {
+    grid-column: 1 / -1;
   }
 
   .webhook-endpoint-head,

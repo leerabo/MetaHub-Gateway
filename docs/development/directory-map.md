@@ -1843,8 +1843,50 @@ Excel 总表第 81 行、M2/M3 交付第 17 行、PAGE-112、账单争议 API、
 
 PRD-080 的设计、实现、专项、必要回归、迁移、Runtime、Browser 和提交前安全门禁均已通过。Excel 总表
 第 82 行、M2/M3 交付第 18 行、PAGE-113、Webhook format API、SecurityEventPayload、
-`security.event_pushed` 与 TC-0161/0162 共同确认，下一条权威未完成项为
-`PRD-081 | M2-企业增强 | P2 | 扩展层 | Webhook SIEM | SIEM/安全事件格式`。本次不启动 PRD-081，
+`security.event_pushed` 与 TC-0161/0162 共同确认 PRD-081；PRD-081 现已按以下目录完成，
+`all_108_prds_complete=false`。
+
+## PRD-081 SIEM/安全事件格式目录（已完成）
+
+- `shared-sdk/python/metahub_shared/runtime/security_events.py`：冻结 exact `SecurityEventPayload`、三类 source
+  映射、5 秒窗口、JSON/CEF deterministic wire、CEF escaping/16 KiB 和 HMAC 实际字节合同。
+- `shared-sdk/python/metahub_shared/runtime/{errors,i18n,fastapi_app,webhooks,webhook_delivery}.py`：登记
+  统一错误、可订阅 `security.event_pushed`、Webhook 私有缓存边界及旧 JSON delivery 的 0074 兼容写入。
+- `infra/migrations/0074_webhook_siem_security_event_format.sql/.down.sql`：扩展 Endpoint/delivery format、wire、
+  rate，新增 tenant-qualified source、aggregate/member、outbox、rate claim 和 Provider decrypt anomaly；
+  owner、append-only、CAS、generation、wire freeze 与 down guard 均由数据库冻结。
+- `control-plane-api/src/metahub_control/security_events/`：持久 aggregate outbox、tenant 公平 lease scheduler、
+  坏 source 隔离、过期 owner 接管与 lifespan 恢复。
+- `control-plane-api/src/metahub_control/webhooks/{models,routes,wire,service,outbox}.py`：认证后 16 KiB exact
+  创建 wire、JSON/CEF Endpoint、冻结 delivery/replay、分钟 rate gate、当前 Secret 刷新和安全响应 DTO。
+- `gateway-data-plane/src/metahub_gateway/{providers,cache_affinity}/keypool.py` 与
+  `api/openai_compatible.py`：在可信 request/trace 和调用方事务内记录不含 Credential 标识的 decrypt anomaly；
+  Provider auth fact、RequestLog、Usage/FinOps 与失败追踪保持兼容。
+- `console-web/src/lib/webhooks.js`、`src/features/webhooks/`、`src/app/main.js` 与 `src/styles/main.css`：
+  PAGE-113 JSON/CEF segmented control、1..600 输入、即时订阅收敛、冻结元数据、权限/owner 清理和双视口
+  安全换行。
+- `shared-sdk/python/tests/test_prd081_security_event_contracts.py`、
+  `control-plane-api/tests/integration/test_prd081_*.py`、受影响 Webhook/RequestLog/Gateway 测试、
+  `console-web/tests/unit/{webhooks,prd081BrowserAcceptance}.test.mjs`：覆盖合同、迁移、API、tenant/RBAC、
+  source、聚合、限流、replay、Gateway anomaly、Console 生命周期与证据清理。
+- `scripts/acceptance/prd081-runtime-acceptance.py` 与
+  `.artifacts/prd081-runtime/final-20260816t/`：空库完成
+  `74/0074 -> 74/0074 -> 73/0073 -> 74/0074`，四阶段 integrity=ok、FK=0；三类真实 source、
+  JSON/CEF、HMAC、聚合、限流、失败/费用追踪和 Control 重启恢复通过，Runtime JSON SHA-256 为
+  `a67a3d330056a14e92aec86a752964d5228fcc28d72ddbb0e83a81c116cb124d`。
+- `scripts/acceptance/prd081-browser-harness.py`、`prd081-browser-acceptance.mjs` 与
+  `.artifacts/prd081-browser/final-20260816q/`：PAGE-113 在 `1280x720`/`390x844` 完成两个 Endpoint 与
+  两次真实投递，RBAC、网络、Storage、SQLite、像素、溢出、重叠、provenance 和 owned-process 清理通过；
+  Browser JSON/manifest SHA-256 分别为
+  `55f131ad4f79d438fdc81720189e77a99f4da5cbf8480204cea38eb9a7e320dc`、
+  `ea72a95cfd92e0bbc79720001d771027ea394d476585a13a09ee023e72c93740`。
+- `docs/prd/PRD-081-siem-security-event-format.md`、`docs/api/webhook-siem.md` 与
+  `docs/testing/PRD-081-tests.md`：保存冻结设计、四轮自审、公开 wire/API、最终门禁与下一项依据。
+
+PRD-081 的实现、专项、必要回归、迁移、Runtime、Browser、文档和提交前安全门禁均已通过。Excel 总表
+第 83 行、M2/M3 交付第 19 行、PAGE-114、API-372..377、McpServer/McpTool/McpInvocation、
+`mcp.tool_called` 与 TC-0163/0164 共同确认，下一条权威未完成项为
+`PRD-082 | M2-企业增强 | P2 | 扩展层 | MCP治理基础 | MCP工具注册与权限`。本次不启动 PRD-082，
 `all_108_prds_complete=false`。
 
 ## MVP 非目标
