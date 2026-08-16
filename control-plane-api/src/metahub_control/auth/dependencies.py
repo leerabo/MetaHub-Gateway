@@ -1534,6 +1534,19 @@ def require_mcp_policy_manager(
     return _require_request_permissions(request, authorization, ("mcp.policy.manage",))
 
 
+def require_mcp_network_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require MCP visibility and network-policy authority before reading the body."""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("mcp.read", "mcp.network.manage"),
+    )
+
+
 def require_mcp_server_refresher(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

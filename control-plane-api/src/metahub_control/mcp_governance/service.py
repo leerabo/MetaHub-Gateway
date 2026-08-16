@@ -15,6 +15,7 @@ from uuid import uuid4
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.mcp import (
+    MCP_SANDBOX_RESPONSE_RESERVE_SECONDS,
     McpContractError,
     McpCryptoOwner,
     McpHmacOwner,
@@ -29,6 +30,7 @@ from metahub_shared.mcp import (
     mcp_hmac_candidates,
     validate_arguments,
     validate_mcp_endpoint_url,
+    validate_mcp_network_policy,
 )
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
@@ -56,6 +58,8 @@ from .models import (
     McpInvocationListResponse,
     McpInvocationResponse,
     McpInvocationResultResponse,
+    McpNetworkPolicyInfo,
+    McpNetworkPolicyResponse,
     McpServerInfo,
     McpServerListResponse,
     McpServerOperationInfo,
@@ -67,6 +71,7 @@ from .models import (
     McpToolResponse,
     RefreshMcpServerRequest,
     RegisterMcpServerRequest,
+    UpdateMcpNetworkPolicyRequest,
     UpdateMcpServerRequest,
     UpdateMcpToolPolicyRequest,
 )
@@ -703,6 +708,158 @@ def refresh_server_tools(
         connection.close()
 
 
+def update_network_policy(
+    config: AppConfig,
+    context: AuthContext,
+    server_id: str,
+    payload: UpdateMcpNetworkPolicyRequest,
+    *,
+    request_id: str,
+    trace_id: str,
+    request_meta: AuditRequestMeta | None = None,
+) -> McpNetworkPolicyResponse:
+    """Append one immutable network policy revision and resume a waiting sync atomically."""
+
+    _ensure_enabled(config)
+    normalized_id = _resource_id(server_id, "mcps_")
+    values, fingerprint = _network_policy_values(config, payload)
+    tenant_id = context.user.tenant_id
+    now = _utcnow()
+    timestamp = _to_db_time(now)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        live = refresh_transaction_authentication(
+            connection, context, unavailable_error_code="mcp.unavailable"
+        )
+        require_permission(live, "mcp.read")
+        require_permission(live, "mcp.network.manage")
+        server = _load_server(connection, tenant_id, normalized_id)
+        if server is None:
+            raise ApiError("mcp.server_not_found")
+        current = _load_network_policy_row(connection, tenant_id, normalized_id)
+        if current is None:
+            raise ApiError("mcp.unavailable")
+        if int(current["policy_revision"]) != payload.expected_revision:
+            raise ApiError("mcp.state_conflict")
+        new_revision = payload.expected_revision + 1
+        before = _network_policy_audit_summary(current, waiting_job_resume_count=0)
+        connection.execute(
+            """
+            INSERT INTO mcp_network_policy_revisions(
+              mcp_network_policy_id,tenant_id,mcp_server_id,policy_revision,
+              policy_fingerprint,status,egress_mode,priority,condition_expr,action,
+              connect_timeout_seconds,probe_timeout_seconds,call_timeout_seconds,
+              failure_threshold,open_seconds,updated_by,request_id,trace_id,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                current["mcp_network_policy_id"],
+                tenant_id,
+                normalized_id,
+                new_revision,
+                fingerprint,
+                values["status"],
+                values["egress_mode"],
+                1000,
+                "registered_endpoint_origin",
+                "allow",
+                values["connect_timeout_seconds"],
+                values["probe_timeout_seconds"],
+                values["call_timeout_seconds"],
+                values["failure_threshold"],
+                values["open_seconds"],
+                live.user.user_id,
+                request_id,
+                trace_id,
+                timestamp,
+            ),
+        )
+        changed = connection.execute(
+            """
+            UPDATE mcp_network_policies
+            SET current_revision=?,current_fingerprint=?,status=?,updated_at=?
+            WHERE tenant_id=? AND mcp_server_id=? AND current_revision=?
+              AND current_fingerprint=?
+            """,
+            (
+                new_revision,
+                fingerprint,
+                values["status"],
+                timestamp,
+                tenant_id,
+                normalized_id,
+                payload.expected_revision,
+                current["policy_fingerprint"],
+            ),
+        ).rowcount
+        if changed != 1:
+            raise ApiError("mcp.state_conflict")
+        resumed = 0
+        if current["status"] == "disabled" and values["status"] == "active":
+            deadline = _to_db_time(
+                now
+                + timedelta(
+                    seconds=int(values["probe_timeout_seconds"])
+                    + MCP_SANDBOX_RESPONSE_RESERVE_SECONDS
+                    + _SYNC_FINALIZE_RESERVE_SECONDS
+                )
+            )
+            resumed = connection.execute(
+                """
+                UPDATE mcp_server_sync_jobs
+                SET status='pending',next_attempt_at=?,deadline_at=?,updated_at=?
+                WHERE tenant_id=? AND mcp_server_id=? AND status='waiting_policy'
+                  AND attempt_count=0 AND lease_owner_id IS NULL AND lease_token IS NULL
+                  AND lease_expires_at IS NULL AND next_attempt_at IS NULL
+                  AND deadline_at IS NULL AND started_at IS NULL AND completed_at IS NULL
+                  AND error_code IS NULL
+                """,
+                (timestamp, deadline, timestamp, tenant_id, normalized_id),
+            ).rowcount
+            if resumed not in {0, 1}:
+                raise ApiError("mcp.unavailable")
+            if resumed:
+                _ensure_scheduler_tenant(connection, tenant_id, timestamp)
+        refreshed = _load_network_policy_row(connection, tenant_id, normalized_id)
+        if refreshed is None:
+            raise ApiError("mcp.unavailable")
+        record_audit_log(
+            connection,
+            live,
+            action="mcp.network_policy_updated",
+            object_type="mcp_network_policy",
+            object_id=str(refreshed["mcp_network_policy_id"]),
+            object_name=None,
+            before_summary=before,
+            after_summary=_network_policy_audit_summary(
+                refreshed, waiting_job_resume_count=resumed
+            ),
+            request_meta=_audit_request_meta(request_meta),
+            request_id=request_id,
+            trace_id=trace_id,
+            created_at=now,
+        )
+        result = McpNetworkPolicyResponse(
+            network_policy=_network_policy_info(refreshed),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        commit_audited_transaction(connection)
+        return result
+    except ApiError:
+        _rollback(connection)
+        raise
+    except sqlite3.IntegrityError as exc:
+        _rollback(connection)
+        raise ApiError("mcp.state_conflict") from exc
+    except (sqlite3.Error, DbError, McpContractError, TypeError, ValueError) as exc:
+        _rollback(connection)
+        raise _mapped_error(exc) from exc
+    finally:
+        connection.close()
+
+
 def list_servers(
     config: AppConfig,
     context: AuthContext,
@@ -747,7 +904,17 @@ def list_servers(
         ).fetchall()
         visible = rows[:page_size]
         return McpServerListResponse(
-            servers=[_server_info(row) for row in visible],
+            servers=[
+                _server_info(
+                    row,
+                    _required_network_policy_info(
+                        connection,
+                        context.user.tenant_id,
+                        str(row["mcp_server_id"]),
+                    ),
+                )
+                for row in visible
+            ],
             next_cursor=(str(visible[-1]["mcp_server_id"]) if len(rows) > page_size else None),
             request_id=request_id,
             trace_id=trace_id,
@@ -1536,8 +1703,42 @@ def _insert_sync_job(
     now: datetime,
 ) -> None:
     timestamp = _to_db_time(now)
+    active = connection.execute(
+        """
+        SELECT 1 FROM mcp_server_sync_jobs
+        WHERE tenant_id=? AND mcp_server_id=?
+          AND status IN('waiting_policy','pending','processing')
+        LIMIT 1
+        """,
+        (tenant_id, server_id),
+    ).fetchone()
+    if active is not None:
+        raise ApiError("mcp.state_conflict")
+    policy = connection.execute(
+        """
+        SELECT status FROM mcp_network_policies
+        WHERE tenant_id=? AND mcp_server_id=?
+        """,
+        (tenant_id, server_id),
+    ).fetchone()
+    if policy is None:
+        raise ApiError("mcp.unavailable")
+    waiting = policy["status"] == "disabled"
     deadline_seconds = int(getattr(config, "mcp_probe_deadline_seconds", 10))
     deadline_seconds = min(max(deadline_seconds, 1), 120)
+    next_attempt_at = None if waiting else timestamp
+    deadline_at = (
+        None
+        if waiting
+        else _to_db_time(
+            now
+            + timedelta(
+                seconds=deadline_seconds
+                + MCP_SANDBOX_RESPONSE_RESERVE_SECONDS
+                + _SYNC_FINALIZE_RESERVE_SECONDS
+            )
+        )
+    )
     connection.execute(
         """
         INSERT INTO mcp_server_sync_jobs(
@@ -1545,7 +1746,7 @@ def _insert_sync_job(
           candidate_credential_revision,job_type,status,attempt_count,lease_generation,
           lease_owner_id,lease_token,lease_expires_at,next_attempt_at,deadline_at,error_code,
           created_at,started_at,completed_at,updated_at
-        ) VALUES(?,?,?,?,?,?,'pending',0,0,NULL,NULL,NULL,?,?,NULL,?,NULL,NULL,?)
+        ) VALUES(?,?,?,?,?,?,?,0,0,NULL,NULL,NULL,?,?,NULL,?,NULL,NULL,?)
         """,
         (
             job_id,
@@ -1554,13 +1755,9 @@ def _insert_sync_job(
             operation_id,
             candidate_credential_revision,
             job_type,
-            timestamp,
-            _to_db_time(
-                now
-                + timedelta(
-                    seconds=deadline_seconds + _SYNC_FINALIZE_RESERVE_SECONDS
-                )
-            ),
+            "waiting_policy" if waiting else "pending",
+            next_attempt_at,
+            deadline_at,
             timestamp,
             timestamp,
         ),
@@ -1662,6 +1859,129 @@ def _load_invocation(
     ).fetchone()
 
 
+def _load_network_policy_row(
+    connection: sqlite3.Connection, tenant_id: str, server_id: str
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT policy.mcp_network_policy_id,policy.tenant_id,policy.mcp_server_id,
+               policy.current_revision AS policy_revision,
+               policy.current_fingerprint AS policy_fingerprint,
+               revision.status,revision.egress_mode,
+               revision.connect_timeout_seconds,revision.probe_timeout_seconds,
+               revision.call_timeout_seconds,revision.failure_threshold,
+               revision.open_seconds,policy.updated_at AS policy_updated_at,
+               COALESCE((
+                 SELECT COUNT(*) FROM mcp_network_decisions decision
+                 WHERE decision.tenant_id=policy.tenant_id
+                   AND decision.mcp_server_id=policy.mcp_server_id
+                   AND decision.policy_revision=policy.current_revision
+                   AND decision.result='blocked'
+               ),0) AS blocked_count,
+               (
+                 SELECT decision.reason_code FROM mcp_network_decisions decision
+                 WHERE decision.tenant_id=policy.tenant_id
+                   AND decision.mcp_server_id=policy.mcp_server_id
+                   AND decision.policy_revision=policy.current_revision
+                   AND decision.result='blocked'
+                 ORDER BY decision.created_at DESC,decision.mcp_network_decision_id DESC
+                 LIMIT 1
+               ) AS last_block_reason,
+               (
+                 SELECT decision.created_at FROM mcp_network_decisions decision
+                 WHERE decision.tenant_id=policy.tenant_id
+                   AND decision.mcp_server_id=policy.mcp_server_id
+                   AND decision.policy_revision=policy.current_revision
+                   AND decision.result='blocked'
+                 ORDER BY decision.created_at DESC,decision.mcp_network_decision_id DESC
+                 LIMIT 1
+               ) AS last_blocked_at,
+               COALESCE((
+                 SELECT circuit.state FROM mcp_network_circuits circuit
+                 WHERE circuit.tenant_id=policy.tenant_id
+                   AND circuit.mcp_server_id=policy.mcp_server_id
+                   AND circuit.policy_revision=policy.current_revision
+               ),'not_initialized') AS circuit_state
+        FROM mcp_network_policies policy
+        JOIN mcp_network_policy_revisions revision
+          ON revision.tenant_id=policy.tenant_id
+         AND revision.mcp_server_id=policy.mcp_server_id
+         AND revision.mcp_network_policy_id=policy.mcp_network_policy_id
+         AND revision.policy_revision=policy.current_revision
+         AND revision.policy_fingerprint=policy.current_fingerprint
+        WHERE policy.tenant_id=? AND policy.mcp_server_id=?
+        """,
+        (tenant_id, server_id),
+    ).fetchone()
+
+
+def _required_network_policy_info(
+    connection: sqlite3.Connection, tenant_id: str, server_id: str
+) -> McpNetworkPolicyInfo:
+    row = _load_network_policy_row(connection, tenant_id, server_id)
+    if row is None:
+        raise ApiError("mcp.unavailable")
+    return _network_policy_info(row)
+
+
+def _network_policy_info(row: sqlite3.Row) -> McpNetworkPolicyInfo:
+    status = str(row["status"])
+    return McpNetworkPolicyInfo(
+        mcp_network_policy_id=str(row["mcp_network_policy_id"]),
+        mcp_server_id=str(row["mcp_server_id"]),
+        status=status,  # type: ignore[arg-type]
+        revision=int(row["policy_revision"]),
+        egress_mode=str(row["egress_mode"]),  # type: ignore[arg-type]
+        destination_count=1 if status == "active" else 0,
+        connect_timeout_seconds=int(row["connect_timeout_seconds"]),
+        probe_timeout_seconds=int(row["probe_timeout_seconds"]),
+        call_timeout_seconds=int(row["call_timeout_seconds"]),
+        failure_threshold=int(row["failure_threshold"]),
+        open_seconds=int(row["open_seconds"]),
+        circuit_state=str(row["circuit_state"]),  # type: ignore[arg-type]
+        blocked_count=int(row["blocked_count"]),
+        last_block_reason=(
+            str(row["last_block_reason"]) if row["last_block_reason"] is not None else None
+        ),  # type: ignore[arg-type]
+        last_blocked_at=(
+            _db_datetime(row["last_blocked_at"]) if row["last_blocked_at"] is not None else None
+        ),
+        updated_at=_db_datetime(row["policy_updated_at"]),
+    )
+
+
+def _network_policy_audit_summary(
+    row: sqlite3.Row, *, waiting_job_resume_count: int
+) -> dict[str, object]:
+    status = str(row["status"])
+    return {
+        "mcp_server_id": str(row["mcp_server_id"]),
+        "status": status,
+        "revision": int(row["policy_revision"]),
+        "egress_mode": str(row["egress_mode"]),
+        "destination_count": 1 if status == "active" else 0,
+        "connect_timeout_seconds": int(row["connect_timeout_seconds"]),
+        "probe_timeout_seconds": int(row["probe_timeout_seconds"]),
+        "call_timeout_seconds": int(row["call_timeout_seconds"]),
+        "failure_threshold": int(row["failure_threshold"]),
+        "open_seconds": int(row["open_seconds"]),
+        "waiting_job_resume_count": waiting_job_resume_count,
+    }
+
+
+def _network_policy_values(
+    config: AppConfig, payload: UpdateMcpNetworkPolicyRequest
+) -> tuple[dict[str, object], str]:
+    try:
+        policy = validate_mcp_network_policy(
+            payload.model_dump(mode="python"),
+            caps=config.mcp_network_policy_caps(),
+        )
+    except McpContractError:
+        raise ApiError("mcp.network_policy_invalid") from None
+    return policy.settings_dict(), policy.fingerprint
+
+
 def _server_response(
     connection: sqlite3.Connection,
     server: sqlite3.Row,
@@ -1671,9 +1991,15 @@ def _server_response(
     trace_id: str,
     idempotent_replay: bool,
 ) -> McpServerResponse:
-    del connection
     return McpServerResponse(
-        server=_server_info(server),
+        server=_server_info(
+            server,
+            _required_network_policy_info(
+                connection,
+                str(server["tenant_id"]),
+                str(server["mcp_server_id"]),
+            ),
+        ),
         operation=_operation_info(operation),
         idempotent_replay=idempotent_replay,
         request_id=request_id,
@@ -1681,7 +2007,7 @@ def _server_response(
     )
 
 
-def _server_info(row: sqlite3.Row) -> McpServerInfo:
+def _server_info(row: sqlite3.Row, network_policy: McpNetworkPolicyInfo) -> McpServerInfo:
     return McpServerInfo(
         mcp_server_id=str(row["mcp_server_id"]),
         name=str(row["name"]),
@@ -1698,6 +2024,7 @@ def _server_info(row: sqlite3.Row) -> McpServerInfo:
         protocol_version=(str(row["protocol_version"]) if row["protocol_version"] else None),
         tool_count=int(row["tool_count"]),
         active_tool_count=int(row["active_tool_count"]),
+        network_policy=network_policy,
         created_at=_db_datetime(row["created_at"]),
         updated_at=_db_datetime(row["updated_at"]),
     )
@@ -1798,9 +2125,7 @@ def _invocation_info(row: sqlite3.Row) -> McpInvocationInfo:
             rule_id=(str(row["output_dlp_rule_id"]) if row["output_dlp_rule_id"] else None),
         ),
         result_redaction_count=(
-            int(row["result_redaction_count"])
-            if row["result_redaction_count"] is not None
-            else 0
+            int(row["result_redaction_count"]) if row["result_redaction_count"] is not None else 0
         ),
         probe_attempt_count=int(row["probe_attempt_count"]),
         call_attempt_count=int(row["call_attempt_count"]),
@@ -2201,9 +2526,7 @@ def _tool_audit_summary(
                 "required_permission_count": len(
                     _json_string_list(row["required_permission_codes_json"])
                 ),
-                "redaction_count": len(
-                    _json_string_list(row["result_redaction_pointers_json"])
-                ),
+                "redaction_count": len(_json_string_list(row["result_redaction_pointers_json"])),
             }
         )
     if include_grants:

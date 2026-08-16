@@ -3449,6 +3449,7 @@ h3 {
 
 .mcp-toolbar-actions button,
 .mcp-tool-actions button,
+.mcp-network-table button,
 .mcp-dialog-actions button,
 .mcp-pagination button,
 .mcp-tabs button {
@@ -3486,6 +3487,7 @@ h3 {
 
 .mcp-toolbar button:disabled,
 .mcp-tool-actions button:disabled,
+.mcp-network-table button:disabled,
 .mcp-dialog button:disabled,
 .mcp-icon-command:disabled {
   cursor: not-allowed;
@@ -3576,8 +3578,24 @@ h3 {
 }
 
 .mcp-server-table th:first-child,
-.mcp-tool-table th:first-child {
+.mcp-tool-table th:first-child,
+.mcp-network-table th:first-child {
   width: 22%;
+}
+
+.mcp-network-table {
+  min-width: 1040px;
+}
+
+.mcp-network-scope {
+  min-width: 0;
+  border-left: 3px solid #0f766e;
+  background: #edf7f5;
+  padding: 8px 10px;
+  color: #0b4f49;
+  font-size: 0.82rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .mcp-status {
@@ -3759,7 +3777,8 @@ h3 {
 
 .mcp-dialog form,
 .mcp-tool-detail,
-.mcp-policy-grid {
+.mcp-policy-grid,
+.mcp-network-policy-grid {
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -3767,6 +3786,81 @@ h3 {
 
 .mcp-policy-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mcp-network-policy-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mcp-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.mcp-segmented legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.mcp-segmented label {
+  position: relative;
+  min-width: 0;
+}
+
+.mcp-segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mcp-segmented span {
+  display: grid;
+  min-height: 40px;
+  place-items: center;
+  border: 1px solid #bdc8d3;
+  background: #fff;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.mcp-segmented label:first-of-type span {
+  border-radius: 6px 0 0 6px;
+}
+
+.mcp-segmented label:last-of-type span {
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.mcp-segmented input:checked + span {
+  border-color: #0f766e;
+  background: #e8f5f2;
+  color: #0b4f49;
+}
+
+.mcp-segmented input:focus-visible + span {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.mcp-conflict {
+  display: grid;
+  gap: 5px;
+  border-block: 1px solid #e6c88d;
+  background: #fff9eb;
+  padding: 10px;
+  color: #704408;
+  overflow-wrap: anywhere;
+}
+
+.mcp-conflict span {
+  font-size: 0.8rem;
 }
 
 .mcp-field {
@@ -3872,7 +3966,8 @@ h3 {
   }
 
   .mcp-server-table th:first-child,
-  .mcp-tool-table th:first-child {
+  .mcp-tool-table th:first-child,
+  .mcp-network-table th:first-child {
     width: 100%;
   }
 
@@ -3905,7 +4000,8 @@ h3 {
 
   .mcp-invocation-facts,
   .mcp-summary-strip,
-  .mcp-policy-grid {
+  .mcp-policy-grid,
+  .mcp-network-policy-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -3933,7 +4029,8 @@ h3 {
 
   .mcp-invocation-facts,
   .mcp-summary-strip,
-  .mcp-policy-grid {
+  .mcp-policy-grid,
+  .mcp-network-policy-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

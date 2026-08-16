@@ -26,6 +26,10 @@ from metahub_shared.mcp.crypto import (
     DEFAULT_MCP_HMAC_SECRET,
     validate_mcp_secret_domains,
 )
+from metahub_shared.mcp.network import (
+    MCP_SANDBOX_RESPONSE_RESERVE_SECONDS,
+    McpNetworkPolicyCaps,
+)
 from metahub_shared.response_cache import (
     ResponseCacheContractError,
     VersionedResponseCacheSecret,
@@ -40,20 +44,16 @@ EnvironmentName = Literal["dev", "test", "prod"]
 ConfigSource = Literal["default", "file", "env"]
 ConfigStatus = Literal["configured", "missing", "masked", "defaulted"]
 ServiceMode = Literal["internal_only", "public_service"]
-McpExecutorMode = Literal["disabled", "test_loopback"]
+McpExecutorMode = Literal["disabled", "test_loopback", "sandbox_http"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
-DEFAULT_CACHE_AFFINITY_HMAC_SECRET = (
-    "dev-only-change-me-metahub-cache-affinity-hmac-secret"
-)
+DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
 )
 # Response Cache 的四个根域分别服务 cache identity、entry 密文、Control 幂等 owner 和
 # commit-unknown failure spool。公开开发值只用于 dev/test；生产即使版本不同也禁止复用。
-DEFAULT_RESPONSE_CACHE_HMAC_SECRET = (
-    "dev-only-change-me-metahub-response-cache-hmac-secret-2026"
-)
+DEFAULT_RESPONSE_CACHE_HMAC_SECRET = "dev-only-change-me-metahub-response-cache-hmac-secret-2026"
 DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET = (
     "dev-only-change-me-metahub-response-cache-encryption-secret-2026"
 )
@@ -65,18 +65,10 @@ DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET = (
 )
 # 企业 Chat 的 Control -> Gateway 身份使用独立密钥域。默认值仅服务于本机回环开发，
 # 生产环境必须显式覆盖，且该值永远不能进入配置摘要、repr、日志或 API 响应。
-DEFAULT_INTERNAL_CHAT_TOKEN = (
-    "dev-only-change-me-metahub-internal-chat-token-2026"
-)
-DEFAULT_INTERNAL_BATCH_TOKEN = (
-    "dev-only-change-me-metahub-internal-batch-token-2026"
-)
-DEFAULT_BATCH_ENCRYPTION_SECRET = (
-    "dev-only-change-me-metahub-batch-encryption-secret-2026"
-)
-DEFAULT_APPROVAL_HMAC_SECRET = (
-    "dev-only-change-me-metahub-approval-hmac-secret-2026"
-)
+DEFAULT_INTERNAL_CHAT_TOKEN = "dev-only-change-me-metahub-internal-chat-token-2026"
+DEFAULT_INTERNAL_BATCH_TOKEN = "dev-only-change-me-metahub-internal-batch-token-2026"
+DEFAULT_BATCH_ENCRYPTION_SECRET = "dev-only-change-me-metahub-batch-encryption-secret-2026"
+DEFAULT_APPROVAL_HMAC_SECRET = "dev-only-change-me-metahub-approval-hmac-secret-2026"
 
 # 运行时启动时间和默认配置集中定义，供健康检查、审计响应和本地默认值复用。
 STARTED_AT = datetime.now(UTC)
@@ -133,6 +125,19 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_MCP_INVOCATION_LEASE_SECONDS": "90",
     "METAHUB_MCP_PROBE_DEADLINE_SECONDS": "10",
     "METAHUB_MCP_CALL_DEADLINE_SECONDS": "30",
+    # PRD-083 production execution is Scheduler -> isolated Sandbox only.  Empty secret/URL
+    # defaults preserve disabled upgrades; enabling sandbox_http requires the complete set.
+    "METAHUB_MCP_SANDBOX_BASE_URL": "",
+    "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN": "",
+    "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET": "",
+    "METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION": "1",
+    "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT": "",
+    "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS": "",
+    "METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS": "5",
+    "METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS": "10",
+    "METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS": "30",
+    "METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX": "10",
+    "METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX": "3600",
     "METAHUB_MCP_REGISTER_MAX_BYTES": "16384",
     "METAHUB_MCP_REFRESH_MAX_BYTES": "4096",
     "METAHUB_MCP_POLICY_MAX_BYTES": "32768",
@@ -309,7 +314,6 @@ class ConfigError(ValueError):
         边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
         """
 
-
         super().__init__(message)
         self.code = code
         self.message = message
@@ -334,7 +338,6 @@ class EnvironmentInfo(BaseModel):
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
-
     name: EnvironmentName
     is_production: bool
     config_profile: str
@@ -348,7 +351,6 @@ class ConfigItemSummary(BaseModel):
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
-
     key: str
     source: ConfigSource
     status: ConfigStatus
@@ -360,7 +362,6 @@ class ConfigSummary(BaseModel):
 
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
-
 
     service_name: str
     environment: EnvironmentName
@@ -427,17 +428,13 @@ class AppConfig(BaseModel):
     session_risk_hmac_version: int = 1
     session_risk_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
     session_risk_previous_hmac_version: int | None = None
-    session_risk_previous_hmac_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    session_risk_previous_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
     # Approval secrets are excluded from both repr and serialization. The
     # retained key is verification-only; all new facts use the current key.
     approval_hmac_version: int = 1
     approval_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
     approval_previous_hmac_version: int | None = None
-    approval_previous_hmac_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    approval_previous_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
     approval_max_pending_tasks_per_tenant: int = 1_000
     approval_scheduler_enabled: bool = False
     approval_scheduler_poll_interval_seconds: float = 2.0
@@ -450,15 +447,11 @@ class AppConfig(BaseModel):
     approval_writeback_batch_size: int = 50
     # 模板正文、变量 schema 和 change summary 共用同一独立根密钥并在实现中分域派生；
     # 缺失值允许非模板功能启动，但模板 API/Gateway 必须失败关闭，绝不回退 Auth/Provider 密钥。
-    prompt_template_encryption_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    prompt_template_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     # 原文件、抽取正文和文件名使用独立根密钥；root 也可能泄露宿主结构，两者均不参与
     # model_dump/repr。数值上限是部署级资源门禁，租户请求不能动态覆盖。
     file_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
-    file_storage_root: str = Field(
-        default=".data/file-storage", exclude=True, repr=False
-    )
+    file_storage_root: str = Field(default=".data/file-storage", exclude=True, repr=False)
     file_max_upload_bytes: int = 20_971_520
     file_parse_concurrency: int = 2
     # 安全扫描与 OCR 分开限流，防止低成本 TXT 被昂贵视觉任务耗尽同一容量池。
@@ -477,9 +470,7 @@ class AppConfig(BaseModel):
     response_cache_hmac_version: int = 1
     response_cache_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
     response_cache_encryption_version: int = 1
-    response_cache_encryption_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    response_cache_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     response_cache_control_idempotency_version: int = 1
     response_cache_control_idempotency_secret: str | None = Field(
         default=None, exclude=True, repr=False
@@ -489,9 +480,7 @@ class AppConfig(BaseModel):
         default=None, exclude=True, repr=False
     )
     response_cache_failure_spool_version: int = 1
-    response_cache_failure_spool_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    response_cache_failure_spool_secret: str | None = Field(default=None, exclude=True, repr=False)
     response_cache_failure_spool_previous_version: int | None = None
     response_cache_failure_spool_previous_secret: str | None = Field(
         default=None, exclude=True, repr=False
@@ -526,6 +515,17 @@ class AppConfig(BaseModel):
     mcp_invocation_lease_seconds: int = 90
     mcp_probe_deadline_seconds: int = 10
     mcp_call_deadline_seconds: int = 30
+    mcp_sandbox_base_url: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_sandbox_internal_token: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_sandbox_envelope_secret: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_sandbox_response_key_version: int = 1
+    mcp_sandbox_response_secret_current: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_sandbox_response_secret_previous: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_network_connect_timeout_max_seconds: int = 5
+    mcp_network_probe_timeout_max_seconds: int = 10
+    mcp_network_call_timeout_max_seconds: int = 30
+    mcp_network_failure_threshold_max: int = 10
+    mcp_network_open_seconds_max: int = 3600
     mcp_register_max_bytes: int = 16_384
     mcp_refresh_max_bytes: int = 4_096
     mcp_policy_max_bytes: int = 32_768
@@ -758,6 +758,17 @@ class AppConfig(BaseModel):
             max_evaluation_steps=self.mcp_validator_max_steps,
         )
 
+    def mcp_network_policy_caps(self) -> McpNetworkPolicyCaps:
+        """Project the immutable PRD-083 caps shared with Scheduler and Sandbox."""
+
+        return McpNetworkPolicyCaps(
+            connect_timeout_max_seconds=self.mcp_network_connect_timeout_max_seconds,
+            probe_timeout_max_seconds=self.mcp_network_probe_timeout_max_seconds,
+            call_timeout_max_seconds=self.mcp_network_call_timeout_max_seconds,
+            failure_threshold_max=self.mcp_network_failure_threshold_max,
+            open_seconds_max=self.mcp_network_open_seconds_max,
+        )
+
 
 class ServiceInfo(BaseModel):
     """服务版本信息。
@@ -813,15 +824,12 @@ def load_app_config(service_name: str) -> AppConfig:
         raise ConfigError(
             code="infra.config_invalid",
             message=(
-                "METAHUB_USAGE_EXPORT_SYNC_ROW_LIMIT cannot exceed "
-                "METAHUB_USAGE_EXPORT_MAX_ROWS."
+                "METAHUB_USAGE_EXPORT_SYNC_ROW_LIMIT cannot exceed METAHUB_USAGE_EXPORT_MAX_ROWS."
             ),
             suggestion="Lower the sync row limit or increase the bounded max rows value.",
         )
 
-    policy_snapshot_sync_enabled = _boolean(
-        values, "METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED"
-    )
+    policy_snapshot_sync_enabled = _boolean(values, "METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED")
     policy_snapshot_poll_interval_seconds = _bounded_int(
         values,
         "METAHUB_POLICY_SNAPSHOT_POLL_INTERVAL_SECONDS",
@@ -852,12 +860,8 @@ def load_app_config(service_name: str) -> AppConfig:
         minimum=1_024,
         maximum=16_777_216,
     )
-    policy_mask_runtime_enabled = _boolean(
-        values, "METAHUB_POLICY_MASK_RUNTIME_ENABLED"
-    )
-    provider_error_map_sync_enabled = _boolean(
-        values, "METAHUB_PROVIDER_ERROR_MAP_SYNC_ENABLED"
-    )
+    policy_mask_runtime_enabled = _boolean(values, "METAHUB_POLICY_MASK_RUNTIME_ENABLED")
+    provider_error_map_sync_enabled = _boolean(values, "METAHUB_PROVIDER_ERROR_MAP_SYNC_ENABLED")
     provider_error_map_poll_interval_seconds = _bounded_int(
         values,
         "METAHUB_PROVIDER_ERROR_MAP_POLL_INTERVAL_SECONDS",
@@ -903,12 +907,8 @@ def load_app_config(service_name: str) -> AppConfig:
     internal_config_token = _optional_value(values, "METAHUB_INTERNAL_CONFIG_TOKEN")
     control_api_base_url = _value(values, "METAHUB_CONTROL_API_BASE_URL")
     gateway_api_base_url = _value(values, "METAHUB_GATEWAY_API_BASE_URL")
-    configured_internal_chat_token = _optional_value(
-        values, "METAHUB_INTERNAL_CHAT_TOKEN"
-    )
-    configured_internal_batch_token = _raw_optional_value(
-        values, "METAHUB_INTERNAL_BATCH_TOKEN"
-    )
+    configured_internal_chat_token = _optional_value(values, "METAHUB_INTERNAL_CHAT_TOKEN")
+    configured_internal_batch_token = _raw_optional_value(values, "METAHUB_INTERNAL_BATCH_TOKEN")
     configured_batch_encryption_secret = _raw_optional_value(
         values, "METAHUB_BATCH_ENCRYPTION_SECRET"
     )
@@ -923,9 +923,7 @@ def load_app_config(service_name: str) -> AppConfig:
         DEFAULT_FILE_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
     response_cache_enabled = _boolean(values, "METAHUB_RESPONSE_CACHE_ENABLED")
-    response_cache_hmac_version = _positive_int(
-        values, "METAHUB_RESPONSE_CACHE_HMAC_VERSION"
-    )
+    response_cache_hmac_version = _positive_int(values, "METAHUB_RESPONSE_CACHE_HMAC_VERSION")
     response_cache_encryption_version = _positive_int(
         values, "METAHUB_RESPONSE_CACHE_ENCRYPTION_VERSION"
     )
@@ -959,9 +957,7 @@ def load_app_config(service_name: str) -> AppConfig:
         DEFAULT_RESPONSE_CACHE_HMAC_SECRET if environment in {"dev", "test"} else None
     )
     response_cache_encryption_secret = configured_response_cache_encryption_secret or (
-        DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET
-        if environment in {"dev", "test"}
-        else None
+        DEFAULT_RESPONSE_CACHE_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
     response_cache_control_idempotency_secret = (
         configured_response_cache_control_idempotency_secret
@@ -971,13 +967,8 @@ def load_app_config(service_name: str) -> AppConfig:
             else None
         )
     )
-    response_cache_failure_spool_secret = (
-        configured_response_cache_failure_spool_secret
-        or (
-            DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET
-            if environment in {"dev", "test"}
-            else None
-        )
+    response_cache_failure_spool_secret = configured_response_cache_failure_spool_secret or (
+        DEFAULT_RESPONSE_CACHE_FAILURE_SPOOL_SECRET if environment in {"dev", "test"} else None
     )
     # previous Secret 不得注入开发默认值；它只在明确轮换窗口中验证已有 owner/spool。
     response_cache_control_idempotency_previous_secret = _raw_optional_value(
@@ -1017,25 +1008,17 @@ def load_app_config(service_name: str) -> AppConfig:
         maximum=3_600,
     )
     session_risk_enabled = _boolean(values, "METAHUB_SESSION_RISK_ENABLED")
-    session_risk_hmac_version = _positive_int(
-        values, "METAHUB_SESSION_RISK_HMAC_VERSION"
-    )
+    session_risk_hmac_version = _positive_int(values, "METAHUB_SESSION_RISK_HMAC_VERSION")
     # secret 必须保留原始空白供强度门禁拒绝，不能先 ``strip`` 后把错误配置变成另一把 key。
-    session_risk_hmac_secret = _raw_optional_value(
-        values, "METAHUB_SESSION_RISK_HMAC_SECRET"
-    )
+    session_risk_hmac_secret = _raw_optional_value(values, "METAHUB_SESSION_RISK_HMAC_SECRET")
     session_risk_previous_hmac_version = _optional_positive_int(
         values, "METAHUB_SESSION_RISK_PREVIOUS_HMAC_VERSION"
     )
     session_risk_previous_hmac_secret = _raw_optional_value(
         values, "METAHUB_SESSION_RISK_PREVIOUS_HMAC_SECRET"
     )
-    approval_hmac_version = _positive_int(
-        values, "METAHUB_APPROVAL_HMAC_VERSION"
-    )
-    configured_approval_hmac_secret = _raw_optional_value(
-        values, "METAHUB_APPROVAL_HMAC_SECRET"
-    )
+    approval_hmac_version = _positive_int(values, "METAHUB_APPROVAL_HMAC_VERSION")
+    configured_approval_hmac_secret = _raw_optional_value(values, "METAHUB_APPROVAL_HMAC_SECRET")
     approval_hmac_secret = configured_approval_hmac_secret or (
         DEFAULT_APPROVAL_HMAC_SECRET if environment in {"dev", "test"} else None
     )
@@ -1045,9 +1028,7 @@ def load_app_config(service_name: str) -> AppConfig:
     approval_previous_hmac_secret = _raw_optional_value(
         values, "METAHUB_APPROVAL_PREVIOUS_HMAC_SECRET"
     )
-    approval_scheduler_enabled = _boolean(
-        values, "METAHUB_APPROVAL_SCHEDULER_ENABLED"
-    )
+    approval_scheduler_enabled = _boolean(values, "METAHUB_APPROVAL_SCHEDULER_ENABLED")
     approval_scheduler_poll_interval_seconds = _bounded_float(
         values,
         "METAHUB_APPROVAL_SCHEDULER_POLL_INTERVAL_SECONDS",
@@ -1067,9 +1048,7 @@ def load_app_config(service_name: str) -> AppConfig:
     approval_outbox_batch_size = _bounded_int(
         values, "METAHUB_APPROVAL_OUTBOX_BATCH_SIZE", minimum=1, maximum=100
     )
-    approval_writeback_enabled = _boolean(
-        values, "METAHUB_APPROVAL_WRITEBACK_ENABLED"
-    )
+    approval_writeback_enabled = _boolean(values, "METAHUB_APPROVAL_WRITEBACK_ENABLED")
     approval_writeback_poll_interval_seconds = _bounded_float(
         values,
         "METAHUB_APPROVAL_WRITEBACK_POLL_INTERVAL_SECONDS",
@@ -1297,20 +1276,12 @@ def load_app_config(service_name: str) -> AppConfig:
         encryption_secret=response_cache_encryption_secret,
         control_version=response_cache_control_idempotency_version,
         control_secret=response_cache_control_idempotency_secret,
-        control_previous_version=(
-            response_cache_control_idempotency_previous_version
-        ),
-        control_previous_secret=(
-            response_cache_control_idempotency_previous_secret
-        ),
+        control_previous_version=(response_cache_control_idempotency_previous_version),
+        control_previous_secret=(response_cache_control_idempotency_previous_secret),
         failure_spool_version=response_cache_failure_spool_version,
         failure_spool_secret=response_cache_failure_spool_secret,
-        failure_spool_previous_version=(
-            response_cache_failure_spool_previous_version
-        ),
-        failure_spool_previous_secret=(
-            response_cache_failure_spool_previous_secret
-        ),
+        failure_spool_previous_version=(response_cache_failure_spool_previous_version),
+        failure_spool_previous_secret=(response_cache_failure_spool_previous_secret),
         forbidden_secrets=(
             auth_token_secret,
             cache_affinity_hmac_secret,
@@ -1344,18 +1315,14 @@ def load_app_config(service_name: str) -> AppConfig:
         minimum=1,
         maximum=60,
     )
-    request_log_query_event_enabled = _boolean(
-        values, "METAHUB_REQUEST_LOG_QUERY_EVENT_ENABLED"
-    )
+    request_log_query_event_enabled = _boolean(values, "METAHUB_REQUEST_LOG_QUERY_EVENT_ENABLED")
     request_log_query_event_poll_interval_seconds = _bounded_int(
         values,
         "METAHUB_REQUEST_LOG_QUERY_EVENT_POLL_INTERVAL_SECONDS",
         minimum=1,
         maximum=60,
     )
-    admin_assistant_event_enabled = _boolean(
-        values, "METAHUB_ADMIN_ASSISTANT_EVENT_ENABLED"
-    )
+    admin_assistant_event_enabled = _boolean(values, "METAHUB_ADMIN_ASSISTANT_EVENT_ENABLED")
     admin_assistant_event_poll_interval_seconds = _bounded_int(
         values,
         "METAHUB_ADMIN_ASSISTANT_EVENT_POLL_INTERVAL_SECONDS",
@@ -1385,9 +1352,7 @@ def load_app_config(service_name: str) -> AppConfig:
     cost_anomaly_workday_start_hour = _bounded_hour(
         values, "METAHUB_COST_ANOMALY_WORKDAY_START_HOUR"
     )
-    cost_anomaly_workday_end_hour = _bounded_hour(
-        values, "METAHUB_COST_ANOMALY_WORKDAY_END_HOUR"
-    )
+    cost_anomaly_workday_end_hour = _bounded_hour(values, "METAHUB_COST_ANOMALY_WORKDAY_END_HOUR")
     # 工作时段必须是同一自然日内的严格递增区间，跨午夜配置在 v1 失败关闭。
     if cost_anomaly_workday_start_hour >= cost_anomaly_workday_end_hour:
         # v1 的工作时段不能跨午夜；非工作时段规则依赖单一左闭右开日内区间。
@@ -1443,6 +1408,7 @@ def load_app_config(service_name: str) -> AppConfig:
     mcp_values = _load_mcp_config(
         values,
         environment=environment,
+        service_name=service_name,
         forbidden_secrets=(
             auth_token_secret,
             cache_affinity_hmac_secret,
@@ -1533,23 +1499,17 @@ def load_app_config(service_name: str) -> AppConfig:
         approval_previous_hmac_version=approval_previous_hmac_version,
         approval_previous_hmac_secret=approval_previous_hmac_secret,
         approval_scheduler_enabled=approval_scheduler_enabled,
-        approval_scheduler_poll_interval_seconds=(
-            approval_scheduler_poll_interval_seconds
-        ),
+        approval_scheduler_poll_interval_seconds=(approval_scheduler_poll_interval_seconds),
         approval_scheduler_batch_size=approval_scheduler_batch_size,
         approval_outbox_enabled=approval_outbox_enabled,
         approval_outbox_poll_interval_seconds=approval_outbox_poll_interval_seconds,
         approval_outbox_batch_size=approval_outbox_batch_size,
         approval_writeback_enabled=approval_writeback_enabled,
-        approval_writeback_poll_interval_seconds=(
-            approval_writeback_poll_interval_seconds
-        ),
+        approval_writeback_poll_interval_seconds=(approval_writeback_poll_interval_seconds),
         approval_writeback_batch_size=approval_writeback_batch_size,
         prompt_template_encryption_secret=prompt_template_encryption_secret,
         file_encryption_secret=file_encryption_secret,
-        file_storage_root=_validated_file_storage_root(
-            _value(values, "METAHUB_FILE_STORAGE_ROOT")
-        ),
+        file_storage_root=_validated_file_storage_root(_value(values, "METAHUB_FILE_STORAGE_ROOT")),
         file_max_upload_bytes=_bounded_int(
             values,
             "METAHUB_FILE_MAX_UPLOAD_BYTES",
@@ -1595,12 +1555,8 @@ def load_app_config(service_name: str) -> AppConfig:
         response_cache_hmac_secret=response_cache_hmac_secret,
         response_cache_encryption_version=response_cache_encryption_version,
         response_cache_encryption_secret=response_cache_encryption_secret,
-        response_cache_control_idempotency_version=(
-            response_cache_control_idempotency_version
-        ),
-        response_cache_control_idempotency_secret=(
-            response_cache_control_idempotency_secret
-        ),
+        response_cache_control_idempotency_version=(response_cache_control_idempotency_version),
+        response_cache_control_idempotency_secret=(response_cache_control_idempotency_secret),
         response_cache_control_idempotency_previous_version=(
             response_cache_control_idempotency_previous_version
         ),
@@ -1612,12 +1568,8 @@ def load_app_config(service_name: str) -> AppConfig:
         response_cache_failure_spool_previous_version=(
             response_cache_failure_spool_previous_version
         ),
-        response_cache_failure_spool_previous_secret=(
-            response_cache_failure_spool_previous_secret
-        ),
-        response_cache_max_ready_entries_per_tenant=(
-            response_cache_max_ready_entries_per_tenant
-        ),
+        response_cache_failure_spool_previous_secret=(response_cache_failure_spool_previous_secret),
+        response_cache_max_ready_entries_per_tenant=(response_cache_max_ready_entries_per_tenant),
         response_cache_max_plaintext_bytes=response_cache_max_plaintext_bytes,
         response_cache_fill_lease_seconds=response_cache_fill_lease_seconds,
         response_cache_failure_spool_root=(
@@ -1683,7 +1635,10 @@ def load_app_config(service_name: str) -> AppConfig:
         usage_export_max_bytes=_bounded_int(
             # BytesIO、SQLite BLOB 与 HTTP Response 会形成有限副本，
             # MVP 硬上限不得超过设计的 50 MiB。
-            values, "METAHUB_USAGE_EXPORT_MAX_BYTES", minimum=1024, maximum=52428800
+            values,
+            "METAHUB_USAGE_EXPORT_MAX_BYTES",
+            minimum=1024,
+            maximum=52428800,
         ),
         usage_export_lease_seconds=_bounded_int(
             values, "METAHUB_USAGE_EXPORT_LEASE_SECONDS", minimum=5, maximum=3600
@@ -1703,9 +1658,7 @@ def load_app_config(service_name: str) -> AppConfig:
             request_log_query_event_poll_interval_seconds
         ),
         admin_assistant_event_enabled=admin_assistant_event_enabled,
-        admin_assistant_event_poll_interval_seconds=(
-            admin_assistant_event_poll_interval_seconds
-        ),
+        admin_assistant_event_poll_interval_seconds=(admin_assistant_event_poll_interval_seconds),
         cost_anomaly_enabled=cost_anomaly_enabled,
         cost_anomaly_poll_interval_seconds=cost_anomaly_poll_interval_seconds,
         cost_anomaly_spike_multiplier_millis=cost_anomaly_spike_multiplier_millis,
@@ -1719,18 +1672,12 @@ def load_app_config(service_name: str) -> AppConfig:
         policy_snapshot_poll_interval_seconds=policy_snapshot_poll_interval_seconds,
         policy_snapshot_http_timeout_seconds=policy_snapshot_http_timeout_seconds,
         policy_snapshot_max_age_seconds=policy_snapshot_max_age_seconds,
-        policy_snapshot_emergency_max_age_seconds=(
-            policy_snapshot_emergency_max_age_seconds
-        ),
+        policy_snapshot_emergency_max_age_seconds=(policy_snapshot_emergency_max_age_seconds),
         policy_snapshot_max_payload_bytes=policy_snapshot_max_payload_bytes,
         policy_mask_runtime_enabled=policy_mask_runtime_enabled,
         provider_error_map_sync_enabled=provider_error_map_sync_enabled,
-        provider_error_map_poll_interval_seconds=(
-            provider_error_map_poll_interval_seconds
-        ),
-        provider_error_map_http_timeout_seconds=(
-            provider_error_map_http_timeout_seconds
-        ),
+        provider_error_map_poll_interval_seconds=(provider_error_map_poll_interval_seconds),
+        provider_error_map_http_timeout_seconds=(provider_error_map_http_timeout_seconds),
         provider_error_map_refresh_queue_timeout_seconds=(
             provider_error_map_refresh_queue_timeout_seconds
         ),
@@ -1821,7 +1768,6 @@ def _merge_config_values() -> dict[str, ConfigValue]:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     values = {key: ConfigValue(value, "default") for key, value in DEFAULT_CONFIG.items()}
 
     default_env_file = Path.cwd() / ".env"
@@ -1860,7 +1806,6 @@ def _overlay_file(values: dict[str, ConfigValue], path: Path) -> None:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     for key, value in _parse_env_file(path).items():
         values[key] = ConfigValue(value, "file")
 
@@ -1870,7 +1815,6 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
     边界：解析失败要么返回空值口径，要么抛统一错误，不能把底层异常透出给 API。
     """
-
 
     result: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -1942,9 +1886,7 @@ def _validated_response_cache_failure_spool_root(value: str) -> str:
         # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
         raise ConfigError(
             code="infra.config_invalid",
-            message=(
-                "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT must be a bounded local path."
-            ),
+            message=("METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT must be a bounded local path."),
             suggestion="Use a Gateway service-account-owned local recovery directory.",
         )
     candidate = Path(raw).expanduser()
@@ -1954,9 +1896,7 @@ def _validated_response_cache_failure_spool_root(value: str) -> str:
         # 根目录既无法证明 owner 独占，也会让 quarantine/清理误触及无关文件。
         raise ConfigError(
             code="infra.config_invalid",
-            message=(
-                "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT cannot be a filesystem root."
-            ),
+            message=("METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT cannot be a filesystem root."),
             suggestion="Choose a dedicated child directory for cache recovery records.",
         )
     return str(normalized)
@@ -2001,7 +1941,6 @@ def _read_environment(values: dict[str, ConfigValue]) -> EnvironmentName:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     raw = _value(values, "METAHUB_ENV").strip().lower()
     if raw not in {"dev", "test", "prod"}:
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
@@ -2020,7 +1959,6 @@ def _read_service_mode(values: dict[str, ConfigValue]) -> ServiceMode:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     raw = _value(values, "METAHUB_SERVICE_MODE").strip().lower()
     if raw not in {"internal_only", "public_service"}:
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
@@ -2037,7 +1975,6 @@ def _read_provider_base_urls(values: dict[str, ConfigValue]) -> dict[str, str]:
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     providers: dict[str, str] = {}
     prefix = "METAHUB_PROVIDER_"
@@ -2063,7 +2000,6 @@ def _read_provider_api_keys(values: dict[str, ConfigValue]) -> dict[str, str]:
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     keys: dict[str, str] = {}
     prefix = "METAHUB_PROVIDER_"
@@ -2119,9 +2055,7 @@ def _validate_response_cache_config(
             suggestion="Configure all four independent Response Cache secrets and restart.",
         )
     # 即使功能关闭，部分 active 配置也会在未来只切开关时造成不一致，必须作为错误拒绝。
-    if any(secret is None for secret in active) and any(
-        secret is not None for secret in active
-    ):
+    if any(secret is None for secret in active) and any(secret is not None for secret in active):
         # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
         raise ConfigError(
             code="infra.config_invalid",
@@ -2142,13 +2076,11 @@ def _validate_response_cache_config(
             suggestion="Configure both previous version and secret, or clear both values.",
         )
     failure_previous_complete = (
-        failure_spool_previous_version is not None
-        and failure_spool_previous_secret is not None
+        failure_spool_previous_version is not None and failure_spool_previous_secret is not None
     )
     # failure spool retained version/Secret 缺一会导致已落盘记录在轮换后无法验证。
     if failure_previous_complete != (
-        failure_spool_previous_version is not None
-        or failure_spool_previous_secret is not None
+        failure_spool_previous_version is not None or failure_spool_previous_secret is not None
     ):
         # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
         raise ConfigError(
@@ -2222,9 +2154,8 @@ def _validate_response_cache_config(
                 suggestion="Configure independent high-entropy UTF-8 secrets.",
             ) from None
         # 部署 Secret 限定 32..512 UTF-8 bytes 且无空白/控制字符，避免 Header/env 解析漂移。
-        if (
-            not 32 <= len(encoded) <= 512
-            or any(character.isspace() or ord(character) < 32 for character in secret)
+        if not 32 <= len(encoded) <= 512 or any(
+            character.isspace() or ord(character) < 32 for character in secret
         ):
             # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
             raise ConfigError(
@@ -2234,9 +2165,7 @@ def _validate_response_cache_config(
             )
     try:
         # 单元素 keyring 同样执行 UTF-8、32..512 bytes、空白和控制字符门禁。
-        validate_secret_keyring(
-            (VersionedResponseCacheSecret(hmac_version, hmac_secret_value),)
-        )
+        validate_secret_keyring((VersionedResponseCacheSecret(hmac_version, hmac_secret_value),))
         validate_secret_keyring(
             (VersionedResponseCacheSecret(encryption_version, encryption_secret_value),)
         )
@@ -2256,8 +2185,7 @@ def _validate_response_cache_config(
     for index, candidate in enumerate(encoded_response_secrets):
         # active/previous 任意两项都必须物理不同，版本号变化不能掩盖 Secret 复用。
         if any(
-            hmac.compare_digest(candidate, other)
-            for other in encoded_response_secrets[index + 1 :]
+            hmac.compare_digest(candidate, other) for other in encoded_response_secrets[index + 1 :]
         ):
             # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
             raise ConfigError(
@@ -2371,9 +2299,22 @@ def _load_mcp_config(
     values: dict[str, ConfigValue],
     *,
     environment: EnvironmentName,
+    service_name: str = "control-plane-api",
     forbidden_secrets: tuple[object, ...],
 ) -> dict[str, Any]:
-    """Load the fixed PRD-082 MCP deployment surface and fail closed on unsafe profiles."""
+    """Load the fixed PRD-082/083 Control or Scheduler deployment surface."""
+
+    # Direct Shared contract callers from PRD-082 can provide the then-current MCP key set.
+    # AppConfig always supplies the complete merged map, while this compatibility fill only adds
+    # declared defaults and never accepts an unknown bypass key.
+    values = {
+        **{
+            key: ConfigValue(default, "default")
+            for key, default in DEFAULT_CONFIG.items()
+            if key.startswith("METAHUB_MCP_") and key not in values
+        },
+        **values,
+    }
 
     enabled = _boolean(values, "METAHUB_MCP_ENABLED")
     encryption_version = _positive_int(values, "METAHUB_MCP_ENCRYPTION_VERSION")
@@ -2381,12 +2322,8 @@ def _load_mcp_config(
     encryption_previous_version = _optional_positive_int(
         values, "METAHUB_MCP_ENCRYPTION_PREVIOUS_VERSION"
     )
-    hmac_previous_version = _optional_positive_int(
-        values, "METAHUB_MCP_HMAC_PREVIOUS_VERSION"
-    )
-    configured_encryption_secret = _raw_optional_value(
-        values, "METAHUB_MCP_ENCRYPTION_SECRET"
-    )
+    hmac_previous_version = _optional_positive_int(values, "METAHUB_MCP_HMAC_PREVIOUS_VERSION")
+    configured_encryption_secret = _raw_optional_value(values, "METAHUB_MCP_ENCRYPTION_SECRET")
     configured_hmac_secret = _raw_optional_value(values, "METAHUB_MCP_HMAC_SECRET")
     encryption_secret = configured_encryption_secret or (
         DEFAULT_MCP_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
@@ -2397,9 +2334,7 @@ def _load_mcp_config(
     encryption_previous_secret = _raw_optional_value(
         values, "METAHUB_MCP_ENCRYPTION_PREVIOUS_SECRET"
     )
-    hmac_previous_secret = _raw_optional_value(
-        values, "METAHUB_MCP_HMAC_PREVIOUS_SECRET"
-    )
+    hmac_previous_secret = _raw_optional_value(values, "METAHUB_MCP_HMAC_PREVIOUS_SECRET")
     if (encryption_previous_version is None) != (encryption_previous_secret is None) or (
         hmac_previous_version is None
     ) != (hmac_previous_secret is None):
@@ -2417,17 +2352,19 @@ def _load_mcp_config(
             message="MCP previous key versions must be lower than their current versions.",
             suggestion="Advance the current version and retain only an older verification key.",
         )
-    if (encryption_secret is None) != (hmac_secret is None) or enabled and (
-        encryption_secret is None or hmac_secret is None
+    if (
+        (encryption_secret is None) != (hmac_secret is None)
+        or enabled
+        and (encryption_secret is None or hmac_secret is None)
     ):
         raise ConfigError(
             code="infra.config_invalid",
             message="Enabled MCP requires independent encryption and HMAC roots.",
             suggestion="Configure both current MCP secrets before enabling the feature.",
         )
-    if (
-        encryption_previous_secret is not None and encryption_secret is None
-    ) or (hmac_previous_secret is not None and hmac_secret is None):
+    if (encryption_previous_secret is not None and encryption_secret is None) or (
+        hmac_previous_secret is not None and hmac_secret is None
+    ):
         raise ConfigError(
             code="infra.config_invalid",
             message="MCP retained keys require complete current key domains.",
@@ -2435,11 +2372,11 @@ def _load_mcp_config(
         )
 
     raw_executor_mode = _value(values, "METAHUB_MCP_EXECUTOR_MODE").strip()
-    if raw_executor_mode not in {"disabled", "test_loopback"}:
+    if raw_executor_mode not in {"disabled", "test_loopback", "sandbox_http"}:
         raise ConfigError(
             code="infra.config_invalid",
             message="METAHUB_MCP_EXECUTOR_MODE is invalid.",
-            suggestion="Choose disabled or the explicit test_loopback adapter.",
+            suggestion="Choose disabled, test_loopback, or the isolated sandbox_http adapter.",
         )
     executor_mode: McpExecutorMode = raw_executor_mode  # type: ignore[assignment]
     test_loopback_enabled = _boolean(values, "METAHUB_MCP_TEST_LOOPBACK_ENABLED")
@@ -2449,13 +2386,11 @@ def _load_mcp_config(
             message="MCP test loopback mode and its explicit enable flag must agree.",
             suggestion="Enable both only in dev/test, or keep both disabled.",
         )
-    if environment == "prod" and (
-        executor_mode != "disabled" or test_loopback_enabled
-    ):
+    if environment == "prod" and (executor_mode == "test_loopback" or test_loopback_enabled):
         raise ConfigError(
             code="infra.config_invalid",
-            message="Production MCP executor must remain disabled for PRD-082.",
-            suggestion="Deploy with disabled executor and no test loopback adapter.",
+            message="Production MCP executor cannot use the test loopback adapter.",
+            suggestion="Use disabled for Control or sandbox_http for the dedicated Scheduler.",
         )
     if executor_mode == "test_loopback" and not enabled:
         raise ConfigError(
@@ -2470,6 +2405,12 @@ def _load_mcp_config(
             code="infra.config_invalid",
             message="MCP scheduler cannot run while the feature is disabled.",
             suggestion="Enable MCP first or stop its scheduler.",
+        )
+    if executor_mode == "sandbox_http" and not scheduler_enabled:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP sandbox_http executor requires the Scheduler role.",
+            suggestion="Enable the dedicated Scheduler or keep the executor disabled.",
         )
     scheduler_poll = _bounded_float(
         values,
@@ -2511,6 +2452,105 @@ def _load_mcp_config(
             suggestion="Increase lease duration or lower the bounded deadline.",
         )
 
+    caps = McpNetworkPolicyCaps(
+        connect_timeout_max_seconds=_bounded_int(
+            values, "METAHUB_MCP_NETWORK_CONNECT_TIMEOUT_MAX_SECONDS", minimum=1, maximum=10
+        ),
+        probe_timeout_max_seconds=_bounded_int(
+            values, "METAHUB_MCP_NETWORK_PROBE_TIMEOUT_MAX_SECONDS", minimum=1, maximum=30
+        ),
+        call_timeout_max_seconds=_bounded_int(
+            values, "METAHUB_MCP_NETWORK_CALL_TIMEOUT_MAX_SECONDS", minimum=1, maximum=120
+        ),
+        failure_threshold_max=_bounded_int(
+            values, "METAHUB_MCP_NETWORK_FAILURE_THRESHOLD_MAX", minimum=1, maximum=10
+        ),
+        open_seconds_max=_bounded_int(
+            values, "METAHUB_MCP_NETWORK_OPEN_SECONDS_MAX", minimum=10, maximum=3600
+        ),
+    )
+    if (
+        operation_lease <= caps.probe_timeout_max_seconds + MCP_SANDBOX_RESPONSE_RESERVE_SECONDS + 6
+        or invocation_lease <= caps.call_timeout_max_seconds
+        or probe_deadline > caps.probe_timeout_max_seconds
+        or call_deadline > caps.call_timeout_max_seconds
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP leases and deadlines do not fit the shared network policy caps.",
+            suggestion=(
+                "Keep deadlines within caps and leases beyond response and finalize reserves."
+            ),
+        )
+
+    sandbox_base_url = _raw_optional_value(values, "METAHUB_MCP_SANDBOX_BASE_URL")
+    sandbox_internal_token = _raw_optional_value(values, "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN")
+    sandbox_envelope_secret = _raw_optional_value(values, "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET")
+    sandbox_response_version = _positive_int(values, "METAHUB_MCP_SANDBOX_RESPONSE_KEY_VERSION")
+    sandbox_response_current = _raw_optional_value(
+        values, "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT"
+    )
+    sandbox_response_previous = _raw_optional_value(
+        values, "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS"
+    )
+    sandbox_values = (
+        sandbox_base_url,
+        sandbox_internal_token,
+        sandbox_envelope_secret,
+        sandbox_response_current,
+    )
+    if executor_mode == "sandbox_http":
+        if any(value is None for value in sandbox_values):
+            raise ConfigError(
+                code="infra.config_missing",
+                message="MCP Scheduler Sandbox configuration is incomplete.",
+                suggestion="Configure the internal URL and all independent Scheduler secrets.",
+            )
+        assert sandbox_base_url is not None
+        sandbox_base_url = _validated_mcp_sandbox_url(sandbox_base_url)
+        _validate_mcp_sandbox_secrets(
+            secrets=(
+                sandbox_internal_token,
+                sandbox_envelope_secret,
+                sandbox_response_current,
+                sandbox_response_previous,
+            ),
+            forbidden_secrets=(
+                *forbidden_secrets,
+                encryption_secret,
+                encryption_previous_secret,
+                hmac_secret,
+                hmac_previous_secret,
+            ),
+        )
+        if sandbox_response_previous is not None and sandbox_response_version < 2:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP Sandbox previous response key requires a consecutive version.",
+                suggestion="Advance the current response version before retaining the old key.",
+            )
+    elif any(value is not None for value in (*sandbox_values, sandbox_response_previous)):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP Sandbox Scheduler settings are forbidden outside sandbox_http mode.",
+            suggestion="Clear Sandbox settings from Control and non-Scheduler processes.",
+        )
+
+    is_scheduler_service = service_name == "mcp-scheduler-worker"
+    if environment == "prod":
+        if is_scheduler_service and (not scheduler_enabled or executor_mode != "sandbox_http"):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Production MCP Scheduler role configuration is incomplete.",
+                suggestion="Enable its Scheduler and use only the sandbox_http executor.",
+            )
+        if not is_scheduler_service and (scheduler_enabled or executor_mode != "disabled"):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Production Control and non-Scheduler roles cannot claim MCP jobs.",
+                suggestion="Disable their MCP Scheduler and executor settings.",
+            )
+
     bounded_ints: dict[str, tuple[int, int]] = {
         "mcp_register_max_bytes": (1_024, 16_384),
         "mcp_refresh_max_bytes": (2, 4_096),
@@ -2543,10 +2583,8 @@ def _load_mcp_config(
     }
     if (
         budget_values["mcp_arguments_max_bytes"] > budget_values["mcp_invoke_max_bytes"]
-        or budget_values["mcp_schema_max_bytes"]
-        > budget_values["mcp_server_schema_max_bytes"]
-        or budget_values["mcp_schema_max_enum_item_bytes"]
-        > budget_values["mcp_schema_max_bytes"]
+        or budget_values["mcp_schema_max_bytes"] > budget_values["mcp_server_schema_max_bytes"]
+        or budget_values["mcp_schema_max_enum_item_bytes"] > budget_values["mcp_schema_max_bytes"]
         or budget_values["mcp_schema_max_properties"] > budget_values["mcp_tree_max_nodes"]
         or budget_values["mcp_max_array_items"] > budget_values["mcp_tree_max_nodes"]
     ):
@@ -2599,8 +2637,117 @@ def _load_mcp_config(
         "mcp_invocation_lease_seconds": invocation_lease,
         "mcp_probe_deadline_seconds": probe_deadline,
         "mcp_call_deadline_seconds": call_deadline,
+        "mcp_sandbox_base_url": sandbox_base_url,
+        "mcp_sandbox_internal_token": sandbox_internal_token,
+        "mcp_sandbox_envelope_secret": sandbox_envelope_secret,
+        "mcp_sandbox_response_key_version": sandbox_response_version,
+        "mcp_sandbox_response_secret_current": sandbox_response_current,
+        "mcp_sandbox_response_secret_previous": sandbox_response_previous,
+        "mcp_network_connect_timeout_max_seconds": caps.connect_timeout_max_seconds,
+        "mcp_network_probe_timeout_max_seconds": caps.probe_timeout_max_seconds,
+        "mcp_network_call_timeout_max_seconds": caps.call_timeout_max_seconds,
+        "mcp_network_failure_threshold_max": caps.failure_threshold_max,
+        "mcp_network_open_seconds_max": caps.open_seconds_max,
         **budget_values,
     }
+
+
+def _validated_mcp_sandbox_url(value: str) -> str:
+    """Accept one canonical internal HTTP(S) origin with no path-carried credentials."""
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_MCP_SANDBOX_BASE_URL is invalid.",
+            suggestion="Configure one canonical internal HTTP(S) origin.",
+        ) from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or parsed.hostname != parsed.hostname.lower()
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or port == 0
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_MCP_SANDBOX_BASE_URL is invalid.",
+            suggestion="Remove userinfo, path, query, fragment, and non-HTTP transports.",
+        )
+    canonical = f"{parsed.scheme}://{parsed.hostname}"
+    if ":" in parsed.hostname:
+        canonical = f"{parsed.scheme}://[{parsed.hostname}]"
+    if port is not None:
+        canonical += f":{port}"
+    if value.rstrip("/") != canonical:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_MCP_SANDBOX_BASE_URL must be canonical.",
+            suggestion="Use a lower-case origin without a trailing path.",
+        )
+    return canonical
+
+
+def _validate_mcp_sandbox_secrets(
+    *, secrets: tuple[object, ...], forbidden_secrets: tuple[object, ...]
+) -> None:
+    """Validate independent Scheduler authentication/response domains without disclosure."""
+
+    present: list[bytes] = []
+    for secret in secrets:
+        if secret is None:
+            continue
+        if type(secret) is not str:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP Sandbox secret configuration is invalid.",
+                suggestion="Use independent 32-512 byte UTF-8 secrets.",
+            )
+        try:
+            encoded = secret.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP Sandbox secret configuration is invalid.",
+                suggestion="Use independent 32-512 byte UTF-8 secrets.",
+            ) from None
+        if (
+            not 32 <= len(encoded) <= 512
+            or secret != secret.strip()
+            or any(character.isspace() or ord(character) < 32 for character in secret)
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP Sandbox secret configuration is invalid.",
+                suggestion="Use independent 32-512 byte secrets without whitespace.",
+            )
+        if any(hmac.compare_digest(encoded, other) for other in present):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP Sandbox secrets must use independent key domains.",
+                suggestion="Replace every reused Scheduler Sandbox secret.",
+            )
+        present.append(encoded)
+    for candidate in present:
+        for forbidden in forbidden_secrets:
+            if type(forbidden) is not str:
+                continue
+            try:
+                encoded_forbidden = forbidden.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                continue
+            if hmac.compare_digest(candidate, encoded_forbidden):
+                raise ConfigError(
+                    code="infra.config_invalid",
+                    message="MCP Sandbox secrets must not reuse another security domain.",
+                    suggestion="Configure dedicated Scheduler Sandbox secrets.",
+                )
 
 
 def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummary]:
@@ -2608,7 +2755,6 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     summary_keys = {
         "METAHUB_ENV",
@@ -2831,9 +2977,7 @@ def _validate_policy_snapshot_config(
         )
     # Control 只提供内部响应，不访问自身 base URL；只有 Gateway 启用同步时需要网络边界校验。
     if service_name == "gateway-data-plane" and sync_enabled:
-        _validate_policy_snapshot_control_url(
-            control_api_base_url, environment=environment
-        )
+        _validate_policy_snapshot_control_url(control_api_base_url, environment=environment)
 
 
 def _validate_provider_error_map_config(
@@ -2986,10 +3130,12 @@ def _validate_batch_config(
             message="Batch heartbeat must be lower than half of the lease.",
             suggestion="Lower the heartbeat or increase the lease duration.",
         )
-    if service_name == "batch-worker" and enabled and (
-        internal_batch_token is None
-        or batch_encryption_secret is None
-        or database_url is None
+    if (
+        service_name == "batch-worker"
+        and enabled
+        and (
+            internal_batch_token is None or batch_encryption_secret is None or database_url is None
+        )
     ):
         # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
         raise ConfigError(
@@ -3009,12 +3155,8 @@ def _validate_batch_config(
                 message="METAHUB_INTERNAL_BATCH_TOKEN must contain ASCII characters only.",
                 suggestion="Configure an independent printable ASCII Batch token.",
             ) from None
-        if (
-            not 32 <= len(token_bytes) <= 512
-            or any(
-                character.isspace() or ord(character) < 32
-                for character in internal_batch_token
-            )
+        if not 32 <= len(token_bytes) <= 512 or any(
+            character.isspace() or ord(character) < 32 for character in internal_batch_token
         ):
             # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
@@ -3052,12 +3194,8 @@ def _validate_batch_config(
                 message="METAHUB_BATCH_ENCRYPTION_SECRET is invalid.",
                 suggestion="Configure an independent high-entropy UTF-8 secret.",
             ) from None
-        if (
-            not 32 <= len(secret_bytes) <= 512
-            or any(
-                character.isspace() or ord(character) < 32
-                for character in batch_encryption_secret
-            )
+        if not 32 <= len(secret_bytes) <= 512 or any(
+            character.isspace() or ord(character) < 32 for character in batch_encryption_secret
         ):
             # 批处理配置和密钥必须独立、完整且在范围内；不满足时拒绝启动。
             raise ConfigError(
@@ -3276,9 +3414,7 @@ def _validate_approval_hmac_config(
             suggestion="Increase the current version while retaining the older version.",
         )
 
-    configured = tuple(
-        secret for secret in (current_secret, previous_secret) if secret is not None
-    )
+    configured = tuple(secret for secret in (current_secret, previous_secret) if secret is not None)
     for secret in configured:
         _validate_approval_hmac_secret(secret)
         if any(
@@ -3291,10 +3427,7 @@ def _validate_approval_hmac_config(
                 message="Approval HMAC secret must use an independent key domain.",
                 suggestion="Configure a dedicated approval HMAC secret.",
             )
-    if (
-        previous_secret is not None
-        and hmac.compare_digest(current_secret, previous_secret)
-    ):
+    if previous_secret is not None and hmac.compare_digest(current_secret, previous_secret):
         # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
         raise ConfigError(
             code="infra.config_invalid",
@@ -3327,9 +3460,8 @@ def _validate_approval_hmac_secret(secret: str) -> None:
             message="Approval HMAC secret is invalid.",
             suggestion="Configure a valid independent UTF-8 secret.",
         ) from None
-    if (
-        not 32 <= len(encoded) <= 512
-        or any(character.isspace() or ord(character) < 32 for character in secret)
+    if not 32 <= len(encoded) <= 512 or any(
+        character.isspace() or ord(character) < 32 for character in secret
     ):
         # 错误路径必须保留统一错误码与 request_id，并清除敏感上下文后再进入日志或响应。
         raise ConfigError(
@@ -3426,9 +3558,8 @@ def _validate_session_risk_hmac_secret(secret: str) -> None:
             message="Session risk HMAC secret is invalid.",
             suggestion="Configure a valid independent UTF-8 secret.",
         ) from None
-    if (
-        not 32 <= len(encoded) <= 512
-        or any(character.isspace() or ord(character) < 32 for character in secret)
+    if not 32 <= len(encoded) <= 512 or any(
+        character.isspace() or ord(character) < 32 for character in secret
     ):
         # 长度、空白或控制字符任一异常都使用固定字段级错误，不泄露实际值或长度。
         raise ConfigError(
@@ -3438,9 +3569,7 @@ def _validate_session_risk_hmac_secret(secret: str) -> None:
         )
 
 
-def _validate_internal_chat_gateway_url(
-    value: str, *, environment: EnvironmentName
-) -> None:
+def _validate_internal_chat_gateway_url(value: str, *, environment: EnvironmentName) -> None:
     """限制企业 Chat 内部 Gateway URL，拒绝凭据、歧义和非回环明文 HTTP。
 
     参数：Gateway 基础 URL 与当前环境。返回：合法时无返回值。
@@ -3488,9 +3617,7 @@ def _validate_internal_chat_gateway_url(
         )
 
 
-def _validate_policy_snapshot_control_url(
-    value: str, *, environment: EnvironmentName
-) -> None:
+def _validate_policy_snapshot_control_url(value: str, *, environment: EnvironmentName) -> None:
     """限制 Gateway 同步 URL：生产仅 HTTPS，开发 HTTP 仅可信回环地址。
 
     参数：Control API base URL 和当前环境；返回：合法时无返回值。
@@ -3555,7 +3682,6 @@ def _build_config_item(key: str, item: ConfigValue | None) -> ConfigItemSummary:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     if item is None or item.value == "":
         return ConfigItemSummary(key=key, source="default", status="missing", value_preview="")
     # 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
@@ -3588,7 +3714,6 @@ def _build_warnings(
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     warnings: list[str] = []
     # 认证令牌属于访问边界，失效或缺失时必须走统一错误。
     if environment == "prod" and not _optional_value(values, "METAHUB_INTERNAL_CONFIG_TOKEN"):
@@ -3612,7 +3737,6 @@ def _ensure_no_secret_preview(items: list[ConfigItemSummary]) -> None:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     for item in items:
         # 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
         if (
@@ -3635,7 +3759,6 @@ def _split_origins(raw: str | None) -> list[str]:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     if not raw:
         return ["http://localhost:5173"]
     return [item.strip() for item in raw.split(",") if item.strip()]
@@ -3647,7 +3770,6 @@ def _value(values: dict[str, ConfigValue], key: str) -> str:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     item = values.get(key)
     return item.value if item else ""
 
@@ -3657,7 +3779,6 @@ def _optional_value(values: dict[str, ConfigValue], key: str) -> str | None:
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     value = _value(values, key).strip()
     return value or None
@@ -3685,7 +3806,6 @@ def _positive_int(values: dict[str, ConfigValue], key: str) -> int:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     raw = _value(values, key).strip()
     try:
         value = int(raw)
@@ -3708,9 +3828,7 @@ def _positive_int(values: dict[str, ConfigValue], key: str) -> int:
     return value
 
 
-def _bounded_int(
-    values: dict[str, ConfigValue], key: str, *, minimum: int, maximum: int
-) -> int:
+def _bounded_int(values: dict[str, ConfigValue], key: str, *, minimum: int, maximum: int) -> int:
     """读取有上下界的健康探测配置，阻止异常参数放大调度或上游压力。"""
 
     value = _positive_int(values, key)
@@ -3724,9 +3842,7 @@ def _bounded_int(
     return value
 
 
-def _bounded_nonnegative_int(
-    values: dict[str, ConfigValue], key: str, *, maximum: int
-) -> int:
+def _bounded_nonnegative_int(values: dict[str, ConfigValue], key: str, *, maximum: int) -> int:
     """解析有上限的非负整型配置，拒绝布尔值、越界值和非规范文本。
 
     Read a canonical ASCII integer in ``0..maximum`` without accepting signs.
@@ -3784,8 +3900,6 @@ def _bounded_float(
     return value
 
 
-
-
 def _boolean(values: dict[str, ConfigValue], key: str) -> bool:
     """解析严格布尔配置，避免拼写错误被静默当作关闭或开启。"""
 
@@ -3834,7 +3948,6 @@ def _config_profile(values: dict[str, ConfigValue]) -> str:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     explicit = _optional_value(values, "METAHUB_CONFIG_FILE")
     if explicit:
         return Path(explicit).name
@@ -3848,7 +3961,6 @@ def _is_sensitive_config_key(key: str) -> bool:
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     normalized = key.lower()
     # “inter-token timeout”中的 token 指模型输出分片，不是认证令牌；该数值应在安全配置摘要中可见。
@@ -3870,7 +3982,6 @@ def _looks_like_http_url(value: str) -> bool:
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
     return value.startswith("http://") or value.startswith("https://")
 
 
@@ -3879,7 +3990,6 @@ def _preview_value(value: str) -> str:
 
     安全：输出只能包含脱敏摘要，不能泄露明文密钥、Token、Prompt 或完整凭据。
     """
-
 
     if len(value) <= 160:
         return value

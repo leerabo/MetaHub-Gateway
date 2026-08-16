@@ -377,6 +377,7 @@ import {
   listMcpTools,
   refreshMcpServerTools,
   registerMcpServer,
+  updateMcpServerNetworkPolicy,
   updateMcpServerStatus,
   updateMcpToolPolicy,
 } from "../lib/mcpTools.js";
@@ -5582,6 +5583,7 @@ function bindMcpToolsPageInteractions(consoleShellState) {
   if (!owner || !mcpToolPageState.enter(owner)) return false;
   return bindMcpToolInteractions({
     toolId: () => mcpToolPageState.snapshot().toolDialog?.toolId ?? "",
+    networkServerId: () => mcpToolPageState.snapshot().networkDialog?.serverId ?? "",
     async onRefresh() {
       const generation = ++refreshSequence;
       const state = await loadMcpToolsState(consoleShellState, generation);
@@ -5616,10 +5618,12 @@ function bindMcpToolsPageInteractions(consoleShellState) {
     },
     async onCloseDialog() {
       const currentOwner = currentMcpToolOwner(consoleShellState);
-      const dialog = mcpToolPageState.snapshot().toolDialog;
-      const closed = dialog?.open
-        ? mcpToolPageState.closeToolDialog(currentOwner)
-        : mcpToolPageState.closeRegister(currentOwner);
+      const snapshot = mcpToolPageState.snapshot();
+      const closed = snapshot.networkDialog?.open
+        ? mcpToolPageState.closeNetworkDialog(currentOwner)
+        : snapshot.toolDialog?.open
+          ? mcpToolPageState.closeToolDialog(currentOwner)
+          : mcpToolPageState.closeRegister(currentOwner);
       if (closed) renderCurrentMcpToolsPanel(consoleShellState);
       return closed;
     },
@@ -5637,6 +5641,17 @@ function bindMcpToolsPageInteractions(consoleShellState) {
     },
     async onSubmitPolicy(policy) {
       return submitMcpToolPolicy(policy, consoleShellState);
+    },
+    async onOpenNetworkPolicy(serverId) {
+      if (!mcpToolPageState.openNetworkDialog(currentMcpToolOwner(consoleShellState), serverId)) {
+        return false;
+      }
+      refreshSequence += 1;
+      renderCurrentMcpToolsPanel(consoleShellState);
+      return true;
+    },
+    async onSubmitNetworkPolicy(policy) {
+      return submitMcpNetworkPolicy(policy, consoleShellState);
     },
   });
 }
@@ -5816,6 +5831,48 @@ async function submitMcpToolPolicy(policy, consoleShellState) {
     mcpToolPageState.finishPolicyUpdate(ticket);
   }
   renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Apply one endpoint-only network policy CAS and explicitly rebase a stale safe draft. */
+async function submitMcpNetworkPolicy(policy, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  const ticket = mcpToolPageState.beginNetworkPolicyUpdate(owner, policy);
+  if (!authSession.token || !ticket) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  let conflict = false;
+  try {
+    const result = await updateMcpServerNetworkPolicy({
+      controlApiUrl,
+      token: authSession.token,
+      serverId: ticket.serverId,
+      policy: ticket.policy,
+      signal: ticket.controller.signal,
+    });
+    mcpToolPageState.acceptNetworkPolicyUpdate(
+      ticket,
+      result,
+      currentMcpToolOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectNetworkPolicyUpdate(
+      ticket,
+      error,
+      currentMcpToolOwner(consoleShellState),
+    )) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+    conflict = error instanceof AuthApiError && error.code === "mcp.state_conflict";
+  } finally {
+    mcpToolPageState.finishNetworkPolicyUpdate(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  if (conflict) {
+    const generation = ++refreshSequence;
+    const state = await loadMcpToolsState(consoleShellState, generation);
+    if (state) renderCurrentMcpToolsPanel(consoleShellState);
+  }
   return mcpToolPageState.snapshot();
 }
 
@@ -14330,7 +14387,7 @@ async function loadMcpToolsState(consoleShellState, refreshId) {
       ...mcpToolPageState.listQuery(tab),
       signal: operation.controller.signal,
     };
-    const result = tab === "servers"
+    const result = tab === "servers" || tab === "network"
       ? await listMcpServers(common)
       : tab === "tools"
         ? await listMcpTools(common)

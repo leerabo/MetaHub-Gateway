@@ -1932,6 +1932,54 @@ McpNetworkPolicy/OBJ-114、`mcp.network_blocked` 与 TC-0165/0166 共同确认�
 `PRD-083 | M2-企业增强 | P2 | 扩展层 | MCP沙箱 | 第三方MCP沙箱网络ACL`。本次只登记、不实现 PRD-083，
 `all_108_prds_complete=false`。
 
+## PRD-083 第三方 MCP 沙箱网络 ACL 目录（已完成）
+
+- `shared-sdk/python/metahub_shared/mcp/network.py` 与 `metahub_shared/mcp/__init__.py`：冻结 Network Policy
+  caps/canonical fingerprint、Endpoint-only ACL、DNS 全地址判定、短时 envelope、boot-bound exact permit、
+  加密 response、replay cache 和 EVT-095 安全 payload；permit 精确绑定 Tool、Credential、Schema、Tool Policy、
+  network decision、durable call intent 与 pinned destination。
+- `shared-sdk/python/metahub_shared/runtime/{config,mcp_sandbox_config,errors,i18n,webhooks}.py` 与 `rbac.py`：
+  发布三角色闭集配置、独立最小 SandboxConfig、固定错误/可用性枚举、可订阅 `mcp.network_blocked` 和
+  RBAC revision 18；未知或跨角色 `METAHUB_*` 失败关闭。
+- `infra/migrations/0076_mcp_sandbox_network_acl.sql/.down.sql`：在 0075 drain preflight 后保真扩展 MCP
+  operation/job/invocation/attempt，新增八张 tenant-qualified network policy/revision/decision/circuit/intent/
+  event/outbox 表及 owner、append-only、CAS、事件正交和 down guard；空库与 seeded 往返均验证 rowid、值、
+  integrity 和复合外键。
+- `control-plane-api/src/metahub_control/mcp_governance/{models,routes,service,scheduler,sandbox_client,
+  scheduler_main}.py`：实现后端双权限 Policy GET/PATCH、revision CAS、waiting-policy 恢复、独立 Scheduler、
+  Worker 加密协议、实时 RBAC/Grant/Schema/Policy 重检、call intent、circuit、EVT-095 source/outbox、迟到 fence
+  和固定失败/成本追踪。
+- `mcp-sandbox-worker/` 与 `infra/docker/mcp-sandbox.Dockerfile`：独立无数据库 Worker、单次 DNS 全量校验、
+  HTTPS pinned transport、Host/SNI 保留、proxy/redirect 禁止、阶段/overall deadline、加密 permit/response、
+  session registry 和有界清理；不会把 Endpoint、Token、参数、结果或第三方异常正文写入日志/证据。
+- `console-web/src/{lib,features/mcp-tools,app,styles}`：PAGE-115 Network policy 摘要与原生编辑 Dialog、后端
+  capability/RBAC owner、409 手工重基、权限漂移清理、迟到响应拒绝和双视口安全布局；read-only 用户无编辑
+  命令，前端隐藏不替代后端授权。
+- `infra/compose/`、`infra/docker/requirements.mcp-sandbox.txt`、`.dockerignore` 与部署脚本/文档：增加独立
+  Scheduler/Sandbox 服务、control/egress 网络、只读非 root 容器、cap drop、no-new-privileges、资源上限和
+  专用 secret/config 边界；Sandbox 不挂载数据库、日志、Control 配置或宿主业务目录。
+- `shared-sdk/python/tests/test_prd083_mcp_network.py`、`mcp-sandbox-worker/tests/`、
+  `control-plane-api/tests/integration/test_prd083_*.py`、相邻 PRD-082 MCP 回归与
+  `console-web/tests/unit/*prd083*.test.mjs`：覆盖 exact 合同、ACL/transport、配置隔离、permit/response、
+  0076、API、Scheduler 竞态、熔断、事件、Console owner 和隐私边界。
+- `scripts/acceptance/prd083-{runtime-acceptance.py,browser-harness.py,browser-acceptance.mjs}` 及合同测试：
+  从空 SQLite 运行真实 Control、Scheduler、Sandbox 与隔离 MCP 测试服务，并对 PAGE-115 双视口、迁移、
+  RBAC、409、动态撤权、隐私、证据 provenance、进程/端口/sidecar 清理执行失败关闭验收。
+- `docs/prd/PRD-083-third-party-mcp-sandbox-network-acl.md`、`docs/api/mcp-tools.md`、
+  `docs/deployment/single-node-compose.md` 与 `docs/testing/PRD-083-tests.md`：保存冻结设计、四轮自审、公开
+  API/部署边界、最终门禁、证据 hash 和下一项交叉确认。
+
+PRD-083 的实现、专项、迁移、Runtime、Browser 和文档已形成正式证据。权威 Runtime 为
+`.artifacts/prd083-runtime/prd083-final-20260816-ac`，JSON SHA-256 为
+`C5FFB99B15FF2156D26408B08C4F8ACD2C4EC07610A06799DDDFE471B23D0047`；权威 Browser 为
+`.artifacts/prd083-browser/prd083-final-20260816-f`，JSON/manifest SHA-256 分别为
+`30685F52892AE64838CCA4C32C1CAA044B974D311D8E0425016BFFDC8C61AE94`、
+`0C59FEE846B45B54461DC00D7C86C2591F47EBF9B87248CB3850128D80830044`。Excel `01_PRD总表` 第 85 行、
+`03_M2-M3扩展交付` 第 21 行、PAGE-116、API-383..388、OBJ-115、EVT-096 与 TC-0167/0168 共同确认，
+下一条权威未完成项为
+`PRD-084 | M2-企业增强 | P2 | 扩展层 | 本地模型 | 本地模型Endpoint接入`。本次只登记、不实现 PRD-084，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

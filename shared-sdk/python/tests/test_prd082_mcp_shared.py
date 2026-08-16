@@ -58,7 +58,8 @@ def test_prd082_rbac_revision_17_has_exact_default_role_deltas() -> None:
         "mcp.invoke": ("write", {"admin", "developer"}),
         "mcp.approve": ("critical", {"admin", "security_admin"}),
     }
-    assert CATALOG_REVISION == 17
+    # Later PRDs may append independent permissions without changing PRD-082 role deltas.
+    assert CATALOG_REVISION >= 17
     for code, (risk, roles) in expected.items():
         definition = PERMISSION_BY_CODE[code]
         assert definition.category == "mcp"

@@ -11,6 +11,16 @@ const INVOCATION_STATUSES = new Set([
   "blocked", "rejected", "outcome_unknown",
 ]);
 const RISK_LEVELS = new Set(["standard", "high"]);
+const NETWORK_POLICY_KEYS = Object.freeze([
+  "expected_revision",
+  "status",
+  "egress_mode",
+  "connect_timeout_seconds",
+  "probe_timeout_seconds",
+  "call_timeout_seconds",
+  "failure_threshold",
+  "open_seconds",
+]);
 let idempotencySequence = 0;
 
 /** Read tenant MCP Server summaries. Endpoint URLs and credentials are never accepted as filters. */
@@ -90,6 +100,26 @@ export async function updateMcpServerStatus({
     body: { expected_revision: revision, status: nextStatus },
     signal,
   });
+}
+
+/** Update one Server network policy without accepting a second destination allowlist. */
+export async function updateMcpServerNetworkPolicy({
+  controlApiUrl,
+  token,
+  serverId,
+  policy,
+  signal,
+}) {
+  const normalizedServerId = requireId(serverId, SERVER_ID);
+  return mcpRequest(
+    `${controlApiUrl}/mcp/servers/${encodeURIComponent(normalizedServerId)}/network-policy`,
+    {
+      token,
+      method: "PATCH",
+      body: normalizeMcpNetworkPolicy(policy),
+      signal,
+    },
+  );
 }
 
 /** Read safe Tool list summaries. Canonical Schema and description only come from getMcpTool. */
@@ -194,6 +224,32 @@ export function normalizeMcpToolPolicy(value = {}) {
     allowed_role_ids: roleIds,
     allowed_user_ids: userIds,
     result_redaction_pointers: normalizePointers(value.result_redaction_pointers),
+  });
+}
+
+/** Normalize the exact tenant-editable network policy body. */
+export function normalizeMcpNetworkPolicy(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw localError("mcp.network_policy_invalid", 422);
+  }
+  const keys = Object.keys(value).sort();
+  if (JSON.stringify(keys) !== JSON.stringify([...NETWORK_POLICY_KEYS].sort())) {
+    throw localError("mcp.network_policy_invalid", 422);
+  }
+  const status = networkEnum(value.status, new Set(["active", "disabled"]));
+  const egressMode = networkEnum(
+    value.egress_mode,
+    new Set(["registered_endpoint_only"]),
+  );
+  return Object.freeze({
+    expected_revision: networkInteger(value.expected_revision, 1, Number.MAX_SAFE_INTEGER),
+    status,
+    egress_mode: egressMode,
+    connect_timeout_seconds: networkInteger(value.connect_timeout_seconds, 1, 10),
+    probe_timeout_seconds: networkInteger(value.probe_timeout_seconds, 1, 30),
+    call_timeout_seconds: networkInteger(value.call_timeout_seconds, 1, 120),
+    failure_threshold: networkInteger(value.failure_threshold, 1, 10),
+    open_seconds: networkInteger(value.open_seconds, 10, 3600),
   });
 }
 
@@ -331,6 +387,20 @@ function normalizedEnum(value, allowed) {
   const normalized = String(value ?? "").trim();
   if (!allowed?.has(normalized)) throw localError("mcp.query_invalid", 422);
   return normalized;
+}
+
+function networkEnum(value, allowed) {
+  if (typeof value !== "string" || !allowed.has(value)) {
+    throw localError("mcp.network_policy_invalid", 422);
+  }
+  return value;
+}
+
+function networkInteger(value, minimum, maximum) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw localError("mcp.network_policy_invalid", 422);
+  }
+  return value;
 }
 
 function validIdempotencyKey(value) {

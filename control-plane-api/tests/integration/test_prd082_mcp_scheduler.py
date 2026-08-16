@@ -109,7 +109,7 @@ def prd082_scheduler_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = "Prd082SchedulerOnly!2026"
     try:
         applied = apply_migrations(database_url).applied
-        assert applied and applied[-1] == "0075"
+        assert applied and applied[-1] == "0076"
         apply_seed_data(database_url)
     finally:
         if previous is None:
@@ -182,6 +182,7 @@ def _prepare_sync_job(
     with_tools: bool,
     tenant_slug: str = "default",
     claim_job: bool = True,
+    deadline_seconds: int | None = None,
 ) -> tuple[SimpleNamespace, McpSyncJobClaim, dict[str, str]]:
     database_url = _url(database)
     connection = connect_database(database_url)
@@ -209,7 +210,9 @@ def _prepare_sync_job(
         tzinfo=UTC
     )
     lease_expires_at = claimed_at + timedelta(minutes=10)
-    deadline_at = claimed_at + timedelta(hours=1)
+    deadline_at = claimed_at + (
+        timedelta(seconds=deadline_seconds) if deadline_seconds is not None else timedelta(hours=1)
+    )
 
     connection.execute(
         """
@@ -592,6 +595,15 @@ def test_scheduler_sync_network_budget_reserves_finalize_window() -> None:
             now=now,
         )
         is None
+    )
+    assert (
+        scheduler._remaining_deadline_seconds(
+            now + timedelta(seconds=200),
+            lease_expires_at=now + timedelta(seconds=300),
+            configured=500,
+            now=now,
+        )
+        == 120
     )
 
 

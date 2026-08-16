@@ -40,12 +40,14 @@ export function renderMcpTools(state, authContext, consoleShellState) {
         ${tabButton("servers", "Servers", state.activeTab)}
         ${tabButton("tools", "Tools", state.activeTab)}
         ${tabButton("invocations", "Invocations", state.activeTab)}
+        ${tabButton("network", "安全配置", state.activeTab)}
       </div>
       <section class="mcp-tab-panel" role="tabpanel" aria-labelledby="mcp-tab-${escapeAttribute(state.activeTab)}">
         ${renderActiveTab(state, owner)}
       </section>
       ${renderRegisterDialog(state, owner)}
       ${renderToolDialog(state, owner)}
+      ${renderNetworkDialog(state, owner)}
     </div>
   `;
 }
@@ -63,11 +65,11 @@ function renderActiveTab(state, owner) {
     return `<div class="mcp-empty" role="status">正在读取 ${escapeHtml(state.activeTab ?? "MCP")} 安全摘要</div>`;
   }
   if (tab.state === "error") return renderError(tab.error);
-  const content = state.activeTab === "servers"
-    ? renderServers(tab.items, owner, state.busy)
-    : state.activeTab === "tools"
-      ? renderTools(tab.items, owner, state.busy)
-      : renderInvocations(tab.items);
+  let content;
+  if (state.activeTab === "servers") content = renderServers(tab.items, owner, state.busy);
+  else if (state.activeTab === "tools") content = renderTools(tab.items, owner, state.busy);
+  else if (state.activeTab === "network") content = renderNetworkPolicies(tab.items, owner, state.busy);
+  else content = renderInvocations(tab.items);
   return `${content}${renderPagination(tab, state.busy)}`;
 }
 
@@ -165,6 +167,32 @@ function renderInvocations(items) {
   `;
 }
 
+function renderNetworkPolicies(items, owner, busy) {
+  if (!items.length) return `<div class="mcp-empty">尚未注册 MCP Server</div>`;
+  return `
+    <div class="mcp-network-scope">仅已注册 Server Endpoint</div>
+    <div class="mcp-table-scroll">
+      <table class="mcp-table mcp-network-table">
+        <thead><tr><th>Server</th><th>策略</th><th>出站范围</th><th>超时</th><th>熔断</th><th>阻断</th><th><span class="sr-only">操作</span></th></tr></thead>
+        <tbody>${items.map((server) => {
+          const policy = server.network_policy;
+          return `
+            <tr>
+              <th data-label="Server"><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml(server.mcp_server_id)}</code></th>
+              <td data-label="策略"><span class="mcp-status tone-${escapeAttribute(policy.status)}">${statusLabel(policy.status)}</span><small>revision ${numberText(policy.revision)}</small></td>
+              <td data-label="出站范围"><strong>注册 Endpoint</strong><small>${numberText(policy.destination_count)} 个目标</small></td>
+              <td data-label="超时"><span>${numberText(policy.connect_timeout_seconds)} / ${numberText(policy.probe_timeout_seconds)} / ${numberText(policy.call_timeout_seconds)} 秒</span><small>连接 / 探测 / 调用</small></td>
+              <td data-label="熔断"><span>${circuitLabel(policy.circuit_state)}</span><small>${numberText(policy.failure_threshold)} 次 · ${numberText(policy.open_seconds)} 秒</small></td>
+              <td data-label="阻断"><strong>${numberText(policy.blocked_count)}</strong><small>${blockReasonLabel(policy.last_block_reason)} · ${formatTime(policy.last_blocked_at)}</small></td>
+              <td data-label="操作" class="mcp-action-cell">${owner.canManageNetwork ? `<button type="button" data-mcp-network-policy="${escapeAttribute(server.mcp_server_id)}"${busy ? " disabled" : ""}>编辑</button>` : ""}</td>
+            </tr>
+          `;
+        }).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderRegisterDialog(state, owner) {
   if (!owner.canManageServers || !state.registerDialog?.open) return "";
   const busy = state.registerDialog.state === "submitting";
@@ -199,6 +227,47 @@ function renderToolDialog(state, owner) {
       ${dialog.state !== "loading" && !busy ? `<div class="mcp-dialog-actions"><button type="button" data-mcp-close-dialog>关闭</button></div>` : ""}
     </dialog>
   `;
+}
+
+function renderNetworkDialog(state, owner) {
+  const dialog = state.networkDialog;
+  if (!owner.canManageNetwork || !dialog?.open || !dialog.policy || !dialog.draft) return "";
+  const busy = dialog.state === "submitting";
+  const draft = dialog.draft;
+  return `
+    <dialog class="mcp-dialog mcp-network-dialog" data-mcp-dialog="network" aria-labelledby="mcp-network-dialog-title" aria-busy="${busy}">
+      <header><div><h3 id="mcp-network-dialog-title">编辑网络安全策略</h3><code>${escapeHtml(dialog.serverId)}</code></div><button type="button" class="mcp-icon-command" data-mcp-close-dialog title="关闭" aria-label="关闭"${busy ? " disabled" : ""}>&times;</button></header>
+      <div class="mcp-network-scope">仅已注册 Server Endpoint · revision ${numberText(dialog.policy.revision)}</div>
+      ${dialog.state === "conflict" ? renderNetworkConflict(dialog.error) : ""}
+      ${dialog.state === "error" ? renderError(dialog.error) : ""}
+      <form data-mcp-network-form novalidate>
+        <input type="hidden" name="expected_revision" value="${numberText(draft.expected_revision)}">
+        <input type="hidden" name="egress_mode" value="registered_endpoint_only">
+        <fieldset class="mcp-segmented"${busy ? " disabled" : ""}>
+          <legend>策略状态</legend>
+          <label><input type="radio" name="status" value="active"${draft.status === "active" ? " checked" : ""}><span>启用</span></label>
+          <label><input type="radio" name="status" value="disabled"${draft.status === "disabled" ? " checked" : ""}><span>停用</span></label>
+        </fieldset>
+        <div class="mcp-network-policy-grid">
+          ${networkNumberField("连接超时（秒）", "connect_timeout_seconds", draft.connect_timeout_seconds, 1, 10, busy)}
+          ${networkNumberField("探测超时（秒）", "probe_timeout_seconds", draft.probe_timeout_seconds, 1, 30, busy)}
+          ${networkNumberField("调用超时（秒）", "call_timeout_seconds", draft.call_timeout_seconds, 1, 120, busy)}
+          ${networkNumberField("失败阈值", "failure_threshold", draft.failure_threshold, 1, 10, busy)}
+          ${networkNumberField("熔断时长（秒）", "open_seconds", draft.open_seconds, 10, 3600, busy)}
+        </div>
+        <p class="mcp-form-error" data-mcp-form-error role="alert"></p>
+        <div class="mcp-dialog-actions"><button type="button" data-mcp-close-dialog${busy ? " disabled" : ""}>取消</button><button type="submit" class="primary"${busy ? " disabled" : ""}>${busy ? "正在保存" : "保存策略"}</button></div>
+      </form>
+    </dialog>
+  `;
+}
+
+function renderNetworkConflict(error) {
+  return `<div class="mcp-conflict" role="alert"><strong>策略已在其他会话更新，安全草稿尚未提交。</strong><span><code>${escapeHtml(error?.code ?? "mcp.state_conflict")}</code> · request_id: ${escapeHtml(error?.requestId ?? "-")}</span></div>`;
+}
+
+function networkNumberField(label, name, value, minimum, maximum, busy) {
+  return `<label class="mcp-field"><span>${label}</span><input name="${name}" type="number" min="${minimum}" max="${maximum}" step="1" value="${numberText(value)}"${busy ? " disabled" : ""} required></label>`;
 }
 
 function renderSchemaDetail(tool) {
@@ -250,6 +319,8 @@ function renderFeedback(feedback) {
   }
   const label = feedback.code === "mcp.policy_updated"
     ? "策略已更新"
+    : feedback.code === "mcp.network_policy_updated"
+      ? "网络安全策略已更新"
     : feedback.code === "mcp.refresh_enqueued"
       ? "刷新任务已提交"
       : feedback.code === "mcp.server_enabled"
@@ -275,6 +346,26 @@ function shortHash(value) {
 
 function statusLabel(value) {
   return escapeHtml(STATUS_LABELS[value] ?? value ?? "未知");
+}
+
+function circuitLabel(value) {
+  return escapeHtml({
+    not_initialized: "未初始化",
+    closed: "关闭",
+    open: "已打开",
+    half_open: "半开",
+  }[value] ?? "未知");
+}
+
+function blockReasonLabel(value) {
+  if (value == null) return "无最近阻断";
+  return escapeHtml({
+    policy_disabled: "策略停用",
+    address_denied: "地址拒绝",
+    mixed_dns_answers: "混合 DNS 地址",
+    port_denied: "端口拒绝",
+    redirect_denied: "重定向拒绝",
+  }[value] ?? "未知");
 }
 
 function dlpText(status, matches) {

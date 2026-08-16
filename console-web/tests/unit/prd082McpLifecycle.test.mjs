@@ -13,6 +13,7 @@ import { renderDeveloperStart } from "../../src/features/developer-start/renderD
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 const SERVER_ID = `mcps_${"a".repeat(32)}`;
+const NETWORK_POLICY_ID = `mcpnp_${"e".repeat(32)}`;
 const TOOL_ID = `mcpt_${"b".repeat(32)}`;
 const INVOCATION_ID = `mcpi_${"c".repeat(32)}`;
 const HASH = "d".repeat(64);
@@ -57,6 +58,24 @@ function server(extra = {}) {
     protocol_version: "2025-06-18",
     tool_count: 1,
     active_tool_count: 0,
+    network_policy: {
+      mcp_network_policy_id: NETWORK_POLICY_ID,
+      mcp_server_id: SERVER_ID,
+      status: "disabled",
+      revision: 1,
+      egress_mode: "registered_endpoint_only",
+      destination_count: 0,
+      connect_timeout_seconds: 5,
+      probe_timeout_seconds: 10,
+      call_timeout_seconds: 30,
+      failure_threshold: 3,
+      open_seconds: 60,
+      circuit_state: "not_initialized",
+      blocked_count: 0,
+      last_block_reason: null,
+      last_blocked_at: null,
+      updated_at: "2026-08-16T00:00:00Z",
+    },
     created_at: "2026-08-16T00:00:00Z",
     updated_at: "2026-08-16T00:01:00Z",
     endpoint_url: "https://private.example.test/full/path",

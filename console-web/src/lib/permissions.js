@@ -89,6 +89,7 @@ export const PERMISSIONS = Object.freeze({
   MCP_READ: "mcp.read",
   MCP_SERVER_MANAGE: "mcp.server.manage",
   MCP_POLICY_MANAGE: "mcp.policy.manage",
+  MCP_NETWORK_MANAGE: "mcp.network.manage",
   MCP_INVOKE: "mcp.invoke",
   MCP_APPROVE: "mcp.approve",
   AUDIT_READ: "audit.read",

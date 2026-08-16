@@ -54,7 +54,8 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # ``billing.finops.write``，不能把争议审核权限当作任意账本写入能力。
 # PRD-082 把 MCP 读取、Server 管理、工具策略、调用和审批拆为五个独立后端权限；
 # 工具附加权限和高危审批都必须叠加校验，不能由页面可见性或 Shared 默认矩阵替代。
-CATALOG_REVISION: Final[int] = 17
+# PRD-083 再把出站网络策略与 MCP 内容策略分离，只有后端 network manage 权限可修改。
+CATALOG_REVISION: Final[int] = 18
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -529,6 +530,13 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "critical",
     ),
     PermissionDefinition(
+        "mcp.network.manage",
+        "mcp",
+        "管理 MCP 网络策略",
+        "管理当前租户 MCP Server 的出站网络策略与熔断边界。",
+        "critical",
+    ),
+    PermissionDefinition(
         "mcp.invoke",
         "mcp",
         "调用 MCP 工具",
@@ -660,6 +668,7 @@ _SECURITY = {
     "approval.decide",
     "mcp.read",
     "mcp.policy.manage",
+    "mcp.network.manage",
     "mcp.approve",
 }
 _OPS = {
@@ -698,6 +707,7 @@ _OPS = {
     "experiment.write",
     "mcp.read",
     "mcp.server.manage",
+    "mcp.network.manage",
 }
 
 # 这些集合是产品授权上限和新租户默认值；运行时必须读取租户矩阵，绝不能在矩阵损坏时回落此处。

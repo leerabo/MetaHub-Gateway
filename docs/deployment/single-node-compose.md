@@ -5,7 +5,7 @@
 ## 范围
 
 - 默认部署 profile：`local-sqlite`。
-- 默认启动服务：`gateway`、`control-api`、`console`。
+- 默认启动服务：`gateway`、`control-api`、`mcp-scheduler-worker`、`mcp-sandbox`、`batch-worker`、`console`。
 - 可选基础设施 profile：`compose-full`，额外启动 `redis`、`postgres`、`minio`。
 - 当前应用运行时只支持 `sqlite://` 数据库 URL，因此 `compose-full` 中的 PostgreSQL 是后续 PostgreSQL driver/迁移方言接入前的基础设施预留，不会被应用默认使用。
 - 不包含 Kubernetes Helm、高可用、TLS、域名、反向代理和生产密钥托管。
@@ -26,10 +26,10 @@
 
 1. 生成 `infra/compose/.env.compose`。
 2. 创建本地持久化目录和部署日志目录。
-3. 构建 `gateway`、`control-api`、`console` 镜像。
+3. 构建 `gateway`、`control-api`、`mcp-sandbox`、`console` 镜像。
 4. 启动 Compose 服务。
 5. 在 `control-api` 容器内执行数据库迁移和 seed。
-6. 轮询 Gateway、Control API 和 Console 健康检查。
+6. 轮询 Gateway、Control API、MCP Sandbox 和 Console 健康检查。
 7. 写入 `.logs/deploy/deployment-events.jsonl` 中的 `deployment.completed` 事件。
 
 首次生成 `.env.compose` 时，CLI 会且只会在 stdout 中返回一次默认管理员密码。该密码不会进入部署事件、容器日志或 README。
@@ -71,6 +71,25 @@ Smoke 检查包含：
 - `GET http://localhost:5173/`
 - 使用 `.env.compose` 中的默认管理员账号执行登录检查，但不输出密码。
 
+## MCP Sandbox
+
+PRD-083 后，生产 MCP 网络执行拆分为独立 `mcp-scheduler-worker` 与 `mcp-sandbox`：
+
+- Control API 固定关闭嵌入式 MCP Scheduler，且不接收 Sandbox URL、internal token、envelope、permit 或
+  response secret。
+- Scheduler 挂载 SQLite/日志卷并持有 ciphertext keyring、Sandbox URL/token、envelope signing secret 和
+  response current/previous key；它不持 permit secret，也不接收部署 ACL CIDR/port。
+- Sandbox 使用专用最小镜像，不挂载数据库、日志或宿主目录，不接收 Control/Gateway 配置；容器以非 root、
+  read-only root filesystem、`cap_drop: ALL`、`no-new-privileges` 运行。
+- Sandbox 没有宿主机端口，只连接内部 control network 与独立 egress network。Scheduler 只连接 control
+  network，不能直接连接第三方 MCP Endpoint。
+- Endpoint/Bearer 只在 Sandbox 内存中解密；Uvicorn access log 关闭，permit 为一次性且不进入数据库或日志。
+
+部署脚本首次生成 `.env.compose` 时会分别生成 MCP ciphertext、HMAC、Sandbox internal、envelope、permit 和
+response secret。`.env.compose.example` 只保留占位符。`METAHUB_MCP_SANDBOX_PRIVATE_CIDRS` 只接受运维显式
+配置的精确 IPv4 `/32` 或 IPv6 `/128` 私网例外；默认为空。数据库、缓存、文件协议和容器控制端口仍由永久
+deny port 集合拒绝，不能被 tenant policy 放开。
+
 ## Compose Full Profile
 
 ```powershell
@@ -85,6 +104,8 @@ Smoke 检查包含：
 - `.env.compose.example` 只能包含 `replace-with-generated-*` 占位符。
 - `deployment.completed` 事件只记录 profile、服务 URL 和 `request_id`，不记录管理员密码、Provider Key、Virtual Key、Token Secret、数据库密码或 MinIO Secret。
 - Provider Key 和 Virtual Key 明文仍只允许在首次创建/本地 env 中出现，不得进入日志。
+- MCP Endpoint、Bearer、permit、Sandbox internal/envelope/response secret 不得进入部署事件、容器日志、
+  health response 或验收证据。
 - 默认端口绑定到 `127.0.0.1`；公网暴露、TLS 和反向代理不属于本 PRD。
 
 ## 错误码

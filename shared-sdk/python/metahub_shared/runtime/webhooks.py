@@ -22,6 +22,11 @@ from metahub_shared.mcp.events import (
     validate_mcp_tool_called_event,
     validate_mcp_tool_called_payload,
 )
+from metahub_shared.mcp.network import (
+    MCP_NETWORK_BLOCKED_EVENT_TYPE,
+    validate_mcp_network_blocked_event,
+    validate_mcp_network_blocked_payload,
+)
 from metahub_shared.rbac import (
     ADMIN_ROLE,
     PERMISSION_CODES,
@@ -120,6 +125,8 @@ WEBHOOK_EVENT_TYPES = {
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
+    # ACL blocks expose only the fixed reason and counters; addresses and origins remain internal.
+    MCP_NETWORK_BLOCKED_EVENT_TYPE,
     # SIEM 标准事件只外发聚合后的固定安全投影；原 DLP/会话事件仍保留兼容订阅。
     SECURITY_EVENT_TYPE,
 }
@@ -363,6 +370,11 @@ def build_webhook_event(
             safe_payload = validate_mcp_tool_called_payload(safe_payload)
         except McpContractError:
             raise ValueError("webhook.payload_invalid") from None
+    elif event_type == MCP_NETWORK_BLOCKED_EVENT_TYPE:
+        try:
+            safe_payload = validate_mcp_network_blocked_payload(safe_payload)
+        except McpContractError:
+            raise ValueError("webhook.payload_invalid") from None
     elif event_type == SECURITY_EVENT_TYPE:
         # PRD-081 聚合事件必须使用 exact 字段合同，不能通过通用 JSON 校验自由扩展。
         safe_payload = validate_security_event_payload(safe_payload)
@@ -414,6 +426,7 @@ def build_webhook_event(
         "trial.expired",
         "billing_dispute.created",
         MCP_TOOL_CALLED_EVENT_TYPE,
+        MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
         "audit.exported",
         "config.imported",
@@ -726,6 +739,20 @@ def build_webhook_event(
     elif event_type == MCP_TOOL_CALLED_EVENT_TYPE:
         try:
             safe_payload = validate_mcp_tool_called_event(
+                safe_payload,
+                event_id=event_id,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                object_id=object_id,
+                trace_id=trace_id,
+                source_request_id=source_request_id,
+                occurred_at=occurred_at,
+            )
+        except McpContractError:
+            raise ValueError("webhook.payload_invalid") from None
+    elif event_type == MCP_NETWORK_BLOCKED_EVENT_TYPE:
+        try:
+            safe_payload = validate_mcp_network_blocked_event(
                 safe_payload,
                 event_id=event_id,
                 tenant_id=tenant_id,

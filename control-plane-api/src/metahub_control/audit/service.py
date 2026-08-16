@@ -138,6 +138,7 @@ ACTION_OBJECT_TYPES = {
     "mcp.tool_refreshed": "mcp_tool",
     "mcp.tool_policy_updated": "mcp_tool",
     "mcp.tool_grants_updated": "mcp_tool",
+    "mcp.network_policy_updated": "mcp_network_policy",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -179,6 +180,21 @@ CONFIG_TRANSFER_TOTAL_LIMIT = 5_000
 # 对象级字段白名单是审计入库的主要安全边界。新增领域字段必须在设计审查后显式加入，
 # 不能通过序列化数据库整行或请求 DTO 的方式自动扩展。
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
+    "mcp_network_policy": frozenset(
+        {
+            "mcp_server_id",
+            "status",
+            "revision",
+            "egress_mode",
+            "destination_count",
+            "connect_timeout_seconds",
+            "probe_timeout_seconds",
+            "call_timeout_seconds",
+            "failure_threshold",
+            "open_seconds",
+            "waiting_job_resume_count",
+        }
+    ),
     "mcp_server": frozenset(
         {
             "mcp_server_id",

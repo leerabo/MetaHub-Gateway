@@ -10,6 +10,7 @@ from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
     require_mcp_invoker,
+    require_mcp_network_manager,
     require_mcp_policy_manager,
     require_mcp_reader,
     require_mcp_server_manager,
@@ -21,6 +22,7 @@ from .models import (
     McpInvocationListResponse,
     McpInvocationResponse,
     McpInvocationResultResponse,
+    McpNetworkPolicyResponse,
     McpServerListResponse,
     McpServerOperationResponse,
     McpServerResponse,
@@ -28,6 +30,7 @@ from .models import (
     McpToolResponse,
     RefreshMcpServerRequest,
     RegisterMcpServerRequest,
+    UpdateMcpNetworkPolicyRequest,
     UpdateMcpServerRequest,
     UpdateMcpToolPolicyRequest,
 )
@@ -42,6 +45,7 @@ from .service import (
     list_tools,
     refresh_server_tools,
     register_server,
+    update_network_policy,
     update_server,
     update_tool_policy,
 )
@@ -182,6 +186,30 @@ async def post_server_refresh(
         request_id=request_id(request),
         trace_id=trace_id(request),
         request_meta=build_audit_request_meta(request, sensitive_values=(key,)),
+    )
+
+
+@router.patch(
+    "/servers/{mcp_server_id}/network-policy",
+    response_model=McpNetworkPolicyResponse,
+)
+async def patch_server_network_policy(
+    request: Request,
+    response: Response,
+    mcp_server_id: str,
+    context: Annotated[AuthContext, Depends(require_mcp_network_manager)],
+) -> McpNetworkPolicyResponse:
+    reject_query(request)
+    payload = await parse_json(request, UpdateMcpNetworkPolicyRequest, 16_384)
+    no_store(response)
+    return update_network_policy(
+        request.app.state.config,
+        context,
+        mcp_server_id,
+        payload,
+        request_id=request_id(request),
+        trace_id=trace_id(request),
+        request_meta=build_audit_request_meta(request, sensitive_values=()),
     )
 
 

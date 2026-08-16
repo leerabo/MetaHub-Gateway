@@ -3,12 +3,14 @@ pythonpath = [
   "shared-sdk/python",
   "gateway-data-plane/src",
   "control-plane-api/src",
+  "mcp-sandbox-worker/src",
   "examples/python/src",
 ]
 testpaths = [
   "shared-sdk/python/tests",
   "gateway-data-plane/tests",
   "control-plane-api/tests",
+  "mcp-sandbox-worker/tests",
   "examples/python/tests",
   "scripts/acceptance/tests",
 ]

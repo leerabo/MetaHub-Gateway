@@ -94,9 +94,28 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-080 - 账单争议与调整流程`
 - `PRD-081 - SIEM/安全事件格式`
 - `PRD-082 - MCP 工具注册与权限`
+- `PRD-083 - 第三方 MCP 沙箱网络 ACL`
 
 最近进展：
 
+- `PRD-083 - 第三方 MCP 沙箱网络 ACL` 已完成：0076、Network Policy revision、DNS 全地址 ACL、HTTPS
+  pinned transport、独立 Scheduler/Sandbox、短时 envelope/permit、durable call intent、熔断、EVT-095
+  source outbox、PAGE-115 与三角色 Compose 边界均已交付。后端实时校验 tenant/RBAC/Grant/Schema/Policy，
+  固定错误携带 request_id，成功、阻断、超时、用量和成本状态可追踪；Endpoint、Token、参数、结果、IP/CIDR
+  与第三方异常正文不进入日志或证据。最终 Shared `9/9`、Worker `28/28`、Scheduler `20/20`、0076/Compose
+  `17/17`、相邻 MCP `35/35`、Console `33/33`、Runtime/Browser Python 合同 `62/62` 和 Browser driver
+  `6/6` 通过。权威 Runtime `prd083-final-20260816-ac` 从空 SQLite 完成
+  `76/0076 -> 76/0076 -> 75/0075 -> 76/0076`，四阶段 integrity/FK 通过，JSON SHA-256 为
+  `C5FFB99B15FF2156D26408B08C4F8ACD2C4EC07610A06799DDDFE471B23D0047`；权威 Browser
+  `prd083-final-20260816-f` 四张 PNG 已逐图复核，JSON/manifest SHA-256 分别为
+  `30685F52892AE64838CCA4C32C1CAA044B974D311D8E0425016BFFDC8C61AE94`、
+  `0C59FEE846B45B54461DC00D7C86C2591F47EBF9B87248CB3850128D80830044`。固定端口、owned process、Sandbox
+  session/connection/task、SQLite sidecar 和正式 work/staging 最终归零。详见
+  [PRD-083 设计](docs/prd/PRD-083-third-party-mcp-sandbox-network-acl.md)、
+  [MCP 工具 API](docs/api/mcp-tools.md)、[PRD-083 测试记录](docs/testing/PRD-083-tests.md)、
+  [Runtime](.artifacts/prd083-runtime/prd083-final-20260816-ac) 和
+  [Browser](.artifacts/prd083-browser/prd083-final-20260816-f)。总体目标仍为
+  `all_108_prds_complete=false`。
 - `PRD-082 - MCP 工具注册与权限` 已完成：Shared 发布 RBAC revision 17、MCP exact contracts、
   Draft 2020-12 Schema profile、分域加密摘要、参数 DLP、返回脱敏和 `mcp.tool_called` 安全事件；0075
   新增 tenant-qualified Server、Credential、Operation、SyncJob、Tool、Grant、Invocation、Attempt、
@@ -320,11 +339,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 84 行、`03_M2-M3扩展交付` 第 20 行、PAGE-115、API-378..382、
-  `McpNetworkPolicy`/OBJ-114、`mcp.network_blocked` 与 TC-0165/0166 已和 README、`docs/prd`、
-  `docs/testing` 的 PRD-082 完成状态交叉确认。PRD-082 之后的下一条权威未完成项为
-  `PRD-083 | M2-企业增强 | P2 | 扩展层 | MCP沙箱 | 第三方MCP沙箱网络ACL`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-083；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 85 行、`03_M2-M3扩展交付` 第 21 行、PAGE-116、API-383..388、
+  OBJ-115、EVT-096 与 TC-0167/0168 已和 README、`docs/prd`、`docs/testing` 的 PRD-083 完成状态
+  交叉确认。PRD-083 之后的下一条权威未完成项为
+  `PRD-084 | M2-企业增强 | P2 | 扩展层 | 本地模型 | 本地模型Endpoint接入`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-084；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

@@ -101,9 +101,7 @@ DETAIL_DELIVERY_LIMIT = 100
 DEAD_LETTER_DEFAULT_LIMIT = 50
 DEAD_LETTER_MAX_LIMIT = 100
 DEAD_LETTER_CURSOR_MAX_LENGTH = 1024
-VALID_DEAD_LETTER_STATUSES = {
-    "dead_letter", "replay_pending", "replayed", "archived", "expired"
-}
+VALID_DEAD_LETTER_STATUSES = {"dead_letter", "replay_pending", "replayed", "archived", "expired"}
 VALID_DELIVERY_STATUSES = {"pending", "success", "failed"}
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
@@ -135,7 +133,7 @@ def list_webhooks(
         f"""
         SELECT *
         FROM webhook_endpoints
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY updated_at DESC, name ASC
         """,
         params,
@@ -316,7 +314,7 @@ def list_webhook_deliveries(
     rows = connection.execute(
         f"""
         SELECT * FROM webhook_deliveries
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY created_at DESC, webhook_delivery_id DESC
         LIMIT ?
         """,
@@ -504,9 +502,7 @@ def list_webhook_dead_letters(
         clauses.append("dead.webhook_endpoint_id=?")
         params.append(normalized_endpoint_id)
     if cursor_value is not None:
-        clauses.append(
-            "(dead.failed_at<? OR (dead.failed_at=? AND dead.dead_letter_event_id<?))"
-        )
+        clauses.append("(dead.failed_at<? OR (dead.failed_at=? AND dead.dead_letter_event_id<?))")
         params.extend(
             [
                 cursor_value["failed_at"],
@@ -524,7 +520,7 @@ def list_webhook_dead_letters(
             JOIN webhook_endpoints endpoint
               ON endpoint.tenant_id=dead.tenant_id
              AND endpoint.webhook_endpoint_id=dead.webhook_endpoint_id
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY dead.failed_at DESC, dead.dead_letter_event_id DESC
             LIMIT ?
             """,
@@ -992,9 +988,7 @@ def _dead_letter_info(
     )
     attempts = _delivery_attempts(connection, latest_row) if latest_row is not None else []
     replay_delivery = (
-        _delivery_record_from_row(connection, replay_row)
-        if replay_row is not None
-        else None
+        _delivery_record_from_row(connection, replay_row) if replay_row is not None else None
     )
     expired_by_time = _parse_db_time(row["expires_at"]) <= _utcnow()
     status = str(row["status"])
@@ -1025,9 +1019,7 @@ def _dead_letter_info(
         updated_at=_parse_db_time(row["updated_at"]),
         latest_attempt=_dead_letter_attempt_info(attempts[-1]) if attempts else None,
         current_replay_delivery=(
-            _dead_letter_delivery_info(replay_delivery)
-            if replay_delivery is not None
-            else None
+            _dead_letter_delivery_info(replay_delivery) if replay_delivery is not None else None
         ),
         replayable="replay" in allowed_actions,
         allowed_actions=allowed_actions,
@@ -1188,11 +1180,13 @@ def _decode_dead_letter_cursor(value: object) -> dict[str, str] | None:
         raise ApiError("webhook.dead_letter_filter_invalid")
     try:
         padding = "=" * (-len(normalized) % 4)
-        parsed = json.loads(base64.b64decode(
-            normalized + padding,
-            altchars=b"-_",
-            validate=True,
-        ).decode("utf-8"))
+        parsed = json.loads(
+            base64.b64decode(
+                normalized + padding,
+                altchars=b"-_",
+                validate=True,
+            ).decode("utf-8")
+        )
         # seek cursor 只允许两个排序键，拒绝 tenant、payload 或内部状态等额外字段。
         if not isinstance(parsed, dict) or set(parsed) != {
             "dead_letter_event_id",
@@ -1663,6 +1657,7 @@ def fail_pending_webhook_event_deliveries(
         "cache.invalidated",
         "experiment.completed",
         "file.prompt_injection_detected",
+        "mcp.network_blocked",
         "mcp.tool_called",
         "quota.exhausted",
         SECURITY_EVENT_TYPE,
@@ -1971,6 +1966,10 @@ def _validated_pending_delivery_body(
                 connection,
                 envelope,
             )
+        elif envelope.get("event_type") == "mcp.network_blocked":
+            # MCP network events keep request identity in the immutable source row,
+            # not in the public webhook envelope.
+            source_request_id = _mcp_network_source_request_id(connection, envelope)
         elif envelope.get("event_type") == "mcp.tool_called":
             # MCP request_id 不进入公开安全摘要；恢复必须重绑同租户不可变 Invocation
             # source，而不能使用本轮 outbox worker 链路或 delivery 副本。
@@ -2111,6 +2110,35 @@ def _batch_job_source_request_id(
         # 禁止使用本轮 worker request_id 或占位值掩盖 source 缺失、漂移或多义。
         raise ApiError("webhook.delivery_unavailable")
     return rows[0]["source_request_id"]
+
+
+def _mcp_network_source_request_id(
+    connection: sqlite3.Connection,
+    envelope: dict[str, Any],
+) -> str:
+    """Recover the immutable source request for a network-blocked event."""
+
+    if (
+        envelope.get("event_type") != "mcp.network_blocked"
+        or type(envelope.get("tenant_id")) is not str
+        or type(envelope.get("event_id")) is not str
+    ):
+        raise ApiError("webhook.delivery_unavailable")
+    try:
+        rows = connection.execute(
+            """
+            SELECT request_id
+            FROM mcp_network_events
+            WHERE tenant_id=? AND mcp_network_event_id=?
+            LIMIT 2
+            """,
+            (envelope["tenant_id"], envelope["event_id"]),
+        ).fetchall()
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        raise ApiError("webhook.delivery_unavailable") from exc
+    if len(rows) != 1 or type(rows[0]["request_id"]) is not str:
+        raise ApiError("webhook.delivery_unavailable")
+    return rows[0]["request_id"]
 
 
 def _adapter_spec_source_request_id(
@@ -2422,6 +2450,7 @@ def _finish_pending_without_network(
             ),
         )
 
+
 def _deliver_event_to_endpoint(
     config: AppConfig,
     connection: sqlite3.Connection,
@@ -2731,9 +2760,7 @@ def _send_once(
         normalized_format = normalize_webhook_payload_format(payload_format)
         headers = {
             "Content-Type": (
-                "application/json"
-                if normalized_format == "json"
-                else "text/plain; charset=utf-8"
+                "application/json" if normalized_format == "json" else "text/plain; charset=utf-8"
             ),
             "User-Agent": f"MetaHub-Webhook/{config.environment}",
             "X-MetaHub-Event": event_type,
@@ -2834,9 +2861,7 @@ def _update_delivery_after_attempt(
     """根据单次尝试结果更新 delivery 摘要和 Endpoint 最近状态。"""
 
     delivery_status = (
-        "success"
-        if result["status"] == "success"
-        else ("failed" if final else "pending")
+        "success" if result["status"] == "success" else ("failed" if final else "pending")
     )
     now = _to_db_time(_utcnow())
     cursor = connection.execute(
@@ -2905,9 +2930,7 @@ def _endpoint_info(
         endpoint_url=row["endpoint_url"],
         event_types=_event_types_from_row(row),
         format=str(row["payload_format"]),
-        security_event_rate_limit_per_minute=int(
-            row["security_event_rate_limit_per_minute"]
-        ),
+        security_event_rate_limit_per_minute=int(row["security_event_rate_limit_per_minute"]),
         secret_prefix=row["secret_prefix"],
         secret_fingerprint=row["secret_fingerprint"],
         secret_version=int(row["secret_version"]),
@@ -2923,9 +2946,7 @@ def _endpoint_info(
         created_at=_parse_db_time(row["created_at"]),
         updated_at=_parse_db_time(row["updated_at"]),
         recent_deliveries=(
-            _recent_deliveries(connection, row, event_type=event_type)
-            if include_deliveries
-            else []
+            _recent_deliveries(connection, row, event_type=event_type) if include_deliveries else []
         ),
     )
 
@@ -2947,7 +2968,7 @@ def _recent_deliveries(
         f"""
         SELECT *
         FROM webhook_deliveries
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY created_at DESC
         LIMIT ?
         """,
@@ -2999,9 +3020,7 @@ def _delivery_info_from_row(
         event_timestamp=_parse_db_time(row["event_timestamp"]),
         payload=_json_loads(row["payload_json"]),
         format=str(row["payload_format"]),
-        security_event_rate_limit_per_minute=int(
-            row["security_event_rate_limit_per_minute"]
-        ),
+        security_event_rate_limit_per_minute=int(row["security_event_rate_limit_per_minute"]),
         status=row["status"],
         attempt_count=int(row["attempt_count"]),
         max_attempts=int(row["max_attempts"]),
@@ -3538,9 +3557,7 @@ def _log_delivery_result(
     """记录 Webhook 投递结果，失败也要可追踪，但不记录 body、签名或响应正文。"""
 
     event_name = (
-        "webhook.delivery_succeeded"
-        if delivery.status == "success"
-        else "webhook.delivery_failed"
+        "webhook.delivery_succeeded" if delivery.status == "success" else "webhook.delivery_failed"
     )
     logger.info(
         event_name,
@@ -3562,7 +3579,6 @@ def _log_delivery_result(
             },
         },
     )
-
 
     if delivery.status == "failed" and delivery.delivery_kind == "original":
         # 死信事实只进入内部结构化日志；该事件已从 Endpoint 可订阅集合排除，避免失败递归。

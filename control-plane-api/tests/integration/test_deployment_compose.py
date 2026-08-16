@@ -58,6 +58,8 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
 
     assert "gateway:" in compose
     assert "control-api:" in compose
+    assert "mcp-scheduler-worker:" in compose
+    assert "mcp-sandbox:" in compose
     assert "batch-worker:" in compose
     assert "console:" in compose
     assert 'profiles: ["compose-full"]' in compose
@@ -84,6 +86,27 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     ) in compose
     assert "sqlite:///./.data/compose/metahub.db" not in compose
     assert "METAHUB_DATABASE_URL:" in worker_section
+    scheduler_section = compose.split("  mcp-scheduler-worker:", 1)[1].split(
+        "  mcp-sandbox:", 1
+    )[0]
+    sandbox_section = compose.split("  mcp-sandbox:", 1)[1].split(
+        "  batch-worker:", 1
+    )[0]
+    assert "env_file:" not in scheduler_section
+    assert "env_file:" not in sandbox_section
+    assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET" not in scheduler_section
+    assert "METAHUB_MCP_SANDBOX_PRIVATE_CIDRS" not in scheduler_section
+    assert "METAHUB_MCP_SANDBOX_DENY_PORTS" not in scheduler_section
+    assert "METAHUB_DATABASE_URL" not in sandbox_section
+    assert "METAHUB_MCP_HMAC_SECRET" not in sandbox_section
+    assert "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_PREVIOUS" not in sandbox_section
+    assert "ports:" not in sandbox_section
+    assert "volumes:" not in sandbox_section
+    assert "read_only: true" in sandbox_section
+    assert "no-new-privileges:true" in sandbox_section
+    assert "mcp-sandbox-control" in sandbox_section
+    assert "mcp-sandbox-egress" in sandbox_section
+    assert "mcp-sandbox-control:\n    internal: true" in compose
 
 
 def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() -> None:
@@ -103,11 +126,16 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert local_profile["database_mode"] == "sqlite"
     assert local_profile["services"]["postgres"]["enabled"] is False
     assert local_profile["services"]["batch-worker"]["enabled"] is True
+    assert local_profile["services"]["mcp-scheduler-worker"]["ports"] == []
+    assert local_profile["services"]["mcp-sandbox"]["ports"] == []
+    assert local_profile["services"]["mcp-sandbox"]["network"] == "isolated-egress"
     assert full_profile["profile_id"] == "compose-full"
     assert full_profile["database_mode"] == "sqlite"
     assert full_profile["services"]["postgres"]["enabled"] is True
     assert full_profile["services"]["minio"]["enabled"] is True
     assert full_profile["services"]["batch-worker"]["enabled"] is True
+    assert full_profile["services"]["mcp-scheduler-worker"]["enabled"] is True
+    assert full_profile["services"]["mcp-sandbox"]["enabled"] is True
 
 
 def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
@@ -122,6 +150,12 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
     assert "replace-with-generated-auth-token-secret" in env_template
     assert "replace-with-generated-internal-batch-token" in env_template
     assert "replace-with-generated-batch-encryption-secret" in env_template
+    assert "replace-with-generated-mcp-encryption-secret" in env_template
+    assert "replace-with-generated-mcp-hmac-secret" in env_template
+    assert "replace-with-generated-mcp-sandbox-internal-token" in env_template
+    assert "replace-with-generated-mcp-sandbox-envelope-secret" in env_template
+    assert "replace-with-generated-mcp-sandbox-permit-secret" in env_template
+    assert "replace-with-generated-mcp-sandbox-response-secret" in env_template
     assert "replace-with-generated-response-cache-hmac-secret" in env_template
     assert "replace-with-generated-response-cache-encryption-secret" in env_template
     assert "replace-with-generated-response-cache-control-secret" in env_template
@@ -247,6 +281,12 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_AUTH_TOKEN_SECRET=" in generated_env
     assert "METAHUB_INTERNAL_BATCH_TOKEN=" in generated_env
     assert "METAHUB_BATCH_ENCRYPTION_SECRET=" in generated_env
+    assert "METAHUB_MCP_ENCRYPTION_SECRET=" in generated_env
+    assert "METAHUB_MCP_HMAC_SECRET=" in generated_env
+    assert "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN=" in generated_env
+    assert "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET=" in generated_env
+    assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" in generated_env
+    assert "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET=" in generated_env
@@ -256,6 +296,7 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_POSTGRES_PASSWORD=" not in completed.stdout
     assert "METAHUB_MINIO_SECRET_KEY=" not in completed.stdout
     assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" not in completed.stdout
+    assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" not in completed.stdout
     assert not list(tmp_path.glob(".metahub-env-*"))
 
     deploy_module = (ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1").read_text(
@@ -279,6 +320,13 @@ def test_dockerfiles_reference_existing_entrypoints_and_runtime_requirements() -
     )
     console_dockerfile = (ROOT / "infra/docker/console.Dockerfile").read_text(encoding="utf-8")
     requirements = (ROOT / "infra/docker/requirements.runtime.txt").read_text(encoding="utf-8")
+    sandbox_dockerfile = (ROOT / "infra/docker/mcp-sandbox.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    sandbox_requirements = (
+        ROOT / "infra/docker/requirements.mcp-sandbox.txt"
+    ).read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
     assert "metahub_gateway.main" in python_dockerfile
     assert "shared-sdk/python" in python_dockerfile
@@ -288,3 +336,15 @@ def test_dockerfiles_reference_existing_entrypoints_and_runtime_requirements() -
     assert "fastapi" in requirements
     assert "uvicorn" in requirements
     assert "cryptography" in requirements
+    assert "mcp-sandbox-worker/src" in sandbox_dockerfile
+    assert "shared-sdk/python" in sandbox_dockerfile
+    assert "control-plane-api" not in sandbox_dockerfile
+    assert "gateway-data-plane" not in sandbox_dockerfile
+    assert "infra/migrations" not in sandbox_dockerfile
+    assert "USER 65532:65532" in sandbox_dockerfile
+    assert "fastapi" in sandbox_requirements
+    assert "mcp>=" in sandbox_requirements
+    assert "pypdf" not in sandbox_requirements
+    assert "rapidocr" not in sandbox_requirements
+    assert ".env" in dockerignore
+    assert "*.sqlite3" in dockerignore

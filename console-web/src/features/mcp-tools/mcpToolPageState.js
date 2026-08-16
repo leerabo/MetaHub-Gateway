@@ -8,11 +8,15 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
-import { createMcpIdempotencyKey } from "../../lib/mcpTools.js";
+import {
+  createMcpIdempotencyKey,
+  normalizeMcpNetworkPolicy,
+} from "../../lib/mcpTools.js";
 
 const PAGE_ID = "mcp-tools";
-const TABS = Object.freeze(["servers", "tools", "invocations"]);
+const TABS = Object.freeze(["servers", "tools", "invocations", "network"]);
 const SERVER_ID = /^mcps_[0-9a-f]{32}$/;
+const NETWORK_POLICY_ID = /^mcpnp_[0-9a-f]{32}$/;
 const TOOL_ID = /^mcpt_[0-9a-f]{32}$/;
 const INVOCATION_ID = /^mcpi_[0-9a-f]{32}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
@@ -59,6 +63,7 @@ export function mcpToolPageOwner(authContext, consoleShellState) {
     ]),
     canManageServers: hasPermission(authContext, PERMISSIONS.MCP_SERVER_MANAGE),
     canManagePolicies: hasPermission(authContext, PERMISSIONS.MCP_POLICY_MANAGE),
+    canManageNetwork: hasPermission(authContext, PERMISSIONS.MCP_NETWORK_MANAGE),
     canInvoke: hasPermission(authContext, PERMISSIONS.MCP_INVOKE),
   });
 }
@@ -77,13 +82,14 @@ export function createMcpToolPageState({
   let capabilities = emptyCapabilities();
   let activeTab = "servers";
   let tabData = emptyTabData();
-  let pageCursors = { servers: null, tools: null, invocations: null };
-  let nextCursors = { servers: null, tools: null, invocations: null };
-  let cursorStacks = { servers: [], tools: [], invocations: [] };
+  let pageCursors = { servers: null, tools: null, invocations: null, network: null };
+  let nextCursors = { servers: null, tools: null, invocations: null, network: null };
+  let cursorStacks = { servers: [], tools: [], invocations: [], network: [] };
   let generations = emptyGenerations();
   let operations = emptyOperations();
   let registerDialog = closedRegisterDialog();
   let toolDialog = closedToolDialog();
+  let networkDialog = closedNetworkDialog();
   let feedback = null;
 
   function enter(owner) {
@@ -98,6 +104,7 @@ export function createMcpToolPageState({
       canManageServers: owner.canManageServers === true,
       canManagePolicies: owner.canManagePolicies === true,
       canRefreshTools: owner.canManageServers === true && owner.canManagePolicies === true,
+      canManageNetwork: owner.canManageNetwork === true,
       canInvoke: owner.canInvoke === true,
     });
     return true;
@@ -110,13 +117,14 @@ export function createMcpToolPageState({
     capabilities = emptyCapabilities();
     activeTab = "servers";
     tabData = emptyTabData();
-    pageCursors = { servers: null, tools: null, invocations: null };
-    nextCursors = { servers: null, tools: null, invocations: null };
-    cursorStacks = { servers: [], tools: [], invocations: [] };
+    pageCursors = { servers: null, tools: null, invocations: null, network: null };
+    nextCursors = { servers: null, tools: null, invocations: null, network: null };
+    cursorStacks = { servers: [], tools: [], invocations: [], network: [] };
     generations = incrementAll(generations);
     operations = emptyOperations();
     registerDialog = closedRegisterDialog();
     toolDialog = closedToolDialog();
+    networkDialog = closedNetworkDialog();
     feedback = null;
   }
 
@@ -124,6 +132,7 @@ export function createMcpToolPageState({
     if (!owns(owner) || !TABS.includes(tab) || isBusy()) return false;
     if (activeTab === tab) return true;
     closeToolDialog(owner);
+    closeNetworkDialogInternal();
     activeTab = tab;
     feedback = null;
     if (!tabData[tab].items.length) {
@@ -170,6 +179,7 @@ export function createMcpToolPageState({
       error: null,
       requestId: normalized.requestId,
     });
+    if (ticket.lane === "network") refreshNetworkConflict(normalized.items);
     nextCursors[ticket.lane] = normalized.nextCursor;
     return true;
   }
@@ -527,8 +537,150 @@ export function createMcpToolPageState({
     if (operations.policyUpdate === ticket) operations.policyUpdate = null;
   }
 
+  function openNetworkDialog(owner, serverId) {
+    const server = tabData.network.items.find((item) => item.mcp_server_id === serverId);
+    if (
+      !owns(owner)
+      || !capabilities.canManageNetwork
+      || !server?.network_policy
+      || isBusy()
+    ) return false;
+    closeNetworkDialogInternal();
+    networkDialog = Object.freeze({
+      open: true,
+      serverId,
+      state: "ready",
+      error: null,
+      policy: server.network_policy,
+      draft: networkPolicyDraft(server.network_policy),
+    });
+    feedback = null;
+    return true;
+  }
+
+  function closeNetworkDialog(owner) {
+    if (!owns(owner) || operations.networkUpdate) return false;
+    closeNetworkDialogInternal();
+    return true;
+  }
+
+  function beginNetworkPolicyUpdate(owner, policy) {
+    if (
+      !owns(owner)
+      || !capabilities.canManageNetwork
+      || !networkDialog.open
+      || !networkDialog.policy
+      || operations.networkUpdate
+    ) return null;
+    let normalized;
+    try {
+      normalized = normalizeMcpNetworkPolicy(policy);
+    } catch {
+      return null;
+    }
+    if (normalized.expected_revision !== networkDialog.policy.revision) return null;
+    generations.networkUpdate += 1;
+    const ticket = Object.freeze({
+      ownerKey,
+      lane: "networkUpdate",
+      generation: generations.networkUpdate,
+      controller: new AbortController(),
+      serverId: networkDialog.serverId,
+      expectedRevision: normalized.expected_revision,
+      policy: normalized,
+    });
+    operations.networkUpdate = ticket;
+    networkDialog = Object.freeze({
+      ...networkDialog,
+      state: "submitting",
+      error: null,
+      draft: normalized,
+    });
+    return ticket;
+  }
+
+  function acceptNetworkPolicyUpdate(ticket, payload, owner) {
+    if (!currentNetworkTicket(ticket, owner)) return false;
+    const updated = normalizeNetworkPolicySummary(
+      payload?.network_policy ?? payload,
+      ticket.serverId,
+    );
+    if (
+      !updated
+      || updated.revision !== ticket.expectedRevision + 1
+      || !networkPolicyMatchesRequest(updated, ticket.policy)
+      || updated.circuit_state !== "not_initialized"
+      || updated.blocked_count !== 0
+      || updated.last_block_reason !== null
+      || updated.last_blocked_at !== null
+    ) return rejectNetworkPolicyUpdate(ticket, fixedError(null, "mcp.response_invalid"), owner);
+    for (const tab of ["servers", "network"]) {
+      tabData = replaceTab(tabData, tab, {
+        ...tabData[tab],
+        items: Object.freeze(tabData[tab].items.map((item) => (
+          item.mcp_server_id === ticket.serverId
+            ? Object.freeze({ ...item, network_policy: updated })
+            : item
+        ))),
+        requestId: safeChain(payload?.request_id),
+      });
+    }
+    networkDialog = closedNetworkDialog();
+    feedback = Object.freeze({
+      kind: "success",
+      code: "mcp.network_policy_updated",
+      requestId: safeChain(payload?.request_id),
+      objectId: updated.mcp_network_policy_id,
+    });
+    return true;
+  }
+
+  function rejectNetworkPolicyUpdate(ticket, error, owner) {
+    if (!currentNetworkTicket(ticket, owner)) return false;
+    const fixed = fixedError(error, "mcp.unavailable");
+    networkDialog = Object.freeze({
+      ...networkDialog,
+      state: fixed.code === "mcp.state_conflict" ? "conflict" : "error",
+      error: fixed,
+      draft: ticket.policy,
+    });
+    return true;
+  }
+
+  function finishNetworkPolicyUpdate(ticket) {
+    if (operations.networkUpdate === ticket) operations.networkUpdate = null;
+  }
+
+  function refreshNetworkConflict(items) {
+    if (!networkDialog.open || networkDialog.state !== "conflict") return;
+    const current = items.find((item) => item.mcp_server_id === networkDialog.serverId);
+    if (!current?.network_policy) {
+      networkDialog = closedNetworkDialog();
+      feedback = Object.freeze({
+        kind: "error",
+        code: "mcp.server_not_found",
+        requestId: "-",
+        objectId: null,
+      });
+      return;
+    }
+    networkDialog = Object.freeze({
+      ...networkDialog,
+      policy: current.network_policy,
+      draft: Object.freeze({
+        ...networkDialog.draft,
+        expected_revision: current.network_policy.revision,
+      }),
+    });
+  }
+
   function blocksShellDomReplacement() {
-    return isDialogOpen() || Boolean(operations.register || operations.serverAction || operations.policyUpdate);
+    return isDialogOpen() || Boolean(
+      operations.register
+      || operations.serverAction
+      || operations.policyUpdate
+      || operations.networkUpdate
+    );
   }
 
   function snapshot() {
@@ -544,10 +696,12 @@ export function createMcpToolPageState({
       })]))),
       registerDialog,
       toolDialog,
+      networkDialog,
       feedback,
       canManageServers: capabilities.canManageServers,
       canManagePolicies: capabilities.canManagePolicies,
       canRefreshTools: capabilities.canRefreshTools,
+      canManageNetwork: capabilities.canManageNetwork,
       canInvoke: capabilities.canInvoke,
       // Background list GETs do not disable already-rendered commands once their snapshot is accepted.
       busy: Boolean(
@@ -556,6 +710,7 @@ export function createMcpToolPageState({
         || operations.detail
         || operations.policy
         || operations.policyUpdate
+        || operations.networkUpdate
       ),
     });
   }
@@ -584,8 +739,14 @@ export function createMcpToolPageState({
       && toolDialog.toolId === ticket.toolId;
   }
 
+  function currentNetworkTicket(ticket, owner) {
+    return currentTicket(ticket, owner, "networkUpdate")
+      && networkDialog.open
+      && networkDialog.serverId === ticket.serverId;
+  }
+
   function isDialogOpen() {
-    return registerDialog.open || toolDialog.open;
+    return registerDialog.open || toolDialog.open || networkDialog.open;
   }
 
   function isBusy() {
@@ -599,6 +760,13 @@ export function createMcpToolPageState({
       operations[lane] = null;
     }
     toolDialog = closedToolDialog();
+  }
+
+  function closeNetworkDialogInternal() {
+    generations.networkUpdate += 1;
+    operations.networkUpdate?.controller?.abort();
+    operations.networkUpdate = null;
+    networkDialog = closedNetworkDialog();
   }
 
   function clearDomSafely() {
@@ -645,6 +813,12 @@ export function createMcpToolPageState({
     acceptPolicyUpdate,
     rejectPolicyUpdate,
     finishPolicyUpdate,
+    openNetworkDialog,
+    closeNetworkDialog,
+    beginNetworkPolicyUpdate,
+    acceptNetworkPolicyUpdate,
+    rejectNetworkPolicyUpdate,
+    finishNetworkPolicyUpdate,
     blocksShellDomReplacement,
     snapshot,
   });
@@ -656,10 +830,11 @@ export function isMcpToolAbortError(error) {
 
 function normalizeListPayload(tab, payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const key = tab === "servers" ? "servers" : tab === "tools" ? "tools" : "invocations";
+  const serverTab = tab === "servers" || tab === "network";
+  const key = serverTab ? "servers" : tab === "tools" ? "tools" : "invocations";
   const source = payload[key] ?? payload.items;
   if (!Array.isArray(source) || source.length > 100) return null;
-  const normalizer = tab === "servers" ? normalizeServer : tab === "tools" ? normalizeTool : normalizeInvocation;
+  const normalizer = serverTab ? normalizeServer : tab === "tools" ? normalizeTool : normalizeInvocation;
   const items = source.map(normalizer);
   if (items.some((item) => !item)) return null;
   const nextCursor = payload.next_cursor == null ? null : String(payload.next_cursor);
@@ -681,7 +856,8 @@ function normalizeServer(value) {
     || safeText(value.endpoint_hint ?? value.masked_endpoint_hint, 240, "") === ""
   ) return null;
   const stateRevision = positiveInt(value.state_revision);
-  if (!stateRevision) return null;
+  const networkPolicy = normalizeNetworkPolicySummary(value.network_policy, value.mcp_server_id);
+  if (!stateRevision || !networkPolicy) return null;
   return Object.freeze({
     mcp_server_id: value.mcp_server_id,
     name: safeText(value.name, 80),
@@ -694,10 +870,98 @@ function normalizeServer(value) {
     tool_count: nonNegativeInt(value.tool_count ?? value.tools_count),
     active_tool_count: nonNegativeInt(value.active_tool_count),
     review_required_tool_count: nonNegativeInt(value.review_required_tool_count),
+    network_policy: networkPolicy,
     last_synced_at: safeTime(value.last_synced_at ?? value.tools_refreshed_at),
     created_at: safeTime(value.created_at),
     updated_at: safeTime(value.updated_at),
   });
+}
+
+function normalizeNetworkPolicySummary(value, expectedServerId) {
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || !NETWORK_POLICY_ID.test(String(value.mcp_network_policy_id ?? ""))
+    || !SERVER_ID.test(String(value.mcp_server_id ?? ""))
+    || value.mcp_server_id !== expectedServerId
+    || !["active", "disabled"].includes(value.status)
+    || value.egress_mode !== "registered_endpoint_only"
+    || !["not_initialized", "closed", "open", "half_open"].includes(value.circuit_state)
+  ) return null;
+  const revision = boundedInteger(value.revision, 1, Number.MAX_SAFE_INTEGER);
+  const destinationCount = boundedInteger(value.destination_count, 0, 1);
+  const connectTimeout = boundedInteger(value.connect_timeout_seconds, 1, 10);
+  const probeTimeout = boundedInteger(value.probe_timeout_seconds, 1, 30);
+  const callTimeout = boundedInteger(value.call_timeout_seconds, 1, 120);
+  const failureThreshold = boundedInteger(value.failure_threshold, 1, 10);
+  const openSeconds = boundedInteger(value.open_seconds, 10, 3600);
+  const blockedCount = boundedInteger(value.blocked_count, 0, Number.MAX_SAFE_INTEGER);
+  const updatedAt = safeUtcTime(value.updated_at);
+  const reason = value.last_block_reason == null
+    ? null
+    : safeEnum(value.last_block_reason, [
+      "policy_disabled",
+      "address_denied",
+      "mixed_dns_answers",
+      "port_denied",
+      "redirect_denied",
+    ], true);
+  const blockedAt = value.last_blocked_at == null ? null : safeUtcTime(value.last_blocked_at);
+  if (
+    revision == null
+    || destinationCount !== (value.status === "active" ? 1 : 0)
+    || connectTimeout == null
+    || probeTimeout == null
+    || callTimeout == null
+    || failureThreshold == null
+    || openSeconds == null
+    || blockedCount == null
+    || !updatedAt
+    || (value.last_block_reason != null && !reason)
+    || Boolean(reason) !== Boolean(blockedAt)
+  ) return null;
+  return Object.freeze({
+    mcp_network_policy_id: value.mcp_network_policy_id,
+    mcp_server_id: value.mcp_server_id,
+    status: value.status,
+    revision,
+    egress_mode: "registered_endpoint_only",
+    destination_count: destinationCount,
+    connect_timeout_seconds: connectTimeout,
+    probe_timeout_seconds: probeTimeout,
+    call_timeout_seconds: callTimeout,
+    failure_threshold: failureThreshold,
+    open_seconds: openSeconds,
+    circuit_state: value.circuit_state,
+    blocked_count: blockedCount,
+    last_block_reason: reason,
+    last_blocked_at: blockedAt,
+    updated_at: updatedAt,
+  });
+}
+
+function networkPolicyDraft(policy) {
+  return Object.freeze({
+    expected_revision: policy.revision,
+    status: policy.status,
+    egress_mode: policy.egress_mode,
+    connect_timeout_seconds: policy.connect_timeout_seconds,
+    probe_timeout_seconds: policy.probe_timeout_seconds,
+    call_timeout_seconds: policy.call_timeout_seconds,
+    failure_threshold: policy.failure_threshold,
+    open_seconds: policy.open_seconds,
+  });
+}
+
+function networkPolicyMatchesRequest(policy, request) {
+  return policy.status === request.status
+    && policy.egress_mode === request.egress_mode
+    && policy.connect_timeout_seconds === request.connect_timeout_seconds
+    && policy.probe_timeout_seconds === request.probe_timeout_seconds
+    && policy.call_timeout_seconds === request.call_timeout_seconds
+    && policy.failure_threshold === request.failure_threshold
+    && policy.open_seconds === request.open_seconds;
 }
 
 function normalizeTool(value) {
@@ -842,6 +1106,7 @@ function ownerKeyFor(owner) {
     owner.navigationOwner,
     owner.canManageServers === true,
     owner.canManagePolicies === true,
+    owner.canManageNetwork === true,
     owner.canInvoke === true,
   ]);
 }
@@ -894,7 +1159,18 @@ function replaceTab(source, tab, value) {
 }
 
 function emptyGenerations() {
-  return { servers: 0, tools: 0, invocations: 0, register: 0, serverAction: 0, detail: 0, policy: 0, policyUpdate: 0 };
+  return {
+    servers: 0,
+    tools: 0,
+    invocations: 0,
+    network: 0,
+    register: 0,
+    serverAction: 0,
+    detail: 0,
+    policy: 0,
+    policyUpdate: 0,
+    networkUpdate: 0,
+  };
 }
 
 function incrementAll(value) {
@@ -902,7 +1178,18 @@ function incrementAll(value) {
 }
 
 function emptyOperations() {
-  return { servers: null, tools: null, invocations: null, register: null, serverAction: null, detail: null, policy: null, policyUpdate: null };
+  return {
+    servers: null,
+    tools: null,
+    invocations: null,
+    network: null,
+    register: null,
+    serverAction: null,
+    detail: null,
+    policy: null,
+    policyUpdate: null,
+    networkUpdate: null,
+  };
 }
 
 function emptyCapabilities() {
@@ -910,6 +1197,7 @@ function emptyCapabilities() {
     canManageServers: false,
     canManagePolicies: false,
     canRefreshTools: false,
+    canManageNetwork: false,
     canInvoke: false,
   });
 }
@@ -920,6 +1208,17 @@ function closedRegisterDialog() {
 
 function closedToolDialog() {
   return Object.freeze({ open: false, kind: "", toolId: "", state: "idle", error: null, tool: null });
+}
+
+function closedNetworkDialog() {
+  return Object.freeze({
+    open: false,
+    serverId: "",
+    state: "idle",
+    error: null,
+    policy: null,
+    draft: null,
+  });
 }
 
 function safeText(value, maximum, fallback = "-") {
@@ -942,6 +1241,10 @@ function positiveInt(value) {
   return Number.isSafeInteger(number) && number >= 1 ? number : 0;
 }
 
+function boundedInteger(value, minimum, maximum) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : null;
+}
+
 function nonNegativeInt(value) {
   const number = Number(value ?? 0);
   return Number.isSafeInteger(number) && number >= 0 ? number : 0;
@@ -954,6 +1257,11 @@ function nullableNonNegativeInt(value) {
 function safeTime(value) {
   const text = String(value ?? "");
   return text && !Number.isNaN(Date.parse(text)) ? text : null;
+}
+
+function safeUtcTime(value) {
+  const text = String(value ?? "");
+  return /(?:Z|\+00:00)$/u.test(text) && !Number.isNaN(Date.parse(text)) ? text : null;
 }
 
 function safeOptionalId(value) {

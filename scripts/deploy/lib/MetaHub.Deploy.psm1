@@ -70,8 +70,15 @@ function Assert-MetaHubEnvFile {
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
     "METAHUB_FILE_ENCRYPTION_SECRET",
     "METAHUB_BATCH_ENCRYPTION_SECRET",
+    "METAHUB_MCP_ENCRYPTION_SECRET",
+    "METAHUB_MCP_HMAC_SECRET",
+    "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN",
+    "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET",
+    "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
+    "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
+    "METAHUB_APPROVAL_HMAC_SECRET",
     "METAHUB_SEED_ADMIN_PASSWORD",
     "METAHUB_SEED_PROVIDER_API_KEY",
     "METAHUB_SEED_VIRTUAL_KEY",
@@ -111,8 +118,15 @@ function Assert-MetaHubEnvFile {
     "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
     "METAHUB_FILE_ENCRYPTION_SECRET",
     "METAHUB_BATCH_ENCRYPTION_SECRET",
+    "METAHUB_MCP_ENCRYPTION_SECRET",
+    "METAHUB_MCP_HMAC_SECRET",
+    "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN",
+    "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET",
+    "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
+    "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
-    "METAHUB_SESSION_RISK_HMAC_SECRET"
+    "METAHUB_SESSION_RISK_HMAC_SECRET",
+    "METAHUB_APPROVAL_HMAC_SECRET"
   )) {
     if ($values.ContainsKey($key) -and ([string]$values[$key]).Length -lt 32) {
       $invalid = $true
@@ -339,8 +353,15 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-prompt-template-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-file-encryption-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-batch-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-encryption-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-hmac-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-sandbox-internal-token" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-sandbox-envelope-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-sandbox-permit-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-mcp-sandbox-response-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-approval-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-response-cache-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-response-cache-encryption-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-response-cache-control-secret" = (New-MetaHubLocalSecret)

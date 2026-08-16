@@ -6,6 +6,8 @@
   "services": {
     "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
     "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "mcp-scheduler-worker": { "enabled": true, "ports": [], "health": null },
+    "mcp-sandbox": { "enabled": true, "ports": [], "health": "/health/ready", "network": "isolated-egress" },
     "batch-worker": { "enabled": true, "ports": [], "health": null },
     "console": { "enabled": true, "port": 5173, "health": "/" },
     "redis": { "enabled": true, "port": 6379 },

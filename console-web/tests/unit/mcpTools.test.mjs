@@ -7,8 +7,10 @@ import {
   createMcpIdempotencyKey,
   listMcpInvocations,
   listMcpTools,
+  normalizeMcpNetworkPolicy,
   normalizeMcpToolPolicy,
   registerMcpServer,
+  updateMcpServerNetworkPolicy,
   updateMcpServerStatus,
 } from "../../src/lib/mcpTools.js";
 
@@ -103,6 +105,65 @@ test("Server status update sends only revision and status with the caller-owned 
       status: "pending_sync",
       idempotencyKey: "mcp_invalid_status",
     }));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("network policy update sends the exact endpoint-only body without idempotency or tenant fields", async () => {
+  const previousFetch = globalThis.fetch;
+  let captured;
+  const controller = new AbortController();
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options };
+    return response({
+      network_policy: {
+        mcp_network_policy_id: `mcpnp_${"b".repeat(32)}`,
+        mcp_server_id: SERVER_ID,
+        revision: 4,
+      },
+      request_id: "req_network_policy",
+    });
+  };
+  try {
+    await updateMcpServerNetworkPolicy({
+      controlApiUrl: "http://control.test",
+      token: "session-token-canary",
+      serverId: SERVER_ID,
+      policy: {
+        expected_revision: 3,
+        status: "active",
+        egress_mode: "registered_endpoint_only",
+        connect_timeout_seconds: 4,
+        probe_timeout_seconds: 9,
+        call_timeout_seconds: 29,
+        failure_threshold: 3,
+        open_seconds: 60,
+      },
+      signal: controller.signal,
+    });
+    assert.equal(captured.url, `http://control.test/mcp/servers/${SERVER_ID}/network-policy`);
+    assert.equal(captured.options.method, "PATCH");
+    assert.equal(captured.options.signal, controller.signal);
+    assert.equal(captured.options.cache, "no-store");
+    assert.equal(captured.options.credentials, "omit");
+    assert.equal(captured.options.redirect, "error");
+    assert.equal("Idempotency-Key" in captured.options.headers, false);
+    assert.equal("X-Request-ID" in captured.options.headers, false);
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      expected_revision: 3,
+      status: "active",
+      egress_mode: "registered_endpoint_only",
+      connect_timeout_seconds: 4,
+      probe_timeout_seconds: 9,
+      call_timeout_seconds: 29,
+      failure_threshold: 3,
+      open_seconds: 60,
+    });
+    assert.doesNotMatch(
+      captured.options.body,
+      /"tenant_id"|"endpoint_url"|"hostname"|"ip"|"cidr"|"token"/i,
+    );
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -205,4 +266,37 @@ test("policy normalization freezes grants and enforces high-risk approval", () =
     ...policy,
     approval_required: false,
   }), /MCP 请求不合法/);
+});
+
+test("network policy normalization enforces exact keys, fixed egress, and every bound", () => {
+  const valid = {
+    expected_revision: 1,
+    status: "disabled",
+    egress_mode: "registered_endpoint_only",
+    connect_timeout_seconds: 1,
+    probe_timeout_seconds: 30,
+    call_timeout_seconds: 120,
+    failure_threshold: 10,
+    open_seconds: 3600,
+  };
+  assert.deepEqual(normalizeMcpNetworkPolicy(valid), valid);
+  for (const invalid of [
+    { ...valid, expected_revision: 0 },
+    { ...valid, status: "pending" },
+    { ...valid, egress_mode: "custom_allowlist" },
+    { ...valid, connect_timeout_seconds: 11 },
+    { ...valid, probe_timeout_seconds: 0 },
+    { ...valid, call_timeout_seconds: 121 },
+    { ...valid, failure_threshold: 0 },
+    { ...valid, open_seconds: 9 },
+    { ...valid, call_timeout_seconds: "30" },
+    { ...valid, failure_threshold: true },
+    { ...valid, status: " active" },
+    { ...valid, hostname: "private.example.test" },
+  ]) {
+    assert.throws(
+      () => normalizeMcpNetworkPolicy(invalid),
+      (error) => error?.code === "mcp.network_policy_invalid" && error?.status === 422,
+    );
+  }
 });

@@ -1,6 +1,7 @@
 /** PAGE-114 DOM bindings, exact form parsing and native Dialog focus handling. */
 
 import {
+  normalizeMcpNetworkPolicy,
   normalizeMcpToolPolicy,
   normalizeServerRegistration,
 } from "../../lib/mcpTools.js";
@@ -58,6 +59,11 @@ export function bindMcpToolInteractions(callbacks = {}) {
       void callbacks.onOpenTool?.(button.dataset.mcpToolPolicy ?? "", "policy");
     });
   });
+  root.querySelectorAll("[data-mcp-network-policy]").forEach((button) => {
+    button.addEventListener("click", () => {
+      void callbacks.onOpenNetworkPolicy?.(button.dataset.mcpNetworkPolicy ?? "");
+    });
+  });
 
   bindDialog(root, callbacks);
   return true;
@@ -69,6 +75,8 @@ function bindDialog(root, callbacks) {
   const kind = dialog.dataset.mcpDialog ?? "";
   const restoreSelector = kind === "register"
     ? "[data-mcp-open-register]"
+    : kind === "network"
+      ? `[data-mcp-network-policy="${cssEscape(callbacks.networkServerId?.() ?? "")}"]`
     : kind === "policy"
       ? `[data-mcp-tool-policy="${cssEscape(callbacks.toolId?.() ?? "")}"]`
       : `[data-mcp-tool-detail="${cssEscape(callbacks.toolId?.() ?? "")}"]`;
@@ -89,6 +97,7 @@ function bindDialog(root, callbacks) {
 
   if (kind === "register") bindRegisterForm(dialog, callbacks, restoreSelector);
   if (kind === "policy") bindPolicyForm(dialog, callbacks, restoreSelector);
+  if (kind === "network") bindNetworkPolicyForm(dialog, callbacks, restoreSelector);
   showModal(dialog);
 }
 
@@ -146,6 +155,24 @@ function bindPolicyForm(dialog, callbacks, restoreSelector) {
   });
 }
 
+function bindNetworkPolicyForm(dialog, callbacks, restoreSelector) {
+  const form = dialog.querySelector("[data-mcp-network-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const policy = mcpNetworkPolicyFromFormData(new FormData(form));
+      clearFormError(dialog);
+      void Promise.resolve(callbacks.onSubmitNetworkPolicy?.(policy)).then((nextState) => {
+        if (!nextState?.networkDialog?.open) {
+          globalThis.document?.querySelector?.(restoreSelector)?.focus?.();
+        }
+      });
+    } catch {
+      showFormError(dialog, "网络安全策略字段不合法");
+    }
+  });
+}
+
 /** Parse only the closed registration body. Returned secrets must be consumed synchronously. */
 export function mcpServerRegistrationFromFormData(formData) {
   const authType = String(formData.get("auth_type") ?? "none");
@@ -175,6 +202,20 @@ export function mcpToolPolicyFromFormData(formData) {
     allowed_role_ids: lineSet(formData.get("allowed_role_ids")),
     allowed_user_ids: lineSet(formData.get("allowed_user_ids")),
     result_redaction_pointers: lineSet(formData.get("result_redaction_pointers"), { trim: false }),
+  });
+}
+
+/** Parse the fixed endpoint-only network policy form. */
+export function mcpNetworkPolicyFromFormData(formData) {
+  return normalizeMcpNetworkPolicy({
+    expected_revision: strictInteger(formData.get("expected_revision")),
+    status: String(formData.get("status") ?? ""),
+    egress_mode: String(formData.get("egress_mode") ?? ""),
+    connect_timeout_seconds: strictInteger(formData.get("connect_timeout_seconds")),
+    probe_timeout_seconds: strictInteger(formData.get("probe_timeout_seconds")),
+    call_timeout_seconds: strictInteger(formData.get("call_timeout_seconds")),
+    failure_threshold: strictInteger(formData.get("failure_threshold")),
+    open_seconds: strictInteger(formData.get("open_seconds")),
   });
 }
 

@@ -41,8 +41,17 @@ InvocationStatus = Literal[
 DlpStatus = Literal["clean", "log_only", "blocked", "unavailable"]
 ExecutionStatus = Literal["not_called", "called", "unknown"]
 CostStatus = Literal["not_applicable", "not_reported", "unknown"]
+NetworkPolicyStatus = Literal["disabled", "active"]
+NetworkCircuitState = Literal["not_initialized", "closed", "open", "half_open"]
+NetworkBlockReason = Literal[
+    "policy_disabled",
+    "address_denied",
+    "mixed_dns_answers",
+    "port_denied",
+    "redirect_denied",
+]
 
-_RESOURCE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,159}$")
+_RESOURCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$")
 
 
 class McpServerAuthRequest(BaseModel):
@@ -91,6 +100,21 @@ class RefreshMcpServerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     expected_revision: StrictInt = Field(ge=1)
+
+
+class UpdateMcpNetworkPolicyRequest(BaseModel):
+    """Strict field types; deployment and semantic bounds are checked by the service."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: StrictInt
+    status: StrictStr
+    egress_mode: StrictStr
+    connect_timeout_seconds: StrictInt
+    probe_timeout_seconds: StrictInt
+    call_timeout_seconds: StrictInt
+    failure_threshold: StrictInt
+    open_seconds: StrictInt
 
 
 class UpdateMcpToolPolicyRequest(BaseModel):
@@ -142,6 +166,35 @@ class InvokeMcpToolRequest(BaseModel):
     arguments: dict[StrictStr, JsonValue] = Field(repr=False)
 
 
+class McpNetworkPolicyInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    mcp_network_policy_id: str
+    mcp_server_id: str
+    status: NetworkPolicyStatus
+    revision: int = Field(ge=1)
+    egress_mode: Literal["registered_endpoint_only"]
+    destination_count: int = Field(ge=0, le=1)
+    connect_timeout_seconds: int = Field(ge=1)
+    probe_timeout_seconds: int = Field(ge=1)
+    call_timeout_seconds: int = Field(ge=1)
+    failure_threshold: int = Field(ge=1)
+    open_seconds: int = Field(ge=10)
+    circuit_state: NetworkCircuitState
+    blocked_count: int = Field(ge=0)
+    last_block_reason: NetworkBlockReason | None = None
+    last_blocked_at: datetime | None = None
+    updated_at: datetime
+
+
+class McpNetworkPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    network_policy: McpNetworkPolicyInfo
+    request_id: str
+    trace_id: str
+
+
 class McpServerInfo(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -156,6 +209,7 @@ class McpServerInfo(BaseModel):
     protocol_version: str | None
     tool_count: int = Field(ge=0)
     active_tool_count: int = Field(ge=0)
+    network_policy: McpNetworkPolicyInfo
     created_at: datetime
     updated_at: datetime
 

@@ -210,6 +210,19 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
     "mcp.request_invalid": ErrorSpec(
         422, "MCP request is invalid.", "Use the exact bounded MCP request contract.", owner="mcp",
     ),
+    "mcp.network_policy_invalid": ErrorSpec(
+        422, "MCP network policy is invalid.",
+        "Use the exact policy fields within the deployment safety caps.", owner="mcp",
+    ),
+    "mcp.network_blocked": ErrorSpec(
+        403, "MCP network access was blocked.",
+        "Review the fixed network safety reason without exposing the destination.", owner="mcp",
+    ),
+    "mcp.sandbox_unavailable": ErrorSpec(
+        503, "MCP Sandbox is temporarily unavailable.",
+        "Retry only after Sandbox authentication, readiness, and isolation recover.",
+        retryable=True, owner="mcp",
+    ),
     "mcp.schema_invalid": ErrorSpec(
         422, "MCP tool Schema is invalid.",
         "Use the supported bounded Draft 2020-12 Schema profile.", owner="mcp",

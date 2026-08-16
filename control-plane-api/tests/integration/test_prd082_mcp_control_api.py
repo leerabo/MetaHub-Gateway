@@ -13,9 +13,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.mcp_governance.routes import router as mcp_router
-from metahub_control.mcp_governance.service import _SYNC_FINALIZE_RESERVE_SECONDS
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.db.security import hash_password
+from metahub_shared.rbac import permission_matrix_sha256
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 ADMIN_PASSWORD = "Prd082AdminOnly!2026"
@@ -28,7 +28,7 @@ MCP_HMAC_SECRET = "prd082-mcp-hmac-domain-" + "h" * 48
 NOW = "2026-08-15T08:00:00Z"
 NOW_1 = "2026-08-15T08:00:01Z"
 
-DEVELOPER_ID = "usr_prd082_api_developer"
+DEVELOPER_ID = "7e3f291c-4e61-4c1b-9031-a462618cfc82"
 SECURITY_ID = "usr_prd082_api_security"
 VIEWER_ID = "usr_prd082_api_viewer"
 OTHER_TENANT_ID = "tenant_prd082_api_other"
@@ -170,7 +170,7 @@ def prd082_mcp_api_template(tmp_path_factory: pytest.TempPathFactory) -> McpApiT
     os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = ADMIN_PASSWORD
     try:
         result = apply_migrations(database_url)
-        assert result.applied and result.applied[-1] == "0075"
+        assert result.applied and result.applied[-1] == "0076"
         seed = apply_seed_data(database_url)
     finally:
         if previous is None:
@@ -526,7 +526,7 @@ async def test_mcp_auth_rbac_exact_wire_and_private_request_ids(
         body_canary = "body-must-not-be-parsed-before-rbac"
         denied_write = await client.post(
             "/mcp/servers",
-            content=("{\"private\":\"" + body_canary + "\"}").encode("ascii"),
+            content=('{"private":"' + body_canary + '"}').encode("ascii"),
             headers={
                 **_headers(
                     security,
@@ -576,7 +576,7 @@ async def test_mcp_auth_rbac_exact_wire_and_private_request_ids(
         missing_key_canary = "missing-key-body-must-not-echo"
         missing_key = await client.post(
             "/mcp/servers",
-            content=("{\"private\":\"" + missing_key_canary + "\"}").encode("ascii"),
+            content=('{"private":"' + missing_key_canary + '"}').encode("ascii"),
             headers={**_headers(admin, "missing-key"), "Content-Type": "application/json"},
         )
         _assert_error(
@@ -682,6 +682,26 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
         assert created_body["idempotent_replay"] is False
         assert created_body["server"]["status"] == "pending_sync"
         assert created_body["operation"]["status"] == "queued"
+        assert created_body["server"]["network_policy"] == {
+            "mcp_network_policy_id": created_body["server"]["network_policy"][
+                "mcp_network_policy_id"
+            ],
+            "mcp_server_id": created_body["server"]["mcp_server_id"],
+            "status": "disabled",
+            "revision": 1,
+            "egress_mode": "registered_endpoint_only",
+            "destination_count": 0,
+            "connect_timeout_seconds": 5,
+            "probe_timeout_seconds": 10,
+            "call_timeout_seconds": 30,
+            "failure_threshold": 3,
+            "open_seconds": 60,
+            "circuit_state": "not_initialized",
+            "blocked_count": 0,
+            "last_block_reason": None,
+            "last_blocked_at": None,
+            "updated_at": created_body["server"]["network_policy"]["updated_at"],
+        }
         registered_server_id = str(created_body["server"]["mcp_server_id"])
         operation_id = str(created_body["operation"]["mcp_server_operation_id"])
 
@@ -725,9 +745,9 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
         )
         assert servers.status_code == 200
         server_body = _assert_boundary(servers, "server-list")
-        assert [item["mcp_server_id"] for item in server_body["servers"]] == [
-            registered_server_id
-        ]
+        assert [item["mcp_server_id"] for item in server_body["servers"]] == [registered_server_id]
+        assert server_body["servers"][0]["network_policy"]["status"] == "disabled"
+        assert server_body["servers"][0]["network_policy"]["revision"] == 1
         assert endpoint not in json.dumps(server_body, ensure_ascii=True, sort_keys=True)
 
         operation = await client.get(
@@ -768,6 +788,7 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
                 "risk_level": "standard",
                 "approval_required": False,
                 "allowed_role_ids": [mcp_api_fixture.developer_role_id],
+                "allowed_user_ids": [DEVELOPER_ID],
                 "result_redaction_pointers": ["/private"],
             },
             headers=_headers(security, "tool-policy"),
@@ -776,9 +797,8 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
         updated_body = _assert_boundary(updated, "tool-policy")
         assert updated_body["tool"]["status"] == "active"
         assert updated_body["tool"]["policy_revision"] == 2
-        assert updated_body["tool"]["allowed_role_ids"] == [
-            mcp_api_fixture.developer_role_id
-        ]
+        assert updated_body["tool"]["allowed_role_ids"] == [mcp_api_fixture.developer_role_id]
+        assert updated_body["tool"]["allowed_user_ids"] == [DEVELOPER_ID]
         assert updated_body["tool"]["result_redaction_pointers"] == ["/private"]
 
         other = await _login(
@@ -826,31 +846,44 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
             "pending_sync",
             1,
         )
-        assert connection.execute(
-            """
+        assert (
+            connection.execute(
+                """
             SELECT COUNT(*) FROM mcp_server_credentials
             WHERE tenant_id=? AND mcp_server_id=? AND status='candidate'
             """,
-            (mcp_api_fixture.tenant_id, registered_server_id),
-        ).fetchone()[0] == 1
+                (mcp_api_fixture.tenant_id, registered_server_id),
+            ).fetchone()[0]
+            == 1
+        )
         sync_job = connection.execute(
             """
             SELECT operation.status AS operation_status,job.status AS job_status,
-              unixepoch(job.deadline_at)-unixepoch(job.created_at) AS deadline_seconds
+              job.attempt_count,job.next_attempt_at,job.deadline_at,
+              job.lease_owner_id,job.lease_token,job.lease_expires_at,
+              job.started_at,job.completed_at,job.error_code
             FROM mcp_server_operations operation
             JOIN mcp_server_sync_jobs job
               ON job.tenant_id=operation.tenant_id
              AND job.mcp_server_operation_id=operation.mcp_server_operation_id
             WHERE operation.tenant_id=? AND operation.mcp_server_operation_id=?
-              AND operation.status='queued' AND job.status='pending'
+              AND operation.status='queued' AND job.status='waiting_policy'
             """,
             (mcp_api_fixture.tenant_id, operation_id),
         ).fetchone()
         assert sync_job is not None
         assert tuple(sync_job) == (
             "queued",
-            "pending",
-            10 + _SYNC_FINALIZE_RESERVE_SECONDS,
+            "waiting_policy",
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         audit = connection.execute(
             """
@@ -871,6 +904,308 @@ async def test_mcp_register_list_detail_policy_and_tenant_persistence(
             (mcp_api_fixture.tenant_id, mcp_api_fixture.policy_tool_id),
         ).fetchone()
         assert tuple(policy) == ("active", 2, '["/private"]')
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.anyio
+async def test_prd083_network_policy_rbac_cas_resume_and_safe_summary(
+    mcp_api_fixture: McpApiFixture,
+) -> None:
+    with connect_database(mcp_api_fixture.database_url) as connection:
+        role = connection.execute(
+            """
+            SELECT role_id,permission_revision FROM roles
+            WHERE tenant_id=? AND code='security_admin'
+            """,
+            (mcp_api_fixture.tenant_id,),
+        ).fetchone()
+        assert role is not None
+        removed = connection.execute(
+            """
+            DELETE FROM role_permissions
+            WHERE tenant_id=?
+              AND role_id=(SELECT role_id FROM roles
+                WHERE tenant_id=? AND code='security_admin')
+              AND permission_id=(SELECT permission_id FROM permissions
+                WHERE code='mcp.read')
+            """,
+            (mcp_api_fixture.tenant_id, mcp_api_fixture.tenant_id),
+        ).rowcount
+        assert removed == 1
+        remaining_codes = {
+            str(row["code"])
+            for row in connection.execute(
+                """
+                SELECT permission.code FROM role_permissions relation
+                JOIN permissions permission
+                  ON permission.permission_id=relation.permission_id
+                WHERE relation.tenant_id=? AND relation.role_id=?
+                """,
+                (mcp_api_fixture.tenant_id, role["role_id"]),
+            )
+        }
+        assert "mcp.network.manage" in remaining_codes
+        assert "mcp.read" not in remaining_codes
+        connection.execute(
+            """
+            UPDATE roles SET permission_revision=?,matrix_sha256=?,updated_at=?
+            WHERE tenant_id=? AND role_id=?
+            """,
+            (
+                int(role["permission_revision"]) + 1,
+                permission_matrix_sha256(remaining_codes),
+                "2099-01-01T00:00:00Z",
+                mcp_api_fixture.tenant_id,
+                role["role_id"],
+            ),
+        )
+        connection.commit()
+
+    app = _build_app()
+    endpoint, registration = _registration_payload()
+    policy = {
+        "expected_revision": 1,
+        "status": "active",
+        "egress_mode": "registered_endpoint_only",
+        "connect_timeout_seconds": 5,
+        "probe_timeout_seconds": 10,
+        "call_timeout_seconds": 30,
+        "failure_threshold": 3,
+        "open_seconds": 60,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        security = await _login(
+            client,
+            email="security@prd082.local",
+            password=ROLE_PASSWORD,
+        )
+        canary = "network-policy-body-must-not-be-read"
+        denied = await client.patch(
+            f"/mcp/servers/{mcp_api_fixture.server_id}/network-policy",
+            content=('{"private":"' + canary + '"}').encode("ascii"),
+            headers={
+                **_headers(security, "network-policy-read-denied"),
+                "Content-Type": "application/json",
+            },
+        )
+        _assert_error(
+            denied,
+            "network-policy-read-denied",
+            status_code=403,
+            code="auth.permission_denied",
+            forbidden=(canary,),
+        )
+
+        developer = await _login(
+            client,
+            email="developer@prd082.local",
+            password=ROLE_PASSWORD,
+        )
+        manage_denied = await client.patch(
+            f"/mcp/servers/{mcp_api_fixture.server_id}/network-policy",
+            json=policy,
+            headers=_headers(developer, "network-policy-manage-denied"),
+        )
+        _assert_error(
+            manage_denied,
+            "network-policy-manage-denied",
+            status_code=403,
+            code="auth.permission_denied",
+        )
+
+        admin = await _login(
+            client,
+            email="admin@metahub.local",
+            password=ADMIN_PASSWORD,
+        )
+        created = await client.post(
+            "/mcp/servers",
+            json=registration,
+            headers=_headers(
+                developer,
+                "network-policy-register",
+                idempotency_key="prd083-network-policy-register",
+            ),
+        )
+        assert created.status_code == 202
+        created_body = _assert_boundary(created, "network-policy-register")
+        server_id = str(created_body["server"]["mcp_server_id"])
+        operation_id = str(created_body["operation"]["mcp_server_operation_id"])
+        default_policy = created_body["server"]["network_policy"]
+        assert default_policy["status"] == "disabled"
+        assert default_policy["revision"] == 1
+        assert default_policy["destination_count"] == 0
+        assert default_policy["blocked_count"] == 0
+        assert default_policy["circuit_state"] == "not_initialized"
+        assert endpoint not in created.text
+
+        invalid_query = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy?unsafe=1",
+            json=policy,
+            headers=_headers(admin, "network-policy-query"),
+        )
+        _assert_error(
+            invalid_query,
+            "network-policy-query",
+            status_code=422,
+            code="mcp.request_invalid",
+        )
+
+        invalid_deadline_order = dict(policy)
+        invalid_deadline_order.update({"connect_timeout_seconds": 2, "call_timeout_seconds": 1})
+        invalid_order = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy",
+            json=invalid_deadline_order,
+            headers=_headers(admin, "network-policy-deadline-order"),
+        )
+        _assert_error(
+            invalid_order,
+            "network-policy-deadline-order",
+            status_code=422,
+            code="mcp.network_policy_invalid",
+        )
+
+        activated = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy",
+            json=policy,
+            headers=_headers(admin, "network-policy-activate"),
+        )
+        assert activated.status_code == 200
+        activated_body = _assert_boundary(activated, "network-policy-activate")
+        assert set(activated_body) == {"network_policy", "request_id", "trace_id"}
+        active_policy = activated_body["network_policy"]
+        assert active_policy["mcp_network_policy_id"] == default_policy["mcp_network_policy_id"]
+        assert active_policy["mcp_server_id"] == server_id
+        assert active_policy["status"] == "active"
+        assert active_policy["revision"] == 2
+        assert active_policy["destination_count"] == 1
+        assert active_policy["blocked_count"] == 0
+        assert active_policy["last_block_reason"] is None
+        assert active_policy["last_blocked_at"] is None
+        assert active_policy["circuit_state"] == "not_initialized"
+        assert endpoint not in activated.text
+
+        stale = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy",
+            json=policy,
+            headers=_headers(admin, "network-policy-stale"),
+        )
+        _assert_error(
+            stale,
+            "network-policy-stale",
+            status_code=409,
+            code="mcp.state_conflict",
+        )
+
+        over_cap = dict(policy)
+        over_cap.update({"expected_revision": 2, "call_timeout_seconds": 31})
+        invalid = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy",
+            json=over_cap,
+            headers=_headers(admin, "network-policy-cap"),
+        )
+        _assert_error(
+            invalid,
+            "network-policy-cap",
+            status_code=422,
+            code="mcp.network_policy_invalid",
+        )
+
+        disabled_policy = dict(policy)
+        disabled_policy.update({"expected_revision": 2, "status": "disabled"})
+        disabled = await client.patch(
+            f"/mcp/servers/{server_id}/network-policy",
+            json=disabled_policy,
+            headers=_headers(admin, "network-policy-disable"),
+        )
+        assert disabled.status_code == 200
+        disabled_body = _assert_boundary(disabled, "network-policy-disable")
+        assert disabled_body["network_policy"]["revision"] == 3
+        assert disabled_body["network_policy"]["destination_count"] == 0
+
+        listed = await client.get(
+            "/mcp/servers?status=pending_sync&limit=10",
+            headers=_headers(developer, "network-policy-list"),
+        )
+        assert listed.status_code == 200
+        listed_body = _assert_boundary(listed, "network-policy-list")
+        listed_server = next(
+            item for item in listed_body["servers"] if item["mcp_server_id"] == server_id
+        )
+        assert listed_server["network_policy"]["revision"] == 3
+        assert listed_server["network_policy"]["status"] == "disabled"
+        assert listed_server["network_policy"]["blocked_count"] == 0
+        assert listed_server["network_policy"]["circuit_state"] == "not_initialized"
+        assert endpoint not in listed.text
+
+    with connect_database(mcp_api_fixture.database_url) as connection:
+        job = connection.execute(
+            """
+            SELECT status,attempt_count,lease_owner_id,lease_token,lease_expires_at,
+                   unixepoch(deadline_at)-unixepoch(next_attempt_at) AS deadline_seconds
+            FROM mcp_server_sync_jobs
+            WHERE tenant_id=? AND mcp_server_id=? AND mcp_server_operation_id=?
+            """,
+            (mcp_api_fixture.tenant_id, server_id, operation_id),
+        ).fetchone()
+        assert tuple(job) == ("pending", 0, None, None, None, 22)
+        aggregate = connection.execute(
+            """
+            SELECT current_revision,status FROM mcp_network_policies
+            WHERE tenant_id=? AND mcp_server_id=?
+            """,
+            (mcp_api_fixture.tenant_id, server_id),
+        ).fetchone()
+        assert tuple(aggregate) == (3, "disabled")
+        revisions = connection.execute(
+            """
+            SELECT policy_revision,status FROM mcp_network_policy_revisions
+            WHERE tenant_id=? AND mcp_server_id=? ORDER BY policy_revision
+            """,
+            (mcp_api_fixture.tenant_id, server_id),
+        ).fetchall()
+        assert [tuple(row) for row in revisions] == [
+            (1, "disabled"),
+            (2, "active"),
+            (3, "disabled"),
+        ]
+        audits = connection.execute(
+            """
+            SELECT before_summary_json,after_summary_json FROM audit_logs
+            WHERE tenant_id=? AND action='mcp.network_policy_updated'
+              AND object_type='mcp_network_policy' AND object_id=?
+            ORDER BY created_at,audit_log_id
+            """,
+            (mcp_api_fixture.tenant_id, default_policy["mcp_network_policy_id"]),
+        ).fetchall()
+        assert len(audits) == 2
+        first_before = json.loads(audits[0]["before_summary_json"])
+        first_after = json.loads(audits[0]["after_summary_json"])
+        expected_audit_keys = {
+            "mcp_server_id",
+            "status",
+            "revision",
+            "egress_mode",
+            "destination_count",
+            "connect_timeout_seconds",
+            "probe_timeout_seconds",
+            "call_timeout_seconds",
+            "failure_threshold",
+            "open_seconds",
+            "waiting_job_resume_count",
+        }
+        assert set(first_before) == expected_audit_keys
+        assert set(first_after) == expected_audit_keys
+        assert first_before["waiting_job_resume_count"] == 0
+        assert first_after["waiting_job_resume_count"] == 1
+        assert first_after["revision"] == 2
+        serialized_audits = json.dumps(
+            [dict(row) for row in audits], ensure_ascii=True, sort_keys=True
+        )
+        assert endpoint not in serialized_audits
+        for forbidden in ("endpoint_url", "token", "credential", "argument", "result"):
+            assert forbidden not in serialized_audits.lower()
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -923,9 +1258,7 @@ async def test_mcp_invoke_persists_safe_summary_and_dlp_block_without_call_event
         )
         assert listed.status_code == 200
         listed_body = _assert_boundary(listed, "invocation-list")
-        assert [item["mcp_invocation_id"] for item in listed_body["invocations"]] == [
-            invocation_id
-        ]
+        assert [item["mcp_invocation_id"] for item in listed_body["invocations"]] == [invocation_id]
 
         with connect_database(mcp_api_fixture.database_url) as connection:
             block_pattern = "dlp-block-marker"
@@ -978,14 +1311,17 @@ async def test_mcp_invoke_persists_safe_summary_and_dlp_block_without_call_event
             (invocation_id,),
         ).fetchone()
         assert queued is not None
-        assert tuple(queued[key] for key in (
-            "tenant_id",
-            "requested_by",
-            "status",
-            "execution_status",
-            "tool_call_count",
-            "cost_status",
-        )) == (
+        assert tuple(
+            queued[key]
+            for key in (
+                "tenant_id",
+                "requested_by",
+                "status",
+                "execution_status",
+                "tool_call_count",
+                "cost_status",
+            )
+        ) == (
             mcp_api_fixture.tenant_id,
             DEVELOPER_ID,
             "queued",
@@ -1013,12 +1349,11 @@ async def test_mcp_invoke_persists_safe_summary_and_dlp_block_without_call_event
             "not_applicable",
             None,
         )
-        assert connection.execute(
-            "SELECT COUNT(*) FROM mcp_invocation_events"
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM mcp_invocation_event_outbox"
-        ).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM mcp_invocation_events").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT COUNT(*) FROM mcp_invocation_event_outbox").fetchone()[0]
+            == 0
+        )
 
 
 @pytest.mark.anyio
@@ -1093,8 +1428,9 @@ async def test_mcp_high_risk_invocation_atomically_binds_approval(
         assert binding["mcp_invocation_id"] == invocation_id
         assert binding["source_request_id"].startswith("req_")
         assert binding["source_trace_id"].startswith("trc_")
-        assert connection.execute(
-            """
+        assert (
+            connection.execute(
+                """
             SELECT COUNT(*) FROM approval_events event
             JOIN approval_event_outbox outbox
               ON outbox.tenant_id=event.tenant_id
@@ -1102,7 +1438,9 @@ async def test_mcp_high_risk_invocation_atomically_binds_approval(
             WHERE event.tenant_id=? AND event.approval_task_id=?
               AND event.event_type='approval.created' AND outbox.status='pending'
             """,
-            (mcp_api_fixture.tenant_id, approval_id),
-        ).fetchone()[0] == 1
+                (mcp_api_fixture.tenant_id, approval_id),
+            ).fetchone()[0]
+            == 1
+        )
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
