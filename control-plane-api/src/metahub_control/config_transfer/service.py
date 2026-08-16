@@ -39,11 +39,15 @@ from metahub_control.model_aliases.service import (
     _load_model_alias,
     _mutation_fingerprint,
     _normalize_alias,
-    _normalize_description as _normalize_alias_description,
     _normalize_fallback_conditions,
     _normalize_quality_cost_config,
-    _normalize_status as _normalize_alias_status,
     _write_fallback_policy,
+)
+from metahub_control.model_aliases.service import (
+    _normalize_description as _normalize_alias_description,
+)
+from metahub_control.model_aliases.service import (
+    _normalize_status as _normalize_alias_status,
 )
 from metahub_control.models.service import (
     _normalize_capabilities,
@@ -51,29 +55,45 @@ from metahub_control.models.service import (
     _normalize_currency,
     _normalize_display_name,
     _normalize_internal_model_id,
-    _normalize_optional_text as _normalize_model_optional_text,
     _normalize_price,
     _normalize_provider_model_id,
-    _normalize_status as _normalize_model_status,
     _parse_capabilities,
 )
+from metahub_control.models.service import (
+    _normalize_optional_text as _normalize_model_optional_text,
+)
+from metahub_control.models.service import (
+    _normalize_status as _normalize_model_status,
+)
 from metahub_control.providers.service import (
-    _validate_provider_auth_combination,
     _normalize_auth_type,
     _normalize_base_url,
     _normalize_code,
-    _normalize_description as _normalize_provider_description,
     _normalize_maintenance_note,
-    _normalize_name as _normalize_provider_name,
     _normalize_provider_type,
+    _validate_provider_auth_combination,
+)
+from metahub_control.providers.service import (
+    _normalize_description as _normalize_provider_description,
+)
+from metahub_control.providers.service import (
+    _normalize_name as _normalize_provider_name,
+)
+from metahub_control.providers.service import (
     _normalize_status as _normalize_provider_status,
 )
 from metahub_control.virtual_keys.service import (
     _generate_virtual_key,
-    _normalize_description as _normalize_virtual_key_description,
     _normalize_limit_status,
     _normalize_limit_value,
+)
+from metahub_control.virtual_keys.service import (
+    _normalize_description as _normalize_virtual_key_description,
+)
+from metahub_control.virtual_keys.service import (
     _normalize_name as _normalize_virtual_key_name,
+)
+from metahub_control.virtual_keys.service import (
     _normalize_status as _normalize_virtual_key_status,
 )
 
@@ -569,6 +589,8 @@ def _normalize_provider_rows(document: dict[str, Any], plan: _ImportPlan) -> Non
             try:
                 # 导入与普通 CRUD 共用同一 type/auth spec 门禁，防止 create-only 旁路写入
                 # custom_header 或厂家+none 后再由健康探测/Gateway 才发现不兼容。
+                if values["provider_type"] == "local_endpoint":
+                    raise ApiError("provider.local_endpoint_requires_local_api")
                 _validate_provider_auth_combination(
                     values["provider_type"],
                     values["auth_type"],
@@ -1549,6 +1571,13 @@ def _load_export_providers(
 ) -> list[dict[str, object]]:
     """按 provider_code 投影当前租户 Provider 白名单字段。"""
 
+    local_endpoint = connection.execute(
+        "SELECT 1 FROM providers WHERE tenant_id=? AND provider_type='local_endpoint' LIMIT 1",
+        (tenant_id,),
+    ).fetchone()
+    if local_endpoint is not None:
+        raise ApiError("provider.local_endpoint_requires_local_api")
+
     rows = connection.execute(
         """
         SELECT provider_code,name,provider_type,base_url,auth_type,
@@ -1896,6 +1925,7 @@ def export_config(
         if exc.code in {
             "config_transfer.export_state_invalid",
             "config_transfer.export_request_conflict",
+            "provider.local_endpoint_requires_local_api",
         }:
             raise
         # 其他内部领域错误不能暴露模块实现细节，统一成为可重试的导出不可用。

@@ -67,6 +67,17 @@ import {
 } from "../features/mcp-tools/mcpToolPageState.js";
 import { renderMcpTools } from "../features/mcp-tools/renderMcpTools.js";
 import {
+  bindLocalEndpointInteractions,
+  clearLocalEndpointDom,
+} from "../features/local-models/bindLocalEndpoints.js";
+import {
+  createLocalEndpointPageState,
+  isLocalEndpointAbortError,
+  localEndpointPageOwner,
+  localEndpointReadIdentitySnapshot,
+} from "../features/local-models/localEndpointPageState.js";
+import { renderLocalEndpoints } from "../features/local-models/renderLocalEndpoints.js";
+import {
   bindExperimentInteractions,
   clearExperimentDom,
 } from "../features/experiments/bindExperiments.js";
@@ -381,6 +392,11 @@ import {
   updateMcpServerStatus,
   updateMcpToolPolicy,
 } from "../lib/mcpTools.js";
+import {
+  createLocalEndpoint,
+  listLocalEndpoints,
+  testLocalEndpoint,
+} from "../lib/localEndpoints.js";
 import {
   createExperiment,
   getExperiment,
@@ -705,6 +721,8 @@ const batchJobPageState = createBatchJobPageState({
 });
 // PAGE-114 的 Endpoint/Token、Schema Dialog、cursor 和异步 owner 只属于当前授权页面内存。
 const mcpToolPageState = createMcpToolPageState({ clearDom: clearMcpToolDom });
+// PAGE-116 的 URL/Token 只存在当前授权 Dialog；列表、创建和测试 ticket 均绑定独立 owner/generation。
+const localEndpointPageState = createLocalEndpointPageState({ clearDom: clearLocalEndpointDom });
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
@@ -867,6 +885,10 @@ if (app && globalThis.window) {
         // PAGE-114 的 Endpoint/Token 输入、Schema Dialog 和全部迟到 ticket 必须在 hash 离页时同步销毁。
         mcpToolPageState.clear();
       }
+      if (nextItemId !== "local-models") {
+        // PAGE-116 的 URL/Token DOM 和全部异步 owner 在 hash 离页时立即销毁。
+        localEndpointPageState.clear();
+      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -924,6 +946,7 @@ if (app && globalThis.window) {
       fileSecurityPageState.clear();
       batchJobPageState.clear();
       mcpToolPageState.clear();
+      localEndpointPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
       planManagementPageState.clear();
@@ -1049,6 +1072,7 @@ async function start() {
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearMcpToolStateOnIdentityChange(authSession.context, context);
+    clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1136,6 +1160,7 @@ async function performRefresh() {
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearMcpToolStateOnIdentityChange(authSession.context, context);
+    clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1346,6 +1371,16 @@ async function performRefresh() {
   ) {
     return;
   }
+  // PAGE-116 同 owner Dialog 在后台鉴权刷新后保留；撤权、换租户或离页则先清敏感 DOM。
+  if (consoleShellState?.activeNavigationItemId !== "local-models") {
+    localEndpointPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && localEndpointPageState.blocksShellDomReplacement()
+    && localEndpointPageState.enter(currentLocalEndpointOwner(consoleShellState))
+  ) {
+    return;
+  }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
     experimentPageState.clear();
@@ -1499,7 +1534,10 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
-  const providersState = await loadProvidersState();
+  // PAGE-116 uses its dedicated aggregate and must never preload the Provider page or any KeyPool.
+  const providersState = consoleShellState?.activeNavigationItemId === "local-models"
+    ? null
+    : await loadProvidersState();
   // Provider 管理读取可能因会话过期清空 Token，此时不能继续加载模型及健康数据。
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
@@ -1649,6 +1687,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-116 only calls the dedicated aggregate API; it never preloads Provider or KeyPool details.
+  const localEndpointsState = await loadLocalEndpointsState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
   const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
     projectState,
@@ -1793,6 +1836,7 @@ async function performRefresh() {
     fileSecurityState,
     batchJobsState,
     mcpToolsState,
+    localEndpointsState,
     experimentsState,
     budgetState,
     dlpState,
@@ -1987,6 +2031,7 @@ function renderLogin(error, requestId) {
   fileSecurityPageState.clear();
   batchJobPageState.clear();
   mcpToolPageState.clear();
+  localEndpointPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
   planManagementPageState.clear();
@@ -2359,6 +2404,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     fileSecurityPageState.clear();
     batchJobPageState.clear();
     mcpToolPageState.clear();
+    localEndpointPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
     planManagementPageState.clear();
@@ -4550,6 +4596,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFileSecurityPageInteractions(consoleShellState);
   bindBatchJobsPageInteractions(consoleShellState);
   bindMcpToolsPageInteractions(consoleShellState);
+  bindLocalEndpointsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
@@ -5888,6 +5935,155 @@ function handleMcpAuthenticationFailure(error) {
   }
   if (error.status === 403) {
     mcpToolPageState.clear();
+    globalThis.window?.setTimeout?.(() => void refresh(), 0);
+    return true;
+  }
+  return false;
+}
+
+/** Construct PAGE-116 owner from the live auth, backend navigation, and current hash. */
+function currentLocalEndpointOwner(consoleShellState) {
+  const owner = localEndpointPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || hashNavigation !== "local-models") return null;
+  return owner;
+}
+
+/** Repaint only PAGE-116 after a local filter, Dialog, create, or test operation. */
+function renderCurrentLocalEndpointsPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".local-models-panel");
+  const owner = currentLocalEndpointOwner(consoleShellState);
+  if (!panel || !owner || !localEndpointPageState.enter(owner)) return false;
+  panel.innerHTML = renderLocalEndpoints(
+    localEndpointPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+  );
+  bindLocalEndpointsPageInteractions(consoleShellState);
+  return true;
+}
+
+/** Bind PAGE-116 controls; every callback revalidates the complete live owner. */
+function bindLocalEndpointsPageInteractions(consoleShellState) {
+  const owner = currentLocalEndpointOwner(consoleShellState);
+  if (!owner || !localEndpointPageState.enter(owner)) return false;
+  return bindLocalEndpointInteractions({
+    async onRefresh() {
+      const generation = ++refreshSequence;
+      const state = await loadLocalEndpointsState(consoleShellState, generation);
+      if (state) renderCurrentLocalEndpointsPanel(consoleShellState);
+    },
+    async onFilters(filters) {
+      if (!localEndpointPageState.setFilters(currentLocalEndpointOwner(consoleShellState), filters)) {
+        return false;
+      }
+      renderCurrentLocalEndpointsPanel(consoleShellState);
+      return true;
+    },
+    async onOpenCreate() {
+      if (!localEndpointPageState.openCreate(currentLocalEndpointOwner(consoleShellState))) return false;
+      refreshSequence += 1;
+      renderCurrentLocalEndpointsPanel(consoleShellState);
+      return true;
+    },
+    async onCloseCreate() {
+      const closed = localEndpointPageState.closeCreate(currentLocalEndpointOwner(consoleShellState));
+      if (closed) renderCurrentLocalEndpointsPanel(consoleShellState);
+      return closed;
+    },
+    async onSubmitCreate(request) {
+      return submitLocalEndpointCreate(request, consoleShellState);
+    },
+    async onTest(localEndpointId) {
+      return submitLocalEndpointTest(localEndpointId, consoleShellState);
+    },
+  });
+}
+
+/** Create an Endpoint without retaining URL or token in state, errors, or post-submit DOM. */
+async function submitLocalEndpointCreate(request, consoleShellState) {
+  const owner = currentLocalEndpointOwner(consoleShellState);
+  const token = authSession.token;
+  const operation = localEndpointPageState.beginCreate(owner);
+  if (!token || !operation) return null;
+  refreshSequence += 1;
+  renderCurrentLocalEndpointsPanel(consoleShellState);
+  try {
+    const pending = createLocalEndpoint({
+      controlApiUrl,
+      token,
+      tenantId: owner.tenantId,
+      request,
+      requestId: operation.requestId,
+      signal: operation.controller.signal,
+    });
+    // requestJson has synchronously serialized the body; remove the remaining callback-owned plaintext now.
+    request.base_url = "";
+    if (Object.hasOwn(request, "bearer_token")) request.bearer_token = "";
+    const result = await pending;
+    localEndpointPageState.acceptCreate(
+      operation,
+      result,
+      currentLocalEndpointOwner(consoleShellState),
+    );
+  } catch (error) {
+    const currentOwner = currentLocalEndpointOwner(consoleShellState);
+    if (isLocalEndpointAbortError(error)) return null;
+    if (!localEndpointPageState.rejectCreate(operation, error, currentOwner)) return null;
+    if (handleLocalEndpointAuthenticationFailure(error)) return null;
+  } finally {
+    request.base_url = "";
+    if (Object.hasOwn(request, "bearer_token")) request.bearer_token = "";
+    localEndpointPageState.finishCreate(operation);
+  }
+  renderCurrentLocalEndpointsPanel(consoleShellState);
+  return localEndpointPageState.snapshot();
+}
+
+/** Test one accepted row using an exact empty request body and owner-bound operation. */
+async function submitLocalEndpointTest(localEndpointId, consoleShellState) {
+  const owner = currentLocalEndpointOwner(consoleShellState);
+  const operation = localEndpointPageState.beginTest(owner, localEndpointId);
+  if (!authSession.token || !operation) return null;
+  refreshSequence += 1;
+  renderCurrentLocalEndpointsPanel(consoleShellState);
+  try {
+    const result = await testLocalEndpoint({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      localEndpointId: operation.localEndpointId,
+      signal: operation.controller.signal,
+    });
+    localEndpointPageState.acceptTest(
+      operation,
+      result,
+      currentLocalEndpointOwner(consoleShellState),
+    );
+  } catch (error) {
+    const currentOwner = currentLocalEndpointOwner(consoleShellState);
+    if (isLocalEndpointAbortError(error)) return null;
+    if (!localEndpointPageState.rejectTest(operation, error, currentOwner)) return null;
+    if (handleLocalEndpointAuthenticationFailure(error)) return null;
+  } finally {
+    localEndpointPageState.finishTest(operation);
+  }
+  renderCurrentLocalEndpointsPanel(consoleShellState);
+  return localEndpointPageState.snapshot();
+}
+
+/** Apply the strong 401/403 boundary after the current ticket has accepted the fixed error. */
+function handleLocalEndpointAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError)) return false;
+  if (error.status === 401) {
+    localEndpointPageState.clear();
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin(authErrorMessage(error), error.requestId);
+    return true;
+  }
+  if (error.status === 403) {
+    localEndpointPageState.clear();
     globalThis.window?.setTimeout?.(() => void refresh(), 0);
     return true;
   }
@@ -9501,6 +9697,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "batch-jobs") {
     // 导航请求前同步擦除结果 DOM，再使 PAGE-104 的 GET/POST ticket 全部失效。
     batchJobPageState.clear();
+  }
+  if (itemId !== "local-models") {
+    // 导航偏好请求前清除 PAGE-116 URL/Token DOM，并淘汰列表、创建和测试 ticket。
+    localEndpointPageState.clear();
   }
   if (itemId !== "experiments") {
     // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
@@ -14411,6 +14611,38 @@ async function loadMcpToolsState(consoleShellState, refreshId) {
   }
 }
 
+/** Load only the dedicated PAGE-116 aggregate and reject every obsolete owner before auth handling. */
+async function loadLocalEndpointsState(consoleShellState, refreshId) {
+  const owner = currentLocalEndpointOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !localEndpointPageState.enter(owner)) return null;
+  const operation = localEndpointPageState.beginLoad(owner, refreshId);
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await listLocalEndpoints({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const currentOwner = currentLocalEndpointOwner(consoleShellState);
+    localEndpointPageState.acceptLoad(operation, result, currentOwner, refreshId);
+    return localEndpointPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentLocalEndpointOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !localEndpointPageState.isLoadCurrent(operation, currentOwner, refreshId)
+      || isLocalEndpointAbortError(error)
+    ) return null;
+    if (handleLocalEndpointAuthenticationFailure(error)) return null;
+    localEndpointPageState.rejectLoad(operation, error, currentOwner, refreshId);
+    return localEndpointPageState.snapshot();
+  } finally {
+    localEndpointPageState.finishLoad(operation);
+  }
+}
+
 /**
  * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
  * Every response is accepted only while the full Batch owner and global refresh generation match.
@@ -15968,6 +16200,13 @@ function clearBatchJobStateOnIdentityChange(previous, current) {
 function clearMcpToolStateOnIdentityChange(previous, current) {
   if (mcpToolReadIdentitySnapshot(previous) !== mcpToolReadIdentitySnapshot(current)) {
     mcpToolPageState.clear();
+  }
+}
+
+/** Destroy PAGE-116 facts when tenant, Session, RBAC revision, fingerprint, or any local capability drifts. */
+function clearLocalEndpointStateOnIdentityChange(previous, current) {
+  if (localEndpointReadIdentitySnapshot(previous) !== localEndpointReadIdentitySnapshot(current)) {
+    localEndpointPageState.clear();
   }
 }
 

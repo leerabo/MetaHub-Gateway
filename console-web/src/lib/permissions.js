@@ -92,6 +92,10 @@ export const PERMISSIONS = Object.freeze({
   MCP_NETWORK_MANAGE: "mcp.network.manage",
   MCP_INVOKE: "mcp.invoke",
   MCP_APPROVE: "mcp.approve",
+  // PAGE-116 本地 Endpoint 读取、原子创建和受限测试独立授权，不能借用 Provider/KeyPool 权限。
+  LOCAL_ENDPOINT_READ: "local_endpoint.read",
+  LOCAL_ENDPOINT_MANAGE: "local_endpoint.manage",
+  LOCAL_ENDPOINT_TEST: "local_endpoint.test",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",

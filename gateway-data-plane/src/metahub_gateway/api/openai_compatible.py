@@ -1165,6 +1165,7 @@ async def _handle_gateway_request(
                 endpoint=endpoint,
                 payload=payload,
                 cache_affinity_context=route_plan.cache_affinity_context,
+                route_plan=route_plan,
                 enable_output_safety=True,
                 budget_initial_estimated_cost_cny=(
                     budget_guard_result.initial_estimated_cost_cny
@@ -1505,13 +1506,15 @@ async def _non_stream_response_with_fallback(
         if experiment_guard is not None:
             experiment_guard.mark_local_failure()
         interrupted_error = _local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE)
+        usage_exposure_possible = _local_usage_exposure_possible(first_request)
         safe_complete_routing_attempt(
             config,
             first_attempt,
             succeeded=False,
             latency_ms=_latency_ms(first_started),
             error=interrupted_error,
-            usage_status="not_applicable",
+            usage_status="unavailable" if usage_exposure_possible else "not_applicable",
+            usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=False,
         )
         safe_finalize_cache_affinity_selection(
@@ -1550,13 +1553,19 @@ async def _non_stream_response_with_fallback(
                 latency_ms=_latency_ms(first_started),
             )
         quality_eligible = is_quality_observation_eligible_error(first_error)
+        usage_exposure_possible = _local_usage_exposure_possible(first_request)
         safe_complete_routing_attempt(
             config,
             first_attempt,
             succeeded=False,
             latency_ms=_latency_ms(first_started),
             error=first_error,
-            usage_status="unavailable" if quality_eligible else "not_applicable",
+            usage_status=(
+                "unavailable"
+                if quality_eligible or usage_exposure_possible
+                else "not_applicable"
+            ),
+            usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=quality_eligible,
         )
         safe_finalize_cache_affinity_selection(
@@ -1745,13 +1754,15 @@ async def _execute_fallback_attempt(
     # 备用调用取消与主调用一样先收口；两次请求都可能已到上游，预算采用冻结估算上界。
     except asyncio.CancelledError as caught:
         interrupted_error = _local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE)
+        usage_exposure_possible = _local_usage_exposure_possible(provider_request)
         safe_complete_routing_attempt(
             config,
             attempt,
             succeeded=False,
             latency_ms=_latency_ms(attempt_started),
             error=interrupted_error,
-            usage_status="not_applicable",
+            usage_status="unavailable" if usage_exposure_possible else "not_applicable",
+            usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=False,
         )
         safe_finalize_cache_affinity_selection(
@@ -1786,13 +1797,19 @@ async def _execute_fallback_attempt(
         exc = _normalized_provider_exception(caught)
         attempt_error = _attempt_error(exc)
         quality_eligible = is_quality_observation_eligible_error(attempt_error)
+        usage_exposure_possible = _local_usage_exposure_possible(provider_request)
         safe_complete_routing_attempt(
             config,
             attempt,
             succeeded=False,
             latency_ms=_latency_ms(attempt_started),
             error=attempt_error,
-            usage_status="unavailable" if quality_eligible else "not_applicable",
+            usage_status=(
+                "unavailable"
+                if quality_eligible or usage_exposure_possible
+                else "not_applicable"
+            ),
+            usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=quality_eligible,
         )
         safe_finalize_cache_affinity_selection(
@@ -2291,6 +2308,8 @@ def _provider_request(
     payload: dict[str, Any],
     config: AppConfig,
     request: Request,
+    *,
+    routing_attempt_id: str | None = None,
 ) -> ProviderRequest:
     """为一次具体路由重新选择 Key 并构建只属于该 Provider 的请求。"""
 
@@ -2303,6 +2322,7 @@ def _provider_request(
     )
     provider_request.request_id = _request_id(request)
     provider_request.trace_id = _trace_id(request)
+    provider_request.routing_attempt_id = routing_attempt_id
     return provider_request
 
 
@@ -2327,7 +2347,15 @@ def _provider_request_with_affinity(
     """
 
     if affinity is None:
-        return _provider_request(adapter, route, endpoint, payload, config, request)
+        return _provider_request(
+            adapter,
+            route,
+            endpoint,
+            payload,
+            config,
+            request,
+            routing_attempt_id=routing_attempt_id,
+        )
     access = select_provider_access(
         config,
         route,
@@ -2359,6 +2387,7 @@ def _provider_request_with_affinity(
     )
     provider_request.request_id = _request_id(request)
     provider_request.trace_id = _trace_id(request)
+    provider_request.routing_attempt_id = routing_attempt_id
     return provider_request
 
 
@@ -2442,7 +2471,8 @@ def _local_interruption_attempt_error(error_code: str) -> NormalizedProviderErro
     """构造不参与模型质量统计的本地中断 attempt 摘要。
 
     参数只能是服务端固定错误码，返回值不含异常正文、Prompt、Endpoint 或凭据。调用方必须
-    同时传 ``quality_observation_eligible=False`` 和 ``usage_status=not_applicable``。
+    同时传 ``quality_observation_eligible=False``；围栏前使用 ``not_applicable``，本地调用已
+    越过持久 send fence 后使用 ``unavailable``，避免把可能存在的上游用量记成不适用。
     """
 
     return NormalizedProviderError(
@@ -2909,6 +2939,7 @@ async def _stream_response(
     endpoint: str | None = None,
     payload: dict[str, Any] | None = None,
     cache_affinity_context: CacheAffinityRouteContext | None = None,
+    route_plan: GatewayRoutePlan | None = None,
     enable_output_safety: bool = False,
     budget_initial_estimated_cost_cny: Decimal = Decimal("0"),
     experiment_guard: ExperimentExecutionGuard | None = None,
@@ -2919,12 +2950,91 @@ async def _stream_response(
     HTTP 200 发出后的错误只能使用标准 SSE error，不能伪装成可修改状态码的 JSON 响应。
     """
 
-    timeout_seconds = float(config.stream_inter_token_timeout_seconds)
-    session = create_stream_session(
-        config,
-        context,
-        inter_token_timeout_ms=int(timeout_seconds * 1000),
+    local_attempt: RoutingAttempt | None = None
+    local_attempt_finalized = False
+    local_route_requested = (
+        route is not None and route.provider_type == "local_endpoint"
+    ) or (
+        provider_request is not None
+        and provider_request.provider_type == "local_endpoint"
     )
+    if local_route_requested:
+        if route is None or route_plan is None:
+            raise ApiError("gateway.routing_attempt_unavailable")
+        local_attempt = create_routing_attempt(
+            config,
+            route_plan,
+            route,
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            attempt_sequence=1,
+            attempt_role=route_plan.initial_role,
+            estimated_cost_cny=budget_initial_estimated_cost_cny,
+        )
+        context = _context_for_attempt(
+            context,
+            route,
+            local_attempt,
+            fallback_triggered=False,
+            attempt_count=1,
+        )
+
+    def finish_local_attempt(
+        *,
+        succeeded: bool,
+        error: NormalizedProviderError | None = None,
+    ) -> None:
+        """Best-effort terminal write for the optional local streaming attempt."""
+
+        nonlocal local_attempt_finalized
+        if local_attempt is None or local_attempt_finalized:
+            return
+        if succeeded:
+            safe_complete_routing_attempt(
+                config,
+                local_attempt,
+                succeeded=True,
+                latency_ms=_latency_ms(started),
+                quality_observation_eligible=True,
+                record_quality_observation=False,
+            )
+        else:
+            attempt_error = error or _local_interruption_attempt_error(
+                LOCAL_STREAM_PROCESSING_ERROR_CODE
+            )
+            attempt_error = replace(attempt_error, evidence=None)
+            quality_eligible = is_quality_observation_eligible_error(attempt_error)
+            usage_exposure_possible = _local_usage_exposure_possible(provider_request)
+            safe_complete_routing_attempt(
+                config,
+                local_attempt,
+                succeeded=False,
+                latency_ms=_latency_ms(started),
+                error=attempt_error,
+                usage_status=(
+                    "unavailable"
+                    if quality_eligible or usage_exposure_possible
+                    else "not_applicable"
+                ),
+                usage_exposure_possible=usage_exposure_possible,
+                quality_observation_eligible=quality_eligible,
+                record_quality_observation=False,
+            )
+        local_attempt_finalized = True
+
+    timeout_seconds = float(config.stream_inter_token_timeout_seconds)
+    try:
+        session = create_stream_session(
+            config,
+            context,
+            inter_token_timeout_ms=int(timeout_seconds * 1000),
+        )
+    except (Exception, asyncio.CancelledError):
+        finish_local_attempt(
+            succeeded=False,
+            error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
+        )
+        raise
     if experiment_guard is not None:
         experiment_guard.bind_stream(session.stream_session_id)
     session_context = replace(context, stream_session_id=session.stream_session_id)
@@ -2967,7 +3077,9 @@ async def _stream_response(
                 client_request,
                 affinity=cache_affinity_context,
                 attempt_sequence=1,
-                routing_attempt_id=None,
+                routing_attempt_id=(
+                    local_attempt.routing_attempt_id if local_attempt is not None else None
+                ),
                 stream_session_id=session.stream_session_id,
             )
             selection_handle = provider_request.cache_affinity_selection
@@ -2999,6 +3111,10 @@ async def _stream_response(
             config,
             selection_handle or _selection_for_outcome(None, exc),
             succeeded=False,
+        )
+        finish_local_attempt(
+            succeeded=False,
+            error=_local_interruption_attempt_error(_REQUEST_CANCELLATION_ERROR_CODE),
         )
         terminal_context = _context_after_stream_output_safety(
             session_context,
@@ -3056,6 +3172,7 @@ async def _stream_response(
             selection_handle or _selection_for_outcome(None, exc),
             succeeded=False,
         )
+        finish_local_attempt(succeeded=False, error=_attempt_error(exc))
         terminal_context = _context_after_stream_output_safety(
             session_context,
             output_safety_scan,
@@ -3091,6 +3208,10 @@ async def _stream_response(
             config,
             selection_handle or _selection_for_outcome(None, exc),
             succeeded=False,
+        )
+        finish_local_attempt(
+            succeeded=False,
+            error=_local_interruption_attempt_error(LOCAL_STREAM_PROCESSING_ERROR_CODE),
         )
         error = ApiError(LOCAL_STREAM_PROCESSING_ERROR_CODE)
         terminal_context = _context_after_stream_output_safety(
@@ -3130,6 +3251,12 @@ async def _stream_response(
                 config,
                 selection_handle,
                 succeeded=False,
+            )
+            finish_local_attempt(
+                succeeded=False,
+                error=_local_interruption_attempt_error(
+                    "gateway.stream_session_unavailable"
+                ),
             )
             terminal_context = _context_after_stream_output_safety(
                 session_context,
@@ -3263,6 +3390,10 @@ async def _stream_response(
                             upstream_read_failed = True
                             raise _UpstreamStreamIncomplete from None
                         break
+                    except ApiError:
+                        # Local overall/byte limits are Gateway policy failures, not evidence
+                        # that the Provider transport or model quality failed.
+                        raise
                     except Exception:
                         # 只有上游 iterator 的异常才具备 Provider 质量归因资格。
                         upstream_read_failed = True
@@ -3487,6 +3618,17 @@ async def _stream_response(
             session_error_code = error_code
             _log_stream_failure(session_context, error_code, include_exception=False)
             raise
+        except ApiError as exc:
+            status = "failed"
+            stream_status = "upstream_failed"
+            error_code = exc.code
+            session_error_code = exc.code
+            _log_stream_failure(session_context, error_code, include_exception=False)
+            if experiment_guard is not None:
+                deferred_experiment_error = True
+            else:
+                stream_error_emitted = True
+                yield _stream_error_event(error_code, session_context)
         except Exception:
             status = "failed"
             stream_status = "upstream_failed"
@@ -3569,6 +3711,45 @@ async def _stream_response(
                         status = "failed"
                         error_code = LOCAL_STREAM_PROCESSING_ERROR_CODE
                         deferred_experiment_error = True
+                    if stream_status in {
+                        "completed",
+                        "output_blocked",
+                        "output_safety_unavailable",
+                    }:
+                        finish_local_attempt(succeeded=True)
+                    elif stream_status == "timed_out" and error_code == (
+                        "gateway.upstream_stream_timeout"
+                    ):
+                        finish_local_attempt(
+                            succeeded=False,
+                            error=NormalizedProviderError(
+                                code=error_code,
+                                message="",
+                                http_status=None,
+                                retryable=True,
+                                provider_error_type="gateway",
+                                error_category="timeout",
+                            ),
+                        )
+                    elif upstream_read_failed:
+                        finish_local_attempt(
+                            succeeded=False,
+                            error=NormalizedProviderError(
+                                code="gateway.upstream_transport_failed",
+                                message="",
+                                http_status=None,
+                                retryable=True,
+                                provider_error_type="transport",
+                                error_category="other",
+                            ),
+                        )
+                    else:
+                        finish_local_attempt(
+                            succeeded=False,
+                            error=_local_interruption_attempt_error(
+                                error_code or LOCAL_STREAM_PROCESSING_ERROR_CODE
+                            ),
+                        )
                     # 输出策略是 Gateway 本地判定，Provider 已成功产出；亲和状态不得因此受罚。
                     safe_finalize_cache_affinity_selection(
                         config,
@@ -5096,3 +5277,13 @@ def _latency_ms(started: float) -> int:
     """
 
     return int((time.perf_counter() - started) * 1000)
+
+
+def _local_usage_exposure_possible(provider_request: ProviderRequest | None) -> bool:
+    """Return whether the durable local send fence proves possible upstream usage."""
+
+    return bool(
+        provider_request is not None
+        and provider_request.provider_type == "local_endpoint"
+        and provider_request.local_provider_call_started
+    )

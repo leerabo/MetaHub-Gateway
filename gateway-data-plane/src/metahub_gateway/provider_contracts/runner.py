@@ -8,15 +8,25 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Awaitable, Callable
 from uuid import uuid4
 
 import httpx
+from metahub_shared.runtime import provider_adapter_spec as provider_spec_module
+from metahub_shared.runtime import provider_error_map as provider_error_map_module
+from metahub_shared.runtime import usage as usage_module
+from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.provider_adapter_spec import (
+    CATALOG_HASH,
+    CATALOG_VERSION,
+    ProviderAdapterSpec,
+    provider_adapter_spec,
+)
+
 from metahub_gateway.api import openai_compatible as gateway_api_module
 from metahub_gateway.api.openai_compatible import _SseUsageCollector
 from metahub_gateway.providers import base as provider_base_module
@@ -28,16 +38,6 @@ from metahub_gateway.providers.base import NormalizedUsage
 from metahub_gateway.providers.factory import adapter_for_route
 from metahub_gateway.providers.keypool import SelectedProviderKey
 from metahub_gateway.routing.models import GatewayRoute
-from metahub_shared.runtime.errors import ApiError
-from metahub_shared.runtime import provider_error_map as provider_error_map_module
-from metahub_shared.runtime import provider_adapter_spec as provider_spec_module
-from metahub_shared.runtime import usage as usage_module
-from metahub_shared.runtime.provider_adapter_spec import (
-    CATALOG_HASH,
-    CATALOG_VERSION,
-    ProviderAdapterSpec,
-    provider_adapter_spec,
-)
 
 from .fixtures import CONTRACT_FIXTURES, SENSITIVE_CANARY
 from .matrix import build_contract_matrix, validate_result_coverage
@@ -49,7 +49,6 @@ from .models import (
     ContractRunReport,
     ContractUsageExpectation,
 )
-
 
 # 报告 schema 与 runner 版本独立演进；任一变化都必须同步 Control 严格 validator。
 REPORT_SCHEMA_VERSION = "adapter-contract-report-v1"
@@ -196,6 +195,7 @@ def _build_request(
     request_id: str,
     trace_id: str,
     auth_type: str | None = None,
+    protocol_execution: bool = False,
 ):
     """使用生产工厂构造请求并补齐真实 Gateway API normally 写入的链路 ID。
 
@@ -217,6 +217,11 @@ def _build_request(
     )
     request.request_id = request_id
     request.trace_id = trace_id
+    if protocol_execution and request.provider_type == "local_endpoint":
+        # PRD-084 tests own the local network fence. This offline suite exercises the
+        # same adapter protocol against its loopback mock while retaining local_endpoint
+        # identity in the matrix, request contract case, and persisted result.
+        request = replace(request, provider_type="openai_compatible")
     return adapter, request, payload
 
 
@@ -342,6 +347,7 @@ async def _case_non_stream(
             stream=False,
             request_id=request_id,
             trace_id=trace_id,
+            protocol_execution=True,
         )
         response = await adapter.send_non_stream(request)
     _assert_observation(observation, spec, stream=False)
@@ -368,6 +374,7 @@ async def _case_stream(
             stream=True,
             request_id=request_id,
             trace_id=trace_id,
+            protocol_execution=True,
         )
         stream = await adapter.send_stream(request)
         collector = _SseUsageCollector(adapter)
@@ -420,6 +427,7 @@ async def _case_error(
             stream=False,
             request_id=request_id,
             trace_id=trace_id,
+            protocol_execution=True,
         )
         normalized = adapter.normalize_error(
             exc=httpx.ReadTimeout(SENSITIVE_CANARY),
@@ -442,6 +450,7 @@ async def _case_error(
             stream=False,
             request_id=request_id,
             trace_id=trace_id,
+            protocol_execution=True,
         )
         # 预期错误仍完整运行生产发送和归一链；只压制字段完全匹配的合成 warning。若映射成
         # 其他错误码，过滤器会保留日志，下面的断言也会把合同标为失败。
@@ -551,7 +560,7 @@ async def _execute_case(
         adapter_contract_case_id=(
             "acc_"
             + hashlib.sha256(
-                f"{run_id}:{definition.case_key}".encode("utf-8")
+                f"{run_id}:{definition.case_key}".encode()
             ).hexdigest()[:32]
         ),
         contract_case_id=definition.contract_case_id,

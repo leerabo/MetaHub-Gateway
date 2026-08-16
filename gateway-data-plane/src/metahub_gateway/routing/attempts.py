@@ -79,9 +79,10 @@ def create_routing_attempt(
               fallback_policy_id, fallback_policy_version, attempt_sequence, attempt_role,
               trigger_type, trigger_error_code, model_id, internal_model_id, provider_id,
               provider_code, status, retryable, usage_status, estimated_cost_cny,
+              provider_call_status,
               created_at, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'started', 0, 'pending', ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'started', 0, 'pending', ?, ?, ?, ?)
             """,
             (
                 attempt_id,
@@ -100,6 +101,7 @@ def create_routing_attempt(
                 route.provider_id,
                 route.provider_code,
                 str(estimated_cost_cny) if estimated_cost_cny is not None else None,
+                "not_called" if route.provider_type == "local_endpoint" else "not_applicable",
                 now,
                 now,
             ),
@@ -131,6 +133,54 @@ def create_routing_attempt(
     )
 
 
+def mark_local_provider_call_started(
+    database_url: str | None,
+    *,
+    tenant_id: str,
+    routing_attempt_id: str | None,
+) -> None:
+    """Atomically cross the local Provider send fence after network preflight.
+
+    The caller must invoke this after DNS/ACL validation and before opening the connection.
+    A missing or stale attempt fails closed so no untracked request reaches a local Endpoint.
+    """
+
+    if not database_url or not routing_attempt_id:
+        raise ApiError("gateway.routing_attempt_unavailable")
+    now = _to_db_time(_utcnow())
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = connect_database(database_url)
+        connection.execute("BEGIN IMMEDIATE")
+        cursor = connection.execute(
+            """
+            UPDATE routing_attempts
+            SET provider_call_status='called', provider_call_started_at=?, updated_at=?
+            WHERE tenant_id=? AND routing_attempt_id=? AND status='started'
+              AND provider_call_status='not_called'
+            """,
+            (now, now, tenant_id, routing_attempt_id),
+        )
+        if cursor.rowcount != 1:
+            raise sqlite3.IntegrityError("local_provider_call_fence_conflict")
+        connection.commit()
+    except (DbError, sqlite3.Error) as exc:
+        if connection is not None:
+            connection.rollback()
+        logger.warning(
+            "route.local_provider_call_fence_failed",
+            extra={
+                "event": "route.local_provider_call_fence_failed",
+                "tenant_id": tenant_id,
+                "object_id": routing_attempt_id,
+            },
+        )
+        raise ApiError("gateway.routing_attempt_unavailable") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def safe_complete_routing_attempt(
     config: AppConfig,
     attempt: RoutingAttempt,
@@ -139,15 +189,22 @@ def safe_complete_routing_attempt(
     latency_ms: int,
     error: NormalizedProviderError | None = None,
     usage_status: str | None = None,
+    usage_exposure_possible: bool = False,
     quality_observation_eligible: bool,
+    record_quality_observation: bool = True,
 ) -> None:
     """尽力把 started 更新为唯一终态，不让日志故障覆盖已经取得的模型响应。
 
-    失败尝试若没有可信 Provider usage，明确写 unavailable 而不是 0；成功尝试先保持
-    pending，Usage Ledger 同事务写入后再改为 recorded。
+    失败尝试若可能已经到达 Provider 但没有可信 usage，明确写 unavailable 而不是 0；
+    本地失败或围栏前阻断写 not_applicable。成功尝试先保持 pending，Usage Ledger 同事务
+    写入后再改为 recorded。用量暴露可能性与模型质量资格是两个独立维度。
     """
 
-    if type(quality_observation_eligible) is not bool:
+    if (
+        type(quality_observation_eligible) is not bool
+        or type(record_quality_observation) is not bool
+        or type(usage_exposure_possible) is not bool
+    ):
         # 内部调用必须显式给出布尔资格，truthy 对象不能决定是否处罚模型质量。
         raise ValueError("quality_observation_eligibility_invalid")
     if type(succeeded) is not bool or type(latency_ms) is not int:
@@ -159,12 +216,17 @@ def safe_complete_routing_attempt(
     if final_usage_status not in {"pending", "recorded", "unavailable", "not_applicable"}:
         raise ValueError("routing_attempt_quality_contract_invalid")
     expected_quality_eligible = succeeded or is_quality_observation_eligible_error(error)
+    expected_failure_usage_status = (
+        "unavailable"
+        if expected_quality_eligible or usage_exposure_possible
+        else "not_applicable"
+    )
     valid_usage_status = (
         succeeded and error is None and final_usage_status in {"pending", "recorded"}
     ) or (
         not succeeded
         and error is not None
-        and final_usage_status == ("unavailable" if expected_quality_eligible else "not_applicable")
+        and final_usage_status == expected_failure_usage_status
     )
     # 显式资格必须与错误白名单和持久 usage_status 完全一致，防止 caller 制造 down/up 漂移。
     if not valid_usage_status or quality_observation_eligible is not expected_quality_eligible:
@@ -182,6 +244,7 @@ def safe_complete_routing_attempt(
             SET status=?, error_code=?, error_category=?, upstream_http_status=?, retryable=?,
                 latency_ms=?, usage_status=?, completed_at=?, updated_at=?
             WHERE tenant_id=? AND routing_attempt_id=? AND status='started'
+              AND (?=0 OR provider_call_status='called')
             """,
             (
                 status,
@@ -195,6 +258,7 @@ def safe_complete_routing_attempt(
                 now,
                 attempt.tenant_id,
                 attempt.routing_attempt_id,
+                1 if usage_exposure_possible else 0,
             ),
         )
         if cursor.rowcount != 1:
@@ -217,7 +281,7 @@ def safe_complete_routing_attempt(
                 owner_terminal_error_code=error.code,
                 created_at=now,
             )
-        if quality_observation_eligible:
+        if quality_observation_eligible and record_quality_observation:
             # 质量增量与唯一终态共同提交；本地 Adapter/Key 等错误必须传 false，不能罚模型。
             record_model_quality_observation(
                 connection,

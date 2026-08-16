@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -33,6 +34,7 @@ from metahub_shared.runtime.provider_error_map import (
 from metahub_shared.runtime.usage import sanitize_provider_usage
 
 from metahub_gateway.cache_affinity.models import CacheAffinitySelectionHandle
+from metahub_gateway.routing.attempts import mark_local_provider_call_started
 from metahub_gateway.routing.models import GatewayRoute
 
 from .base import (
@@ -44,6 +46,11 @@ from .base import (
     UpstreamApiError,
 )
 from .keypool import SelectedProviderKey, mark_provider_key_error, select_provider_key
+from .local_network import (
+    LocalEndpointNetworkError,
+    PinnedLocalEndpointTransport,
+    resolve_local_endpoint_target,
+)
 
 logger = logging.getLogger("metahub.provider_adapter")
 
@@ -165,41 +172,108 @@ class OpenAICompatibleAdapter:
             stream_write_timeout_seconds=config.stream_write_timeout_seconds if config else 30,
             stream_pool_timeout_seconds=config.stream_pool_timeout_seconds if config else 5,
             error_map_lease=error_map_lease or builtin_provider_error_map_lease(route.tenant_id),
+            local_endpoint_private_cidrs=(
+                tuple(config.local_endpoint_private_cidrs) if config else ()
+            ),
+            local_endpoint_allowed_ports=(
+                tuple(config.local_endpoint_allowed_ports) if config else ()
+            ),
+            local_endpoint_allow_loopback=(
+                config.local_endpoint_allow_loopback if config else False
+            ),
+            local_endpoint_connect_timeout_seconds=(
+                config.local_endpoint_connect_timeout_seconds if config else 5
+            ),
+            local_endpoint_overall_timeout_seconds=(
+                config.local_endpoint_overall_timeout_seconds if config else 120
+            ),
+            local_endpoint_max_response_bytes=(
+                config.local_endpoint_max_response_bytes if config else 16_777_216
+            ),
+            local_endpoint_max_stream_bytes=(
+                config.local_endpoint_max_stream_bytes if config else 67_108_864
+            ),
         )
 
     async def send_non_stream(self, request: ProviderRequest) -> NormalizedResponse:
         """发送非流式 JSON 请求，并返回标准化响应。"""
 
+        transport: httpx.AsyncBaseTransport | None = None
+        timeout: float | httpx.Timeout = 30.0
+        overall_timeout: float | None = None
+        if request.provider_type == "local_endpoint":
+            timeout = httpx.Timeout(
+                connect=float(request.local_endpoint_connect_timeout_seconds),
+                read=float(request.local_endpoint_overall_timeout_seconds),
+                write=float(request.local_endpoint_connect_timeout_seconds),
+                pool=float(request.stream_pool_timeout_seconds),
+            )
+            overall_timeout = float(request.local_endpoint_overall_timeout_seconds)
         try:
             # 上游 Endpoint 是租户显式配置的模型服务地址，不能让系统代理把本机或内网地址改路。
-            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
-                headers = {**request.headers, "Accept-Encoding": "identity"}
-                # 非 2xx 必须保持 wire stream，先分类再决定是否读取完整成功正文。
-                async with client.stream(
-                    "POST", request.url, json=request.payload, headers=headers
-                ) as response:
-                    if response.status_code < 200 or response.status_code >= 300:
-                        facts = await _read_provider_error_facts(response)
-                        self._raise_adapter_error(
-                            request,
-                            self.normalize_error(
-                                response=response, request=request, extracted_facts=facts
-                            ),
-                        )
-                    # 成功响应沿用完整 JSON 读取；64 KiB 门禁只约束不可信错误正文。
-                    await response.aread()
-                    try:
-                        data = response.json()
-                    # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
-                    except ValueError as exc:
-                        self._raise_adapter_error(
-                            request,
-                            self.normalize_error(response=response, exc=exc, request=request),
-                        )
-                    if not isinstance(data, dict):
-                        self._raise_adapter_error(
-                            request, self.normalize_error(response=response, request=request)
-                        )
+            async with asyncio.timeout(overall_timeout):
+                if request.provider_type == "local_endpoint":
+                    transport = await _prepare_local_endpoint_transport(request)
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    trust_env=False,
+                    follow_redirects=False,
+                    transport=transport,
+                ) as client:
+                    headers = {**request.headers, "Accept-Encoding": "identity"}
+                    # 非 2xx 必须保持 wire stream，先分类再决定是否读取完整成功正文。
+                    async with client.stream(
+                        "POST", request.url, json=request.payload, headers=headers
+                    ) as response:
+                        if response.status_code < 200 or response.status_code >= 300:
+                            facts = await _read_provider_error_facts(response)
+                            self._raise_adapter_error(
+                                request,
+                                self.normalize_error(
+                                    response=response, request=request, extracted_facts=facts
+                                ),
+                            )
+                        if request.provider_type == "local_endpoint":
+                            body = await _read_bounded_success_body(
+                                response,
+                                request.local_endpoint_max_response_bytes,
+                            )
+                            try:
+                                data = httpx.Response(
+                                    response.status_code,
+                                    content=body,
+                                ).json()
+                            except ValueError as exc:
+                                self._raise_adapter_error(
+                                    request,
+                                    self.normalize_error(
+                                        response=response,
+                                        exc=exc,
+                                        request=request,
+                                    ),
+                                )
+                        else:
+                            await response.aread()
+                            try:
+                                data = response.json()
+                            # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
+                            except ValueError as exc:
+                                self._raise_adapter_error(
+                                    request,
+                                    self.normalize_error(
+                                        response=response,
+                                        exc=exc,
+                                        request=request,
+                                    ),
+                                )
+                        if not isinstance(data, dict):
+                            self._raise_adapter_error(
+                                request, self.normalize_error(response=response, request=request)
+                            )
+        except TimeoutError:
+            raise ApiError("gateway.local_endpoint_unavailable") from None
+        except LocalEndpointNetworkError as exc:
+            raise ApiError(exc.code) from None
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         except (httpx.InvalidURL, httpx.TimeoutException, httpx.HTTPError) as exc:
             self._raise_adapter_error(request, self.normalize_error(exc=exc, request=request))
@@ -223,30 +297,57 @@ class OpenAICompatibleAdapter:
 
         # body read 不设置 httpx timeout，首块和块间停顿由编排器的 Inter-Token Watchdog 判定；
         # 建连、写请求和连接池等待仍必须有硬上限，防止握手前永久占用工作协程。
+        transport: httpx.AsyncBaseTransport | None = None
+        overall_timeout: float | None = None
+        deadline_monotonic: float | None = None
+        connect_timeout = float(request.stream_connect_timeout_seconds)
+        write_timeout = float(request.stream_write_timeout_seconds)
+        if request.provider_type == "local_endpoint":
+            overall_timeout = float(request.local_endpoint_overall_timeout_seconds)
+            deadline_monotonic = time.monotonic() + overall_timeout
+            connect_timeout = float(request.local_endpoint_connect_timeout_seconds)
+            write_timeout = float(request.local_endpoint_connect_timeout_seconds)
         timeout = httpx.Timeout(
-            connect=float(request.stream_connect_timeout_seconds),
+            connect=connect_timeout,
             read=None,
-            write=float(request.stream_write_timeout_seconds),
+            write=write_timeout,
             pool=float(request.stream_pool_timeout_seconds),
         )
-        # 流式调用同样禁用环境代理，避免 SSE 连接被本机代理接管后返回非 Provider 响应。
-        client = httpx.AsyncClient(timeout=timeout, trust_env=False)
+        client: httpx.AsyncClient | None = None
         stream: Any | None = None
         try:
-            stream = client.stream(
-                "POST",
-                request.url,
-                json=request.payload,
-                # 禁止 httpx 自动解压不受控错误正文；成功 SSE 目前同样按 identity 传输。
-                headers={**request.headers, "Accept-Encoding": "identity"},
-            )
-            response = await stream.__aenter__()
+            # The local deadline starts before DNS and covers connect plus TTFB. None keeps
+            # the existing non-local httpx timeout behavior unchanged.
+            async with asyncio.timeout(overall_timeout):
+                if request.provider_type == "local_endpoint":
+                    transport = await _prepare_local_endpoint_transport(request)
+                # 流式调用同样禁用环境代理，避免 SSE 连接被本机代理接管后返回非 Provider 响应。
+                client = httpx.AsyncClient(
+                    timeout=timeout,
+                    trust_env=False,
+                    follow_redirects=False,
+                    transport=transport,
+                )
+                stream = client.stream(
+                    "POST",
+                    request.url,
+                    json=request.payload,
+                    # 禁止 httpx 自动解压不受控错误正文；成功 SSE 目前同样按 identity 传输。
+                    headers={**request.headers, "Accept-Encoding": "identity"},
+                )
+                response = await stream.__aenter__()
         # 客户端在响应头握手期间断开时，CancelledError 不属于普通 Provider 错误。先有界释放
         # 两类网络资源，再原样传播取消，让上层按客户端断开而不是 5xx/质量失败收口。
         except asyncio.CancelledError as exc:
             await _close_stream_handshake_resources(client, stream, exc)
             raise
+        except TimeoutError as exc:
+            await _close_stream_handshake_resources(client, stream, exc)
+            raise ApiError("gateway.local_endpoint_unavailable") from None
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
+        except LocalEndpointNetworkError as exc:
+            await _close_stream_handshake_resources(client, stream, exc)
+            raise ApiError(exc.code) from None
         except (httpx.InvalidURL, httpx.TimeoutException, httpx.HTTPError) as exc:
             await _close_stream_handshake_resources(client, stream, exc)
             self._raise_adapter_error(request, self.normalize_error(exc=exc, request=request))
@@ -255,6 +356,8 @@ class OpenAICompatibleAdapter:
         except Exception as exc:
             await _close_stream_handshake_resources(client, stream, exc)
             raise
+        if client is None:
+            raise ApiError("gateway.local_endpoint_unavailable")
         if response.status_code < 200 or response.status_code >= 300:
             # response 尚未关闭时按同一 64 KiB wire helper 提取事实；读取失败只降级状态码分类。
             facts = await _read_provider_error_facts(response)
@@ -267,7 +370,19 @@ class OpenAICompatibleAdapter:
                 request,
                 self.normalize_error(response=response, request=request, extracted_facts=facts),
             )
-        return ProviderStreamResponse(client=client, response=response, stream_context=stream)
+        return ProviderStreamResponse(
+            client=client,
+            response=response,
+            stream_context=stream,
+            max_bytes=(
+                request.local_endpoint_max_stream_bytes
+                if request.provider_type == "local_endpoint"
+                else None
+            ),
+            deadline_monotonic=(
+                deadline_monotonic if request.provider_type == "local_endpoint" else None
+            ),
+        )
 
     def parse_usage(self, payload: Mapping[str, Any]) -> NormalizedUsage:
         """把 OpenAI、通用/Anthropic 与 Gemini usage dialect 归一为统一结构。
@@ -418,7 +533,7 @@ class OpenAICompatibleAdapter:
 
 
 async def _close_stream_handshake_resources(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient | None,
     stream_context: Any | None,
     failure: BaseException,
 ) -> None:
@@ -429,9 +544,11 @@ async def _close_stream_handshake_resources(
     清理超时或清理自身异常都不得覆盖调用方的原始失败或取消语义，也不得记录敏感正文。
     """
 
-    tasks: set[asyncio.Task[Any]] = {
-        asyncio.create_task(client.aclose(), name="provider-stream-handshake-client-close")
-    }
+    tasks: set[asyncio.Task[Any]] = set()
+    if client is not None:
+        tasks.add(
+            asyncio.create_task(client.aclose(), name="provider-stream-handshake-client-close")
+        )
     if stream_context is not None:
         tasks.add(
             asyncio.create_task(
@@ -443,6 +560,8 @@ async def _close_stream_handshake_resources(
                 name="provider-stream-handshake-context-close",
             )
         )
+    if not tasks:
+        return
     try:
         done, pending = await asyncio.wait(
             tasks,
@@ -717,6 +836,39 @@ async def post_json(
     request = adapter.build_request(route, endpoint, dict(payload))
     response = await adapter.send_non_stream(request)
     return response.payload
+
+
+async def _prepare_local_endpoint_transport(
+    request: ProviderRequest,
+) -> PinnedLocalEndpointTransport:
+    """Validate and pin one local target, then cross the durable send fence."""
+
+    target = await resolve_local_endpoint_target(
+        request.url,
+        private_cidrs=list(request.local_endpoint_private_cidrs),
+        allowed_ports=list(request.local_endpoint_allowed_ports),
+        allow_loopback=request.local_endpoint_allow_loopback,
+    )
+    mark_local_provider_call_started(
+        request.database_url,
+        tenant_id=request.tenant_id,
+        routing_attempt_id=request.routing_attempt_id,
+    )
+    request.local_provider_call_started = True
+    return PinnedLocalEndpointTransport(target)
+
+
+async def _read_bounded_success_body(response: httpx.Response, max_bytes: int) -> bytes:
+    """Read a local success body without retaining data beyond the deployment limit."""
+
+    body = bytearray()
+    async for chunk in response.aiter_raw():
+        if not chunk:
+            continue
+        if len(body) + len(chunk) > max_bytes:
+            raise ApiError("gateway.local_endpoint_unavailable")
+        body.extend(chunk)
+    return bytes(body)
 
 
 async def open_stream(

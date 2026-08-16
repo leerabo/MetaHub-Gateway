@@ -242,6 +242,14 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_PROVIDER_HEALTH_STALE_SECONDS": "180",
     "METAHUB_PROVIDER_HEALTH_CONCURRENCY": "1",
     "METAHUB_PROVIDER_HEALTH_PRIVATE_CIDRS": "",
+    # 本地模型只允许部署运维开放私网和端口；租户请求不能携带或放宽这些边界。
+    "METAHUB_LOCAL_ENDPOINT_PRIVATE_CIDRS": "",
+    "METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS": "80,443,8000,8080,8443,11434",
+    "METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK": "false",
+    "METAHUB_LOCAL_ENDPOINT_CONNECT_TIMEOUT_SECONDS": "5",
+    "METAHUB_LOCAL_ENDPOINT_OVERALL_TIMEOUT_SECONDS": "120",
+    "METAHUB_LOCAL_ENDPOINT_MAX_RESPONSE_BYTES": "16777216",
+    "METAHUB_LOCAL_ENDPOINT_MAX_STREAM_BYTES": "67108864",
     # 用量导出只在控制面运行；同步、总量和字节三层上限共同保护 SQLite 与进程内存。
     "METAHUB_USAGE_EXPORT_ENABLED": "true",
     "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS": "2",
@@ -564,6 +572,15 @@ class AppConfig(BaseModel):
     provider_health_stale_seconds: int = 180
     provider_health_concurrency: int = 1
     provider_health_private_cidrs: list[str] = Field(default_factory=list)
+    local_endpoint_private_cidrs: list[str] = Field(default_factory=list)
+    local_endpoint_allowed_ports: list[int] = Field(
+        default_factory=lambda: [80, 443, 8000, 8080, 8443, 11434]
+    )
+    local_endpoint_allow_loopback: bool = False
+    local_endpoint_connect_timeout_seconds: int = 5
+    local_endpoint_overall_timeout_seconds: int = 120
+    local_endpoint_max_response_bytes: int = 16_777_216
+    local_endpoint_max_stream_bytes: int = 67_108_864
     # 导出配置带安全默认值，兼容测试直接构造 AppConfig，同时禁止无界任务和长期 BLOB。
     usage_export_enabled: bool = True
     usage_export_poll_interval_seconds: int = 2
@@ -1405,6 +1422,22 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Increase the total pixel budget or lower the per-image budget.",
         )
 
+    local_endpoint_private_cidrs = _canonical_network_list(
+        _value(values, "METAHUB_LOCAL_ENDPOINT_PRIVATE_CIDRS")
+    )
+    local_endpoint_allowed_ports = _bounded_port_list(
+        _value(values, "METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS")
+    )
+    local_endpoint_allow_loopback = _boolean(
+        values, "METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK"
+    )
+    if environment == "prod" and local_endpoint_allow_loopback:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Local model loopback endpoints are forbidden in production.",
+            suggestion="Disable METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK in production.",
+        )
+
     mcp_values = _load_mcp_config(
         values,
         environment=environment,
@@ -1626,6 +1659,33 @@ def load_app_config(service_name: str) -> AppConfig:
             for item in _value(values, "METAHUB_PROVIDER_HEALTH_PRIVATE_CIDRS").split(",")
             if item.strip()
         ],
+        local_endpoint_private_cidrs=local_endpoint_private_cidrs,
+        local_endpoint_allowed_ports=local_endpoint_allowed_ports,
+        local_endpoint_allow_loopback=local_endpoint_allow_loopback,
+        local_endpoint_connect_timeout_seconds=_bounded_int(
+            values,
+            "METAHUB_LOCAL_ENDPOINT_CONNECT_TIMEOUT_SECONDS",
+            minimum=1,
+            maximum=30,
+        ),
+        local_endpoint_overall_timeout_seconds=_bounded_int(
+            values,
+            "METAHUB_LOCAL_ENDPOINT_OVERALL_TIMEOUT_SECONDS",
+            minimum=1,
+            maximum=600,
+        ),
+        local_endpoint_max_response_bytes=_bounded_int(
+            values,
+            "METAHUB_LOCAL_ENDPOINT_MAX_RESPONSE_BYTES",
+            minimum=65_536,
+            maximum=67_108_864,
+        ),
+        local_endpoint_max_stream_bytes=_bounded_int(
+            values,
+            "METAHUB_LOCAL_ENDPOINT_MAX_STREAM_BYTES",
+            minimum=65_536,
+            maximum=268_435_456,
+        ),
         usage_export_enabled=_boolean(values, "METAHUB_USAGE_EXPORT_ENABLED"),
         usage_export_poll_interval_seconds=_bounded_int(
             values, "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS", minimum=1, maximum=60
@@ -3762,6 +3822,90 @@ def _split_origins(raw: str | None) -> list[str]:
     if not raw:
         return ["http://localhost:5173"]
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+_LOCAL_ENDPOINT_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+# These metadata service addresses remain blocked even when an operator allows the
+# surrounding private range. Keep the set shared by Control probes and Gateway calls.
+LOCAL_ENDPOINT_BLOCKED_ADDRESSES = frozenset(
+    {
+        ipaddress.ip_address("169.254.169.254"),
+        ipaddress.ip_address("100.100.100.200"),
+        ipaddress.ip_address("fd00:ec2::254"),
+        ipaddress.ip_address("fd20:ce::254"),
+    }
+)
+
+
+def _canonical_network_list(raw: str) -> list[str]:
+    """Validate deployment-owned private CIDRs and return a stable canonical list."""
+
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in (part.strip() for part in raw.split(",")):
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=True)
+        except ValueError as exc:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local model private CIDR configuration is invalid.",
+                suggestion="Use canonical, non-overlapping IPv4 or IPv6 CIDR values.",
+            ) from exc
+        # Loopback is controlled only by METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK. The CIDR
+        # allowlist is limited to enterprise RFC1918 IPv4 and IPv6 ULA networks.
+        if network.is_loopback or not any(
+            network.version == allowed.version and network.subnet_of(allowed)
+            for allowed in _LOCAL_ENDPOINT_PRIVATE_NETWORKS
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local model private CIDR configuration is not private.",
+                suggestion="Use RFC1918 IPv4 or IPv6 ULA CIDRs; configure loopback separately.",
+            )
+        if any(network == existing or network.overlaps(existing) for existing in networks):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local model private CIDR configuration overlaps.",
+                suggestion="Remove duplicate or overlapping CIDR values.",
+            )
+        networks.append(network)
+    networks.sort(key=lambda item: (item.version, int(item.network_address), item.prefixlen))
+    return [str(item) for item in networks]
+
+
+def _bounded_port_list(raw: str) -> list[int]:
+    """Parse the deployment-owned local model port allowlist."""
+
+    ports: list[int] = []
+    for item in (part.strip() for part in raw.split(",")):
+        if not item or not item.isascii() or not item.isdigit():
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local model allowed ports configuration is invalid.",
+                suggestion="Use a comma-separated list of ports between 1 and 65535.",
+            )
+        port = int(item)
+        if port < 1 or port > 65_535 or port in ports:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local model allowed ports configuration is invalid.",
+                suggestion="Use unique ports between 1 and 65535.",
+            )
+        ports.append(port)
+    if not ports or len(ports) > 32:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Local model allowed ports configuration is invalid.",
+            suggestion="Configure between one and 32 allowed ports.",
+        )
+    return sorted(ports)
 
 
 def _value(values: dict[str, ConfigValue], key: str) -> str:

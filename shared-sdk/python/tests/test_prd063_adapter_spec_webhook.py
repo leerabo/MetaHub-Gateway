@@ -15,7 +15,6 @@ from metahub_shared.runtime.webhooks import (
     build_webhook_event,
 )
 
-
 # 三个常量只构造脱敏、可重复的事件归属和目录 hash，不对应真实租户或生产发布事实。
 ACTIVATION_ID = "paca_" + "6" * 32
 EVENT_ID = f"evt_{ACTIVATION_ID}"
@@ -35,7 +34,7 @@ def _payload(occurred_at: datetime) -> dict[str, object]:
         "catalog_version": "adapter-spec-v2",
         "catalog_hash": CATALOG_HASH,
         "previous_catalog_version": "adapter-spec-v1",
-        "spec_count": 9,
+        "spec_count": 10,
         "activated_at": occurred_at.isoformat().replace("+00:00", "Z"),
     }
 

@@ -10,13 +10,12 @@ from pathlib import Path
 import httpcore
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.provider_health.routes import router as health_router
 from metahub_control.provider_health.service import (
     _PinnedNetworkBackend,
-    _ValidatedProbeUrl,
     _validated_probe_url,
+    _ValidatedProbeUrl,
 )
 from metahub_control.providers.routes import router as providers_router
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
@@ -187,7 +186,7 @@ async def test_provider_health_permissions_and_strict_probe_body(
 
 
 def test_provider_probe_ssrf_policy_blocks_local_and_accepts_public_dns(monkeypatch) -> None:
-    """安全边界：回环地址始终拒绝，全部解析为公开地址的标准 HTTPS Endpoint 可探测。"""
+    """安全边界：通用 Provider 可探测公网，本地 Endpoint 只接受部署 allowlist。"""
 
     class Config:
         """提供 SSRF 纯函数所需的最小私网 allowlist 配置。"""
@@ -196,15 +195,26 @@ def test_provider_probe_ssrf_policy_blocks_local_and_accepts_public_dns(monkeypa
 
     addresses = {
         "localhost": "127.0.0.1",
-        "mapped-metadata.example": "::ffff:100.100.100.200",
+        "metadata-aws-v4.example": "169.254.169.254",
+        "metadata-alibaba-v4.example": "100.100.100.200",
+        "mapped-metadata-aws.example": "::ffff:169.254.169.254",
+        "mapped-metadata-alibaba.example": "::ffff:100.100.100.200",
+        "metadata-aws-v6.example": "fd00:ec2::254",
+        "metadata-google-v6.example": "fd20:ce::254",
         "cgnat.example": "100.64.0.1",
         "provider.example": "8.8.8.8",
+        "local-provider.example": "10.20.1.7",
     }
 
     def _resolved_address(host: str, port: int, type: int) -> list[tuple[object, ...]]:
         """返回固定 DNS 样本，覆盖回环、mapped metadata、CGNAT 和正常公网。"""
 
         del type
+        if host == "many-local.example":
+            return [
+                (2, 1, 6, "", (f"10.20.1.{index}", port))
+                for index in range(1, 10)
+            ]
         return [(2, 1, 6, "", (addresses[host], port))]
 
     monkeypatch.setattr(
@@ -213,13 +223,53 @@ def test_provider_probe_ssrf_policy_blocks_local_and_accepts_public_dns(monkeypa
     )
     for blocked_url in (
         "http://localhost:8000/v1",
-        "https://mapped-metadata.example/v1",
+        "https://metadata-aws-v4.example/v1",
+        "https://metadata-alibaba-v4.example/v1",
+        "https://mapped-metadata-aws.example/v1",
+        "https://mapped-metadata-alibaba.example/v1",
+        "https://metadata-aws-v6.example/v1",
+        "https://metadata-google-v6.example/v1",
         "https://cgnat.example/v1",
     ):
         # 所有非 global 或 metadata 变体都应在返回探测目标前失败关闭。
         with pytest.raises(ValueError):
             _validated_probe_url(Config(), blocked_url)
+    for metadata_host in (
+        "metadata-aws-v4.example",
+        "metadata-alibaba-v4.example",
+        "mapped-metadata-aws.example",
+        "mapped-metadata-alibaba.example",
+        "metadata-aws-v6.example",
+        "metadata-google-v6.example",
+    ):
+        with pytest.raises(ValueError):
+            _validated_probe_url(
+                Config(),
+                f"https://{metadata_host}/v1",
+                private_cidrs=["0.0.0.0/0", "::/0"],
+                allowed_ports=[443],
+            )
     assert _validated_probe_url(Config(), "https://provider.example/v1") == "https://provider.example/v1/models"
+    with pytest.raises(ValueError):
+        _validated_probe_url(
+            Config(),
+            "https://provider.example/v1",
+            private_cidrs=[],
+            allowed_ports=[443],
+        )
+    assert _validated_probe_url(
+        Config(),
+        "https://local-provider.example/v1",
+        private_cidrs=["10.20.0.0/16"],
+        allowed_ports=[443],
+    ) == "https://local-provider.example/v1/models"
+    with pytest.raises(ValueError):
+        _validated_probe_url(
+            Config(),
+            "https://many-local.example/v1",
+            private_cidrs=["10.20.0.0/16"],
+            allowed_ports=[443],
+        )
 
 
 def test_provider_health_pins_validated_dns_address() -> None:

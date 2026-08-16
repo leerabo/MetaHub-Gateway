@@ -90,6 +90,25 @@ response secret。`.env.compose.example` 只保留占位符。`METAHUB_MCP_SANDB
 配置的精确 IPv4 `/32` 或 IPv6 `/128` 私网例外；默认为空。数据库、缓存、文件协议和容器控制端口仍由永久
 deny port 集合拒绝，不能被 tenant policy 放开。
 
+## 本地模型 Endpoint 网络配置
+
+PRD-084 的 `local_endpoint` Provider 仍由 Control/Gateway 进程访问，不经过 MCP Sandbox。部署前必须由
+运维在 `.env.compose` 或等价运行配置中明确设置网络范围；租户 API 不能提交 CIDR、端口、resolved IP 或
+超时/大小上限。
+
+- `METAHUB_LOCAL_ENDPOINT_PRIVATE_CIDRS` 默认为空，只接受规范且不重叠的企业私网 CIDR。公网地址不会因
+  此变量自动获准；本地 Endpoint 必须命中配置范围。
+- `METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS` 默认为 `80,443,8000,8080,8443,11434`。
+- `METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK=false`；只允许在隔离 dev/test 验收中临时启用，prod 配置为
+  true 会使服务启动失败。
+- connect/overall deadline 默认 `5s/120s`；非流式/流式响应上限默认 `16 MiB/64 MiB`。
+- metadata、link-local、multicast、unspecified 永久拒绝。每次请求执行 DNS 全地址 ACL 并固定单一已批准
+  IP，同时保留原 Host/TLS SNI，禁用 proxy、redirect、HTTP/2 和跨请求 keep-alive。
+
+Control 和 Gateway 必须使用相同的 local Endpoint 网络变量。配置非法时 readiness 失败关闭；不得通过
+Provider API、配置导入、Compose tenant 环境变量或前端表单放宽部署边界。完整 API 和错误合同见
+`docs/api/local-model-endpoints.md`。
+
 ## Compose Full Profile
 
 ```powershell

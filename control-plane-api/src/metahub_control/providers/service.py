@@ -6,21 +6,14 @@
 
 from __future__ import annotations
 
-import logging
 import hashlib
+import logging
 import re
 import sqlite3
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from metahub_control.audit import (
-    AuditRequestMeta,
-    commit_audited_transaction,
-    dispatch_audit_recorded,
-    record_audit_log,
-)
-from metahub_control.auth import AuthContext
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import encrypt_provider_key, secret_fingerprint, secret_prefix
@@ -33,13 +26,21 @@ from metahub_shared.runtime.provider_adapter_spec import (
     validate_provider_auth,
 )
 
+from metahub_control.audit import (
+    AuditRequestMeta,
+    commit_audited_transaction,
+    dispatch_audit_recorded,
+    record_audit_log,
+)
+from metahub_control.auth import AuthContext
+
 from .models import (
     CreateProviderKeyRequest,
     CreateProviderRequest,
+    ProviderInfo,
     ProviderKeyInfo,
     ProviderKeyListResponse,
     ProviderKeyResponse,
-    ProviderInfo,
     ProviderListResponse,
     ProviderResponse,
     ProviderTestResponse,
@@ -59,6 +60,11 @@ PROVIDER_KEY_STATUSES = {"active", "disabled"}
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
+def _reject_local_endpoint_provider(provider: ProviderInfo) -> None:
+    if provider.provider_type == "local_endpoint":
+        raise ApiError("provider.local_endpoint_requires_local_api")
+
+
 def list_providers(
     config: AppConfig,
     context: AuthContext,
@@ -75,8 +81,10 @@ def list_providers(
 
     normalized_status = _normalize_optional_status(status)
     normalized_type = _normalize_optional_provider_type(provider_type)
+    if normalized_type == "local_endpoint":
+        raise ApiError("provider.local_endpoint_requires_local_api")
     params: list[str] = [context.user.tenant_id]
-    filters: list[str] = []
+    filters: list[str] = ["provider_type!='local_endpoint'"]
     if normalized_status:
         filters.append("status=?")
         params.append(normalized_status)
@@ -122,6 +130,8 @@ def create_provider(
     provider_code = _normalize_code(payload.provider_code)
     name = _normalize_name(payload.name)
     provider_type = _normalize_provider_type(payload.provider_type)
+    if provider_type == "local_endpoint":
+        raise ApiError("provider.local_endpoint_requires_local_api")
     base_url = _normalize_base_url(payload.base_url)
     auth_type = _normalize_auth_type(payload.auth_type)
     # 类型与鉴权必须作为一个可执行合同校验；分别命中两个枚举并不代表组合可联网。
@@ -214,6 +224,8 @@ def update_provider(
     # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
     if payload.provider_type is not None:
         updates["provider_type"] = _normalize_provider_type(payload.provider_type)
+        if updates["provider_type"] == "local_endpoint":
+            raise ApiError("provider.local_endpoint_requires_local_api")
     if payload.base_url is not None:
         updates["base_url"] = _normalize_base_url(payload.base_url)
     # 认证令牌属于访问边界，失效或缺失时必须走统一错误。
@@ -232,6 +244,8 @@ def update_provider(
 
     connection = _connect(config)
     before = _load_provider(connection, context.user.tenant_id, provider_id)
+    if before.provider_type == "local_endpoint":
+        raise ApiError("provider.local_endpoint_requires_local_api")
     # PATCH 可能只修改 type 或 auth，必须用修改后的值与未修改的持久值组成完整候选再校验。
     _validate_provider_auth_combination(
         str(updates.get("provider_type", before.provider_type)),
@@ -307,7 +321,8 @@ def list_provider_keys(
 
 
     connection = _connect(config)
-    _load_provider(connection, context.user.tenant_id, provider_id)
+    provider = _load_provider(connection, context.user.tenant_id, provider_id)
+    _reject_local_endpoint_provider(provider)
     rows = connection.execute(
         """
         SELECT
@@ -345,6 +360,7 @@ def create_provider_key(
 
     connection = _connect(config)
     provider = _load_provider(connection, context.user.tenant_id, provider_id)
+    _reject_local_endpoint_provider(provider)
     plain_value = _normalize_provider_key_plain_value(payload.plain_value)
     key_prefix = secret_prefix(plain_value)
     name = _normalize_provider_key_name(payload.name, default=f"{provider.provider_code}-{key_prefix}")
@@ -453,6 +469,7 @@ def update_provider_key(
     connection = _connect(config)
     before = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
     provider = _load_provider(connection, context.user.tenant_id, before.provider_id)
+    _reject_local_endpoint_provider(provider)
     now = _to_db_time(_utcnow())
     set_clauses = [f"{column}=?" for column in updates]
     values = list(updates.values())
@@ -536,6 +553,7 @@ def test_provider_connection(
 
     connection = _connect(config)
     provider = _load_provider(connection, context.user.tenant_id, provider_id)
+    _reject_local_endpoint_provider(provider)
     # 历史 custom_header 或损坏组合必须在 import 健康模块、DNS、lease 和网络 I/O 前失败关闭。
     adapter_spec = _validate_provider_auth_combination(
         provider.provider_type,
@@ -1040,7 +1058,7 @@ def _normalize_provider_key_weight(value: int | None) -> int:
     # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
     except (TypeError, ValueError):
         # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-        raise ApiError("provider_key.weight_invalid")
+        raise ApiError("provider_key.weight_invalid") from None
     if weight <= 0 or weight > 10000:
         raise ApiError("provider_key.weight_invalid")
     return weight

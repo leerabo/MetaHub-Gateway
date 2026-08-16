@@ -531,6 +531,9 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Dispute detail contains tenant-private billing evidence and authorized free text.
         # Authentication, validation and unhandled failures must share the same boundary.
         response.headers["Cache-Control"] = "no-store, private"
+    elif path == "/local-endpoints" or path.startswith("/local-endpoints/"):
+        # Local endpoint state is tenant-private, including authentication and unhandled failures.
+        response.headers["Cache-Control"] = "no-store, private"
     elif path.rstrip("/") == "/admin-assistant/query":
         # 管理助手的成功、认证拒绝、wire 错误和最外层未捕获异常都可能关联租户私有查询。
         # 统一在共享异常出口补齐 exact Header，避免 500 绕过 Control 层用户中间件。

@@ -8,10 +8,10 @@ Response 或可执行插件上传能力。
 
 | 字段 | 当前值 |
 | --- | --- |
-| catalog version | `adapter-spec-v1` |
-| spec count | `9` |
-| canonical UTF-8 bytes | `13633` |
-| SHA-256 | `9757f206d4bd0ec625d39173d4c5e5bd1f6d36132b3117008ffb1e5e7ba69870` |
+| catalog version | `adapter-spec-v2` |
+| spec count | `10` |
+| canonical UTF-8 bytes | `15151` |
+| SHA-256 | `c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf` |
 
 目录正文随 Shared SDK 发布并在进程内冻结。数据库只保存每个租户激活的
 `version/hash/spec_count` 事实，不保存或复制 spec JSON。Gateway 也不会在请求热路径查询
@@ -22,7 +22,7 @@ Control API 或数据库加载可执行 spec。
 | classification | Provider 类型 | 说明 |
 | --- | --- | --- |
 | `model_vendor_cloud` | `zhipu`、`dashscope`、`wenxin`、`volcengine`、`hunyuan`、`deepseek` | 默认上游候选，使用厂家官方或云服务 Endpoint |
-| `local_compatible` | `openai_compatible` | 客户本地或客户指定的 OpenAI-compatible Endpoint |
+| `local_compatible` | `openai_compatible`、`local_endpoint` | 客户本地或客户指定的 OpenAI-compatible Endpoint；后者只能通过 PRD-084 聚合 API 创建 |
 | `customer_managed` | `custom` | 客户自管的通用 JSON/SSE Endpoint |
 | `migration_platform` | `migration_compatible` | 可选迁移入口，不是模型厂家或默认上游 |
 
@@ -63,8 +63,8 @@ X-Request-ID: req_adapter_specs_example
 ```json
 {
   "catalog": {
-    "version": "adapter-spec-v1",
-    "hash": "9757f206d4bd0ec625d39173d4c5e5bd1f6d36132b3117008ffb1e5e7ba69870",
+    "version": "adapter-spec-v2",
+    "hash": "c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf",
     "activated_at": "2026-08-01T00:00:00Z"
   },
   "specs": [
@@ -125,8 +125,8 @@ X-Request-ID: req_adapter_activation_20260801
 Content-Type: application/json
 
 {
-  "catalog_version": "adapter-spec-v1",
-  "catalog_hash": "9757f206d4bd0ec625d39173d4c5e5bd1f6d36132b3117008ffb1e5e7ba69870"
+  "catalog_version": "adapter-spec-v2",
+  "catalog_hash": "c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf"
 }
 ```
 
@@ -137,7 +137,7 @@ Content-Type: application/json
 3. 新 request 只有与当前进程目录完全一致才可继续。
 4. 已激活同一目录时写入不可变 no-op 收据，返回 `changed=false`，不替换 active，不发事件。
 5. 真实目录切换在一个事务内 supersede 旧 active 并插入新 active，返回 `changed=true`。
-6. `0055` 和新租户 bootstrap 均为首次激活，不伪造 `adapter.spec_updated`。
+6. `0077` 和新租户 bootstrap 均为首次 v2 激活，不伪造 `adapter.spec_updated`。
 7. Webhook 在数据库提交后尽力派发；失败不会回滚激活，也不会记录 Endpoint、正文或异常字符串。
 
 ## 5. Gateway 执行合同
@@ -146,7 +146,8 @@ Provider 管理、配置导入、健康探测和 Gateway 建连都会重新校�
 `provider_type/auth_type` 组合：
 
 - 六类国内厂家只允许 `bearer`；
-- `openai_compatible`、`custom` 允许 `none` 或 `bearer`；
+- `openai_compatible`、`local_endpoint`、`custom` 允许 `none` 或 `bearer`；
+- `local_endpoint` 只能通过 `/local-endpoints` 创建；通用 Provider/Health/Config 入口固定拒绝；
 - `migration_compatible` 只允许 `bearer`；
 - 历史 `custom_header` 可继续作为旧元数据显示，但创建、更新、导入、探测和调用都在网络 I/O
   前返回固定错误，绝不回退为 Bearer；
@@ -161,10 +162,10 @@ Provider 管理、配置导入、健康探测和 Gateway 建连都会重新校�
 
 ```json
 {
-  "catalog_version": "adapter-spec-v2",
+  "catalog_version": "adapter-spec-v3",
   "catalog_hash": "<64 位小写 SHA-256>",
-  "previous_catalog_version": "adapter-spec-v1",
-  "spec_count": 9,
+  "previous_catalog_version": "adapter-spec-v2",
+  "spec_count": 10,
   "activated_at": "2026-08-01T00:00:00Z"
 }
 ```
@@ -212,5 +213,5 @@ Provider 类型脏值、Token、Header、Endpoint、SQL 或上游响应。
 6. 运行 Shared、Gateway、Control、迁移和 Console 相关专项，并完成隔离数据库、真实 API、Stub 和
    双视口运行验收；全部证据通过后才能把新目录标记为可发布。
 
-完整可复用契约测试框架属于后续 PRD-064；PRD-063 的九类测试是冻结目录的最小发布证明，
+完整可复用契约测试框架已由 PRD-064 交付；PRD-084 的十类 103 条测试是当前冻结目录的发布证明，
 不能用公网探测或真实厂商 Key 替代。

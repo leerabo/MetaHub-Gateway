@@ -1976,9 +1976,50 @@ PRD-083 的实现、专项、迁移、Runtime、Browser 和文档已形成正式
 `30685F52892AE64838CCA4C32C1CAA044B974D311D8E0425016BFFDC8C61AE94`、
 `0C59FEE846B45B54461DC00D7C86C2591F47EBF9B87248CB3850128D80830044`。Excel `01_PRD总表` 第 85 行、
 `03_M2-M3扩展交付` 第 21 行、PAGE-116、API-383..388、OBJ-115、EVT-096 与 TC-0167/0168 共同确认，
+交接后的实现项为 `PRD-084 | M2-企业增强 | P2 | 扩展层 | 本地模型 | 本地模型Endpoint接入`；该项现已按
+以下目录完成，`all_108_prds_complete=false`。
+
+## PRD-084 本地模型 Endpoint 接入目录（已完成）
+
+- `shared-sdk/python/metahub_shared/runtime/{provider_adapter_spec,local_model_events,config,errors,
+  error_diagnosis,i18n,webhooks,webhook_delivery}.py` 与 `rbac.py`：发布 Adapter v2 `local_endpoint`、
+  EVT-096 安全事件、部署级私网 ACL/永久 metadata deny、有界超时、统一错误和 RBAC revision 19；默认上游
+  仍为国内厂商官方/云服务及客户本地 OpenAI-compatible Endpoint，不把 OpenRouter/硅基流动列为默认上游。
+- `infra/migrations/0077_local_model_endpoint_access.sql/.down.sql`：保真扩展 Provider、routing attempt call
+  fence、LocalModelEndpoint/catalog/create receipt/call event/source outbox，安装 tenant owner、父子不可漂移、
+  append-only、状态 CAS、事件正交和 down guard；fresh/repeat/down/re-up 均验证 integrity 与复合外键。
+- `control-plane-api/src/metahub_control/local_endpoints/` 及 Provider/Health/Config Transfer 入口：实现
+  `POST/GET /local-endpoints` 和 `POST /local-endpoints/{id}/test`，Provider -> initial Model -> Endpoint ->
+  optional encrypted Credential -> receipt/Audit 原子创建；后端实时校验 tenant、read/manage/test 权限、DNS 全地址
+  私网闭集、lease/generation 与目录上限，通用 Provider/Import 旁路失败关闭。
+- `gateway-data-plane/src/metahub_gateway/providers/local_network.py`、`local_model_events.py`、
+  `api/openai_compatible.py` 与 routing/provider adapter：在 DLP/预算/权限之后执行 pinning、Host/SNI、proxy/
+  redirect/metadata deny 与 provider-call fence；vLLM/Ollama/OpenAI-compatible 的非流式、流式、失败、超时、
+  fallback 和取消路径保持 request/attempt/usage/cost/event 一致，只有实际 `called` 才发布 EVT-096。
+- `console-web/src/features/local-models/`、`src/lib/localEndpoints.js`、`src/app/main.js`、i18n 与样式：交付
+  PAGE-116 独立导航、筛选、原生创建 Dialog、none/bearer、测试状态、owner/Abort、动态撤权与租户切换清理；
+  URL/Token 不进入 Storage、query string、Console error 或正式证据，前端 capability 不替代后端授权。
+- `scripts/acceptance/prd084-{runtime-acceptance.py,browser-harness.py,browser-acceptance.mjs}` 及对应合同测试：
+  从空 SQLite 启动真实 Control/Gateway/Console、两个 OpenAI-compatible stub、Webhook receiver 和 Chromium，
+  验证 0077、DLP/预算零上游、成功/失败/usage/cost/EVT-096、三角色、动态撤权、租户隔离、双视口、隐私与
+  owner-safe 进程/端口/SQLite sidecar 清理。
+- `shared-sdk/python/tests/test_prd084_shared_contracts.py`、`control-plane-api/tests/integration/test_prd084_*.py`、
+  `gateway-data-plane/tests/unit/test_prd084_*.py`、`console-web/tests/unit/prd084*.test.mjs` 及 PRD-063/064
+  相邻回归：覆盖 exact wire、迁移、API、tenant/RBAC、网络、取消、durable delivery、Adapter v2 和 PAGE-116。
+- `docs/prd/PRD-084-local-model-endpoint-access.md`、`docs/api/local-model-endpoints.md`、
+  `docs/api/provider-adapter-specs.md`、`docs/deployment/single-node-compose.md` 与
+  `docs/testing/PRD-084-tests.md`：保存冻结设计、四轮自审、公开 API/部署边界、最终门禁、证据 hash 和下一项依据。
+
+PRD-084 的实现、专项、必要回归、迁移、Runtime、Browser 和文档已形成正式证据。权威 Runtime JSON 为
+`.artifacts/prd084-runtime/20260816T183036Z-c60eb988.json`，SHA-256 为
+`F226D7665714C6AF335C72AE64E33392976337CE7A1E8850319384C8FFDBFDDC`；权威 Browser 为
+`.artifacts/prd084-browser/final-20260817-01/`，JSON/manifest SHA-256 分别为
+`F1C6EAF61B496956326CD56974058A9250FAF8AF20C23816F1F9EFF9A949507E`、
+`9A20078068521D2C3E1AC33C838E7EDBBA5060F112617C5BABBA28FC66290F13`。Excel `01_PRD总表` 第 86 行、
+`03_M2-M3扩展交付` 第 22 行、PAGE-117、API-389..391、OBJ-116、EVT-097 与 TC-0169/0170 共同确认，
 下一条权威未完成项为
-`PRD-084 | M2-企业增强 | P2 | 扩展层 | 本地模型 | 本地模型Endpoint接入`。本次只登记、不实现 PRD-084，
-`all_108_prds_complete=false`。
+`PRD-085 | M2-企业增强 | P2 | 扩展层 | 用户行为埋点 | 产品使用埋点与激活漏斗`。本次只登记、不实现
+PRD-085，`all_108_prds_complete=false`。
 
 ## MVP 非目标
 

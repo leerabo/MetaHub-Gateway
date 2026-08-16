@@ -1,4 +1,4 @@
-"""注册 PRD-063 九类 Provider spec 的显式契约夹具。
+"""注册当前十类 Provider spec 的显式契约夹具。
 
 注册表有意逐项列出，不能从 spec 自动生成默认夹具；否则新增 Adapter 时会在没有研发提交
 新测试的情况下被通用断言放行。所有正文均为合成数据，不得替换为客户 Prompt、真实响应或 Key。
@@ -7,10 +7,9 @@
 from __future__ import annotations
 
 import json
-from typing import Mapping
+from collections.abc import Mapping
 
 from .models import AdapterContractFixture, ContractUsageExpectation
-
 
 # 固定合成租户只用于离线合并门禁，不能与开发库默认租户或真实客户租户混用。
 CONTRACT_TENANT_ID = "ci-contract"
@@ -152,7 +151,7 @@ def _fixture(
     )
 
 
-# 九个注册项逐一对应冻结 spec；任何新增 spec 都必须显式增加一项并接受代码审查。
+# 十个注册项逐一对应冻结 spec；任何新增 spec 都必须显式增加一项并接受代码审查。
 CONTRACT_FIXTURES: dict[str, AdapterContractFixture] = {
     "prd063_custom_minimum_contract": _fixture(
         case_id="prd063_custom_minimum_contract",
@@ -188,6 +187,15 @@ CONTRACT_FIXTURES: dict[str, AdapterContractFixture] = {
         adapter_name="openai_compatible",
         usage_root="usageMetadata",
         usage=_GEMINI_USAGE,
+        openai_stream=True,
+    ),
+    "prd084_local_endpoint_minimum_contract": _fixture(
+        case_id="prd084_local_endpoint_minimum_contract",
+        spec_id="adapter-spec-local_endpoint-v1",
+        provider_type="local_endpoint",
+        adapter_name="openai_compatible",
+        usage_root="usage",
+        usage=_OPENAI_USAGE,
         openai_stream=True,
     ),
     "prd063_migration_compatible_minimum_contract": _fixture(

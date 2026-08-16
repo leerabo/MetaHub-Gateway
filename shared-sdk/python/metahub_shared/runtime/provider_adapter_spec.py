@@ -1,7 +1,7 @@
 """PRD-063 国内模型 Endpoint 的共享 Provider Adapter 规范目录。
 
 本模块只发布可公开、可执行的机器合同，不保存租户 Endpoint、Provider Key、Token、Prompt
-或 Response。Control、Gateway、健康探测和 Console 必须共享这里的九类冻结目录；未知类型、
+或 Response。Control、Gateway、健康探测和 Console 必须共享这里的十类冻结目录；未知类型、
 不受支持的鉴权组合及目录漂移均在网络 I/O 前失败关闭，不能回退到猜测的 Adapter。
 """
 
@@ -17,10 +17,9 @@ from typing import Final, NoReturn
 
 from .provider_error_map import BUILTIN_CATALOG_VERSION
 
-
 # 目录版本是数据库激活事实、Gateway 制品和 Console 展示共同使用的发布身份；字段语义或目录
 # 内容变化都必须显式升级版本，不能沿用旧版本静默改变 hash。
-CATALOG_VERSION: Final = "adapter-spec-v1"
+CATALOG_VERSION: Final = "adapter-spec-v2"
 
 # 四类产品边界明确区分默认国内模型上游、客户 Endpoint 与迁移入口，避免把竞品聚合平台
 # 错误归入 MetaHub 默认模型厂商集合并影响推荐、统计和适配行为。
@@ -68,7 +67,7 @@ ACTIVE: Final = "active"
 OPTIONAL: Final = "optional"
 SPEC_STATUSES: Final = frozenset({ACTIVE, OPTIONAL})
 
-# 六类国内厂家和九类完整目录均使用不可变集合公开，防止调用方原地扩充白名单并绕过 spec。
+# 六类国内厂家和十类完整目录均使用不可变集合公开，防止调用方原地扩充白名单并绕过 spec。
 DOMESTIC_PROVIDER_TYPES: Final = frozenset(
     {"zhipu", "dashscope", "wenxin", "volcengine", "hunyuan", "deepseek"}
 )
@@ -76,6 +75,7 @@ EXPECTED_PROVIDER_TYPES: Final = frozenset(
     {
         *DOMESTIC_PROVIDER_TYPES,
         "openai_compatible",
+        "local_endpoint",
         "custom",
         "migration_compatible",
     }
@@ -87,7 +87,7 @@ _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{1,63}\Z")
 _SAFE_SPEC_ID = re.compile(r"adapter-spec-[a-z][a-z0-9_]{1,63}-v[1-9][0-9]{0,3}\Z")
 _SAFE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
 _SAFE_PROFILE_ID = re.compile(r"[a-z][a-z0-9_]{1,79}\Z")
-_SAFE_CONTRACT_CASE = re.compile(r"prd063_[a-z0-9_]{2,80}\Z")
+_SAFE_CONTRACT_CASE = re.compile(r"(?:prd063|prd084)_[a-z0-9_]{2,80}\Z")
 _SAFE_HEADER = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,63}\Z")
 _SENSITIVE_VALUE = re.compile(
     r"(?i)(?:https?://|bearer\s+\S+|sk-[a-z0-9]{8,}|"
@@ -389,6 +389,7 @@ def _spec(
     model_id_strategy: str = PROVIDER_MODEL_ID,
     status: str = ACTIVE,
     platform_examples: tuple[str, ...] = (),
+    contract_case_id: str | None = None,
 ) -> ProviderAdapterSpec:
     """构造一条发布目录常量，集中绑定 Adapter 与三个子 profile。
 
@@ -418,11 +419,13 @@ def _spec(
         probe_profile=(OPENAI_PROBE_PROFILE if openai_profile else GENERIC_PROBE_PROFILE),
         platform_examples=platform_examples,
         status=status,
-        contract_case_id=f"prd063_{provider_type}_minimum_contract",
+        contract_case_id=(
+            contract_case_id or f"prd063_{provider_type}_minimum_contract"
+        ),
     )
 
 
-# 初始九类目录逐项列出六个国内厂家、两种客户 Endpoint 与唯一迁移入口；声明顺序不作为
+# v2 目录逐项列出六个国内厂家、三种客户 Endpoint 与唯一迁移入口；声明顺序不作为
 # canonical 顺序，发布制品会再次按 provider_type 排序以消除人工调整顺序造成的漂移。
 _DECLARED_SPECS: Final = (
     _spec("zhipu", "智谱官方或云服务", MODEL_VENDOR_CLOUD),
@@ -441,6 +444,13 @@ _DECLARED_SPECS: Final = (
         "客户本地 OpenAI-compatible Endpoint",
         LOCAL_COMPATIBLE,
         allowed_auth_types=("none", "bearer"),
+    ),
+    _spec(
+        "local_endpoint",
+        "本地模型 Endpoint",
+        LOCAL_COMPATIBLE,
+        allowed_auth_types=("none", "bearer"),
+        contract_case_id="prd084_local_endpoint_minimum_contract",
     ),
     _spec(
         "custom",
@@ -521,6 +531,15 @@ _EXPECTED_EXECUTION_SHAPES: Final = MappingProxyType(
             ACTIVE,
         ),
         "openai_compatible": (
+            LOCAL_COMPATIBLE,
+            OPENAI_ADAPTER,
+            OPENAI_PROTOCOL,
+            ("none", "bearer"),
+            PROVIDER_MODEL_ID,
+            OPENAI_PROBE_PROFILE,
+            ACTIVE,
+        ),
+        "local_endpoint": (
             LOCAL_COMPATIBLE,
             OPENAI_ADAPTER,
             OPENAI_PROTOCOL,
@@ -677,13 +696,13 @@ def _validate_public_wire(value: object) -> None:
 
 
 def _validate_catalog(specs: object) -> None:
-    """验证九类目录的唯一性、分类、组合、子 profile 和隐私边界。
+    """验证十类目录的唯一性、分类、组合、子 profile 和隐私边界。
 
     参数：待验证的冻结 spec tuple；返回：成功时无返回值。
     约束：该函数供模块导入和专项篡改测试共享，任何不完整或未知值均失败关闭。
     """
 
-    # 九类目录必须以不可变 tuple 一次性交付，数量异常时不能构造部分可用索引。
+    # 十类目录必须以不可变 tuple 一次性交付，数量异常时不能构造部分可用索引。
     if not isinstance(specs, tuple) or len(specs) != len(EXPECTED_PROVIDER_TYPES):
         _fail("adapter.spec_catalog_invalid", "spec_count_invalid")
     provider_types_seen: set[str] = set()
@@ -773,6 +792,13 @@ def _validate_catalog(specs: object) -> None:
             spec.contract_case_id
         ):
             _fail("adapter.spec_catalog_invalid", "contract_case_invalid")
+        expected_contract_case = (
+            "prd084_local_endpoint_minimum_contract"
+            if provider_type == "local_endpoint"
+            else f"prd063_{provider_type}_minimum_contract"
+        )
+        if spec.contract_case_id != expected_contract_case:
+            _fail("adapter.spec_catalog_invalid", "contract_case_invalid")
         _validate_public_wire(spec.to_wire())
 
         expected_shape = _EXPECTED_EXECUTION_SHAPES.get(provider_type)
@@ -795,7 +821,7 @@ def _validate_catalog(specs: object) -> None:
         elif spec.platform_examples:
             _fail("adapter.spec_catalog_invalid", "migration_examples_invalid")
 
-    # 缺失厂家或混入 OpenRouter/硅基流动独立类型都会使集合与九类冻结边界不一致。
+    # 缺失厂家或混入 OpenRouter/硅基流动独立类型都会使集合与十类冻结边界不一致。
     if provider_types_seen != EXPECTED_PROVIDER_TYPES:
         _fail("adapter.spec_catalog_invalid", "provider_types_incomplete")
     domestic = {
@@ -841,9 +867,9 @@ def _assert_catalog_identity(
 # canonical bytes 是迁移种子、Control 激活和 Gateway 发布包共同引用的唯一目录正文。下方长度
 # 与 hash 在生成初版后改为字面量并由导入期双断言保护，不能动态自证正确。
 CATALOG_CANONICAL_BYTES: Final = _canonical_catalog_bytes(_SPECS)
-CATALOG_CANONICAL_BYTE_LENGTH: Final = 13_633
+CATALOG_CANONICAL_BYTE_LENGTH: Final = 15_151
 CATALOG_CANONICAL_LENGTH: Final = CATALOG_CANONICAL_BYTE_LENGTH
-CATALOG_HASH: Final = "9757f206d4bd0ec625d39173d4c5e5bd1f6d36132b3117008ffb1e5e7ba69870"
+CATALOG_HASH: Final = "c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf"
 _assert_catalog_identity(
     CATALOG_CANONICAL_BYTES,
     expected_length=CATALOG_CANONICAL_BYTE_LENGTH,
@@ -864,7 +890,7 @@ def _normalize_lookup_code(value: object) -> str | None:
 
 
 def provider_adapter_specs() -> tuple[ProviderAdapterSpec, ...]:
-    """返回按 provider_type 稳定排序的九类冻结目录。
+    """返回按 provider_type 稳定排序的十类冻结目录。
 
     返回：只读 tuple；各项及其 usage/error/stream 子 profile 都是 frozen dataclass。
     约束：调用方不得从数据库或请求体追加 spec，目录升级只能随发布制品完成。

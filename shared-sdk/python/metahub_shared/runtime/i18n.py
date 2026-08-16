@@ -72,6 +72,41 @@ _MCP_ERROR_LABELS = (
     ("mcp.outcome_unknown", "MCP 调用结果未知", "MCP outcome unknown"),
     ("mcp.unavailable", "MCP 治理暂不可用", "MCP governance unavailable"),
 )
+_LOCAL_ENDPOINT_ERROR_LABELS = (
+    (
+        "provider.local_endpoint_requires_local_api",
+        "本地模型需使用专用接口",
+        "Local model endpoint API required",
+    ),
+    ("local_endpoint.not_found", "本地模型 Endpoint 不存在", "Local endpoint not found"),
+    ("local_endpoint.request_invalid", "本地模型请求不合法", "Invalid local endpoint request"),
+    ("local_endpoint.engine_invalid", "本地模型引擎不合法", "Invalid local model engine"),
+    ("local_endpoint.url_invalid", "本地模型地址不合法", "Invalid local endpoint URL"),
+    ("local_endpoint.auth_invalid", "本地模型鉴权不合法", "Invalid local endpoint auth"),
+    ("local_endpoint.catalog_invalid", "本地模型目录不合法", "Invalid local model catalog"),
+    ("local_endpoint.conflict", "本地模型 Endpoint 冲突", "Local endpoint conflict"),
+    (
+        "local_endpoint.idempotency_conflict",
+        "本地模型请求意图冲突",
+        "Local endpoint idempotency conflict",
+    ),
+    ("local_endpoint.unavailable", "本地模型管理暂不可用", "Local endpoint unavailable"),
+    (
+        "gateway.local_endpoint_blocked",
+        "本地模型网络访问已阻断",
+        "Local endpoint network access blocked",
+    ),
+    (
+        "gateway.local_endpoint_unavailable",
+        "本地模型调用暂不可用",
+        "Local endpoint call unavailable",
+    ),
+    (
+        "gateway.local_endpoint_outcome_unknown",
+        "本地模型调用结果未知",
+        "Local model call outcome unknown",
+    ),
+)
 I18N_MESSAGES: tuple[I18nMessage, ...] = (
     I18nMessage("error.webhook.format_invalid.label", "zh-CN", "Webhook 格式不合法", "errors"),
     I18nMessage("error.webhook.format_invalid.label", "en-US", "Invalid webhook format", "errors"),
@@ -1105,6 +1140,13 @@ I18N_MESSAGES: tuple[I18nMessage, ...] = (
 ) + tuple(
     message
     for code, zh_cn, en_us in _MCP_ERROR_LABELS
+    for message in (
+        I18nMessage(f"error.{code}.label", "zh-CN", zh_cn, "errors"),
+        I18nMessage(f"error.{code}.label", "en-US", en_us, "errors"),
+    )
+) + tuple(
+    message
+    for code, zh_cn, en_us in _LOCAL_ENDPOINT_ERROR_LABELS
     for message in (
         I18nMessage(f"error.{code}.label", "zh-CN", zh_cn, "errors"),
         I18nMessage(f"error.{code}.label", "en-US", en_us, "errors"),

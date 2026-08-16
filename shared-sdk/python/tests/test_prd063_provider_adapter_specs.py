@@ -11,9 +11,8 @@ import hashlib
 import json
 from typing import cast
 
-import pytest
-
 import metahub_shared.runtime.provider_adapter_spec as registry
+import pytest
 from metahub_shared.runtime.provider_adapter_spec import (
     CATALOG_CANONICAL_BYTE_LENGTH,
     CATALOG_CANONICAL_BYTES,
@@ -42,10 +41,9 @@ from metahub_shared.runtime.provider_adapter_spec import (
     validate_provider_auth,
 )
 
-
 # 固定摘要必须以字面量进入测试，避免实现和断言同时动态计算后掩盖目录漂移。
-EXPECTED_CANONICAL_BYTE_LENGTH = 13_633
-EXPECTED_CATALOG_HASH = "9757f206d4bd0ec625d39173d4c5e5bd1f6d36132b3117008ffb1e5e7ba69870"
+EXPECTED_CANONICAL_BYTE_LENGTH = 15_151
+EXPECTED_CATALOG_HASH = "c1cc9a5c9f977308fa3e06ab6914c28d9f9bef4ad3fe07eb950d1c6a76a2addf"
 
 
 def _assert_catalog_error(
@@ -67,7 +65,7 @@ def _replace_spec(
     provider_type: str,
     **changes: object,
 ) -> tuple[ProviderAdapterSpec, ...]:
-    """复制九类目录并仅替换目标 spec，供失败关闭测试构造单一漂移。"""
+    """复制十类目录并仅替换目标 spec，供失败关闭测试构造单一漂移。"""
 
     return tuple(
         dataclasses.replace(spec, **changes) if spec.provider_type == provider_type else spec
@@ -76,14 +74,14 @@ def _replace_spec(
 
 
 def test_catalog_identity_freezes_version_length_hash_and_order() -> None:
-    """主流程：版本、九类数量、UTF-8 长度、SHA-256 与稳定排序必须精确一致。"""
+    """主流程：版本、十类数量、UTF-8 长度、SHA-256 与稳定排序必须精确一致。"""
 
     specs = provider_adapter_specs()
     identity = catalog_identity()
 
     assert isinstance(identity, ProviderAdapterCatalogIdentity)
-    assert identity.version == identity.catalog_version == CATALOG_VERSION == "adapter-spec-v1"
-    assert identity.spec_count == len(specs) == 9
+    assert identity.version == identity.catalog_version == CATALOG_VERSION == "adapter-spec-v2"
+    assert identity.spec_count == len(specs) == 10
     assert identity.canonical_byte_length == CATALOG_CANONICAL_BYTE_LENGTH
     assert CATALOG_CANONICAL_BYTE_LENGTH == EXPECTED_CANONICAL_BYTE_LENGTH
     assert CATALOG_HASH == EXPECTED_CATALOG_HASH
@@ -166,7 +164,7 @@ def test_customer_endpoint_classifications_remain_separate() -> None:
     """分类边界：本地兼容与客户自管 Endpoint 不得混入国内厂家或迁移平台。"""
 
     assert provider_types(classification=LOCAL_COMPATIBLE) == frozenset(
-        {"openai_compatible"}
+        {"openai_compatible", "local_endpoint"}
     )
     assert provider_types(classification=CUSTOMER_MANAGED) == frozenset({"custom"})
     assert provider_adapter_spec("openai_compatible").adapter_name == OPENAI_ADAPTER
@@ -203,7 +201,12 @@ def test_every_allowed_provider_has_a_complete_minimum_contract(provider_type: s
     assert spec.stream_profile.profile_id == spec.stream_profile_id
     assert spec.stream_include_usage == spec.stream_profile.allow_include_usage
     assert spec.price_fields == PRICE_FIELDS
-    assert spec.contract_case_id == f"prd063_{provider_type}_minimum_contract"
+    expected_case = (
+        "prd084_local_endpoint_minimum_contract"
+        if provider_type == "local_endpoint"
+        else f"prd063_{provider_type}_minimum_contract"
+    )
+    assert spec.contract_case_id == expected_case
 
 
 def test_execution_profiles_match_openai_and_generic_boundaries() -> None:
@@ -230,6 +233,7 @@ def test_auth_contract_accepts_only_declared_combinations() -> None:
         "openai_compatible"
     )
     assert validate_provider_auth("custom", "bearer").provider_type == "custom"
+    assert validate_provider_auth("local_endpoint", "none").provider_type == "local_endpoint"
 
 
 @pytest.mark.parametrize(

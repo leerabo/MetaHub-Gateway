@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
-
 from metahub_control.adapter_contracts import outbox as contract_outbox
 from metahub_control.adapter_contracts import service as adapter_contract_service
 from metahub_control.adapter_contracts.routes import router as adapter_contracts_router
@@ -24,7 +23,6 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 from metahub_shared.runtime.provider_adapter_spec import catalog_identity, provider_adapter_specs
 from metahub_shared.runtime.webhooks import canonical_json_bytes
-
 
 # 固定凭据只服务当前专项角色矩阵；内部 Token 不写入报告、数据库断言或日志证据。
 ADMIN_PASSWORD = "Prd064Admin!2026"
@@ -171,7 +169,12 @@ def _report(
         for kind, variant, auth_type in definitions:
             suffix = f":{auth_type}" if auth_type else ""
             case_key = f"{spec.contract_case_id}:{kind}:{variant}{suffix}"
-            should_fail = failed and not failed_assigned and kind == "usage" and variant == "standard"
+            should_fail = (
+                failed
+                and not failed_assigned
+                and kind == "usage"
+                and variant == "standard"
+            )
             if should_fail:
                 failed_assigned = True
             cases.append(
@@ -312,8 +315,16 @@ async def test_internal_ingest_auth_strict_json_idempotency_and_catalog(
             headers={**_internal_headers("req_prd064_oversized", "trc_prd064_oversized"),
                      "Content-Type": "application/json"},
         )
-        first = await client.post(path, json=report, headers=_internal_headers(request_id, trace_id))
-        replay = await client.post(path, json=report, headers=_internal_headers(request_id, trace_id))
+        first = await client.post(
+            path,
+            json=report,
+            headers=_internal_headers(request_id, trace_id),
+        )
+        replay = await client.post(
+            path,
+            json=report,
+            headers=_internal_headers(request_id, trace_id),
+        )
         cross_request_id = "req_prd064_cross_tenant_run_collision"
         cross_trace_id = "trc_prd064_cross_tenant_run_collision"
         cross_report = _report(
@@ -483,7 +494,11 @@ async def test_read_permissions_tenant_isolation_and_failed_event_outbox(
     )
     path = f"/internal/tenants/{tenant_id}/adapter-contract-runs"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
-        uploaded = await client.post(path, json=report, headers=_internal_headers(request_id, trace_id))
+        uploaded = await client.post(
+            path,
+            json=report,
+            headers=_internal_headers(request_id, trace_id),
+        )
         developer = await _login(
             client,
             "default",
@@ -622,7 +637,8 @@ async def test_read_permissions_tenant_isolation_and_failed_event_outbox(
     pending_delivery = connection.execute(
         """
         SELECT ? AS payload_json,? AS tenant_id,? AS event_id,
-               ? AS event_type,? AS event_timestamp
+               ? AS event_type,? AS event_timestamp,? AS payload_format,
+               ? AS wire_body_text
         """,
         (
             json.dumps(event.to_payload(), ensure_ascii=False, sort_keys=True),
@@ -630,6 +646,8 @@ async def test_read_permissions_tenant_isolation_and_failed_event_outbox(
             event.event_id,
             event.event_type,
             event.timestamp,
+            "json",
+            canonical_json_bytes(event.to_payload()).decode("utf-8"),
         ),
     ).fetchone()
     resumed_body = webhook_service._validated_pending_delivery_body(
@@ -831,6 +849,7 @@ async def test_contract_failed_webhook_pending_dead_letter_and_replay(
         _endpoint: object,
         body: bytes,
         _delivery_id: str,
+        **_kwargs: object,
     ) -> dict[str, object]:
         """模拟 Endpoint intent 已提交、首次联网尚未形成 attempt 时进程中断。"""
 
@@ -890,6 +909,7 @@ async def test_contract_failed_webhook_pending_dead_letter_and_replay(
         _endpoint: object,
         body: bytes,
         delivery_id: str,
+        **_kwargs: object,
     ) -> dict[str, object]:
         """恢复同一 pending delivery，并只返回不含响应正文的固定成功摘要。"""
 
@@ -958,6 +978,7 @@ async def test_contract_failed_webhook_pending_dead_letter_and_replay(
         _endpoint: object,
         body: bytes,
         _delivery_id: str,
+        **_kwargs: object,
     ) -> dict[str, object]:
         """让公共 dispatcher 用持久尝试上限终结，并由迁移 trigger 原子生成死信。"""
 
@@ -1021,6 +1042,7 @@ async def test_contract_failed_webhook_pending_dead_letter_and_replay(
         _endpoint: object,
         body: bytes,
         _delivery_id: str,
+        **_kwargs: object,
     ) -> dict[str, object]:
         """死信重放只使用持久信封，并返回固定成功摘要完成根状态收敛。"""
 

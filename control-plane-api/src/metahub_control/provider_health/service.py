@@ -6,27 +6,27 @@ API 响应和异常映射都只使用固定分类，不能包含 Authorization �
 
 from __future__ import annotations
 
-import ipaddress
 import hashlib
+import ipaddress
+import json
 import logging
 import socket
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpcore
 import httpx
-
-from metahub_control.auth import AuthContext
-from metahub_control.providers.service import _validate_provider_auth_combination
-from metahub_control.webhooks.service import dispatch_webhook_event
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import decrypt_provider_key
-from metahub_shared.runtime.config import AppConfig
+from metahub_shared.runtime.config import (
+    LOCAL_ENDPOINT_BLOCKED_ADDRESSES,
+    AppConfig,
+)
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.provider_adapter_spec import (
     GENERIC_PROBE_PROFILE,
@@ -35,6 +35,10 @@ from metahub_shared.runtime.provider_adapter_spec import (
     provider_types,
 )
 from metahub_shared.runtime.webhooks import build_webhook_event
+
+from metahub_control.auth import AuthContext
+from metahub_control.providers.service import _validate_provider_auth_combination
+from metahub_control.webhooks.service import dispatch_webhook_event
 
 from .models import (
     ProbeAttemptInfo,
@@ -96,6 +100,17 @@ class _Attempt:
     error_code: str | None
     summary: str
     checked_at: datetime
+    model_ids: tuple[str, ...] = field(default=(), repr=False)
+    catalog_truncated: bool = False
+
+
+@dataclass(frozen=True)
+class LocalProviderCatalogProbe:
+    """Modern health result plus a bounded, validated local model catalog projection."""
+
+    response: ProviderProbeResponse
+    model_ids: tuple[str, ...] = field(repr=False)
+    catalog_truncated: bool
 
 
 class _ValidatedProbeUrl(str):
@@ -235,11 +250,13 @@ def list_provider_health(
     # 类型筛选复用 Provider 注册白名单，未知值不能被解释成合法的空结果。
     if provider_type and provider_type.strip() not in PROVIDER_TYPES:
         raise ApiError("provider_health.filter_invalid")
+    if provider_type and provider_type.strip() == "local_endpoint":
+        raise ApiError("provider.local_endpoint_requires_local_api")
     # 分页边界在服务层再次校验，避免内部调用绕过 FastAPI Query 约束。
     if limit < 1 or limit > 100 or offset < 0 or offset > 10000:
         raise ApiError("provider_health.pagination_invalid")
 
-    clauses = ["tenant_id=?"]
+    clauses = ["tenant_id=?", "provider_type!='local_endpoint'"]
     params: list[object] = [context.user.tenant_id]
     for column, value in (
         ("status", normalized_provider_status),
@@ -319,6 +336,18 @@ def probe_provider_for_tenant(
 ) -> ProviderProbeResponse:
     """供手工入口和周期调度共用的租户级探测函数。"""
 
+    if trigger_type == "manual":
+        connection = _connect(config)
+        try:
+            row = connection.execute(
+                "SELECT provider_type FROM providers WHERE tenant_id=? AND provider_id=?",
+                (tenant_id, provider_id),
+            ).fetchone()
+            if row is not None and row["provider_type"] == "local_endpoint":
+                raise ApiError("provider.local_endpoint_requires_local_api")
+        finally:
+            connection.close()
+
     claim, credentials = _claim_provider(config, tenant_id, provider_id, trigger_type)
     attempts = _perform_probe(config, claim, credentials)
     result_status = _aggregate_result(attempts)
@@ -342,6 +371,69 @@ def probe_provider_for_tenant(
         attempts=[_attempt_info(index, attempt) for index, attempt in enumerate(attempts, 1)],
         request_id=request_id,
         trace_id=trace_id,
+    )
+
+
+def probe_local_provider_catalog(
+    config: AppConfig,
+    context: AuthContext,
+    provider_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+) -> LocalProviderCatalogProbe:
+    """Probe one local Endpoint and capture its bounded model IDs in the same leased request."""
+
+    claim, credentials = _claim_provider(
+        config,
+        context.user.tenant_id,
+        provider_id,
+        "manual",
+    )
+    if claim.provider_type != "local_endpoint":
+        # The local route resolves the aggregate first; this remains a fail-closed defense for
+        # internal callers and releases the acquired lease through the normal completion path.
+        attempts = [
+            _fixed_attempt(
+                "failed",
+                "unverified",
+                "endpoint_invalid",
+                "Provider endpoint is invalid.",
+                _utcnow(),
+            )
+        ]
+    else:
+        attempts = _perform_probe(config, claim, credentials, capture_model_catalog=True)
+    result_status = _aggregate_result(attempts)
+    transitioned = _complete_probe(
+        config,
+        claim,
+        attempts,
+        result_status=result_status,
+        trigger_type="manual",
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    connection = _connect(config)
+    row = _load_health_row(connection, claim.tenant_id, provider_id)
+    item = _health_item(row, config)
+    if transitioned:
+        _dispatch_unhealthy_event(config, claim, item, attempts, request_id, trace_id)
+    response = ProviderProbeResponse(
+        provider_health=item,
+        result_status=result_status,
+        attempts=[_attempt_info(index, attempt) for index, attempt in enumerate(attempts, 1)],
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    successful = next(
+        (attempt for attempt in attempts if attempt.result_status == "success"),
+        None,
+    )
+    return LocalProviderCatalogProbe(
+        response=response,
+        model_ids=successful.model_ids if successful is not None else (),
+        catalog_truncated=successful.catalog_truncated if successful is not None else False,
     )
 
 
@@ -449,20 +541,36 @@ def _claim_provider(
     return claim, credentials
 
 
-def _perform_probe(config: AppConfig, claim: _Claim, credentials: list[_Credential]) -> list[_Attempt]:
+def _perform_probe(
+    config: AppConfig,
+    claim: _Claim,
+    credentials: list[_Credential],
+    *,
+    capture_model_catalog: bool = False,
+) -> list[_Attempt]:
     """在事务外执行受限网络探测，并把所有异常收敛为固定安全分类。"""
 
     checked_at = _utcnow()
     try:
         # 既有 OpenAI-compatible 路径保持原两参数调用合同；通用 profile 才显式传入，
         # 既兼容历史测试/扩展包装器，也确保 custom 不会被错误追加 /models。
+        network_options = (
+            {
+                "private_cidrs": config.local_endpoint_private_cidrs,
+                "allowed_ports": config.local_endpoint_allowed_ports,
+                "allow_loopback": config.local_endpoint_allow_loopback,
+            }
+            if claim.provider_type == "local_endpoint"
+            else {}
+        )
         target = (
-            _validated_probe_url(config, claim.base_url)
+            _validated_probe_url(config, claim.base_url, **network_options)
             if claim.probe_profile == OPENAI_PROBE_PROFILE
             else _validated_probe_url(
                 config,
                 claim.base_url,
                 probe_profile=claim.probe_profile,
+                **network_options,
             )
         )
     # SSRF、DNS 或 URL 校验失败统一为固定分类，不回显内部地址解析细节。
@@ -471,7 +579,15 @@ def _perform_probe(config: AppConfig, claim: _Claim, credentials: list[_Credenti
 
     # 无认证 Endpoint 不构造 Authorization 请求头，也完全不读取或解密 KeyPool 凭据。
     if claim.auth_type == "none":
-        return [_http_attempt(config, target, None, None)]
+        return [
+            _http_attempt(
+                config,
+                target,
+                None,
+                None,
+                capture_model_catalog=capture_model_catalog,
+            )
+        ]
     if len(credentials) > 20:
         credentials = credentials[:20]
         sampling_truncated = True
@@ -497,7 +613,13 @@ def _perform_probe(config: AppConfig, claim: _Claim, credentials: list[_Credenti
                 )
             )
             continue
-        attempt = _http_attempt(config, target, plain_key, credential.credential_id)
+        attempt = _http_attempt(
+            config,
+            target,
+            plain_key,
+            credential.credential_id,
+            capture_model_catalog=capture_model_catalog,
+        )
         plain_key = ""
         attempts.append(attempt)
         # 成功或 Endpoint 级故障已经足以形成结论，无需继续消耗其他 Key。
@@ -565,7 +687,12 @@ def probe_provider_reachability(
 
 
 def _http_attempt(
-    config: AppConfig, target: str, plain_key: str | None, credential_id: str | None
+    config: AppConfig,
+    target: str,
+    plain_key: str | None,
+    credential_id: str | None,
+    *,
+    capture_model_catalog: bool = False,
 ) -> _Attempt:
     """只读取 HTTP 状态的流式探测；底层异常对象和响应正文都不向上返回。"""
 
@@ -582,9 +709,34 @@ def _http_attempt(
         ) as client:
             with client.stream("GET", target, headers=headers) as response:
                 status = response.status_code
+                if 200 <= status < 300 and capture_model_catalog:
+                    try:
+                        model_ids, catalog_truncated = _read_model_catalog(response)
+                    except ValueError:
+                        return _Attempt(
+                            credential_id,
+                            "failed",
+                            "accepted",
+                            status,
+                            int((time.perf_counter() - started) * 1000),
+                            "catalog_invalid",
+                            "Provider model catalog is invalid.",
+                            checked_at,
+                        )
         latency = int((time.perf_counter() - started) * 1000)
         if 200 <= status < 300:
-            return _Attempt(credential_id, "success", "accepted", status, latency, None, "Provider probe succeeded.", checked_at)
+            return _Attempt(
+                credential_id,
+                "success",
+                "accepted",
+                status,
+                latency,
+                None,
+                "Provider probe succeeded.",
+                checked_at,
+                model_ids if capture_model_catalog else (),
+                catalog_truncated if capture_model_catalog else False,
+            )
         # 401/403 证明 Endpoint 可达但当前凭据被拒绝，分类到 Key 而非网络故障。
         if status in {401, 403}:
             return _Attempt(credential_id, "failed", "rejected", status, latency, "authentication_failed", "Provider authentication was rejected.", checked_at)
@@ -614,6 +766,44 @@ def _http_attempt(
         summary,
         checked_at,
     )
+
+
+def _read_model_catalog(response: httpx.Response) -> tuple[tuple[str, ...], bool]:
+    """Read a bounded OpenAI-compatible models response without retaining its raw body."""
+
+    maximum_bytes = 1_048_576
+    body = bytearray()
+    for chunk in response.iter_bytes(chunk_size=16_384):
+        if len(body) + len(chunk) > maximum_bytes:
+            raise ValueError("catalog_too_large")
+        body.extend(chunk)
+    try:
+        payload = json.loads(bytes(body))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("catalog_invalid") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ValueError("catalog_invalid")
+    model_ids: list[str] = []
+    truncated = False
+    for raw_item in payload["data"]:
+        if not isinstance(raw_item, dict):
+            raise ValueError("catalog_invalid")
+        model_id = raw_item.get("id")
+        if (
+            not isinstance(model_id, str)
+            or not model_id
+            or len(model_id) > 160
+            or model_id != model_id.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in model_id)
+        ):
+            raise ValueError("catalog_invalid")
+        if model_id in model_ids:
+            continue
+        if len(model_ids) >= 200:
+            truncated = True
+            continue
+        model_ids.append(model_id)
+    return tuple(model_ids), truncated
 
 
 def _aggregate_result(attempts: list[_Attempt]) -> str:
@@ -826,6 +1016,9 @@ def _validated_probe_url(
     base_url: str,
     *,
     probe_profile: str = OPENAI_PROBE_PROFILE,
+    private_cidrs: list[str] | None = None,
+    allowed_ports: list[int] | None = None,
+    allow_loopback: bool = False,
 ) -> str:
     """校验 scheme、端口和全部解析地址，并按 spec 选择受控探测路径。
 
@@ -838,9 +1031,17 @@ def _validated_probe_url(
         raise ValueError("invalid endpoint")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     # 端口白名单限制探测面，不能借 Provider API 扫描任意内网服务。
-    if port not in {80, 443, 8000, 8080, 8443}:
+    if port not in set(allowed_ports or (80, 443, 8000, 8080, 8443)):
         raise ValueError("blocked port")
-    allow_networks = [ipaddress.ip_network(value, strict=False) for value in config.provider_health_private_cidrs]
+    local_endpoint_policy = private_cidrs is not None
+    allow_networks = [
+        ipaddress.ip_network(value, strict=False)
+        for value in (
+            private_cidrs
+            if private_cidrs is not None
+            else config.provider_health_private_cidrs
+        )
+    ]
     infos = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
     # DNS 无结果时拒绝请求，不让 httpx 再进行一次不受检查的隐式解析。
     if not infos:
@@ -857,18 +1058,32 @@ def _validated_probe_url(
             else resolved_address
         )
         # 回环、链路本地、多播和未指定地址始终禁止，不能被私网 allowlist 放开。
-        if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified:
+        if (
+            (address.is_loopback and not allow_loopback)
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_unspecified
+        ):
             raise ValueError("blocked address")
         # 常见云 metadata 地址单独拒绝，避免未来 ipaddress 分类变化削弱边界。
-        if str(address) in {"169.254.169.254", "100.100.100.200"}:
+        if address in LOCAL_ENDPOINT_BLOCKED_ADDRESSES:
             raise ValueError("metadata endpoint is blocked")
         # 企业私网、CGNAT、文档保留和其他非 global 地址都必须显式命中部署级 CIDR；
         # metadata/回环等高危类别已在前面无条件拒绝，不能借 allowlist 放开。
-        if not address.is_global and not any(address in network for network in allow_networks):
+        explicitly_allowed = any(address in network for network in allow_networks)
+        loopback_allowed = allow_loopback and address.is_loopback
+        if local_endpoint_policy:
+            # Local Endpoint policy is a closed enterprise-private allowlist. Public addresses
+            # must not inherit generic Provider Health's internet egress behavior.
+            if not loopback_allowed and not explicitly_allowed:
+                raise ValueError("local endpoint is not allowlisted")
+        elif not address.is_global and not explicitly_allowed:
             raise ValueError("non-global endpoint is not allowlisted")
         normalized_address = str(address)
         if normalized_address not in resolved_addresses:
             resolved_addresses.append(normalized_address)
+            if local_endpoint_policy and len(resolved_addresses) > 8:
+                raise ValueError("too many local endpoint addresses")
     clean_base = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/") + "/", "", ""))
     # OpenAI-compatible 用 /models 验证认证合同；通用 Endpoint 只探测已配置根路径，不能
     # 猜测私有 models API。profile 已在 lease 前由冻结目录验证，不接受请求体自由值。

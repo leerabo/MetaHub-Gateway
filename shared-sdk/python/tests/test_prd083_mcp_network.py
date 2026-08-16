@@ -504,7 +504,7 @@ def test_response_crypto_authenticates_metadata_payload_and_previous_rotation() 
 
 
 def test_rbac_errors_and_i18n_publish_prd083_contracts() -> None:
-    assert CATALOG_REVISION == 18
+    assert CATALOG_REVISION >= 18
     assert PERMISSION_BY_CODE["mcp.network.manage"].risk_level == "critical"
     assert "mcp.network.manage" in ROLE_GRANTABLE_PERMISSIONS["admin"]
     assert "mcp.network.manage" in ROLE_GRANTABLE_PERMISSIONS["security_admin"]

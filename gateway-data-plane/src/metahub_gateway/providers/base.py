@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -67,6 +68,19 @@ class ProviderRequest:
     adapter_catalog_hash: str = ""
     # 可空终止标记随 Adapter spec 一起冻结；None 表示该兼容协议以 clean EOF 合法结束。
     stream_termination_marker: str | None = field(default=None, repr=False)
+    # PRD-084 local Endpoint network settings are deployment-owned and never sourced from
+    # the request body. The URL and resolved target remain repr-hidden in the adapter.
+    routing_attempt_id: str | None = None
+    local_endpoint_private_cidrs: tuple[str, ...] = field(default=(), repr=False)
+    local_endpoint_allowed_ports: tuple[int, ...] = field(default=(), repr=False)
+    local_endpoint_allow_loopback: bool = False
+    local_endpoint_connect_timeout_seconds: int = 5
+    local_endpoint_overall_timeout_seconds: int = 120
+    local_endpoint_max_response_bytes: int = 16_777_216
+    local_endpoint_max_stream_bytes: int = 67_108_864
+    # Set only after the durable not_called -> called CAS succeeds. This in-memory
+    # marker lets cancellation cleanup preserve conservative usage semantics.
+    local_provider_call_started: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -233,13 +247,32 @@ class ProviderStreamResponse:
     stream_context: Any = field(repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    max_bytes: int | None = field(default=None, repr=False)
+    deadline_monotonic: float | None = field(default=None, repr=False)
+    _observed_bytes: int = field(default=0, init=False, repr=False)
 
     async def iter_bytes(self) -> AsyncIterator[bytes]:
         """逐块返回非空响应字节，并在迭代结束时释放上游资源。"""
 
         try:
-            async for chunk in self.response.aiter_bytes():
+            iterator = self.response.aiter_bytes().__aiter__()
+            while True:
+                try:
+                    if self.deadline_monotonic is None:
+                        chunk = await anext(iterator)
+                    else:
+                        remaining = self.deadline_monotonic - time.monotonic()
+                        if remaining <= 0:
+                            raise ApiError("gateway.local_endpoint_unavailable")
+                        chunk = await asyncio.wait_for(anext(iterator), timeout=remaining)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    raise ApiError("gateway.local_endpoint_unavailable") from None
                 if chunk:
+                    self._observed_bytes += len(chunk)
+                    if self.max_bytes is not None and self._observed_bytes > self.max_bytes:
+                        raise ApiError("gateway.local_endpoint_unavailable")
                     yield chunk
         finally:
             await self.aclose()

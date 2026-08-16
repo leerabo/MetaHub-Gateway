@@ -16,6 +16,7 @@ from metahub_gateway.error_maps import install_provider_error_map_cache
 from metahub_gateway.events import install_runtime_event_dispatcher
 from metahub_gateway.feedback.routes import router as feedback_router
 from metahub_gateway.intent_security import install_intent_security_dispatcher
+from metahub_gateway.local_model_events import install_local_model_event_recovery
 from metahub_gateway.policies import install_policy_snapshot_cache
 from metahub_gateway.policies.redaction import install_policy_mask_runtime
 from metahub_gateway.quota import install_quota_reconciliation
@@ -42,6 +43,9 @@ install_policy_mask_runtime(app)
 install_cache_affinity_recovery(app)
 # Fallback Webhook 通过有界队列异步投递，任何接收端故障都不能延迟主备模型切换。
 install_runtime_event_dispatcher(app)
+# Local call events use a persistent source/outbox and must recover stale attempts before the
+# outer lifespan exposes the Gateway. Delivery remains independent from model response latency.
+install_local_model_event_recovery(app)
 # Intent worker 必须包在 runtime event dispatcher 外层：启动时事件队列先就绪，退出时
 # 先完成旁路分类和 source event 生产，再由内层 dispatcher 排空 Webhook 投递。
 install_intent_security_dispatcher(app)

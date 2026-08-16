@@ -51,6 +51,7 @@ ROLE_DASHBOARD_PAYLOAD_ALLOWED_KEYS = {
 # 事件枚举与导航入口一一绑定，防止调用方把高价值事件伪造到其他页面。
 EVENT_TYPE_BY_NAVIGATION = {
     "overview": "dashboard.viewed",
+    "local-models": "console.page_viewed",
     # PAGE-107 页面事件只保存 shell 元数据；问题、回答与来源值仅存在浏览器活动内存，
     # 专用助手审计图也只保存枚举、计数和链路 owner，不能借 page_viewed 复制正文。
     "admin-assistant": "console.page_viewed",
@@ -221,6 +222,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "注册上游模型 Endpoint，并维护 Provider KeyPool。",
         "先注册模型厂商或客户本地 OpenAI-compatible Endpoint。",
         40,
+    ),
+    NavigationDefinition(
+        "local-models",
+        "本地模型",
+        "配置",
+        "local-models",
+        ("local_endpoint.read",),
+        "管理当前租户可访问的本地 OpenAI-compatible Endpoint。",
+        "尚未注册本地模型 Endpoint。",
+        41,
     ),
     NavigationDefinition(
         "adapter-specs",

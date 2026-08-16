@@ -55,7 +55,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-082 把 MCP 读取、Server 管理、工具策略、调用和审批拆为五个独立后端权限；
 # 工具附加权限和高危审批都必须叠加校验，不能由页面可见性或 Shared 默认矩阵替代。
 # PRD-083 再把出站网络策略与 MCP 内容策略分离，只有后端 network manage 权限可修改。
-CATALOG_REVISION: Final[int] = 18
+# PRD-084 为本地模型聚合入口增加独立 read/manage/test 权限；developer 仅获 read/test，
+# 不得借页面可见性读取完整 Provider/KeyPool 或注册凭据。
+CATALOG_REVISION: Final[int] = 19
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -151,6 +153,27 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "provider",
         "探测 Provider",
         "主动触发当前租户 Provider 健康探测。",
+        "write",
+    ),
+    PermissionDefinition(
+        "local_endpoint.read",
+        "provider",
+        "读取本地模型 Endpoint",
+        "读取当前租户本地模型 Endpoint 的脱敏聚合与目录摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "local_endpoint.manage",
+        "provider",
+        "管理本地模型 Endpoint",
+        "原子注册当前租户本地 Endpoint、初始模型和可选凭据。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "local_endpoint.test",
+        "provider",
+        "测试本地模型 Endpoint",
+        "执行当前租户本地 Endpoint 的受限健康与目录探测。",
         "write",
     ),
     PermissionDefinition(
@@ -569,6 +592,8 @@ _DEVELOPER = {
     "virtual_key.write",
     "provider.health.read",
     "provider.health.probe",
+    "local_endpoint.read",
+    "local_endpoint.test",
     "provider_error_map.read",
     "model.read",
     "model_price.read",
@@ -684,6 +709,9 @@ _OPS = {
     "provider.write",
     "provider.health.read",
     "provider.health.probe",
+    "local_endpoint.read",
+    "local_endpoint.manage",
+    "local_endpoint.test",
     "provider_error_map.read",
     "model.read",
     "model.write",

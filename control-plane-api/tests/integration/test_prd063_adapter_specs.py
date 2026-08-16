@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
-
 from metahub_control.adapter_specs import service as adapter_spec_service
 from metahub_control.adapter_specs.routes import router as adapter_specs_router
 from metahub_control.auth.routes import router as auth_router
@@ -168,7 +167,7 @@ async def test_adapter_spec_read_permission_filters_and_tenant_projection(
     payload = success.json()
     assert payload["catalog"]["version"] == identity.version
     assert payload["catalog"]["hash"] == identity.catalog_hash
-    assert len(payload["specs"]) == identity.spec_count == 9
+    assert len(payload["specs"]) == identity.spec_count == 10
     assert {item["tenant_id"] for item in payload["specs"]} == {tenant_id}
     assert {item["provider_type"] for item in domestic.json()["specs"]} == {
         "zhipu",
@@ -473,17 +472,17 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """事件流程：受控 v1->v2 切换发 exact 事件，v2->v3 投递失败仍保留已提交 active。"""
+    """事件流程：受控 v2->v3 切换发 exact 事件，v3->v4 投递失败仍保留已提交 active。"""
 
     database_url, tenant_id = _prepare_database(monkeypatch, tmp_path)
     original = catalog_identity()
-    v2 = ProviderAdapterCatalogIdentity(
-        version="adapter-spec-v2",
+    v3 = ProviderAdapterCatalogIdentity(
+        version="adapter-spec-v3",
         catalog_hash="b" * 64,
         spec_count=original.spec_count,
         canonical_byte_length=original.canonical_byte_length,
     )
-    monkeypatch.setattr(adapter_spec_service, "catalog_identity", lambda: v2)
+    monkeypatch.setattr(adapter_spec_service, "catalog_identity", lambda: v3)
     delivered: list[object] = []
 
     def _capture_event(*args: object, **kwargs: object) -> None:
@@ -498,16 +497,16 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
         switched = await client.post(
             path,
-            json={"catalog_version": v2.version, "catalog_hash": v2.catalog_hash},
+            json={"catalog_version": v3.version, "catalog_hash": v3.catalog_hash},
             headers={
                 "X-Internal-Token": INTERNAL_TOKEN,
-                "X-Request-ID": "req_prd063_switch_v2",
+                "X-Request-ID": "req_prd063_switch_v3",
             },
         )
 
     assert switched.status_code == 200, switched.text
     assert switched.json()["changed"] is True
-    assert switched.json()["activation"]["catalog_version"] == "adapter-spec-v2"
+    assert switched.json()["activation"]["catalog_version"] == "adapter-spec-v3"
     assert len(delivered) == 1
     event = delivered[0]
     assert event is not None
@@ -515,20 +514,20 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
     assert event.tenant_id == tenant_id
     assert event.actor_id == "adapter-spec-publisher"
     assert event.payload == {
-        "catalog_version": "adapter-spec-v2",
+        "catalog_version": "adapter-spec-v3",
         "catalog_hash": "b" * 64,
-        "previous_catalog_version": "adapter-spec-v1",
-        "spec_count": 9,
+        "previous_catalog_version": "adapter-spec-v2",
+        "spec_count": 10,
         "activated_at": event.payload["activated_at"],
     }
 
-    v3 = ProviderAdapterCatalogIdentity(
-        version="adapter-spec-v3",
+    v4 = ProviderAdapterCatalogIdentity(
+        version="adapter-spec-v4",
         catalog_hash="c" * 64,
         spec_count=original.spec_count,
         canonical_byte_length=original.canonical_byte_length,
     )
-    monkeypatch.setattr(adapter_spec_service, "catalog_identity", lambda: v3)
+    monkeypatch.setattr(adapter_spec_service, "catalog_identity", lambda: v4)
 
     def _fail_delivery(*args: object, **kwargs: object) -> None:
         """模拟含敏感 URL 的投递异常，服务日志不得记录异常字符串或 traceback。"""
@@ -542,10 +541,10 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
         failed_delivery = await client.post(
             path,
-            json={"catalog_version": v3.version, "catalog_hash": v3.catalog_hash},
+            json={"catalog_version": v4.version, "catalog_hash": v4.catalog_hash},
             headers={
                 "X-Internal-Token": INTERNAL_TOKEN,
-                "X-Request-ID": "req_prd063_switch_v3",
+                "X-Request-ID": "req_prd063_switch_v4",
             },
         )
 
@@ -560,12 +559,13 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
         """,
         (tenant_id,),
     ).fetchone()
-    # v2 已被 v3 supersede，模拟它遗留的 pending/dead-letter delivery；恢复必须从历史
+    # v3 已被 v4 supersede，模拟它遗留的 pending/dead-letter delivery；恢复必须从历史
     # activation 读取原始 source_request_id，而不能用当前 worker 的请求 ID 或占位值。
     pending_delivery = connection.execute(
         """
         SELECT ? AS payload_json,? AS tenant_id,? AS event_id,
-               ? AS event_type,? AS event_timestamp
+               ? AS event_type,? AS event_timestamp,
+               ? AS payload_format,? AS wire_body_text
         """,
         (
             json.dumps(event.to_payload(), ensure_ascii=False, sort_keys=True),
@@ -573,11 +573,13 @@ async def test_real_catalog_switch_emits_exact_event_and_webhook_failure_does_no
             event.event_id,
             event.event_type,
             event.timestamp,
+            "json",
+            canonical_json_bytes(event.to_payload()).decode("utf-8"),
         ),
     ).fetchone()
     resumed_body = webhook_service._validated_pending_delivery_body(connection, pending_delivery)
     connection.close()
-    assert tuple(active) == ("adapter-spec-v3", "c" * 64, 9, "active")
+    assert tuple(active) == ("adapter-spec-v4", "c" * 64, 10, "active")
     assert resumed_body == canonical_json_bytes(event.to_payload())
     logs = "\n".join(record.getMessage() for record in caplog.records)
     assert "adapter spec webhook delivery unavailable" in logs

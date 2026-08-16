@@ -819,6 +819,33 @@ def require_provider_writer(
     return _require_request_permissions(request, authorization, ("provider.write",))
 
 
+def require_local_endpoint_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require the independent local Endpoint read permission."""
+
+    return _require_request_permissions(request, authorization, ("local_endpoint.read",))
+
+
+def require_local_endpoint_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require local Endpoint aggregate creation authority."""
+
+    return _require_request_permissions(request, authorization, ("local_endpoint.manage",))
+
+
+def require_local_endpoint_tester(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Require permission to run the bounded local Endpoint probe."""
+
+    return _require_request_permissions(request, authorization, ("local_endpoint.test",))
+
+
 def require_model_catalog_writer(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

@@ -34,6 +34,11 @@ from metahub_shared.rbac import (
     canonical_permission_codes,
 )
 
+from .local_model_events import (
+    LOCAL_MODEL_CALLED_EVENT_TYPE,
+    validate_local_model_called_event,
+    validate_local_model_called_payload,
+)
 from .provider_error_map import TENANT_PROVIDER_ERROR_OUTPUT_CODES
 from .security_events import (
     SECURITY_EVENT_TYPE,
@@ -122,6 +127,9 @@ WEBHOOK_EVENT_TYPES = {
     # 账单争议只外发创建时冻结的范围类型、条目计数和按币种汇总；request 列表、
     # 时间范围、reason、价格证据和调整明细均留在 tenant-qualified 权威数据库。
     "billing_dispute.created",
+    # 本地模型调用事件仅外发 routing attempt 的固定终态摘要；Endpoint、凭据、请求/响应正文、
+    # 原始 usage 和上游错误正文都必须留在租户限定的权威事实中。
+    LOCAL_MODEL_CALLED_EVENT_TYPE,
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -350,6 +358,9 @@ def build_webhook_event(
     elif event_type in {"batch_job.created", "batch_job.completed"}:
         # PRD-074 只接受 Batch source row 冻结的任务计数与金额摘要。
         _validate_batch_job_event_payload(event_type, safe_payload)
+    elif event_type == LOCAL_MODEL_CALLED_EVENT_TYPE:
+        # PRD-084 只接受已实际开始本地 Provider 调用的 exact 安全终态摘要。
+        safe_payload = validate_local_model_called_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -425,6 +436,7 @@ def build_webhook_event(
         "quota.exhausted",
         "trial.expired",
         "billing_dispute.created",
+        LOCAL_MODEL_CALLED_EVENT_TYPE,
         MCP_TOOL_CALLED_EVENT_TYPE,
         MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
@@ -727,6 +739,18 @@ def build_webhook_event(
     elif event_type == "billing_dispute.created":
         # source event 必须绑定认证申请人、争议对象和原始创建链路，恢复 worker 不得自造身份。
         _validate_billing_dispute_created_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == LOCAL_MODEL_CALLED_EVENT_TYPE:
+        # 运行时 source event 没有用户 actor，并必须绑定同一 Endpoint、request、trace 与完成秒。
+        safe_payload = validate_local_model_called_event(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,

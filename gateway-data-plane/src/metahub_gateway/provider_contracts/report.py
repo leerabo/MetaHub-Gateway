@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from .models import ContractCaseResult, ContractRunReport
 
-
 # 报告版本、大小和各类稳定码同时约束本地 CI 制品与 Control 上报边界；调整任一值都需要
 # 升级 schema 并同步后端严格 validator，不能靠宽松反序列化兼容未知字段。
 _REPORT_SCHEMA_VERSION = "adapter-contract-report-v1"
@@ -28,7 +27,7 @@ _LOWER_HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_.-]{0,159}\Z")
 _SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z")
 _SAFE_CASE_KEY = re.compile(r"[a-z0-9_][a-z0-9_.:-]{0,255}\Z")
-_CONTRACT_CASE_ID = re.compile(r"prd063_[a-z0-9_]{2,80}\Z")
+_CONTRACT_CASE_ID = re.compile(r"(?:prd063|prd084)_[a-z0-9_]{2,80}\Z")
 _ADAPTER_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
 
 # kind、variant、auth 和失败码必须形成一组精确合同；这能阻止 skip/unknown 或错误码漂移
@@ -101,7 +100,7 @@ def _validate_case(report: ContractRunReport, case: object) -> ContractCaseResul
     expected_case_id = (
         "acc_"
         + hashlib.sha256(
-            f"{report.run_id}:{case.case_key}".encode("utf-8")
+            f"{report.run_id}:{case.case_key}".encode()
         ).hexdigest()[:32]
     )
     if case.adapter_contract_case_id != expected_case_id:

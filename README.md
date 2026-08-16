@@ -95,9 +95,26 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-081 - SIEM/安全事件格式`
 - `PRD-082 - MCP 工具注册与权限`
 - `PRD-083 - 第三方 MCP 沙箱网络 ACL`
+- `PRD-084 - 本地模型 Endpoint 接入`
 
 最近进展：
 
+- `PRD-084 - 本地模型 Endpoint 接入` 已完成：0077、RBAC revision 19、Adapter v2 `local_endpoint`、
+  tenant-qualified Local Endpoint aggregate、Control 创建/列表/探测 API、Gateway 私网 ACL 与 provider-call
+  fence、`local_model.called` EVT-096/source outbox/Webhook、PAGE-116 和部署/API 文档均已交付。后端逐请求
+  校验 tenant/RBAC，DLP 与预算阻断保持上游调用 0；成功、失败、取消、usage、成本、attempt 和事件可追踪，
+  Endpoint URL、Token、Prompt、Response 与上游异常正文不进入日志或正式证据。最终联合专项 `56/56`、
+  持久层/网络/取消专项 `20/20`、Shared PRD-063/064/084 `116/116`、Gateway PRD-063/064 `74/74`、
+  Adapter v2 `10 specs / 103 cases`、Control PRD-063/064 `12/12`、Console `876/876`、lint `269 files`、
+  Runtime 合同 `8/8`、Browser harness `7/7` 与 Browser driver `6/6` 通过。权威 Runtime JSON 为
+  `.artifacts/prd084-runtime/20260816T183036Z-c60eb988.json`，SHA-256 为
+  `F226D7665714C6AF335C72AE64E33392976337CE7A1E8850319384C8FFDBFDDC`；权威 Browser 批次
+  `.artifacts/prd084-browser/final-20260817-01/` 的 JSON/manifest SHA-256 分别为
+  `F1C6EAF61B496956326CD56974058A9250FAF8AF20C23816F1F9EFF9A949507E`、
+  `9A20078068521D2C3E1AC33C838E7EDBBA5060F112617C5BABBA28FC66290F13`，四张 PNG 已逐图复核。
+  详见 [PRD-084 设计](docs/prd/PRD-084-local-model-endpoint-access.md)、
+  [本地模型 Endpoint API](docs/api/local-model-endpoints.md) 和
+  [PRD-084 测试记录](docs/testing/PRD-084-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-083 - 第三方 MCP 沙箱网络 ACL` 已完成：0076、Network Policy revision、DNS 全地址 ACL、HTTPS
   pinned transport、独立 Scheduler/Sandbox、短时 envelope/permit、durable call intent、熔断、EVT-095
   source outbox、PAGE-115 与三角色 Compose 边界均已交付。后端实时校验 tenant/RBAC/Grant/Schema/Policy，
@@ -339,11 +356,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 85 行、`03_M2-M3扩展交付` 第 21 行、PAGE-116、API-383..388、
-  OBJ-115、EVT-096 与 TC-0167/0168 已和 README、`docs/prd`、`docs/testing` 的 PRD-083 完成状态
-  交叉确认。PRD-083 之后的下一条权威未完成项为
-  `PRD-084 | M2-企业增强 | P2 | 扩展层 | 本地模型 | 本地模型Endpoint接入`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-084；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 86 行、`03_M2-M3扩展交付` 第 22 行、PAGE-117、API-389..391、
+  OBJ-116、EVT-097 与 TC-0169/0170 已和 README、`docs/prd`、`docs/testing` 的 PRD-084 完成状态
+  交叉确认。PRD-084 之后的下一条权威未完成项为
+  `PRD-085 | M2-企业增强 | P2 | 扩展层 | 用户行为埋点 | 产品使用埋点与激活漏斗`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-085；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

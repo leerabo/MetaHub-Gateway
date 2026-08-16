@@ -12,6 +12,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.console.routes import router as console_router
+from metahub_control.console.service import EVENT_TYPE_BY_NAVIGATION, NAVIGATION_DEFINITIONS
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.db.security import hash_password
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -97,6 +98,12 @@ async def test_console_navigation_roles_and_preferences(
 ) -> None:
     """主流程：不同角色拿到不同导航，开发者保存偏好后重新进入能恢复当前入口。"""
 
+    local_models_definition = next(
+        item for item in NAVIGATION_DEFINITIONS if item.id == "local-models"
+    )
+    assert local_models_definition.required_permissions == ("local_endpoint.read",)
+    assert EVENT_TYPE_BY_NAVIGATION["local-models"] == "console.page_viewed"
+
     prepare_database(monkeypatch, tmp_path)
     control_app = build_control_app()
     async with AsyncClient(transport=ASGITransport(app=control_app), base_url="http://control") as client:
@@ -123,6 +130,14 @@ async def test_console_navigation_roles_and_preferences(
             "/console/navigation?active_item_id=request-explanations",
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
+        developer_local_models_navigation = await client.get(
+            "/console/navigation?active_item_id=local-models",
+            headers={"Authorization": f"Bearer {developer_token}"},
+        )
+        viewer_local_models_denied = await client.get(
+            "/console/navigation?active_item_id=local-models",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
         viewer_explanation_preference_denied = await client.patch(
             "/console/preferences",
             json={"active_navigation_item_id": "request-explanations"},
@@ -147,6 +162,7 @@ async def test_console_navigation_roles_and_preferences(
     admin_ids = {item["id"] for item in admin_payload["navigation_items"]}
     assert {
         "providers",
+        "local-models",
         "adapter-specs",
         "users",
         "role-permissions",
@@ -184,6 +200,7 @@ async def test_console_navigation_roles_and_preferences(
         "api-docs",
         "models",
         "adapter-specs",
+        "local-models",
         "sdk-examples",
     }.issubset(developer_ids)
     assert "providers" not in developer_ids
@@ -203,6 +220,11 @@ async def test_console_navigation_roles_and_preferences(
     assert (
         developer_explanation_navigation.json()["active_navigation_item_id"]
         == "request-explanations"
+    )
+    assert developer_local_models_navigation.status_code == 200
+    assert (
+        developer_local_models_navigation.json()["active_navigation_item_id"]
+        == "local-models"
     )
 
     assert viewer_navigation.status_code == 200, viewer_navigation.text
@@ -225,9 +247,12 @@ async def test_console_navigation_roles_and_preferences(
     # 满意度报表属于租户调用事实，viewer 不得收到导航或通过偏好恢复受限入口。
     assert "feedback-summary" not in viewer_ids
     assert "adapter-specs" not in viewer_ids
+    assert "local-models" not in viewer_ids
     assert "request-explanations" not in viewer_ids
     assert viewer_explanation_denied.status_code == 422
     assert viewer_explanation_denied.json()["code"] == "console.navigation_invalid"
+    assert viewer_local_models_denied.status_code == 422
+    assert viewer_local_models_denied.json()["code"] == "console.navigation_invalid"
     # Python 示例归档需要登录开发者权限，viewer 不能只靠前端隐藏后继续保存该导航偏好。
     assert viewer_explanation_preference_denied.status_code == 422
     assert viewer_explanation_preference_denied.json()["code"] == "console.navigation_invalid"

@@ -46,11 +46,12 @@ from .files.routes import router as files_router
 from .finops.routes import router as finops_router
 from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
+from .local_endpoints import router as local_endpoints_router
+from .mcp_governance import install_mcp_scheduler
+from .mcp_governance import router as mcp_governance_router
 from .model_aliases.routes import router as model_aliases_router
 from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
-from .mcp_governance import install_mcp_scheduler
-from .mcp_governance import router as mcp_governance_router
 from .models.routes import router as models_router
 from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
@@ -120,6 +121,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         }
         or request.url.path == "/billing-disputes"
         or request.url.path.startswith("/billing-disputes/")
+        or request.url.path == "/local-endpoints"
+        or request.url.path.startswith("/local-endpoints/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         response.headers["Cache-Control"] = "no-store, private"
@@ -158,6 +161,7 @@ app.include_router(user_preferences_router)
 app.include_router(users_router)
 app.include_router(invitations_router)
 app.include_router(intent_security_router)
+app.include_router(local_endpoints_router)
 app.include_router(virtual_keys_router)
 app.include_router(providers_router)
 app.include_router(provider_health_router)

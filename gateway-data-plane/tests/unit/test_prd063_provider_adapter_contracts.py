@@ -1,6 +1,6 @@
 """PRD-063 Gateway Provider Adapter 最小合同测试。
 
-本文件只验证九类冻结 spec 与数据面请求构造的一致性；PRD-064 的通用契约执行框架、
+本文件验证当前十类冻结 spec 与数据面请求构造的一致性；PRD-064 的通用契约执行框架、
 公网厂商探测和 CI 扩展不在这里提前实现。测试使用内存路由和假 Key，不访问真实 Endpoint，
 也不把 Provider Key、Prompt 或 Response 写入日志和断言输出。
 """
@@ -93,7 +93,7 @@ def test_factory_matches_every_frozen_spec(
     provider_type: str,
     adapter_type: type[OpenAICompatibleAdapter],
 ) -> None:
-    """主流程：九类 Provider 都选择与共享 spec 名称和版本完全一致的 Adapter。"""
+    """主流程：十类 Provider 都选择与共享 spec 名称和版本完全一致的 Adapter。"""
 
     adapter = adapter_for_route(_route(provider_type))
     spec = provider_adapter_spec(provider_type)

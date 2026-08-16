@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from metahub_gateway.api import openai_compatible as api_module
 from metahub_gateway.cache_affinity.models import CacheAffinitySelectionHandle
+from metahub_gateway.policies.cache import PolicySnapshotLeaseDecision
 from metahub_gateway.providers.base import (
     NormalizedProviderError,
     ProviderRequest,
@@ -44,6 +45,18 @@ class _CancellingAdapter:
         raise asyncio.CancelledError
 
 
+class _CalledLocalCancellingAdapter(_CancellingAdapter):
+    """Cross the simulated local send fence before cancellation reaches the caller."""
+
+    async def send_non_stream(self, request: ProviderRequest) -> None:
+        request.local_provider_call_started = True
+        raise asyncio.CancelledError
+
+    async def send_stream(self, request: ProviderRequest) -> None:
+        request.local_provider_call_started = True
+        raise asyncio.CancelledError
+
+
 class _UpstreamFailingAdapter:
     """让主 Provider 返回可触发 Fallback 的受控 5xx 分类。"""
 
@@ -63,7 +76,13 @@ class _UpstreamFailingAdapter:
         )
 
 
-def _route(*, model_id: str, provider_id: str, alias_id: str) -> GatewayRoute:
+def _route(
+    *,
+    model_id: str,
+    provider_id: str,
+    alias_id: str,
+    provider_type: str = "openai_compatible",
+) -> GatewayRoute:
     """构造不含真实 Endpoint 或 Credential 的租户内测试路由。"""
 
     return GatewayRoute(
@@ -74,8 +93,8 @@ def _route(*, model_id: str, provider_id: str, alias_id: str) -> GatewayRoute:
         capabilities={"chat": True, "stream": True},
         provider_id=provider_id,
         provider_code=f"code-{provider_id}",
-        provider_type="openai_compatible",
-        provider_auth_type="bearer",
+        provider_type=provider_type,
+        provider_auth_type="none" if provider_type == "local_endpoint" else "bearer",
         provider_name="Provider Test",
         provider_base_url="https://provider.invalid/v1",
         model_alias_id=alias_id,
@@ -257,6 +276,46 @@ async def test_non_stream_primary_cancellation_closes_attempt_and_selection(
 
 
 @pytest.mark.anyio
+async def test_called_local_primary_cancellation_keeps_usage_unavailable_without_quality_penalty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = _route(
+        model_id="model-local-primary",
+        provider_id="provider-local-primary",
+        alias_id="alias-local",
+        provider_type="local_endpoint",
+    )
+    plan = GatewayRoutePlan(
+        initial_route=primary,
+        initial_role="primary",
+        cache_affinity_context=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    state = _install_attempt_spies(monkeypatch, plan)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_for_route",
+        lambda _route: _CalledLocalCancellingAdapter(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_module._non_stream_response_with_fallback(
+            SimpleNamespace(),
+            _context(),
+            plan,
+            endpoint="chat/completions",
+            payload={"model": "company-cache", "messages": []},
+            request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+            request_started=time.perf_counter(),
+            budget_guard_result=None,
+        )
+
+    completion = state["completed"][0][1]
+    assert completion["usage_status"] == "unavailable"
+    assert completion["usage_exposure_possible"] is True
+    assert completion["quality_observation_eligible"] is False
+
+
+@pytest.mark.anyio
 async def test_fallback_cancellation_closes_second_attempt_without_quality_penalty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,6 +369,57 @@ async def test_fallback_cancellation_closes_second_attempt_without_quality_penal
     assert audit_context.routing_attempt_count == 2
     assert audit_context.final_routing_attempt_id == "rta-cancel-2"
     assert audit_context.budget_reservation_outstanding_cny == "4.000000"
+
+
+@pytest.mark.anyio
+async def test_called_local_fallback_cancellation_keeps_usage_unavailable_without_quality_penalty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = _route(
+        model_id="model-primary",
+        provider_id="provider-primary",
+        alias_id="alias-test",
+    )
+    fallback = _route(
+        model_id="model-local-fallback",
+        provider_id="provider-local-fallback",
+        alias_id="alias-test",
+        provider_type="local_endpoint",
+    )
+    plan = GatewayRoutePlan(
+        initial_route=primary,
+        initial_role="primary",
+        fallback_route=fallback,
+        fallback_conditions=("upstream_5xx",),
+        cache_affinity_context=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    state = _install_attempt_spies(monkeypatch, plan)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_for_route",
+        lambda route: (
+            _UpstreamFailingAdapter()
+            if route is primary
+            else _CalledLocalCancellingAdapter()
+        ),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_module._non_stream_response_with_fallback(
+            SimpleNamespace(),
+            _context(),
+            plan,
+            endpoint="chat/completions",
+            payload={"model": "company-cache", "messages": []},
+            request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(events=[]))),
+            request_started=time.perf_counter(),
+            budget_guard_result=None,
+        )
+
+    fallback_completion = state["completed"][1][1]
+    assert fallback_completion["usage_status"] == "unavailable"
+    assert fallback_completion["usage_exposure_possible"] is True
+    assert fallback_completion["quality_observation_eligible"] is False
 
 
 @pytest.mark.anyio
@@ -380,6 +490,73 @@ async def test_stream_handshake_cancellation_closes_session_and_selection(
 
 
 @pytest.mark.anyio
+async def test_called_local_stream_cancellation_keeps_usage_unavailable_without_quality_penalty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = _route(
+        model_id="model-local-stream",
+        provider_id="provider-local-stream",
+        alias_id="alias-local-stream",
+        provider_type="local_endpoint",
+    )
+    plan = GatewayRoutePlan(initial_route=route, initial_role="primary")
+    context = _context()
+    provider_request = _provider_request(route, sequence=1)
+    attempt = RoutingAttempt(
+        routing_attempt_id="rta-local-stream-cancel",
+        tenant_id=route.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        attempt_sequence=1,
+        attempt_role="primary",
+        route=route,
+    )
+    session = StreamSession(
+        stream_session_id="str-local-stream-cancel",
+        tenant_id=context.tenant_id,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        model_id=route.model_id,
+        provider_id=route.provider_id,
+        provider_code=route.provider_code,
+        inter_token_timeout_ms=1000,
+        started_at=datetime.now(UTC),
+    )
+    completions: list[dict[str, Any]] = []
+    monkeypatch.setattr(api_module, "create_routing_attempt", lambda *_args, **_kwargs: attempt)
+    monkeypatch.setattr(api_module, "create_stream_session", lambda *_args, **_kwargs: session)
+    monkeypatch.setattr(api_module, "safe_finish_stream_session", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        api_module,
+        "safe_complete_routing_attempt",
+        lambda *_args, **kwargs: completions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "safe_finalize_cache_affinity_selection",
+        lambda *_args, **_kwargs: True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_module._stream_response(
+            SimpleNamespace(stream_inter_token_timeout_seconds=1),
+            context,
+            _CalledLocalCancellingAdapter(),
+            provider_request,
+            time.perf_counter(),
+            None,
+            client_request=SimpleNamespace(),
+            route=route,
+            route_plan=plan,
+        )
+
+    assert len(completions) == 1
+    assert completions[0]["usage_status"] == "unavailable"
+    assert completions[0]["usage_exposure_possible"] is True
+    assert completions[0]["quality_observation_eligible"] is False
+
+
+@pytest.mark.anyio
 async def test_outer_handler_records_and_settles_cancelled_provider_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -406,10 +583,13 @@ async def test_outer_handler_records_and_settles_cancelled_provider_request(
         project_id=None,
         application_id=None,
     )
-    policy_lease = SimpleNamespace(
+    policy_lease = PolicySnapshotLeaseDecision(
         executable=True,
+        snapshot=None,
+        snapshot_version=None,
+        status="disabled",
         error_code=None,
-        snapshot_version=1,
+        acquired_monotonic=0.0,
     )
     # 取消链路不触发 PRD-068 mask；桩仍需显式携带门禁结果，避免绕过真实策略结果合同。
     policy_result = SimpleNamespace(decision="allow", mask_required=False)
@@ -510,8 +690,18 @@ async def test_outer_handler_records_and_settles_cancelled_provider_request(
     )
     monkeypatch.setattr(api_module, "apply_dlp_decision", lambda context, _decision: context)
     monkeypatch.setattr(api_module, "enforce_virtual_key_rate_limit", acquire_rate_limit)
+    monkeypatch.setattr(
+        api_module,
+        "prepare_response_cache",
+        lambda *_args, **_kwargs: api_module.PreparedResponseCache(status="disabled"),
+    )
     monkeypatch.setattr(api_module, "enforce_budget_guard", lambda *_args, **_kwargs: budget)
     monkeypatch.setattr(api_module, "apply_budget_decision", lambda context, _decision: context)
+    monkeypatch.setattr(
+        api_module,
+        "enforce_quota_guard",
+        lambda *_args, **_kwargs: api_module.QuotaGuardResult(None, 0, None),
+    )
     monkeypatch.setattr(api_module, "_log_request_received", lambda *_args: None)
     monkeypatch.setattr(api_module, "adapter_for_route", lambda _route: _CancellingAdapter())
     monkeypatch.setattr(

@@ -317,6 +317,8 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
     "provider": frozenset(
         {
             "name",
+            # PRD-084 本地 Endpoint 名称是租户自由文本，只允许以 SHA-256 进入审计。
+            "name_hash",
             "provider_code",
             "provider_type",
             "base_url_hash",

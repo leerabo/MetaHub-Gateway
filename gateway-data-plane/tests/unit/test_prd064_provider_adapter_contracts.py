@@ -57,7 +57,7 @@ _FAILURE_CODE_BY_KIND = {
 
 @pytest.fixture(scope="module")
 def merge_gate_report() -> ContractRunReport:
-    """完整执行一次 92 条动态矩阵，并在本模块其余测试中复用不可变报告。"""
+    """完整执行一次 103 条动态矩阵，并在本模块其余测试中复用不可变报告。"""
 
     return run_merge_gate_sync(
         tenant_id="ci-contract",
@@ -169,13 +169,13 @@ def _run_cli_with_matrix_failure(
 
 
 def test_matrix_is_dynamic_exact_set_for_all_specs_and_auth_types() -> None:
-    """主流程：九个显式夹具按 auth 加九类固定行为动态形成当前 92 条唯一 case。"""
+    """主流程：十个显式夹具按 auth 加九类固定行为动态形成当前 103 条唯一 case。"""
 
     specs = provider_adapter_specs()
     matrix = build_contract_matrix()
     expected_count = sum(len(spec.allowed_auth_types) + 9 for spec in specs)
 
-    assert expected_count == 92
+    assert expected_count == 103
     assert len(matrix) == expected_count
     assert len({case.case_key for case in matrix}) == expected_count
     assert set(CONTRACT_FIXTURES) == {spec.contract_case_id for spec in specs}
@@ -274,13 +274,13 @@ def test_runner_rejects_nonstandard_trace_before_matrix(
 def test_full_runner_covers_success_stream_errors_and_usage(
     merge_gate_report: ContractRunReport,
 ) -> None:
-    """主流程：完整 runner 覆盖非流式、两类 SSE、四类错误和三类 usage 且 92/92 通过。"""
+    """主流程：完整 runner 覆盖非流式、两类 SSE、四类错误和三类 usage 且 103/103 通过。"""
 
     validate_report(merge_gate_report)
     assert merge_gate_report.status == "passed"
     assert merge_gate_report.coverage_complete is True
-    assert merge_gate_report.total_cases == 92
-    assert merge_gate_report.passed_cases == 92
+    assert merge_gate_report.total_cases == 103
+    assert merge_gate_report.passed_cases == 103
     assert merge_gate_report.failed_cases == 0
     assert merge_gate_report.failure_codes == ()
     assert {case.provider_type for case in merge_gate_report.cases} == {
@@ -540,7 +540,7 @@ def test_cli_defaults_use_standard_ids_and_return_zero(
     assert str(captured_kwargs["trace_id"]).startswith("trc_")
     assert captured.err == ""
     assert summary["status"] == "passed"
-    assert summary["total_cases"] == 92
+    assert summary["total_cases"] == 103
     assert summary["report_path"].startswith(".artifacts/")
     assert SENSITIVE_CANARY not in captured.out
 

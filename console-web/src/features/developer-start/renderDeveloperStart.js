@@ -21,6 +21,7 @@ import { renderFiles } from "../files/renderFiles.js";
 import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderMcpTools } from "../mcp-tools/renderMcpTools.js";
+import { renderLocalEndpoints } from "../local-models/renderLocalEndpoints.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import {
@@ -487,6 +488,13 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.authContext,
         options.consoleShellState,
       );
+    case "local-models":
+      // PAGE-116 only consumes the dedicated safe aggregate; Provider and KeyPool pages are never loaded here.
+      return renderLocalEndpointsSection(
+        options.localEndpointsState,
+        options.authContext,
+        options.consoleShellState,
+      );
     case "output-safety":
       // PAGE-099 复用 RequestLog owner；真实 request_log.read 与 tenant 条件仍由每次 Control GET 强制执行。
       return renderOutputSafetySection(
@@ -923,6 +931,18 @@ function renderMcpToolsSection(state, authContext, consoleShellState) {
   return html
     ? `
       <section class="panel mcp-tools-panel" aria-labelledby="mcp-tools-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** Render PAGE-116 only while local_endpoint.read and its backend navigation owner remain exact. */
+function renderLocalEndpointsSection(state, authContext, consoleShellState) {
+  const html = renderLocalEndpoints(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel local-models-panel" aria-labelledby="local-models-title">
         ${html}
       </section>
     `
