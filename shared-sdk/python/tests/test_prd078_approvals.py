@@ -105,10 +105,10 @@ def test_approval_canonical_json_is_stable_and_rejects_implicit_values() -> None
         canonical_approval_bytes(nested)  # type: ignore[arg-type]
 
 
-def test_rbac_revision_14_grants_approval_only_to_three_default_roles() -> None:
-    """审批职责和目标域职责分离，默认矩阵只提升 admin/财务/安全角色。"""
+def test_rbac_approval_permissions_remain_scoped_after_revision_14() -> None:
+    """审批职责和目标域职责分离，后续目录版本不得扩大默认审批角色。"""
 
-    assert CATALOG_REVISION == 14
+    assert CATALOG_REVISION >= 14
     assert PERMISSION_BY_CODE["approval.read"].risk_level == "read"
     assert PERMISSION_BY_CODE["approval.decide"].risk_level == "critical"
     approval_permissions = {"approval.read", "approval.decide"}

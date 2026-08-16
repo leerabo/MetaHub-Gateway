@@ -1663,6 +1663,7 @@ def fail_pending_webhook_event_deliveries(
         "cache.invalidated",
         "experiment.completed",
         "file.prompt_injection_detected",
+        "mcp.tool_called",
         "quota.exhausted",
         SECURITY_EVENT_TYPE,
         "trial.expired",
@@ -1967,6 +1968,17 @@ def _validated_pending_delivery_body(
             )
 
             source_request_id = recover_billing_dispute_source_request_id(
+                connection,
+                envelope,
+            )
+        elif envelope.get("event_type") == "mcp.tool_called":
+            # MCP request_id 不进入公开安全摘要；恢复必须重绑同租户不可变 Invocation
+            # source，而不能使用本轮 outbox worker 链路或 delivery 副本。
+            from metahub_control.mcp_governance.outbox import (
+                recover_mcp_invocation_source_request_id,
+            )
+
+            source_request_id = recover_mcp_invocation_source_request_id(
                 connection,
                 envelope,
             )

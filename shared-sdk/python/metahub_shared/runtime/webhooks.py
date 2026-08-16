@@ -16,6 +16,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from metahub_shared.mcp.contracts import McpContractError
+from metahub_shared.mcp.events import (
+    MCP_TOOL_CALLED_EVENT_TYPE,
+    validate_mcp_tool_called_event,
+    validate_mcp_tool_called_payload,
+)
 from metahub_shared.rbac import (
     ADMIN_ROLE,
     PERMISSION_CODES,
@@ -111,6 +117,9 @@ WEBHOOK_EVENT_TYPES = {
     # 账单争议只外发创建时冻结的范围类型、条目计数和按币种汇总；request 列表、
     # 时间范围、reason、价格证据和调整明细均留在 tenant-qualified 权威数据库。
     "billing_dispute.created",
+    # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
+    # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
+    MCP_TOOL_CALLED_EVENT_TYPE,
     # SIEM 标准事件只外发聚合后的固定安全投影；原 DLP/会话事件仍保留兼容订阅。
     SECURITY_EVENT_TYPE,
 }
@@ -349,6 +358,11 @@ def build_webhook_event(
     elif event_type == "billing_dispute.created":
         # PRD-080 只接受 immutable item/source 可重建的七字段创建摘要。
         _validate_billing_dispute_created_payload(safe_payload)
+    elif event_type == MCP_TOOL_CALLED_EVENT_TYPE:
+        try:
+            safe_payload = validate_mcp_tool_called_payload(safe_payload)
+        except McpContractError:
+            raise ValueError("webhook.payload_invalid") from None
     elif event_type == SECURITY_EVENT_TYPE:
         # PRD-081 聚合事件必须使用 exact 字段合同，不能通过通用 JSON 校验自由扩展。
         safe_payload = validate_security_event_payload(safe_payload)
@@ -399,6 +413,7 @@ def build_webhook_event(
         "quota.exhausted",
         "trial.expired",
         "billing_dispute.created",
+        MCP_TOOL_CALLED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
         "audit.exported",
         "config.imported",
@@ -708,6 +723,20 @@ def build_webhook_event(
             source_request_id=source_request_id,
             occurred_at=occurred_at,
         )
+    elif event_type == MCP_TOOL_CALLED_EVENT_TYPE:
+        try:
+            safe_payload = validate_mcp_tool_called_event(
+                safe_payload,
+                event_id=event_id,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                object_id=object_id,
+                trace_id=trace_id,
+                source_request_id=source_request_id,
+                occurred_at=occurred_at,
+            )
+        except McpContractError:
+            raise ValueError("webhook.payload_invalid") from None
     elif event_type == SECURITY_EVENT_TYPE:
         # 聚合器信封必须绑定稳定 sevt_、固定 actor、窗口结束秒和最后来源请求。
         validate_security_event_envelope(
@@ -1258,6 +1287,7 @@ def _validate_approval_event_payload(event_type: str, payload: dict[str, Any]) -
     target_action = payload["target_action"]
     target_actions = {
         "budget_block_release": {"release"},
+        "mcp_tool_invocation": {"invoke"},
         "session_risk_action": {
             "freeze_session",
             "freeze_virtual_key",

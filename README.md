@@ -93,9 +93,34 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-079 - 套餐、试用与额度类型`
 - `PRD-080 - 账单争议与调整流程`
 - `PRD-081 - SIEM/安全事件格式`
+- `PRD-082 - MCP 工具注册与权限`
 
 最近进展：
 
+- `PRD-082 - MCP 工具注册与权限` 已完成：Shared 发布 RBAC revision 17、MCP exact contracts、
+  Draft 2020-12 Schema profile、分域加密摘要、参数 DLP、返回脱敏和 `mcp.tool_called` 安全事件；0075
+  新增 tenant-qualified Server、Credential、Operation、SyncJob、Tool、Grant、Invocation、Attempt、
+  Approval 绑定、event/outbox 与 scheduler 事实。Control 提供 Server 注册/刷新/停用/启用、Tool Schema
+  与 policy、异步 invoke/result、后端实时 RBAC、非自审高危审批、公平 lease、失败/结果未知恢复和全路径
+  no-store；PAGE-114 提供 Servers/Tools/Invocations 三个 tab、原生注册与 Schema Dialog、安全调用摘要和
+  双视口布局。生产 executor 仍固定 `disabled`，正式 Runtime 只使用 test-only literal-loopback 官方 SDK
+  adapter，不把 PRD-083 的沙箱/网络 ACL 能力冒充为已交付。最终 PRD-082 Python 专项合集 `146/146`，
+  其中 Scheduler `30/30`、Runtime contracts `36/36`、Browser harness `8/8`；Console 全量 `846/846`、
+  Browser driver contracts `6/6`、lint `261 files`，Ruff/compile 通过；这些分组存在重叠，不相加冒充
+  一次根级全量。权威 Runtime 从空 SQLite
+  完成 `75/0075 -> 75/0075 -> 74/0074 -> 75/0075`，四阶段均 `integrity_check=ok`、外键违规 0；
+  DLP block、返回脱敏、高危审批、已知失败、结果未知、失败请求、用量/成本和停服恢复均可追踪，固定端口、
+  owned process 与 SQLite sidecar 最终为 0。权威 Browser `prd082-page114-20260816-r8` 在
+  `1280x720`/`390x844` 覆盖三 tab、Server disable/enable、Schema Dialog 和移动注册 Dialog，四张截图
+  已目视复核；外部请求、禁止 query、Console/Page error、全局横向 overflow 和敏感明文命中均为 0。
+  正式生命周期验收确认会话过期时权限矩阵失败关闭，动态撤权后 PAGE-114、导航和 root 状态立即清除并
+  回到概览，viewer 无入口且直达 `#mcp-tools` 仍不渲染页面；端口、进程、数据库、sidecar 和临时凭据
+  最终全部清零。四张正式 PNG 已由主 Agent 逐张目视复核。
+  详见 [PRD-082 设计](docs/prd/PRD-082-mcp-tool-registration-permissions.md)、
+  [MCP 工具 API](docs/api/mcp-tools.md)、[PRD-082 测试记录](docs/testing/PRD-082-tests.md)、
+  [Runtime](.artifacts/prd082-runtime/prd082-final-runtime-7) 和
+  [Browser](.artifacts/prd082-browser/prd082-page114-20260816-r8)。总体目标仍为
+  `all_108_prds_complete=false`。
 - `PRD-081 - SIEM/安全事件格式` 已完成：Shared 提供 exact `SecurityEventPayload`、JSON/CEF
   deterministic wire 与 HMAC 实际字节合同；0074 新增 tenant-qualified 安全 source、5 秒聚合、成员、
   outbox、Endpoint 分钟限流和 Webhook format/wire 冻结。Control 以公平 lease scheduler 从 DLP、会话风险和
@@ -295,11 +320,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 83 行、`03_M2-M3扩展交付` 第 19 行、PAGE-114、API-372..377、
-  McpServer/McpTool/McpInvocation、`mcp.tool_called` 与 TC-0163/0164 已和 README、`docs/prd`、
-  `docs/testing` 的 PRD-081 完成状态交叉确认。PRD-081 之后的下一条权威未完成项为
-  `PRD-082 | M2-企业增强 | P2 | 扩展层 | MCP治理基础 | MCP工具注册与权限`，不是仅按编号推断。
-  本次提交不启动或混入 PRD-082；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 84 行、`03_M2-M3扩展交付` 第 20 行、PAGE-115、API-378..382、
+  `McpNetworkPolicy`/OBJ-114、`mcp.network_blocked` 与 TC-0165/0166 已和 README、`docs/prd`、
+  `docs/testing` 的 PRD-082 完成状态交叉确认。PRD-082 之后的下一条权威未完成项为
+  `PRD-083 | M2-企业增强 | P2 | 扩展层 | MCP沙箱 | 第三方MCP沙箱网络ACL`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-083；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

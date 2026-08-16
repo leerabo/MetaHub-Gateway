@@ -25,7 +25,7 @@ from metahub_control.session_risks.service import (
     _load_score,
 )
 
-TargetType = Literal["budget_block_release", "session_risk_action"]
+TargetType = Literal["budget_block_release", "session_risk_action", "mcp_tool_invocation"]
 
 # Session Risk 回写使用独立 HMAC 域和固定理由矩阵，避免摘要跨用途复用或客户端自造动作。
 _SESSION_APPROVAL_ACTION_KEY_DOMAIN = b"metahub.session-risk.approval-action-idempotency.v1"
@@ -58,7 +58,9 @@ class ApprovalTarget:
 class AppliedTarget:
     """批准事务产生的持久目标坐标和可选 Redis 对账意图。"""
 
-    adapter_kind: Literal["budget_block_release", "session_risk_store_sync"]
+    adapter_kind: Literal[
+        "budget_block_release", "session_risk_store_sync", "mcp_invocation_enqueue"
+    ]
     target_fact_id: str | None
     target_revision: int | None
     sync_intent: SessionRiskStoreSyncIntent | None = None
@@ -91,6 +93,16 @@ def load_target(
     if target_type == "session_risk_action":
         # Session Risk 目标必须由当前租户的服务端适配器解析，不能接受客户端指定的跨域对象。
         return _load_session_risk_target(
+            connection,
+            tenant_id=tenant_id,
+            source_type=source_type,
+            source_id=source_id,
+            target_id=target_id,
+            target_action=target_action,
+            target_reason_code=target_reason_code,
+        )
+    if target_type == "mcp_tool_invocation":
+        return _load_mcp_target(
             connection,
             tenant_id=tenant_id,
             source_type=source_type,
@@ -153,6 +165,15 @@ def apply_approved_target(
             target_fact_id=None,
             target_revision=None,
         )
+    if target_type == "mcp_tool_invocation":
+        return _apply_mcp_target(
+            connection,
+            context,
+            task,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
     # Session Risk 目标必须由当前租户的服务端适配器解析，不能接受客户端指定的跨域对象。
     if target_type != "session_risk_action":
         # 内部依赖、摘要或持久化事实异常统一失败关闭；只暴露固定错误码而不泄露敏感上下文。
@@ -166,6 +187,243 @@ def apply_approved_target(
         request_id=request_id,
         trace_id=trace_id,
         now=now,
+    )
+
+
+def apply_rejected_target(
+    connection: sqlite3.Connection,
+    task: sqlite3.Row,
+    *,
+    timeout: bool,
+    now: datetime,
+) -> None:
+    """让 MCP 审批拒绝/超时与 Invocation 终态在同一事务收敛。"""
+
+    if _text(task["target_type"]) != "mcp_tool_invocation":
+        return
+    error_code = "mcp.approval_timeout" if timeout else "mcp.approval_rejected"
+    timestamp = _to_db_time(now)
+    changed = connection.execute(
+        """
+        UPDATE mcp_invocations
+        SET status='rejected',execution_status='not_called',invocation_count=1,
+            tool_call_count=0,cost_status='not_applicable',cost_micros=NULL,
+            error_code=?,completed_at=?,updated_at=?,state_revision=state_revision+1,
+            lease_owner_id=NULL,lease_token=NULL,
+            lease_expires_at=NULL,next_attempt_at=NULL
+        WHERE tenant_id=? AND mcp_invocation_id=? AND status='approval_pending'
+          AND approval_task_id=?
+        """,
+        (
+            error_code,
+            timestamp,
+            timestamp,
+            _text(task["tenant_id"]),
+            _text(task["target_id"]),
+            _text(task["approval_task_id"]),
+        ),
+    ).rowcount
+    if changed != 1:
+        raise ApiError("approval.target_conflict")
+
+
+def _load_mcp_target(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    source_type: str,
+    source_id: str,
+    target_id: str,
+    target_action: str,
+    target_reason_code: str | None,
+) -> ApprovalTarget:
+    """从 tenant-qualified Invocation 重建高危 MCP 审批指纹。"""
+
+    if (
+        source_type != "mcp"
+        or source_id != target_id
+        or target_action != "invoke"
+        or target_reason_code is not None
+    ):
+        raise ApiError("approval.input_invalid")
+    row = connection.execute(
+        """
+        SELECT invocation.*,server.state_revision AS current_server_revision,
+               server.active_credential_revision AS current_credential_revision,
+               server.status AS current_server_status,
+               tool.schema_revision AS current_schema_revision,
+               tool.policy_revision AS current_policy_revision,
+               tool.status AS current_tool_status
+        FROM mcp_invocations invocation
+        JOIN mcp_servers server
+          ON server.tenant_id=invocation.tenant_id
+         AND server.mcp_server_id=invocation.mcp_server_id
+        JOIN mcp_tools tool
+          ON tool.tenant_id=invocation.tenant_id
+         AND tool.mcp_server_id=invocation.mcp_server_id
+         AND tool.mcp_tool_id=invocation.mcp_tool_id
+        WHERE invocation.tenant_id=? AND invocation.mcp_invocation_id=?
+        """,
+        (tenant_id, target_id),
+    ).fetchone()
+    if row is None:
+        raise ApiError("approval.not_found")
+    if (
+        row["status"] != "approval_pending"
+        or row["risk_level"] != "high"
+        or row["approval_required"] != 1
+        or row["current_server_status"] != "active"
+        or row["current_tool_status"] != "active"
+        or row["server_state_revision"] != row["current_server_revision"]
+        or row["credential_revision"] != row["current_credential_revision"]
+        or row["schema_revision"] != row["current_schema_revision"]
+        or row["policy_revision"] != row["current_policy_revision"]
+    ):
+        raise ApiError("approval.target_conflict")
+    return build_mcp_approval_target(
+        invocation_id=_text(row["mcp_invocation_id"]),
+        tenant_id=_text(row["tenant_id"]),
+        server_id=_text(row["mcp_server_id"]),
+        tool_id=_text(row["mcp_tool_id"]),
+        requested_by=_text(row["requested_by"]),
+        server_state_revision=_positive_integer(row["server_state_revision"]),
+        credential_revision=_positive_integer(row["credential_revision"]),
+        schema_revision=_positive_integer(row["schema_revision"]),
+        policy_revision=_positive_integer(row["policy_revision"]),
+        input_schema_original_sha256=_text(row["input_schema_original_sha256"]),
+        input_schema_effective_sha256=_text(row["input_schema_effective_sha256"]),
+        output_schema_original_sha256=(
+            _text(row["output_schema_original_sha256"])
+            if row["output_schema_original_sha256"] is not None
+            else None
+        ),
+        output_schema_effective_sha256=(
+            _text(row["output_schema_effective_sha256"])
+            if row["output_schema_effective_sha256"] is not None
+            else None
+        ),
+        required_permissions_sha256=_text(row["required_permissions_sha256"]),
+        grant_sha256=_text(row["grant_sha256"]),
+        arguments_hmac=_text(row["arguments_hmac"]),
+        arguments_hmac_key_version=_positive_integer(row["arguments_hmac_key_version"]),
+        approval_deadline_at=_text(row["approval_deadline_at"]),
+    )
+
+
+def build_mcp_approval_target(
+    *,
+    invocation_id: str,
+    tenant_id: str,
+    server_id: str,
+    tool_id: str,
+    requested_by: str,
+    server_state_revision: int,
+    credential_revision: int,
+    schema_revision: int,
+    policy_revision: int,
+    input_schema_original_sha256: str,
+    input_schema_effective_sha256: str,
+    output_schema_original_sha256: str | None,
+    output_schema_effective_sha256: str | None,
+    required_permissions_sha256: str,
+    grant_sha256: str,
+    arguments_hmac: str,
+    arguments_hmac_key_version: int,
+    approval_deadline_at: str,
+) -> ApprovalTarget:
+    """Build the one canonical approval target used before and after persistence."""
+
+    version = ":".join(
+        str(value)
+        for value in (
+            server_state_revision,
+            credential_revision,
+            schema_revision,
+            policy_revision,
+        )
+    )
+    fields = (
+        invocation_id,
+        tenant_id,
+        server_id,
+        tool_id,
+        requested_by,
+        input_schema_original_sha256,
+        input_schema_effective_sha256,
+        output_schema_original_sha256 or "",
+        output_schema_effective_sha256 or "",
+        required_permissions_sha256,
+        grant_sha256,
+        arguments_hmac,
+        str(arguments_hmac_key_version),
+        approval_deadline_at,
+    )
+    return ApprovalTarget(
+        target_type="mcp_tool_invocation",
+        target_id=invocation_id,
+        target_action="invoke",
+        target_reason_code=None,
+        target_version=version,
+        fingerprint_parts=("mcp_tool_invocation", version, *fields),
+        risk_level="high",
+        read_permission_code="mcp.read",
+        write_permission_code="mcp.approve",
+    )
+
+
+def _apply_mcp_target(
+    connection: sqlite3.Connection,
+    context: AuthContext,
+    task: sqlite3.Row,
+    *,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> AppliedTarget:
+    """审批事务只排队 Invocation；不得解密参数或访问 MCP Endpoint。"""
+
+    del request_id, trace_id
+    tenant_id = context.user.tenant_id
+    invocation_id = _text(task["target_id"])
+    row = connection.execute(
+        """
+        SELECT requested_by,policy_revision,status,approval_task_id
+        FROM mcp_invocations
+        WHERE tenant_id=? AND mcp_invocation_id=?
+        """,
+        (tenant_id, invocation_id),
+    ).fetchone()
+    if row is None or row["status"] != "approval_pending":
+        raise ApiError("approval.target_conflict")
+    if row["requested_by"] == context.user.user_id:
+        raise ApiError("mcp.approval_self_denied")
+    if row["approval_task_id"] != task["approval_task_id"]:
+        raise ApiError("approval.target_conflict")
+    timestamp = _to_db_time(now)
+    changed = connection.execute(
+        """
+        UPDATE mcp_invocations
+        SET status='queued',queued_at=?,next_attempt_at=?,updated_at=?,
+            state_revision=state_revision+1
+        WHERE tenant_id=? AND mcp_invocation_id=? AND status='approval_pending'
+          AND approval_task_id=? AND requested_by!=?
+        """,
+        (
+            timestamp,
+            timestamp,
+            timestamp,
+            tenant_id,
+            invocation_id,
+            task["approval_task_id"],
+            context.user.user_id,
+        ),
+    ).rowcount
+    if changed != 1:
+        raise ApiError("approval.target_conflict")
+    return AppliedTarget(
+        adapter_kind="mcp_invocation_enqueue",
+        target_fact_id=invocation_id,
+        target_revision=_positive_integer(row["policy_revision"]),
     )
 
 
@@ -483,6 +741,7 @@ __all__ = [
     "AppliedTarget",
     "ApprovalTarget",
     "apply_approved_target",
+    "apply_rejected_target",
     "load_target",
     "load_task_target",
 ]

@@ -85,6 +85,12 @@ export const PERMISSIONS = Object.freeze({
   BILLING_DISPUTE_READ: "billing.dispute.read",
   BILLING_DISPUTE_CREATE: "billing.dispute.create",
   BILLING_DISPUTE_REVIEW: "billing.dispute.review",
+  // PAGE-114 MCP 读取、Server 管理、策略管理、调用和审批均为独立后端能力。
+  MCP_READ: "mcp.read",
+  MCP_SERVER_MANAGE: "mcp.server.manage",
+  MCP_POLICY_MANAGE: "mcp.policy.manage",
+  MCP_INVOKE: "mcp.invoke",
+  MCP_APPROVE: "mcp.approve",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",

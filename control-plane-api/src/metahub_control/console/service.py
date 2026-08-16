@@ -93,6 +93,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "quota-buckets": "console.page_viewed",
     # PAGE-112 只记录页面访问，不携带争议原因、item、金额、幂等键或审核决定。
     "billing-disputes": "console.page_viewed",
+    # PAGE-114 访问事件只记录外壳元数据，不携带 Endpoint、Token、Schema、参数或结果。
+    "mcp-tools": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -664,6 +666,17 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看异步批处理任务、进度、固定失败原因和成本摘要。",
         "提交前确认文件安全准入、模型价格和预算均可用。",
         122,
+    ),
+    NavigationDefinition(
+        "mcp-tools",
+        "MCP 工具",
+        "开发者",
+        "mcp-tools",
+        # PAGE-114 的页面入口只要求读取权限；注册和策略按钮由独立写权限控制。
+        ("mcp.read",),
+        "注册 MCP Server，审核工具 Schema 与权限，并查看安全调用摘要。",
+        "注册 Server 并完成工具策略审核后，可按权限追踪调用状态。",
+        123,
     ),
     NavigationDefinition(
         "debug-console",

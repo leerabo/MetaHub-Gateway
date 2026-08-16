@@ -44,6 +44,31 @@ AVAILABLE_LOCALES = (
     LocaleInfo(locale="zh-CN", label="简体中文", native_label="简体中文", default=True),
     LocaleInfo(locale="en-US", label="English", native_label="English", default=False),
 )
+_MCP_ERROR_LABELS = (
+    ("mcp.feature_disabled", "MCP 治理未启用", "MCP governance disabled"),
+    ("mcp.executor_disabled", "MCP 执行器未启用", "MCP executor disabled"),
+    ("mcp.request_invalid", "MCP 请求不合法", "Invalid MCP request"),
+    ("mcp.schema_invalid", "MCP 工具 Schema 不合法", "Invalid MCP tool Schema"),
+    ("mcp.sync_failed", "MCP 工具同步失败", "MCP tool sync failed"),
+    ("mcp.credential_invalid", "MCP 候选凭据无效", "Invalid MCP candidate credential"),
+    ("mcp.server_not_found", "MCP Server 不存在", "MCP Server not found"),
+    ("mcp.tool_not_found", "MCP Tool 不存在", "MCP Tool not found"),
+    ("mcp.invocation_not_found", "MCP 调用不存在", "MCP Invocation not found"),
+    ("mcp.state_conflict", "MCP 状态已变化", "MCP state changed"),
+    ("mcp.idempotency_required", "需要 MCP 幂等键", "MCP idempotency key required"),
+    ("mcp.idempotency_conflict", "MCP 幂等意图冲突", "MCP idempotency conflict"),
+    ("mcp.arguments_invalid", "MCP 工具参数不合法", "Invalid MCP tool arguments"),
+    ("mcp.arguments_blocked", "MCP 工具参数已阻断", "MCP tool arguments blocked"),
+    ("mcp.result_blocked", "MCP 工具结果已阻断", "MCP tool result blocked"),
+    ("mcp.output_dlp_unavailable", "MCP 输出 DLP 暂不可用", "MCP output DLP unavailable"),
+    ("mcp.approval_self_denied", "不能自批 MCP 调用", "MCP self-approval denied"),
+    ("mcp.authorization_revoked", "MCP 调用权限已撤销", "MCP authorization revoked"),
+    ("mcp.server_unavailable", "MCP Server 暂不可用", "MCP Server unavailable"),
+    ("mcp.tool_failed", "MCP Tool 调用失败", "MCP Tool failed"),
+    ("mcp.result_invalid", "MCP 工具结果不合法", "Invalid MCP tool result"),
+    ("mcp.outcome_unknown", "MCP 调用结果未知", "MCP outcome unknown"),
+    ("mcp.unavailable", "MCP 治理暂不可用", "MCP governance unavailable"),
+)
 I18N_MESSAGES: tuple[I18nMessage, ...] = (
     I18nMessage("error.webhook.format_invalid.label", "zh-CN", "Webhook 格式不合法", "errors"),
     I18nMessage("error.webhook.format_invalid.label", "en-US", "Invalid webhook format", "errors"),
@@ -1074,6 +1099,13 @@ I18N_MESSAGES: tuple[I18nMessage, ...] = (
         "File model access blocked",
         "errors",
     ),
+) + tuple(
+    message
+    for code, zh_cn, en_us in _MCP_ERROR_LABELS
+    for message in (
+        I18nMessage(f"error.{code}.label", "zh-CN", zh_cn, "errors"),
+        I18nMessage(f"error.{code}.label", "en-US", en_us, "errors"),
+    )
 )
 MESSAGE_INDEX = {(message.locale, message.key): message.text for message in I18N_MESSAGES}
 

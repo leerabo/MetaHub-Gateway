@@ -20,6 +20,7 @@ import { renderSessionRisks } from "../session-risks/renderSessionRisks.js";
 import { renderFiles } from "../files/renderFiles.js";
 import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
+import { renderMcpTools } from "../mcp-tools/renderMcpTools.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import {
@@ -479,6 +480,13 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.consoleShellState,
         options.i18n,
       );
+    case "mcp-tools":
+      // PAGE-114 列表只展示安全摘要；Schema 仅由显式详情 Dialog 加载，真实 RBAC 仍由 MCP API 强制执行。
+      return renderMcpToolsSection(
+        options.mcpToolsState,
+        options.authContext,
+        options.consoleShellState,
+      );
     case "output-safety":
       // PAGE-099 复用 RequestLog owner；真实 request_log.read 与 tenant 条件仍由每次 Control GET 强制执行。
       return renderOutputSafetySection(
@@ -903,6 +911,18 @@ function renderBatchJobsSection(state, authContext, consoleShellState, i18n) {
   return html
     ? `
       <section class="panel batch-jobs-panel" aria-labelledby="batch-jobs-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** 仅在 mcp.read 导航 owner 精确匹配时渲染 PAGE-114，失权时不保留空壳 DOM。 */
+function renderMcpToolsSection(state, authContext, consoleShellState) {
+  const html = renderMcpTools(state, authContext, consoleShellState);
+  return html
+    ? `
+      <section class="panel mcp-tools-panel" aria-labelledby="mcp-tools-title">
         ${html}
       </section>
     `

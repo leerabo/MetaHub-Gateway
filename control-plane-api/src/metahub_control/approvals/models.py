@@ -11,7 +11,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-ApprovalTargetType = Literal["budget_block_release", "session_risk_action"]
+ApprovalTargetType = Literal[
+    "budget_block_release", "session_risk_action", "mcp_tool_invocation"
+]
 ApprovalAction = Literal["approve", "reject"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
 ApprovalRiskLevel = Literal["standard", "high"]

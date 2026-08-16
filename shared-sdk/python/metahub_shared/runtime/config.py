@@ -14,12 +14,18 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
 from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
+from metahub_shared.mcp.contracts import McpContractError, McpSchemaLimits, McpVersionedSecret
+from metahub_shared.mcp.crypto import (
+    DEFAULT_MCP_ENCRYPTION_SECRET,
+    DEFAULT_MCP_HMAC_SECRET,
+    validate_mcp_secret_domains,
+)
 from metahub_shared.response_cache import (
     ResponseCacheContractError,
     VersionedResponseCacheSecret,
@@ -34,6 +40,7 @@ EnvironmentName = Literal["dev", "test", "prod"]
 ConfigSource = Literal["default", "file", "env"]
 ConfigStatus = Literal["configured", "missing", "masked", "defaulted"]
 ServiceMode = Literal["internal_only", "public_service"]
+McpExecutorMode = Literal["disabled", "test_loopback"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = (
@@ -104,6 +111,47 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_ROOT": ".data/response-cache-failure-spool",
     "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_POLL_INTERVAL_SECONDS": "2",
     "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_CLAIM_LEASE_SECONDS": "60",
+    # MCP defaults to disabled and cannot open tenant sockets in production.  Dev/test receive
+    # two public, independent local roots at load time; production never synthesizes a key.
+    "METAHUB_MCP_ENABLED": "false",
+    "METAHUB_MCP_ENCRYPTION_VERSION": "1",
+    "METAHUB_MCP_ENCRYPTION_SECRET": "",
+    "METAHUB_MCP_ENCRYPTION_PREVIOUS_VERSION": "",
+    "METAHUB_MCP_ENCRYPTION_PREVIOUS_SECRET": "",
+    "METAHUB_MCP_HMAC_VERSION": "1",
+    "METAHUB_MCP_HMAC_SECRET": "",
+    "METAHUB_MCP_HMAC_PREVIOUS_VERSION": "",
+    "METAHUB_MCP_HMAC_PREVIOUS_SECRET": "",
+    "METAHUB_MCP_EXECUTOR_MODE": "disabled",
+    "METAHUB_MCP_TEST_LOOPBACK_ENABLED": "false",
+    "METAHUB_MCP_SCHEDULER_ENABLED": "false",
+    "METAHUB_MCP_SCHEDULER_POLL_INTERVAL_SECONDS": "2",
+    "METAHUB_MCP_SCHEDULER_BATCH_SIZE": "20",
+    "METAHUB_MCP_GLOBAL_CONCURRENCY": "4",
+    "METAHUB_MCP_TENANT_CONCURRENCY": "1",
+    "METAHUB_MCP_OPERATION_LEASE_SECONDS": "60",
+    "METAHUB_MCP_INVOCATION_LEASE_SECONDS": "90",
+    "METAHUB_MCP_PROBE_DEADLINE_SECONDS": "10",
+    "METAHUB_MCP_CALL_DEADLINE_SECONDS": "30",
+    "METAHUB_MCP_REGISTER_MAX_BYTES": "16384",
+    "METAHUB_MCP_REFRESH_MAX_BYTES": "4096",
+    "METAHUB_MCP_POLICY_MAX_BYTES": "32768",
+    "METAHUB_MCP_INVOKE_MAX_BYTES": "131072",
+    "METAHUB_MCP_ARGUMENTS_MAX_BYTES": "65536",
+    "METAHUB_MCP_SCHEMA_MAX_BYTES": "65536",
+    "METAHUB_MCP_SERVER_SCHEMA_MAX_BYTES": "1048576",
+    "METAHUB_MCP_RESULT_MAX_BYTES": "1048576",
+    "METAHUB_MCP_TREE_MAX_DEPTH": "12",
+    "METAHUB_MCP_TREE_MAX_NODES": "1024",
+    "METAHUB_MCP_SCHEMA_MAX_PROPERTIES": "256",
+    "METAHUB_MCP_SCHEMA_MAX_KEYWORDS": "2048",
+    "METAHUB_MCP_SCHEMA_MAX_COMBINATOR_BRANCHES": "64",
+    "METAHUB_MCP_SCHEMA_MAX_ENUM_ITEMS": "256",
+    "METAHUB_MCP_SCHEMA_MAX_ENUM_ITEM_BYTES": "4096",
+    "METAHUB_MCP_SCHEMA_MAX_PATTERN_LENGTH": "512",
+    "METAHUB_MCP_VALIDATOR_MAX_STEPS": "100000",
+    "METAHUB_MCP_MAX_STRING_LENGTH": "65536",
+    "METAHUB_MCP_MAX_ARRAY_ITEMS": "1024",
     # 空默认值让生产与未启用 Chat 的部署保持可启动；load 阶段仅在 dev/test 回环环境
     # 注入公开的本地开发值，内部 Chat 入口遇到生产缺失值必须失败关闭。
     "METAHUB_INTERNAL_CHAT_TOKEN": "",
@@ -456,6 +504,47 @@ class AppConfig(BaseModel):
     )
     response_cache_failure_spool_poll_interval_seconds: int = 2
     response_cache_failure_spool_claim_lease_seconds: int = 60
+    # MCP cryptographic roots and executor controls are deployment-owned.  Secret fields never
+    # participate in model_dump/repr; previous keys are retained for bounded reads only.
+    mcp_enabled: bool = False
+    mcp_encryption_version: int = 1
+    mcp_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_encryption_previous_version: int | None = None
+    mcp_encryption_previous_secret: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_hmac_version: int = 1
+    mcp_hmac_secret: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_hmac_previous_version: int | None = None
+    mcp_hmac_previous_secret: str | None = Field(default=None, exclude=True, repr=False)
+    mcp_executor_mode: McpExecutorMode = "disabled"
+    mcp_test_loopback_enabled: bool = False
+    mcp_scheduler_enabled: bool = False
+    mcp_scheduler_poll_interval_seconds: float = 2.0
+    mcp_scheduler_batch_size: int = 20
+    mcp_global_concurrency: int = 4
+    mcp_tenant_concurrency: int = 1
+    mcp_operation_lease_seconds: int = 60
+    mcp_invocation_lease_seconds: int = 90
+    mcp_probe_deadline_seconds: int = 10
+    mcp_call_deadline_seconds: int = 30
+    mcp_register_max_bytes: int = 16_384
+    mcp_refresh_max_bytes: int = 4_096
+    mcp_policy_max_bytes: int = 32_768
+    mcp_invoke_max_bytes: int = 131_072
+    mcp_arguments_max_bytes: int = 65_536
+    mcp_schema_max_bytes: int = 65_536
+    mcp_server_schema_max_bytes: int = 1_048_576
+    mcp_result_max_bytes: int = 1_048_576
+    mcp_tree_max_depth: int = 12
+    mcp_tree_max_nodes: int = 1_024
+    mcp_schema_max_properties: int = 256
+    mcp_schema_max_keywords: int = 2_048
+    mcp_schema_max_combinator_branches: int = 64
+    mcp_schema_max_enum_items: int = 256
+    mcp_schema_max_enum_item_bytes: int = 4_096
+    mcp_schema_max_pattern_length: int = 512
+    mcp_validator_max_steps: int = 100_000
+    mcp_max_string_length: int = 65_536
+    mcp_max_array_items: int = 1_024
     # spool 路径可能暴露宿主机目录结构，因此与数据库 URL 一样禁止进入 model_dump/repr。
     # HMAC 复用 auth_token_secret 但在实现中使用独立域分隔，不能直接对正文签名。
     finops_usage_spool_root: str = Field(
@@ -613,6 +702,62 @@ class AppConfig(BaseModel):
             )
         return tuple(keys)
 
+    @property
+    def mcp_encryption_keyring(self) -> tuple[McpVersionedSecret, ...]:
+        """Return active-first MCP encryption keys; an empty tuple means fail closed."""
+
+        if self.mcp_encryption_secret is None:
+            return ()
+        keys = [McpVersionedSecret(self.mcp_encryption_version, self.mcp_encryption_secret)]
+        if (
+            self.mcp_encryption_previous_version is not None
+            and self.mcp_encryption_previous_secret is not None
+        ):
+            keys.append(
+                McpVersionedSecret(
+                    self.mcp_encryption_previous_version,
+                    self.mcp_encryption_previous_secret,
+                )
+            )
+        return tuple(keys)
+
+    @property
+    def mcp_hmac_keyring(self) -> tuple[McpVersionedSecret, ...]:
+        """Return active-first MCP HMAC keys; retained keys never sign new facts."""
+
+        if self.mcp_hmac_secret is None:
+            return ()
+        keys = [McpVersionedSecret(self.mcp_hmac_version, self.mcp_hmac_secret)]
+        if self.mcp_hmac_previous_version is not None and self.mcp_hmac_previous_secret is not None:
+            keys.append(
+                McpVersionedSecret(
+                    self.mcp_hmac_previous_version,
+                    self.mcp_hmac_previous_secret,
+                )
+            )
+        return tuple(keys)
+
+    @property
+    def mcp_schema_limits(self) -> McpSchemaLimits:
+        """Project deployment-owned AppConfig budgets into the Shared Schema validator."""
+
+        return McpSchemaLimits(
+            max_schema_bytes=self.mcp_schema_max_bytes,
+            max_instance_bytes=self.mcp_arguments_max_bytes,
+            max_result_bytes=self.mcp_result_max_bytes,
+            max_depth=self.mcp_tree_max_depth,
+            max_nodes=self.mcp_tree_max_nodes,
+            max_properties=self.mcp_schema_max_properties,
+            max_string_length=self.mcp_max_string_length,
+            max_array_items=self.mcp_max_array_items,
+            max_keywords=self.mcp_schema_max_keywords,
+            max_combinator_branches=self.mcp_schema_max_combinator_branches,
+            max_enum_items=self.mcp_schema_max_enum_items,
+            max_enum_item_bytes=self.mcp_schema_max_enum_item_bytes,
+            max_pattern_length=self.mcp_schema_max_pattern_length,
+            max_evaluation_steps=self.mcp_validator_max_steps,
+        )
+
 
 class ServiceInfo(BaseModel):
     """服务版本信息。
@@ -639,6 +784,7 @@ def load_app_config(service_name: str) -> AppConfig:
     """
 
     values = _merge_config_values()
+    _validate_mcp_config_keys(values)
     environment = _read_environment(values)
     service_mode = _read_service_mode(values)
     loaded_at = datetime.now(UTC)
@@ -1294,6 +1440,33 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Increase the total pixel budget or lower the per-image budget.",
         )
 
+    mcp_values = _load_mcp_config(
+        values,
+        environment=environment,
+        forbidden_secrets=(
+            auth_token_secret,
+            cache_affinity_hmac_secret,
+            internal_config_token,
+            internal_chat_token,
+            internal_batch_token,
+            batch_encryption_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            approval_hmac_secret,
+            approval_previous_hmac_secret,
+            session_risk_hmac_secret,
+            session_risk_previous_hmac_secret,
+            response_cache_hmac_secret,
+            response_cache_encryption_secret,
+            response_cache_control_idempotency_secret,
+            response_cache_control_idempotency_previous_secret,
+            response_cache_failure_spool_secret,
+            response_cache_failure_spool_previous_secret,
+            _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+            *provider_api_keys.values(),
+        ),
+    )
+
     return AppConfig(
         service_name=service_name,
         environment=environment,
@@ -1320,6 +1493,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "file_processing_enabled": file_encryption_secret is not None,
             "batch_worker_enabled": batch_worker_enabled,
             "response_cache_enabled": response_cache_enabled,
+            "mcp_enabled": bool(mcp_values["mcp_enabled"]),
         },
         config_items=config_items,
         warnings=warnings,
@@ -1584,6 +1758,7 @@ def load_app_config(service_name: str) -> AppConfig:
             minimum=1,
             maximum=262_144,
         ),
+        **mcp_values,
     )
 
 
@@ -2180,6 +2355,254 @@ def _validate_cache_affinity_hmac_secret(
     )
 
 
+def _validate_mcp_config_keys(values: dict[str, ConfigValue]) -> None:
+    """Reject undeclared MCP environment switches instead of silently ignoring bypass knobs."""
+
+    allowed = {key for key in DEFAULT_CONFIG if key.startswith("METAHUB_MCP_")}
+    if any(key.startswith("METAHUB_MCP_") and key not in allowed for key in values):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="An unsupported METAHUB_MCP configuration key is present.",
+            suggestion="Remove undeclared MCP settings and use the fixed deployment profile.",
+        )
+
+
+def _load_mcp_config(
+    values: dict[str, ConfigValue],
+    *,
+    environment: EnvironmentName,
+    forbidden_secrets: tuple[object, ...],
+) -> dict[str, Any]:
+    """Load the fixed PRD-082 MCP deployment surface and fail closed on unsafe profiles."""
+
+    enabled = _boolean(values, "METAHUB_MCP_ENABLED")
+    encryption_version = _positive_int(values, "METAHUB_MCP_ENCRYPTION_VERSION")
+    hmac_version = _positive_int(values, "METAHUB_MCP_HMAC_VERSION")
+    encryption_previous_version = _optional_positive_int(
+        values, "METAHUB_MCP_ENCRYPTION_PREVIOUS_VERSION"
+    )
+    hmac_previous_version = _optional_positive_int(
+        values, "METAHUB_MCP_HMAC_PREVIOUS_VERSION"
+    )
+    configured_encryption_secret = _raw_optional_value(
+        values, "METAHUB_MCP_ENCRYPTION_SECRET"
+    )
+    configured_hmac_secret = _raw_optional_value(values, "METAHUB_MCP_HMAC_SECRET")
+    encryption_secret = configured_encryption_secret or (
+        DEFAULT_MCP_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
+    )
+    hmac_secret = configured_hmac_secret or (
+        DEFAULT_MCP_HMAC_SECRET if environment in {"dev", "test"} else None
+    )
+    encryption_previous_secret = _raw_optional_value(
+        values, "METAHUB_MCP_ENCRYPTION_PREVIOUS_SECRET"
+    )
+    hmac_previous_secret = _raw_optional_value(
+        values, "METAHUB_MCP_HMAC_PREVIOUS_SECRET"
+    )
+    if (encryption_previous_version is None) != (encryption_previous_secret is None) or (
+        hmac_previous_version is None
+    ) != (hmac_previous_secret is None):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP previous key versions and secrets must be configured in complete pairs.",
+            suggestion="Configure both retained fields for each domain, or clear both.",
+        )
+    if (
+        encryption_previous_version is not None
+        and encryption_previous_version >= encryption_version
+    ) or (hmac_previous_version is not None and hmac_previous_version >= hmac_version):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP previous key versions must be lower than their current versions.",
+            suggestion="Advance the current version and retain only an older verification key.",
+        )
+    if (encryption_secret is None) != (hmac_secret is None) or enabled and (
+        encryption_secret is None or hmac_secret is None
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Enabled MCP requires independent encryption and HMAC roots.",
+            suggestion="Configure both current MCP secrets before enabling the feature.",
+        )
+    if (
+        encryption_previous_secret is not None and encryption_secret is None
+    ) or (hmac_previous_secret is not None and hmac_secret is None):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP retained keys require complete current key domains.",
+            suggestion="Configure both current roots before retaining an older key.",
+        )
+
+    raw_executor_mode = _value(values, "METAHUB_MCP_EXECUTOR_MODE").strip()
+    if raw_executor_mode not in {"disabled", "test_loopback"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_MCP_EXECUTOR_MODE is invalid.",
+            suggestion="Choose disabled or the explicit test_loopback adapter.",
+        )
+    executor_mode: McpExecutorMode = raw_executor_mode  # type: ignore[assignment]
+    test_loopback_enabled = _boolean(values, "METAHUB_MCP_TEST_LOOPBACK_ENABLED")
+    if (executor_mode == "test_loopback") != test_loopback_enabled:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP test loopback mode and its explicit enable flag must agree.",
+            suggestion="Enable both only in dev/test, or keep both disabled.",
+        )
+    if environment == "prod" and (
+        executor_mode != "disabled" or test_loopback_enabled
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Production MCP executor must remain disabled for PRD-082.",
+            suggestion="Deploy with disabled executor and no test loopback adapter.",
+        )
+    if executor_mode == "test_loopback" and not enabled:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP test loopback executor requires the feature to be enabled.",
+            suggestion="Enable MCP only in an isolated dev/test profile, or disable the adapter.",
+        )
+
+    scheduler_enabled = _boolean(values, "METAHUB_MCP_SCHEDULER_ENABLED")
+    if scheduler_enabled and not enabled:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP scheduler cannot run while the feature is disabled.",
+            suggestion="Enable MCP first or stop its scheduler.",
+        )
+    scheduler_poll = _bounded_float(
+        values,
+        "METAHUB_MCP_SCHEDULER_POLL_INTERVAL_SECONDS",
+        minimum=0.1,
+        maximum=60.0,
+    )
+    scheduler_batch = _bounded_int(
+        values, "METAHUB_MCP_SCHEDULER_BATCH_SIZE", minimum=1, maximum=100
+    )
+    global_concurrency = _bounded_int(
+        values, "METAHUB_MCP_GLOBAL_CONCURRENCY", minimum=1, maximum=32
+    )
+    tenant_concurrency = _bounded_int(
+        values, "METAHUB_MCP_TENANT_CONCURRENCY", minimum=1, maximum=8
+    )
+    if tenant_concurrency > global_concurrency:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP tenant concurrency cannot exceed global concurrency.",
+            suggestion="Lower the tenant limit or raise the bounded global limit.",
+        )
+    operation_lease = _bounded_int(
+        values, "METAHUB_MCP_OPERATION_LEASE_SECONDS", minimum=30, maximum=3_600
+    )
+    invocation_lease = _bounded_int(
+        values, "METAHUB_MCP_INVOCATION_LEASE_SECONDS", minimum=30, maximum=3_600
+    )
+    probe_deadline = _bounded_int(
+        values, "METAHUB_MCP_PROBE_DEADLINE_SECONDS", minimum=1, maximum=30
+    )
+    call_deadline = _bounded_int(
+        values, "METAHUB_MCP_CALL_DEADLINE_SECONDS", minimum=1, maximum=120
+    )
+    if probe_deadline >= operation_lease or call_deadline >= invocation_lease:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP leases must outlive their probe and call deadlines.",
+            suggestion="Increase lease duration or lower the bounded deadline.",
+        )
+
+    bounded_ints: dict[str, tuple[int, int]] = {
+        "mcp_register_max_bytes": (1_024, 16_384),
+        "mcp_refresh_max_bytes": (2, 4_096),
+        "mcp_policy_max_bytes": (1_024, 32_768),
+        "mcp_invoke_max_bytes": (1_024, 131_072),
+        "mcp_arguments_max_bytes": (1_024, 65_536),
+        "mcp_schema_max_bytes": (1_024, 65_536),
+        "mcp_server_schema_max_bytes": (1_024, 1_048_576),
+        "mcp_result_max_bytes": (1_024, 1_048_576),
+        "mcp_tree_max_depth": (4, 12),
+        "mcp_tree_max_nodes": (64, 1_024),
+        "mcp_schema_max_properties": (1, 256),
+        "mcp_schema_max_keywords": (64, 2_048),
+        "mcp_schema_max_combinator_branches": (1, 64),
+        "mcp_schema_max_enum_items": (1, 256),
+        "mcp_schema_max_enum_item_bytes": (64, 4_096),
+        "mcp_schema_max_pattern_length": (1, 512),
+        "mcp_validator_max_steps": (1_000, 100_000),
+        "mcp_max_string_length": (64, 65_536),
+        "mcp_max_array_items": (1, 1_024),
+    }
+    budget_values = {
+        field: _bounded_int(
+            values,
+            "METAHUB_" + field.upper(),
+            minimum=minimum,
+            maximum=maximum,
+        )
+        for field, (minimum, maximum) in bounded_ints.items()
+    }
+    if (
+        budget_values["mcp_arguments_max_bytes"] > budget_values["mcp_invoke_max_bytes"]
+        or budget_values["mcp_schema_max_bytes"]
+        > budget_values["mcp_server_schema_max_bytes"]
+        or budget_values["mcp_schema_max_enum_item_bytes"]
+        > budget_values["mcp_schema_max_bytes"]
+        or budget_values["mcp_schema_max_properties"] > budget_values["mcp_tree_max_nodes"]
+        or budget_values["mcp_max_array_items"] > budget_values["mcp_tree_max_nodes"]
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="MCP nested resource budgets are inconsistent.",
+            suggestion="Keep child limits within their request, Schema, and tree parent budgets.",
+        )
+
+    if encryption_secret is not None and hmac_secret is not None:
+        encryption_ring = [McpVersionedSecret(encryption_version, encryption_secret)]
+        hmac_ring = [McpVersionedSecret(hmac_version, hmac_secret)]
+        if encryption_previous_version is not None and encryption_previous_secret is not None:
+            encryption_ring.append(
+                McpVersionedSecret(encryption_previous_version, encryption_previous_secret)
+            )
+        if hmac_previous_version is not None and hmac_previous_secret is not None:
+            hmac_ring.append(McpVersionedSecret(hmac_previous_version, hmac_previous_secret))
+        try:
+            validate_mcp_secret_domains(
+                encryption_keyring=tuple(encryption_ring),
+                hmac_keyring=tuple(hmac_ring),
+                forbidden_secrets=forbidden_secrets,
+            )
+        except McpContractError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="MCP secret domains do not meet isolation requirements.",
+                suggestion="Use independent current/previous roots not shared by another domain.",
+            ) from None
+
+    return {
+        "mcp_enabled": enabled,
+        "mcp_encryption_version": encryption_version,
+        "mcp_encryption_secret": encryption_secret,
+        "mcp_encryption_previous_version": encryption_previous_version,
+        "mcp_encryption_previous_secret": encryption_previous_secret,
+        "mcp_hmac_version": hmac_version,
+        "mcp_hmac_secret": hmac_secret,
+        "mcp_hmac_previous_version": hmac_previous_version,
+        "mcp_hmac_previous_secret": hmac_previous_secret,
+        "mcp_executor_mode": executor_mode,
+        "mcp_test_loopback_enabled": test_loopback_enabled,
+        "mcp_scheduler_enabled": scheduler_enabled,
+        "mcp_scheduler_poll_interval_seconds": scheduler_poll,
+        "mcp_scheduler_batch_size": scheduler_batch,
+        "mcp_global_concurrency": global_concurrency,
+        "mcp_tenant_concurrency": tenant_concurrency,
+        "mcp_operation_lease_seconds": operation_lease,
+        "mcp_invocation_lease_seconds": invocation_lease,
+        "mcp_probe_deadline_seconds": probe_deadline,
+        "mcp_call_deadline_seconds": call_deadline,
+        **budget_values,
+    }
+
+
 def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummary]:
     """在 运行配置 内部复用 build config items 辅助逻辑，集中处理边界值和错误映射。
 
@@ -2313,6 +2736,7 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_OUTPUT_SAFETY_WINDOW_TOKENS",
         "METAHUB_OUTPUT_SAFETY_MAX_FULL_TEXT_CODE_POINTS",
     }
+    summary_keys.update(key for key in DEFAULT_CONFIG if key.startswith("METAHUB_MCP_"))
     summary_keys.update(key for key in values if key.startswith("METAHUB_PROVIDER_"))
 
     return [_build_config_item(key, values.get(key)) for key in sorted(summary_keys)]

@@ -4,6 +4,11 @@ uvicorn[standard]>=0.30,<1.0
 pydantic>=2.7,<3.0
 httpx>=0.27,<1.0
 cryptography>=42,<46
+# PRD-082 uses the official v1 MCP client wire contract and the mature Draft
+# 2020-12 validator.  Major versions are capped so protocol/schema behavior
+# cannot drift silently between Control workers.
+mcp>=1.0,<2.0
+jsonschema[format-nongpl]>=4.23,<5.0
 # PRD-072 文件正文必须在鉴权后由有界流式 multipart 解析器读取；0.0.27 是
 # max_header_count/max_header_size 公共参数的最低版本。PDF/DOCX 仅处理已通过格式、大小和
 # 结构门禁的内存 bytes，主版本上限用于锁定资源限制与安全合同。

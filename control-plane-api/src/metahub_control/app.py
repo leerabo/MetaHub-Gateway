@@ -49,6 +49,8 @@ from .invitations.routes import router as invitations_router
 from .model_aliases.routes import router as model_aliases_router
 from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
+from .mcp_governance import install_mcp_scheduler
+from .mcp_governance import router as mcp_governance_router
 from .models.routes import router as models_router
 from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
@@ -167,6 +169,7 @@ app.include_router(models_router)
 app.include_router(model_prices_router)
 app.include_router(model_aliases_router)
 app.include_router(model_quality_scores_router)
+app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
 app.include_router(policies_router)
@@ -198,3 +201,4 @@ install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
 install_billing_dispute_scheduler(app)
 install_security_event_scheduler(app)
+install_mcp_scheduler(app)

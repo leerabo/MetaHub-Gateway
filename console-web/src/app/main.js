@@ -56,6 +56,17 @@ import {
   isBatchAbortError,
 } from "../features/batch-jobs/batchJobPageState.js";
 import {
+  bindMcpToolInteractions,
+  clearMcpToolDom,
+} from "../features/mcp-tools/bindMcpTools.js";
+import {
+  createMcpToolPageState,
+  isMcpToolAbortError,
+  mcpToolPageOwner,
+  mcpToolReadIdentitySnapshot,
+} from "../features/mcp-tools/mcpToolPageState.js";
+import { renderMcpTools } from "../features/mcp-tools/renderMcpTools.js";
+import {
   bindExperimentInteractions,
   clearExperimentDom,
 } from "../features/experiments/bindExperiments.js";
@@ -359,6 +370,16 @@ import {
   listBatchJobs,
   listBatchTasks,
 } from "../lib/batchJobs.js";
+import {
+  getMcpTool,
+  listMcpInvocations,
+  listMcpServers,
+  listMcpTools,
+  refreshMcpServerTools,
+  registerMcpServer,
+  updateMcpServerStatus,
+  updateMcpToolPolicy,
+} from "../lib/mcpTools.js";
 import {
   createExperiment,
   getExperiment,
@@ -681,6 +702,8 @@ const fileSecurityPageState = createFileSecurityPageState();
 const batchJobPageState = createBatchJobPageState({
   clearResultDom: () => clearBatchResultDom(globalThis.document),
 });
+// PAGE-114 的 Endpoint/Token、Schema Dialog、cursor 和异步 owner 只属于当前授权页面内存。
+const mcpToolPageState = createMcpToolPageState({ clearDom: clearMcpToolDom });
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
@@ -839,6 +862,10 @@ if (app && globalThis.window) {
         // PAGE-104 必须先擦除可见结果正文，再取消列表、详情和写请求。
         batchJobPageState.clear();
       }
+      if (nextItemId !== "mcp-tools") {
+        // PAGE-114 的 Endpoint/Token 输入、Schema Dialog 和全部迟到 ticket 必须在 hash 离页时同步销毁。
+        mcpToolPageState.clear();
+      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -895,6 +922,7 @@ if (app && globalThis.window) {
       filePageState.clear();
       fileSecurityPageState.clear();
       batchJobPageState.clear();
+      mcpToolPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
       planManagementPageState.clear();
@@ -1019,6 +1047,7 @@ async function start() {
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
+    clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1105,6 +1134,7 @@ async function performRefresh() {
     clearFileStateOnIdentityChange(authSession.context, context);
     clearFileSecurityStateOnIdentityChange(authSession.context, context);
     clearBatchJobStateOnIdentityChange(authSession.context, context);
+    clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1304,6 +1334,16 @@ async function performRefresh() {
   // PAGE-104 只属于后端确认的 batch-jobs 导航；撤权或离页同步清正文并取消全部 ticket。
   if (consoleShellState?.activeNavigationItemId !== "batch-jobs") {
     batchJobPageState.clear();
+  }
+  // PAGE-114 只属于后端确认的 mcp.read owner；Dialog 保留期间后台刷新只重验 auth/navigation。
+  if (consoleShellState?.activeNavigationItemId !== "mcp-tools") {
+    mcpToolPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && mcpToolPageState.blocksShellDomReplacement()
+    && mcpToolPageState.enter(currentMcpToolOwner(consoleShellState))
+  ) {
+    return;
   }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
@@ -1603,6 +1643,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-114 每次只读取活动 tab；Schema 详情必须由显式 Dialog 操作另行加载。
+  const mcpToolsState = await loadMcpToolsState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
   const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
     projectState,
@@ -1746,6 +1791,7 @@ async function performRefresh() {
     filesState,
     fileSecurityState,
     batchJobsState,
+    mcpToolsState,
     experimentsState,
     budgetState,
     dlpState,
@@ -1939,6 +1985,7 @@ function renderLogin(error, requestId) {
   filePageState.clear();
   fileSecurityPageState.clear();
   batchJobPageState.clear();
+  mcpToolPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
   planManagementPageState.clear();
@@ -2310,6 +2357,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     filePageState.clear();
     fileSecurityPageState.clear();
     batchJobPageState.clear();
+    mcpToolPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
     planManagementPageState.clear();
@@ -4500,6 +4548,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFilesPageInteractions(consoleShellState);
   bindFileSecurityPageInteractions(consoleShellState);
   bindBatchJobsPageInteractions(consoleShellState);
+  bindMcpToolsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
@@ -5503,6 +5552,289 @@ async function exportFileSecurityReport(consoleShellState) {
   } finally {
     finishOperation();
   }
+}
+
+/** Construct the current PAGE-114 owner from live auth, backend navigation and hash state. */
+function currentMcpToolOwner(consoleShellState) {
+  const owner = mcpToolPageOwner(authSession.context, consoleShellState);
+  const hashNavigation = readActiveNavigationHash();
+  if (!owner || hashNavigation !== "mcp-tools") return null;
+  return owner;
+}
+
+/** Repaint only PAGE-114 after a local tab or Dialog operation. */
+function renderCurrentMcpToolsPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".mcp-tools-panel");
+  const owner = currentMcpToolOwner(consoleShellState);
+  if (!panel || !owner || !mcpToolPageState.enter(owner)) return false;
+  panel.innerHTML = renderMcpTools(
+    mcpToolPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+  );
+  bindMcpToolsPageInteractions(consoleShellState);
+  return true;
+}
+
+/** Bind PAGE-114 commands; each callback rechecks the complete owner before creating a request. */
+function bindMcpToolsPageInteractions(consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  if (!owner || !mcpToolPageState.enter(owner)) return false;
+  return bindMcpToolInteractions({
+    toolId: () => mcpToolPageState.snapshot().toolDialog?.toolId ?? "",
+    async onRefresh() {
+      const generation = ++refreshSequence;
+      const state = await loadMcpToolsState(consoleShellState, generation);
+      if (state) renderCurrentMcpToolsPanel(consoleShellState);
+    },
+    async onTab(tab) {
+      if (!mcpToolPageState.switchTab(currentMcpToolOwner(consoleShellState), tab)) return;
+      const generation = ++refreshSequence;
+      renderCurrentMcpToolsPanel(consoleShellState);
+      const state = await loadMcpToolsState(consoleShellState, generation);
+      if (state) renderCurrentMcpToolsPanel(consoleShellState);
+    },
+    async onPreviousPage() {
+      if (!mcpToolPageState.previousPage(currentMcpToolOwner(consoleShellState))) return;
+      const generation = ++refreshSequence;
+      renderCurrentMcpToolsPanel(consoleShellState);
+      const state = await loadMcpToolsState(consoleShellState, generation);
+      if (state) renderCurrentMcpToolsPanel(consoleShellState);
+    },
+    async onNextPage() {
+      if (!mcpToolPageState.nextPage(currentMcpToolOwner(consoleShellState))) return;
+      const generation = ++refreshSequence;
+      renderCurrentMcpToolsPanel(consoleShellState);
+      const state = await loadMcpToolsState(consoleShellState, generation);
+      if (state) renderCurrentMcpToolsPanel(consoleShellState);
+    },
+    async onOpenRegister() {
+      if (!mcpToolPageState.openRegister(currentMcpToolOwner(consoleShellState))) return false;
+      refreshSequence += 1;
+      renderCurrentMcpToolsPanel(consoleShellState);
+      return true;
+    },
+    async onCloseDialog() {
+      const currentOwner = currentMcpToolOwner(consoleShellState);
+      const dialog = mcpToolPageState.snapshot().toolDialog;
+      const closed = dialog?.open
+        ? mcpToolPageState.closeToolDialog(currentOwner)
+        : mcpToolPageState.closeRegister(currentOwner);
+      if (closed) renderCurrentMcpToolsPanel(consoleShellState);
+      return closed;
+    },
+    async onSubmitRegister(request) {
+      return submitMcpServerRegistration(request, consoleShellState);
+    },
+    async onRefreshServer(serverId) {
+      await submitMcpServerRefresh(serverId, consoleShellState);
+    },
+    async onServerStatus(serverId) {
+      await submitMcpServerStatus(serverId, consoleShellState);
+    },
+    async onOpenTool(toolId, kind) {
+      await loadMcpToolDialog(toolId, kind, consoleShellState);
+    },
+    async onSubmitPolicy(policy) {
+      return submitMcpToolPolicy(policy, consoleShellState);
+    },
+  });
+}
+
+/** Submit registration while keeping Endpoint and Token out of page state and post-submit DOM. */
+async function submitMcpServerRegistration(request, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  const token = authSession.token;
+  const ticket = mcpToolPageState.beginRegister(owner);
+  if (!token || !ticket) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  try {
+    const pending = registerMcpServer({
+      controlApiUrl,
+      token,
+      name: request.name,
+      endpointUrl: request.endpointUrl,
+      authType: request.authType,
+      bearerToken: request.bearerToken,
+      idempotencyKey: ticket.idempotencyKey,
+      signal: ticket.controller.signal,
+    });
+    // The client has synchronously constructed fetch; erase the last callback-owned plaintext references now.
+    request.endpointUrl = "";
+    request.bearerToken = "";
+    const result = await pending;
+    const currentOwner = currentMcpToolOwner(consoleShellState);
+    mcpToolPageState.acceptRegister(ticket, result, currentOwner);
+  } catch (error) {
+    const currentOwner = currentMcpToolOwner(consoleShellState);
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectRegister(ticket, error, currentOwner)) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+  } finally {
+    request.endpointUrl = "";
+    request.bearerToken = "";
+    mcpToolPageState.finishRegister(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Enqueue a tools/list refresh from a safe Server row summary. */
+async function submitMcpServerRefresh(serverId, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  const ticket = mcpToolPageState.beginServerRefresh(owner, serverId);
+  if (!authSession.token || !ticket) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  try {
+    const result = await refreshMcpServerTools({
+      controlApiUrl,
+      token: authSession.token,
+      serverId: ticket.serverId,
+      expectedRevision: ticket.expectedRevision,
+      idempotencyKey: ticket.idempotencyKey,
+      signal: ticket.controller.signal,
+    });
+    mcpToolPageState.acceptServerRefresh(
+      ticket,
+      result,
+      currentMcpToolOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectServerRefresh(
+      ticket,
+      error,
+      currentMcpToolOwner(consoleShellState),
+    )) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+  } finally {
+    mcpToolPageState.finishServerRefresh(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Apply one Server enable/disable CAS from the owner-bound row snapshot. */
+async function submitMcpServerStatus(serverId, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  const ticket = mcpToolPageState.beginServerStatus(owner, serverId);
+  if (!authSession.token || !ticket) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  try {
+    const result = await updateMcpServerStatus({
+      controlApiUrl,
+      token: authSession.token,
+      serverId: ticket.serverId,
+      expectedRevision: ticket.expectedRevision,
+      status: ticket.nextStatus,
+      idempotencyKey: ticket.idempotencyKey,
+      signal: ticket.controller.signal,
+    });
+    mcpToolPageState.acceptServerStatus(
+      ticket,
+      result,
+      currentMcpToolOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectServerStatus(
+      ticket,
+      error,
+      currentMcpToolOwner(consoleShellState),
+    )) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+  } finally {
+    mcpToolPageState.finishServerStatus(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Load bounded canonical Schema or policy only after an explicit Tool-row command. */
+async function loadMcpToolDialog(toolId, kind, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  if (!mcpToolPageState.openToolDialog(owner, toolId, kind)) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  const ticket = mcpToolPageState.beginToolDetail(currentMcpToolOwner(consoleShellState));
+  if (!authSession.token || !ticket) return null;
+  try {
+    const result = await getMcpTool({
+      controlApiUrl,
+      token: authSession.token,
+      toolId: ticket.toolId,
+      signal: ticket.controller.signal,
+    });
+    mcpToolPageState.acceptToolDetail(ticket, result, currentMcpToolOwner(consoleShellState));
+  } catch (error) {
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectToolDetail(
+      ticket,
+      error,
+      currentMcpToolOwner(consoleShellState),
+    )) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+  } finally {
+    mcpToolPageState.finishToolDetail(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Apply one policy CAS; Server/name/Schema fields cannot enter this callback. */
+async function submitMcpToolPolicy(policy, consoleShellState) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  const ticket = mcpToolPageState.beginPolicyUpdate(owner);
+  if (!authSession.token || !ticket) return null;
+  refreshSequence += 1;
+  renderCurrentMcpToolsPanel(consoleShellState);
+  try {
+    const result = await updateMcpToolPolicy({
+      controlApiUrl,
+      token: authSession.token,
+      toolId: ticket.toolId,
+      policy,
+      signal: ticket.controller.signal,
+    });
+    mcpToolPageState.acceptPolicyUpdate(
+      ticket,
+      result,
+      currentMcpToolOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (isMcpToolAbortError(error)) return null;
+    if (!mcpToolPageState.rejectPolicyUpdate(
+      ticket,
+      error,
+      currentMcpToolOwner(consoleShellState),
+    )) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+  } finally {
+    mcpToolPageState.finishPolicyUpdate(ticket);
+  }
+  renderCurrentMcpToolsPanel(consoleShellState);
+  return mcpToolPageState.snapshot();
+}
+
+/** Apply the same strong 401/403 boundary to every PAGE-114 lane. */
+function handleMcpAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError)) return false;
+  if (error.status === 401) {
+    mcpToolPageState.clear();
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin(authErrorMessage(error), error.requestId);
+    return true;
+  }
+  if (error.status === 403) {
+    mcpToolPageState.clear();
+    globalThis.window?.setTimeout?.(() => void refresh(), 0);
+    return true;
+  }
+  return false;
 }
 
 /** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
@@ -13984,6 +14316,44 @@ function clearBudgetSessionState() {
   budgetMutationLifecycle.invalidate();
 }
 
+/** Read only the active PAGE-114 tab; Tool Schema and descriptions remain explicit-detail only. */
+async function loadMcpToolsState(consoleShellState, refreshId) {
+  const owner = currentMcpToolOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !mcpToolPageState.enter(owner)) return null;
+  const tab = mcpToolPageState.snapshot().activeTab;
+  const operation = mcpToolPageState.beginList(owner, tab, refreshId);
+  if (!operation || !authSession.token) return null;
+  try {
+    const common = {
+      controlApiUrl,
+      token: authSession.token,
+      ...mcpToolPageState.listQuery(tab),
+      signal: operation.controller.signal,
+    };
+    const result = tab === "servers"
+      ? await listMcpServers(common)
+      : tab === "tools"
+        ? await listMcpTools(common)
+        : await listMcpInvocations(common);
+    if (refreshId !== refreshSequence) return null;
+    const currentOwner = currentMcpToolOwner(consoleShellState);
+    mcpToolPageState.acceptList(operation, result, currentOwner, refreshId);
+    return mcpToolPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentMcpToolOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !mcpToolPageState.isListCurrent(operation, currentOwner, refreshId)
+      || isMcpToolAbortError(error)
+    ) return null;
+    if (handleMcpAuthenticationFailure(error)) return null;
+    mcpToolPageState.rejectList(operation, error, currentOwner, refreshId);
+    return mcpToolPageState.snapshot();
+  } finally {
+    mcpToolPageState.finishList(operation);
+  }
+}
+
 /**
  * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
  * Every response is accepted only while the full Batch owner and global refresh generation match.
@@ -15534,6 +15904,13 @@ function clearFileSecurityStateOnIdentityChange(previous, current) {
 function clearBatchJobStateOnIdentityChange(previous, current) {
   if (batchReadIdentitySnapshot(previous) !== batchReadIdentitySnapshot(current)) {
     batchJobPageState.clear();
+  }
+}
+
+/** Destroy PAGE-114 facts when tenant, Session, revision, fingerprint or mcp.read changes. */
+function clearMcpToolStateOnIdentityChange(previous, current) {
+  if (mcpToolReadIdentitySnapshot(previous) !== mcpToolReadIdentitySnapshot(current)) {
+    mcpToolPageState.clear();
   }
 }
 

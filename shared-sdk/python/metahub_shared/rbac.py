@@ -52,7 +52,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # 复核预算或会话风险的目标权限，不能让审批权限成为跨域写入后门。
 # PRD-080 再拆分账单争议读取、申请与审核权限；批准争议仍须同时实时具备
 # ``billing.finops.write``，不能把争议审核权限当作任意账本写入能力。
-CATALOG_REVISION: Final[int] = 16
+# PRD-082 把 MCP 读取、Server 管理、工具策略、调用和审批拆为五个独立后端权限；
+# 工具附加权限和高危审批都必须叠加校验，不能由页面可见性或 Shared 默认矩阵替代。
+CATALOG_REVISION: Final[int] = 17
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -506,6 +508,41 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "critical",
     ),
     PermissionDefinition(
+        "mcp.read",
+        "mcp",
+        "读取 MCP 治理",
+        "读取当前租户 MCP Server、Tool 与调用安全摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "mcp.server.manage",
+        "mcp",
+        "管理 MCP Server",
+        "注册、刷新、禁用 MCP Server 及轮换候选凭据。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "mcp.policy.manage",
+        "mcp",
+        "管理 MCP 工具策略",
+        "审核 Schema 并配置工具风险、审批、权限、授权与脱敏策略。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "mcp.invoke",
+        "mcp",
+        "调用 MCP 工具",
+        "发起当前租户已审核工具调用并读取本人安全结果。",
+        "write",
+    ),
+    PermissionDefinition(
+        "mcp.approve",
+        "mcp",
+        "审批 MCP 调用",
+        "审批当前租户高危 MCP 工具调用。",
+        "critical",
+    ),
+    PermissionDefinition(
         "system.config.read", "system", "读取系统配置", "读取脱敏运行配置和系统状态。", "read"
     ),
 )
@@ -548,6 +585,9 @@ _DEVELOPER = {
     "batch.write",
     "experiment.read",
     "experiment.write",
+    "mcp.read",
+    "mcp.server.manage",
+    "mcp.invoke",
 }
 _VIEWER = {
     "console.basic.read",
@@ -618,6 +658,9 @@ _SECURITY = {
     "admin_assistant.query",
     "approval.read",
     "approval.decide",
+    "mcp.read",
+    "mcp.policy.manage",
+    "mcp.approve",
 }
 _OPS = {
     "console.basic.read",
@@ -653,6 +696,8 @@ _OPS = {
     "batch.write",
     "experiment.read",
     "experiment.write",
+    "mcp.read",
+    "mcp.server.manage",
 }
 
 # 这些集合是产品授权上限和新租户默认值；运行时必须读取租户矩阵，绝不能在矩阵损坏时回落此处。

@@ -1505,3 +1505,52 @@ def require_batch_reconciler(
         authorization,
         ("batch.read", "billing.finops.write"),
     )
+
+
+def require_mcp_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """在解析 MCP path/query 前校验当前租户的治理读取权限。"""
+
+    return _require_request_permissions(request, authorization, ("mcp.read",))
+
+
+def require_mcp_server_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """在读取 Endpoint 或 Bearer 正文前校验 Server 管理权限。"""
+
+    return _require_request_permissions(request, authorization, ("mcp.server.manage",))
+
+
+def require_mcp_policy_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 具有逐工具治理策略管理权限。"""
+
+    return _require_request_permissions(request, authorization, ("mcp.policy.manage",))
+
+
+def require_mcp_server_refresher(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """刷新发现会同时修改 Server 与 Tool 治理事实，必须双权限命中。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("mcp.server.manage", "mcp.policy.manage"),
+    )
+
+
+def require_mcp_invoker(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """在解析可能敏感的 MCP arguments 前校验基础调用权限。"""
+
+    return _require_request_permissions(request, authorization, ("mcp.invoke",))

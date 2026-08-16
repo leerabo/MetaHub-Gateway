@@ -1885,8 +1885,51 @@ PRD-080 的设计、实现、专项、必要回归、迁移、Runtime、Browser 
 
 PRD-081 的实现、专项、必要回归、迁移、Runtime、Browser、文档和提交前安全门禁均已通过。Excel 总表
 第 83 行、M2/M3 交付第 19 行、PAGE-114、API-372..377、McpServer/McpTool/McpInvocation、
-`mcp.tool_called` 与 TC-0163/0164 共同确认，下一条权威未完成项为
-`PRD-082 | M2-企业增强 | P2 | 扩展层 | MCP治理基础 | MCP工具注册与权限`。本次不启动 PRD-082，
+`mcp.tool_called` 与 TC-0163/0164 共同确认 PRD-082；PRD-082 现已按以下目录完成，
+`all_108_prds_complete=false`。
+
+## PRD-082 MCP 工具注册与权限目录（已完成）
+
+- `shared-sdk/python/metahub_shared/mcp/`：提供 MCP exact contracts、Draft 2020-12 Schema profile、
+  canonical/effective Schema、分域 HMAC/AES-GCM、参数 DLP 投影、结果脱敏和 `mcp.tool_called` exact payload。
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,i18n,webhooks}.py`：发布 RBAC revision 17、
+  五项固定 MCP 权限、统一错误和事件订阅合同；动态 Tool 名不进入全局权限目录。
+- `infra/migrations/0075_mcp_tool_registration_permissions.sql/.down.sql`：创建 tenant-qualified Server、
+  Credential、Operation、SyncJob、Tool、role/user Grant、Invocation、Attempt、Approval 绑定、event/outbox 与
+  scheduler 事实；owner、复合外键、append-only、CAS、lease、Audit 保真和 down guard 均由数据库冻结。
+- `control-plane-api/src/metahub_control/mcp_governance/`：实现认证后 exact wire、Server 注册/刷新/停用/启用、
+  Tool Schema/policy、异步 invoke/result、官方 SDK loopback executor、公平 scheduler、迟到 owner、事件 outbox
+  和 lifespan 恢复。production executor 固定 `disabled`，不从 Control 或普通 worker 连接 tenant Endpoint。
+- `control-plane-api/src/metahub_control/{approvals,auth,audit,console}/` 与应用装配：增加
+  `mcp_tool_invocation` target、非自审高危审批、逐请求 RBAC、MCP Audit 白名单、PAGE-114 后端导航和
+  `/mcp` 全路径 no-store/request_id；前端可见性不代替后端授权。
+- `console-web/src/lib/mcpTools.js` 与 `src/features/mcp-tools/`：PAGE-114 Servers、Tools、Invocations 三 tab、
+  原生注册 Dialog、按需 Schema Dialog、Tool policy、安全 Invocation/审批摘要和 owner/generation/Abort 生命周期；
+  页面不保存或展示 Token、Endpoint、原始参数或结果正文。
+- `shared-sdk/python/tests/test_prd082_mcp_shared.py`、`control-plane-api/tests/**/*prd082*.py`、
+  `console-web/tests/unit/{mcpTools,prd082McpLifecycle,prd082BrowserAcceptance}.test.mjs` 与
+  `scripts/acceptance/tests/test_prd082_*`：覆盖 Shared、0075、API、tenant/RBAC、审批、DLP/脱敏、executor、
+  scheduler/outbox、Console 生命周期和 Runtime/Browser 证据合同；最终 Python 专项 `146/146`、Scheduler
+  `30/30`、Console 全量 `846/846`、lint `261 files`。
+- `scripts/acceptance/prd082-runtime-acceptance.py` 与
+  `.artifacts/prd082-runtime/prd082-final-runtime-7/`：从空 SQLite 完成
+  `75/0075 -> 75/0075 -> 74/0074 -> 75/0075`，四阶段 integrity=ok、FK=0；官方 SDK loopback、
+  DLP block、返回脱敏、高危审批、已知失败、结果未知、费用/失败追踪和恢复通过，Runtime JSON SHA-256 为
+  `15457991d5e1fb5c1b1acc55530d53acd68e74f9fb53bc5a7c3f3c0633b21c21`。
+- `scripts/acceptance/prd082-browser-harness.py`、`prd082-browser-acceptance.mjs` 与
+  `.artifacts/prd082-browser/prd082-page114-20260816-r8/`：PAGE-114 在 `1280x720`/`390x844` 完成三 tab、
+  Server disable/enable、Schema Dialog 和移动注册 Dialog；四图已目视复核，外部请求、禁止 query、
+  Console/Page error、全局横向 overflow、敏感明文和 owned-process 残留均为 0。Browser JSON/manifest
+  SHA-256 分别为 `7c9a965af27968769f8294c14a569bb152e27998d4b083f300f51625511360eb`、
+  `e387ef1cf76b53b2a886751899ab919b9ea5fd90ca44beb9ec74e953f4eb411c`。
+- `docs/prd/PRD-082-mcp-tool-registration-permissions.md`、`docs/api/mcp-tools.md` 与
+  `docs/testing/PRD-082-tests.md`：保存冻结设计、两轮编码前与两轮实现后自审、最终独立深审、公开
+  API/错误/事件合同、最终门禁和下一项依据。
+
+PRD-082 的实现、专项、迁移、Runtime、Browser 和文档均已形成正式证据；生产第三方 MCP 出网仍等待
+PRD-083 的沙箱和网络 ACL。Excel 总表第 84 行、M2/M3 交付第 20 行、PAGE-115、API-378..382、
+McpNetworkPolicy/OBJ-114、`mcp.network_blocked` 与 TC-0165/0166 共同确认，下一条权威未完成项为
+`PRD-083 | M2-企业增强 | P2 | 扩展层 | MCP沙箱 | 第三方MCP沙箱网络ACL`。本次只登记、不实现 PRD-083，
 `all_108_prds_complete=false`。
 
 ## MVP 非目标

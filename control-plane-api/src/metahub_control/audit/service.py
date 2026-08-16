@@ -126,6 +126,18 @@ ACTION_OBJECT_TYPES = {
     "billing_dispute.approved": "billing_dispute",
     "billing_dispute.rejected": "billing_dispute",
     "billing_dispute.cancelled": "billing_dispute",
+    # MCP 管理审计仅保存状态、revision、计数和固定错误码。Endpoint、Credential、
+    # Schema、description、授权列表和结果正文均由 tenant-qualified 领域表独占。
+    "mcp.server_registered": "mcp_server",
+    "mcp.server_refreshed": "mcp_server",
+    "mcp.server_credential_rotated": "mcp_server",
+    "mcp.server_updated": "mcp_server",
+    "mcp.server_disabled": "mcp_server",
+    "mcp.server_enabled": "mcp_server",
+    "mcp.server_operation_completed": "mcp_server_operation",
+    "mcp.tool_refreshed": "mcp_tool",
+    "mcp.tool_policy_updated": "mcp_tool",
+    "mcp.tool_grants_updated": "mcp_tool",
 }
 
 # 配置迁移的导入、导出摘要虽共用对象类型，但机器字段必须按 action 精确互斥，禁止联合白名单混写。
@@ -167,6 +179,42 @@ CONFIG_TRANSFER_TOTAL_LIMIT = 5_000
 # 对象级字段白名单是审计入库的主要安全边界。新增领域字段必须在设计审查后显式加入，
 # 不能通过序列化数据库整行或请求 DTO 的方式自动扩展。
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
+    "mcp_server": frozenset(
+        {
+            "mcp_server_id",
+            "status",
+            "state_revision",
+            "active_credential_revision",
+            "tool_count",
+            "active_tool_count",
+        }
+    ),
+    "mcp_server_operation": frozenset(
+        {
+            "mcp_server_operation_id",
+            "mcp_server_id",
+            "operation_type",
+            "status",
+            "start_server_revision",
+            "candidate_credential_revision",
+            "error_code",
+        }
+    ),
+    "mcp_tool": frozenset(
+        {
+            "mcp_tool_id",
+            "mcp_server_id",
+            "status",
+            "schema_revision",
+            "policy_revision",
+            "risk_level",
+            "approval_required",
+            "required_permission_count",
+            "role_grant_count",
+            "user_grant_count",
+            "redaction_count",
+        }
+    ),
     "response_cache_policy": frozenset(
         {
             "status",

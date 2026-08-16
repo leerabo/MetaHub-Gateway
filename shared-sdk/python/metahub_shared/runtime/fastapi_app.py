@@ -180,6 +180,10 @@ def create_service_app(
         # 内部 ID，避免响应头、access log 或持久 source identity 二次回显。
         sensitive_request_boundary = (
             invitation_token is not None
+            # Every MCP route may carry an endpoint, bearer, arguments, result, or Schema.
+            # Client-provided correlation IDs are therefore never trusted on this prefix.
+            or request.url.path == "/mcp"
+            or request.url.path.startswith("/mcp/")
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
             or request.url.path == "/billing-disputes"
             or request.url.path.startswith("/billing-disputes/")
@@ -328,6 +332,8 @@ def create_service_app(
             or safe_path == "/admin-assistant/query"
             or safe_path == "/billing-disputes"
             or safe_path == "/billing-disputes/{billing_dispute_id}"
+            or safe_path == "/mcp"
+            or safe_path.startswith("/mcp/")
             else logger.exception
         )
         failure_logger(
@@ -478,7 +484,13 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
     """
 
     path = request.url.path
-    if path == "/invitations" or path.startswith("/invitations/"):
+    if path == "/mcp" or path.startswith("/mcp/"):
+        # MCP responses can expose tenant-private governance state and the one authorized,
+        # redacted result.  The outer boundary overrides every success and error response.
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
+    elif path == "/invitations" or path.startswith("/invitations/"):
         # 创建响应含仅本次可见 Token，接受响应也属于凭据换取的私有身份结果；任何状态码
         # 都禁止浏览器/共享代理缓存，并阻止当前 URL 成为后续导航 Referer。
         response.headers["Cache-Control"] = "no-store, private"

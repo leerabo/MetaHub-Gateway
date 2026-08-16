@@ -52,13 +52,22 @@ from .models import (
     CreateApprovalRequest,
     CreateApprovalResponse,
 )
-from .targets import ApprovalTarget, apply_approved_target, load_target, load_task_target
+from .targets import (
+    ApprovalTarget,
+    apply_approved_target,
+    apply_rejected_target,
+    build_mcp_approval_target,
+    load_target,
+    load_task_target,
+)
 
 # 审批标识、分页、容量、票据时效及目标权限映射构成服务端输入与授权边界。
 APPROVAL_ID_PATTERN = re.compile(r"^apr_[0-9a-f]{32}$")
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 VALID_STATUSES = frozenset({"pending", "approved", "rejected", "all"})
-VALID_TARGET_TYPES = frozenset({"budget_block_release", "session_risk_action"})
+VALID_TARGET_TYPES = frozenset(
+    {"budget_block_release", "session_risk_action", "mcp_tool_invocation"}
+)
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 MAX_PENDING_PER_TENANT = 1_000
@@ -76,6 +85,7 @@ _DECISION_REASON_MATRIX = {
 _READ_PERMISSION = {
     "budget_block_release": "billing.budget.read",
     "session_risk_action": "session_risk.read",
+    "mcp_tool_invocation": "mcp.read",
 }
 
 
@@ -304,6 +314,161 @@ def create_approval(
         raise ApiError("approval.unavailable") from exc
     finally:
         connection.close()
+
+
+def create_mcp_approval_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    tenant_id: str,
+    invocation_id: str,
+    approval_id: str,
+    created_by_id: str,
+    expires_at: datetime,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> sqlite3.Row:
+    """在 Invocation 的现有事务内原子创建高危 MCP ApprovalTask。
+
+    调用方必须先插入使用 deferred FK 的 approval_pending Invocation。此函数不提交、不解密参数、
+    不访问 MCP 网络；任一 Task/Event/Outbox 写入失败都由调用方整体回滚。
+    """
+
+    if not connection.in_transaction:
+        raise ApiError("approval.unavailable")
+    pending = connection.execute(
+        "SELECT COUNT(*) AS value FROM approval_tasks WHERE tenant_id=? AND status='pending'",
+        (tenant_id,),
+    ).fetchone()
+    maximum = int(getattr(config, "approval_max_pending_tasks_per_tenant", MAX_PENDING_PER_TENANT))
+    if pending is None or type(pending["value"]) is not int:
+        raise ApiError("approval.unavailable")
+    if pending["value"] >= maximum:
+        raise ApiError("approval.capacity_full")
+    target = load_target(
+        connection,
+        tenant_id=tenant_id,
+        source_type="mcp",
+        source_id=invocation_id,
+        target_type="mcp_tool_invocation",
+        target_id=invocation_id,
+        target_action="invoke",
+        target_reason_code=None,
+    )
+    keyring = _keyring(config)
+    key_digest = keyring.digest(
+        CREATE_KEY_DOMAIN,
+        {
+            "tenant_id": tenant_id,
+            "producer_id": "mcp-governance",
+            "idempotency_key": invocation_id,
+        },
+    )
+    intent_digest = keyring.digest(
+        CREATE_INTENT_DOMAIN,
+        {
+            "tenant_id": tenant_id,
+            "source_type": "mcp",
+            "source_id": invocation_id,
+            "target_type": target.target_type,
+            "target_id": target.target_id,
+            "target_action": target.target_action,
+            "target_version": target.target_version,
+            "expires_at": _to_db_time(expires_at),
+        },
+    )
+    fingerprint = keyring.digest(
+        TARGET_FINGERPRINT_DOMAIN,
+        _target_fingerprint_payload(tenant_id, target),
+    )
+    timestamp = _to_db_time(now)
+    connection.execute(
+        """
+        INSERT INTO approval_tasks(
+          approval_task_id,tenant_id,source_type,source_id,target_type,target_id,
+          target_action,target_reason_code,target_version,target_fingerprint,risk_level,
+          status,resolution_reason,state_revision,writeback_status,
+          required_permission_code,created_by_type,created_by_id,decided_by_user_id,
+          decided_at,expires_at,create_hmac_key_version,create_idempotency_key_hmac,
+          create_intent_hmac,source_request_id,source_trace_id,decision_request_id,
+          decision_trace_id,created_at,updated_at,mcp_invocation_id
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',NULL,1,'pending',?,
+                 'user',?,NULL,NULL,?,?,?,?,?,?,NULL,NULL,?,?,?)
+        """,
+        (
+            approval_id,
+            tenant_id,
+            "mcp",
+            invocation_id,
+            target.target_type,
+            target.target_id,
+            target.target_action,
+            target.target_reason_code,
+            target.target_version,
+            fingerprint.digest,
+            target.risk_level,
+            target.write_permission_code,
+            created_by_id,
+            _to_db_time(expires_at),
+            key_digest.version,
+            key_digest.digest,
+            intent_digest.digest,
+            request_id,
+            trace_id,
+            timestamp,
+            timestamp,
+            invocation_id,
+        ),
+    )
+    task = _load_task(connection, tenant_id, approval_id)
+    if task is None:
+        raise ApiError("approval.unavailable")
+    _insert_created_event(
+        connection,
+        task,
+        request_id=request_id,
+        trace_id=trace_id,
+        now=now,
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO approval_scheduler_tenants(
+          tenant_id,status,lease_generation,lease_owner_id,lease_token,
+          lease_expires_at,next_scan_at,created_at,updated_at
+        ) VALUES(?,'idle',0,NULL,NULL,NULL,?,?,?)
+        """,
+        (tenant_id, timestamp, timestamp, timestamp),
+    )
+    return task
+
+
+def mcp_approval_target_coordinates(
+    config: AppConfig,
+    *,
+    fingerprint_key_version: int | None = None,
+    **values: object,
+) -> tuple[str, str]:
+    """Return the canonical MCP target version and Approval-domain fingerprint."""
+
+    try:
+        target = build_mcp_approval_target(**values)  # type: ignore[arg-type]
+        keyring = _keyring(config)
+        payload = _target_fingerprint_payload(str(values["tenant_id"]), target)
+        if fingerprint_key_version is None:
+            fingerprint = keyring.digest(TARGET_FINGERPRINT_DOMAIN, payload).digest
+        else:
+            fingerprint = _digest_for_version(
+                keyring,
+                TARGET_FINGERPRINT_DOMAIN,
+                payload,
+                _positive_int(fingerprint_key_version),
+            )
+            if fingerprint is None:
+                raise ApprovalContractError("approval.hmac_key_invalid")
+    except (ApprovalContractError, KeyError, TypeError, ValueError) as exc:
+        raise ApiError("approval.unavailable") from exc
+    return target.target_version, fingerprint
 
 
 def list_approvals(
@@ -1088,6 +1253,7 @@ def decide_approval(
             task_status = "approved"
             resolution_reason = "approved"
         else:
+            apply_rejected_target(connection, task, timeout=False, now=now)
             writeback_status = "completed"
             task_status = "rejected"
             resolution_reason = "user_rejected"
@@ -1455,6 +1621,7 @@ def _timeout_task_in_transaction(
     approval_id = _text(task["approval_task_id"])
     revision_before = _positive_int(task["state_revision"])
     timestamp = _to_db_time(now)
+    apply_rejected_target(connection, task, timeout=True, now=now)
     cursor = connection.execute(
         """
         UPDATE approval_tasks
