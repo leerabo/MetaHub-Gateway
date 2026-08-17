@@ -2080,6 +2080,36 @@ PRD-086 的实现、专项、迁移、真实 Runtime/API、Browser 和文档已�
 `PRD-087 | M2-企业增强 | P2 | 扩展层 | 伙伴门户 | 渠道伙伴与白标门户`。本次只登记、不实现 PRD-087，
 `all_108_prds_complete=false`。
 
+## PRD-087 渠道伙伴与白标门户目录（已完成）
+
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,webhooks}.py`：发布 RBAC revision 22、六组伙伴
+  权限、固定伙伴错误和 EVT-099 exact 可订阅事件合同。
+- `infra/migrations/0080_channel_partner_white_label_portal.sql/.down.sql`：创建 tenant-qualified Partner、
+  PartnerCustomer、CommissionRecord、分润游标、source outbox 与安全操作链，安装 owner、append-only、
+  idempotency/payload hash、CAS/lease/cutoff、exact event、权限矩阵和 down guard。
+- `control-plane-api/src/metahub_control/partner_portal/` 及 auth/app/console/webhook 装配：实现 Partner 配置、
+  白标、Project 客户映射、历史用量、映射后分润、CSV、交付包、两阶段 Scheduler 和可恢复 EVT-099 outbox；
+  所有 API 从 Session 恢复 tenant/actor 并由后端实时校验 RBAC。
+- `console-web/src/lib/partnerPortal.js`、`src/features/partner-portal/`、主壳、i18n 与样式：交付 PAGE-119
+  初始化/就绪工作台、客户映射、历史用量、分润、CSV/交付、根节点品牌变量、owner/ticket/generation、动态撤权、
+  迟到响应丢弃、租户切换清理和 390/1280/1440 响应布局。
+- `scripts/acceptance/prd087-{browser-harness.py,browser-acceptance.mjs}` 与合同测试：从空 SQLite 启动真实
+  Control/Console/Chromium，验证 0080 往返、API、双租户、动态撤权、未授权零预取、附件、隐私、截图 hash 以及
+  owner-safe 进程、端口和 SQLite sidecar 清理。
+- `shared-sdk/python/tests/test_prd087_partner_portal_contracts.py`、
+  `control-plane-api/tests/integration/test_prd087_{partner_portal,db_migrations}.py` 与
+  `console-web/tests/unit/{partnerPortal,prd087BrowserAcceptance,prd087BrowserAcceptanceDriver}.test.mjs`：覆盖 exact
+  wire、0080、租户/RBAC、幂等/CAS、分润并发/接管/cutoff、EVT-099 恢复、附件、生命周期和视觉合同。
+- `.artifacts/prd087-browser/page119-final-20260817-r17/`：保存最终 `browser-acceptance.json`、SHA-256 manifest
+  与 setup、ready、commission、tenant-isolation 四张已逐图复核的 PNG。
+- `docs/prd/PRD-087-channel-partner-white-label-portal.md`、`docs/api/partner-portal.md` 与
+  `docs/testing/PRD-087-tests.md`：保存冻结设计、两轮编码前自审、公开 API、最终门禁、证据 hash 和下一项依据。
+
+PRD-087 的实现、迁移、专项、必要回归和真实 Browser 已形成正式证据。Excel `01_PRD总表` 第 89 行、
+`03_M2-M3扩展交付` 第 25 行、PAGE-120、API-400/401、OBJ-121、EVT-100 与 TC-0175/0176 共同确认下一条权威
+未完成项为 `PRD-088 | M2-企业增强 | P2 | 扩展层 | 白标配置 | 客户/渠道白标配置`。本次只登记、不实现
+PRD-088，`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

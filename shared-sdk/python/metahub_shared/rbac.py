@@ -60,7 +60,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-085 的激活漏斗只对 admin 与 ops_admin 开放，页面可见性不能替代后端权限校验。
 # PRD-086 的客户健康评分沿用当前租户边界，并增加独立只读权限；不存在的客户成功/销售
 # persona 不能变成跨租户授权，默认只向 admin 与 ops_admin 扩展。
-CATALOG_REVISION: Final[int] = 21
+# PRD-087 将伙伴读取、首次配置、客户管理、白标、分润导出和交付下载拆成六个权限；
+# 运行时还必须叠加当前 tenant 的 Partner owner 校验，不能把角色上限当成客户范围。
+CATALOG_REVISION: Final[int] = 22
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -108,6 +110,48 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "读取客户健康评分",
         "读取当前租户确定性客户健康评分、聚合信号与可解释建议。",
         "read",
+    ),
+    PermissionDefinition(
+        "partner_portal.read",
+        "partner",
+        "读取伙伴门户",
+        "读取当前租户伙伴资料、客户安全聚合与分润摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "partner_portal.configure",
+        "partner",
+        "配置伙伴门户",
+        "首次创建当前租户唯一伙伴资料与冻结分润基线。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "partner_customer.manage",
+        "partner",
+        "管理伙伴客户",
+        "创建或终止当前伙伴租户内的 Project 客户映射。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "partner_branding.manage",
+        "partner",
+        "管理伙伴白标",
+        "更新当前伙伴门户的纯文本品牌名称、颜色和支持信息。",
+        "write",
+    ),
+    PermissionDefinition(
+        "partner_commission.export",
+        "partner",
+        "导出伙伴分润",
+        "导出当前伙伴按币种汇总的非结算分润报表。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "partner_delivery.download",
+        "partner",
+        "下载伙伴交付包",
+        "下载当前伙伴不含凭据和内部地址的安全交付清单。",
+        "critical",
     ),
     PermissionDefinition(
         "tenant.settings.read", "tenant", "读取租户设置", "读取当前租户的脱敏基础配置。", "read"
@@ -647,6 +691,11 @@ _VIEWER = {
     "file.read",
     "file.write",
     "file.security.scan",
+    "partner_portal.read",
+    "partner_customer.manage",
+    "partner_branding.manage",
+    "partner_commission.export",
+    "partner_delivery.download",
 }
 _FINANCE = {
     "console.basic.read",

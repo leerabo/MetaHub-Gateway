@@ -98,9 +98,24 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-084 - 本地模型 Endpoint 接入`
 - `PRD-085 - 产品使用埋点与激活漏斗`
 - `PRD-086 - 客户健康评分`
+- `PRD-087 - 渠道伙伴与白标门户`
 
 最近进展：
 
+- `PRD-087 - 渠道伙伴与白标门户` 已完成：0080、RBAC revision 22、tenant-qualified Partner、
+  PartnerCustomer、CommissionRecord、两阶段分润游标、EVT-099/source outbox、伙伴安全操作链、六组后端权限、
+  `GET/POST/PATCH /partners*`、CSV/交付包和 PAGE-119 均已交付。客户用量明确包含 Project 映射前历史，分润只从
+  映射生效后的 FinOps ledger sequence 物化；不同币种不换算，estimated 与 accrued/not_applicable 状态保留。
+  后端逐请求校验 tenant/RBAC/owner，跨租户与不存在同形 404，API 全路径统一 `no-store, private`、错误码与
+  request_id；Provider Key、Token、Prompt、Response、Endpoint、客户展示名和品牌正文不进入日志、事件或正式证据。
+  最终 PRD-087 Python 联合专项 `53/53`、Shared 相邻 `81/81`、Control 相邻 `17/17`、PAGE-119 Console
+  `18/18`、Console 全量 `926/926`、lint `286 files` 均通过。真实 Chromium 批次
+  `.artifacts/prd087-browser/page119-final-20260817-r17/` 从空 SQLite 完成 `80/0080` 往返并验证两个 tenant、
+  动态撤权、迟到响应、未授权零预取、CSV/交付、19 个业务请求/响应、四张 390/1280/1440 PNG、零 Console/Page
+  error、零敏感明文和 owned 资源清理。详见
+  [PRD-087 设计](docs/prd/PRD-087-channel-partner-white-label-portal.md)、
+  [伙伴门户 API](docs/api/partner-portal.md) 和
+  [PRD-087 测试记录](docs/testing/PRD-087-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-086 - 客户健康评分` 已完成：0079、RBAC revision 21、tenant-qualified append-only
   CustomerHealthScore、每小时两阶段 Scheduler、changed-only `customer.health_changed` EVT-098/source outbox、
   纯读 `GET /customer-health` 和 PAGE-118 均已交付。v1 固定六类信号，其中工单源明确 unavailable，
@@ -386,11 +401,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 88 行、`03_M2-M3扩展交付` 第 24 行、PAGE-119、API-394..399、
-  OBJ-118..120、EVT-099 与 TC-0173/0174 已和 README、`docs/prd`、`docs/testing` 的 PRD-086 完成状态
-  交叉确认。PRD-086 之后的下一条权威未完成项为
-  `PRD-087 | M2-企业增强 | P2 | 扩展层 | 伙伴门户 | 渠道伙伴与白标门户`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-087；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 89 行、`03_M2-M3扩展交付` 第 25 行、PAGE-120、API-400/401、
+  OBJ-121、EVT-100 与 TC-0175/0176 已和 README、`docs/prd`、`docs/testing` 的 PRD-087 完成状态交叉确认。
+  PRD-087 之后的下一条权威未完成项为
+  `PRD-088 | M2-企业增强 | P2 | 扩展层 | 白标配置 | 客户/渠道白标配置`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-088；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

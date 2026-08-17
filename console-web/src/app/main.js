@@ -92,6 +92,18 @@ import {
 } from "../features/customer-health/customerHealthPageState.js";
 import { renderCustomerHealth } from "../features/customer-health/renderCustomerHealth.js";
 import {
+  bindPartnerPortalInteractions,
+  clearPartnerPortalBranding,
+  clearPartnerPortalDom,
+} from "../features/partner-portal/bindPartnerPortal.js";
+import {
+  createPartnerPortalPageState,
+  isPartnerPortalAbortError,
+  partnerPortalPageOwner,
+  partnerPortalReadIdentitySnapshot,
+} from "../features/partner-portal/partnerPortalPageState.js";
+import { renderPartnerPortal } from "../features/partner-portal/renderPartnerPortal.js";
+import {
   bindExperimentInteractions,
   clearExperimentDom,
 } from "../features/experiments/bindExperiments.js";
@@ -413,6 +425,19 @@ import {
 } from "../lib/localEndpoints.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import { getCustomerHealth } from "../lib/customerHealth.js";
+import {
+  configurePartner,
+  createPartnerCustomer,
+  downloadPartnerCommissionCsv,
+  downloadPartnerDeliveryPackage,
+  getPartnerCommission,
+  getPartnerProfile,
+  listPartnerCustomers,
+  listPartnerProjects,
+  triggerPartnerAttachmentDownload,
+  updatePartnerBranding,
+  updatePartnerCustomer,
+} from "../lib/partnerPortal.js";
 import {
   createExperiment,
   getExperiment,
@@ -747,6 +772,11 @@ const productAnalyticsPageState = createProductAnalyticsPageState({
 const customerHealthPageState = createCustomerHealthPageState({
   clearDom: () => globalThis.document?.querySelector?.(".customer-health-panel")?.replaceChildren(),
 });
+// PAGE-119 owns branding, customer/commission aggregates, dialogs, and attachment lanes independently.
+const partnerPortalPageState = createPartnerPortalPageState({
+  clearDom: () => clearPartnerPortalDom(globalThis.document),
+  clearBranding: () => clearPartnerPortalBranding(globalThis.document),
+});
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
@@ -921,6 +951,10 @@ if (app && globalThis.window) {
         // PAGE-118 score and GET owner are destroyed synchronously at the hash boundary.
         customerHealthPageState.clear();
       }
+      if (nextItemId !== "partner-portal") {
+        // PAGE-119 clears visible branding and all private lanes before navigation work can complete.
+        partnerPortalPageState.clear();
+      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -981,6 +1015,7 @@ if (app && globalThis.window) {
       localEndpointPageState.clear();
       productAnalyticsPageState.clear();
       customerHealthPageState.clear();
+      partnerPortalPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
       planManagementPageState.clear();
@@ -1109,6 +1144,7 @@ async function start() {
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
+    clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1199,6 +1235,7 @@ async function performRefresh() {
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
+    clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1426,6 +1463,10 @@ async function performRefresh() {
   // PAGE-118 is owned only by the backend-confirmed customer-health navigation and exact read capability.
   if (consoleShellState?.activeNavigationItemId !== "customer-health") {
     customerHealthPageState.clear();
+  }
+  // PAGE-119 exists only while the exact backend navigation owner and live read permission remain current.
+  if (consoleShellState?.activeNavigationItemId !== "partner-portal") {
+    partnerPortalPageState.clear();
   }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
@@ -1749,6 +1790,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-119 composes only its dedicated aggregate endpoints after the profile owner is confirmed.
+  const partnerPortalState = await loadPartnerPortalState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
   const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
     projectState,
@@ -1896,6 +1942,7 @@ async function performRefresh() {
     localEndpointsState,
     productAnalyticsState,
     customerHealthState,
+    partnerPortalState,
     experimentsState,
     budgetState,
     dlpState,
@@ -2093,6 +2140,7 @@ function renderLogin(error, requestId) {
   localEndpointPageState.clear();
   productAnalyticsPageState.clear();
   customerHealthPageState.clear();
+  partnerPortalPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
   planManagementPageState.clear();
@@ -2468,6 +2516,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     localEndpointPageState.clear();
     productAnalyticsPageState.clear();
     customerHealthPageState.clear();
+    partnerPortalPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
     planManagementPageState.clear();
@@ -2581,6 +2630,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRequestFeedbackSummaryInteractions(consoleShellState);
   bindProductAnalyticsInteractions(consoleShellState);
   bindCustomerHealthInteractions(consoleShellState);
+  bindPartnerPortalPageInteractions(consoleShellState);
   bindRoleDashboardInteractions(consoleShellState);
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
   void ownMigrationGuideVisitAfterRender(consoleShellState);
@@ -6272,6 +6322,209 @@ function handleCustomerHealthAuthenticationFailure(error) {
   return false;
 }
 
+/** Build PAGE-119 owner only from the exact live RBAC/navigation snapshot and current hash. */
+function currentPartnerPortalOwner(consoleShellState) {
+  const owner = partnerPortalPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "partner-portal" ? owner : null;
+}
+
+/** Redraw only PAGE-119 and immediately rebind commands to the same owner snapshot. */
+function renderCurrentPartnerPortalPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".partner-portal-panel");
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!panel || !owner || !partnerPortalPageState.enter(owner)) return false;
+  panel.innerHTML = renderPartnerPortal(
+    partnerPortalPageState.snapshot(), authSession.context, consoleShellState, currentI18n,
+  );
+  bindPartnerPortalPageInteractions(consoleShellState);
+  return true;
+}
+
+/** Bind setup, CAS edits, filtering, confirmations, and authenticated downloads for the current PAGE-119 owner. */
+function bindPartnerPortalPageInteractions(consoleShellState) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!owner || !partnerPortalPageState.enter(owner)) return false;
+  return bindPartnerPortalInteractions(globalThis.document, {
+    onRefresh: () => refresh(),
+    onSetup: (input) => runPartnerProfileMutation(consoleShellState, "configure", input),
+    onBranding: (input, revision) => runPartnerProfileMutation(consoleShellState, "branding", input, revision),
+    onCustomerFilter: async (filters) => {
+      const current = currentPartnerPortalOwner(consoleShellState);
+      if (!partnerPortalPageState.setCustomerFilters(current, filters)) return;
+      const pending = loadPartnerCustomersLane(consoleShellState, refreshSequence);
+      renderCurrentPartnerPortalPanel(consoleShellState);
+      await pending;
+      renderCurrentPartnerPortalPanel(consoleShellState);
+    },
+    onCommissionFilter: async (filters) => {
+      const current = currentPartnerPortalOwner(consoleShellState);
+      if (!partnerPortalPageState.setCommissionFilters(current, filters)) return;
+      const pending = loadPartnerCommissionLane(consoleShellState, refreshSequence);
+      renderCurrentPartnerPortalPanel(consoleShellState);
+      await pending;
+      renderCurrentPartnerPortalPanel(consoleShellState);
+    },
+    onOpenCustomer: (kind, customerId) => {
+      const current = currentPartnerPortalOwner(consoleShellState);
+      if (partnerPortalPageState.openCustomerDialog(current, kind, customerId)) {
+        renderCurrentPartnerPortalPanel(consoleShellState);
+      }
+    },
+    onCloseDialog: () => {
+      const current = currentPartnerPortalOwner(consoleShellState);
+      if (partnerPortalPageState.closeDialog(current)) renderCurrentPartnerPortalPanel(consoleShellState);
+    },
+    onCreateCustomer: (input) => runPartnerCustomerMutation(consoleShellState, "create", "", 0, input),
+    onUpdateCustomer: (kind, customerId, revision, input) => (
+      runPartnerCustomerMutation(consoleShellState, kind, customerId, revision, input)
+    ),
+    onExport: () => runPartnerAttachmentDownload(consoleShellState, "export"),
+    onDelivery: () => runPartnerAttachmentDownload(consoleShellState, "delivery"),
+  });
+}
+
+/** Configure the Partner or update branding with revision CAS; no form body is retained after completion. */
+async function runPartnerProfileMutation(consoleShellState, kind, input, revision = 0) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!owner || !partnerPortalPageState.enter(owner)) return false;
+  const operation = partnerPortalPageState.beginMutation(owner, kind);
+  if (!operation || !authSession.token) return false;
+  renderCurrentPartnerPortalPanel(consoleShellState);
+  try {
+    const result = kind === "configure"
+      ? await configurePartner({
+          controlApiUrl, token: authSession.token, input,
+          idempotencyKey: createPartnerPortalIdempotencyKey(), signal: operation.controller.signal,
+        })
+      : await updatePartnerBranding({
+          controlApiUrl, token: authSession.token, input, revision, signal: operation.controller.signal,
+        });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent("mutation", operation, current)) return false;
+    partnerPortalPageState.acceptPartnerMutation(operation, result, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    if (kind === "configure") {
+      await Promise.all([
+        loadPartnerProjectsLane(consoleShellState, refreshSequence),
+        loadPartnerCustomersLane(consoleShellState, refreshSequence),
+        loadPartnerCommissionLane(consoleShellState, refreshSequence),
+      ]);
+      renderCurrentPartnerPortalPanel(consoleShellState);
+    }
+    return true;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent("mutation", operation, current) || isPartnerPortalAbortError(error)) return false;
+    if (handlePartnerPortalAuthenticationFailure(error)) return false;
+    partnerPortalPageState.rejectMutation(operation, error, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    return false;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
+/** Create, rename, or disable one customer mapping with its frozen idempotency/CAS boundary. */
+async function runPartnerCustomerMutation(consoleShellState, kind, customerId, revision, input) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!owner || !partnerPortalPageState.enter(owner)) return false;
+  const operation = partnerPortalPageState.beginMutation(owner, kind, { customerId, revision });
+  if (!operation || !authSession.token) return false;
+  renderCurrentPartnerPortalPanel(consoleShellState);
+  try {
+    const result = kind === "create"
+      ? await createPartnerCustomer({
+          controlApiUrl, token: authSession.token, input,
+          idempotencyKey: createPartnerPortalIdempotencyKey(), signal: operation.controller.signal,
+        })
+      : await updatePartnerCustomer({
+          controlApiUrl, token: authSession.token, partnerCustomerId: customerId,
+          input, revision, signal: operation.controller.signal,
+        });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent("mutation", operation, current)) return false;
+    partnerPortalPageState.acceptCustomerMutation(operation, result, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    await Promise.all([
+      loadPartnerProjectsLane(consoleShellState, refreshSequence),
+      loadPartnerCustomersLane(consoleShellState, refreshSequence),
+      loadPartnerCommissionLane(consoleShellState, refreshSequence),
+    ]);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    return true;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent("mutation", operation, current) || isPartnerPortalAbortError(error)) return false;
+    if (handlePartnerPortalAuthenticationFailure(error)) return false;
+    partnerPortalPageState.rejectMutation(operation, error, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    return false;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
+/** Fetch, validate, click, and immediately revoke a PAGE-119 attachment without storing its Blob in page state. */
+async function runPartnerAttachmentDownload(consoleShellState, lane) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!owner || !partnerPortalPageState.enter(owner)) return false;
+  const operation = partnerPortalPageState.beginDownload(owner, lane);
+  if (!operation || !authSession.token || !operation.partnerCode) return false;
+  renderCurrentPartnerPortalPanel(consoleShellState);
+  try {
+    const result = lane === "export"
+      ? await downloadPartnerCommissionCsv({
+          controlApiUrl, token: authSession.token, partnerCode: operation.partnerCode,
+          filters: operation.filters, signal: operation.controller.signal,
+        })
+      : await downloadPartnerDeliveryPackage({
+          controlApiUrl, token: authSession.token, partnerCode: operation.partnerCode,
+          signal: operation.controller.signal,
+        });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent(lane, operation, current)) return false;
+    triggerPartnerAttachmentDownload(result);
+    partnerPortalPageState.acceptDownload(operation, result, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    return true;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent(lane, operation, current) || isPartnerPortalAbortError(error)) return false;
+    if (handlePartnerPortalAuthenticationFailure(error)) return false;
+    partnerPortalPageState.rejectDownload(operation, error, current);
+    renderCurrentPartnerPortalPanel(consoleShellState);
+    return false;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
+/** Only a still-current PAGE-119 ticket may react to 401/403. */
+function handlePartnerPortalAuthenticationFailure(error) {
+  if (!(error instanceof AuthApiError)) return false;
+  if (error.status === 401) {
+    partnerPortalPageState.clear();
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin(authErrorMessage(error), error.requestId);
+    return true;
+  }
+  if (error.status === 403) {
+    partnerPortalPageState.clear();
+    globalThis.window?.setTimeout?.(() => void refresh(), 0);
+    return true;
+  }
+  return false;
+}
+
+function createPartnerPortalIdempotencyKey() {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (!uuid) throw new AuthApiError({
+    status: 503, code: "partner.unavailable", message: "伙伴门户暂不可用", requestId: "-", traceId: "-",
+  });
+  return `partner-${uuid}`;
+}
+
 /** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
 /** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchReadOwner(consoleShellState) {
@@ -9891,6 +10144,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "customer-health") {
     // Destroy the PAGE-118 ticket before the navigation preference request can race it.
     customerHealthPageState.clear();
+  }
+  if (itemId !== "partner-portal") {
+    // PAGE-119 attachment/object state and branding are destroyed before the navigation preference request.
+    partnerPortalPageState.clear();
   }
   if (itemId !== "experiments") {
     // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
@@ -14907,6 +15164,121 @@ async function loadCustomerHealthState(consoleShellState, refreshId) {
   }
 }
 
+/** Load PAGE-119 profile first, then its independent project/customer/commission lanes. */
+async function loadPartnerPortalState(consoleShellState, refreshId) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !partnerPortalPageState.enter(owner)) return null;
+  const operation = partnerPortalPageState.beginProfile(owner, refreshId);
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await getPartnerProfile({
+      controlApiUrl, token: authSession.token, signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (!partnerPortalPageState.isCurrent("profile", operation, current)) return null;
+    partnerPortalPageState.acceptProfile(operation, result, current);
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !partnerPortalPageState.isCurrent("profile", operation, current)
+      || isPartnerPortalAbortError(error)
+    ) return null;
+    if (handlePartnerPortalAuthenticationFailure(error)) return null;
+    partnerPortalPageState.rejectProfile(operation, error, current);
+    return partnerPortalPageState.snapshot();
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+  await Promise.all([
+    loadPartnerProjectsLane(consoleShellState, refreshId),
+    loadPartnerCustomersLane(consoleShellState, refreshId),
+    loadPartnerCommissionLane(consoleShellState, refreshId),
+  ]);
+  return refreshId === refreshSequence ? partnerPortalPageState.snapshot() : null;
+}
+
+async function loadPartnerProjectsLane(consoleShellState, refreshId) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  const operation = partnerPortalPageState.beginProjects(owner);
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await listPartnerProjects({
+      controlApiUrl, token: authSession.token, signal: operation.controller.signal,
+    });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("projects", operation, current)) return null;
+    partnerPortalPageState.acceptProjects(operation, result, current);
+    return result;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("projects", operation, current)
+      || isPartnerPortalAbortError(error)
+    ) return null;
+    if (handlePartnerPortalAuthenticationFailure(error)) return null;
+    partnerPortalPageState.rejectProjects(operation, error, current);
+    return null;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
+async function loadPartnerCustomersLane(consoleShellState, refreshId) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  const operation = partnerPortalPageState.beginCustomers(owner);
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await listPartnerCustomers({
+      controlApiUrl, token: authSession.token, filters: operation.filters,
+      signal: operation.controller.signal,
+    });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("customers", operation, current)) return null;
+    partnerPortalPageState.acceptCustomers(operation, result, current);
+    return result;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("customers", operation, current)
+      || isPartnerPortalAbortError(error)
+    ) return null;
+    if (handlePartnerPortalAuthenticationFailure(error)) return null;
+    partnerPortalPageState.rejectCustomers(operation, error, current);
+    return null;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
+async function loadPartnerCommissionLane(consoleShellState, refreshId) {
+  const owner = currentPartnerPortalOwner(consoleShellState);
+  const operation = partnerPortalPageState.beginCommission(owner);
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await getPartnerCommission({
+      controlApiUrl, token: authSession.token, filters: operation.filters,
+      signal: operation.controller.signal,
+    });
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("commission", operation, current)) return null;
+    partnerPortalPageState.acceptCommission(operation, result, current);
+    return result;
+  } catch (error) {
+    const current = currentPartnerPortalOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("commission", operation, current)
+      || isPartnerPortalAbortError(error)
+    ) return null;
+    if (handlePartnerPortalAuthenticationFailure(error)) return null;
+    partnerPortalPageState.rejectCommission(operation, error, current);
+    return null;
+  } finally {
+    partnerPortalPageState.finish(operation);
+  }
+}
+
 /**
  * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
  * Every response is accepted only while the full Batch owner and global refresh generation match.
@@ -16486,6 +16858,13 @@ function clearProductAnalyticsStateOnIdentityChange(previous, current) {
 function clearCustomerHealthStateOnIdentityChange(previous, current) {
   if (customerHealthReadIdentitySnapshot(previous) !== customerHealthReadIdentitySnapshot(current)) {
     customerHealthPageState.clear();
+  }
+}
+
+/** Destroy PAGE-119 branding, aggregates, dialogs, and attachment tickets on any read-owner drift. */
+function clearPartnerPortalStateOnIdentityChange(previous, current) {
+  if (partnerPortalReadIdentitySnapshot(previous) !== partnerPortalReadIdentitySnapshot(current)) {
+    partnerPortalPageState.clear();
   }
 }
 

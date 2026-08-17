@@ -48,7 +48,7 @@ def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     root = tmp_path_factory.mktemp("prd085-control-template")
     database = root / "empty.sqlite3"
-    assert apply_migrations(_url(database)).applied[-1] == "0079"
+    assert apply_migrations(_url(database)).applied[-1] == "0080"
     return database
 
 

@@ -68,7 +68,7 @@ def seeded_0079(tmp_path_factory: pytest.TempPathFactory) -> Path:
     os.environ.update(names)
     try:
         result = apply_migrations(_url(database))
-        assert result.applied[-1] == "0079"
+        assert result.applied[-1] == "0080"
         apply_seed_data(_url(database))
     finally:
         for name, value in previous.items():

@@ -54,6 +54,7 @@ import { renderRequestExplanationPanel } from "../request-explanations/renderReq
 import { renderRequestFeedbackSummaryPanel } from "../request-feedback/renderRequestFeedback.js";
 import { renderProductAnalytics } from "../product-analytics/renderProductAnalytics.js";
 import { renderCustomerHealth } from "../customer-health/renderCustomerHealth.js";
+import { renderPartnerPortal } from "../partner-portal/renderPartnerPortal.js";
 import { renderSystemStatusPanel } from "../system-status/renderSystemStatusPanel.js";
 import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
 import { renderUsagePanel } from "../usage/renderUsagePanel.js";
@@ -547,6 +548,14 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-118 only consumes the dedicated score DTO; source-domain APIs are never composed in the browser.
       return renderCustomerHealthSection(
         options.customerHealthState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "partner-portal":
+      // PAGE-119 only renders the backend-authorized partner owner and strict aggregate DTOs.
+      return renderPartnerPortalSection(
+        options.partnerPortalState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -1207,6 +1216,18 @@ function renderCustomerHealthSection(state, authContext, consoleShellState, i18n
   return html
     ? `
       <section class="panel customer-health-panel" aria-labelledby="customer-health-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** PAGE-119 keeps partner branding and customer/commission facts inside its independent owner boundary. */
+function renderPartnerPortalSection(state, authContext, consoleShellState, i18n) {
+  const html = renderPartnerPortal(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel partner-portal-panel" aria-labelledby="partner-portal-title">
         ${html}
       </section>
     `

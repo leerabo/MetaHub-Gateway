@@ -93,7 +93,9 @@ def test_prd085_role_matrix_hashes_are_exact() -> None:
 
     assert {
         role: permission_matrix_sha256(
-            permission for permission in permissions if permission != "customer_health.read"
+            permission
+            for permission in permissions
+            if permission != "customer_health.read" and not permission.startswith("partner_")
         )
         for role, permissions in ROLE_GRANTABLE_PERMISSIONS.items()
     } == {

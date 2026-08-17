@@ -55,6 +55,8 @@ from .model_aliases.routes import router as model_aliases_router
 from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
+from .partner_portal import install_partner_portal_scheduler
+from .partner_portal import router as partner_portal_router
 from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
 from .plan_billing import router as plan_billing_router
@@ -129,6 +131,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/billing-disputes/")
         or request.url.path == "/local-endpoints"
         or request.url.path.startswith("/local-endpoints/")
+        or request.url.path == "/partners"
+        or request.url.path.startswith("/partners/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         response.headers["Cache-Control"] = "no-store, private"
@@ -184,6 +188,7 @@ app.include_router(model_quality_scores_router)
 app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
+app.include_router(partner_portal_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
@@ -213,6 +218,7 @@ install_response_cache_outbox_scheduler(app)
 install_product_event_scheduler(app)
 install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
+install_partner_portal_scheduler(app)
 install_billing_dispute_scheduler(app)
 install_security_event_scheduler(app)
 install_mcp_scheduler(app)

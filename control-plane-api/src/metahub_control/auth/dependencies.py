@@ -406,6 +406,76 @@ def require_customer_health_reader(
     )
 
 
+def require_partner_portal_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 实时具备伙伴门户读取权限。"""
+
+    return _require_request_permissions(request, authorization, ("partner_portal.read",))
+
+
+def require_partner_portal_configurer(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 具备首次创建当前租户 Partner 的关键权限。"""
+
+    return _require_request_permissions(request, authorization, ("partner_portal.configure",))
+
+
+def require_partner_customer_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求同时具备伙伴读取与客户映射管理权限。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("partner_portal.read", "partner_customer.manage"),
+    )
+
+
+def require_partner_branding_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求同时具备伙伴读取与白标配置权限。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("partner_portal.read", "partner_branding.manage"),
+    )
+
+
+def require_partner_commission_exporter(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求同时具备伙伴读取与分润导出权限。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("partner_portal.read", "partner_commission.export"),
+    )
+
+
+def require_partner_delivery_downloader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求同时具备伙伴读取与安全交付包下载权限。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("partner_portal.read", "partner_delivery.download"),
+    )
+
+
 def require_project_reader(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

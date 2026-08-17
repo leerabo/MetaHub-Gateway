@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,8 @@ from .security_events import (
 
 # PRD-086 客户健康事件是后台确定性评分公开投影的变更通知，不由 GET 触发。
 CUSTOMER_HEALTH_CHANGED_EVENT_TYPE = "customer.health_changed"
+# PRD-087 客户创建事件只外发 Project 映射的固定安全标识，不携带展示名或品牌正文。
+PARTNER_CUSTOMER_CREATED_EVENT_TYPE = "partner.customer_created"
 
 # Webhook 事件类型白名单定义可订阅治理事件，payload 生成和签名校验必须共享同一集合。
 WEBHOOK_EVENT_TYPES = {
@@ -137,6 +140,8 @@ WEBHOOK_EVENT_TYPES = {
     "product_event.recorded",
     # 客户健康事件只外发总分、风险枚举和固定 signal code；聚合计数与来源明细留在控制面。
     CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
+    # 伙伴客户事件只外发同租户 owner 与整数费率，不包含客户展示名、分润或交付包正文。
+    PARTNER_CUSTOMER_CREATED_EVENT_TYPE,
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -374,6 +379,9 @@ def build_webhook_event(
     elif event_type == CUSTOMER_HEALTH_CHANGED_EVENT_TYPE:
         # PRD-086 只接受后台评分快照可重建的 exact 公开投影，不允许读取者或源计数进入事件。
         _validate_customer_health_changed_payload(safe_payload)
+    elif event_type == PARTNER_CUSTOMER_CREATED_EVENT_TYPE:
+        # PRD-087 只允许 PartnerCustomer 的固定安全 owner 投影进入签名正文。
+        _validate_partner_customer_created_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -452,6 +460,7 @@ def build_webhook_event(
         LOCAL_MODEL_CALLED_EVENT_TYPE,
         "product_event.recorded",
         CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
+        PARTNER_CUSTOMER_CREATED_EVENT_TYPE,
         MCP_TOOL_CALLED_EVENT_TYPE,
         MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
@@ -790,6 +799,18 @@ def build_webhook_event(
     elif event_type == CUSTOMER_HEALTH_CHANGED_EVENT_TYPE:
         # Scheduler source 必须使用稳定 system actor 与同一 score identity 派生的链路。
         _validate_customer_health_changed_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == PARTNER_CUSTOMER_CREATED_EVENT_TYPE:
+        # 客户创建恢复必须复用原 actor、对象、请求链路和发生秒，不能用 outbox JSON 自证。
+        _validate_partner_customer_created_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1794,6 +1815,65 @@ def _validate_customer_health_changed_envelope(
         or not window_end <= occurred_at.astimezone(UTC) < window_end + timedelta(hours=1)
     ):
         # outbox 恢复不能替换 system actor、score/object、稳定链路或评分窗口。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_partner_customer_created_payload(payload: dict[str, Any]) -> None:
+    """校验伙伴客户创建事件的 exact v1 安全投影。"""
+
+    expected = {
+        "schema_version",
+        "partner_id",
+        "partner_customer_id",
+        "customer_code",
+        "project_id",
+        "status",
+        "commission_rate_bps",
+    }
+    customer_code = payload.get("customer_code")
+    if (
+        set(payload) != expected
+        or payload.get("schema_version") != "1.0"
+        or not _is_prefixed_lower_hex_id(payload.get("partner_id"), prefix="par_")
+        or not _is_prefixed_lower_hex_id(payload.get("partner_customer_id"), prefix="pcu_")
+        or type(customer_code) is not str
+        or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", customer_code) is None
+        or not _is_prefixed_lower_hex_id(payload.get("project_id"), prefix="prj_")
+        or payload.get("status") != "active"
+        or type(payload.get("commission_rate_bps")) is not int
+        or payload["commission_rate_bps"] != 1_000
+    ):
+        # 展示名、branding、金额或任意额外字段都不能进入 EVT-099 签名正文。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_partner_customer_created_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把 EVT-099 绑定到稳定客户、原始操作者和创建请求链路。"""
+
+    customer_id = payload["partner_customer_id"]
+    event_suffix = hashlib.sha256(customer_id.encode("ascii")).hexdigest()[:32]
+    if (
+        event_id != f"evt_pcu_{event_suffix}"
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != customer_id
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+        or not _is_canonical_utc_second(_to_iso(occurred_at))
+    ):
+        # 恢复不得替换 tenant、actor、customer、请求链路或发生时刻。
         raise ValueError("webhook.payload_invalid")
 
 

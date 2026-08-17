@@ -1941,6 +1941,16 @@ def _validated_pending_delivery_body(
                 connection,
                 envelope,
             )
+        elif envelope.get("event_type") == "partner.customer_created":
+            # EVT-099 不公开原始 request_id；恢复必须重绑同租户 PartnerCustomer source 图。
+            from metahub_control.partner_portal.outbox import (
+                recover_partner_customer_source_request_id,
+            )
+
+            source_request_id = recover_partner_customer_source_request_id(
+                connection,
+                envelope,
+            )
         elif envelope.get("event_type") == "file.prompt_injection_detected":
             # 文件安全 request_id 不进入公开七字段 payload；pending 恢复必须从同 tenant
             # 不可变 source/scan/finding 重新取得，禁止用 worker request_id 或占位值绕过绑定。

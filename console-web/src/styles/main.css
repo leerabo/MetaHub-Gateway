@@ -15,6 +15,382 @@
     Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
 }
 
+/* PAGE-119 partner workbench: dense desktop operations with a bounded single-column mobile projection. */
+.partner-portal-panel {
+  --partner-portal-accent: var(--partner-brand-primary, #176b5b);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.partner-portal-loading,
+.partner-portal-error,
+.partner-portal-empty {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.partner-portal-empty {
+  max-width: 620px;
+}
+
+.partner-portal-kicker {
+  margin: 0;
+  color: var(--muted-text, #64748b);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.partner-portal-empty h2,
+.partner-portal-header h2,
+.partner-portal-section h3,
+.partner-portal-side-section h3,
+.partner-portal-dialog h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.partner-portal-setup-form,
+.partner-portal-side-section form,
+.partner-portal-dialog form {
+  width: min(100%, 560px);
+  display: grid;
+  gap: 12px;
+}
+
+.partner-portal-setup-form label,
+.partner-portal-side-section label,
+.partner-portal-dialog label,
+.partner-portal-filters label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--muted-text, #64748b);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.partner-portal-setup-form input,
+.partner-portal-side-section input,
+.partner-portal-dialog input,
+.partner-portal-dialog select,
+.partner-portal-filters input,
+.partner-portal-filters select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.partner-portal-color-field input[type="color"] {
+  width: 48px;
+  height: 34px;
+  padding: 2px;
+}
+
+.partner-portal-workbench {
+  min-width: 0;
+}
+
+.partner-portal-header,
+.partner-portal-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.partner-portal-header {
+  padding: 4px 0 18px 14px;
+  border-left: 4px solid var(--partner-portal-accent);
+}
+
+.partner-portal-header p,
+.partner-portal-section-heading p,
+.partner-portal-side-section p {
+  margin: 5px 0 0;
+  color: var(--muted-text, #64748b);
+  line-height: 1.5;
+}
+
+.partner-portal-header-actions,
+.partner-portal-row-actions,
+.partner-portal-download-actions,
+.partner-portal-dialog-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.partner-portal-status,
+.partner-portal-freshness {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--partner-portal-accent) 45%, #cbd5e1);
+  color: var(--partner-portal-accent);
+  background: color-mix(in srgb, var(--partner-portal-accent) 8%, white);
+  border-radius: 4px;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.partner-portal-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
+  align-items: start;
+  gap: 20px;
+}
+
+.partner-portal-main,
+.partner-portal-aside {
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+
+.partner-portal-section,
+.partner-portal-side-section {
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color, #d9e0e7);
+}
+
+.partner-portal-side-section {
+  padding: 16px 0 0 16px;
+  border-left: 1px solid var(--border-color, #d9e0e7);
+}
+
+.partner-portal-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 0.75fr)) minmax(120px, 0.7fr) minmax(140px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.partner-portal-section-state {
+  min-height: 74px;
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  border: 1px dashed var(--border-color, #d9e0e7);
+  color: var(--muted-text, #64748b);
+}
+
+.partner-portal-section-state.is-error,
+.partner-portal-form-error,
+.partner-portal-warning {
+  color: #9f2d2d;
+  background: #fff7f5;
+}
+
+.partner-portal-table {
+  min-width: 0;
+  border: 1px solid var(--border-color, #d9e0e7);
+}
+
+.partner-portal-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.45fr) repeat(3, minmax(68px, 0.55fr)) minmax(118px, 0.9fr) minmax(90px, 0.72fr) minmax(112px, 0.8fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-color, #d9e0e7);
+}
+
+.partner-portal-commission-table .partner-portal-row {
+  grid-template-columns: minmax(150px, 1.3fr) minmax(155px, 1fr) minmax(65px, 0.45fr) minmax(100px, 0.7fr) minmax(100px, 0.7fr);
+}
+
+.partner-portal-row:first-child {
+  border-top: 0;
+}
+
+.partner-portal-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.partner-portal-row strong,
+.partner-portal-row small {
+  display: block;
+}
+
+.partner-portal-row small {
+  margin-top: 3px;
+  color: var(--muted-text, #64748b);
+}
+
+.partner-portal-table-head {
+  background: #f6f8fa;
+  color: #46515d;
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.partner-portal-freshness.is-lagging {
+  border-color: #d99a3a;
+  color: #81500c;
+  background: #fff8e8;
+}
+
+.partner-portal-currency-summaries {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.partner-portal-currency-summaries > div {
+  min-width: 0;
+  padding: 12px;
+  border-left: 3px solid var(--partner-portal-accent);
+  background: #f6f8fa;
+}
+
+.partner-portal-currency-summaries span,
+.partner-portal-currency-summaries strong,
+.partner-portal-currency-summaries small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.partner-portal-currency-summaries strong {
+  margin: 4px 0;
+  font-size: 1.2rem;
+}
+
+.partner-portal-feedback,
+.partner-portal-form-error,
+.partner-portal-warning,
+.partner-portal-readonly-note {
+  padding: 9px 11px;
+  border: 1px solid var(--border-color, #d9e0e7);
+  overflow-wrap: anywhere;
+}
+
+.partner-portal-feedback {
+  color: #176044;
+  background: #f0faf5;
+}
+
+.partner-portal-download-actions {
+  margin-top: 14px;
+}
+
+.partner-portal-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  box-sizing: border-box;
+  overflow: auto;
+  border: 1px solid #aeb8c3;
+  border-radius: 6px;
+  box-shadow: 0 18px 45px rgb(15 23 42 / 22%);
+}
+
+.partner-portal-dialog::backdrop {
+  background: rgb(15 23 42 / 42%);
+}
+
+.partner-portal-dialog-actions {
+  justify-content: flex-end;
+}
+
+.partner-portal-row-actions .text-button {
+  padding: 2px 0;
+}
+
+.partner-portal-row-actions .danger,
+.partner-portal-dialog .danger-button {
+  color: #9f2d2d;
+}
+
+/* 1280/1440px 视口扣除控制台侧栏后不足以容纳门户主区与操作栏，提前折叠为单列。 */
+@media (max-width: 1680px) {
+  .partner-portal-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .partner-portal-aside {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .partner-portal-side-section {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .partner-portal-header,
+  .partner-portal-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .partner-portal-aside,
+  .partner-portal-filters,
+  .partner-portal-currency-summaries {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .partner-portal-table-head {
+    display: none;
+  }
+
+  .partner-portal-row,
+  .partner-portal-commission-table .partner-portal-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    padding: 13px 12px;
+  }
+
+  .partner-portal-row:not(.partner-portal-table-head) > * {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.45fr) minmax(0, 1fr);
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .partner-portal-row:not(.partner-portal-table-head) > *::before {
+    content: attr(data-label);
+    color: var(--muted-text, #64748b);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  .partner-portal-row-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 420px) {
+  .partner-portal-panel {
+    padding-inline: 12px;
+  }
+
+  .partner-portal-header-actions,
+  .partner-portal-download-actions,
+  .partner-portal-dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .partner-portal-header-actions button,
+  .partner-portal-download-actions button,
+  .partner-portal-dialog-actions button {
+    width: 100%;
+  }
+}
+
 /* PAGE-105 模型实验工作区：紧凑承载列表、权威双列结果和不落盘创建对话框。 */
 .experiments-panel {
   min-width: 0;

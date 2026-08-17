@@ -59,6 +59,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "approvals": "console.page_viewed",
     # PAGE-117 只记录页面外壳，不复制漏斗计数、ProductEvent、actor 或时间。
     "growth-analytics": "console.page_viewed",
+    # PAGE-119 页面访问只记录外壳，不携带客户名、branding、分润或附件内容。
+    "partner-portal": "console.page_viewed",
     "migration-guide": "migration.guide_viewed",
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
@@ -194,6 +196,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看当前租户确定性客户健康评分、风险标签和可解释建议。",
         "后台完成首次评估后可查看客户健康评分。",
         14,
+    ),
+    NavigationDefinition(
+        "partner-portal",
+        "伙伴门户",
+        "总览",
+        "partner-portal",
+        ("partner_portal.read",),
+        "管理当前租户的渠道客户、白标信息和分润报告。",
+        "初始化伙伴资料后可建立客户映射并查看分润。",
+        15,
     ),
     NavigationDefinition(
         "tenant",

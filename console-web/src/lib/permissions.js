@@ -100,6 +100,13 @@ export const PERMISSIONS = Object.freeze({
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。
   CUSTOMER_HEALTH_READ: "customer_health.read",
+  // PAGE-119 读取、初始化、客户、白标和两类附件能力分别授权，任何按钮都不能由角色名推导。
+  PARTNER_PORTAL_READ: "partner_portal.read",
+  PARTNER_PORTAL_CONFIGURE: "partner_portal.configure",
+  PARTNER_CUSTOMER_MANAGE: "partner_customer.manage",
+  PARTNER_BRANDING_MANAGE: "partner_branding.manage",
+  PARTNER_COMMISSION_EXPORT: "partner_commission.export",
+  PARTNER_DELIVERY_DOWNLOAD: "partner_delivery.download",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",
