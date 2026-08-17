@@ -59,6 +59,8 @@ from .plan_billing import router as plan_billing_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
+from .product_analytics import install_product_event_scheduler
+from .product_analytics import router as product_analytics_router
 from .projects.routes import router as projects_router
 from .prompt_templates.routes import router as prompt_templates_router
 from .provider_health import install_provider_health_scheduler
@@ -118,6 +120,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/plans",
             "/quota-buckets",
             "/quota-adjustments",
+            "/product-analytics/funnel",
         }
         or request.url.path == "/billing-disputes"
         or request.url.path.startswith("/billing-disputes/")
@@ -167,6 +170,7 @@ app.include_router(providers_router)
 app.include_router(provider_health_router)
 app.include_router(provider_status_router)
 app.include_router(projects_router)
+app.include_router(product_analytics_router)
 app.include_router(prompt_templates_router)
 app.include_router(provider_keys_router)
 app.include_router(models_router)
@@ -201,6 +205,7 @@ install_file_security_event_scheduler(app)
 install_adapter_contract_event_scheduler(app)
 install_experiment_scheduler(app)
 install_response_cache_outbox_scheduler(app)
+install_product_event_scheduler(app)
 install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
 install_billing_dispute_scheduler(app)

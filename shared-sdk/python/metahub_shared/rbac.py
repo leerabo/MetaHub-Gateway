@@ -57,7 +57,8 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-083 再把出站网络策略与 MCP 内容策略分离，只有后端 network manage 权限可修改。
 # PRD-084 为本地模型聚合入口增加独立 read/manage/test 权限；developer 仅获 read/test，
 # 不得借页面可见性读取完整 Provider/KeyPool 或注册凭据。
-CATALOG_REVISION: Final[int] = 19
+# PRD-085 的激活漏斗只对 admin 与 ops_admin 开放，页面可见性不能替代后端权限校验。
+CATALOG_REVISION: Final[int] = 20
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -90,6 +91,13 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "console",
         "读取概览",
         "读取当前租户的聚合运行概览，不包含正式账单明细。",
+        "read",
+    ),
+    PermissionDefinition(
+        "product_analytics.read",
+        "analytics",
+        "读取产品激活漏斗",
+        "读取当前租户产品使用行为聚合与七阶段激活漏斗。",
         "read",
     ),
     PermissionDefinition(
@@ -699,6 +707,7 @@ _SECURITY = {
 _OPS = {
     "console.basic.read",
     "dashboard.read",
+    "product_analytics.read",
     "environment.read",
     "environment.write",
     "project.read",

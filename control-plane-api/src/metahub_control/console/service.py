@@ -57,6 +57,8 @@ EVENT_TYPE_BY_NAVIGATION = {
     "admin-assistant": "console.page_viewed",
     # PAGE-108/109 页面事件只记录受控 shell 元数据，不携带 task、target、密码或票据。
     "approvals": "console.page_viewed",
+    # PAGE-117 只记录页面外壳，不复制漏斗计数、ProductEvent、actor 或时间。
+    "growth-analytics": "console.page_viewed",
     "migration-guide": "migration.guide_viewed",
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
@@ -172,6 +174,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "处理当前租户预算阻断与高风险会话操作的审批任务。",
         "当前没有可见审批任务。",
         12,
+    ),
+    NavigationDefinition(
+        "growth-analytics",
+        "增长分析",
+        "总览",
+        "growth-analytics",
+        ("product_analytics.read",),
+        "查看当前租户的产品接入与激活漏斗。",
+        "当前租户尚未形成可展示的产品激活事实。",
+        13,
     ),
     NavigationDefinition(
         "tenant",

@@ -379,6 +379,19 @@ def require_dashboard_reader(
     )
 
 
+def require_product_analytics_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 实时具备本租户产品激活聚合读取权限。"""
+
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("product_analytics.read",),
+    )
+
+
 def require_project_reader(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

@@ -80,6 +80,23 @@ def test_current_catalog_preserves_batch_permission_boundaries() -> None:
         "admin_assistant.query",
         "approval.read",
         "approval.decide",
+        "billing.plan.read",
+        "billing.plan.write",
+        "billing.quota.read",
+        "billing.quota.write",
+        "billing.dispute.read",
+        "billing.dispute.create",
+        "billing.dispute.review",
+        "mcp.read",
+        "mcp.server.manage",
+        "mcp.policy.manage",
+        "mcp.network.manage",
+        "mcp.invoke",
+        "mcp.approve",
+        "local_endpoint.read",
+        "local_endpoint.manage",
+        "local_endpoint.test",
+        "product_analytics.read",
     }
     assert len(legacy_permission_codes) == 64
     assert {"batch.read", "batch.write"} <= set(PERMISSION_CODES)

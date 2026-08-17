@@ -305,7 +305,8 @@ function launchEdge(config, tracker) {
     "--disable-default-apps",
     "--disable-domain-reliability",
     "--disable-extensions",
-    "--disable-features=AutofillServerCommunication,OptimizationHints,MediaRouter",
+    // 一次性验收禁止启动系统更新安装器，避免外部子进程污染 owner 树和锁住隔离 Profile。
+    "--disable-features=AutofillServerCommunication,OptimizationHints,MediaRouter,OsUpdateHandlerWin",
     "--disable-sync",
     "--metrics-recording-only",
     "--remote-allow-origins=*",

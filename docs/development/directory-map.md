@@ -2021,6 +2021,38 @@ PRD-084 的实现、专项、必要回归、迁移、Runtime、Browser 和文档
 `PRD-085 | M2-企业增强 | P2 | 扩展层 | 用户行为埋点 | 产品使用埋点与激活漏斗`。本次只登记、不实现
 PRD-085，`all_108_prds_complete=false`。
 
+## PRD-085 产品使用埋点与激活漏斗目录（已完成）
+
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,webhooks}.py`：发布 RBAC revision 20、
+  `product_analytics.read`、固定产品分析错误及 EVT-097 可订阅事件合同。
+- `infra/migrations/0078_product_analytics_activation_funnel.sql/.down.sql`：创建 tenant-qualified
+  ProductEvent、source outbox 和来源投影，安装 owner、append-only、唯一来源、状态 CAS、订阅快照与 down
+  guard；fresh/repeat/down/re-up 均验证 integrity 与复合外键。
+- `control-plane-api/src/metahub_control/product_analytics/` 及 auth/app/console/webhook 装配：实现
+  `GET /product-analytics/funnel`、七阶段整数基点聚合、实时后端 RBAC、tenant 隔离和可恢复 source outbox。
+- `console-web/src/lib/productAnalytics.js`、`src/features/product-analytics/`、`src/app/main.js`、i18n 与样式：
+  交付 PAGE-117 七阶段漏斗、初始态、刷新、owner/Abort、动态撤权、迟到响应丢弃、租户切换清理和双视口布局。
+- `scripts/acceptance/prd085-{runtime-acceptance.py,browser-harness.py,browser-acceptance.mjs}` 与合同测试：
+  从空 SQLite 启动真实 Control/Gateway/Console、本地上游、Webhook receiver 和 Chromium，验证 0078、七来源、
+  Usage/成本/失败、outbox 恢复、双租户 `2/7` 对 `1/7`、动态撤权、当前 401/403、迟到 200/401、24 文件
+  来源证明、隐私及 owner-safe 进程/端口/SQLite sidecar/隔离 Chrome 运行树分项清理。
+- `shared-sdk/python/tests/test_prd085_product_analytics_contracts.py`、
+  `control-plane-api/tests/integration/test_prd085_*.py`、相邻 Shared/Control/Gateway 回归和
+  `console-web/tests/unit/{productAnalytics,prd085BrowserAcceptance}.test.mjs`：覆盖 exact wire、迁移、来源原子性、
+  API、tenant/RBAC、乱序时间、终态失败、Console 生命周期和 Browser 证据合同。
+- `docs/prd/PRD-085-product-analytics-activation-funnel.md`、`docs/api/product-analytics.md` 与
+  `docs/testing/PRD-085-tests.md`：保存冻结设计、四轮自审、公开 API、最终门禁、证据 hash 和下一项依据。
+
+PRD-085 的实现、专项、必要回归、迁移、Runtime、Browser 和文档已形成正式证据。权威 Runtime JSON 为
+`.artifacts/prd085-runtime/prd085-runtime-20260817T055917Z-f41d66e4.json`，SHA-256 为
+`9BC26BCD9DC04A18B9628BE5A689FE9492EE2E4ED99F6A623DFFE36397EE61D6`；权威 Browser 为
+`.artifacts/prd085-browser/prd085-browser-20260817T073524Z-final-r2/`，JSON/manifest SHA-256 分别为
+`2BA160C3B7351FF1B9771AC1D2BD1BBA9BCFB06B90E94CAA3463484B92A881F9`、
+`BC51513B7ED3B20AF628121C1D49ADCC7A5FEDB6D4A04156875D113591BE49A1`。Excel `01_PRD总表` 第 87 行、
+`03_M2-M3扩展交付` 第 23 行、PAGE-118、API-392/393、OBJ-117、EVT-098 与 TC-0171/0172 共同确认，
+下一条权威未完成项为 `PRD-086 | M2-企业增强 | P2 | 扩展层 | 客户健康 | 客户健康评分`。本次只登记、
+不实现 PRD-086，`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

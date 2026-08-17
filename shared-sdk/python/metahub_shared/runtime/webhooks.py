@@ -130,6 +130,8 @@ WEBHOOK_EVENT_TYPES = {
     # 本地模型调用事件仅外发 routing attempt 的固定终态摘要；Endpoint、凭据、请求/响应正文、
     # 原始 usage 和上游错误正文都必须留在租户限定的权威事实中。
     LOCAL_MODEL_CALLED_EVENT_TYPE,
+    # 产品激活事件只外发固定阶段、实时捕获模式与发生秒；来源、名称、筛选值和正文留在控制面。
+    "product_event.recorded",
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -361,6 +363,9 @@ def build_webhook_event(
     elif event_type == LOCAL_MODEL_CALLED_EVENT_TYPE:
         # PRD-084 只接受已实际开始本地 Provider 调用的 exact 安全终态摘要。
         safe_payload = validate_local_model_called_payload(safe_payload)
+    elif event_type == "product_event.recorded":
+        # PRD-085 只接受不可变 ProductEvent 的五字段实时安全摘要，历史回填不得外发。
+        _validate_product_event_recorded_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -437,6 +442,7 @@ def build_webhook_event(
         "trial.expired",
         "billing_dispute.created",
         LOCAL_MODEL_CALLED_EVENT_TYPE,
+        "product_event.recorded",
         MCP_TOOL_CALLED_EVENT_TYPE,
         MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
@@ -751,6 +757,18 @@ def build_webhook_event(
     elif event_type == LOCAL_MODEL_CALLED_EVENT_TYPE:
         # 运行时 source event 没有用户 actor，并必须绑定同一 Endpoint、request、trace 与完成秒。
         safe_payload = validate_local_model_called_event(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == "product_event.recorded":
+        # outbox 恢复只能复用原 ProductEvent owner、可空操作链路和发生秒。
+        _validate_product_event_recorded_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1588,6 +1606,71 @@ def _validate_billing_dispute_created_envelope(
         or _to_iso(occurred_at) != payload["created_at"]
     ):
         # lease worker 或恢复任务不得替换申请人、request/trace、object 或发生时刻。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_product_event_recorded_payload(payload: dict[str, Any]) -> None:
+    """校验产品激活事实 Webhook 的 exact v1 实时安全摘要。"""
+
+    expected = {
+        "schema_version",
+        "product_event_id",
+        "event_type",
+        "capture_mode",
+        "occurred_at",
+    }
+    allowed_event_types = {
+        "tenant.registered",
+        "provider.created",
+        "virtual_key.created",
+        "gateway.first_call_succeeded",
+        "budget.configured",
+        "teammate.invited",
+        "request_logs.viewed",
+    }
+    if (
+        set(payload) != expected
+        or type(payload["schema_version"]) is not str
+        or payload["schema_version"] != "1.0"
+        or not _is_prefixed_lower_hex_id(payload["product_event_id"], prefix="pev_")
+        or type(payload["event_type"]) is not str
+        or payload["event_type"] not in allowed_event_types
+        or type(payload["capture_mode"]) is not str
+        or payload["capture_mode"] != "live"
+        or not _is_canonical_utc_second(payload["occurred_at"])
+    ):
+        # exact-set 和固定枚举防止来源 ID、筛选值、对象名称或任意 metadata 被外发。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_product_event_recorded_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把安全摘要绑定到同租户 ProductEvent、原操作链路和 source outbox。"""
+
+    if (
+        not _is_prefixed_lower_hex_id(event_id, prefix="evt_pev_")
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or (actor_id is not None and not _is_bounded_safe_text(actor_id, maximum=160))
+        or object_id != payload["product_event_id"]
+        or (trace_id is not None and not _is_bounded_safe_text(trace_id, maximum=160))
+        or (
+            source_request_id is not None
+            and not _is_bounded_safe_text(source_request_id, maximum=128)
+        )
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+        or _to_iso(occurred_at) != payload["occurred_at"]
+    ):
+        # 回填事件没有 outbox；实时恢复不得更换租户、actor、对象、链路或发生时刻。
         raise ValueError("webhook.payload_invalid")
 
 

@@ -1660,6 +1660,7 @@ def fail_pending_webhook_event_deliveries(
         "mcp.network_blocked",
         "mcp.tool_called",
         "quota.exhausted",
+        "product_event.recorded",
         SECURITY_EVENT_TYPE,
         "trial.expired",
     }
@@ -1926,6 +1927,16 @@ def _validated_pending_delivery_body(
             )
 
             source_request_id = recover_response_cache_source_request_id(
+                connection,
+                envelope,
+            )
+        elif envelope.get("event_type") == "product_event.recorded":
+            # 产品事件公开信封不含原始 request_id；恢复必须重新绑定不可变 ProductEvent。
+            from metahub_control.product_analytics.outbox import (
+                recover_product_event_source_request_id,
+            )
+
+            source_request_id = recover_product_event_source_request_id(
                 connection,
                 envelope,
             )

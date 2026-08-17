@@ -3421,6 +3421,19 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Use request_id to inspect the tenant role dashboard configuration and migration state.",
         owner="dashboard",
     ),
+    "product_analytics.request_invalid": ErrorSpec(
+        422,
+        "Product analytics request is invalid.",
+        "Use the supported product analytics query contract.",
+        owner="product_analytics",
+    ),
+    "product_analytics.unavailable": ErrorSpec(
+        503,
+        "Product analytics is unavailable.",
+        "Retry the request later.",
+        retryable=True,
+        owner="product_analytics",
+    ),
     "user_preference.locale_invalid": ErrorSpec(
         422,
         "User preference locale is invalid.",

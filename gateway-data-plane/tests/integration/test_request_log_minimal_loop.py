@@ -15,10 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import metahub_gateway.usage.ledger as usage_ledger_service
 import pytest
 from httpx import ASGITransport, AsyncClient
-
-import metahub_gateway.usage.ledger as usage_ledger_service
 from metahub_gateway.api.openai_compatible import router as openai_compatible_router
 from metahub_gateway.usage.ledger import (
     RequestLogContext,
@@ -284,6 +283,12 @@ def test_price_snapshot_partial_write_rolls_back_closes_and_next_usage_succeeds(
             self.commit_calls = 0
             self.rollback_calls = 0
             self.close_calls = 0
+
+        @property
+        def in_transaction(self) -> bool:
+            """转发额度结算用于决定 savepoint 边界的真实连接状态。"""
+
+            return self.inner.in_transaction
 
         def execute(self, sql: str, *parameters: object):
             """转发 SQL；首轮 Usage INSERT 前抛固定异常，已完成的 PriceSnapshot 留给 rollback。"""

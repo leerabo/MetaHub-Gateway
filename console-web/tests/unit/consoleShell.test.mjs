@@ -177,6 +177,29 @@ test("feedback report direct hash is accepted only when backend navigation inclu
   });
 });
 
+test("growth analytics direct hash is accepted only when backend navigation includes PAGE-117", () => {
+  const authorizedNavigation = {
+    active_navigation_item_id: "overview",
+    navigation_items: [
+      { id: "overview", visible: true, disabled: false },
+      { id: "growth-analytics", visible: true, disabled: false },
+    ],
+  };
+  const restrictedNavigation = {
+    active_navigation_item_id: "overview",
+    navigation_items: [{ id: "overview", visible: true, disabled: false }],
+  };
+
+  assert.deepEqual(resolveVisibleNavigation(authorizedNavigation, "growth-analytics"), {
+    activeItemId: "growth-analytics",
+    rejectedRequestedItem: false,
+  });
+  assert.deepEqual(resolveVisibleNavigation(restrictedNavigation, "growth-analytics"), {
+    activeItemId: "overview",
+    rejectedRequestedItem: true,
+  });
+});
+
 test("navigation hash parser distinguishes missing malformed and oversized values", () => {
   assert.deepEqual(parseNavigationHash(""), { value: undefined, rejected: false });
   assert.deepEqual(parseNavigationHash("#usage"), { value: "usage", rejected: false });
