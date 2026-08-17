@@ -46,6 +46,9 @@ from .security_events import (
     validate_security_event_payload,
 )
 
+# PRD-086 客户健康事件是后台确定性评分公开投影的变更通知，不由 GET 触发。
+CUSTOMER_HEALTH_CHANGED_EVENT_TYPE = "customer.health_changed"
+
 # Webhook 事件类型白名单定义可订阅治理事件，payload 生成和签名校验必须共享同一集合。
 WEBHOOK_EVENT_TYPES = {
     "webhook.test",
@@ -132,6 +135,8 @@ WEBHOOK_EVENT_TYPES = {
     LOCAL_MODEL_CALLED_EVENT_TYPE,
     # 产品激活事件只外发固定阶段、实时捕获模式与发生秒；来源、名称、筛选值和正文留在控制面。
     "product_event.recorded",
+    # 客户健康事件只外发总分、风险枚举和固定 signal code；聚合计数与来源明细留在控制面。
+    CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -366,6 +371,9 @@ def build_webhook_event(
     elif event_type == "product_event.recorded":
         # PRD-085 只接受不可变 ProductEvent 的五字段实时安全摘要，历史回填不得外发。
         _validate_product_event_recorded_payload(safe_payload)
+    elif event_type == CUSTOMER_HEALTH_CHANGED_EVENT_TYPE:
+        # PRD-086 只接受后台评分快照可重建的 exact 公开投影，不允许读取者或源计数进入事件。
+        _validate_customer_health_changed_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -443,6 +451,7 @@ def build_webhook_event(
         "billing_dispute.created",
         LOCAL_MODEL_CALLED_EVENT_TYPE,
         "product_event.recorded",
+        CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
         MCP_TOOL_CALLED_EVENT_TYPE,
         MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
@@ -769,6 +778,18 @@ def build_webhook_event(
     elif event_type == "product_event.recorded":
         # outbox 恢复只能复用原 ProductEvent owner、可空操作链路和发生秒。
         _validate_product_event_recorded_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == CUSTOMER_HEALTH_CHANGED_EVENT_TYPE:
+        # Scheduler source 必须使用稳定 system actor 与同一 score identity 派生的链路。
+        _validate_customer_health_changed_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1671,6 +1692,108 @@ def _validate_product_event_recorded_envelope(
         or _to_iso(occurred_at) != payload["occurred_at"]
     ):
         # 回填事件没有 outbox；实时恢复不得更换租户、actor、对象、链路或发生时刻。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_customer_health_changed_payload(payload: dict[str, Any]) -> None:
+    """校验客户健康变更事件的 exact v1 安全投影。"""
+
+    expected = {
+        "schema_version",
+        "customer_health_score_id",
+        "score_version",
+        "score_bps",
+        "risk_level",
+        "risk_tags",
+        "missing_signals",
+        "window_end",
+    }
+    tag_order = (
+        "usage_declining",
+        "high_error_rate",
+        "cost_anomaly_open",
+        "budget_missing",
+        "team_inactive",
+    )
+    risk_order = {"healthy": 0, "watch": 1, "at_risk": 2, "critical": 3}
+    score = payload.get("score_bps")
+    risk = payload.get("risk_level")
+    tags = payload.get("risk_tags")
+    missing = payload.get("missing_signals")
+    if (
+        set(payload) != expected
+        or type(payload.get("schema_version")) is not str
+        or payload["schema_version"] != "1.0"
+        or not _is_prefixed_lower_hex_id(payload.get("customer_health_score_id"), prefix="chs_")
+        or type(payload.get("score_version")) is not str
+        or payload["score_version"] != "customer-health-v1"
+        or type(score) is not int
+        or not 0 <= score <= 10_000
+        or type(risk) is not str
+        or risk not in risk_order
+        or type(tags) is not list
+        or any(type(tag) is not str or tag not in tag_order for tag in tags)
+        or tags != [tag for tag in tag_order if tag in tags]
+        or len(tags) != len(set(tags))
+        or type(missing) is not list
+        or missing != ["ticket_health"]
+        or not _is_canonical_utc_second(payload.get("window_end"))
+    ):
+        # exact-set 与固定排序阻止任意来源、说明文本或敏感计数进入签名正文。
+        raise ValueError("webhook.payload_invalid")
+
+    base_risk = (
+        "healthy"
+        if score >= 8000
+        else "watch"
+        if score >= 6000
+        else "at_risk"
+        if score >= 3000
+        else "critical"
+    )
+    if risk_order[risk] < risk_order[base_risk]:
+        # 风险下限只能提高严重度；事件不能把同一总分降级包装成更健康的状态。
+        raise ValueError("webhook.payload_invalid")
+    if any(tag in tags for tag in ("high_error_rate", "cost_anomaly_open")) and risk == "healthy":
+        # 这两类信号至少触发 watch；完整 5%/10% 与 critical 规则由
+        # tenant-qualified score trigger 复核。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_customer_health_changed_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把评分摘要绑定到稳定 Scheduler 身份、对象和评估小时。"""
+
+    score_id = payload["customer_health_score_id"]
+    event_suffix = hashlib.sha256(score_id.encode("ascii")).hexdigest()[:32]
+    # window_end 必须是规范 UTC 时间；解析失败统一收敛，不能泄露原始事件字段。
+    try:
+        window_end = datetime.fromisoformat(payload["window_end"].replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        # 坏窗口时间统一返回固定载荷错误，不向调用方透出解析异常正文。
+        raise ValueError("webhook.payload_invalid") from None
+    if (
+        event_id != f"evt_chs_{event_suffix}"
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or actor_id != "system:customer-health-scheduler"
+        or object_id != score_id
+        or not _is_prefixed_lower_hex_id(trace_id, prefix="trc_chs_")
+        or not _is_prefixed_lower_hex_id(source_request_id, prefix="req_chs_")
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+        or not _is_canonical_utc_second(_to_iso(occurred_at))
+        or not window_end <= occurred_at.astimezone(UTC) < window_end + timedelta(hours=1)
+    ):
+        # outbox 恢复不能替换 system actor、score/object、稳定链路或评分窗口。
         raise ValueError("webhook.payload_invalid")
 
 

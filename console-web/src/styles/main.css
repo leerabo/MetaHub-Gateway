@@ -3731,6 +3731,328 @@ h3 {
   }
 }
 
+/* PAGE-118 customer health: compact six-signal workbench with stable desktop and mobile tracks. */
+.customer-health-panel {
+  min-width: 0;
+}
+
+.customer-health-header,
+.customer-health-summary-heading,
+.customer-health-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.customer-health-header h2,
+.customer-health-summary h3,
+.customer-health-signals h3,
+.customer-health-actions h3,
+.customer-health-activation h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.customer-health-header h2 {
+  font-size: 1.35rem;
+}
+
+.customer-health-kicker {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.customer-health-refresh {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  font-size: 1.15rem;
+}
+
+.customer-health-loading,
+.customer-health-error {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 210px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.customer-health-error {
+  color: var(--danger);
+}
+
+.customer-health-error span,
+.customer-health-error code {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.customer-health-notice {
+  margin: 14px 0 0;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.customer-health-notice.is-stale {
+  color: var(--warning);
+}
+
+.customer-health-summary,
+.customer-health-signals,
+.customer-health-actions,
+.customer-health-activation {
+  min-width: 0;
+  margin-top: 20px;
+}
+
+.customer-health-summary h3,
+.customer-health-signals h3,
+.customer-health-actions h3,
+.customer-health-activation h3 {
+  font-size: 0.95rem;
+}
+
+.customer-health-risk,
+.customer-health-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.customer-health-risk.is-healthy,
+.customer-health-status.is-healthy {
+  color: var(--ok);
+}
+
+.customer-health-risk.is-watch,
+.customer-health-status.is-watch {
+  color: var(--warning);
+}
+
+.customer-health-risk.is-at_risk,
+.customer-health-status.is-at_risk,
+.customer-health-risk.is-critical,
+.customer-health-status.is-critical {
+  color: var(--danger);
+}
+
+.customer-health-status.is-unknown {
+  color: var(--muted);
+}
+
+.customer-health-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.customer-health-metrics > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.customer-health-metrics > div:last-child {
+  border-right: 0;
+}
+
+.customer-health-metrics span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.customer-health-metrics strong {
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+
+.customer-health-progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin-top: 10px;
+  accent-color: var(--accent);
+}
+
+.customer-health-progress.is-healthy {
+  accent-color: var(--ok);
+}
+
+.customer-health-progress.is-watch {
+  accent-color: var(--warning);
+}
+
+.customer-health-progress.is-at_risk,
+.customer-health-progress.is-critical {
+  accent-color: var(--danger);
+}
+
+.customer-health-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.customer-health-tags li {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--danger);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.customer-health-tags.is-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.customer-health-section-heading time {
+  color: var(--muted);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.customer-health-table {
+  display: grid;
+  min-width: 0;
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.customer-health-row {
+  display: grid;
+  grid-template-columns:
+    minmax(108px, 0.9fr)
+    minmax(86px, 0.7fr)
+    minmax(58px, 0.5fr)
+    minmax(58px, 0.5fr)
+    minmax(66px, 0.55fr)
+    minmax(190px, 1.7fr);
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.customer-health-row > * {
+  min-width: 0;
+  padding: 9px 8px;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.customer-health-table-head {
+  color: var(--muted);
+  background: #f8fafc;
+  font-weight: 700;
+}
+
+.customer-health-actions ul {
+  display: grid;
+  margin: 10px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.customer-health-actions li {
+  min-width: 0;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.customer-health-actions li > span {
+  color: var(--muted);
+}
+
+.customer-health-actions a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.customer-health-activation p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 900px) {
+  .customer-health-table-head {
+    display: none;
+  }
+
+  .customer-health-row:not(.customer-health-table-head) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px 0;
+  }
+
+  .customer-health-row:not(.customer-health-table-head) > * {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: right;
+  }
+
+  .customer-health-row:not(.customer-health-table-head) > *::before {
+    content: attr(data-label);
+    flex: 0 0 42%;
+    color: var(--muted);
+    text-align: left;
+    font-size: 0.74rem;
+    font-weight: 600;
+  }
+}
+
+@media (max-width: 620px) {
+  .customer-health-header,
+  .customer-health-summary-heading,
+  .customer-health-section-heading {
+    align-items: flex-start;
+  }
+
+  .customer-health-metrics,
+  .customer-health-row:not(.customer-health-table-head) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .customer-health-metrics > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .customer-health-metrics > div:last-child {
+    border-bottom: 0;
+  }
+
+  .customer-health-row:not(.customer-health-table-head) > * {
+    padding: 6px 4px;
+  }
+}
+
 /* PAGE-114 MCP governance workspace: compact tables on desktop, single-layer rows on mobile. */
 .mcp-workspace {
   display: grid;

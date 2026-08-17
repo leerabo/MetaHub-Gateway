@@ -1655,6 +1655,7 @@ def fail_pending_webhook_event_deliveries(
         "billing_dispute.created",
         "cache.hit",
         "cache.invalidated",
+        "customer.health_changed",
         "experiment.completed",
         "file.prompt_injection_detected",
         "mcp.network_blocked",

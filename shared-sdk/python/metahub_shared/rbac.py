@@ -58,7 +58,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-084 为本地模型聚合入口增加独立 read/manage/test 权限；developer 仅获 read/test，
 # 不得借页面可见性读取完整 Provider/KeyPool 或注册凭据。
 # PRD-085 的激活漏斗只对 admin 与 ops_admin 开放，页面可见性不能替代后端权限校验。
-CATALOG_REVISION: Final[int] = 20
+# PRD-086 的客户健康评分沿用当前租户边界，并增加独立只读权限；不存在的客户成功/销售
+# persona 不能变成跨租户授权，默认只向 admin 与 ops_admin 扩展。
+CATALOG_REVISION: Final[int] = 21
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -98,6 +100,13 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "analytics",
         "读取产品激活漏斗",
         "读取当前租户产品使用行为聚合与七阶段激活漏斗。",
+        "read",
+    ),
+    PermissionDefinition(
+        "customer_health.read",
+        "analytics",
+        "读取客户健康评分",
+        "读取当前租户确定性客户健康评分、聚合信号与可解释建议。",
         "read",
     ),
     PermissionDefinition(
@@ -708,6 +717,7 @@ _OPS = {
     "console.basic.read",
     "dashboard.read",
     "product_analytics.read",
+    "customer_health.read",
     "environment.read",
     "environment.write",
     "project.read",

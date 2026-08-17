@@ -29,6 +29,8 @@ from .config_transfer.routes import router as config_transfer_router
 from .console.routes import router as console_router
 from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
+from .customer_health import install_customer_health_scheduler
+from .customer_health import router as customer_health_router
 from .dashboard.routes import router as dashboard_router
 from .debug_console.routes import router as debug_console_router
 from .developer_portal.routes import router as developer_portal_router
@@ -120,6 +122,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/plans",
             "/quota-buckets",
             "/quota-adjustments",
+            "/customer-health",
             "/product-analytics/funnel",
         }
         or request.url.path == "/billing-disputes"
@@ -145,6 +148,7 @@ app.include_router(adapter_specs_router)
 app.include_router(audit_router)
 app.include_router(console_router)
 app.include_router(cost_anomalies_router)
+app.include_router(customer_health_router)
 app.include_router(dashboard_router)
 app.include_router(config_router)
 app.include_router(config_transfer_router)
@@ -196,6 +200,7 @@ install_admin_assistant_scheduler(app)
 install_provider_health_scheduler(app)
 install_usage_export_scheduler(app)
 install_cost_anomaly_scheduler(app)
+install_customer_health_scheduler(app)
 install_request_explanation_scheduler(app)
 install_request_log_query_event_scheduler(app)
 install_provider_error_map_scheduler(app)

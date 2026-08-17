@@ -98,6 +98,8 @@ export const PERMISSIONS = Object.freeze({
   LOCAL_ENDPOINT_TEST: "local_endpoint.test",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
+  // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。
+  CUSTOMER_HEALTH_READ: "customer_health.read",
   AUDIT_READ: "audit.read",
   AUDIT_EXPORT: "audit.export",
   WEBHOOK_MANAGE: "webhook.manage",

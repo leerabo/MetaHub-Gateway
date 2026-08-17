@@ -97,9 +97,22 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-083 - 第三方 MCP 沙箱网络 ACL`
 - `PRD-084 - 本地模型 Endpoint 接入`
 - `PRD-085 - 产品使用埋点与激活漏斗`
+- `PRD-086 - 客户健康评分`
 
 最近进展：
 
+- `PRD-086 - 客户健康评分` 已完成：0079、RBAC revision 21、tenant-qualified append-only
+  CustomerHealthScore、每小时两阶段 Scheduler、changed-only `customer.health_changed` EVT-098/source outbox、
+  纯读 `GET /customer-health` 和 PAGE-118 均已交付。v1 固定六类信号，其中工单源明确 unavailable，
+  `effective_weight_bps=9000` 并采用整数最大余数重归一；后端逐请求校验 tenant/RBAC，API 全路径统一
+  `no-store, private` 与 request_id。专项结果为 Shared `36/36`、Control `7/7`、Migration `12/12`、Console
+  `14/14`；最终相邻 Python `92/92`、Console 受影响回归 `61/61`、lint `279 files`，Ruff 精确改动范围与
+  compileall 均通过。真实运行覆盖空库 `79/0079` 往返、outbox sent、API 200/401/403/422/503、纯读计数不变和三租户
+  隔离；Browser 在 1280/1440/390 三种视口生成 healthy、high-risk、no-samples、tenant-isolation 四张 PNG，
+  均已逐图复核无重叠、无横向溢出和无 Console error。详见
+  [PRD-086 设计](docs/prd/PRD-086-customer-health-score.md)、
+  [客户健康 API](docs/api/customer-health.md) 和
+  [PRD-086 测试记录](docs/testing/PRD-086-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-085 - 产品使用埋点与激活漏斗` 已完成：0078、RBAC revision 20、tenant-qualified
   ProductEvent、`product_event.recorded` EVT-097/source outbox、`GET /product-analytics/funnel` 和
   PAGE-117 均已交付。七阶段来源由受支持的注册、Provider、Virtual Key、首次成功调用、预算、邀请与
@@ -373,11 +386,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 87 行、`03_M2-M3扩展交付` 第 23 行、PAGE-118、API-392/393、
-  OBJ-117、EVT-098 与 TC-0171/0172 已和 README、`docs/prd`、`docs/testing` 的 PRD-085 完成状态
-  交叉确认。PRD-085 之后的下一条权威未完成项为
-  `PRD-086 | M2-企业增强 | P2 | 扩展层 | 客户健康 | 客户健康评分`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-086；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 88 行、`03_M2-M3扩展交付` 第 24 行、PAGE-119、API-394..399、
+  OBJ-118..120、EVT-099 与 TC-0173/0174 已和 README、`docs/prd`、`docs/testing` 的 PRD-086 完成状态
+  交叉确认。PRD-086 之后的下一条权威未完成项为
+  `PRD-087 | M2-企业增强 | P2 | 扩展层 | 伙伴门户 | 渠道伙伴与白标门户`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-087；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

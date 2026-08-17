@@ -2053,6 +2053,33 @@ PRD-085 的实现、专项、必要回归、迁移、Runtime、Browser 和文档
 下一条权威未完成项为 `PRD-086 | M2-企业增强 | P2 | 扩展层 | 客户健康 | 客户健康评分`。本次只登记、
 不实现 PRD-086，`all_108_prds_complete=false`。
 
+## PRD-086 客户健康评分目录（已完成）
+
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,webhooks}.py`：发布 RBAC revision 21、
+  `customer_health.read`、客户健康固定错误和 EVT-098 exact 可订阅事件合同。
+- `infra/migrations/0079_customer_health_score.sql/.down.sql`：创建 tenant-qualified append-only 评分、source
+  outbox 和 Scheduler tenant 游标，安装 owner、safe-count、公式/hash、CAS/lease、changed-only 事件及 down guard。
+- `control-plane-api/src/metahub_control/customer_health/` 及 auth/app/console/webhook 装配：实现纯读
+  `GET /customer-health`、五类权威信号、工单 unavailable、整数最大余数、风险下限、每小时 Scheduler 和可恢复 outbox；
+  idle 轮询先只读探测，不占用 SQLite writer。
+- `console-web/src/lib/customerHealth.js`、`src/features/customer-health/`、主壳、i18n 与样式：交付 PAGE-118
+  健康工作台、六信号贡献、风险标签、建议动作、激活上下文、strict owner/ticket/generation、动态撤权、迟到响应丢弃和
+  390/1280/1440 响应布局。
+- `shared-sdk/python/tests/test_prd086_customer_health_contracts.py`、
+  `control-plane-api/tests/integration/test_prd086_{customer_health,db_migrations}.py` 与
+  `console-web/tests/unit/{customerHealth,prd086BrowserAcceptance}.test.mjs`：覆盖 exact wire、0079、公式、租户/RBAC、
+  纯读 GET、Scheduler/outbox 恢复、idle writer 保护、Console 生命周期和视觉合同。
+- `.artifacts/prd086-runtime/prd086-live-20260817-{05,06}/`：空 SQLite 往返、真实 lifespan Scheduler、
+  API 200/401/403/422/503、三租户纯读隔离及 healthy/high-risk/no-samples/tenant-isolation 四张截图。
+- `docs/prd/PRD-086-customer-health-score.md`、`docs/api/customer-health.md` 与
+  `docs/testing/PRD-086-tests.md`：保存冻结设计、两轮编码前自审、公开 API、最终门禁、证据 hash 和下一项依据。
+
+PRD-086 的实现、专项、迁移、真实 Runtime/API、Browser 和文档已形成证据。Excel `01_PRD总表` 第 88 行、
+`03_M2-M3扩展交付` 第 24 行、PAGE-119、API-394..399、OBJ-118..120、EVT-099 与 TC-0173/0174 共同确认，
+下一条权威未完成项为
+`PRD-087 | M2-企业增强 | P2 | 扩展层 | 伙伴门户 | 渠道伙伴与白标门户`。本次只登记、不实现 PRD-087，
+`all_108_prds_complete=false`。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

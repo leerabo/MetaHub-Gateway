@@ -186,6 +186,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         13,
     ),
     NavigationDefinition(
+        "customer-health",
+        "客户健康",
+        "总览",
+        "customer-health",
+        ("customer_health.read",),
+        "查看当前租户确定性客户健康评分、风险标签和可解释建议。",
+        "后台完成首次评估后可查看客户健康评分。",
+        14,
+    ),
+    NavigationDefinition(
         "tenant",
         "租户设置",
         "配置",

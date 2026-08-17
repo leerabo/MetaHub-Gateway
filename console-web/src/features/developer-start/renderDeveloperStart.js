@@ -53,6 +53,7 @@ import { renderOutputSafety } from "../output-safety/renderOutputSafety.js";
 import { renderRequestExplanationPanel } from "../request-explanations/renderRequestExplanation.js";
 import { renderRequestFeedbackSummaryPanel } from "../request-feedback/renderRequestFeedback.js";
 import { renderProductAnalytics } from "../product-analytics/renderProductAnalytics.js";
+import { renderCustomerHealth } from "../customer-health/renderCustomerHealth.js";
 import { renderSystemStatusPanel } from "../system-status/renderSystemStatusPanel.js";
 import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
 import { renderUsagePanel } from "../usage/renderUsagePanel.js";
@@ -538,6 +539,14 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-117 只展示后端权威七阶段聚合；权限 capability、tenant 与漏斗不变量均在独立边界复核。
       return renderProductAnalyticsSection(
         options.productAnalyticsState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "customer-health":
+      // PAGE-118 only consumes the dedicated score DTO; source-domain APIs are never composed in the browser.
+      return renderCustomerHealthSection(
+        options.customerHealthState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -1186,6 +1195,18 @@ function renderProductAnalyticsSection(state, authContext, consoleShellState, i1
   return html
     ? `
       <section class="panel growth-analytics-panel" aria-labelledby="product-analytics-title">
+        ${html}
+      </section>
+    `
+    : "";
+}
+
+/** 仅在租户、读取权限和后端导航 owner 都仍有效时渲染 PAGE-118。 */
+function renderCustomerHealthSection(state, authContext, consoleShellState, i18n) {
+  const html = renderCustomerHealth(state, authContext, consoleShellState, i18n);
+  return html
+    ? `
+      <section class="panel customer-health-panel" aria-labelledby="customer-health-title">
         ${html}
       </section>
     `

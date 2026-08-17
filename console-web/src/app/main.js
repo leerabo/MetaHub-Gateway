@@ -85,6 +85,13 @@ import {
 } from "../features/product-analytics/productAnalyticsPageState.js";
 import { renderProductAnalytics } from "../features/product-analytics/renderProductAnalytics.js";
 import {
+  createCustomerHealthPageState,
+  customerHealthPageOwner,
+  customerHealthReadIdentitySnapshot,
+  isCustomerHealthAbortError,
+} from "../features/customer-health/customerHealthPageState.js";
+import { renderCustomerHealth } from "../features/customer-health/renderCustomerHealth.js";
+import {
   bindExperimentInteractions,
   clearExperimentDom,
 } from "../features/experiments/bindExperiments.js";
@@ -405,6 +412,7 @@ import {
   testLocalEndpoint,
 } from "../lib/localEndpoints.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
+import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
   createExperiment,
   getExperiment,
@@ -735,6 +743,10 @@ const localEndpointPageState = createLocalEndpointPageState({ clearDom: clearLoc
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
 });
+// PAGE-118 keeps only the current authorized tenant score; it never shares PAGE-117 request ownership.
+const customerHealthPageState = createCustomerHealthPageState({
+  clearDom: () => globalThis.document?.querySelector?.(".customer-health-panel")?.replaceChildren(),
+});
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
@@ -905,6 +917,10 @@ if (app && globalThis.window) {
         // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
         productAnalyticsPageState.clear();
       }
+      if (nextItemId !== "customer-health") {
+        // PAGE-118 score and GET owner are destroyed synchronously at the hash boundary.
+        customerHealthPageState.clear();
+      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -964,6 +980,7 @@ if (app && globalThis.window) {
       mcpToolPageState.clear();
       localEndpointPageState.clear();
       productAnalyticsPageState.clear();
+      customerHealthPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
       planManagementPageState.clear();
@@ -1091,6 +1108,7 @@ async function start() {
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
+    clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1180,6 +1198,7 @@ async function performRefresh() {
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
+    clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1403,6 +1422,10 @@ async function performRefresh() {
   // PAGE-117 只属于后端确认的独立 capability 导航；撤权、换租户或离页立即销毁聚合与 GET。
   if (consoleShellState?.activeNavigationItemId !== "growth-analytics") {
     productAnalyticsPageState.clear();
+  }
+  // PAGE-118 is owned only by the backend-confirmed customer-health navigation and exact read capability.
+  if (consoleShellState?.activeNavigationItemId !== "customer-health") {
+    customerHealthPageState.clear();
   }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
@@ -1720,6 +1743,12 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-118 只读取专用评分 DTO，绝不预取用量、预算、用户或成本异常源接口。
+  const customerHealthState = await loadCustomerHealthState(consoleShellState, refreshId);
+  // 客户健康 loader 若确认 Session 已失效，必须立刻停止后续控制面读取。
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
   const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
     projectState,
@@ -1866,6 +1895,7 @@ async function performRefresh() {
     mcpToolsState,
     localEndpointsState,
     productAnalyticsState,
+    customerHealthState,
     experimentsState,
     budgetState,
     dlpState,
@@ -2062,6 +2092,7 @@ function renderLogin(error, requestId) {
   mcpToolPageState.clear();
   localEndpointPageState.clear();
   productAnalyticsPageState.clear();
+  customerHealthPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
   planManagementPageState.clear();
@@ -2436,6 +2467,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     mcpToolPageState.clear();
     localEndpointPageState.clear();
     productAnalyticsPageState.clear();
+    customerHealthPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
     planManagementPageState.clear();
@@ -2548,6 +2580,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
   bindProductAnalyticsInteractions(consoleShellState);
+  bindCustomerHealthInteractions(consoleShellState);
   bindRoleDashboardInteractions(consoleShellState);
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
   void ownMigrationGuideVisitAfterRender(consoleShellState);
@@ -6182,6 +6215,63 @@ function handleProductAnalyticsAuthenticationFailure(error) {
   return false;
 }
 
+/** 从实时权限、后端导航和当前 hash 构造 PAGE-118 owner，任一不一致即失败关闭。 */
+function currentCustomerHealthOwner(consoleShellState) {
+  const owner = customerHealthPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "customer-health" ? owner : null;
+}
+
+/** 手动刷新后只重绘 PAGE-118；owner 已失效时保持面板为空且不接纳旧数据。 */
+function renderCurrentCustomerHealthPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".customer-health-panel");
+  const owner = currentCustomerHealthOwner(consoleShellState);
+  if (!panel || !owner || !customerHealthPageState.enter(owner)) return false;
+  panel.innerHTML = renderCustomerHealth(
+    customerHealthPageState.snapshot(),
+    authSession.context,
+    consoleShellState,
+    currentI18n,
+  );
+  bindCustomerHealthInteractions(consoleShellState);
+  return true;
+}
+
+/** PAGE-118 只绑定一次手动刷新命令，每次点击创建新的全局刷新代次。 */
+function bindCustomerHealthInteractions(consoleShellState) {
+  const owner = currentCustomerHealthOwner(consoleShellState);
+  if (!owner || !customerHealthPageState.enter(owner)) return false;
+  const button = globalThis.document?.querySelector?.("[data-customer-health-refresh]");
+  button?.addEventListener("click", async () => {
+    const generation = ++refreshSequence;
+    const pending = loadCustomerHealthState(consoleShellState, generation);
+    renderCurrentCustomerHealthPanel(consoleShellState);
+    const state = await pending;
+    if (state) renderCurrentCustomerHealthPanel(consoleShellState);
+  }, { once: true });
+  return Boolean(button);
+}
+
+/** 仅在调用方已证明 PAGE-118 票据仍有效时处理认证错误，迟到错误不得改变 Session。 */
+function handleCustomerHealthAuthenticationFailure(error) {
+  // 非认证错误留给页面固定错误投影，不能触发退出登录或权限刷新。
+  if (!(error instanceof AuthApiError)) return false;
+  // 当前 401 清空客户健康数据和登录态，防止失效 Session 继续发起控制面请求。
+  if (error.status === 401) {
+    customerHealthPageState.clear();
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin(authErrorMessage(error), error.requestId);
+    return true;
+  }
+  // 当前 403 清空页面并重新读取后端权限导航，前端不自行恢复入口。
+  if (error.status === 403) {
+    customerHealthPageState.clear();
+    globalThis.window?.setTimeout?.(() => void refresh(), 0);
+    return true;
+  }
+  return false;
+}
+
 /** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
 /** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchReadOwner(consoleShellState) {
@@ -9797,6 +9887,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "growth-analytics") {
     // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
     productAnalyticsPageState.clear();
+  }
+  if (itemId !== "customer-health") {
+    // Destroy the PAGE-118 ticket before the navigation preference request can race it.
+    customerHealthPageState.clear();
   }
   if (itemId !== "experiments") {
     // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
@@ -14779,6 +14873,40 @@ async function loadProductAnalyticsState(consoleShellState, refreshId) {
   }
 }
 
+/** 读取 PAGE-118 评分，并丢弃 owner 或刷新代次已过期的全部响应。 */
+async function loadCustomerHealthState(consoleShellState, refreshId) {
+  const owner = currentCustomerHealthOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !customerHealthPageState.enter(owner)) return null;
+  const operation = customerHealthPageState.beginLoad(owner, refreshId);
+  // 没有有效票据或 Token 时不得向控制面发起客户健康请求。
+  if (!operation || !authSession.token) return null;
+  try {
+    const result = await getCustomerHealth({
+      controlApiUrl,
+      token: authSession.token,
+      tenantId: owner.tenantId,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    const currentOwner = currentCustomerHealthOwner(consoleShellState);
+    customerHealthPageState.accept(operation, result, currentOwner, refreshId);
+    return customerHealthPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentCustomerHealthOwner(consoleShellState);
+    if (
+      refreshId !== refreshSequence
+      || !customerHealthPageState.isCurrent(operation, currentOwner, refreshId)
+      || isCustomerHealthAbortError(error)
+    ) return null;
+    // 只有当前 401/403 能改变认证状态；当前 422/503 仅形成脱敏页面错误。
+    if (handleCustomerHealthAuthenticationFailure(error)) return null;
+    customerHealthPageState.reject(operation, error, currentOwner, refreshId);
+    return customerHealthPageState.snapshot();
+  } finally {
+    customerHealthPageState.finish(operation);
+  }
+}
+
 /**
  * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
  * Every response is accepted only while the full Batch owner and global refresh generation match.
@@ -16351,6 +16479,13 @@ function clearProductAnalyticsStateOnIdentityChange(previous, current) {
   // 读取身份快照变化代表 owner 边界变化，必须同步清空旧租户 DOM 并触发 Abort。
   if (productAnalyticsReadIdentitySnapshot(previous) !== productAnalyticsReadIdentitySnapshot(current)) {
     productAnalyticsPageState.clear();
+  }
+}
+
+/** Destroy PAGE-118 data when tenant, user, Session, role, revision, permission set, or fingerprint changes. */
+function clearCustomerHealthStateOnIdentityChange(previous, current) {
+  if (customerHealthReadIdentitySnapshot(previous) !== customerHealthReadIdentitySnapshot(current)) {
+    customerHealthPageState.clear();
   }
 }
 

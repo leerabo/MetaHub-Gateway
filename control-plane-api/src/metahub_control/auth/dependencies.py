@@ -392,6 +392,20 @@ def require_product_analytics_reader(
     )
 
 
+def require_customer_health_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 实时具备本租户客户健康评分读取权限。"""
+
+    # PAGE-118 的 persona 和前端导航都不能补权；每次请求只信任当前 tenant 的动态矩阵。
+    return _require_request_permissions(
+        request,
+        authorization,
+        ("customer_health.read",),
+    )
+
+
 def require_project_reader(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

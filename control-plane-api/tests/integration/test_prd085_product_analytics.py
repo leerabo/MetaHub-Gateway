@@ -43,19 +43,19 @@ def _url(path: Path) -> str:
 
 
 @pytest.fixture(scope="module")
-def empty_0078(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """构建一次空库 0078 模板，后续用例复制后再写各自租户事实。"""
+def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """构建一次当前空库模板，后续用例复制后再写各自租户事实。"""
 
     root = tmp_path_factory.mktemp("prd085-control-template")
     database = root / "empty.sqlite3"
-    assert apply_migrations(_url(database)).applied[-1] == "0078"
+    assert apply_migrations(_url(database)).applied[-1] == "0079"
     return database
 
 
 def _prepare(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    empty_0078: Path,
+    migrated_database: Path,
 ) -> str:
     """复制隔离数据库并建立默认租户 ops 用户与第二租户管理员边界。"""
 
@@ -64,7 +64,7 @@ def _prepare(
     monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", ADMIN_PASSWORD)
     monkeypatch.setenv("METAHUB_AUTH_TOKEN_SECRET", AUTH_SECRET)
     monkeypatch.setenv("METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET", AUTH_SECRET + "-enc")
-    shutil.copy2(empty_0078, tmp_path / "prd085-control.sqlite3")
+    shutil.copy2(migrated_database, tmp_path / "prd085-control.sqlite3")
     seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
     connection.execute(
@@ -288,11 +288,11 @@ def _revoke_ops_product_read(database_url: str) -> None:
 async def test_funnel_api_exact_query_permissions_isolation_and_dynamic_revoke(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    empty_0078: Path,
+    migrated_database: Path,
 ) -> None:
     """验证 exact query、双租户隔离、admin/ops 授权、动态撤权和统一错误链路。"""
 
-    database_url = _prepare(monkeypatch, tmp_path, empty_0078)
+    database_url = _prepare(monkeypatch, tmp_path, migrated_database)
     _insert_provider_event(database_url, audit_id="aud_prd085_api")
     _insert_provider_event(
         database_url,
@@ -396,11 +396,11 @@ async def test_funnel_api_exact_query_permissions_isolation_and_dynamic_revoke(
 def test_outbox_snapshot_retry_expiry_stale_cas_and_source_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    empty_0078: Path,
+    migrated_database: Path,
 ) -> None:
     """验证订阅快照冻结、退避重试、过期接管、陈旧 CAS 和原请求恢复。"""
 
-    database_url = _prepare(monkeypatch, tmp_path, empty_0078)
+    database_url = _prepare(monkeypatch, tmp_path, migrated_database)
     _insert_webhook_endpoint(
         database_url,
         endpoint_id="wh_11111111111111111111111111111111",
@@ -533,11 +533,11 @@ def test_outbox_snapshot_retry_expiry_stale_cas_and_source_recovery(
 def test_outbox_ten_failures_reach_fixed_terminal_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    empty_0078: Path,
+    migrated_database: Path,
 ) -> None:
     """验证连续十次失败后 source、delivery 和死信进入固定终态且不再领取。"""
 
-    database_url = _prepare(monkeypatch, tmp_path, empty_0078)
+    database_url = _prepare(monkeypatch, tmp_path, migrated_database)
     _insert_webhook_endpoint(
         database_url,
         endpoint_id="wh_33333333333333333333333333333333",

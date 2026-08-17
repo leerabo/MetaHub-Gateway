@@ -3434,6 +3434,26 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="product_analytics",
     ),
+    "customer_health.request_invalid": ErrorSpec(
+        422,
+        "Customer health request is invalid.",
+        "Use the documented query-free customer health request.",
+        owner="customer_health",
+    ),
+    "customer_health.not_ready": ErrorSpec(
+        503,
+        "Customer health is not ready.",
+        "Retry after the background evaluation has completed.",
+        retryable=True,
+        owner="customer_health",
+    ),
+    "customer_health.unavailable": ErrorSpec(
+        503,
+        "Customer health is unavailable.",
+        "Retry the request later.",
+        retryable=True,
+        owner="customer_health",
+    ),
     "user_preference.locale_invalid": ErrorSpec(
         422,
         "User preference locale is invalid.",
