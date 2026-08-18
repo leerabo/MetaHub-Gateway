@@ -51,6 +51,8 @@ from .security_events import (
 CUSTOMER_HEALTH_CHANGED_EVENT_TYPE = "customer.health_changed"
 # PRD-087 客户创建事件只外发 Project 映射的固定安全标识，不携带展示名或品牌正文。
 PARTNER_CUSTOMER_CREATED_EVENT_TYPE = "partner.customer_created"
+# PRD-088 白标更新事件只外发配置版本和 Logo/域名安全摘要，不携带 Logo 或文案正文。
+BRANDING_UPDATED_EVENT_TYPE = "branding.updated"
 
 # Webhook 事件类型白名单定义可订阅治理事件，payload 生成和签名校验必须共享同一集合。
 WEBHOOK_EVENT_TYPES = {
@@ -142,6 +144,8 @@ WEBHOOK_EVENT_TYPES = {
     CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
     # 伙伴客户事件只外发同租户 owner 与整数费率，不包含客户展示名、分润或交付包正文。
     PARTNER_CUSTOMER_CREATED_EVENT_TYPE,
+    # 白标更新只外发不可变配置版本与固定安全投影，正文仍留在租户数据库。
+    BRANDING_UPDATED_EVENT_TYPE,
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -382,6 +386,9 @@ def build_webhook_event(
     elif event_type == PARTNER_CUSTOMER_CREATED_EVENT_TYPE:
         # PRD-087 只允许 PartnerCustomer 的固定安全 owner 投影进入签名正文。
         _validate_partner_customer_created_payload(safe_payload)
+    elif event_type == BRANDING_UPDATED_EVENT_TYPE:
+        # PRD-088 只允许 BrandingConfig 的版本、字段名和不可逆 Logo/域名摘要出网。
+        _validate_branding_updated_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -811,6 +818,18 @@ def build_webhook_event(
     elif event_type == PARTNER_CUSTOMER_CREATED_EVENT_TYPE:
         # 客户创建恢复必须复用原 actor、对象、请求链路和发生秒，不能用 outbox JSON 自证。
         _validate_partner_customer_created_envelope(
+            safe_payload,
+            event_id=event_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            trace_id=trace_id,
+            source_request_id=source_request_id,
+            occurred_at=occurred_at,
+        )
+    elif event_type == BRANDING_UPDATED_EVENT_TYPE:
+        # 白标恢复必须绑定同一 BrandingConfig、原操作者、原请求链路和发生秒。
+        _validate_branding_updated_envelope(
             safe_payload,
             event_id=event_id,
             tenant_id=tenant_id,
@@ -1874,6 +1893,90 @@ def _validate_partner_customer_created_envelope(
         or not _is_canonical_utc_second(_to_iso(occurred_at))
     ):
         # 恢复不得替换 tenant、actor、customer、请求链路或发生时刻。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_branding_updated_payload(payload: dict[str, Any]) -> None:
+    """校验 EVT-100 的固定安全投影，不接受品牌正文或 Logo 二进制。"""
+
+    expected = {
+        "schema_version",
+        "branding_config_id",
+        "revision",
+        "changed_fields",
+        "logo_present",
+        "logo_sha256",
+        "custom_domain_status",
+    }
+    changed_fields = payload.get("changed_fields")
+    logo_hash = payload.get("logo_sha256")
+    valid_hash = logo_hash is None or (
+        type(logo_hash) is str and re.fullmatch(r"[0-9a-f]{64}", logo_hash) is not None
+    )
+    valid_fields = (
+        type(changed_fields) is list
+        and 1 <= len(changed_fields) <= 7
+        and all(
+            type(value) is str
+            and value
+            in {
+                "product_name",
+                "primary_color",
+                "secondary_color",
+                "login_title",
+                "login_message",
+                "custom_domain",
+                "logo_png",
+            }
+            for value in changed_fields
+        )
+        and changed_fields == sorted(set(changed_fields))
+    )
+    if (
+        set(payload) != expected
+        or payload.get("schema_version") != 1
+        or not _is_prefixed_lower_hex_id(payload.get("branding_config_id"), prefix="brc_")
+        or type(payload.get("revision")) is not int
+        or not 2 <= payload["revision"] <= 2_147_483_647
+        or not valid_fields
+        or type(payload.get("logo_present")) is not bool
+        or not valid_hash
+        or (payload["logo_present"] != (logo_hash is not None))
+        or payload.get("custom_domain_status") not in {"not_configured", "reserved"}
+    ):
+        # 登录文案、域名原文、Logo bytes 和尺寸均不得进入 EVT-100 签名正文。
+        raise ValueError("webhook.payload_invalid")
+
+
+def _validate_branding_updated_envelope(
+    payload: dict[str, Any],
+    *,
+    event_id: str | None,
+    tenant_id: str,
+    actor_id: str | None,
+    object_id: str | None,
+    trace_id: str | None,
+    source_request_id: str | None,
+    occurred_at: datetime,
+) -> None:
+    """把 EVT-100 绑定到持久配置、租户 actor、请求链路和 UTC 秒。"""
+
+    branding_id = payload["branding_config_id"]
+    suffix = hashlib.sha256(
+        f"{branding_id}\x1f{payload['revision']}".encode("ascii")
+    ).hexdigest()[:32]
+    if (
+        event_id != f"evt_brd_{suffix}"
+        or not _is_bounded_safe_text(tenant_id, maximum=160)
+        or not _is_bounded_safe_text(actor_id, maximum=160)
+        or object_id != branding_id
+        or not _is_bounded_safe_text(trace_id, maximum=160)
+        or not _is_bounded_safe_text(source_request_id, maximum=128)
+        or type(occurred_at) is not datetime
+        or occurred_at.tzinfo is None
+        or not _is_canonical_utc_second(_to_iso(occurred_at))
+    ):
+        # 恢复不得替换 tenant、actor、配置版本、请求链路或发生时刻。
         raise ValueError("webhook.payload_invalid")
 
 

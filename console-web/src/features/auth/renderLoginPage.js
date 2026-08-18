@@ -1,3 +1,5 @@
+import { safeBrandingLogoUrl } from "../../lib/branding.js";
+
 /**
  * 渲染控制台登录页。
  *
@@ -8,20 +10,22 @@ export function renderLoginPage(container, options = {}) {
   if (!container) {
     return;
   }
+  const branding = options.branding && typeof options.branding === "object" ? options.branding : {};
+  const logoUrl = branding.logoPresent === true ? safeBrandingLogoUrl(branding.logoUrl) : "";
+  const productName = boundedText(branding.product_name, 120) ? branding.product_name : "MetaHub";
+  const loginTitle = boundedText(branding.login_title, 160) ? branding.login_title : "MetaHub 控制台登录";
+  const loginMessage = boundedText(branding.login_message, 400) ? branding.login_message : "";
   container.innerHTML = `
     <main class="login-shell">
       <section class="login-panel" aria-labelledby="login-title">
         <div class="login-brand">
-          <div class="brand-mark" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
+          ${logoUrl ? `<div class="brand-mark brand-mark-image"><img class="brand-logo" src="${escapeAttribute(logoUrl)}" alt="${escapeAttribute(productName)}"></div>` : `<div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>`}
           <div>
-            <p class="eyebrow">中国境内企业级 AI Gateway</p>
-            <h1 id="login-title">MetaHub 控制台登录</h1>
+            <p class="eyebrow">${escapeHtml(productName)}</p>
+            <h1 id="login-title">${escapeHtml(loginTitle)}</h1>
           </div>
         </div>
+        <p class="login-brand-message" data-login-brand-message${loginMessage ? "" : " hidden"}>${escapeHtml(loginMessage)}</p>
         <form class="login-form" id="login-form">
           <label>
             <span>租户标识</span>
@@ -45,6 +49,12 @@ export function renderLoginPage(container, options = {}) {
       </section>
     </main>
   `;
+}
+
+/** 白标公开投影仍需在渲染边界做长度和控制字符保护。 */
+function boundedText(value, max) {
+  const text = String(value ?? "");
+  return text.length > 0 && text.length <= max && !/[\u0000-\u001f\u007f]/u.test(text);
 }
 
 /**

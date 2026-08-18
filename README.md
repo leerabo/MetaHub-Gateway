@@ -99,9 +99,21 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-085 - 产品使用埋点与激活漏斗`
 - `PRD-086 - 客户健康评分`
 - `PRD-087 - 渠道伙伴与白标门户`
+- `PRD-088 - 客户/渠道白标配置`
 
 最近进展：
 
+- `PRD-088 - 客户/渠道白标配置` 已完成：0081、RBAC revision 23、tenant-qualified BrandingConfig、
+  安全 PNG Logo、域名预留、不可变 `branding.updated` 审计、EVT-100/source outbox、实时后端权限校验、
+  Branding 受保护/公共 API、PAGE-120、登录页与认证后 Console shell 均已交付。公共投影对非法和不存在 tenant
+  slug 返回同形默认品牌，不能枚举租户；Logo、登录文案和域名原文不进入日志、审计、事件或验收证据。
+  PRD-088 Branding 集成 `4/4`、Migration `9/9`、Console Branding `9/9`、Console 全量 `935/935`，Ruff 与
+  lint 均通过。真实 HTTP 验证 admin/viewer、动态撤权、统一错误/request_id 和 no-store；三视口 Browser 验证
+  管理员保存、viewer 只读、撤权清理、恢复权限及零横向溢出。真实库为 `81/0081`、`integrity_check=ok`、
+  外键违规 0，EVT-100 worker 最终无 pending，敏感哨兵命中 0。详见
+  [PRD-088 设计](docs/prd/PRD-088-tenant-white-label-branding.md)、
+  [Branding API](docs/api/branding.md) 和
+  [PRD-088 测试记录](docs/testing/PRD-088-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-087 - 渠道伙伴与白标门户` 已完成：0080、RBAC revision 22、tenant-qualified Partner、
   PartnerCustomer、CommissionRecord、两阶段分润游标、EVT-099/source outbox、伙伴安全操作链、六组后端权限、
   `GET/POST/PATCH /partners*`、CSV/交付包和 PAGE-119 均已交付。客户用量明确包含 Project 映射前历史，分润只从
@@ -401,11 +413,11 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 当前下一项：
 
-- Excel 的 `01_PRD总表` 第 89 行、`03_M2-M3扩展交付` 第 25 行、PAGE-120、API-400/401、
-  OBJ-121、EVT-100 与 TC-0175/0176 已和 README、`docs/prd`、`docs/testing` 的 PRD-087 完成状态交叉确认。
-  PRD-087 之后的下一条权威未完成项为
-  `PRD-088 | M2-企业增强 | P2 | 扩展层 | 白标配置 | 客户/渠道白标配置`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-088；总体目标仍为 `all_108_prds_complete=false`。
+- Excel 的 `01_PRD总表` 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、
+  OBJ-122/123、EVT-101/102 与 TC-0177/0178 已和 README、`docs/prd`、`docs/testing` 的 PRD-088 完成状态
+  交叉确认。PRD-088 之后的下一条权威未完成项为
+  `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
+  本次只登记，不启动或混入 PRD-089；总体目标仍为 `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板

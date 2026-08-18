@@ -23,6 +23,8 @@ from .auth.routes import router as auth_router
 from .batch_jobs import router as batch_jobs_router
 from .billing_disputes import install_billing_dispute_scheduler
 from .billing_disputes import router as billing_disputes_router
+from .branding import router as branding_router
+from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
 from .config.routes import router as config_router
 from .config_transfer.routes import router as config_transfer_router
@@ -133,9 +135,13 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/local-endpoints/")
         or request.url.path == "/partners"
         or request.url.path.startswith("/partners/")
+        or request.url.path == "/branding"
+        or request.url.path.startswith("/branding/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
-        response.headers["Cache-Control"] = "no-store, private"
+        # Preserve endpoint-specific directives while covering error responses
+        # that do not set a cache boundary themselves.
+        response.headers.setdefault("Cache-Control", "no-store, private")
     if request.url.path == "/admin-assistant/query":
         response.headers["Pragma"] = "no-cache"
         response.headers["Vary"] = "Authorization"
@@ -189,6 +195,7 @@ app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
 app.include_router(partner_portal_router)
+app.include_router(branding_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
@@ -219,6 +226,7 @@ install_product_event_scheduler(app)
 install_approval_scheduler(app)
 install_plan_billing_scheduler(app)
 install_partner_portal_scheduler(app)
+install_branding_scheduler(app)
 install_billing_dispute_scheduler(app)
 install_security_event_scheduler(app)
 install_mcp_scheduler(app)

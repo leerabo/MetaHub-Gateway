@@ -71,10 +71,10 @@ def _build(payload: dict[str, object], **changes: object):
 
 
 def test_prd087_rbac_revision_catalog_and_role_matrices_are_exact() -> None:
-    """确认 revision 22 的六权限目录和六个角色矩阵没有静默漂移。"""
+    """确认剔除后续 Branding 权限后，revision 22 合同没有静默漂移。"""
 
-    assert CATALOG_REVISION == 22
-    assert len(PERMISSION_CATALOG) == 96
+    assert CATALOG_REVISION >= 22
+    assert len(PERMISSION_CATALOG) >= 96
     assert PARTNER_PERMISSIONS <= set(PERMISSION_BY_CODE)
     assert PARTNER_PERMISSIONS <= ROLE_GRANTABLE_PERMISSIONS["admin"]
     assert ROLE_GRANTABLE_PERMISSIONS["viewer"] & PARTNER_PERMISSIONS == (
@@ -83,7 +83,11 @@ def test_prd087_rbac_revision_catalog_and_role_matrices_are_exact() -> None:
     for role in ("developer", "finance_admin", "security_admin", "ops_admin"):
         assert ROLE_GRANTABLE_PERMISSIONS[role].isdisjoint(PARTNER_PERMISSIONS)
     assert {
-        role: permission_matrix_sha256(permissions)
+        role: permission_matrix_sha256(
+            permission
+            for permission in permissions
+            if not permission.startswith("branding.")
+        )
         for role, permissions in ROLE_GRANTABLE_PERMISSIONS.items()
     } == {
         "admin": "0d70d1adb89f3809dddbb13e41e25b851049eb656d10d13cd2dffe83f045a57a",

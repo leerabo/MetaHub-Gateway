@@ -62,7 +62,8 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # persona 不能变成跨租户授权，默认只向 admin 与 ops_admin 扩展。
 # PRD-087 将伙伴读取、首次配置、客户管理、白标、分润导出和交付下载拆成六个权限；
 # 运行时还必须叠加当前 tenant 的 Partner owner 校验，不能把角色上限当成客户范围。
-CATALOG_REVISION: Final[int] = 22
+# PRD-088 把全局控制台/登录页白标和伙伴门户白标分开，读写权限不能复用后者。
+CATALOG_REVISION: Final[int] = 23
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -110,6 +111,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "读取客户健康评分",
         "读取当前租户确定性客户健康评分、聚合信号与可解释建议。",
         "read",
+    ),
+    PermissionDefinition(
+        "branding.read",
+        "branding",
+        "读取白标配置",
+        "读取当前租户控制台与登录页的安全白标配置和受限 Logo。",
+        "read",
+    ),
+    PermissionDefinition(
+        "branding.manage",
+        "branding",
+        "管理白标配置",
+        "修改当前租户控制台与登录页的 Logo、名称、配色和文案。",
+        "critical",
     ),
     PermissionDefinition(
         "partner_portal.read",
@@ -682,6 +697,7 @@ _DEVELOPER = {
     "mcp.read",
     "mcp.server.manage",
     "mcp.invoke",
+    "branding.read",
 }
 _VIEWER = {
     "console.basic.read",
@@ -696,6 +712,7 @@ _VIEWER = {
     "partner_branding.manage",
     "partner_commission.export",
     "partner_delivery.download",
+    "branding.read",
 }
 _FINANCE = {
     "console.basic.read",
@@ -726,6 +743,7 @@ _FINANCE = {
     "admin_assistant.query",
     "approval.read",
     "approval.decide",
+    "branding.read",
 }
 _SECURITY = {
     "console.basic.read",
@@ -761,6 +779,7 @@ _SECURITY = {
     "mcp.policy.manage",
     "mcp.network.manage",
     "mcp.approve",
+    "branding.read",
 }
 _OPS = {
     "console.basic.read",
@@ -804,6 +823,7 @@ _OPS = {
     "mcp.read",
     "mcp.server.manage",
     "mcp.network.manage",
+    "branding.read",
 }
 
 # 这些集合是产品授权上限和新租户默认值；运行时必须读取租户矩阵，绝不能在矩阵损坏时回落此处。

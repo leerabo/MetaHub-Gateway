@@ -1,3 +1,74 @@
+/** 读取登录前公开白标；Logo 只存 Blob URL，并在下一租户或登录页 owner 变化时回收。 */
+async function loadPublicBrandingPreview(tenantSlug, generation, hydrate) {
+  const ownerGeneration = Number(generation);
+  try {
+    const result = await getPublicBranding({ controlApiUrl, tenantSlug });
+    if (ownerGeneration !== publicBrandingGeneration || authSession.token) return false;
+    let nextLogoUrl = "";
+    if (result.branding.logo_present === true) {
+      try {
+        const logo = await getPublicBrandingLogo({ controlApiUrl, tenantSlug });
+        nextLogoUrl = brandingLogoUrlFromBlob(logo.blob);
+      } catch (error) {
+        if (Number(error?.status) !== 404 && error?.code !== "branding.logo_not_configured") throw error;
+      }
+    }
+    if (publicBrandingLogoUrl && publicBrandingLogoUrl !== nextLogoUrl) revokeBrandingObjectUrl(publicBrandingLogoUrl);
+    publicBrandingLogoUrl = nextLogoUrl;
+    publicBrandingPreview = result.branding;
+    publicBrandingTenantSlug = String(tenantSlug ?? "default").trim().toLowerCase() || "default";
+    if (hydrate) hydrateLoginBranding();
+    return true;
+  } catch {
+    // 公开品牌解析不能阻断登录；固定默认品牌避免把上游异常正文暴露到登录页。
+    return false;
+  }
+}
+
+/** 将公开品牌投影写入现有登录 DOM，不重建表单，避免清除用户正在输入的密码。 */
+function hydrateLoginBranding() {
+  if (authSession.token || !globalThis.document) return;
+  const branding = publicBrandingPreview;
+  const productName = String(branding?.product_name ?? "MetaHub");
+  const loginTitle = String(branding?.login_title ?? "MetaHub 控制台登录");
+  const message = String(branding?.login_message ?? "");
+  const brand = document.querySelector(".login-brand");
+  const eyebrow = brand?.querySelector(".eyebrow");
+  const title = document.querySelector("#login-title");
+  const messageNode = document.querySelector("[data-login-brand-message]");
+  if (eyebrow) eyebrow.textContent = productName;
+  if (title) title.textContent = loginTitle;
+  if (messageNode) {
+    messageNode.textContent = message;
+    messageNode.hidden = !message;
+  }
+  const mark = brand?.querySelector(".brand-mark");
+  if (!mark) return;
+  mark.replaceChildren();
+  const logoUrl = publicBrandingLogoUrl;
+  if (branding?.logo_present === true && logoUrl) {
+    mark.classList.add("brand-mark-image");
+    const image = document.createElement("img");
+    image.className = "brand-logo";
+    image.alt = productName;
+    image.src = logoUrl;
+    mark.append(image);
+  } else {
+    mark.classList.remove("brand-mark-image");
+    mark.setAttribute("aria-hidden", "true");
+    mark.innerHTML = "<span></span><span></span><span></span>";
+  }
+}
+
+/** 登录边界不继承上一租户公开品牌；随后只为固定 default slug 重新发起公开读取。 */
+function clearPublicBrandingPreview() {
+  publicBrandingGeneration += 1;
+  if (publicBrandingLogoUrl) revokeBrandingObjectUrl(publicBrandingLogoUrl);
+  publicBrandingLogoUrl = "";
+  publicBrandingPreview = null;
+  publicBrandingTenantSlug = "default";
+}
+
 /**
  * 模块职责：维护 MetaHub 控制台前端的数据读取、状态转换和用户可见反馈。
  * 维护边界：前端只负责展示与交互提示，权限结论、密钥脱敏和租户隔离必须以后端返回为准。
@@ -91,6 +162,17 @@ import {
   isCustomerHealthAbortError,
 } from "../features/customer-health/customerHealthPageState.js";
 import { renderCustomerHealth } from "../features/customer-health/renderCustomerHealth.js";
+import { renderBrandingSettings } from "../features/branding/renderBrandingSettings.js";
+import { bindBrandingSettingsInteractions, clearBrandingSettingsDom } from "../features/branding/bindBrandingSettings.js";
+import {
+  brandingGlobalOwner,
+  brandingIdentitySnapshot,
+  brandingPageOwner,
+  brandingLogoUrlFromBlob,
+  revokeBrandingObjectUrl,
+  createBrandingPageState,
+  clearBrandingCss,
+} from "../features/branding/brandingPageState.js";
 import {
   bindPartnerPortalInteractions,
   clearPartnerPortalBranding,
@@ -426,6 +508,13 @@ import {
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
+  getBranding,
+  getBrandingLogo,
+  getPublicBranding,
+  getPublicBrandingLogo,
+  updateBranding,
+} from "../lib/branding.js";
+import {
   configurePartner,
   createPartnerCustomer,
   downloadPartnerCommissionCsv,
@@ -648,6 +737,14 @@ let authSession = publicInvitationRoute?.isPublicMode()
   ? { token: null, context: null }
   : readAuthSession();
 let consoleShellActionError = null;
+// PAGE-120 全局品牌与 PAGE-119 伙伴色分离；Logo URL 仅驻留当前 owner 的内存。
+const brandingPageState = createBrandingPageState({
+  clearDom: () => clearBrandingSettingsDom(globalThis.document),
+});
+let publicBrandingPreview = null;
+let publicBrandingTenantSlug = "default";
+let publicBrandingGeneration = 0;
+let publicBrandingLogoUrl = "";
 // 当前 i18n 上下文供 PAGE-070 局部重绘复用；身份清除时会回到默认中文，避免沿用上一用户偏好。
 let currentI18n = createI18n(DEFAULT_LOCALE);
 let gatewayDebugState = {};
@@ -955,6 +1052,10 @@ if (app && globalThis.window) {
         // PAGE-119 clears visible branding and all private lanes before navigation work can complete.
         partnerPortalPageState.clear();
       }
+      if (nextItemId !== "branding") {
+        // PAGE-120 离开设置页只清写入 lane/设置 DOM；全局白标继续服务当前租户的 Console shell。
+        brandingPageState.leavePage();
+      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -1016,6 +1117,7 @@ if (app && globalThis.window) {
       productAnalyticsPageState.clear();
       customerHealthPageState.clear();
       partnerPortalPageState.clear();
+      brandingPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
       planManagementPageState.clear();
@@ -1145,6 +1247,7 @@ async function start() {
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
+    clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1236,6 +1339,7 @@ async function performRefresh() {
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
+    clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
     clearPlanBillingStateOnIdentityChange(authSession.context, context);
@@ -1291,6 +1395,14 @@ async function performRefresh() {
   const consoleShellState = await loadConsoleShellState();
   // 导航读取期间可能发生来源跳转、侧栏切换或新 Session 登录；旧 shell 快照不得清理新页面 owner。
   if (!refreshOwnerCurrent()) {
+    return;
+  }
+  if (!consoleShellState || !authSession.token) {
+    return;
+  }
+  // PAGE-120 是全局 shell 品牌，先于业务页面读取；失败只降级默认品牌，不能阻断其他已授权页面。
+  const brandingState = await loadBrandingState(refreshId);
+  if (!authSession.token || !refreshOwnerCurrent()) {
     return;
   }
   if (
@@ -1466,7 +1578,10 @@ async function performRefresh() {
   }
   // PAGE-119 exists only while the exact backend navigation owner and live read permission remain current.
   if (consoleShellState?.activeNavigationItemId !== "partner-portal") {
-    partnerPortalPageState.clear();
+      partnerPortalPageState.clear();
+  }
+  if (consoleShellState?.activeNavigationItemId !== "branding") {
+    brandingPageState.leavePage();
   }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
@@ -1943,6 +2058,8 @@ async function performRefresh() {
     productAnalyticsState,
     customerHealthState,
     partnerPortalState,
+    brandingState,
+    branding: brandingDisplayFromSnapshot(brandingState),
     experimentsState,
     budgetState,
     dlpState,
@@ -2116,6 +2233,8 @@ if (app && globalThis.window) {
 function renderLogin(error, requestId) {
   // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
   loginGeneration += 1;
+  clearPublicBrandingPreview();
+  const loginBrandingGeneration = publicBrandingGeneration;
   // 登录态变化等同于离开调试页，必须取消旧流并使尚未返回的回调失效。
   gatewayDebugLifecycle.leave();
   gatewayDebugState = {};
@@ -2141,6 +2260,7 @@ function renderLogin(error, requestId) {
   productAnalyticsPageState.clear();
   customerHealthPageState.clear();
   partnerPortalPageState.clear();
+  brandingPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
   planManagementPageState.clear();
@@ -2198,7 +2318,14 @@ function renderLogin(error, requestId) {
   adapterSpecFilters = { view: "default", status: "", provider_type: "" };
   // 登录边界必须销毁 PAGE-091 的运行、case、opaque cursor 和请求 owner，避免跨租户证据残留。
   adapterContractRunPageState.clear();
-  renderLoginPage(app, { error, requestId, tenantSlug: "default" });
+  renderLoginPage(app, {
+    error,
+    requestId,
+    tenantSlug: publicBrandingTenantSlug,
+    branding: publicBrandingPreview ? { ...publicBrandingPreview, logoUrl: publicBrandingLogoUrl } : null,
+  });
+  // 公开品牌加载失败时保持安全默认登录页；成功只在本次登录页 owner 仍有效时替换品牌 DOM。
+  void loadPublicBrandingPreview(publicBrandingTenantSlug, loginBrandingGeneration, true);
   const form = document.querySelector("#login-form");
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2209,6 +2336,8 @@ function renderLogin(error, requestId) {
       && !authSession.token
     );
     const data = new FormData(form);
+    publicBrandingTenantSlug = String(data.get("tenantSlug") ?? "default").trim().toLowerCase() || "default";
+    void loadPublicBrandingPreview(publicBrandingTenantSlug, loginBrandingGeneration, false);
     const button = form.querySelector("button[type='submit']");
     button.disabled = true;
     button.textContent = "登录中";
@@ -2364,6 +2493,10 @@ async function copyInvitationSecret(
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 function bindAuthenticatedEvents(consoleShellState) {
+  // PAGE-120 设置写入只在精确 branding owner 下绑定；隐藏按钮不能替代后端 RBAC。
+  bindBrandingSettingsInteractions(document, {
+    onSave: (input) => runBrandingMutation(consoleShellState, input),
+  });
   // PAGE-093 使用独立事件绑定；DOM 不存在或后端导航未授权时该函数立即失败关闭且不发请求。
   bindEnterpriseChatInteractions(consoleShellState);
   // PAGE-094 只在精确后端导航 owner 存在时绑定，伪造按钮不能绕过 read/write permission。
@@ -2517,6 +2650,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     productAnalyticsPageState.clear();
     customerHealthPageState.clear();
     partnerPortalPageState.clear();
+    brandingPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
     planManagementPageState.clear();
@@ -6326,6 +6460,68 @@ function handleCustomerHealthAuthenticationFailure(error) {
 function currentPartnerPortalOwner(consoleShellState) {
   const owner = partnerPortalPageOwner(authSession.context, consoleShellState);
   return owner && readActiveNavigationHash() === "partner-portal" ? owner : null;
+}
+
+/** 读取 PAGE-120 设置页 owner；全局品牌读取 owner 不依赖 hash，但写入必须在活动页面。 */
+function currentBrandingPageOwner(consoleShellState) {
+  const owner = brandingPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "branding" ? owner : null;
+}
+
+/** 以 revision CAS 保存白标，成功后重新读取受保护 Logo，避免旧 Blob URL 跨 revision 复用。 */
+async function runBrandingMutation(consoleShellState, input) {
+  const owner = currentBrandingPageOwner(consoleShellState);
+  if (!owner || owner.canManage !== true || !brandingPageState.enter(owner)) return false;
+  const operation = brandingPageState.beginMutation(owner);
+  const revision = brandingPageState.snapshot().branding?.revision;
+  if (!operation || !authSession.token || !Number.isSafeInteger(Number(revision))) return false;
+  renderCurrentBrandingPanel(consoleShellState);
+  try {
+    const result = await updateBranding({
+      controlApiUrl, token: authSession.token, input, revision,
+      signal: operation.controller.signal,
+    });
+    const current = currentBrandingPageOwner(consoleShellState);
+    if (!brandingPageState.isCurrent("mutation", operation, current)) return false;
+    let logoUrl = "";
+    if (result.branding.logo_present === true) {
+      const logo = await getBrandingLogo({ controlApiUrl, token: authSession.token, signal: operation.controller.signal });
+      logoUrl = brandingLogoUrlFromBlob(logo.blob);
+    }
+    brandingPageState.acceptMutation(operation, result, current, logoUrl);
+    await refresh();
+    return true;
+  } catch (error) {
+    const current = currentBrandingPageOwner(consoleShellState);
+    if (!brandingPageState.isCurrent("mutation", operation, current) || error?.name === "AbortError") return false;
+    if (error instanceof AuthApiError && error.status === 401) {
+      brandingPageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return false;
+    }
+    if (error instanceof AuthApiError && error.status === 403) {
+      brandingPageState.clear();
+      void refresh();
+      return false;
+    }
+    brandingPageState.rejectMutation(operation, error, current);
+    renderCurrentBrandingPanel(consoleShellState);
+    return false;
+  } finally {
+    brandingPageState.finish(operation);
+  }
+}
+
+/** 设置页局部重绘保留全局 shell 品牌，完成后重新绑定唯一 submit owner。 */
+function renderCurrentBrandingPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".branding-settings-shell");
+  const owner = currentBrandingPageOwner(consoleShellState);
+  if (!panel || !owner || !brandingPageState.enter(owner)) return false;
+  panel.innerHTML = renderBrandingSettings(brandingPageState.snapshot(), owner, currentI18n);
+  bindBrandingSettingsInteractions(globalThis.document, { onSave: (input) => runBrandingMutation(consoleShellState, input) });
+  return true;
 }
 
 /** Redraw only PAGE-119 and immediately rebind commands to the same owner snapshot. */
@@ -15199,6 +15395,59 @@ async function loadPartnerPortalState(consoleShellState, refreshId) {
   return refreshId === refreshSequence ? partnerPortalPageState.snapshot() : null;
 }
 
+/** 读取全局 PAGE-120 BrandingConfig 和 PNG Logo；图片正文只存在当前 Blob URL 生命周期。 */
+async function loadBrandingState(refreshId) {
+  const owner = brandingGlobalOwner(authSession.context);
+  if (!owner || refreshId !== refreshSequence || !brandingPageState.enter(owner)) return brandingPageState.snapshot();
+  const operation = brandingPageState.beginRead(owner);
+  if (!operation || !authSession.token) return brandingPageState.snapshot();
+  try {
+    const result = await getBranding({ controlApiUrl, token: authSession.token, signal: operation.controller.signal });
+    if (refreshId !== refreshSequence || !brandingPageState.isCurrent("read", operation, owner)) return null;
+    let logoUrl = "";
+    if (result.branding.logo_present === true) {
+      try {
+        const logo = await getBrandingLogo({ controlApiUrl, token: authSession.token, signal: operation.controller.signal });
+        logoUrl = brandingLogoUrlFromBlob(logo.blob);
+      } catch (error) {
+        // 未配置或已被并发清除的 Logo 不应阻断安全文本品牌；其他错误仍保留脱敏错误状态。
+        if (Number(error?.status) !== 404 && error?.code !== "branding.logo_not_configured") throw error;
+      }
+    }
+    const current = brandingGlobalOwner(authSession.context);
+    if (!brandingPageState.isCurrent("read", operation, current)) return null;
+    brandingPageState.acceptRead(operation, result, current, logoUrl);
+    return brandingPageState.snapshot();
+  } catch (error) {
+    const current = brandingGlobalOwner(authSession.context);
+    if (refreshId !== refreshSequence || !brandingPageState.isCurrent("read", operation, current) || error?.name === "AbortError") return null;
+    if (error instanceof AuthApiError && error.status === 401) {
+      brandingPageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    brandingPageState.rejectRead(operation, error, current);
+    return brandingPageState.snapshot();
+  } finally {
+    brandingPageState.finish(operation);
+  }
+}
+
+/** 传给 shell 的最小品牌投影，不把 tenant_id、revision 或状态暴露给渲染层。 */
+function brandingDisplayFromSnapshot(state) {
+  const item = state?.branding;
+  if (!item) return null;
+  return Object.freeze({
+    product_name: item.product_name,
+    primary_color: item.primary_color,
+    secondary_color: item.secondary_color,
+    logoPresent: item.logo_present === true,
+    logoUrl: state.logoUrl,
+  });
+}
+
 async function loadPartnerProjectsLane(consoleShellState, refreshId) {
   const owner = currentPartnerPortalOwner(consoleShellState);
   const operation = partnerPortalPageState.beginProjects(owner);
@@ -16865,6 +17114,13 @@ function clearCustomerHealthStateOnIdentityChange(previous, current) {
 function clearPartnerPortalStateOnIdentityChange(previous, current) {
   if (partnerPortalReadIdentitySnapshot(previous) !== partnerPortalReadIdentitySnapshot(current)) {
     partnerPortalPageState.clear();
+  }
+}
+
+/** tenant、Session、RBAC revision 或 fingerprint 变化时清理 PAGE-120 全局品牌与 Logo。 */
+function clearBrandingStateOnIdentityChange(previous, current) {
+  if (brandingIdentitySnapshot(previous) !== brandingIdentitySnapshot(current)) {
+    brandingPageState.clear();
   }
 }
 

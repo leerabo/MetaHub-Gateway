@@ -2105,10 +2105,32 @@ PRD-086 的实现、专项、迁移、真实 Runtime/API、Browser 和文档已�
 - `docs/prd/PRD-087-channel-partner-white-label-portal.md`、`docs/api/partner-portal.md` 与
   `docs/testing/PRD-087-tests.md`：保存冻结设计、两轮编码前自审、公开 API、最终门禁、证据 hash 和下一项依据。
 
-PRD-087 的实现、迁移、专项、必要回归和真实 Browser 已形成正式证据。Excel `01_PRD总表` 第 89 行、
-`03_M2-M3扩展交付` 第 25 行、PAGE-120、API-400/401、OBJ-121、EVT-100 与 TC-0175/0176 共同确认下一条权威
-未完成项为 `PRD-088 | M2-企业增强 | P2 | 扩展层 | 白标配置 | 客户/渠道白标配置`。本次只登记、不实现
-PRD-088，`all_108_prds_complete=false`。
+PRD-087 的实现、迁移、专项、必要回归和真实 Browser 已形成正式证据。其完成时，Excel `01_PRD总表` 第 89 行、
+`03_M2-M3扩展交付` 第 25 行、PAGE-120、API-400/401、OBJ-121、EVT-100 与 TC-0175/0176 共同确认后续
+PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all_108_prds_complete=false`。
+
+## PRD-088 客户/渠道白标配置目录（已完成）
+
+- `shared-sdk/python/metahub_shared/rbac.py` 与 `runtime/{errors,webhooks}.py`：发布 RBAC revision 23、
+  `branding.read/manage`、固定 Branding 错误和 EVT-100 exact 事件合同。
+- `infra/migrations/0081_tenant_white_label_branding.sql/.down.sql`：创建 tenant-qualified BrandingConfig、
+  immutable source event/outbox，安装 owner、PNG/域名、revision CAS、lease/generation、RBAC 和 down guard。
+- `control-plane-api/src/metahub_control/branding/` 及 audit/auth/app/console 装配：实现受保护/公共投影、
+  安全 PNG、域名预留、后端实时权限、原子审计/event/outbox 和可停止恢复 worker。
+- `console-web/src/lib/branding.js`、`src/features/branding/`、登录页、主壳、developer-start 和样式：交付
+  PAGE-120、公共登录品牌、认证后 shell、管理员 CAS 保存、viewer 只读、owner/generation、动态撤权和
+  Blob URL/CSS/title/tenant 切换清理。
+- `control-plane-api/tests/integration/test_prd088_{branding,db_migrations}.py` 与
+  `console-web/tests/unit/branding.test.mjs`：覆盖 exact wire、0081 往返、租户/RBAC/导航、PNG、审计、
+  EVT-100 恢复、公共投影、迟到响应和页面生命周期。
+- `docs/prd/PRD-088-tenant-white-label-branding.md`、`docs/api/branding.md` 与
+  `docs/testing/PRD-088-tests.md`：保存冻结设计、两轮编码前自审、公开 API、最终门禁和下一项依据。
+
+PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
+第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
+TC-0177/0178 共同确认下一条权威未完成项为
+`PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`。本次只登记、不实现
+PRD-089，`all_108_prds_complete=false`。
 
 ## MVP 非目标
 

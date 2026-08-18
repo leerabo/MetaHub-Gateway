@@ -450,6 +450,43 @@ def require_partner_branding_manager(
     )
 
 
+def require_branding_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求当前 Session 具备租户级 BrandingConfig 读取权限。"""
+
+    return _require_branding_permissions(request, authorization, ("branding.read",))
+
+
+def require_branding_manager(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """要求同时具备白标读取和管理权限，避免撤销读取后仍可写入品牌配置。"""
+
+    return _require_branding_permissions(
+        request,
+        authorization,
+        ("branding.read", "branding.manage"),
+    )
+
+
+def _require_branding_permissions(
+    request: Request,
+    authorization: str | None,
+    permission_codes: tuple[str, ...],
+) -> AuthContext:
+    """Map live RBAC denial to Branding while preserving authentication errors."""
+
+    try:
+        return _require_request_permissions(request, authorization, permission_codes)
+    except ApiError as exc:
+        if exc.code == "auth.permission_denied":
+            raise ApiError("branding.forbidden") from None
+        raise
+
+
 def require_partner_commission_exporter(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

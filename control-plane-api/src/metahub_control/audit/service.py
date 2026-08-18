@@ -108,6 +108,8 @@ ACTION_OBJECT_TYPES = {
     # projection is deliberately limited to immutable local owners and integer configuration;
     # the user-facing name and all request-level facts remain outside AuditLog.
     "experiment.created": "experiment",
+    # PRD-088 白标审计只保存版本、字段哈希和枚举，不复制 Logo、域名或登录文案正文。
+    "branding.updated": "branding_config",
     # Response Cache 管理动作只审计策略安全快照和失效计数；entry、正文、摘要与账务 owner
     # 均由领域事实表保存，不能复制进通用 AuditLog。
     "response_cache.policy_created": "response_cache_policy",
@@ -268,6 +270,22 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "sampling_duration_seconds",
             "feedback_collection_enabled",
             "feedback_window_seconds",
+        }
+    ),
+    "branding_config": frozenset(
+        {
+            "branding_config_id",
+            "status",
+            "revision",
+            "changed_fields",
+            "product_name_sha256",
+            "login_title_sha256",
+            "login_message_sha256",
+            "custom_domain_status",
+            "logo_present",
+            "logo_sha256",
+            "logo_width",
+            "logo_height",
         }
     ),
     "config_transfer": frozenset(
