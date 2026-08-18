@@ -93,6 +93,7 @@ EVENT_TYPE_BY_NAVIGATION = {
     "file-security": "console.page_viewed",
     # PAGE-104 page events never carry job/task/file IDs, names, costs, failures, or result text.
     "batch-jobs": "console.page_viewed",
+    "tenant-data-lifecycle": "console.page_viewed",
     # PAGE-105 只记录页面访问，实验名称、模型指标、分桶和请求级 owner 均不得进入事件载荷。
     "experiments": "console.page_viewed",
     # PAGE-110/111 页面事件只记录 shell 元数据，不携带套餐字段、余额、调整原因或幂等键。
@@ -734,6 +735,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "注册 MCP Server，审核工具 Schema 与权限，并查看安全调用摘要。",
         "注册 Server 并完成工具策略审核后，可按权限追踪调用状态。",
         123,
+    ),
+    NavigationDefinition(
+        "tenant-data-lifecycle",
+        "数据管理",
+        "租户治理",
+        "tenant-data-lifecycle",
+        ("tenant_data.read",),
+        "查看当前租户的数据导出、留存和注销生命周期。",
+        "导出或注销操作会由后端再次校验实时权限、租户归属和版本。",
+        124,
     ),
     NavigationDefinition(
         "debug-console",

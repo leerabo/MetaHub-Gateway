@@ -59,6 +59,7 @@ import { brandingPageOwner } from "../branding/brandingPageState.js";
 import { renderBrandingSettings } from "../branding/renderBrandingSettings.js";
 import { renderSystemStatusPanel } from "../system-status/renderSystemStatusPanel.js";
 import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
+import { renderTenantDataLifecycle } from "../tenant-data-lifecycle/renderTenantDataLifecycle.js";
 import { renderUsagePanel } from "../usage/renderUsagePanel.js";
 import { renderFinOpsLedger } from "../finops-ledger/renderFinOpsLedger.js";
 import { renderCostAnomalies } from "../cost-anomalies/renderCostAnomalies.js";
@@ -483,6 +484,13 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-104 uses an owner-bound state; public routes still recheck RBAC and tenant ownership.
       return renderBatchJobsSection(
         options.batchJobsState,
+        options.authContext,
+        options.consoleShellState,
+        options.i18n,
+      );
+    case "tenant-data-lifecycle":
+      return renderTenantDataLifecycleSection(
+        options.tenantDataLifecycleState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -960,6 +968,14 @@ function renderBatchJobsSection(state, authContext, consoleShellState, i18n) {
         ${html}
       </section>
     `
+    : "";
+}
+
+/** PAGE-121 is rendered only for the backend-confirmed tenant data read owner. */
+function renderTenantDataLifecycleSection(state, authContext, consoleShellState, i18n) {
+  const html = renderTenantDataLifecycle(state, authContext, consoleShellState, i18n);
+  return html
+    ? `<section class="panel tenant-data-lifecycle-panel" aria-labelledby="tenant-data-title">${html}</section>`
     : "";
 }
 

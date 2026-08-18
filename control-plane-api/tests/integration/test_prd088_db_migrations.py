@@ -97,8 +97,13 @@ def _ids(connection: sqlite3.Connection) -> tuple[str, str, str]:
 @pytest.fixture(scope="module")
 def empty_0081(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd088-empty-0081")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 81:
+            shutil.copy2(source, migrations / source.name)
     database = root / "empty.sqlite3"
-    result = apply_migrations(_url(database))
+    result = apply_migrations(_url(database), migrations_dir=migrations)
     assert result.applied == [f"{version:04d}" for version in range(1, 82)]
     connection = connect_database(_url(database))
     try:
@@ -139,12 +144,15 @@ def test_fresh_repeat_pristine_down_and_reapply(empty_0081: Path, tmp_path: Path
                 """
             ).fetchone()
         ) == (98, 254)
-        assert [tuple(row) for row in connection.execute(
-            """
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                """
             SELECT rowid,permission_code FROM rbac_permission_templates
             WHERE permission_code LIKE 'branding.%' ORDER BY rowid
             """
-        )] == [(97, "branding.read"), (98, "branding.manage")]
+            )
+        ] == [(97, "branding.read"), (98, "branding.manage")]
         audit_schema = str(
             connection.execute(
                 "SELECT sql FROM sqlite_schema WHERE type='table' AND name='audit_logs'"
@@ -152,14 +160,17 @@ def test_fresh_repeat_pristine_down_and_reapply(empty_0081: Path, tmp_path: Path
         )
         assert "'branding.updated'" in audit_schema
         assert "'branding_config'" in audit_schema
-        assert connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name LIKE '%_prd088'"
-        ).fetchone()[0] == 10
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name LIKE '%_prd088'"
+            ).fetchone()[0]
+            == 10
+        )
         _healthy(connection)
     finally:
         connection.close()
 
-    repeated = apply_migrations(database_url)
+    repeated = apply_migrations(database_url, migrations_dir=empty_0081.parent / "migrations")
     assert repeated.applied == [] and repeated.skipped[-1] == "0081"
     assert rollback_last_migration(database_url, expected_version="0081").rolled_back == "0081"
     connection = connect_database(database_url)
@@ -175,9 +186,12 @@ def test_fresh_repeat_pristine_down_and_reapply(empty_0081: Path, tmp_path: Path
                 """
             ).fetchone()
         ) == (96, 247)
-        assert connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'branding_%'"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'branding_%'"
+            ).fetchone()[0]
+            == 0
+        )
         audit_schema = str(
             connection.execute(
                 "SELECT sql FROM sqlite_schema WHERE type='table' AND name='audit_logs'"
@@ -189,7 +203,9 @@ def test_fresh_repeat_pristine_down_and_reapply(empty_0081: Path, tmp_path: Path
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0081"]
+    assert apply_migrations(
+        database_url, migrations_dir=empty_0081.parent / "migrations"
+    ).applied == ["0081"]
     connection = connect_database(database_url)
     try:
         assert _hashes(connection) == (CATALOG_HASH_23, ROLE_HASH_23)
@@ -257,7 +273,9 @@ def test_existing_custom_role_is_preserved_and_new_tenant_gets_defaults(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0081"]
+    assert apply_migrations(
+        database_url, migrations_dir=empty_0081.parent / "migrations"
+    ).applied == ["0081"]
     connection = connect_database(database_url)
     try:
         assert {
@@ -278,22 +296,31 @@ def test_existing_custom_role_is_preserved_and_new_tenant_gets_defaults(
             (seed.tenant_id,),
         ).fetchone()
         assert tuple(developer_after)[1:] == (custom_revision, custom_hash)
-        assert connection.execute(
-            """
+        assert (
+            connection.execute(
+                """
             SELECT COUNT(*) FROM role_permissions relation JOIN permissions permission
               ON permission.tenant_id=relation.tenant_id
              AND permission.permission_id=relation.permission_id
             WHERE relation.tenant_id=? AND relation.role_id=?
               AND permission.code LIKE 'branding.%'
             """,
-            (seed.tenant_id, developer_after["role_id"]),
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM permissions WHERE tenant_id=?", (seed.tenant_id,)
-        ).fetchone()[0] == 98
-        assert connection.execute(
-            "SELECT COUNT(*) FROM role_permissions WHERE tenant_id=?", (seed.tenant_id,)
-        ).fetchone()[0] == 252
+                (seed.tenant_id, developer_after["role_id"]),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM permissions WHERE tenant_id=?", (seed.tenant_id,)
+            ).fetchone()[0]
+            == 98
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM role_permissions WHERE tenant_id=?", (seed.tenant_id,)
+            ).fetchone()[0]
+            == 252
+        )
 
         connection.execute(
             """
@@ -329,15 +356,24 @@ def test_existing_custom_role_is_preserved_and_new_tenant_gets_defaults(
             (seed.tenant_id,),
         ).fetchone()
         assert tuple(developer_down) == (custom_revision, custom_hash)
-        assert connection.execute(
-            "SELECT COUNT(*) FROM permissions WHERE tenant_id=?", (seed.tenant_id,)
-        ).fetchone()[0] == 96
-        assert connection.execute(
-            "SELECT COUNT(*) FROM role_permissions WHERE tenant_id=?", (seed.tenant_id,)
-        ).fetchone()[0] == 246
-        assert connection.execute(
-            "SELECT COUNT(*) FROM role_permissions WHERE tenant_id='tenant_prd088_new'"
-        ).fetchone()[0] == 247
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM permissions WHERE tenant_id=?", (seed.tenant_id,)
+            ).fetchone()[0]
+            == 96
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM role_permissions WHERE tenant_id=?", (seed.tenant_id,)
+            ).fetchone()[0]
+            == 246
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM role_permissions WHERE tenant_id='tenant_prd088_new'"
+            ).fetchone()[0]
+            == 247
+        )
         _healthy(connection)
     finally:
         connection.close()
@@ -523,9 +559,12 @@ def test_down_guards_are_atomic(
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0081"
-        assert connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE name='branding_configs'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name='branding_configs'"
+            ).fetchone()[0]
+            == 1
+        )
         _healthy(connection)
     finally:
         connection.close()

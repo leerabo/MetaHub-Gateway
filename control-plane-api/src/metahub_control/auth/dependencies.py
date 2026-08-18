@@ -234,6 +234,42 @@ def require_tenant_settings_reader(
     return _require_request_permissions(request, authorization, ("tenant.settings.read",))
 
 
+def require_tenant_data_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """在解析 PAGE-121 业务输入前实时校验租户数据只读权限。"""
+
+    return _require_request_permissions(request, authorization, ("tenant_data.read",))
+
+
+def require_tenant_data_exporter(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """导出命令必须由后端独立 critical 权限授权，不能由页面可见性推导。"""
+
+    return _require_request_permissions(request, authorization, ("tenant_data.export",))
+
+
+def require_tenant_data_downloader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """下载制品使用独立权限，避免只读页面权限扩大到敏感附件。"""
+
+    return _require_request_permissions(request, authorization, ("tenant_data.download",))
+
+
+def require_tenant_data_deleter(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """注销命令在正文解析前完成独立后端危险权限校验。"""
+
+    return _require_request_permissions(request, authorization, ("tenant_data.delete",))
+
+
 def require_virtual_key_writer(
     request: Request,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

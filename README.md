@@ -417,7 +417,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   OBJ-122/123、EVT-101/102 与 TC-0177/0178 已和 README、`docs/prd`、`docs/testing` 的 PRD-088 完成状态
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
-  本次只登记，不启动或混入 PRD-089；总体目标仍为 `all_108_prds_complete=false`。
+  该历史登记已由下方 PRD-089 完成项关闭；PRD-090 仍未启动，总体目标仍为
+  `all_108_prds_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -647,6 +648,22 @@ AuditLog/source event、固定接受审计脱敏、0051/0052 和 PAGE-087。迁�
   Edge 验收保留在本机 `.artifacts/prd065-browser/run-20260801T225656-CST/browser-evidence.json`。当时识别的
   下一项 PRD-066 和其后的 PRD-067 现已完成；当前按 Excel 进入
   `PRD-068 | M2-企业增强 | P2 | 策略模板库 | 行业/场景策略模板库`；`all_108_prds_complete=false`。
+
+### PRD-089 租户数据导出与注销（已实现）
+
+PRD-089 adds tenant-qualified `POST /tenant/export`, `GET /tenant/exports/{job_id}` and protected
+ZIP download, plus `POST /tenant/deletion-request` and a cancellable lifecycle worker. Export
+artifacts use the independent tenant-data AES-GCM key domain and contain only fixed safe
+projections for tenant metadata, Usage/Cost totals, failure summaries and audit aggregates.
+Deletion freezes the tenant, verifies the signed schema/trigger manifest, archives bounded
+retention facts, removes tenant-owned rows atomically, invalidates the cache generation and
+leaves a tombstone plus lifecycle event/outbox facts. Every route derives `tenant_id` from the
+authenticated session, re-checks live RBAC, rejects unknown body/query fields, returns
+`request_id`/`trace_id`, and applies `no-store, private` boundaries. The migration is `0082`;
+fresh SQLite verification is `integrity_check=ok` with zero foreign-key violations. PAGE-121
+is exposed only with `tenant_data.read`. See [PRD-089 design](docs/prd/PRD-089-tenant-data-export-deletion.md)
+and [PRD-089 tests](docs/testing/PRD-089-tests.md). Overall status remains
+`all_108_prds_complete=false`; PRD-090 is not started.
 
 ## 目录结构
 

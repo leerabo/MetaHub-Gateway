@@ -53,6 +53,8 @@ CUSTOMER_HEALTH_CHANGED_EVENT_TYPE = "customer.health_changed"
 PARTNER_CUSTOMER_CREATED_EVENT_TYPE = "partner.customer_created"
 # PRD-088 白标更新事件只外发配置版本和 Logo/域名安全摘要，不携带 Logo 或文案正文。
 BRANDING_UPDATED_EVENT_TYPE = "branding.updated"
+TENANT_EXPORTED_EVENT_TYPE = "tenant.exported"
+TENANT_DELETION_REQUESTED_EVENT_TYPE = "tenant.deletion_requested"
 
 # Webhook 事件类型白名单定义可订阅治理事件，payload 生成和签名校验必须共享同一集合。
 WEBHOOK_EVENT_TYPES = {
@@ -146,6 +148,8 @@ WEBHOOK_EVENT_TYPES = {
     PARTNER_CUSTOMER_CREATED_EVENT_TYPE,
     # 白标更新只外发不可变配置版本与固定安全投影，正文仍留在租户数据库。
     BRANDING_UPDATED_EVENT_TYPE,
+    TENANT_EXPORTED_EVENT_TYPE,
+    TENANT_DELETION_REQUESTED_EVENT_TYPE,
     # MCP invocation events expose only fixed execution, DLP, byte, and cost-status facts.
     # Endpoint, Token, Schema, arguments, result, and fingerprints never enter the event.
     MCP_TOOL_CALLED_EVENT_TYPE,
@@ -389,6 +393,9 @@ def build_webhook_event(
     elif event_type == BRANDING_UPDATED_EVENT_TYPE:
         # PRD-088 只允许 BrandingConfig 的版本、字段名和不可逆 Logo/域名摘要出网。
         _validate_branding_updated_payload(safe_payload)
+    elif event_type in {TENANT_EXPORTED_EVENT_TYPE, TENANT_DELETION_REQUESTED_EVENT_TYPE}:
+        # PRD-089 事件只外发状态、计数和哈希，不允许导出正文或确认短语。
+        _validate_tenant_lifecycle_payload(safe_payload)
     elif event_type == "experiment.completed":
         # PRD-075 只接受两条 Result 与 Experiment owner 可逐字段重建的十九字段摘要。
         _validate_experiment_completed_payload(safe_payload)
@@ -468,6 +475,8 @@ def build_webhook_event(
         "product_event.recorded",
         CUSTOMER_HEALTH_CHANGED_EVENT_TYPE,
         PARTNER_CUSTOMER_CREATED_EVENT_TYPE,
+        TENANT_EXPORTED_EVENT_TYPE,
+        TENANT_DELETION_REQUESTED_EVENT_TYPE,
         MCP_TOOL_CALLED_EVENT_TYPE,
         MCP_NETWORK_BLOCKED_EVENT_TYPE,
         SECURITY_EVENT_TYPE,
@@ -1075,8 +1084,7 @@ def _validate_response_cache_hit_payload(payload: dict[str, Any]) -> None:
     if payload["charge_cache_hits"]:
         # 收费 hit 必须复用同一 reference snapshot；两者状态和值均必须逐字相等。
         if (
-            payload["current_reference_cost_status"]
-            != payload["billed_cost_status"]
+            payload["current_reference_cost_status"] != payload["billed_cost_status"]
             or current != billed
         ):
             # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
@@ -1143,9 +1151,7 @@ def _validate_response_cache_invalidated_payload(payload: dict[str, Any]) -> Non
     if (
         type(payload["schema_version"]) is not int
         or payload["schema_version"] != 1
-        or not _is_prefixed_lower_hex_id(
-            payload["cache_invalidation_id"], prefix="rci_"
-        )
+        or not _is_prefixed_lower_hex_id(payload["cache_invalidation_id"], prefix="rci_")
         or payload["scope"] not in {"all", "tags"}
         or payload["match_mode"] != "all"
         or payload["reason_code"]
@@ -1169,8 +1175,7 @@ def _validate_response_cache_invalidated_payload(payload: dict[str, Any]) -> Non
     )
     # 所有计数拒绝 bool、负数和 SQLite 范围外整数，避免 wire/数据库解释分叉。
     if any(
-        type(payload[field]) is not int
-        or not 0 <= payload[field] <= 9_223_372_036_854_775_807
+        type(payload[field]) is not int or not 0 <= payload[field] <= 9_223_372_036_854_775_807
         for field in count_fields
     ):
         # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
@@ -1251,11 +1256,7 @@ def build_assistant_queried_event(
     错误正文均不属于参数或 payload。
     """
 
-    if (
-        type(duration_ms) is not int
-        or duration_ms < 0
-        or duration_ms > 9_223_372_036_854_775_807
-    ):
+    if type(duration_ms) is not int or duration_ms < 0 or duration_ms > 9_223_372_036_854_775_807:
         # 耗时必须是有符号六十四位非负整数，bool 与越界值不能进入事件摘要。
         raise ValueError("webhook.payload_invalid")
     # 1.5 秒是整个 endpoint 的绝对期限；超时失败仍落入第二个固定 bucket 供容量复核。
@@ -1333,8 +1334,7 @@ def _validate_admin_assistant_queried_payload(payload: dict[str, Any]) -> None:
         payload["redaction_count"],
     )
     if any(
-        type(value) is not int or not 0 <= value <= 9_223_372_036_854_775_807
-        for value in counts
+        type(value) is not int or not 0 <= value <= 9_223_372_036_854_775_807 for value in counts
     ):
         # bool 是 int 子类，必须用 exact type 拒绝，避免 true 被下游解释成计数一。
         raise ValueError("webhook.payload_invalid")
@@ -1488,10 +1488,7 @@ def _validate_approval_event_envelope(
             # 创建者是经过内部身份校验的服务或用户；匿名 source 不能生成通知。
             raise ValueError("webhook.payload_invalid")
         return
-    if (
-        actor_id != "approval-timeout-scheduler"
-        or _to_iso(occurred_at) != payload["decided_at"]
-    ):
+    if actor_id != "approval-timeout-scheduler" or _to_iso(occurred_at) != payload["decided_at"]:
         # timeout 只能由固定系统 actor 产生，且信封时间必须与终态事实同秒。
         raise ValueError("webhook.payload_invalid")
 
@@ -1948,6 +1945,32 @@ def _validate_branding_updated_payload(payload: dict[str, Any]) -> None:
         raise ValueError("webhook.payload_invalid")
 
 
+def _validate_tenant_lifecycle_payload(payload: dict[str, Any]) -> None:
+    """校验 EVT-101/102 的固定摘要，避免生命周期事件成为数据导出旁路。"""
+
+    expected = {
+        "schema_version",
+        "lifecycle_status",
+        "object_id",
+        "row_count",
+        "retained_records",
+        "manifest_sha256",
+    }
+    if (
+        set(payload) != expected
+        or payload.get("schema_version") != 1
+        or not isinstance(payload.get("lifecycle_status"), str)
+        or payload["lifecycle_status"] not in {"requested", "completed", "failed"}
+        or not _is_bounded_safe_text(payload.get("object_id"), maximum=80)
+        or type(payload.get("row_count")) is not int
+        or payload["row_count"] < 0
+        or type(payload.get("retained_records")) is not int
+        or payload["retained_records"] < 0
+        or re.fullmatch(r"[0-9a-f]{64}", str(payload.get("manifest_sha256"))) is None
+    ):
+        raise ValueError("webhook.payload_invalid")
+
+
 def _validate_branding_updated_envelope(
     payload: dict[str, Any],
     *,
@@ -1962,9 +1985,9 @@ def _validate_branding_updated_envelope(
     """把 EVT-100 绑定到持久配置、租户 actor、请求链路和 UTC 秒。"""
 
     branding_id = payload["branding_config_id"]
-    suffix = hashlib.sha256(
-        f"{branding_id}\x1f{payload['revision']}".encode("ascii")
-    ).hexdigest()[:32]
+    suffix = hashlib.sha256(f"{branding_id}\x1f{payload['revision']}".encode("ascii")).hexdigest()[
+        :32
+    ]
     if (
         event_id != f"evt_brd_{suffix}"
         or not _is_bounded_safe_text(tenant_id, maximum=160)
@@ -2033,8 +2056,7 @@ def _validate_batch_job_event_payload(
         payload["cancelled_count"],
     )
     if (
-        payload["status"]
-        not in {"completed", "partial_failed", "failed", "cancelled", "expired"}
+        payload["status"] not in {"completed", "partial_failed", "failed", "cancelled", "expired"}
         or any(type(value) is not int or not 0 <= value <= 100 for value in counts)
         or sum(counts) > 100
         or not _is_finops_money_text(payload["actual_cost_cny"])
@@ -2119,8 +2141,7 @@ def _validate_experiment_completed_payload(payload: dict[str, Any]) -> None:
         )
         or payload["model_a_id"] == payload["model_b_id"]
         or payload["status"] != "completed"
-        or payload["completion_reason"]
-        not in {"target_reached", "sampling_deadline_reached"}
+        or payload["completion_reason"] not in {"target_reached", "sampling_deadline_reached"}
         or not _is_canonical_utc_second(payload["facts_through_at"])
     ):
         # Webhook 载荷必须满足固定字段和类型边界；异常数据不得进入投递链路。
@@ -2144,8 +2165,7 @@ def _validate_experiment_completed_payload(payload: dict[str, Any]) -> None:
         raise ValueError("webhook.payload_invalid")
     assigned = payload["assigned_count"]
     if (
-        payload["model_a_assigned_count"] + payload["model_b_assigned_count"]
-        != assigned
+        payload["model_a_assigned_count"] + payload["model_b_assigned_count"] != assigned
         or payload["gateway_success_count"]
         + payload["gateway_failure_count"]
         + payload["unresolved_count"]
@@ -2231,9 +2251,7 @@ def _validate_prompt_template_published_payload(payload: dict[str, Any]) -> None
     # 适用范围只允许冻结枚举，不能把项目标识或任意文本借 scope 发送出去。
     if scope not in {"all", "selected"}:
         raise ValueError("webhook.payload_invalid")
-    if (scope == "all" and project_count != 0) or (
-        scope == "selected" and project_count < 1
-    ):
+    if (scope == "all" and project_count != 0) or (scope == "selected" and project_count < 1):
         # scope 与计数必须一致，避免消费者根据矛盾摘要做出错误治理决策。
         raise ValueError("webhook.payload_invalid")
 
@@ -2317,9 +2335,7 @@ def _validate_policy_template_applied_payload(payload: dict[str, Any]) -> None:
         # apply 必须从真实 published baseline 单调生成下一版，不能接受跳号或虚构 v0。
         raise ValueError("webhook.payload_invalid")
     for field in ("impact_hash", "bindings_hash"):
-        if type(payload[field]) is not str or not _is_lower_hex(
-            payload[field], expected_length=64
-        ):
+        if type(payload[field]) is not str or not _is_lower_hex(payload[field], expected_length=64):
             # 两个摘要都是不可逆 canonical SHA-256；大小写或长度漂移会破坏消费者幂等判断。
             raise ValueError("webhook.payload_invalid")
     if payload["changed_resource_types"] != ["policy", "policy_snapshot"]:
@@ -2393,7 +2409,8 @@ def _validate_intent_detected_payload(payload: dict[str, Any]) -> None:
         type(source_kind) is not str
         or type(mode) is not str
         or type(action) is not str
-        or (source_kind, mode, action) not in {
+        or (source_kind, mode, action)
+        not in {
             ("gateway", "sync_strong", "block"),
             ("gateway", "async_light", "observe"),
             ("gateway", "sync_session", "block"),
@@ -2407,10 +2424,7 @@ def _validate_intent_detected_payload(payload: dict[str, Any]) -> None:
     if type(score) is not int or not 1 <= score <= 10_000:
         # bool 不能借 Python 整数子类关系成为风险分数，量纲由独立固定字段冻结。
         raise ValueError("webhook.payload_invalid")
-    if (
-        payload["risk_score_scale"] != 10_000
-        or type(payload["risk_score_scale"]) is not int
-    ):
+    if payload["risk_score_scale"] != 10_000 or type(payload["risk_score_scale"]) is not int:
         # 禁止 float 或另一量纲导致下游错误比较。
         raise ValueError("webhook.payload_invalid")
     # reason、taxonomy、分数和强弱属性属于当前 ruleset 的一个不可拆分事实；只分别
@@ -2450,9 +2464,7 @@ def _validate_intent_detected_payload(payload: dict[str, Any]) -> None:
         ),
     }
     reason_code = payload["reason_code"]
-    reason_contract = (
-        reason_contracts.get(reason_code) if type(reason_code) is str else None
-    )
+    reason_contract = reason_contracts.get(reason_code) if type(reason_code) is str else None
     if (
         reason_contract is None
         or payload["risk_type"] != reason_contract[0]
@@ -2565,9 +2577,7 @@ def _validate_output_blocked_payload(payload: dict[str, Any]) -> None:
         # 暴露状态与已放行 Token 必须相互证明，bool 也不能借 int 子类关系通过。
         raise ValueError("webhook.payload_invalid")
     if payload["billing_disposition"] == "not_billable_response_cache_candidate" and (
-        payload["scan_mode"] != "non_stream_full"
-        or exposure_state != "none"
-        or emitted != 0
+        payload["scan_mode"] != "non_stream_full" or exposure_state != "none" or emitted != 0
     ):
         # 只有未调用 Provider、未向客户端暴露任何内容的 cache candidate 才能标记不计费；
         # 流式或 partial 事实仍必须沿用真实 Provider 成本争议路径。
@@ -2689,8 +2699,7 @@ def _validate_file_scanned_decision(payload: dict[str, Any]) -> None:
         type(payload["media_type"]) is not str
         or type(match_count) is not int
         or not 0 <= match_count <= 100
-        or payload["extractor_version"]
-        != extractor_by_media_type.get(payload["media_type"])
+        or payload["extractor_version"] != extractor_by_media_type.get(payload["media_type"])
         or (
             estimated_tokens is not None
             and (type(estimated_tokens) is not int or estimated_tokens < 1)
@@ -2701,17 +2710,9 @@ def _validate_file_scanned_decision(payload: dict[str, Any]) -> None:
 
     dlp_contract_valid = (
         (dlp_status == "clean" and dlp_action is None and match_count == 0)
-        or (
-            dlp_status == "matched"
-            and dlp_action in ("allow", "log_only")
-            and match_count >= 1
-        )
+        or (dlp_status == "matched" and dlp_action in ("allow", "log_only") and match_count >= 1)
         or (dlp_status == "blocked" and dlp_action == "block" and match_count >= 1)
-        or (
-            dlp_status in ("pending", "unavailable")
-            and dlp_action is None
-            and match_count == 0
-        )
+        or (dlp_status in ("pending", "unavailable") and dlp_action is None and match_count == 0)
     )
     if not dlp_contract_valid:
         # DLP 状态、动作与命中数必须成组自洽，不能由调用方自由拼装。
@@ -2892,18 +2893,17 @@ def _validate_session_high_risk_payload(payload: dict[str, Any]) -> None:
         # 纯 high-risk/dismiss/expire 跃迁没有 overlay，target 也必须为空，禁止半关联事件。
         if target_type is not None:
             raise ValueError("webhook.payload_invalid")
-    elif (
-        not _is_prefixed_lower_hex_id(freeze_id, prefix="srf_")
-        or target_type not in {"session", "virtual_key"}
-    ):
+    elif not _is_prefixed_lower_hex_id(freeze_id, prefix="srf_") or target_type not in {
+        "session",
+        "virtual_key",
+    }:
         # overlay 事件必须同时提供规范 freeze ID 和固定目标类型。
         raise ValueError("webhook.payload_invalid")
 
     scope_type = payload["scope_type"]
     scope_reference = payload["scope_reference"]
-    valid_chat_reference = (
-        scope_type == "enterprise_chat"
-        and _is_prefixed_lower_hex_id(scope_reference, prefix="chs_")
+    valid_chat_reference = scope_type == "enterprise_chat" and _is_prefixed_lower_hex_id(
+        scope_reference, prefix="chs_"
     )
     valid_api_reference = (
         scope_type == "api_session"
@@ -3096,7 +3096,6 @@ def _validate_request_explanation_viewed_envelope(
         raise ValueError("webhook.payload_invalid")
 
 
-
 def _validate_request_log_query_executed_payload(payload: dict[str, Any]) -> None:
     """校验 log.query_executed 只包含不可逆筛选摘要和有界计数。
 
@@ -3105,10 +3104,21 @@ def _validate_request_log_query_executed_payload(payload: dict[str, Any]) -> Non
     """
 
     expected_fields = {
-        "schema_version", "query_event_id", "filter_version", "filter_keys",
-        "filter_fingerprint", "saved_filter_id", "sort_by", "sort_direction",
-        "limit", "offset", "matched_count", "returned_count", "has_more",
-        "query_duration_ms", "executed_at",
+        "schema_version",
+        "query_event_id",
+        "filter_version",
+        "filter_keys",
+        "filter_fingerprint",
+        "saved_filter_id",
+        "sort_by",
+        "sort_direction",
+        "limit",
+        "offset",
+        "matched_count",
+        "returned_count",
+        "has_more",
+        "query_duration_ms",
+        "executed_at",
     }
     if set(payload) != expected_fields:
         # 精确白名单防止 filters 值、保存筛选名称或未来未审字段进入签名事件。
@@ -3126,11 +3136,29 @@ def _validate_request_log_query_executed_payload(payload: dict[str, Any]) -> Non
         # 指纹只接受 canonical SHA-256，不能用短摘要或任意文本替代原筛选值。
         raise ValueError("webhook.payload_invalid")
     allowed_keys = (
-        "application_id", "cost_amount_max", "cost_amount_min", "created_from", "created_to",
-        "currency", "environment_id", "error_code", "latency_ms_max", "latency_ms_min",
-        "model", "project_id", "provider_code", "request_id", "request_model", "resolved_model",
-        "snapshot_version", "status", "terminal_stage", "total_tokens_max",
-        "total_tokens_min", "trace_id", "virtual_key_id",
+        "application_id",
+        "cost_amount_max",
+        "cost_amount_min",
+        "created_from",
+        "created_to",
+        "currency",
+        "environment_id",
+        "error_code",
+        "latency_ms_max",
+        "latency_ms_min",
+        "model",
+        "project_id",
+        "provider_code",
+        "request_id",
+        "request_model",
+        "resolved_model",
+        "snapshot_version",
+        "status",
+        "terminal_stage",
+        "total_tokens_max",
+        "total_tokens_min",
+        "trace_id",
+        "virtual_key_id",
     )
     if not _is_stable_subset(payload["filter_keys"], allowed_order=allowed_keys, allow_empty=True):
         # 字段名必须唯一且按冻结顺序排列，确保重试签名稳定并拒绝未知筛选字段。
@@ -3161,8 +3189,11 @@ def _validate_request_log_query_executed_payload(payload: dict[str, Any]) -> Non
         # 排序方向仅允许强枚举，未知文本不得由订阅端自行解释。
         raise ValueError("webhook.payload_invalid")
     integer_bounds = {
-        "limit": (1, 100), "offset": (0, 10000), "matched_count": (0, 9_007_199_254_740_991),
-        "returned_count": (0, 100), "query_duration_ms": (0, 9_007_199_254_740_991),
+        "limit": (1, 100),
+        "offset": (0, 10000),
+        "matched_count": (0, 9_007_199_254_740_991),
+        "returned_count": (0, 100),
+        "query_duration_ms": (0, 9_007_199_254_740_991),
     }
     for field, (minimum, maximum) in integer_bounds.items():
         value = payload[field]
@@ -3209,6 +3240,7 @@ def _validate_request_log_query_executed_envelope(
     ):
         # 信封身份或时间任一漂移都会把查询通知绑定到错误持久事实，必须整体拒绝。
         raise ValueError("webhook.payload_invalid")
+
 
 def _is_canonical_utc_second(value: object) -> bool:
     """判断值是否为无小数、Z 后缀的 canonical UTC 秒级时间。"""
@@ -3323,8 +3355,7 @@ def _validate_cost_anomaly_detected_payload(payload: dict[str, Any]) -> None:
         "affected_virtual_key_count",
     )
     if any(
-        type(payload[field]) is not int
-        or not 0 <= payload[field] <= 9_007_199_254_740_991
+        type(payload[field]) is not int or not 0 <= payload[field] <= 9_007_199_254_740_991
         for field in count_fields
     ):
         # 计数保持 JSON 数字是为了接收端易用，因此必须限制在 IEEE-754 安全整数范围内。
@@ -3392,6 +3423,7 @@ def _canonical_utc_five_minute(value: object) -> datetime | None:
     if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value or parsed.minute % 5 != 0:
         return None
     return parsed
+
 
 def _validate_budget_scope_exceeded_payload(payload: dict[str, Any]) -> None:
     """校验 ``budget.scope_exceeded`` 的精确安全 payload。
@@ -3501,11 +3533,7 @@ def _budget_money_micros(value: object) -> int | None:
         or (len(integer) > 1 and integer.startswith("0"))
         or (
             separator
-            and (
-                not 1 <= len(fraction) <= 6
-                or not fraction.isascii()
-                or not fraction.isdecimal()
-            )
+            and (not 1 <= len(fraction) <= 6 or not fraction.isascii() or not fraction.isdecimal())
         )
     ):
         return None
@@ -3623,9 +3651,7 @@ def _validate_finops_ledger_entry_payload(payload: dict[str, Any]) -> None:
         raise ValueError("webhook.payload_invalid")
     source_request_id = payload["source_request_id"]
     # 可选请求身份仍须有界且无控制字符，避免事件日志和下游索引被污染。
-    if source_request_id is not None and not _is_bounded_safe_text(
-        source_request_id, maximum=128
-    ):
+    if source_request_id is not None and not _is_bounded_safe_text(source_request_id, maximum=128):
         # 请求身份含控制字符或超长时会污染审计关联，必须整条拒绝。
         raise ValueError("webhook.payload_invalid")
     # Usage 分录必须绑定原请求；人工调整是否关联请求由调整类型另行约束。
@@ -3897,9 +3923,8 @@ def _validate_cache_affinity_selected_envelope(
             # runtime 事件身份就是 cas_ Selection，且它由 Gateway 执行而不是控制台 actor 触发。
             raise ValueError("webhook.payload_invalid")
         return
-    if (
-        not _is_prefixed_lower_hex(event_id, prefix="cae_")
-        or not _is_bounded_safe_text(actor_id, maximum=128)
+    if not _is_prefixed_lower_hex(event_id, prefix="cae_") or not _is_bounded_safe_text(
+        actor_id, maximum=128
     ):
         # 配置事件使用独立 cae_ 幂等 ID 并强制可信 actor，不能复用 runtime Selection 身份。
         raise ValueError("webhook.payload_invalid")
@@ -4397,7 +4422,7 @@ def _validate_route_configuration_changed_payload(payload: dict[str, Any]) -> No
     change_order = (
         "created",
         "mode",
-        *(('quality_cost',) if is_v2 else ()),
+        *(("quality_cost",) if is_v2 else ()),
         "candidates",
         "alias_state",
     )
@@ -4576,8 +4601,7 @@ def _validate_adapter_spec_updated_payload(payload: dict[str, Any]) -> None:
             or not 3 <= len(value) <= 80
             or not value[0].islower()
             or any(
-                character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-"
-                for character in value
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-" for character in value
             )
         ):
             # 版本只允许受控 ASCII 短码，不能把自由说明或 URL 填进事件。
@@ -4670,8 +4694,10 @@ def _validate_adapter_contract_failed_payload(payload: dict[str, Any]) -> None:
     if (
         type(catalog_version) is not str
         or not 1 <= len(catalog_version) <= 80
-        or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
-               for character in catalog_version)
+        or any(
+            character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-"
+            for character in catalog_version
+        )
     ):
         # 目录版本只允许有界安全字符，禁止控制字符或路径片段进入签名载荷。
         raise ValueError("webhook.payload_invalid")
@@ -5315,8 +5341,7 @@ def _is_fixed_dotted_code(value: object) -> bool:
         and part[0].islower()
         and part[0].isalpha()
         and all(
-            character.islower() or character.isdigit() or character == "_"
-            for character in part
+            character.islower() or character.isdigit() or character == "_" for character in part
         )
         for part in parts
     )
@@ -5414,6 +5439,7 @@ def _validate_invitation_event_envelope(
     ):
         # 任一身份或时间漂移都会破坏一次性状态、租户隔离和投递幂等，必须提交前失败关闭。
         raise ValueError("webhook.payload_invalid")
+
 
 def _validate_policy_snapshot_event_payload(payload: dict[str, Any]) -> None:
     """校验 ``policy_snapshot.published`` 的精确安全 payload。

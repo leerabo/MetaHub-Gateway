@@ -63,7 +63,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-087 将伙伴读取、首次配置、客户管理、白标、分润导出和交付下载拆成六个权限；
 # 运行时还必须叠加当前 tenant 的 Partner owner 校验，不能把角色上限当成客户范围。
 # PRD-088 把全局控制台/登录页白标和伙伴门户白标分开，读写权限不能复用后者。
-CATALOG_REVISION: Final[int] = 23
+# PRD-089 再把租户数据生命周期拆成只读、创建导出、下载和注销四个后端权限；危险命令不能因
+# PAGE-121 可见或角色名称而得到隐式授权。
+CATALOG_REVISION: Final[int] = 24
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -170,6 +172,34 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
     ),
     PermissionDefinition(
         "tenant.settings.read", "tenant", "读取租户设置", "读取当前租户的脱敏基础配置。", "read"
+    ),
+    PermissionDefinition(
+        "tenant_data.read",
+        "tenant",
+        "读取租户数据生命周期",
+        "读取当前租户导出任务、注销状态与安全留存摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "tenant_data.export",
+        "tenant",
+        "创建租户数据导出",
+        "创建当前租户不含凭据、Prompt 和 Response 的受保护数据导出。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "tenant_data.download",
+        "tenant",
+        "下载租户数据导出",
+        "下载当前租户已完成且未过期的加密存储导出制品。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "tenant_data.delete",
+        "tenant",
+        "申请租户注销",
+        "冻结当前租户并启动可恢复的数据归档、缓存失效和业务数据擦除流程。",
+        "critical",
     ),
     PermissionDefinition(
         "user.manage", "tenant", "管理用户", "创建租户用户并分配固定角色。", "critical"
@@ -780,6 +810,7 @@ _SECURITY = {
     "mcp.network.manage",
     "mcp.approve",
     "branding.read",
+    "tenant_data.read",
 }
 _OPS = {
     "console.basic.read",

@@ -83,6 +83,8 @@ from .response_cache import router as response_cache_router
 from .security_events import install_security_event_scheduler
 from .session_risks import router as session_risks_router
 from .tenants.routes import router as tenant_router
+from .tenant_data import install_tenant_data_scheduler
+from .tenant_data.routes import router as tenant_data_router
 from .usage.routes import router as usage_router
 from .usage.scheduler import install_usage_export_scheduler
 from .user_preferences.routes import router as user_preferences_router
@@ -174,6 +176,7 @@ app.include_router(files_router)
 app.include_router(file_security_router)
 app.include_router(finops_router)
 app.include_router(tenant_router)
+app.include_router(tenant_data_router)
 app.include_router(user_preferences_router)
 app.include_router(users_router)
 app.include_router(invitations_router)
@@ -230,3 +233,4 @@ install_branding_scheduler(app)
 install_billing_dispute_scheduler(app)
 install_security_event_scheduler(app)
 install_mcp_scheduler(app)
+install_tenant_data_scheduler(app)

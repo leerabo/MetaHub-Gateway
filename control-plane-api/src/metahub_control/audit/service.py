@@ -110,6 +110,10 @@ ACTION_OBJECT_TYPES = {
     "experiment.created": "experiment",
     # PRD-088 白标审计只保存版本、字段哈希和枚举，不复制 Logo、域名或登录文案正文。
     "branding.updated": "branding_config",
+    "tenant.export_requested": "tenant_export_job",
+    "tenant.exported": "tenant_export_job",
+    "tenant.deletion_requested": "deletion_request",
+    "tenant.deleted": "deletion_request",
     # Response Cache 管理动作只审计策略安全快照和失效计数；entry、正文、摘要与账务 owner
     # 均由领域事实表保存，不能复制进通用 AuditLog。
     "response_cache.policy_created": "response_cache_policy",
@@ -286,6 +290,19 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
             "logo_sha256",
             "logo_width",
             "logo_height",
+        }
+    ),
+    "tenant_export_job": frozenset(
+        {
+            "tenant_export_job_id", "status", "schema_version", "snapshot_at",
+            "usage_snapshot_sequence", "audit_snapshot_sequence", "row_count",
+            "retained_records", "content_size", "content_sha256", "error_code",
+        }
+    ),
+    "deletion_request": frozenset(
+        {
+            "deletion_request_id", "status", "tenant_revision", "archived_rows",
+            "deleted_rows", "retained_records", "schema_manifest_sha256", "error_code",
         }
     ),
     "config_transfer": frozenset(

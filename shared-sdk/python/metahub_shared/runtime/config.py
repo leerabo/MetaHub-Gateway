@@ -69,6 +69,11 @@ DEFAULT_INTERNAL_CHAT_TOKEN = "dev-only-change-me-metahub-internal-chat-token-20
 DEFAULT_INTERNAL_BATCH_TOKEN = "dev-only-change-me-metahub-internal-batch-token-2026"
 DEFAULT_BATCH_ENCRYPTION_SECRET = "dev-only-change-me-metahub-batch-encryption-secret-2026"
 DEFAULT_APPROVAL_HMAC_SECRET = "dev-only-change-me-metahub-approval-hmac-secret-2026"
+# 租户导出 ZIP 与注销留存分段共享一个 PRD-089 根密钥，但通过固定 AAD/domain 分离用途。
+# 公开默认值只服务 dev/test；生产缺失时仅 tenant-data 功能关闭失败，不能回退到 Auth/Provider 密钥。
+DEFAULT_TENANT_DATA_ENCRYPTION_SECRET = (
+    "dev-only-change-me-metahub-tenant-data-encryption-secret-2026"
+)
 
 # 运行时启动时间和默认配置集中定义，供健康检查、审计响应和本地默认值复用。
 STARTED_AT = datetime.now(UTC)
@@ -212,6 +217,10 @@ DEFAULT_CONFIG: dict[str, str] = {
     # 文件正文使用第四个独立密钥域。dev/test 在 load 阶段注入公开开发值；生产缺失保持
     # None，只让文件 API 503 失败关闭，不能拖垮健康、登录和其他控制面能力。
     "METAHUB_FILE_ENCRYPTION_SECRET": "",
+    "METAHUB_TENANT_DATA_ENCRYPTION_VERSION": "1",
+    "METAHUB_TENANT_DATA_ENCRYPTION_SECRET": "",
+    "METAHUB_TENANT_DATA_SCHEDULER_ENABLED": "true",
+    "METAHUB_TENANT_DATA_POLL_INTERVAL_SECONDS": "2",
     "METAHUB_FILE_STORAGE_ROOT": ".data/file-storage",
     "METAHUB_FILE_MAX_UPLOAD_BYTES": "20971520",
     "METAHUB_FILE_PARSE_CONCURRENCY": "2",
@@ -459,6 +468,11 @@ class AppConfig(BaseModel):
     # 原文件、抽取正文和文件名使用独立根密钥；root 也可能泄露宿主结构，两者均不参与
     # model_dump/repr。数值上限是部署级资源门禁，租户请求不能动态覆盖。
     file_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
+    # PRD-089 的导出制品和留存归档只允许使用独立密钥域；secret 不参与 repr/model_dump。
+    tenant_data_encryption_version: int = 1
+    tenant_data_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
+    tenant_data_scheduler_enabled: bool = True
+    tenant_data_poll_interval_seconds: int = 2
     file_storage_root: str = Field(default=".data/file-storage", exclude=True, repr=False)
     file_max_upload_bytes: int = 20_971_520
     file_parse_concurrency: int = 2
@@ -939,6 +953,13 @@ def load_app_config(service_name: str) -> AppConfig:
     file_encryption_secret = configured_file_encryption_secret or (
         DEFAULT_FILE_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
+    tenant_data_encryption_version = _positive_int(values, "METAHUB_TENANT_DATA_ENCRYPTION_VERSION")
+    configured_tenant_data_encryption_secret = _raw_optional_value(
+        values, "METAHUB_TENANT_DATA_ENCRYPTION_SECRET"
+    )
+    tenant_data_encryption_secret = configured_tenant_data_encryption_secret or (
+        DEFAULT_TENANT_DATA_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
+    )
     response_cache_enabled = _boolean(values, "METAHUB_RESPONSE_CACHE_ENABLED")
     response_cache_hmac_version = _positive_int(values, "METAHUB_RESPONSE_CACHE_HMAC_VERSION")
     response_cache_encryption_version = _positive_int(
@@ -1224,6 +1245,28 @@ def load_app_config(service_name: str) -> AppConfig:
             values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"
         ),
     )
+    _validate_tenant_data_encryption_secret(
+        environment=environment,
+        encryption_secret=tenant_data_encryption_secret,
+        forbidden_secrets=(
+            auth_token_secret,
+            cache_affinity_hmac_secret,
+            internal_config_token,
+            internal_chat_token,
+            internal_batch_token,
+            batch_encryption_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+            session_risk_hmac_secret,
+            session_risk_previous_hmac_secret,
+            response_cache_hmac_secret,
+            response_cache_encryption_secret,
+            response_cache_control_idempotency_secret,
+            response_cache_failure_spool_secret,
+            *provider_api_keys.values(),
+        ),
+    )
     _validate_session_risk_hmac_config(
         enabled=session_risk_enabled,
         current_version=session_risk_hmac_version,
@@ -1428,9 +1471,7 @@ def load_app_config(service_name: str) -> AppConfig:
     local_endpoint_allowed_ports = _bounded_port_list(
         _value(values, "METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS")
     )
-    local_endpoint_allow_loopback = _boolean(
-        values, "METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK"
-    )
+    local_endpoint_allow_loopback = _boolean(values, "METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK")
     if environment == "prod" and local_endpoint_allow_loopback:
         raise ConfigError(
             code="infra.config_invalid",
@@ -1542,6 +1583,15 @@ def load_app_config(service_name: str) -> AppConfig:
         approval_writeback_batch_size=approval_writeback_batch_size,
         prompt_template_encryption_secret=prompt_template_encryption_secret,
         file_encryption_secret=file_encryption_secret,
+        tenant_data_encryption_version=tenant_data_encryption_version,
+        tenant_data_encryption_secret=tenant_data_encryption_secret,
+        tenant_data_scheduler_enabled=_boolean(values, "METAHUB_TENANT_DATA_SCHEDULER_ENABLED"),
+        tenant_data_poll_interval_seconds=_bounded_int(
+            values,
+            "METAHUB_TENANT_DATA_POLL_INTERVAL_SECONDS",
+            minimum=1,
+            maximum=60,
+        ),
         file_storage_root=_validated_file_storage_root(_value(values, "METAHUB_FILE_STORAGE_ROOT")),
         file_max_upload_bytes=_bounded_int(
             values,
@@ -3419,6 +3469,54 @@ def _validate_file_encryption_secret(
             code="infra.config_invalid",
             message="METAHUB_FILE_ENCRYPTION_SECRET must be replaced in prod.",
             suggestion="Configure a dedicated production file encryption secret.",
+        )
+
+
+def _validate_tenant_data_encryption_secret(
+    *,
+    environment: EnvironmentName,
+    encryption_secret: str | None,
+    forbidden_secrets: tuple[str | None, ...],
+) -> None:
+    """校验 PRD-089 导出与留存根密钥，不让功能回退复用任何既有安全域。"""
+
+    # 生产可以在尚未启用租户数据管理时缺省；业务入口会固定返回 unavailable，不能猜测其他密钥。
+    if encryption_secret is None:
+        return
+    try:
+        encoded = encryption_secret.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_TENANT_DATA_ENCRYPTION_SECRET is invalid.",
+            suggestion="Configure an independent high-entropy UTF-8 tenant-data secret.",
+        ) from None
+    if not 32 <= len(encoded) <= 512 or any(
+        character.isspace() or ord(character) < 32 for character in encryption_secret
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_TENANT_DATA_ENCRYPTION_SECRET does not meet security requirements.",
+            suggestion="Use an independent 32-512 byte secret without whitespace or controls.",
+        )
+    if any(
+        type(candidate) is str and hmac.compare_digest(encryption_secret, candidate)
+        for candidate in forbidden_secrets
+    ):
+        # 根密钥物理隔离是部署合同；仅靠 AAD 分域不能抵消同一根密钥泄露的扩大影响。
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Tenant-data encryption secret must use an independent key domain.",
+            suggestion="Configure a dedicated METAHUB_TENANT_DATA_ENCRYPTION_SECRET.",
+        )
+    if environment == "prod" and (
+        hmac.compare_digest(encryption_secret, DEFAULT_TENANT_DATA_ENCRYPTION_SECRET)
+        or encryption_secret.startswith("replace-with-")
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_TENANT_DATA_ENCRYPTION_SECRET must be replaced in prod.",
+            suggestion="Configure a dedicated production tenant-data encryption secret.",
         )
 
 

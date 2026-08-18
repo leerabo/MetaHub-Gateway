@@ -440,6 +440,21 @@ import {
 import { getServiceStatuses } from "../lib/serviceStatus.js";
 import { getSystemHealth } from "../lib/systemHealth.js";
 import { getCurrentTenant, updateCurrentTenant } from "../lib/tenant.js";
+import {
+  createTenantDataIdempotencyKey,
+  createTenantExport,
+  downloadTenantExport,
+  getTenantExport,
+  getTenantDataManagement,
+  isTenantDataAbortError,
+  requestTenantDeletion,
+} from "../lib/tenantDataLifecycle.js";
+import { bindTenantDataLifecycleInteractions } from "../features/tenant-data-lifecycle/bindTenantDataLifecycle.js";
+import { renderTenantDataLifecycle } from "../features/tenant-data-lifecycle/renderTenantDataLifecycle.js";
+import {
+  createTenantDataLifecyclePageState,
+  tenantDataLifecycleOwner,
+} from "../features/tenant-data-lifecycle/tenantDataLifecyclePageState.js";
 import { createUniquePageVisitTracker } from "../lib/consoleVisitTracker.js";
 import {
   createUsageExportRequestId,
@@ -833,6 +848,7 @@ let refreshSequence = 0;
 let loginGeneration = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
 let activeRefreshCount = 0;
+let tenantDataDeletionTrigger = null;
 // 导航偏好、page-view 与目标刷新共同构成一次交互；定时器不得在中间推进 refreshSequence 淘汰用户点击。
 let activeConsoleNavigationCount = 0;
 // 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
@@ -857,6 +873,8 @@ const fileSecurityPageState = createFileSecurityPageState();
 const batchJobPageState = createBatchJobPageState({
   clearResultDom: () => clearBatchResultDom(globalThis.document),
 });
+// PAGE-121 export/deletion status and confirmation are owned by the current tenant session only.
+const tenantDataLifecyclePageState = createTenantDataLifecyclePageState();
 // PAGE-114 的 Endpoint/Token、Schema Dialog、cursor 和异步 owner 只属于当前授权页面内存。
 const mcpToolPageState = createMcpToolPageState({ clearDom: clearMcpToolDom });
 // PAGE-116 的 URL/Token 只存在当前授权 Dialog；列表、创建和测试 ticket 均绑定独立 owner/generation。
@@ -1112,6 +1130,7 @@ if (app && globalThis.window) {
       filePageState.clear();
       fileSecurityPageState.clear();
       batchJobPageState.clear();
+      tenantDataLifecyclePageState.clear();
       mcpToolPageState.clear();
       localEndpointPageState.clear();
       productAnalyticsPageState.clear();
@@ -1548,6 +1567,9 @@ async function performRefresh() {
   if (consoleShellState?.activeNavigationItemId !== "batch-jobs") {
     batchJobPageState.clear();
   }
+  if (consoleShellState?.activeNavigationItemId !== "tenant-data-lifecycle") {
+    tenantDataLifecyclePageState.clear();
+  }
   // PAGE-114 只属于后端确认的 mcp.read owner；Dialog 保留期间后台刷新只重验 auth/navigation。
   if (consoleShellState?.activeNavigationItemId !== "mcp-tools") {
     mcpToolPageState.clear();
@@ -1884,6 +1906,11 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  // PAGE-121 only reads the dedicated aggregate for its backend-confirmed navigation owner.
+  const tenantDataLifecycleState = await loadTenantDataLifecycleState(consoleShellState, refreshId);
+  if (!authSession.token) {
+    return;
+  }
   // PAGE-114 每次只读取活动 tab；Schema 详情必须由显式 Dialog 操作另行加载。
   const mcpToolsState = await loadMcpToolsState(consoleShellState, refreshId);
   if (!authSession.token) {
@@ -2053,6 +2080,7 @@ async function performRefresh() {
     filesState,
     fileSecurityState,
     batchJobsState,
+    tenantDataLifecycleState,
     mcpToolsState,
     localEndpointsState,
     productAnalyticsState,
@@ -2255,6 +2283,7 @@ function renderLogin(error, requestId) {
   filePageState.clear();
   fileSecurityPageState.clear();
   batchJobPageState.clear();
+  tenantDataLifecyclePageState.clear();
   mcpToolPageState.clear();
   localEndpointPageState.clear();
   productAnalyticsPageState.clear();
@@ -4844,6 +4873,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindFilesPageInteractions(consoleShellState);
   bindFileSecurityPageInteractions(consoleShellState);
   bindBatchJobsPageInteractions(consoleShellState);
+  bindTenantDataLifecyclePageInteractions(consoleShellState);
   bindMcpToolsPageInteractions(consoleShellState);
   bindLocalEndpointsPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
@@ -6808,6 +6838,173 @@ function bindBatchJobsPageInteractions(consoleShellState) {
       return submitBatchCancellation(batchJobId, consoleShellState);
     },
   });
+}
+
+function currentTenantDataLifecycleOwner(consoleShellState, mode = "read") {
+  const owner = tenantDataLifecycleOwner(authSession.context, consoleShellState, mode);
+  const hash = readActiveNavigationHash();
+  return owner && (!hash || hash === "tenant-data-lifecycle") ? owner : null;
+}
+
+async function loadTenantDataLifecycleState(consoleShellState, refreshId) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState);
+  if (!tenantDataLifecyclePageState.enter(owner) || !authSession.token) return null;
+  const ticket = tenantDataLifecyclePageState.beginLane("read", owner);
+  if (!ticket) return null;
+  try {
+    const result = await getTenantDataManagement({ controlApiUrl, token: authSession.token, signal: ticket.controller.signal });
+    if (refreshId !== refreshSequence || !tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState), "read")) return null;
+    tenantDataLifecyclePageState.set(result);
+    tenantDataLifecyclePageState.finishLane(ticket);
+    return result;
+  } catch (error) {
+    if (isTenantDataAbortError(error) || !tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState), "read")) return null;
+    if (error instanceof AuthApiError && error.status === 401) {
+      tenantDataLifecyclePageState.finishLane(ticket);
+      tenantDataLifecyclePageState.clear();
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    tenantDataLifecyclePageState.set({ state: { lifecycle_status: "active", revision: 1, cache_generation: 0 }, exports: [], deletion_request: null, error: { code: error?.code ?? "tenant_data.unavailable", requestId: error?.requestId ?? "-" } });
+    tenantDataLifecyclePageState.finishLane(ticket);
+    return tenantDataLifecyclePageState.snapshot();
+  }
+}
+
+function renderCurrentTenantDataLifecyclePanel(consoleShellState) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState);
+  if (!tenantDataLifecyclePageState.enter(owner)) return false;
+  const panel = globalThis.document?.querySelector?.(".tenant-data-lifecycle-panel");
+  if (!panel) return false;
+  const html = renderTenantDataLifecycle(tenantDataLifecyclePageState.snapshot(), authSession.context, consoleShellState, currentI18n);
+  if (!html) { tenantDataLifecyclePageState.clear(); return false; }
+  panel.innerHTML = html;
+  bindTenantDataLifecyclePageInteractions(consoleShellState);
+  return true;
+}
+
+function bindTenantDataLifecyclePageInteractions(consoleShellState) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState);
+  if (!tenantDataLifecyclePageState.enter(owner)) return;
+  bindTenantDataLifecycleInteractions({
+    onRefresh: () => void refresh(),
+    onExport: () => void submitTenantDataExport(consoleShellState),
+    onDownload: (jobId) => void downloadTenantDataExport(consoleShellState, jobId),
+    onDelete: (formData) => formData ? void submitTenantDataDeletion(consoleShellState, String(formData.get("confirmation") ?? "")) : openTenantDataDeletionDialog(),
+    onCancelDelete: closeTenantDataDeletionDialog,
+  });
+}
+
+function openTenantDataDeletionDialog() {
+  const dialog = document.querySelector("[data-tenant-data-dialog]");
+  if (dialog && !dialog.open) {
+    tenantDataDeletionTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.setAttribute("aria-busy", "false");
+    dialog.showModal();
+  }
+  dialog?.querySelector("input[name='confirmation']")?.focus();
+}
+
+function closeTenantDataDeletionDialog() {
+  const dialog = document.querySelector("[data-tenant-data-dialog]");
+  if (dialog?.getAttribute("aria-busy") === "true") return;
+  if (dialog?.open) dialog.close();
+  const input = dialog?.querySelector("input[name='confirmation']");
+  if (input) input.value = "";
+  if (tenantDataDeletionTrigger?.isConnected) tenantDataDeletionTrigger.focus({ preventScroll: true });
+  tenantDataDeletionTrigger = null;
+}
+
+function setTenantDataDeletionBusy(busy) {
+  const dialog = document.querySelector("[data-tenant-data-dialog]");
+  if (!dialog) return;
+  dialog.setAttribute("aria-busy", busy ? "true" : "false");
+  dialog.querySelectorAll("button, input").forEach((control) => { control.disabled = Boolean(busy); });
+  if (!busy) dialog.querySelector("input[name='confirmation']")?.focus({ preventScroll: true });
+}
+
+async function submitTenantDataExport(consoleShellState) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState, "export");
+  if (!authSession.token || !owner) { tenantDataLifecyclePageState.clear(); if (!authSession.token) renderLogin(); return; }
+  tenantDataLifecyclePageState.enter(owner);
+  const ticket = tenantDataLifecyclePageState.beginLane("export", owner);
+  if (!ticket) return;
+  try {
+    const result = await createTenantExport({ controlApiUrl, token: authSession.token, idempotencyKey: createTenantDataIdempotencyKey(), signal: ticket.controller.signal });
+    if (!tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState, "export"), "export")) return;
+    const current = tenantDataLifecyclePageState.snapshot();
+    if (current) tenantDataLifecyclePageState.set({ ...current, exports: [result.export_job, ...(current.exports ?? []).filter((item) => item.tenant_export_job_id !== result.export_job.tenant_export_job_id)] });
+    await refresh();
+    await pollTenantDataExport(consoleShellState, result.export_job.tenant_export_job_id, ticket);
+  } catch (error) {
+    tenantDataLifecyclePageState.finishLane(ticket);
+    if (error instanceof AuthApiError && error.status === 401) { tenantDataLifecyclePageState.clear(); clearAuthSession(); authSession = { token: null, context: null }; renderLogin(authErrorMessage(error), error.requestId); return; }
+    const feedback = document.querySelector("[data-tenant-data-feedback]");
+    if (feedback) feedback.textContent = `导出失败 · code: ${error?.code ?? "tenant_data.unavailable"} · request_id: ${error?.requestId ?? "-"}`;
+  }
+}
+
+async function pollTenantDataExport(consoleShellState, jobId, ticket) {
+  const delays = [500, 1000, 2000, 4000, 8000, 12000];
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, delays[attempt]));
+    if (!tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState, "export"), "export")) return;
+    const result = await getTenantExport({ controlApiUrl, token: authSession.token, jobId, signal: ticket.controller.signal });
+    if (!tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState, "export"), "export")) return;
+    const current = tenantDataLifecyclePageState.snapshot();
+    if (current) tenantDataLifecyclePageState.set({ ...current, exports: [result.export_job, ...(current.exports ?? []).filter((item) => item.tenant_export_job_id !== jobId)] });
+    renderCurrentTenantDataLifecyclePanel(consoleShellState);
+    if (["completed", "failed", "expired"].includes(result.export_job.status)) break;
+  }
+  tenantDataLifecyclePageState.finishLane(ticket);
+}
+
+async function downloadTenantDataExport(consoleShellState, jobId) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState, "download");
+  if (!authSession.token || !owner) return;
+  tenantDataLifecyclePageState.enter(owner);
+  const ticket = tenantDataLifecyclePageState.beginLane("download", owner);
+  if (!ticket) return;
+  try {
+    const result = await downloadTenantExport({ controlApiUrl, token: authSession.token, jobId, signal: ticket.controller.signal });
+    if (!tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState, "download"), "download")) return;
+    const url = URL.createObjectURL(result.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = result.filename; anchor.click();
+    try { await new Promise((resolve) => globalThis.setTimeout(resolve, 0)); } finally { URL.revokeObjectURL(url); }
+    tenantDataLifecyclePageState.finishLane(ticket);
+  } catch (error) {
+    tenantDataLifecyclePageState.finishLane(ticket);
+    const feedback = document.querySelector("[data-tenant-data-feedback]");
+    if (feedback) feedback.textContent = `下载失败 · code: ${error?.code ?? "tenant_data.unavailable"} · request_id: ${error?.requestId ?? "-"}`;
+  }
+}
+
+async function submitTenantDataDeletion(consoleShellState, confirmation) {
+  const owner = currentTenantDataLifecycleOwner(consoleShellState, "delete");
+  const snapshot = tenantDataLifecyclePageState.snapshot();
+  if (!authSession.token || !owner || !snapshot?.state?.revision || !confirmation.trim()) return;
+  tenantDataLifecyclePageState.enter(owner);
+  const ticket = tenantDataLifecyclePageState.beginLane("delete", owner);
+  if (!ticket) return;
+  setTenantDataDeletionBusy(true);
+  try {
+    await requestTenantDeletion({ controlApiUrl, token: authSession.token, idempotencyKey: createTenantDataIdempotencyKey(), confirmation, tenantRevision: Number(snapshot.state.revision), signal: ticket.controller.signal });
+    if (!tenantDataLifecyclePageState.isCurrent(ticket, currentTenantDataLifecycleOwner(consoleShellState, "delete"), "delete")) return;
+    tenantDataLifecyclePageState.finishLane(ticket);
+    tenantDataLifecyclePageState.clear();
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin("注销申请已提交，请等待租户生命周期任务完成");
+  } catch (error) {
+    tenantDataLifecyclePageState.finishLane(ticket);
+    if (error instanceof AuthApiError && error.status === 401) { tenantDataLifecyclePageState.clear(); clearAuthSession(); authSession = { token: null, context: null }; renderLogin(authErrorMessage(error), error.requestId); return; }
+    setTenantDataDeletionBusy(false);
+    const feedback = document.querySelector("[data-tenant-data-feedback]");
+    if (feedback) feedback.textContent = `注销申请失败 · code: ${error?.code ?? "tenant_data.unavailable"} · request_id: ${error?.requestId ?? "-"}`;
+  }
 }
 
 /** Fetch one assistant result and hydrate it only after the exact owner/job/task ticket accepts it. */

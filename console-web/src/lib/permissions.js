@@ -9,6 +9,11 @@ export const PERMISSIONS = Object.freeze({
   CONSOLE_BASIC_READ: "console.basic.read",
   DASHBOARD_READ: "dashboard.read",
   TENANT_SETTINGS_READ: "tenant.settings.read",
+  // PAGE-121 tenant data lifecycle capabilities are intentionally independent.
+  TENANT_DATA_READ: "tenant_data.read",
+  TENANT_DATA_EXPORT: "tenant_data.export",
+  TENANT_DATA_DOWNLOAD: "tenant_data.download",
+  TENANT_DATA_DELETE: "tenant_data.delete",
   USER_MANAGE: "user.manage",
   RBAC_MATRIX_MANAGE: "rbac.matrix.manage",
   ENVIRONMENT_READ: "environment.read",
