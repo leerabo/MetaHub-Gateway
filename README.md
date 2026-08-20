@@ -8,6 +8,15 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 默认上游是模型厂商或云端模型 Endpoint，例如智谱、通义、文心、火山、混元、DeepSeek 官方或云上服务，以及客户本地 OpenAI-compatible Endpoint。
 - MVP 不做硬件盒子、不做 MCP 主链路、不做信创、不做复杂数据出境；这些能力放到 M2/M3 或可选模块。
 
+## SaaS 增量路线图
+
+- PRD-001 至 PRD-089 的已完成事实保持不变。旧总清单中的 PRD-090 至 PRD-108 已废弃并禁止开发，只保留历史审计。
+- 新路线图从 PRD-090 重新开始，当前详细基线至 PRD-138，共 49 条，但 PRD-138 不是永久总数上限；后续需求从末尾继续编号。
+- PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
+  [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
+- 当前下一条未完成项为新 `PRD-090 - SaaS总体架构与兼容迁移基线`，状态为“未启动”。本次只完成路线图，不代表已开始设计或实现。
+- 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
+
 ## 当前状态
 
 当前已完成：
@@ -100,6 +109,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - `PRD-086 - 客户健康评分`
 - `PRD-087 - 渠道伙伴与白标门户`
 - `PRD-088 - 客户/渠道白标配置`
+- `PRD-089 - 租户数据导出与注销流程`
 
 最近进展：
 
@@ -417,8 +427,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   OBJ-122/123、EVT-101/102 与 TC-0177/0178 已和 README、`docs/prd`、`docs/testing` 的 PRD-088 完成状态
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
-  该历史登记已由下方 PRD-089 完成项关闭；PRD-090 仍未启动，总体目标仍为
-  `all_108_prds_complete=false`。
+  该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；当前下一项改为新路线图的
+  `PRD-090 - SaaS总体架构与兼容迁移基线`，尚未启动，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -662,8 +672,10 @@ authenticated session, re-checks live RBAC, rejects unknown body/query fields, r
 `request_id`/`trace_id`, and applies `no-store, private` boundaries. The migration is `0082`;
 fresh SQLite verification is `integrity_check=ok` with zero foreign-key violations. PAGE-121
 is exposed only with `tenant_data.read`. See [PRD-089 design](docs/prd/PRD-089-tenant-data-export-deletion.md)
-and [PRD-089 tests](docs/testing/PRD-089-tests.md). Overall status remains
-`all_108_prds_complete=false`; PRD-090 is not started.
+and [PRD-089 tests](docs/testing/PRD-089-tests.md). The legacy PRD-090..108 plan is retired. The
+new authoritative roadmap starts at `PRD-090 - SaaS总体架构与兼容迁移基线`; it is not started,
+`saas_incremental_roadmap_complete=false`, and the compatibility flag remains
+`all_108_prds_complete=false`.
 
 ## 目录结构
 

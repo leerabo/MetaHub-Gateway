@@ -15,6 +15,7 @@
 | `scripts/` | 已建脚本目录，已新增单机部署 CLI 和 PRD-047 验收程序 | 本地启动、CI、数据库、部署、发布、预检脚本；PRD-028 的 `scripts/deploy/install.ps1`、`start.ps1`、`stop.ps1`、`status.ps1`、`smoke.ps1` 保持不变。PRD-047 Runtime/Browser 程序已通过真实三服务、精确 origin、DOM/URL/storage 隐私、PNG 像素、owner/命名图和 finally cleanup 验收；旧失败制品不作为通过证据。 |
 | `infra/` | 已建迁移、seed、Docker 与 Compose 目录 | Docker、Compose、数据库迁移、种子数据。0034 快照/claim 与 0035 explanation/Dry-Run 合同保持不变；已验收的 PRD-047 0036 新增 RoutingPolicy/Event/Candidate 和 `budget_reservations.outstanding_cost_cny`，扩展 Decision/Audit。它保留历史行与链路字段，但把删除旧 Provider Audit 可逆 `base_url` 明文作为唯一安全例外；down 不恢复该 URL。 |
 | `docs/` | 已建文档目录 | PRD 设计、架构、API、ADR、开发说明、Runbook、安全与测试文档；`docs/development/code-commenting-standard.md` 固定中文注释规范。 |
+| `docs/planning/` | SaaS 增量路线图 | 保存 PRD-090 起的权威规划说明；详细字段、废弃映射和门禁以根目录 `企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx` 为准。 |
 
 PRD-024 后，M0 热路径已接入基础 DLP：控制面管理租户级关键词/正则规则，数据面只扫描 Chat Completions 的 `role=user` 文本，调用日志详情只展示命中摘要哈希。PRD-025 后，控制面已接入 Webhook Endpoint 注册、事件类型订阅、HMAC 测试发送、3 次重试和发送记录；生产治理事件触发点按后续 PRD 复用同一事件信封接入。PRD-026 后，控制台概览页改为当前租户 Dashboard，从真实 `request_logs` 与 `usage_ledger` 聚合今日请求、成功率、P95、成本、Top 模型、Top Virtual Key 和最近错误。PRD-027 后，控制台建立 i18n 基础框架，当前用户可通过 `/user/preferences` 保存 `zh-CN` 或 `en-US`，错误码目录可按 locale 返回展示层 label，但内部 code、日志和事件类型继续保持英文稳定值。PRD-028 后，仓库新增单机 Docker Compose 部署包，默认以 `local-sqlite` profile 启动 Gateway、Control API 和 Console；Redis、PostgreSQL、MinIO 通过 `compose-full` 作为可选基础设施服务预留，应用默认数据库仍为 sqlite。PRD-029 后，Project/Application 成为 Virtual Key、调用日志、用量账本和预算规则的业务归属维度；历史日志和 usage 保存请求发生时的归属快照，不随 Key 后续改绑漂移。PRD-042 后，Webhook 支持最近 100 条详情筛选、failed delivery 幂等重放、Secret 原子轮换、版本快照和脱敏管理审计；持久崩溃恢复与 dead-letter 仍留给 PRD-057。PRD-043 后，admin 可在用量页同步下载或异步生成固定 42 列 CSV；只增账本序列固定异步快照，任务、下载审计和 `usage.exported` 事件按租户追踪，FinanceAdmin、对象存储和分布式任务仍留给后续 PRD。PRD-044 已完成受限 DSL、Policy 管理 API、admin-only 编辑器和全部运行验收。PRD-045 已完成不可变快照发布/单调回滚、Gateway 按租户消费、请求 claim、调用日志版本追踪、运行库迁移、真实 API 与三档浏览器验收。PRD-046 已完成策略预演实现、专项/全量、0035、真实 API、结果未知补偿、隐私扫描和三档浏览器运行验收。PRD-047 已完成设计、自审、实现、安全复审、专项/全量、0036、真实 API/Webhook/Usage、隐私清理和三档浏览器验收。
 
@@ -2140,7 +2141,22 @@ PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all
 PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
 TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数据生命周期边界关闭。当前下一条
-权威未完成项为 PRD-090，仍未启动，`all_108_prds_complete=false`。
+权威未完成项已切换到下方新 SaaS 路线图的 PRD-090，仍未启动，`saas_incremental_roadmap_complete=false`；
+兼容旧口径继续保持 `all_108_prds_complete=false`。
+
+## PRD-090 起 SaaS 增量规划目录
+
+- `企业级AI_Gateway_PRD开发总清单_给CodexClaude.xlsx`：保留 PRD-001..089 完成事实和旧 PRD-090..108
+  历史内容；旧 090..108 已废弃、禁止开发。
+- `企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx`：PRD-090 起的唯一详细计划，当前基线至
+  PRD-138，共 49 条，不设置永久总数上限。
+- `docs/planning/MetaHub-SaaS-PRD-090-onward.md`：保存权威性、产品/云边/权限边界、阶段路线、49 条总表和
+  执行纪律。
+- `scripts/planning/generate_saas_prd_plan.py`：可重复生成并校验工作簿，固定检查连续编号、未启动状态、旧计划
+  废弃映射、10 个 Sheet 和两个未完成状态标记。
+
+当前下一项是新 `PRD-090 - SaaS总体架构与兼容迁移基线`，尚未开始设计或实现。
+`saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## MVP 非目标
 
