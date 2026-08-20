@@ -31,6 +31,14 @@ from .logging import configure_json_logging
 from .request_id import REQUEST_ID_HEADER, TRACE_ID_HEADER, resolve_request_id, resolve_trace_id
 
 logger = logging.getLogger("metahub.runtime")
+_CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE = "metahub_clear_identity_cookies_on_error"
+
+
+def clear_identity_cookies_on_error(request: Request) -> None:
+    """Ensure an authorized logout attempt clears browser credentials on every outcome."""
+
+    setattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, True)
+
 
 # 业务路由仅在已提交安全事实后向这里绑定任务；统一错误处理器据此保留响应后的尽力副作用。
 ERROR_RESPONSE_BACKGROUND_TASKS_STATE = "metahub_error_response_background_tasks"
@@ -42,6 +50,7 @@ def create_service_app(
     *,
     extra_cors_allow_headers: tuple[str, ...] = (),
     extra_cors_expose_headers: tuple[str, ...] = (),
+    cors_allow_credentials: bool = False,
 ) -> FastAPI:
     """创建 PRD-001 服务空壳。
 
@@ -87,10 +96,16 @@ def create_service_app(
         "Content-Disposition",
         *extra_cors_expose_headers,
     )
+    if cors_allow_credentials and "*" in config.allowed_origins:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Credentialed CORS requires an exact origin allowlist.",
+            suggestion="Replace the wildcard with explicit MetaHub console origins.",
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.allowed_origins,
-        allow_credentials=False,
+        allow_credentials=cors_allow_credentials,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             REQUEST_ID_HEADER,
@@ -182,6 +197,8 @@ def create_service_app(
             invitation_token is not None
             # Every MCP route may carry an endpoint, bearer, arguments, result, or Schema.
             # Client-provided correlation IDs are therefore never trusted on this prefix.
+            or request.url.path == "/identity"
+            or request.url.path.startswith("/identity/")
             or request.url.path == "/mcp"
             or request.url.path.startswith("/mcp/")
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
@@ -191,10 +208,7 @@ def create_service_app(
                 request.method == "POST"
                 and request.url.path.rstrip("/") == "/security/classify-intent"
             )
-            or (
-                request.method == "POST"
-                and request.url.path.rstrip("/") == "/webhooks"
-            )
+            or (request.method == "POST" and request.url.path.rstrip("/") == "/webhooks")
             or (
                 request.method == "POST"
                 and request.url.path.startswith("/internal/tenants/")
@@ -332,6 +346,8 @@ def create_service_app(
             or safe_path == "/admin-assistant/query"
             or safe_path == "/billing-disputes"
             or safe_path == "/billing-disputes/{billing_dispute_id}"
+            or safe_path == "/identity"
+            or safe_path.startswith("/identity/")
             or safe_path == "/mcp"
             or safe_path.startswith("/mcp/")
             else logger.exception
@@ -358,6 +374,7 @@ def create_service_app(
             response,
             allowed_origins=config.allowed_origins,
             expose_headers=cors_expose_headers,
+            allow_credentials=cors_allow_credentials,
         )
         return response
 
@@ -484,7 +501,11 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
     """
 
     path = request.url.path
-    if path == "/mcp" or path.startswith("/mcp/"):
+    if path == "/identity" or path.startswith("/identity/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    elif path == "/mcp" or path.startswith("/mcp/"):
         # MCP responses can expose tenant-private governance state and the one authorized,
         # redacted result.  The outer boundary overrides every success and error response.
         response.headers["Cache-Control"] = "no-store, private"
@@ -642,6 +663,7 @@ def _apply_unhandled_cors_headers(
     *,
     allowed_origins: list[str],
     expose_headers: tuple[str, ...],
+    allow_credentials: bool = False,
 ) -> None:
     """为绕过内层 CORS 中间件的未捕获异常补齐浏览器响应头。
 
@@ -667,6 +689,8 @@ def _apply_unhandled_cors_headers(
     else:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers.add_vary_header("Origin")
+    if allow_credentials:
+        response.headers["Access-Control-Allow-Credentials"] = "true"
 
 
 def _request_id(request: Request) -> str:
@@ -736,9 +760,25 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
     # handler 调用攻击者可控对象，或把非任务状态误挂到响应生命周期。
     if not isinstance(background_tasks, BackgroundTasks):
         background_tasks = None
-    return JSONResponse(
+    error_response = JSONResponse(
         status_code=error.http_status,
         content=response.model_dump(),
         headers={REQUEST_ID_HEADER: request_id, TRACE_ID_HEADER: trace_id},
         background=background_tasks,
     )
+    if getattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, False) is True:
+        error_response.delete_cookie(
+            "__Host-metahub-global-session",
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+        error_response.delete_cookie(
+            "__Host-metahub-global-csrf",
+            path="/",
+            secure=True,
+            httponly=False,
+            samesite="strict",
+        )
+    return error_response

@@ -48,7 +48,7 @@ def quota_database_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = root / "template.sqlite3"
     database_url = f"sqlite:///{database.as_posix()}"
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0072"
+    assert result.applied[-1] == "0083"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:

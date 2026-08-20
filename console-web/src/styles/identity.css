@@ -1,0 +1,441 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  --identity-text: #18212b;
+  --identity-muted: #667281;
+  --identity-line: #d9dfe6;
+  --identity-soft: #f5f7f8;
+  --identity-accent: #08786f;
+  --identity-accent-dark: #075f58;
+  --identity-danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #f3f5f6;
+  color: var(--identity-text);
+  letter-spacing: 0;
+}
+
+button,
+input {
+  font: inherit;
+  letter-spacing: 0;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.identity-app {
+  min-height: 100vh;
+}
+
+.identity-login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px 18px;
+}
+
+.identity-login-panel {
+  width: min(420px, 100%);
+  border: 1px solid var(--identity-line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 16px 38px rgba(27, 39, 52, 0.1);
+  padding: 30px;
+}
+
+.identity-brand,
+.identity-wordmark,
+.identity-section-heading,
+.identity-current-session,
+.identity-session-row,
+.identity-summary-list dd {
+  display: flex;
+  align-items: center;
+}
+
+.identity-brand {
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.identity-brand p,
+.identity-brand h1,
+.identity-heading p,
+.identity-heading h1,
+.identity-section-heading p,
+.identity-section-heading h2 {
+  margin: 0;
+}
+
+.identity-brand p,
+.identity-heading p,
+.identity-section-heading p {
+  color: var(--identity-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.identity-brand h1 {
+  margin-top: 3px;
+  font-size: 1.38rem;
+}
+
+.identity-brand-mark {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--identity-accent);
+  color: #fff;
+  font-weight: 800;
+}
+
+.identity-login-form,
+.identity-password-form {
+  display: grid;
+  gap: 16px;
+}
+
+.identity-login-form label,
+.identity-password-form label {
+  display: grid;
+  gap: 7px;
+  color: #3e4955;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.identity-login-form input,
+.identity-password-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 8px 10px;
+}
+
+.identity-login-form input:focus-visible,
+.identity-password-form input:focus-visible,
+.identity-login-form button:focus-visible,
+.identity-password-form button:focus-visible,
+.identity-topbar button:focus-visible,
+.identity-sessions button:focus-visible,
+.identity-wordmark:focus-visible {
+  outline: 3px solid rgba(8, 120, 111, 0.25);
+  outline-offset: 2px;
+}
+
+.identity-primary,
+.identity-quiet-command,
+.identity-danger-command {
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 7px 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.identity-primary {
+  border: 1px solid var(--identity-accent);
+  background: var(--identity-accent);
+  color: #fff;
+}
+
+.identity-primary:hover {
+  border-color: var(--identity-accent-dark);
+  background: var(--identity-accent-dark);
+}
+
+.identity-quiet-command,
+.identity-danger-command {
+  border: 1px solid #bdc7d2;
+  background: #fff;
+  color: var(--identity-text);
+}
+
+.identity-danger-command {
+  color: var(--identity-danger);
+}
+
+.identity-error,
+.identity-feedback {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  border-left: 3px solid #d92d20;
+  background: #fff3f1;
+  color: #8f1d14;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.identity-error small {
+  color: #9b4038;
+}
+
+.identity-feedback {
+  border-color: var(--identity-accent);
+  background: #edf8f6;
+  color: var(--identity-accent-dark);
+}
+
+.identity-security-shell {
+  min-height: 100vh;
+  background: #fff;
+}
+
+.identity-topbar {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--identity-line);
+  padding: 10px max(20px, calc((100vw - 1040px) / 2));
+}
+
+.identity-wordmark {
+  gap: 9px;
+  color: var(--identity-text);
+  text-decoration: none;
+}
+
+.identity-wordmark .identity-brand-mark {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+}
+
+.identity-security-main {
+  width: min(100% - 40px, 1040px);
+  margin: 0 auto;
+  padding: 42px 0 64px;
+}
+
+.identity-heading {
+  margin-bottom: 34px;
+}
+
+.identity-heading h1 {
+  max-width: 100%;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 1.72rem;
+}
+
+.identity-heading span {
+  display: block;
+  margin-top: 7px;
+  color: var(--identity-muted);
+  overflow-wrap: anywhere;
+}
+
+.identity-security-main > section:not(.identity-heading),
+.identity-security-main > .identity-error,
+.identity-security-main > .identity-feedback {
+  margin-top: 26px;
+}
+
+.identity-summary,
+.identity-sessions,
+.identity-password {
+  border-top: 1px solid var(--identity-line);
+  padding-top: 20px;
+}
+
+.identity-section-heading {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.identity-section-heading h2 {
+  margin-top: 4px;
+  font-size: 1.14rem;
+}
+
+.identity-section-heading > span {
+  color: var(--identity-muted);
+  font-size: 0.86rem;
+}
+
+.identity-summary-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-summary-list > div {
+  padding: 16px;
+}
+
+.identity-summary-list > div + div {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-summary-list dt {
+  color: var(--identity-muted);
+  font-size: 0.8rem;
+}
+
+.identity-summary-list dd {
+  gap: 8px;
+  margin: 7px 0 0;
+  font-weight: 700;
+}
+
+.identity-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.identity-status-dot.is-ok {
+  background: #16845b;
+}
+
+.identity-current-session,
+.identity-session-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  min-width: 0;
+  border-block: 1px solid var(--identity-line);
+  padding: 16px 4px;
+}
+
+.identity-current-session {
+  display: grid;
+  background: var(--identity-soft);
+  padding-inline: 14px;
+}
+
+.identity-session-row {
+  display: grid;
+  border-top: 0;
+}
+
+.identity-current-session > div:nth-child(2),
+.identity-session-row > div:nth-child(2) {
+  min-width: 0;
+}
+
+.identity-current-session strong,
+.identity-current-session span,
+.identity-current-session small,
+.identity-session-row strong,
+.identity-session-row span,
+.identity-session-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-current-session span,
+.identity-session-row span {
+  margin-top: 4px;
+  color: #495665;
+  font-size: 0.86rem;
+}
+
+.identity-current-session small,
+.identity-session-row small {
+  margin-top: 3px;
+  color: var(--identity-muted);
+}
+
+.identity-device-mark {
+  width: 28px;
+  height: 22px;
+  border: 2px solid #566575;
+  border-radius: 4px;
+  box-shadow: inset 0 -4px 0 #dfe4e9;
+}
+
+.identity-other-heading {
+  margin-top: 28px;
+}
+
+.identity-empty {
+  margin: 0;
+  border-block: 1px solid var(--identity-line);
+  color: var(--identity-muted);
+  padding: 18px 4px;
+}
+
+.identity-password-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.identity-password-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .identity-login-panel {
+    padding: 24px 20px;
+  }
+
+  .identity-security-main {
+    width: min(100% - 28px, 1040px);
+    padding-top: 30px;
+  }
+
+  .identity-password-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-password-actions {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .identity-topbar {
+    padding-inline: 14px;
+  }
+
+  .identity-summary-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-summary-list > div + div {
+    border-top: 1px solid var(--identity-line);
+    border-left: 0;
+  }
+
+  .identity-current-session,
+  .identity-session-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .identity-current-session button,
+  .identity-session-row button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .identity-password-actions button {
+    width: 100%;
+  }
+}

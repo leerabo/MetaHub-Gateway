@@ -1,0 +1,206 @@
+export function renderIdentityLoginPage(container, options = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-login-title">
+        <header class="identity-brand">
+          <span class="identity-brand-mark" aria-hidden="true">M</span>
+          <div>
+            <p>MetaHub</p>
+            <h1 id="identity-login-title">登录账号</h1>
+          </div>
+        </header>
+        <form class="identity-login-form" data-identity-login-form>
+          <label>
+            <span>邮箱</span>
+            <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="current-password" required />
+          </label>
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit">登录</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+export function renderIdentitySecurityPage(container, state) {
+  if (!container) return;
+  const account = state.account;
+  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const currentIndex = sessions.findIndex((session) => session.is_current);
+  const currentSession = currentIndex >= 0 ? sessions[currentIndex] : state.currentSession;
+  const otherSessions = sessions
+    .map((session, index) => ({ session, index }))
+    .filter(({ session }) => !session.is_current);
+  const displayName = account.display_name || account.email;
+
+  container.innerHTML = `
+    <div class="identity-security-shell">
+      <header class="identity-topbar">
+        <a class="identity-wordmark" href="/identity.html" aria-label="MetaHub 账号安全首页">
+          <span class="identity-brand-mark" aria-hidden="true">M</span>
+          <strong>MetaHub</strong>
+        </a>
+        <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
+      </header>
+      <div class="identity-security-main">
+        <section class="identity-heading" aria-labelledby="identity-security-title">
+          <p>账号安全</p>
+          <h1 id="identity-security-title">${escapeHtml(displayName)}</h1>
+          <span>${escapeHtml(account.email)}</span>
+        </section>
+        ${renderFeedback(state.feedback)}
+        ${renderError(state.error)}
+        <section class="identity-summary" aria-labelledby="identity-summary-title">
+          <div class="identity-section-heading">
+            <div>
+              <p>安全摘要</p>
+              <h2 id="identity-summary-title">账号保护状态</h2>
+            </div>
+          </div>
+          <dl class="identity-summary-list">
+            <div>
+              <dt>账号状态</dt>
+              <dd><span class="identity-status-dot is-ok" aria-hidden="true"></span>${accountStatusLabel(account.status)}</dd>
+            </div>
+            <div>
+              <dt>多重验证</dt>
+              <dd>${account.mfa_configured ? "已启用" : "尚未启用"}</dd>
+            </div>
+          </dl>
+        </section>
+        <section class="identity-sessions" aria-labelledby="identity-current-session-title">
+          <div class="identity-section-heading">
+            <div>
+              <p>登录设备</p>
+              <h2 id="identity-current-session-title">当前设备</h2>
+            </div>
+          </div>
+          ${renderCurrentSession(currentSession, currentIndex)}
+          <div class="identity-section-heading identity-other-heading">
+            <div>
+              <p>其他登录</p>
+              <h2>其他设备</h2>
+            </div>
+            <span>${otherSessions.length > 0 ? `${otherSessions.length} 台` : "无"}</span>
+          </div>
+          <div class="identity-session-list">
+            ${otherSessions.length > 0 ? otherSessions.map(({ session, index }) => renderOtherSession(session, index)).join("") : '<p class="identity-empty">当前没有其他设备登录。</p>'}
+          </div>
+        </section>
+        <section class="identity-password" aria-labelledby="identity-password-title">
+          <div class="identity-section-heading">
+            <div>
+              <p>登录密码</p>
+              <h2 id="identity-password-title">修改密码</h2>
+            </div>
+          </div>
+          <form class="identity-password-form" data-identity-password-form>
+            <label>
+              <span>当前密码</span>
+              <input name="currentPassword" type="password" autocomplete="current-password" required />
+            </label>
+            <label>
+              <span>新密码</span>
+              <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+            </label>
+            <label>
+              <span>确认新密码</span>
+              <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+            </label>
+            <div class="identity-password-actions">
+              <button class="identity-primary" type="submit">更新密码</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+  `;
+}
+
+function renderCurrentSession(session, index) {
+  if (!session) {
+    return '<p class="identity-empty">当前设备信息暂时不可用。</p>';
+  }
+  return `
+    <article class="identity-current-session">
+      <div class="identity-device-mark" aria-hidden="true"></div>
+      <div>
+        <strong>${escapeHtml(deviceLabel(session.device_family))}</strong>
+        <span>本机 · 最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
+        <small>登录于 ${escapeHtml(formatDateTime(session.created_at))}，有效至 ${escapeHtml(formatDateTime(session.expires_at))}</small>
+      </div>
+      <button class="identity-danger-command" type="button" data-identity-action="revoke-session" data-session-index="${index}">退出此设备</button>
+    </article>
+  `;
+}
+
+function renderOtherSession(session, index) {
+  return `
+    <article class="identity-session-row">
+      <div class="identity-device-mark" aria-hidden="true"></div>
+      <div>
+        <strong>${escapeHtml(deviceLabel(session.device_family))}</strong>
+        <span>最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
+        <small>有效至 ${escapeHtml(formatDateTime(session.expires_at))}</small>
+      </div>
+      <button class="identity-danger-command" type="button" data-identity-action="revoke-session" data-session-index="${index}">撤销</button>
+    </article>
+  `;
+}
+
+function renderFeedback(feedback) {
+  return feedback ? `<p class="identity-feedback" role="status">${escapeHtml(feedback)}</p>` : "";
+}
+
+function renderError(error) {
+  if (!error) return "";
+  return `<div class="identity-error" role="alert"><span>${escapeHtml(error.message ?? error)}</span>${error.requestId && error.requestId !== "-" ? `<small>request_id: ${escapeHtml(error.requestId)}</small>` : ""}</div>`;
+}
+
+function accountStatusLabel(status) {
+  return status === "active" ? "正常" : "需要重新登录";
+}
+
+function deviceLabel(value) {
+  const labels = {
+    chrome: "Chrome 浏览器",
+    edge: "Edge 浏览器",
+    firefox: "Firefox 浏览器",
+    safari: "Safari 浏览器",
+    mobile: "移动设备",
+    unknown: "浏览器设备",
+  };
+  const normalized = String(value ?? "unknown").toLowerCase();
+  return labels[normalized] ?? "浏览器设备";
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "未知时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
+}

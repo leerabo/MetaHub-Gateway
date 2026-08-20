@@ -244,6 +244,39 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     if missing:
         report.errors.append("missing fields: " + ", ".join(missing[:20]))
 
+    rows_by_id = {str(row["PRD_ID"]): row for row in rows}
+    prd091 = rows_by_id.get("PRD-091", {})
+    report.check(
+        "WorkspaceMember" not in str(prd091.get("需求范围/功能说明") or "")
+        and "platform_" not in str(prd091.get("关键权限") or "")
+        and "/identity/credentials/password/rotate" in str(prd091.get("API/动作") or "")
+        and "identity.credential_rotated" in str(prd091.get("事件/Webhook") or ""),
+        "PRD-091 remains global-account-only and matches its delivered credential contract",
+    )
+    prd106 = rows_by_id.get("PRD-106", {})
+    report.check(
+        "租户管理员" not in str(prd106.get("主要用户/角色") or "")
+        and "不共用平台工作台、API或授权" in str(prd106.get("需求范围/功能说明") or "")
+        and "/platform/jobs/" in str(prd106.get("API/动作") or ""),
+        "platform scheduler and enterprise batch jobs have separate workbenches and APIs",
+    )
+    prd142 = rows_by_id.get("PRD-142", {})
+    report.check(
+        "独立导航、DTO、写权限和owner" in str(prd142.get("需求范围/功能说明") or ""),
+        "platform branding and private Deployment appearance are explicitly separated",
+    )
+    prd143 = rows_by_id.get("PRD-143", {})
+    report.check(
+        "Workspace" not in str(prd143.get("主要用户/角色") or "")
+        and "企业开发者只在Provider详情" in str(prd143.get("需求范围/功能说明") or ""),
+        "Provider engineering is platform-only while enterprise BYOK gets a separate projection",
+    )
+    prd146_scope = str(rows_by_id.get("PRD-146", {}).get("需求范围/功能说明") or "")
+    report.check(
+        all(label in prd146_scope for label in ("BYOK", "企业内部财务", "文件安全", "异步批处理", "MCP")),
+        "enterprise Gateway scope explicitly retains AI governance, files, batch and MCP",
+    )
+
     seen_unstarted = False
     status_order_ok = True
     for row in rows:
@@ -340,6 +373,29 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         not any(label in tenant_allowed_pages for label in ("渠道", "客户管理", "增长分析")),
         "channel, customer-management and growth pages remain platform-only",
     )
+    report.check(
+        not any(
+            label in tenant_allowed_pages
+            for label in ("平台品牌", "Provider Adapter", "合同CI", "套餐目录", "争议裁决")
+        ),
+        "platform branding, Provider engineering and commercial decision pages remain platform-only",
+    )
+    report.check(
+        all(label in tenant_allowed_pages for label in ("文件", "批处理", "MCP")),
+        "enterprise role pages retain files, asynchronous batch and MCP capabilities",
+    )
+    page_by_role = {str(row.get("角色")): row for row in page_rows}
+    platform_ops_pages = str(page_by_role.get("platform_ops", {}).get("允许导航/页面") or "")
+    platform_ops_actions = str(page_by_role.get("platform_ops", {}).get("关键动作") or "")
+    provider_engineer_pages = str(
+        page_by_role.get("platform_provider_engineer", {}).get("允许导航/页面") or ""
+    )
+    report.check(
+        "Provider工程" not in platform_ops_pages
+        and "合同测试" not in platform_ops_actions
+        and "合同CI" in provider_engineer_pages,
+        "Provider engineering belongs to platform_provider_engineer, not platform_ops",
+    )
 
     navigation_headers, navigation_rows = _rows_by_header(NEW_PLAN, "11_现有导航处置")
     required_navigation_fields = {
@@ -361,10 +417,70 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         "every navigation disposition defines roles, implementation evidence, target PRD and cutover boundary",
     )
     disposition_by_id = {str(row.get("navigation_id")): row for row in navigation_rows}
-    platform_only_ids = {"growth-analytics", "customer-health", "partner-portal", "adapter-contract-runs", "competitor-comparison"}
+    saas_only_ids = {
+        "growth-analytics",
+        "customer-health",
+        "partner-portal",
+        "adapter-specs",
+        "adapter-contract-runs",
+    }
+    split_domain_ids = {
+        "overview",
+        "admin-assistant",
+        "approvals",
+        "branding",
+        "provider-health",
+        "error-maps",
+        "model-prices",
+        "plans",
+        "billing-disputes",
+        "policy-templates",
+        "system-status",
+        "config-summary",
+    }
+    global_shell_ids = {"language-settings"}
+    retired_product_ui_ids = {"competitor-comparison"}
+    enterprise_only_ids = set(source_navigation_ids) - (
+        saas_only_ids | split_domain_ids | global_shell_ids | retired_product_ui_ids
+    )
     report.check(
-        all(str(disposition_by_id[item].get("企业可见角色")) == "无" for item in platform_only_ids),
-        "platform-only and retired product pages have no enterprise role",
+        len(enterprise_only_ids) == 44
+        and len(split_domain_ids) == 12
+        and len(saas_only_ids) == 5
+        and len(global_shell_ids) == 1
+        and len(retired_product_ui_ids) == 1,
+        "navigation ownership closes as 44 enterprise, 12 split, 5 SaaS, 1 global and 1 retired",
+    )
+    report.check(
+        all(
+            str(disposition_by_id[item].get("企业可见角色")) == "无"
+            and str(disposition_by_id[item].get("平台可见角色")) != "无"
+            and str(disposition_by_id[item].get("处置")) == "迁出企业"
+            for item in saas_only_ids
+        ),
+        "all five SaaS-only pages leave the enterprise navigation and retain platform owners",
+    )
+    report.check(
+        all(
+            str(disposition_by_id[item].get("企业可见角色")) != "无"
+            and str(disposition_by_id[item].get("平台可见角色")) != "无"
+            and "拆分" in str(disposition_by_id[item].get("处置"))
+            for item in split_domain_ids
+        ),
+        "all twelve shared capabilities require separate platform and enterprise projections",
+    )
+    report.check(
+        all(
+            str(disposition_by_id[item].get("处置")).startswith("企业保留")
+            and str(disposition_by_id[item].get("企业可见角色")) != "无"
+            for item in enterprise_only_ids
+        ),
+        "all forty-four enterprise Gateway pages remain enterprise-owned",
+    )
+    report.check(
+        disposition_by_id["language-settings"].get("处置") == "迁到全局账号壳层"
+        and disposition_by_id["competitor-comparison"].get("处置") == "迁出产品控制台",
+        "global preference and retired comparison content are not misclassified as SaaS operations",
     )
     report.check(
         all(
@@ -438,7 +554,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         for path in (ROOT / "infra/migrations").glob("*.sql")
         if ".down." not in path.name and (match := re.match(r"(\d{4})_", path.name))
     )
-    report.check(bool(migration_versions) and migration_versions[-1] == 82, "PRD-090 creates no migration after 0082")
+    report.check(
+        bool(migration_versions)
+        and migration_versions[-1] == 83
+        and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
+        and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
+        "PRD-091 owns migration 0083 after the PRD-090 no-migration baseline",
+    )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)
     for name, pattern in SECRET_PATTERNS.items():

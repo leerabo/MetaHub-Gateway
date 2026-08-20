@@ -1,5 +1,9 @@
 import pytest
-from metahub_shared.runtime.config import ConfigError, load_app_config
+from metahub_shared.runtime.config import (
+    DEFAULT_IDENTITY_SESSION_SECRET,
+    ConfigError,
+    load_app_config,
+)
 
 
 def test_load_app_config_defaults_to_dev(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,12 +111,40 @@ def _enable_policy_snapshot_sync(monkeypatch: pytest.MonkeyPatch) -> None:
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "unit-test-cache-affinity-hmac-secret-0123456789abcdef",
     )
+    monkeypatch.setenv(
+        "METAHUB_IDENTITY_SESSION_SECRET",
+        "unit-test-independent-identity-session-secret-0123456789abcdef",
+    )
     monkeypatch.setenv("METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED", "true")
     monkeypatch.setenv(
         "METAHUB_INTERNAL_CONFIG_TOKEN",
         "unit-test-policy-snapshot-token-0123456789abcdef",
     )
     monkeypatch.setenv("METAHUB_CONTROL_API_BASE_URL", "http://127.0.0.1:8001")
+
+
+@pytest.mark.parametrize(
+    "identity_secret",
+    (
+        "too-short",
+        DEFAULT_IDENTITY_SESSION_SECRET,
+        "unit-test-cache-affinity-hmac-secret-0123456789abcdef",
+    ),
+)
+def test_prod_identity_session_secret_must_be_independent(
+    monkeypatch: pytest.MonkeyPatch,
+    identity_secret: str,
+) -> None:
+    _enable_policy_snapshot_sync(monkeypatch)
+    monkeypatch.setenv("METAHUB_ENV", "prod")
+    monkeypatch.setenv("METAHUB_CONTROL_API_BASE_URL", "https://control.internal.example")
+    monkeypatch.setenv("METAHUB_IDENTITY_SESSION_SECRET", identity_secret)
+
+    with pytest.raises(ConfigError) as exc:
+        load_app_config("gateway-data-plane")
+
+    assert exc.value.code == "infra.config_invalid"
+    assert "METAHUB_IDENTITY_SESSION_SECRET" in exc.value.message
 
 
 def test_policy_snapshot_config_has_safe_bounded_defaults(
@@ -230,6 +262,10 @@ def test_policy_snapshot_sync_cannot_be_disabled_for_protected_gateway_modes(
 
     monkeypatch.setenv("METAHUB_ENV", environment)
     monkeypatch.setenv("METAHUB_SERVICE_MODE", service_mode)
+    monkeypatch.setenv(
+        "METAHUB_IDENTITY_SESSION_SECRET",
+        "unit-test-independent-identity-session-secret-0123456789abcdef",
+    )
     monkeypatch.setenv("METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED", "false")
 
     with pytest.raises(ConfigError) as exc:

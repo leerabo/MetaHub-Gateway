@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 已完成；当前下一条未完成项是 `PRD-091 - 全局用户账号与认证凭据`。
+- 新 `PRD-090` 与 `PRD-091 - 全局用户账号与认证凭据` 已完成；当前下一条未完成项是 `PRD-092 - 个人与企业用户自助注册验证`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -421,15 +421,15 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   [会话风险 API](docs/api/session-risks.md) 和
   [PRD-070 测试记录](docs/testing/PRD-070-tests.md)。
 
-当前下一项：
+历史交接定位（已关闭）：
 
 - Excel 的 `01_PRD总表` 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、
   OBJ-122/123、EVT-101/102 与 TC-0177/0178 已和 README、`docs/prd`、`docs/testing` 的 PRD-088 完成状态
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
   该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；新路线图的
-  `PRD-090 - SaaS总体架构与兼容迁移基线` 已完成，当前下一项为 `PRD-091 - 全局用户账号与认证凭据`，
-  `saas_incremental_roadmap_complete=false`。
+  `PRD-090 - SaaS总体架构与兼容迁移基线` 和 `PRD-091 - 全局用户账号与认证凭据` 已完成；当前
+  权威未完成项为 `PRD-092 - 个人与企业用户自助注册验证`，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -674,8 +674,8 @@ authenticated session, re-checks live RBAC, rejects unknown body/query fields, r
 fresh SQLite verification is `integrity_check=ok` with zero foreign-key violations. PAGE-121
 is exposed only with `tenant_data.read`. See [PRD-089 design](docs/prd/PRD-089-tenant-data-export-deletion.md)
 and [PRD-089 tests](docs/testing/PRD-089-tests.md). The legacy PRD-090..108 plan is retired. The
-new authoritative roadmap starts at `PRD-090 - SaaS总体架构与兼容迁移基线`; PRD-090 is complete
-and the next unfinished item is `PRD-091 - 全局用户账号与认证凭据`.
+new authoritative roadmap starts at `PRD-090 - SaaS总体架构与兼容迁移基线`; PRD-090 and
+PRD-091 are complete, and the next unfinished item is `PRD-092 - 个人与企业用户自助注册验证`.
 `saas_incremental_roadmap_complete=false`, and the compatibility flag remains
 `all_108_prds_complete=false`.
 
@@ -705,6 +705,19 @@ decisions and platform SRE join channel/customer/growth in the SaaS operator dom
 Gateway keeps role-scoped BYOK, models/routing, projects/keys, quotas/budgets, usage/internal finance,
 members, security, logs/audit, developer tools and private deployments. PRD-138 is a release
 candidate gate; public SaaS GA is PRD-148 after PRD-139..147 complete the domain migration.
+
+### PRD-091 全局用户账号与认证凭据（已完成）
+
+PRD-091 adds tenant-free `GlobalAccount`, Argon2id password credentials, opaque Secure/HttpOnly
+browser sessions, CSRF-bound device management and atomic identity events/outbox. New
+`/identity/*` routes never grant Workspace or platform permissions and reject legacy Bearer
+credentials; existing `/auth/*` routes continue to authorize the enterprise Console independently.
+Migration 0083 backfills one account per legacy user without merging equal emails across tenants,
+isolates ambiguous identities and preserves password hashes. The standalone account-security page
+is `/identity.html`; public registration remains out of scope until PRD-092. See
+[PRD-091 design](docs/prd/PRD-091-global-account-and-credentials.md),
+[Global Identity API](docs/api/global-identity.md) and
+[PRD-091 tests](docs/testing/PRD-091-tests.md).
 
 ## 目录结构
 

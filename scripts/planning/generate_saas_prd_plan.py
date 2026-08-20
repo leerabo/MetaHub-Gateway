@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-20"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 90
+COMPLETED_THROUGH_PRD = 91
 
 
 def prd(
@@ -102,15 +102,15 @@ INITIAL_DRAFT_PRDS = [
         "平台身份层",
         "全局账号",
         "全局用户账号与认证凭据",
-        "个人用户/企业成员/平台员工",
+        "账号本人",
         "作为用户，我希望一个账号可以拥有个人空间并加入多个企业，而不是账号被固定在单一租户。",
-        "将登录主体从tenant-bound User拆分为GlobalAccount与WorkspaceMember；支持密码哈希、邮箱/手机号规范化、账号状态、MFA预留、凭据轮换、全局Session主体；保留现有租户用户兼容投影。",
+        "将登录主体从tenant-bound User拆分为GlobalAccount；支持密码哈希、邮箱/手机号规范化、账号状态、MFA预留、凭据轮换、全局Session主体；保留现有租户用户兼容投影。Workspace与Membership由PRD-093/094承接。",
         "不在本条实现公开注册、SSO或SCIM；不允许全局账号直接访问任意Workspace业务数据。",
         "账号安全设置、会话与设备列表",
-        ("POST /identity/login", "GET /identity/me", "POST /identity/logout", "GET /identity/sessions", "DELETE /identity/sessions/{session_id}"),
+        ("POST /identity/login", "GET /identity/me", "POST /identity/logout", "GET /identity/sessions", "DELETE /identity/sessions/{session_id}", "POST /identity/credentials/password/rotate"),
         ("GlobalAccount", "AccountCredential", "GlobalSession", "AccountIdentityLink"),
-        ("identity.login_succeeded", "identity.login_failed", "identity.session_revoked"),
-        "账号本人；platform_security只读脱敏状态；Workspace权限必须在后续成员上下文中恢复",
+        ("identity.login_succeeded", "identity.login_failed", "identity.session_revoked", "identity.credential_rotated"),
+        "仅账号本人；GlobalSession不授予平台或Workspace权限，后续必须从独立Platform/Workspace上下文恢复授权",
         "同一邮箱账号可关联多个Workspace；登录Token不包含可伪造tenant选择；现有admin账号可无损映射；失败、锁定和撤销均返回统一错误与request_id。",
         "PRD-090",
         "新增全局表并双写兼容映射；先回填再切读；迁移前后账号数/哈希不变；回滚继续使用旧登录且不丢Session撤销事实。",
@@ -665,14 +665,14 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "PRD-091..104、现有Webhook outbox", "站内信查询p95<300ms；排队到投递启动p95<10s", "5-6人周",
     ),
     planned(
-        106, "S3-生产云底座", "P0", "平台运行层", "分布式任务", "分布式任务队列、Scheduler与Worker生产运行时",
-        "平台SRE/后端开发/租户管理员",
-        "将现有批处理模式沉淀为平台级持久任务运行时：队列、优先级、租户公平、lease/generation、checkpoint、幂等效果、重试/取消/死信、背压、停服恢复和任务类型注册。",
-        "GET /platform/job-queues；GET /jobs/{id}；POST /jobs/{id}/retry；POST /jobs/{id}/cancel；POST /platform/job-types",
+        106, "S3-生产云底座", "P0", "平台运行层", "分布式任务", "平台分布式任务队列、Scheduler与Worker生产运行时",
+        "platform_ops/平台SRE/后端开发",
+        "将平台后台任务沉淀为持久运行时：队列、优先级、租户公平、lease/generation、checkpoint、幂等效果、重试/取消/死信、背压、停服恢复和任务类型注册。企业异步批处理继续使用tenant-owned任务事实和企业任务页，只复用受审的运行时协议，不共用平台工作台、API或授权。",
+        "GET /platform/job-queues；GET /platform/jobs/{id}；POST /platform/jobs/{id}/retry；POST /platform/jobs/{id}/cancel；POST /platform/job-types",
         "PlatformJob；JobAttempt；WorkQueue；SchedulerLease；JobCheckpoint；DeadLetterJob",
         "platform_job.started；platform_job.failed；platform_job.completed；platform_job.dead_lettered",
-        "platform_ops管理队列和任务类型；租户只能查看/取消本空间允许的任务；Worker从持久owner恢复tenant，不接受消息体伪造。",
-        "至少一次领取但业务效果恰好一次；租户公平无饥饿；进程崩溃可接管；取消不留下半终态；所有失败和恢复有request_id/attempt。",
+        "platform_ops管理平台队列和任务类型；任何Workspace角色均拒绝/platform/job-*；企业批处理由Workspace API逐请求鉴权；Worker从持久owner恢复执行域，不接受消息体伪造。",
+        "平台任务至少一次领取但业务效果恰好一次；租户公平无饥饿；进程崩溃可接管；取消不留下半终态；企业任务与平台队列无跨域枚举；所有失败和恢复有request_id/attempt。",
         "PRD-057/074/099/100/105", "入队p95<100ms；空闲队列启动p95<10s；崩溃任务接管<60s", "8-10人周",
     ),
     planned(
@@ -1062,8 +1062,8 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
     ),
     planned(
         142, "S7-平台运营分域", "P1", "品牌与域名层", "品牌边界", "平台品牌、渠道白标与私有Gateway外观分域",
-        "platform_owner/platform_channel/release_manager/Workspace owner",
-        "拆分现有tenant-scoped branding：SaaS主登录页和平台品牌仅由平台管理；渠道白标归platform_channel且绑定伙伴/合同/域名验证；企业Workspace不再改写SaaS登录页；云管私有Gateway可由Workspace owner在Deployment范围配置本地外观。复用branding_configs/events/outbox并保留tenant_id审计。",
+        "platform_owner/platform_channel/release_manager；Workspace owner仅管理本地Deployment外观",
+        "拆分现有tenant-scoped branding：SaaS主登录页和平台品牌仅由平台管理；渠道白标归platform_channel且绑定伙伴/合同/域名验证；企业Workspace不再改写SaaS登录页；云管私有Gateway可由Workspace owner在Deployment范围配置本地外观。本地Deployment外观与平台品牌/渠道白标使用独立导航、DTO、写权限和owner；只迁移复用branding_configs/events/outbox历史事实并保留tenant_id审计。",
         "GET/PATCH /platform/branding；GET/PATCH /platform/channel-partners/{id}/branding；GET/PATCH /deployments/{id}/branding；GET /branding/public",
         "PlatformBrand；ChannelBrand；DeploymentBrand；VerifiedDomain；BrandAsset；BrandMigrationCursor",
         "platform_brand.changed；channel_brand.changed；deployment_brand.changed；brand_domain.verified",
@@ -1073,7 +1073,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
     ),
     planned(
         143, "S7-平台运营分域", "P1", "Provider工程层", "Provider工程台", "Provider Adapter目录、合同测试与错误规则分域",
-        "platform_provider_engineer/platform_security/release_manager/Workspace developer",
+        "platform_provider_engineer/platform_security/release_manager",
         "把adapter-specs、adapter-contract-runs和内置error-map维护迁到平台Provider工程台；官方Adapter目录、合同CI、内置错误规则和发布证明由平台管理。企业开发者只在Provider详情查看兼容版本、健康摘要和自身Endpoint的受限错误覆盖，不展示CI内部case、Runner、构建路径或竞品运营信息。",
         "GET /platform/provider-adapters；GET /platform/provider-adapters/{id}/contract-runs；POST /platform/provider-error-catalogs/releases；GET/PATCH /workspace/provider-error-overrides",
         "ProviderAdapterRelease；AdapterContractRunProjection；BuiltinErrorCatalog；WorkspaceErrorOverride；ProviderCompatibilityProjection",
@@ -1107,7 +1107,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
     planned(
         146, "S7-平台运营分域", "P1", "信息架构层", "企业工作区重组", "企业Gateway角色导航、任务首页与高级入口重组",
         "Workspace owner/admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer",
-        "以现有63项导航处置矩阵重组企业Gateway：默认折叠并保持单组展开；首页按角色显示下一步任务；保留BYOK、Provider/模型/路由、Key、项目、额度预算、用量成本、企业财务、员工权限、安全策略、日志审计、开发工具和私有部署；competitor-comparison移出产品UI；debug、intent测试、Webhook死信、环境诊断等仅高级角色按需进入。",
+        "以现有63项导航处置矩阵重组企业Gateway：默认折叠并保持单组展开；首页按角色显示下一步任务；保留BYOK、Provider/模型/路由/评测、Project/Application、Virtual Key、额度预算、用量成本、企业内部财务、员工权限、安全策略、日志审计、Prompt、文件与文件安全、企业异步批处理、MCP、数据生命周期和私有部署；competitor-comparison移出产品UI；debug、intent测试、Webhook死信、环境诊断等仅高级角色按需进入。",
         "GET /workspace/navigation；GET /workspace/getting-started；PATCH /identity/preferences/navigation；GET /workspace/advanced-tools",
         "WorkspaceNavigationProjection；RoleTaskHome；NavigationPreference；AdvancedToolEntitlement；NavigationContractSnapshot",
         "workspace_navigation.changed；role_task.completed；advanced_tool.opened",
@@ -1209,7 +1209,7 @@ PERMISSION_ROWS = (
 
 ROLE_PAGE_ROWS = (
     ("platform_owner", "平台", "平台总览；平台人员与角色；租户目录；品牌；套餐账务；SRE；安全合规；发布；渠道；客户成功；增长", "平台授权、全局配置和最终审批", "无SupportGrant不得读取客户业务内容", "显式bootstrap后由platform_owner按委派上限管理"),
-    ("platform_ops", "平台", "平台总览；租户运行摘要；基础设施；Gateway Fleet；Provider工程；事故与容量", "运行、合同测试、冻结/恢复和受控发布操作", "客户业务正文；平台IAM授权；财务调整", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_ops", "平台", "平台总览；租户运行摘要；基础设施；Gateway Fleet；Provider与Cell运行健康；事故与容量", "运行健康、冻结/恢复、容量和事故处置", "Provider Adapter/合同CI维护；最终制品发布；客户业务正文；平台IAM授权；财务调整", "platform_owner或具备平台IAM委派权限者"),
     ("platform_security", "平台", "安全中心；风险；支持审批；隔离验证；安全审计", "风险冻结、审批和安全处置", "账务调整；默认客户正文", "platform_owner或具备平台IAM委派权限者"),
     ("platform_billing", "平台", "套餐目录；订阅；支付；退款；发票；争议裁决；对账；渠道结算摘要", "财务审核、调整、争议裁决和对账", "Provider Key/Prompt/Response；平台IAM；企业内部成本价", "platform_owner或具备平台IAM委派权限者"),
     ("platform_support", "平台", "工单；客户脱敏目录；本人SupportGrant；受控诊断", "工单处理；授权后的字段白名单诊断", "永久模拟租户；Key/Token/Prompt/Response", "platform_owner或具备平台IAM委派权限者"),
@@ -1221,10 +1221,10 @@ ROLE_PAGE_ROWS = (
     ("platform_channel", "平台", "渠道伙伴；代理商成员；商机报备；客户归属；佣金结算摘要", "渠道目录、商机和归属申请", "租户控制面；客户业务内容；财务最终调整", "platform_owner或具备平台IAM委派权限者"),
     ("platform_customer_success", "平台", "客户运营目录；健康；成功计划；续费协同；QBR摘要", "客户成功计划、跟进和脱敏运营记录", "租户控制面；客户业务正文；平台IAM", "platform_owner或具备平台IAM委派权限者"),
     ("platform_growth", "平台", "增长总览；漏斗；同期群；活动；实验；转化归因", "活动/实验和聚合分析", "租户控制面；客户业务正文；个体营销画像", "platform_owner或具备平台IAM委派权限者"),
-    ("owner", "租户", "Workspace任务首页；成员与角色；BYOK/Provider；模型与路由；项目/Key；额度预算；企业财务；安全；日志审计；私有部署", "本空间最高权限、Owner转移和职能授权", "平台控制面；其他Workspace；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析", "Workspace创建或经二次验证的Owner转移"),
-    ("admin", "租户", "Workspace任务首页；成员；BYOK/Provider/模型/路由/Key；额度预算；策略；用量；部署；常规审计", "邀请/停用成员并分配非Owner职能角色；日常治理", "授予owner；平台控制面；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析；越过自身权限", "owner或具备成员管理权限的admin"),
-    ("developer", "租户", "开发者快速开始；Provider/模型只读；Virtual Key；调试；调用日志；技术用量", "按授权管理技术接入资源", "成员、合同、付款、法律保全、平台页", "owner/admin在自身委派上限内"),
-    ("security_admin", "租户", "安全中心；策略/DLP；Session；审计；Edge遥测策略", "安全策略、会话撤权和风险处置", "付款调整；平台页；默认Provider Secret", "owner/admin在自身委派上限内"),
+    ("owner", "租户", "Workspace任务首页；成员与角色；BYOK/Provider；模型/路由/评测；项目/Key；额度预算；企业财务；安全；日志审计；Prompt/文件/批处理/MCP；数据生命周期；私有部署", "本空间最高权限、Owner转移和职能授权", "平台控制面；其他Workspace；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析", "Workspace创建或经二次验证的Owner转移"),
+    ("admin", "租户", "Workspace任务首页；成员；BYOK/Provider/模型/路由/Key；额度预算；策略；用量；Prompt/文件/批处理/MCP；数据生命周期；部署；常规审计", "邀请/停用成员并分配非Owner职能角色；日常治理", "授予owner；平台控制面；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析；越过自身权限", "owner或具备成员管理权限的admin"),
+    ("developer", "租户", "开发者快速开始；Provider/模型只读；Virtual Key；Prompt；文件；企业异步批处理；MCP；调试；调用日志；技术用量", "按授权管理技术接入资源", "成员、合同、付款、法律保全、平台页", "owner/admin在自身委派上限内"),
+    ("security_admin", "租户", "安全中心；策略/DLP；Session；文件安全；MCP网络策略；审计；Edge遥测策略", "安全策略、会话撤权和风险处置", "付款调整；平台页；默认Provider Secret", "owner/admin在自身委派上限内"),
     ("finance_admin", "租户", "用量成本；BYOK成本价；额度预算；内部FinOps；订阅摘要；账单；争议申请；发票；对账", "本Workspace财务资料、预算和争议申请", "Provider Secret；平台套餐目录写入；争议裁决；成员授权；平台页", "owner/admin在自身委派上限内"),
     ("legal_admin", "租户", "合同主体；隐私；驻留；保留；法律保全；合规审计", "合同、隐私和保全操作", "Provider/Key；成员授权；平台页", "owner/admin在自身委派上限内"),
     ("auditor", "租户", "只读审计；安全摘要；账单摘要；部署摘要；合规证据", "导出授权范围内的审计证据", "任何写操作；Secret/正文；平台页", "owner/admin在自身委派上限内"),
@@ -1283,7 +1283,7 @@ NAVIGATION_DISPOSITION_ROWS = (
     ("配置", "environments", "环境设置", "企业保留并归组", "Gateway环境与发布边界", "owner/admin/developer；auditor只读", "platform_ops仅看运行摘要", "现有environment.read及dev/test/prod owner关系", "PRD-101/108/146", "环境、Key、路由、预算均绑定本Workspace；普通viewer不见写入口"),
     ("配置", "providers", "Provider 与 KeyPool", "企业保留", "BYOK与上游接入", "owner/admin/developer按权限", "platform_support默认无；仅目录角色看非Secret元数据", "现有provider.read及Provider/KeyPool；Secret继续独立托管", "PRD-100/119/123/146", "Key不进入日志、平台支持或验收证据；默认官方上游边界不变"),
     ("配置", "local-models", "本地模型", "企业保留并归组", "本地OpenAI-compatible Endpoint", "owner/admin/developer按权限", "platform_ops只看脱敏Deployment健康", "现有local_endpoint.read、local_endpoints模块", "PRD-119/120/123/146", "Endpoint和本地Secret属于Workspace/Deployment；平台不得任意读取"),
-    ("配置", "adapter-specs", "Adapter 规范", "迁出普通企业UI", "平台Provider工程台；企业Provider详情仅兼容摘要", "developer只读兼容摘要", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-specs；POST /internal/adapter-specs/{tenant_id}/activate；provider_adapter_catalog_activations", "PRD-143/147", "企业无独立规范导航，不暴露内部schema、构建信息或发布权限"),
+    ("配置", "adapter-specs", "Adapter 规范", "迁出企业", "平台Provider工程台；企业Provider详情另建兼容摘要", "无", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-specs；POST /internal/adapter-specs/{tenant_id}/activate；provider_adapter_catalog_activations", "PRD-143/147", "企业旧规范导航、DOM、预取和API归零；兼容摘要由Provider详情独立鉴权，不暴露内部schema、构建信息或发布权限"),
     ("配置", "adapter-contract-runs", "CI 测试报告", "迁出企业", "平台Provider工程台", "无", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-contract-runs及/{id}；POST /internal/tenants/{tenant_id}/adapter-contract-runs；runs/cases/outbox", "PRD-143/147", "Runner、case详情和构建路径不进入企业DTO；企业兼容结论改在Provider详情提供；旧run/outbox水位保真"),
     ("配置", "provider-health", "Provider 状态", "平台/企业拆分", "本企业Provider健康；平台全局Provider/Cell健康", "owner/admin/developer/security_admin/viewer按授权", "platform_ops/platform_security/platform_support只读脱敏", "GET /provider-health、POST /providers/{id}/probe；真实调用与探测事实", "PRD-109/112/119/143/145", "企业只见自身Endpoint/调用；平台聚合不得泄漏业务正文或Secret"),
     ("配置", "error-maps", "错误码管理", "平台/企业拆分并降级", "平台内置目录；企业受限覆盖", "owner/admin/developer高级入口", "platform_provider_engineer/platform_security/release_manager", "GET/POST/PATCH /error-maps；builtin catalog、maps、versions、heads、events、facts", "PRD-143/147", "企业不能改内置规则；覆盖只作用本Workspace且每个失败请求可解释追踪"),
@@ -1376,12 +1376,13 @@ def add_readme_sheet(wb: Workbook) -> None:
         ("计划日期", PLAN_DATE),
         ("权威状态", "本工作簿是PRD-090起唯一开发依据；旧总清单PRD-090..108全部废弃、禁止开发，仅保留历史审计。"),
         ("编号策略", f"保留PRD-001..089完成事实；从PRD-090重新规划，不设需求总数或最终编号上限；当前已细化{len(PRDS)}条、至PRD-{CURRENT_PLANNED_LAST_PRD:03d}，后续按连续编号追加并记录变更。"),
-        ("总体状态", f"saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090已完成，下一项{NEXT_PLANNED_PRD}。"),
+        ("总体状态", f"saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090..091已完成，下一项{NEXT_PLANNED_PRD}。"),
         ("产品目标", "云端SaaS支持个人和企业自助注册；平台团队统一运营；企业可部署本地Gateway并由SaaS云管。"),
         ("标准模式", "个人SaaS、企业SaaS、云管私有Gateway；完全离线仅支持签名包异步管理，不承诺云端实时管理。"),
         ("身份原则", "全局账号不绑定单租户；Workspace承载个人/企业；Membership恢复租户角色；登录不填写租户标识。"),
         ("权限原则", "平台角色与租户角色完全分域；平台支持默认看不到Provider Key、Token、Prompt、Response或客户正文。"),
         ("页面原则", "平台员工由平台IAM分配角色；企业owner/admin添加职能用户；导航由后端按角色/权限计算，直达URL和API仍逐请求鉴权；渠道、客户、增长、平台品牌、Provider工程、套餐目录、商业账务裁决和平台SRE不进入企业Workspace。"),
+        ("现有导航归属", "源码63项：44项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI；不得只隐藏菜单，DOM、预取、API和数据owner必须同步切换。"),
         ("数据原则", "所有业务数据继续携带tenant_id/workspace_id；后端授权权威；统一错误码和request_id；用量、成本和失败可追踪。"),
         ("云边原则", "本地Gateway仅出站mTLS；云端下发签名期望状态；本地使用LKG；Provider Key默认只保存在本地。"),
         ("默认上游", "智谱、通义、月之暗面、文心、火山、混元、DeepSeek官方/云服务及客户本地OpenAI-compatible Endpoint。"),

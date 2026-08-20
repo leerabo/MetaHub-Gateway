@@ -1,0 +1,544 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
+import {
+  renderIdentityLoginPage,
+  renderIdentitySecurityPage,
+} from "../../src/features/identity/renderIdentityPage.js";
+import {
+  IdentityApiError,
+  getIdentityMe,
+  listIdentitySessions,
+  loginIdentity,
+  logoutIdentity,
+  revokeIdentitySession,
+  rotateIdentityPassword,
+} from "../../src/lib/identity.js";
+
+const CONTROL_URL = "http://control.local";
+const SESSION_ONE = "gis_11111111111111111111111111111111";
+const SESSION_TWO = "gis_22222222222222222222222222222222";
+
+test("identity login sends only email and password with credential cookies", async () => {
+  const calls = installFetch(() => accountSessionResponse());
+
+  await loginIdentity({
+    controlApiUrl: CONTROL_URL,
+    email: "owner@example.com",
+    password: "PasswordMustRemainPrivate",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://control.local/identity/login");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    email: "owner@example.com",
+    password: "PasswordMustRemainPrivate",
+  });
+  assert.equal("Authorization" in calls[0].options.headers, false);
+  assert.equal("X-Request-ID" in calls[0].options.headers, false);
+  assert.equal("X-CSRF-Token" in calls[0].options.headers, false);
+  assert.doesNotMatch(calls[0].options.body, /tenant|workspace|role|permission/u);
+});
+
+test("identity reads include credentials and never send CSRF or Authorization", async () => {
+  const calls = installFetch((url) =>
+    String(url).endsWith("/sessions") ? sessionListResponse() : accountSessionResponse(),
+  );
+
+  await getIdentityMe({ controlApiUrl: CONTROL_URL });
+  await listIdentitySessions({ controlApiUrl: CONTROL_URL });
+
+  assert.deepEqual(
+    calls.map((call) => [call.url, call.options.method, call.options.credentials]),
+    [
+      ["http://control.local/identity/me", "GET", "include"],
+      ["http://control.local/identity/sessions", "GET", "include"],
+    ],
+  );
+  for (const call of calls) {
+    assert.equal("Authorization" in call.options.headers, false);
+    assert.equal("X-CSRF-Token" in call.options.headers, false);
+  }
+});
+
+test("protected writes use the unique CSRF cookie and encode session paths", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "theme=light; __Host-metahub-global-csrf=csrf%2Dvalue" };
+  const calls = installFetch((url) => {
+    if (String(url).endsWith("/logout")) return jsonResponse(logoutPayload());
+    if (String(url).endsWith("/rotate")) return jsonResponse(rotationPayload());
+    return jsonResponse(revokePayload());
+  });
+  try {
+    await logoutIdentity({ controlApiUrl: CONTROL_URL });
+    await revokeIdentitySession({ controlApiUrl: CONTROL_URL, sessionId: "session/with space" });
+    await rotateIdentityPassword({
+      controlApiUrl: CONTROL_URL,
+      currentPassword: "CurrentPassword",
+      newPassword: "ReplacementPassword",
+    });
+  } finally {
+    globalThis.document = originalDocument;
+  }
+
+  assert.equal(calls[0].options.headers["X-CSRF-Token"], "csrf-value");
+  assert.equal(calls[1].url, "http://control.local/identity/sessions/session%2Fwith%20space");
+  assert.equal(calls[1].options.method, "DELETE");
+  assert.equal(calls[2].url, "http://control.local/identity/credentials/password/rotate");
+  assert.deepEqual(JSON.parse(calls[2].options.body), {
+    current_password: "CurrentPassword",
+    new_password: "ReplacementPassword",
+  });
+  for (const call of calls) {
+    assert.equal(call.options.credentials, "include");
+    assert.equal(call.options.headers["X-CSRF-Token"], "csrf-value");
+    assert.equal("Authorization" in call.options.headers, false);
+  }
+});
+
+test("missing, duplicate, and malformed CSRF cookies fail before fetch", async () => {
+  const originalDocument = globalThis.document;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return jsonResponse(logoutPayload());
+  };
+  try {
+    for (const cookie of [
+      "theme=light",
+      "__Host-metahub-global-csrf=one; __Host-metahub-global-csrf=two",
+      "__Host-metahub-global-csrf=",
+      "__Host-metahub-global-csrf=one,two",
+      "__Host-metahub-global-csrf=%E0%A4%A",
+    ]) {
+      globalThis.document = { cookie };
+      await assert.rejects(
+        () => logoutIdentity({ controlApiUrl: CONTROL_URL }),
+        (error) => error instanceof IdentityApiError && error.code === "identity.csrf_unavailable",
+      );
+    }
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  assert.equal(fetchCount, 0);
+});
+
+test("strict DTO validation rejects authorization and internal fields", async () => {
+  const forbiddenMutations = [
+    (payload) => Object.assign(payload, { tenant_id: "tenant_private" }),
+    (payload) => Object.assign(payload.account, { role: "platform_admin" }),
+    (payload) => Object.assign(payload.account, { account_id: "gac_private" }),
+    (payload) => Object.assign(payload.current_session, { token: "token_private" }),
+    (payload) => Object.assign(payload.current_session, { csrf: "csrf_private" }),
+    (payload) => Object.assign(payload.current_session, { issuer: "issuer_private" }),
+    (payload) => Object.assign(payload.current_session, { credential_hash: "hash_private" }),
+  ];
+
+  for (const mutate of forbiddenMutations) {
+    const payload = accountSessionPayload();
+    mutate(payload);
+    installFetch(() => jsonResponse(payload));
+    await assert.rejects(
+      () => getIdentityMe({ controlApiUrl: CONTROL_URL }),
+      (error) => error instanceof IdentityApiError && error.code === "identity.response_invalid",
+    );
+  }
+});
+
+test("identity client never reads browser storage", async () => {
+  const localDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const sessionDescriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() {
+      throw new Error("localStorage must not be accessed");
+    },
+  });
+  Object.defineProperty(globalThis, "sessionStorage", {
+    configurable: true,
+    get() {
+      throw new Error("sessionStorage must not be accessed");
+    },
+  });
+  installFetch(() => accountSessionResponse());
+  try {
+    await getIdentityMe({ controlApiUrl: CONTROL_URL });
+  } finally {
+    restoreProperty("localStorage", localDescriptor);
+    restoreProperty("sessionStorage", sessionDescriptor);
+  }
+});
+
+test("login renderer exposes only email and password fields", () => {
+  const root = createRoot();
+  renderIdentityLoginPage(root, {
+    email: 'owner"><script>unsafe()</script>@example.com',
+    error: { message: "<script>unsafe()</script>", requestId: "req_<unsafe>" },
+  });
+
+  assert.equal((root.innerHTML.match(/<input /gu) ?? []).length, 2);
+  assert.match(root.innerHTML, /name="email"/u);
+  assert.match(root.innerHTML, /name="password"/u);
+  assert.doesNotMatch(root.innerHTML, /name="(?:tenant|workspace|role|permission)"/u);
+  assert.doesNotMatch(root.innerHTML, /<script>/u);
+  assert.match(root.innerHTML, /request_id: req_&lt;unsafe&gt;/u);
+  assert.match(root.innerHTML, /autocomplete="username"/u);
+  assert.match(root.innerHTML, /autocomplete="current-password"/u);
+});
+
+test("security renderer never places account or session internals in the DOM", () => {
+  const root = createRoot();
+  renderIdentitySecurityPage(root, {
+    account: account({ email: "owner@example.com", display_name: "<Owner>" }),
+    currentSession: session({ session_id: SESSION_ONE, is_current: true }),
+    sessions: [
+      session({ session_id: SESSION_ONE, is_current: true }),
+      session({ session_id: SESSION_TWO, is_current: false, device_family: "firefox" }),
+    ],
+  });
+
+  assert.doesNotMatch(root.innerHTML, new RegExp(`${SESSION_ONE}|${SESSION_TWO}`, "u"));
+  assert.doesNotMatch(
+    root.innerHTML,
+    /account_id|tenant_id|tenant_slug|workspace|permission|issuer|audience|credential_hash|csrf|token/iu,
+  );
+  assert.doesNotMatch(root.innerHTML, /<Owner>/u);
+  assert.match(root.innerHTML, /&lt;Owner&gt;/u);
+  assert.match(root.innerHTML, /data-session-index="0"/u);
+  assert.match(root.innerHTML, /data-session-index="1"/u);
+});
+
+test("other-session revoke confirms and current-session revoke returns to login", async () => {
+  const root = createRoot();
+  const revoked = [];
+  let confirmationCount = 0;
+  const api = workingApi({
+    revoke: async ({ sessionId }) => {
+      revoked.push(sessionId);
+      return revokePayload();
+    },
+  });
+  const controller = createIdentityPageController({
+    root,
+    api,
+    confirmAction: () => {
+      confirmationCount += 1;
+      return true;
+    },
+  });
+
+  await controller.mount();
+  await controller.revokeSession(1);
+  assert.equal(confirmationCount, 1);
+  assert.deepEqual(revoked, [SESSION_TWO]);
+
+  await controller.revokeSession(0);
+  assert.equal(confirmationCount, 1);
+  assert.deepEqual(revoked, [SESSION_TWO, SESSION_ONE]);
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /账号保护状态/u);
+});
+
+test("cancelled other-session revoke does not call the API", async () => {
+  const root = createRoot();
+  let revokeCount = 0;
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({ revoke: async () => (revokeCount += 1) }),
+    confirmAction: () => false,
+  });
+  await controller.mount();
+  assert.equal(await controller.revokeSession(1), false);
+  assert.equal(revokeCount, 0);
+});
+
+test("password rotation clears fields and reloads replacement session state", async () => {
+  const passwordInputs = [{ value: "CurrentSecret" }, { value: "NewSecret" }, { value: "NewSecret" }];
+  const root = createRoot(passwordInputs);
+  let sessionsCalls = 0;
+  const api = workingApi({
+    sessions: async () => {
+      sessionsCalls += 1;
+      return sessionListPayload(
+        sessionsCalls === 1
+          ? [
+              session({ session_id: SESSION_ONE, is_current: true }),
+              session({ session_id: SESSION_TWO, is_current: false }),
+            ]
+          : [session({ session_id: "gis_33333333333333333333333333333333", is_current: true })],
+      );
+    },
+  });
+  const controller = createIdentityPageController({ root, api });
+
+  await controller.mount();
+  const result = await controller.rotatePassword({
+    currentPassword: "CurrentSecret",
+    newPassword: "NewSecret",
+    confirmPassword: "NewSecret",
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(passwordInputs.map((input) => input.value), ["", "", ""]);
+  assert.match(root.innerHTML, /密码已更新，其他设备已退出/u);
+  assert.match(root.innerHTML, /当前没有其他设备登录/u);
+  assert.doesNotMatch(root.innerHTML, new RegExp(SESSION_TWO, "u"));
+});
+
+test("logout and expired sessions scrub protected DOM and password fields", async () => {
+  const passwordInputs = [{ value: "MustBeCleared" }];
+  const root = createRoot(passwordInputs);
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({
+      logout: async () => {
+        throw new IdentityApiError({ status: 401, code: "identity.session_invalid" });
+      },
+    }),
+  });
+  await controller.mount();
+  await controller.logout();
+
+  assert.equal(passwordInputs[0].value, "");
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /账号保护状态/u);
+
+  const expired = createIdentityPageController({
+    root,
+    api: workingApi({
+      me: async () => {
+        throw new IdentityApiError({ status: 401, code: "identity.session_invalid" });
+      },
+    }),
+  });
+  await expired.mount();
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+});
+
+test("late protected responses cannot repopulate the page after logout", async () => {
+  const root = createRoot();
+  const meDeferred = deferred();
+  const api = workingApi({ me: async () => meDeferred.promise });
+  const controller = createIdentityPageController({ root, api });
+
+  const mounting = controller.mount();
+  await controller.logout();
+  meDeferred.resolve(accountSessionPayload());
+  await mounting;
+
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /账号保护状态|owner@example.com/u);
+});
+
+test("logout waits for an in-flight login before clearing the issued session", async () => {
+  const root = createRoot();
+  const loginDeferred = deferred();
+  const operations = [];
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({
+      login: async () => {
+        operations.push("login-started");
+        return loginDeferred.promise;
+      },
+      logout: async () => {
+        operations.push("logout-finished");
+        return logoutPayload();
+      },
+    }),
+  });
+
+  const login = controller.login({ email: "owner@example.com", password: "PrivatePassword" });
+  const logout = controller.logout();
+  loginDeferred.resolve(accountSessionPayload());
+  await Promise.all([login, logout]);
+
+  assert.deepEqual(operations, ["login-started", "logout-finished"]);
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /账号保护状态|PrivatePassword/u);
+});
+
+test("safe page errors escape HTML and expose only request_id", async () => {
+  const root = createRoot();
+  const controller = createIdentityPageController({
+    root,
+    api: workingApi({
+      login: async () => {
+        throw new IdentityApiError({
+          status: 401,
+          code: "identity.login_invalid",
+          message: "<img src=x onerror=unsafe()>",
+          requestId: "req_<unsafe>",
+          traceId: "trace_must_not_render",
+        });
+      },
+    }),
+  });
+
+  await controller.login({ email: "owner@example.com", password: "PrivatePassword" });
+  assert.doesNotMatch(root.innerHTML, /<img|trace_must_not_render|PrivatePassword/u);
+  assert.match(root.innerHTML, /&lt;img src=x onerror=unsafe\(\)&gt;/u);
+  assert.match(root.innerHTML, /request_id: req_&lt;unsafe&gt;/u);
+});
+
+test("identity page keeps keyboard, focus, and mobile layout contracts", async () => {
+  const [html, css] = await Promise.all([
+    readFile(new URL("../../identity.html", import.meta.url), "utf8"),
+    readFile(new URL("../../src/styles/identity.css", import.meta.url), "utf8"),
+  ]);
+  const root = createRoot();
+  renderIdentitySecurityPage(root, {
+    account: account(),
+    currentSession: session({ session_id: SESSION_ONE, is_current: true }),
+    sessions: [session({ session_id: SESSION_ONE, is_current: true })],
+  });
+
+  assert.match(html, /name="viewport"/u);
+  assert.match(html, /name="referrer" content="no-referrer"/u);
+  assert.match(css, /:focus-visible/u);
+  assert.match(css, /@media \(max-width: 520px\)/u);
+  assert.match(css, /min-width: 320px/u);
+  assert.match(root.innerHTML, /type="button" data-identity-action="logout"/u);
+  assert.match(root.innerHTML, /type="submit"/u);
+});
+
+function installFetch(responseFactory) {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return responseFactory(url, options);
+  };
+  return calls;
+}
+
+function jsonResponse(payload, { ok = true, status = 200 } = {}) {
+  return {
+    ok,
+    status,
+    headers: new Map(),
+    async json() {
+      return structuredClone(payload);
+    },
+  };
+}
+
+function accountSessionResponse() {
+  return jsonResponse(accountSessionPayload());
+}
+
+function sessionListResponse() {
+  return jsonResponse(sessionListPayload());
+}
+
+function accountSessionPayload() {
+  return {
+    account: account(),
+    current_session: session({ session_id: SESSION_ONE, is_current: true }),
+    request_id: "req_identity",
+    trace_id: "trc_identity",
+  };
+}
+
+function sessionListPayload(customSessions = null) {
+  const sessions = customSessions ?? [
+    session({ session_id: SESSION_ONE, is_current: true }),
+    session({ session_id: SESSION_TWO, is_current: false, device_family: "firefox" }),
+  ];
+  return {
+    sessions,
+    limit: 20,
+    offset: 0,
+    total: sessions.length,
+    request_id: "req_sessions",
+    trace_id: "trc_sessions",
+  };
+}
+
+function logoutPayload() {
+  return { logged_out: true, request_id: "req_logout", trace_id: "trc_logout" };
+}
+
+function revokePayload() {
+  return { revoked: true, request_id: "req_revoke", trace_id: "trc_revoke" };
+}
+
+function rotationPayload() {
+  return {
+    rotated: true,
+    account: account(),
+    current_session: session({
+      session_id: "gis_33333333333333333333333333333333",
+      is_current: true,
+    }),
+    request_id: "req_rotate",
+    trace_id: "trc_rotate",
+  };
+}
+
+function account(overrides = {}) {
+  return {
+    email: "owner@example.com",
+    display_name: "Owner",
+    status: "active",
+    mfa_configured: false,
+    ...overrides,
+  };
+}
+
+function session(overrides = {}) {
+  return {
+    session_id: SESSION_ONE,
+    device_family: "chrome",
+    created_at: "2026-08-20T01:00:00Z",
+    last_seen_at: "2026-08-20T02:00:00Z",
+    expires_at: "2026-08-21T01:00:00Z",
+    is_current: false,
+    ...overrides,
+  };
+}
+
+function workingApi(overrides = {}) {
+  return {
+    login: async () => accountSessionPayload(),
+    me: async () => accountSessionPayload(),
+    sessions: async () => sessionListPayload(),
+    revoke: async () => revokePayload(),
+    logout: async () => logoutPayload(),
+    rotate: async () => rotationPayload(),
+    ...overrides,
+  };
+}
+
+function createRoot(passwordInputs = []) {
+  return {
+    innerHTML: "",
+    addEventListener() {},
+    contains() {
+      return true;
+    },
+    querySelectorAll(selector) {
+      return selector === 'input[type="password"]' ? passwordInputs : [];
+    },
+  };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
+
+function restoreProperty(name, descriptor) {
+  if (descriptor) {
+    Object.defineProperty(globalThis, name, descriptor);
+  } else {
+    delete globalThis[name];
+  }
+}

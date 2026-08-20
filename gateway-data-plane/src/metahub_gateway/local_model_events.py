@@ -137,18 +137,22 @@ def claim_local_model_events(
     *,
     now: datetime | None = None,
     limit: int = _BATCH_SIZE,
+    connection: sqlite3.Connection | None = None,
 ) -> list[LocalModelEventClaim]:
     """Lease at most one due event per tenant in each fair batch."""
 
     claimed_at = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
     now_text = _db_time(claimed_at)
     lease_until = _db_time(claimed_at + timedelta(seconds=_LEASE_SECONDS))
-    connection = connect_database(config.database_url)
+    owns_connection = connection is None
+    database = connection or connect_database(config.database_url)
     claims: list[LocalModelEventClaim] = []
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        _recover_expired_leases(connection, now_text)
-        rows = connection.execute(
+        if not _has_due_outbox_work(database, now_text):
+            return claims
+        database.execute("BEGIN IMMEDIATE")
+        _recover_expired_leases(database, now_text)
+        rows = database.execute(
             """
             WITH ranked AS(
               SELECT local_model_call_event_outbox_id,tenant_id,local_model_call_event_id,
@@ -166,7 +170,7 @@ def claim_local_model_events(
         ).fetchall()
         for row in rows:
             token = hashlib.sha256(uuid4().bytes).hexdigest()
-            updated = connection.execute(
+            updated = database.execute(
                 """
                 UPDATE local_model_call_event_outbox
                 SET status='leased',attempt_count=attempt_count+1,
@@ -199,13 +203,34 @@ def claim_local_model_events(
                         attempt_count=int(row["attempt_count"]) + 1,
                     )
                 )
-        connection.commit()
+        database.commit()
         return claims
     except Exception:
-        connection.rollback()
+        database.rollback()
         raise
     finally:
-        connection.close()
+        if owns_connection:
+            database.close()
+
+
+def _has_due_outbox_work(connection: sqlite3.Connection, now: str) -> bool:
+    """Keep an empty outbox poll read-only so idle workers do not contend for SQLite."""
+
+    return (
+        connection.execute(
+            """
+            SELECT 1 FROM(
+              SELECT 1 FROM local_model_call_event_outbox
+              WHERE status='leased' AND lease_expires_at<=?
+              UNION ALL
+              SELECT 1 FROM local_model_call_event_outbox
+              WHERE status='pending' AND next_attempt_at<=? AND attempt_count<?
+            ) LIMIT 1
+            """,
+            (now, now, _MAX_ATTEMPTS),
+        ).fetchone()
+        is not None
+    )
 
 
 def dispatch_claimed_local_model_event(
@@ -242,26 +267,45 @@ def dispatch_claimed_local_model_event(
 
 
 async def _outbox_worker(config: AppConfig, worker_id: str, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        try:
-            claims = await asyncio.to_thread(claim_local_model_events, config, worker_id)
-            for claim in claims:
-                await asyncio.to_thread(dispatch_claimed_local_model_event, config, claim)
-        except Exception:
-            logger.warning(
-                "local_model.event_worker_failed",
-                extra={
-                    "event": "local_model.event_worker_failed",
-                    "payload": {"error_code": "local_endpoint.unavailable"},
-                },
-            )
-            claims = []
-        if claims:
-            continue
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=_POLL_SECONDS)
-        except TimeoutError:
-            pass
+    connection: sqlite3.Connection | None = None
+    try:
+        while not stop.is_set():
+            try:
+                if connection is None:
+                    connection = await asyncio.to_thread(
+                        connect_database,
+                        config.database_url,
+                        check_same_thread=False,
+                    )
+                claims = await asyncio.to_thread(
+                    claim_local_model_events,
+                    config,
+                    worker_id,
+                    connection=connection,
+                )
+                for claim in claims:
+                    await asyncio.to_thread(dispatch_claimed_local_model_event, config, claim)
+            except Exception:
+                logger.warning(
+                    "local_model.event_worker_failed",
+                    extra={
+                        "event": "local_model.event_worker_failed",
+                        "payload": {"error_code": "local_endpoint.unavailable"},
+                    },
+                )
+                claims = []
+                if connection is not None:
+                    await asyncio.to_thread(connection.close)
+                    connection = None
+            if claims:
+                continue
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=_POLL_SECONDS)
+            except TimeoutError:
+                pass
+    finally:
+        if connection is not None:
+            await asyncio.to_thread(connection.close)
 
 
 def _load_source_event(config: AppConfig, claim: LocalModelEventClaim) -> WebhookEvent:

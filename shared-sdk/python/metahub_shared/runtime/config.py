@@ -48,6 +48,7 @@ McpExecutorMode = Literal["disabled", "test_loopback", "sandbox_http"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
+DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
 )
@@ -87,6 +88,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_ALLOWED_ORIGINS": "http://localhost:5173",
     "METAHUB_SERVICE_MODE": "internal_only",
     "METAHUB_AUTH_TOKEN_SECRET": "dev-only-change-me-metahub-auth-secret",
+    "METAHUB_IDENTITY_SESSION_SECRET": DEFAULT_IDENTITY_SESSION_SECRET,
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
     # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
     "METAHUB_RESPONSE_CACHE_ENABLED": "false",
@@ -488,6 +490,11 @@ class AppConfig(BaseModel):
     file_security_max_image_pixels: int = 12_000_000
     file_security_max_total_pixels: int = 50_000_000
     auth_token_secret: str = Field(exclude=True, repr=False)
+    identity_session_secret: str = Field(
+        default=DEFAULT_IDENTITY_SESSION_SECRET,
+        exclude=True,
+        repr=False,
+    )
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
     # Response Cache 的部署级总开关默认关闭；四个根密钥均从 repr/model_dump 排除。
@@ -837,7 +844,20 @@ def load_app_config(service_name: str) -> AppConfig:
     provider_base_urls = _read_provider_base_urls(values)
     provider_api_keys = _read_provider_api_keys(values)
     auth_token_secret = _value(values, "METAHUB_AUTH_TOKEN_SECRET")
+    identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
     cache_affinity_hmac_secret = _value(values, "METAHUB_CACHE_AFFINITY_HMAC_SECRET")
+
+    if (
+        len(identity_session_secret) < 32
+        or hmac.compare_digest(identity_session_secret, auth_token_secret)
+        or hmac.compare_digest(identity_session_secret, cache_affinity_hmac_secret)
+        or (environment == "prod" and identity_session_secret == DEFAULT_IDENTITY_SESSION_SECRET)
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_IDENTITY_SESSION_SECRET is not an independent production secret.",
+            suggestion="Configure a unique identity session secret of at least 32 characters.",
+        )
 
     environment_info = EnvironmentInfo(
         name=environment,
@@ -1639,6 +1659,7 @@ def load_app_config(service_name: str) -> AppConfig:
         file_security_max_image_pixels=file_security_max_image_pixels,
         file_security_max_total_pixels=file_security_max_total_pixels,
         auth_token_secret=auth_token_secret,
+        identity_session_secret=identity_session_secret,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
         response_cache_enabled=response_cache_enabled,
         response_cache_hmac_version=response_cache_hmac_version,
@@ -2935,6 +2956,7 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_FILE_SECURITY_MAX_IMAGE_PIXELS",
         "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS",
         "METAHUB_AUTH_TOKEN_SECRET",
+        "METAHUB_IDENTITY_SESSION_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_RESPONSE_CACHE_ENABLED",
         "METAHUB_RESPONSE_CACHE_HMAC_VERSION",

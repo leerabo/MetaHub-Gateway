@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from metahub_shared.db.connection import connect_database
 from metahub_shared.runtime.errors import ApiError
 
 from .service import reconcile_expired_quota_reservations
@@ -44,16 +46,35 @@ def install_quota_reconciliation(app: FastAPI) -> None:
 async def _reconciliation_loop(app: FastAPI, stop_event: asyncio.Event) -> None:
     """按有界间隔循环恢复超期额度，同时响应网关停机信号。"""
 
-    await _run_once(app)
-    while not stop_event.is_set():
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=_poll_seconds(app))
-        # 等待超时表示进入下一次正常轮询，不应当视为额度服务错误。
-        except TimeoutError:
-            await _run_once(app)
+    connection: sqlite3.Connection | None = None
+    try:
+        while not stop_event.is_set():
+            try:
+                if connection is None:
+                    connection = await asyncio.to_thread(
+                        connect_database,
+                        app.state.config.database_url,
+                        check_same_thread=False,
+                    )
+                if not await _run_once(app, connection):
+                    await asyncio.to_thread(connection.close)
+                    connection = None
+            except Exception:
+                _warning("gateway.quota_unavailable")
+                if connection is not None:
+                    await asyncio.to_thread(connection.close)
+                    connection = None
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=_poll_seconds(app))
+            # 等待超时表示进入下一次正常轮询，不应当视为额度服务错误。
+            except TimeoutError:
+                pass
+    finally:
+        if connection is not None:
+            await asyncio.to_thread(connection.close)
 
 
-async def _run_once(app: FastAPI) -> None:
+async def _run_once(app: FastAPI, connection: sqlite3.Connection) -> bool:
     """在线程池执行一轮数据库恢复，并将异常折叠为安全日志。"""
 
     try:
@@ -61,12 +82,15 @@ async def _run_once(app: FastAPI) -> None:
             reconcile_expired_quota_reservations,
             app.state.config,
             limit=_batch_size(app),
+            connection=connection,
         )
+        return True
     # 统一错误只记录稳定错误码，避免把数据库异常或请求内容写入日志。
     except ApiError as exc:
         _warning(exc.code)
     except Exception:
         _warning("gateway.quota_unavailable")
+    return False
 
 
 def _poll_seconds(app: FastAPI) -> float:

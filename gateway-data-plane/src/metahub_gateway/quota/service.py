@@ -874,18 +874,23 @@ def reconcile_expired_quota_reservations(
     config: AppConfig,
     *,
     limit: int = 50,
+    connection: sqlite3.Connection | None = None,
 ) -> int:
     """补结算或释放一批已超期 Reservation，迟到 Usage 保留为 overage。"""
 
     # 恢复批量必须严格有界，防止错误配置形成长事务或资源耗尽。
     if type(limit) is not int or not 1 <= limit <= 200:
         raise ValueError("quota_reconciliation_limit_invalid")
-    connection = _connect(config)
+    owns_connection = connection is None
+    database = connection or _connect(config)
     processed = 0
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        now = _database_now(connection)
-        reservations = connection.execute(
+        now = _database_now(database)
+        if not _has_expired_quota_reservations(database, now):
+            return 0
+        database.execute("BEGIN IMMEDIATE")
+        now = _database_now(database)
+        reservations = database.execute(
             """
             SELECT * FROM quota_reservations
             WHERE status IN('active','exposure_pending')
@@ -896,7 +901,7 @@ def reconcile_expired_quota_reservations(
             (now, limit),
         ).fetchall()
         for reservation in reservations:
-            settlements = connection.execute(
+            settlements = database.execute(
                 """
                 SELECT * FROM quota_usage_settlements
                 WHERE tenant_id=? AND quota_reservation_id=?
@@ -907,7 +912,7 @@ def reconcile_expired_quota_reservations(
             # 一个请求只有一条 canonical Usage；多条结算表示恢复 owner 已出现歧义。
             if len(settlements) > 1:
                 raise sqlite3.IntegrityError("quota_reconciliation_settlement_ambiguous")
-            charges = connection.execute(
+            charges = database.execute(
                 """
                 SELECT entry.finops_ledger_entry_id,entry.usage_ledger_id,
                        entry.normalized_cny_micros,entry.cny_normalization_status
@@ -938,7 +943,7 @@ def reconcile_expired_quota_reservations(
                 settlement = settlements[0]
                 charge = charges[0]
                 settle_quota_usage(
-                    connection,
+                    database,
                     tenant_id=str(reservation["tenant_id"]),
                     request_id=str(reservation["request_id"]),
                     trace_id=str(reservation["trace_id"]),
@@ -950,7 +955,7 @@ def reconcile_expired_quota_reservations(
                     ),
                 )
                 released = release_request_quota_in_transaction(
-                    connection,
+                    database,
                     tenant_id=str(reservation["tenant_id"]),
                     request_id=str(reservation["request_id"]),
                     trace_id=str(reservation["trace_id"]),
@@ -963,7 +968,7 @@ def reconcile_expired_quota_reservations(
                 # 尚无 Settlement 时 canonical charge 是唯一金额事实；未决失败估算不能继续
                 # 占用额度，也不能作为 charge 叠加，因此以 exposure=0 补齐原子结算。
                 settle_quota_usage(
-                    connection,
+                    database,
                     tenant_id=str(reservation["tenant_id"]),
                     request_id=str(reservation["request_id"]),
                     trace_id=str(reservation["trace_id"]),
@@ -973,7 +978,7 @@ def reconcile_expired_quota_reservations(
                     exposure_outstanding_micros=0,
                 )
             else:
-                request_log = connection.execute(
+                request_log = database.execute(
                     """
                     SELECT status,trace_id FROM request_logs
                     WHERE tenant_id=? AND request_id=?
@@ -983,7 +988,7 @@ def reconcile_expired_quota_reservations(
                 # 恢复释放前复核请求链路所有者，避免相同 request_id 跨链路误释放。
                 if request_log is not None and request_log["trace_id"] != reservation["trace_id"]:
                     raise sqlite3.IntegrityError("quota_reconciliation_request_owner_mismatch")
-                routing_attempt = connection.execute(
+                routing_attempt = database.execute(
                     """
                     SELECT 1 FROM routing_attempts
                     WHERE tenant_id=? AND request_id=? AND trace_id=?
@@ -1006,7 +1011,7 @@ def reconcile_expired_quota_reservations(
                     else "reconciliation_required"
                 )
                 released = release_request_quota_in_transaction(
-                    connection,
+                    database,
                     tenant_id=str(reservation["tenant_id"]),
                     request_id=str(reservation["request_id"]),
                     trace_id=str(reservation["trace_id"]),
@@ -1016,22 +1021,40 @@ def reconcile_expired_quota_reservations(
                 if not released:
                     raise sqlite3.IntegrityError("quota_reconciliation_release_lost")
             processed += 1
-        connection.commit()
+        database.commit()
     # 恢复异常统一回滚并折叠为公开错误，日志不写数据库或请求原文。
     except (DbError, sqlite3.Error, TypeError, ValueError, DecimalException) as exc:
-        if connection.in_transaction:
-            connection.rollback()
+        if database.in_transaction:
+            database.rollback()
         _log_reconciliation_failed(exc)
         # 恢复错误仅暴露稳定代码，具体数据库异常不得进入响应或日志正文。
         raise ApiError("gateway.quota_unavailable") from exc
     finally:
-        connection.close()
+        if owns_connection:
+            database.close()
     if processed:
         logger.info(
             "quota.reconciled",
             extra={"event": "quota.reconciled", "payload": {"processed_count": processed}},
         )
     return processed
+
+
+def _has_expired_quota_reservations(connection: sqlite3.Connection, now: str) -> bool:
+    """Avoid taking SQLite's single writer lock when reconciliation has no work."""
+
+    return (
+        connection.execute(
+            """
+            SELECT 1 FROM quota_reservations
+            WHERE status IN('active','exposure_pending')
+              AND unixepoch(expires_at)<=unixepoch(?)
+            LIMIT 1
+            """,
+            (now,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _normalized_charge_micros(charge: sqlite3.Row) -> int | None:

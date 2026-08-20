@@ -4,6 +4,7 @@ uvicorn[standard]>=0.30,<1.0
 pydantic>=2.7,<3.0
 httpx>=0.27,<1.0
 cryptography>=42,<46
+argon2-cffi>=23.1,<26.0
 # PRD-082 uses the official v1 MCP client wire contract and the mature Draft
 # 2020-12 validator.  Major versions are capped so protocol/schema behavior
 # cannot drift silently between Control workers.

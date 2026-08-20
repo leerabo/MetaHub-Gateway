@@ -11,7 +11,12 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 from secrets import token_bytes
+
+_ARGON2ID_HASH_RE = re.compile(
+    r"^\$argon2id\$v=19\$m=65536,t=3,p=2\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$"
+)
 
 
 def hash_password(password: str, *, salt: bytes | None = None) -> str:
@@ -35,13 +40,73 @@ def verify_password(password: str, stored_hash: str) -> bool:
     安全：明文只在函数入参的短生命周期内使用，不能写入日志、数据库明文字段或响应。
     """
 
-    algorithm, rounds, salt_b64, digest_b64 = stored_hash.split("$", 3)
-    if algorithm != "pbkdf2_sha256":
+    algorithm = password_hash_algorithm(stored_hash)
+    if algorithm == "argon2id":
+        try:
+            from argon2 import PasswordHasher
+            from argon2.exceptions import InvalidHashError, VerificationError
+
+            return PasswordHasher().verify(stored_hash, password)
+        except (InvalidHashError, VerificationError, ValueError, TypeError):
+            return False
+    try:
+        if algorithm != "pbkdf2_sha256_legacy":
+            return False
+        _name, _rounds, salt_b64, digest_b64 = stored_hash.split("$", 3)
+        salt = _strict_urlsafe_b64decode(salt_b64)
+        expected = _strict_urlsafe_b64decode(digest_b64)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
+        return hmac.compare_digest(actual, expected)
+    except (UnicodeEncodeError, ValueError, TypeError, OverflowError):
         return False
-    salt = base64.urlsafe_b64decode(salt_b64.encode("ascii"))
-    expected = base64.urlsafe_b64decode(digest_b64.encode("ascii"))
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(rounds))
-    return hmac.compare_digest(actual, expected)
+
+
+def password_hash_algorithm(stored_hash: object) -> str | None:
+    """Return the bounded password profile accepted by MetaHub.
+
+    Parsing happens before any KDF call so a corrupted legacy row cannot select attacker-controlled
+    PBKDF2 rounds or Argon2 memory/time parameters.
+    """
+
+    if type(stored_hash) is not str or len(stored_hash) > 256:
+        return None
+    if _ARGON2ID_HASH_RE.fullmatch(stored_hash):
+        return "argon2id"
+    parts = stored_hash.split("$", 3)
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256" or parts[1] != "200000":
+        return None
+    try:
+        salt = _strict_urlsafe_b64decode(parts[2])
+        digest = _strict_urlsafe_b64decode(parts[3])
+    except (ValueError, TypeError):
+        return None
+    if len(salt) != 16 or len(digest) != 32:
+        return None
+    return "pbkdf2_sha256_legacy"
+
+
+def _strict_urlsafe_b64decode(value: str) -> bytes:
+    encoded = value.encode("ascii")
+    decoded = base64.b64decode(encoded, altchars=b"-_", validate=True)
+    if base64.urlsafe_b64encode(decoded).decode("ascii") != value:
+        raise ValueError("non-canonical base64")
+    return decoded
+
+
+def hash_password_argon2id(password: str) -> str:
+    """Hash a new or rotated password with the global-account Argon2id profile."""
+
+    from argon2 import PasswordHasher
+    from argon2.low_level import Type
+
+    return PasswordHasher(
+        time_cost=3,
+        memory_cost=65_536,
+        parallelism=2,
+        hash_len=32,
+        salt_len=16,
+        type=Type.ID,
+    ).hash(password)
 
 
 def hash_secret(secret: str) -> str:

@@ -6,7 +6,11 @@ import sqlite3
 
 import anyio
 import pytest
-from metahub_shared.db.connection import connect_database, database_request_scope
+from metahub_shared.db.connection import (
+    _close_idle_database_connections,
+    connect_database,
+    database_request_scope,
+)
 
 
 def test_closed_connection_cannot_be_reused_by_a_prior_owner(tmp_path):
@@ -120,3 +124,39 @@ async def test_request_scope_reuses_handle_across_worker_context(
 
     with pytest.raises(sqlite3.ProgrammingError):
         business.execute("SELECT value FROM probe")
+
+
+def test_reusable_request_scope_keeps_schema_handle_warm_and_resets_connection_state(
+    tmp_path,
+    monkeypatch,
+):
+    database_url = f"sqlite:///{tmp_path / 'pooled-request.db'}"
+    real_connect = sqlite3.connect
+    opened = 0
+
+    def counted_connect(*args, **kwargs):
+        nonlocal opened
+        opened += 1
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", counted_connect)
+    try:
+        with database_request_scope(reuse_connections=True):
+            first = connect_database(database_url)
+            first.execute("CREATE TABLE probe (value TEXT NOT NULL)")
+            first.commit()
+            first.execute("PRAGMA query_only=ON")
+
+        with pytest.raises(sqlite3.ProgrammingError):
+            first.execute("SELECT 1")
+
+        with database_request_scope(reuse_connections=True):
+            second = connect_database(database_url)
+            assert second.execute("PRAGMA query_only").fetchone()[0] == 0
+            second.execute("INSERT INTO probe(value) VALUES ('warm')")
+            second.commit()
+            assert second.execute("SELECT value FROM probe").fetchone()[0] == "warm"
+
+        assert opened == 1
+    finally:
+        _close_idle_database_connections()

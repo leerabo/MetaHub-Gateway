@@ -23,6 +23,7 @@ from .security import (
     placeholder_encrypted_secret,
     secret_fingerprint,
     secret_prefix,
+    verify_password,
 )
 
 
@@ -254,6 +255,16 @@ def _upsert_user(
 
 
     password = configured_secret("METAHUB_SEED_ADMIN_PASSWORD", admin["password"])
+    email = os.getenv("METAHUB_SEED_ADMIN_EMAIL", admin["email"]).lower()
+    existing = connection.execute(
+        "SELECT password_hash FROM users WHERE tenant_id=? AND email=?",
+        (tenant_id, email),
+    ).fetchone()
+    password_hash = (
+        existing["password_hash"]
+        if existing is not None and verify_password(password, existing["password_hash"])
+        else hash_password(password)
+    )
     connection.execute(
         """
         INSERT INTO users(user_id, tenant_id, email, display_name, password_hash, role, status, created_at, updated_at)
@@ -268,9 +279,9 @@ def _upsert_user(
         (
             user_id,
             tenant_id,
-            os.getenv("METAHUB_SEED_ADMIN_EMAIL", admin["email"]).lower(),
+            email,
             admin["display_name"],
-            hash_password(password),
+            password_hash,
         ),
     )
 

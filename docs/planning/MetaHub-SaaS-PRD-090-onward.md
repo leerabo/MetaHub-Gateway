@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**规划基线已落盘；PRD-090 已完成，当前下一项为 PRD-091**
+状态：**PRD-090..091 已完成，当前下一项为 PRD-092**
 
 基线日期：2026-08-20
 
@@ -24,7 +24,25 @@ MetaHub 的目标形态包括个人 SaaS、企业 SaaS和云管私有 Gateway。
 
 平台IAM分别承载管理、运维、安全、财务、客服、审核、合规、隐私、发布、Provider工程、渠道、客户成功和增长角色。企业Workspace的owner/admin只能添加本企业职能用户并在委派上限内分配开发、安全、财务、法务、审计和只读角色。导航由后端返回，但页面API仍逐请求鉴权。渠道、客户成功、增长、平台品牌、Provider工程、套餐目录、商业账务裁决和平台SRE只属于SaaS平台；企业Gateway保留BYOK、模型/路由、项目/Key、额度预算、用量/内部财务、员工权限、安全策略、日志审计、开发工具和私有部署。
 
-现有tenant Console的63项导航已在Excel `11_现有导航处置`逐项分类，并绑定当前API/表/Scheduler证据、目标角色、承接PRD和切换门禁。任何后续实现不得只删除菜单，必须同时处理DOM、预取、直达API、数据owner、事件、Scheduler、审计、兼容和回滚。
+| 产品域 | 必须承载的能力 | 主要角色与授权边界 |
+| --- | --- | --- |
+| 全局账号壳层 | 登录、注册、验证、账号安全、设备会话、全局偏好、Workspace选择 | 账号本人；GlobalSession不直接授予平台或企业业务权限 |
+| SaaS平台IAM与支持 | 平台员工、平台角色、JIT SupportGrant、break-glass、平台审计 | 仅`platform_*`；企业owner/admin不能创建或授予平台角色 |
+| SaaS租户与客户运营 | Workspace目录、生命周期、客户成功、健康、续费、工单和SLA | `platform_ops/platform_customer_success/platform_support`按最小字段；无SupportGrant不读企业业务正文 |
+| SaaS渠道与增长 | 渠道伙伴、代理商、商机/客户归属、佣金摘要、获客漏斗、活动、实验和转化归因 | `platform_channel/platform_growth`；所有企业角色拒绝导航、DOM、预取和API |
+| SaaS品牌与Provider工程 | SaaS主品牌、渠道白标、官方Adapter目录、合同CI、内置错误目录和发布候选 | `platform_owner/platform_channel/platform_provider_engineer/platform_security/release_manager`；企业只看本地Deployment外观或BYOK兼容摘要 |
+| SaaS商业与SRE | 套餐目录、订阅权益、支付退款、发票、争议裁决、平台收入成本、基础设施、Cell/Fleet、事故、容量和发布 | `platform_billing/platform_ops/release_manager`按职责分离；平台运维不获得Provider工程维护或最终发布权 |
+| 企业组织治理 | 企业资料、员工、成员、角色、权限、Owner转移和企业审批 | `owner/admin`在本Workspace委派上限内添加职能用户；后端逐请求校验Membership revision |
+| 企业模型接入 | BYOK、官方/云Provider、本地OpenAI-compatible Endpoint、Provider健康、模型、别名、路由、Fallback和评测 | `owner/admin/developer`按读写职责；Secret只在企业/客户执行域 |
+| 企业调用与FinOps | Project/Application、Virtual Key、额度、预算、用量、BYOK成本价、内部财务、企业账单摘要与争议申请 | `finance_admin`管理财务事实；技术角色只看获授权技术用量；平台商业裁决与企业内部账分域 |
+| 企业安全与可观测 | 策略、DLP、会话/输出安全、Webhook、调用日志、错误诊断、安全事件和审计 | `security_admin/auditor/legal_admin`按字段和动作裁剪；隐藏页面不替代API权限 |
+| 企业开发与数据工具 | Prompt、文件、文件安全、企业异步批处理、MCP、SDK/API文档、数据生命周期和私有Deployment | `owner/admin/developer/security_admin`按能力授权；文件正文、Prompt/Response和Secret不进入日志或平台支持证据 |
+
+底层队列、通知、健康探测、品牌历史表或账务对账可以复用受审运行时，但“复用运行时”不等于共享工作台、API、Session、数据owner或角色。平台任务与企业批任务、平台品牌与本地Deployment外观、官方Provider工程与企业BYOK配置必须保持独立导航和后端授权。
+
+现有tenant Console的63项导航已在Excel `11_现有导航处置`逐项分类，并绑定当前API/表/Scheduler证据、目标角色、承接PRD和切换门禁。归属计数固定为：44项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI。任何后续实现不得只删除菜单，必须同时处理DOM、预取、直达API、数据owner、事件、Scheduler、审计、兼容和回滚。
+
+完全迁入SaaS平台的是`growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`和`adapter-contract-runs`。`competitor-comparison`不属于平台运营工作台，必须退出登录后产品UI；`language-settings`属于账号本人而不是任何企业或平台角色。`overview`、`admin-assistant`、`approvals`、`branding`、`provider-health`、`error-maps`、`model-prices`、`plans`、`billing-disputes`、`policy-templates`、`system-status`和`config-summary`必须拆成独立主体、API、缓存、DTO和数据投影，不能继续共用tenant页面。
 
 Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入日志、事件、支持包或验收证据。成功、失败、取消、重试、用量和成本必须可追踪。默认上游仍为智谱、通义、月之暗面、文心、火山、混元、DeepSeek 官方/云服务及客户本地 OpenAI-compatible Endpoint；OpenRouter、硅基流动只作为竞品和迁移兼容对象。
 
@@ -108,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构与迁移基线已完成；当前下一条需求是 PRD-091，必须先设计和两轮自审，不能跳项实现。
+1. PRD-090 架构基线与 PRD-091 全局账号已完成；当前下一条需求是 PRD-092，必须先设计和两轮自审，不能跳项实现。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。

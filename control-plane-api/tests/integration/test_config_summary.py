@@ -63,6 +63,10 @@ async def test_config_summary_requires_internal_token_in_prod(
     monkeypatch.setenv("METAHUB_ENV", "prod")
     internal_token = "expected-control-token-0123456789abcdef"
     monkeypatch.setenv("METAHUB_INTERNAL_CONFIG_TOKEN", internal_token)
+    monkeypatch.setenv(
+        "METAHUB_IDENTITY_SESSION_SECRET",
+        "test-config-summary-identity-session-secret-0123456789abcdef",
+    )
     app = build_test_app()
 
     transport = ASGITransport(app=app)

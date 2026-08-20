@@ -38,7 +38,7 @@
 
 ### ADR-090-02：平台IAM与租户IAM分域
 
-决定：`platform_*` 角色和租户角色使用不同存储、Token audience、路由前缀和审计域。平台role id固定为`platform_owner`、`platform_ops`、`platform_security`、`platform_billing`、`platform_support`、`platform_verification`、`platform_compliance`、`platform_privacy`和`release_manager`；它们不自动成为任何Workspace成员。支持访问只能生成限时`SupportGrant`，且不允许读取Provider Key、Token、Prompt、Response或本地Secret。
+决定：`platform_*` 角色和租户角色使用不同存储、Token audience、路由前缀和审计域。平台role id固定为`platform_owner`、`platform_ops`、`platform_security`、`platform_billing`、`platform_support`、`platform_verification`、`platform_compliance`、`platform_privacy`、`release_manager`、`platform_provider_engineer`、`platform_channel`、`platform_customer_success`和`platform_growth`；它们不自动成为任何Workspace成员。支持访问只能生成限时`SupportGrant`，且不允许读取Provider Key、Token、Prompt、Response或本地Secret。
 
 拒绝方案：按`admin@metahub.local`或任意存量邮箱自动创建`PlatformOperator`。旧账号默认继续只是其Workspace的租户admin；按邮箱静默提升会让平台管理与客户业务管理无法证明隔离。
 
@@ -141,10 +141,12 @@
 
 | 处置 | navigation_id | 目标 |
 | --- | --- | --- |
-| 迁出企业或租户壳层 | `growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`、`adapter-contract-runs`、`competitor-comparison`、`language-settings` | 前三项进入平台增长/客户成功/渠道域；Adapter工程进入平台Provider工程台；竞品内容退出登录后产品UI；语言进入GlobalAccount壳层 |
-| 平台/企业拆分 | `overview`、`admin-assistant`、`approvals`、`branding`、`provider-health`、`error-maps`、`model-prices`、`plans`、`billing-disputes`、`policy-templates`、`system-status`、`config-summary` | 同名能力使用不同主体、API、缓存和数据投影；企业只保留本Workspace治理、BYOK成本、订阅摘要、争议申请和Deployment诊断 |
-| 企业保留但改名、归组、合并或降级 | `tenant`、`users`、`environments`、`local-models`、`response-cache`、`policy-simulator`、`intent-security`、`webhook-dead-letters`、`request-explanations`、`quickstart`、`sdk-examples`、`migration-guide`、`api-docs`、`file-security`、`mcp-tools`、`tenant-data-lifecycle`、`debug-console` | 分别进入企业资料/成员、模型接入、日志/文件详情、安全高级工具、真实向导、开发者中心和数据隐私；不再平铺全部菜单 |
-| 企业AI治理原位保留 | 其余27项 | BYOK、模型/路由、项目/Key、用量/内部FinOps、额度/预算、策略/DLP、安全、日志审计、Prompt/文件/批处理等继续以tenant为owner并按职能角色显示 |
+| 完全迁入SaaS平台（5项） | `growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`、`adapter-contract-runs` | 分别进入平台增长、客户成功、渠道和Provider工程域；所有企业角色的导航、DOM、预取和旧API归零 |
+| 平台/企业拆分（12项） | `overview`、`admin-assistant`、`approvals`、`branding`、`provider-health`、`error-maps`、`model-prices`、`plans`、`billing-disputes`、`policy-templates`、`system-status`、`config-summary` | 同名能力使用不同主体、API、缓存和数据投影；企业只保留本Workspace治理、BYOK成本、订阅摘要、争议申请和Deployment诊断 |
+| 迁到GlobalAccount壳层（1项） | `language-settings` | 只由账号本人维护，不携带平台或Workspace角色，也不改变权限 |
+| 退出登录后产品UI（1项） | `competitor-comparison` | 可转为公开市场/迁移资料，但不作为SaaS平台运营页或企业工作页 |
+| 企业Gateway保留但改名、归组、合并或降级（17项） | `tenant`、`users`、`environments`、`local-models`、`response-cache`、`policy-simulator`、`intent-security`、`webhook-dead-letters`、`request-explanations`、`quickstart`、`sdk-examples`、`migration-guide`、`api-docs`、`file-security`、`mcp-tools`、`tenant-data-lifecycle`、`debug-console` | 分别进入企业资料/成员、模型接入、日志/文件详情、安全高级工具、真实向导、开发者中心和数据隐私；不再平铺全部菜单 |
+| 企业Gateway直接保留（27项） | 其余27项 | BYOK、模型/路由、项目/Key、用量/内部FinOps、额度/预算、策略/DLP、安全、日志审计、Prompt/文件/批处理等继续以tenant为owner并按职能角色显示 |
 
 高风险迁移不能只改菜单：
 

@@ -51,6 +51,7 @@ from .file_security import install_file_security_event_scheduler
 from .file_security import router as file_security_router
 from .files.routes import router as files_router
 from .finops.routes import router as finops_router
+from .identity.routes import router as identity_router
 from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
 from .local_endpoints import router as local_endpoints_router
@@ -102,7 +103,13 @@ app = create_service_app(
     service_name="control-plane-api",
     title="MetaHub Control Plane API",
     # Policy 编辑器需要发送强 If-Match 并读取 ETag；该 CORS 能力只属于控制面。
-    extra_cors_allow_headers=("If-Match", "If-Policy-Candidate-Match", "Idempotency-Key"),
+    extra_cors_allow_headers=(
+        "If-Match",
+        "If-Policy-Candidate-Match",
+        "Idempotency-Key",
+        "X-CSRF-Token",
+    ),
+    cors_allow_credentials=True,
     extra_cors_expose_headers=(
         "ETag",
         "X-Policy-Candidate-ETag",
@@ -162,6 +169,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(identity_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
