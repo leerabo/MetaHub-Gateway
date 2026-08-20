@@ -33,9 +33,13 @@ def get_current_tenant(
     租户 ID 只来自认证上下文，不能由请求参数或请求体提供，这是多租户隔离的第一条边界。
     """
 
-    tenant = _load_current_tenant(_connect(config), context.user.tenant_id)
-    # 租户判断决定数据隔离边界，不能跨租户复用或返回对象。
-    return TenantCurrentResponse(tenant=tenant, request_id=request_id, trace_id=trace_id)
+    connection = _connect(config)
+    try:
+        tenant = _load_current_tenant(connection, context.user.tenant_id)
+        # 租户判断决定数据隔离边界，不能跨租户复用或返回对象。
+        return TenantCurrentResponse(tenant=tenant, request_id=request_id, trace_id=trace_id)
+    finally:
+        connection.close()
 
 
 def update_current_tenant(
@@ -65,15 +69,34 @@ def update_current_tenant(
         raise ApiError("tenant.update_empty")
 
     connection = _connect(config)
-    before = _load_current_tenant(connection, context.user.tenant_id)
-    assignments = ", ".join(f"{field}=?" for field in updates)
-    values = [*updates.values(), _to_db_time(_utcnow()), context.user.tenant_id]
     try:
+        before = _load_current_tenant(connection, context.user.tenant_id)
+        assignments = ", ".join(f"{field}=?" for field in updates)
+        values = [*updates.values(), _to_db_time(_utcnow()), context.user.tenant_id]
         connection.execute(
             f"UPDATE tenants SET {assignments}, updated_at=? WHERE tenant_id=?",
             values,
         )
         connection.commit()
+        after = _load_current_tenant(connection, context.user.tenant_id)
+        logger.info(
+            "tenant.updated",
+            extra={
+                "event": "tenant.updated",
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "tenant_id": context.user.tenant_id,
+                "actor_id": context.user.user_id,
+                "object_id": context.user.tenant_id,
+                "payload": {
+                    "changed_fields": sorted(updates),
+                    "before": {field: getattr(before, field) for field in updates},
+                    "after": {field: getattr(after, field) for field in updates},
+                },
+            },
+        )
+        # 租户状态或租户筛选是隔离边界，命中异常时必须立即截断。
+        return TenantCurrentResponse(tenant=after, request_id=request_id, trace_id=trace_id)
     # 数据库异常需要折叠为统一错误码并保留 request_id，避免底层细节外泄。
     except sqlite3.Error as exc:
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
@@ -82,26 +105,8 @@ def update_current_tenant(
             message="Tenant update failed.",
             suggestion="Check tenant fields and retry.",
         ) from exc
-
-    after = _load_current_tenant(connection, context.user.tenant_id)
-    logger.info(
-        "tenant.updated",
-        extra={
-            "event": "tenant.updated",
-            "request_id": request_id,
-            "trace_id": trace_id,
-            "tenant_id": context.user.tenant_id,
-            "actor_id": context.user.user_id,
-            "object_id": context.user.tenant_id,
-            "payload": {
-                "changed_fields": sorted(updates),
-                "before": {field: getattr(before, field) for field in updates},
-                "after": {field: getattr(after, field) for field in updates},
-            },
-        },
-    )
-    # 租户状态或租户筛选是隔离边界，命中异常时必须立即截断。
-    return TenantCurrentResponse(tenant=after, request_id=request_id, trace_id=trace_id)
+    finally:
+        connection.close()
 
 
 def _load_current_tenant(connection: sqlite3.Connection, tenant_id: str) -> TenantInfo:

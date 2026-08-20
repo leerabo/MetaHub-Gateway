@@ -267,40 +267,47 @@ def list_provider_health(
             clauses.append(f"{column}=?")
             params.append(value)
     connection = _connect(config)
-    rows = connection.execute(
-        f"""
-        SELECT provider_id, tenant_id, provider_code, name, provider_type, base_url,
-               status, health_status, last_tested_at, last_success_at, last_failure_at,
-               last_probe_latency_ms, last_probe_http_status, last_probe_error_code,
-               last_test_error, consecutive_probe_failures, next_probe_at, health_updated_at
-        FROM providers
-        WHERE {' AND '.join(clauses)}
-        ORDER BY provider_id ASC
-        """,
-        params,
-    ).fetchall()
-    items = [_health_item(row, config) for row in rows]
-    if normalized_health:
-        items = [item for item in items if item.effective_health_status == normalized_health]
-    items.sort(
-        key=lambda item: (
-            {"unhealthy": 0, "observing": 1, "unknown": 2, "healthy": 3, "disabled": 4}[
-                item.effective_health_status
-            ],
-            item.provider_id,
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT provider_id, tenant_id, provider_code, name, provider_type, base_url,
+                   status, health_status, last_tested_at, last_success_at, last_failure_at,
+                   last_probe_latency_ms, last_probe_http_status, last_probe_error_code,
+                   last_test_error, consecutive_probe_failures, next_probe_at, health_updated_at
+            FROM providers
+            WHERE {' AND '.join(clauses)}
+            ORDER BY provider_id ASC
+            """,
+            params,
+        ).fetchall()
+        items = [_health_item(row, config) for row in rows]
+        if normalized_health:
+            items = [item for item in items if item.effective_health_status == normalized_health]
+        items.sort(
+            key=lambda item: (
+                {
+                    "unhealthy": 0,
+                    "observing": 1,
+                    "unknown": 2,
+                    "healthy": 3,
+                    "disabled": 4,
+                }[item.effective_health_status],
+                item.provider_id,
+            )
         )
-    )
-    summary = _summary(items)
-    total = len(items)
-    return ProviderHealthListResponse(
-        provider_health=items[offset : offset + limit],
-        summary=summary,
-        total=total,
-        limit=limit,
-        offset=offset,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+        summary = _summary(items)
+        total = len(items)
+        return ProviderHealthListResponse(
+            provider_health=items[offset : offset + limit],
+            summary=summary,
+            total=total,
+            limit=limit,
+            offset=offset,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def probe_provider(

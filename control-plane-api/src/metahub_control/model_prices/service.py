@@ -58,43 +58,46 @@ def list_model_price_plans(
         # 未知状态无法稳定解释价格时间线，必须返回统一查询错误。
         raise ApiError("model_price.query_invalid")
     connection = _connect(config)
-    # 指定模型筛选时先验证当前租户归属，避免跨租户 ID 被用于价格探测。
-    if normalized_model_id:
-        _require_model(connection, context.user.tenant_id, normalized_model_id)
-    params: list[object] = [context.user.tenant_id]
-    model_filter = ""
-    # 已验证的模型 ID 才能进入 SQL 条件，查询始终同时保留 tenant_id 约束。
-    if normalized_model_id:
-        model_filter = " AND pp.model_id=?"
-        params.append(normalized_model_id)
-    rows = connection.execute(
-        f"""
-        SELECT
-          pp.*, m.model_alias AS internal_model_id, m.display_name,
-          p.provider_code, u.display_name AS created_by_name
-        FROM model_price_plans pp
-        JOIN models m ON m.tenant_id=pp.tenant_id AND m.model_id=pp.model_id
-        JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
-        LEFT JOIN users u ON u.tenant_id=pp.tenant_id AND u.user_id=pp.created_by
-        WHERE pp.tenant_id=? {model_filter}
-        ORDER BY pp.model_id ASC, pp.effective_from ASC, pp.created_at ASC
-        """,
-        params,
-    ).fetchall()
-    as_of = _utcnow()
-    plans = _plan_infos(rows, as_of)
-    if normalized_status != "all":
-        plans = [plan for plan in plans if plan.effective_status == normalized_status]
-    total = len(plans)
-    return ModelPricePlanListResponse(
-        price_plans=plans[offset : offset + limit],
-        total=total,
-        limit=limit,
-        offset=offset,
-        as_of=as_of,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        # 指定模型筛选时先验证当前租户归属，避免跨租户 ID 被用于价格探测。
+        if normalized_model_id:
+            _require_model(connection, context.user.tenant_id, normalized_model_id)
+        params: list[object] = [context.user.tenant_id]
+        model_filter = ""
+        # 已验证的模型 ID 才能进入 SQL 条件，查询始终同时保留 tenant_id 约束。
+        if normalized_model_id:
+            model_filter = " AND pp.model_id=?"
+            params.append(normalized_model_id)
+        rows = connection.execute(
+            f"""
+            SELECT
+              pp.*, m.model_alias AS internal_model_id, m.display_name,
+              p.provider_code, u.display_name AS created_by_name
+            FROM model_price_plans pp
+            JOIN models m ON m.tenant_id=pp.tenant_id AND m.model_id=pp.model_id
+            JOIN providers p ON p.tenant_id=m.tenant_id AND p.provider_id=m.provider_id
+            LEFT JOIN users u ON u.tenant_id=pp.tenant_id AND u.user_id=pp.created_by
+            WHERE pp.tenant_id=? {model_filter}
+            ORDER BY pp.model_id ASC, pp.effective_from ASC, pp.created_at ASC
+            """,
+            params,
+        ).fetchall()
+        as_of = _utcnow()
+        plans = _plan_infos(rows, as_of)
+        if normalized_status != "all":
+            plans = [plan for plan in plans if plan.effective_status == normalized_status]
+        total = len(plans)
+        return ModelPricePlanListResponse(
+            price_plans=plans[offset : offset + limit],
+            total=total,
+            limit=limit,
+            offset=offset,
+            as_of=as_of,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_model_price_plan(

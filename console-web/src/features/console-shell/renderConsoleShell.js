@@ -37,6 +37,11 @@ export function renderConsoleShell({
     localizeNavigationItem(item, i18n),
   );
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
+  const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState);
+  const expandedGroupKey = String(consoleShellState?.sidebarExpandedGroupKey ?? "").trim();
+  const sidebarToggleLabel = sidebarCollapsed
+    ? t(i18n, "shell.sidebar_expand", "展开导航")
+    : t(i18n, "shell.sidebar_collapse", "收缩导航");
   return `
     <section class="topbar console-topbar">
       ${renderBrandMark(branding)}
@@ -47,13 +52,27 @@ export function renderConsoleShell({
       ${renderUserMenu(authContext, i18n)}
     </section>
 
-    <section class="console-shell" data-active-navigation="${escapeAttribute(activeItem.id)}">
-      <aside class="console-sidebar" aria-label="${escapeAttribute(t(i18n, "shell.nav_aria", "控制台导航"))}">
+    <section class="console-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}" data-active-navigation="${escapeAttribute(activeItem.id)}" data-sidebar-collapsed="${sidebarCollapsed ? "true" : "false"}">
+      <aside id="console-sidebar" class="console-sidebar" aria-label="${escapeAttribute(t(i18n, "shell.nav_aria", "控制台导航"))}">
         <div class="sidebar-title">
-          <strong>${escapeHtml(t(i18n, "shell.sidebar_title", "治理入口"))}</strong>
-          <span>${escapeHtml(authContext?.user?.role ?? t(i18n, "shell.guest", "guest"))}</span>
+          <div class="sidebar-title-copy">
+            <strong>${escapeHtml(t(i18n, "shell.sidebar_title", "治理入口"))}</strong>
+            <span>${escapeHtml(authContext?.user?.role ?? t(i18n, "shell.guest", "guest"))}</span>
+          </div>
+          <button
+            type="button"
+            class="sidebar-toggle"
+            data-sidebar-toggle
+            aria-controls="console-sidebar"
+            aria-expanded="${sidebarCollapsed ? "false" : "true"}"
+            aria-label="${escapeAttribute(sidebarToggleLabel)}"
+            title="${escapeAttribute(sidebarToggleLabel)}"
+          >
+            <span class="sidebar-toggle-icon" aria-hidden="true">${sidebarCollapsed ? "&#x203A;" : "&#x2039;"}</span>
+            <span class="sidebar-toggle-text">${escapeHtml(sidebarToggleLabel)}</span>
+          </button>
         </div>
-        ${renderNavigationGroups(navigationItems, activeItem.id)}
+        ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey, sidebarCollapsed)}
       </aside>
       <main class="console-main" aria-labelledby="console-main-title">
         <div class="console-main-heading">
@@ -83,6 +102,12 @@ function renderBrandMark(branding) {
 function brandingText(value, fallback) {
   const text = String(value ?? "").trim();
   return text && text.length <= 120 ? text : fallback;
+}
+
+/** 偏好接口返回 preference 包装对象；兼容单测和旧缓存中的扁平形态。 */
+function sidebarCollapsedFromState(consoleShellState) {
+  return consoleShellState?.preferences?.preference?.sidebar_collapsed === true
+    || consoleShellState?.preferences?.sidebar_collapsed === true;
 }
 
 /**
@@ -141,7 +166,7 @@ function localizeGroupLabel(group, i18n) {
 /**
  * 按 group 渲染侧边栏导航，保证不同角色只看到后端返回的可见入口。
  */
-function renderNavigationGroups(items, activeId) {
+function renderNavigationGroups(items, activeId, expandedGroupKey = "", sidebarCollapsed = false) {
   const groups = [];
   for (const item of items) {
     let group = groups.find((entry) => entry.name === item.group);
@@ -152,15 +177,41 @@ function renderNavigationGroups(items, activeId) {
     group.items.push(item);
   }
   return groups
-    .map(
-      (group) => `
-        <nav class="sidebar-group" aria-label="${escapeAttribute(group.name)}">
-          <h3>${escapeHtml(group.name)}</h3>
-          ${group.items.map((item) => renderNavigationItem(item, activeId)).join("")}
+    .map((group, index) => {
+      const key = sidebarGroupKey(group);
+      // The full sidebar is an accordion. The compact icon rail still exposes every authorized item.
+      const isExpanded = sidebarCollapsed || key === expandedGroupKey;
+      const isCollapsed = !isExpanded;
+      const itemsId = `sidebar-group-items-${index}`;
+      return `
+        <nav class="sidebar-group${isCollapsed ? " is-collapsed" : ""}" aria-label="${escapeAttribute(group.name)}" data-sidebar-group="${escapeAttribute(key)}">
+          <button
+            type="button"
+            class="sidebar-group-toggle"
+            data-sidebar-group-toggle="${escapeAttribute(key)}"
+            aria-controls="${itemsId}"
+            aria-expanded="${isCollapsed ? "false" : "true"}"
+            aria-label="${escapeAttribute(`${isCollapsed ? "展开" : "收起"}${group.name}`)}"
+            title="${escapeAttribute(`${isCollapsed ? "展开" : "收起"}${group.name}`)}"
+          >
+            <span class="sidebar-group-label">${escapeHtml(group.name)}</span>
+            <span class="sidebar-group-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div id="${itemsId}" class="sidebar-group-items"${isCollapsed ? " hidden" : ""}>
+            ${group.items.map((item) => renderNavigationItem(item, activeId)).join("")}
+          </div>
         </nav>
-      `,
-    )
+      `;
+    })
     .join("");
+}
+
+/** Group identity is derived only from backend navigation IDs, not display labels. */
+function sidebarGroupKey(group) {
+  const ids = group.items
+    .map((item) => String(item?.id ?? "").trim())
+    .filter(Boolean);
+  return ids.join("|") || String(group.name ?? "").trim();
 }
 
 /**
@@ -169,19 +220,32 @@ function renderNavigationGroups(items, activeId) {
  */
 function renderNavigationItem(item, activeId) {
   const active = item.id === activeId;
+  const label = String(item.label ?? item.id ?? "").trim();
   return `
     <button
       type="button"
       class="sidebar-link${active ? " active" : ""}"
       data-console-nav="${escapeAttribute(item.id)}"
       data-console-target="${escapeAttribute(item.target_section)}"
+      data-console-nav-label="${escapeAttribute(label)}"
+      data-console-group="${escapeAttribute(item.group ?? "")}"
+      data-console-description="${escapeAttribute(item.description ?? "")}"
       aria-current="${active ? "page" : "false"}"
+      aria-label="${escapeAttribute(label)}"
       title="${escapeAttribute(item.empty_state_hint ?? item.description ?? "")}"
     >
-      <span>${escapeHtml(item.label)}</span>
+      <span class="sidebar-link-label">${escapeHtml(label)}</span>
+      <span class="sidebar-link-short" aria-hidden="true">${escapeHtml(shortNavigationLabel(item))}</span>
       <small>${escapeHtml(item.description ?? "")}</small>
     </button>
   `;
+}
+
+function shortNavigationLabel(item) {
+  const source = String(item.label ?? item.id ?? "").trim();
+  const letters = Array.from(source).filter((character) => /[\p{L}\p{N}]/u.test(character));
+  const compact = letters.slice(0, 2).join("");
+  return compact || String(item.id ?? "nav").replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "NA";
 }
 
 /**

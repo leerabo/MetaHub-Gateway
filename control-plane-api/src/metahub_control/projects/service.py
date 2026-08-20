@@ -78,29 +78,32 @@ def list_projects(
         like_value = f"%{normalized_search}%"
         params.extend([like_value, like_value])
     connection = _connect(config)
-    rows = connection.execute(
-        f"""
-        SELECT
-          p.project_id, p.tenant_id, p.project_code, p.name, p.description,
-          p.owner_user_id, u.display_name AS owner_display_name, p.status,
-          p.created_at, p.updated_at,
-          COUNT(DISTINCT a.application_id) AS application_count,
-          COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
-        FROM projects p
-        LEFT JOIN users u ON u.tenant_id=p.tenant_id AND u.user_id=p.owner_user_id
-        LEFT JOIN applications a ON a.tenant_id=p.tenant_id AND a.project_id=p.project_id
-        LEFT JOIN virtual_keys vk ON vk.tenant_id=p.tenant_id AND vk.project_id=p.project_id
-        WHERE {' AND '.join(clauses)}
-        GROUP BY p.project_id
-        ORDER BY p.updated_at DESC, p.project_code ASC
-        """,
-        params,
-    ).fetchall()
-    return ProjectListResponse(
-        projects=[_project_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT
+              p.project_id, p.tenant_id, p.project_code, p.name, p.description,
+              p.owner_user_id, u.display_name AS owner_display_name, p.status,
+              p.created_at, p.updated_at,
+              COUNT(DISTINCT a.application_id) AS application_count,
+              COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
+            FROM projects p
+            LEFT JOIN users u ON u.tenant_id=p.tenant_id AND u.user_id=p.owner_user_id
+            LEFT JOIN applications a ON a.tenant_id=p.tenant_id AND a.project_id=p.project_id
+            LEFT JOIN virtual_keys vk ON vk.tenant_id=p.tenant_id AND vk.project_id=p.project_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY p.project_id
+            ORDER BY p.updated_at DESC, p.project_code ASC
+            """,
+            params,
+        ).fetchall()
+        return ProjectListResponse(
+            projects=[_project_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_project(
@@ -233,39 +236,44 @@ def list_applications(
     normalized_status = _normalize_query_status(status)
     normalized_search = _normalize_optional_search(search)
     connection = _connect(config)
-    clauses = ["a.tenant_id=?"]
-    params: list[object] = [context.user.tenant_id]
-    if normalized_project_id:
-        _load_project(connection, context.user.tenant_id, normalized_project_id)
-        clauses.append("a.project_id=?")
-        params.append(normalized_project_id)
-    if normalized_status != "all":
-        clauses.append("a.status=?")
-        params.append(normalized_status)
-    if normalized_search:
-        clauses.append("(a.application_code LIKE ? OR a.name LIKE ?)")
-        like_value = f"%{normalized_search}%"
-        params.extend([like_value, like_value])
-    rows = connection.execute(
-        f"""
-        SELECT
-          a.application_id, a.tenant_id, a.project_id, p.project_code, p.name AS project_name,
-          a.application_code, a.name, a.description, a.status, a.created_at, a.updated_at,
-          COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
-        FROM applications a
-        JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
-        LEFT JOIN virtual_keys vk ON vk.tenant_id=a.tenant_id AND vk.application_id=a.application_id
-        WHERE {' AND '.join(clauses)}
-        GROUP BY a.application_id
-        ORDER BY a.updated_at DESC, a.application_code ASC
-        """,
-        params,
-    ).fetchall()
-    return ApplicationListResponse(
-        applications=[_application_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        clauses = ["a.tenant_id=?"]
+        params: list[object] = [context.user.tenant_id]
+        if normalized_project_id:
+            _load_project(connection, context.user.tenant_id, normalized_project_id)
+            clauses.append("a.project_id=?")
+            params.append(normalized_project_id)
+        if normalized_status != "all":
+            clauses.append("a.status=?")
+            params.append(normalized_status)
+        if normalized_search:
+            clauses.append("(a.application_code LIKE ? OR a.name LIKE ?)")
+            like_value = f"%{normalized_search}%"
+            params.extend([like_value, like_value])
+        rows = connection.execute(
+            f"""
+            SELECT
+              a.application_id, a.tenant_id, a.project_id, p.project_code,
+              p.name AS project_name, a.application_code, a.name, a.description,
+              a.status, a.created_at, a.updated_at,
+              COUNT(DISTINCT vk.virtual_key_id) AS virtual_key_count
+            FROM applications a
+            JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
+            LEFT JOIN virtual_keys vk
+              ON vk.tenant_id=a.tenant_id AND vk.application_id=a.application_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY a.application_id
+            ORDER BY a.updated_at DESC, a.application_code ASC
+            """,
+            params,
+        ).fetchall()
+        return ApplicationListResponse(
+            applications=[_application_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_application(

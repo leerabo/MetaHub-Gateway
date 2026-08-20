@@ -366,7 +366,8 @@ test("main and CSS include every prompt cleanup and responsive boundary", async 
   ]);
   assert.match(mainSource, /clearPolicyDryRunSessionState\(\)/);
   assert.match(mainSource, /clearPolicyDryRunStateOnIdentityChange/);
-  assert.match(mainSource, /policyDryRunLifecycle\.isBusy\(\) \|\| policyDryRunHasSensitiveInput\(\)/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "policy-simulator":[\s\S]*policyDryRunContextState/);
   assert.match(mainSource, /textarea\[name='prompt'\]"\)\.value = ""/);
   assert.match(mainSource, /bindPolicyDryRunInteractions\(consoleShellState\)/);
   assert.match(mainSource, /focusSelector: "#policy-dry-run-summary-title"/);

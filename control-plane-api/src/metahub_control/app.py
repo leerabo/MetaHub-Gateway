@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.fastapi_app import create_service_app
 from starlette.requests import Request
 
@@ -82,9 +85,9 @@ from .response_cache import install_response_cache_outbox_scheduler
 from .response_cache import router as response_cache_router
 from .security_events import install_security_event_scheduler
 from .session_risks import router as session_risks_router
-from .tenants.routes import router as tenant_router
 from .tenant_data import install_tenant_data_scheduler
 from .tenant_data.routes import router as tenant_data_router
+from .tenants.routes import router as tenant_router
 from .usage.routes import router as usage_router
 from .usage.scheduler import install_usage_export_scheduler
 from .user_preferences.routes import router as user_preferences_router
@@ -118,7 +121,15 @@ app = create_service_app(
 async def response_cache_private_cache_boundary(request: Request, call_next):
     """让 Response Cache 的认证、校验与业务错误和成功响应共享 no-store/private。"""
 
-    response = await call_next(request)
+    # Control GETs commonly authenticate and then read through a separate service.
+    # Reuse one handle for that request only; writes keep their existing ownership.
+    scope = (
+        database_request_scope()
+        if request.method in {"GET", "HEAD"}
+        else nullcontext()
+    )
+    with scope:
+        response = await call_next(request)
     if (
         request.url.path
         in {
@@ -210,27 +221,29 @@ app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
 # PRD-077 runtime 必须先于其他 scheduler 预建 WAL/FULL 连接；后安装的 lifespan 会在
-# shutdown 时先停止各自 worker，再由本 runtime 最后关闭长期连接。
-install_admin_assistant_scheduler(app)
-install_provider_health_scheduler(app)
-install_usage_export_scheduler(app)
-install_cost_anomaly_scheduler(app)
-install_customer_health_scheduler(app)
-install_request_explanation_scheduler(app)
-install_request_log_query_event_scheduler(app)
-install_provider_error_map_scheduler(app)
-install_audit_export_scheduler(app)
-install_webhook_replay_scheduler(app)
-install_file_security_event_scheduler(app)
-install_adapter_contract_event_scheduler(app)
-install_experiment_scheduler(app)
-install_response_cache_outbox_scheduler(app)
-install_product_event_scheduler(app)
-install_approval_scheduler(app)
-install_plan_billing_scheduler(app)
-install_partner_portal_scheduler(app)
-install_branding_scheduler(app)
-install_billing_dispute_scheduler(app)
-install_security_event_scheduler(app)
-install_mcp_scheduler(app)
-install_tenant_data_scheduler(app)
+# shutdown 时先停止各自 worker，再由本 runtime 最后关闭长期连接。单进程本地开发默认
+# 可关闭这组可选恢复 worker，避免大量空队列轮询争用 SQLite；生产默认保持开启。
+if app.state.config.control_background_schedulers_enabled:
+    install_admin_assistant_scheduler(app)
+    install_provider_health_scheduler(app)
+    install_usage_export_scheduler(app)
+    install_cost_anomaly_scheduler(app)
+    install_customer_health_scheduler(app)
+    install_request_explanation_scheduler(app)
+    install_request_log_query_event_scheduler(app)
+    install_provider_error_map_scheduler(app)
+    install_audit_export_scheduler(app)
+    install_webhook_replay_scheduler(app)
+    install_file_security_event_scheduler(app)
+    install_adapter_contract_event_scheduler(app)
+    install_experiment_scheduler(app)
+    install_response_cache_outbox_scheduler(app)
+    install_product_event_scheduler(app)
+    install_approval_scheduler(app)
+    install_plan_billing_scheduler(app)
+    install_partner_portal_scheduler(app)
+    install_branding_scheduler(app)
+    install_billing_dispute_scheduler(app)
+    install_security_event_scheduler(app)
+    install_mcp_scheduler(app)
+    install_tenant_data_scheduler(app)

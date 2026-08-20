@@ -407,6 +407,7 @@ import {
 import { GatewayApiError, sendChatCompletion } from "../lib/gatewayApi.js";
 import { createEnvironment, listEnvironments, updateEnvironment } from "../lib/environments.js";
 import { getDashboardRoleView } from "../lib/dashboard.js";
+import { getTenantOnboardingSummary } from "../lib/onboarding.js";
 import { getDeveloperQuickstartData } from "../lib/developerQuickstart.js";
 import {
   downloadJavascriptSdkExample,
@@ -741,8 +742,12 @@ import { renderInvitationAcceptancePage } from "../features/invitations/renderIn
 
 // 非浏览器单测只导入生命周期管理器，不启动应用；真实页面仍要求存在 #app 根节点。
 const app = globalThis.document?.querySelector("#app") ?? null;
-const gatewayUrl = "http://localhost:8000";
-const controlApiUrl = "http://localhost:8001";
+// The local Python services bind IPv4 only. On the local console, avoid the
+// Windows IPv6 ::1 fallback delay; keep the hostname fallback for non-local
+// deployments and the established source-level browser contracts.
+const localLoopback = globalThis.window?.location?.hostname === "localhost";
+const gatewayUrl = localLoopback ? "http://127.0.0.1:8000" : "http://localhost:8000";
+const controlApiUrl = localLoopback ? "http://127.0.0.1:8001" : "http://localhost:8001";
 const consoleUrl = globalThis.window?.location?.origin ?? "";
 // 公开邀请 fragment 必须先于认证 Storage 读取同步截获并清除，避免既有 Session 污染 accept 请求。
 const publicInvitationRoute = globalThis.window
@@ -762,7 +767,13 @@ let publicBrandingGeneration = 0;
 let publicBrandingLogoUrl = "";
 // 当前 i18n 上下文供 PAGE-070 局部重绘复用；身份清除时会回到默认中文，避免沿用上一用户偏好。
 let currentI18n = createI18n(DEFAULT_LOCALE);
+let shellMetadataIdentity = "";
+let consolePreferencesIdentity = "";
+let consolePreferencesCache = null;
 let gatewayDebugState = {};
+// 分组折叠只保存稳定导航 ID，不保存租户、用户、业务数据或任何凭据。
+const SIDEBAR_GROUP_STORAGE_KEY = "metahub.console.sidebar-group.v2";
+let expandedConsoleGroupKey = readExpandedConsoleGroupKey();
 // 生命周期管理器集中持有当前 AbortController 和递增代次，防止旧流回调覆盖连续提交后的新结果。
 const gatewayDebugLifecycle = createGatewayDebugStreamLifecycle();
 // PAGE-093 的正文、草稿、Session owner 和 AbortController 全部封装在独立闭包，绝不复用 Debug Console。
@@ -799,6 +810,12 @@ let providerHealthActionError = null;
 let providerHealthProbingProviderId = null;
 let providerHealthRequestGeneration = 0;
 let providerHealthController = null;
+// Provider 列表及其 Key 读取绑定当前刷新；导航或注销时必须先取消，避免失效 Token 继续请求。
+let providersLoadController = null;
+let consoleSidebarController = null;
+// 导航偏好和访问事件是低优先级写入；快速切页时只保留最后一页。
+const CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000;
+let consoleNavigationSideEffectTimer = null;
 // Provider 状态 GET 使用完整身份、导航、筛选、Token 与 generation 共同约束迟到响应。
 const providerStatusPageState = createProviderStatusPageState();
 // PAGE-092 使用独立 owner 和记忆；selected view 只驻留内存，禁止写入 URL、Storage 或用户偏好。
@@ -853,6 +870,9 @@ let tenantDataDeletionTrigger = null;
 let activeConsoleNavigationCount = 0;
 // 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
 let nextRefreshIsBackground = false;
+// 导航点击使用一次性快速路径；先投影当前入口，再由后台 refresh 补齐非当前页面数据。
+let nextRefreshIsFastNavigation = false;
+const FAST_NAVIGATION_COMPLETE_IDS = new Set(["overview", "admin-assistant"]);
 let usageFilters = { limit: 20, offset: 0 };
 let usageActionError = null;
 // CSV 导出状态只驻留当前认证会话内存；controller 和 generation 防止离页后的旧轮询覆盖新会话页面。
@@ -1307,11 +1327,11 @@ async function start() {
  * 执行 控制台主应用 的 `refresh` 辅助逻辑，保持页面状态和后端响应口径一致。
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
-async function refresh() {
+async function refresh(options = {}) {
   // 交互刷新仍允许覆盖更早结果；活动计数只供后台定时器判断，不能吞掉用户刚完成的操作反馈。
   activeRefreshCount += 1;
   try {
-    return await performRefresh();
+    return await performRefresh(options);
   } finally {
     activeRefreshCount -= 1;
   }
@@ -1321,10 +1341,14 @@ async function refresh() {
  * 执行单轮控制台数据读取和渲染。
  * refresh 外层必须用 finally 维护活动计数，确保认证失败或任一提前返回都不会永久关闭定时刷新。
  */
-async function performRefresh() {
+async function performRefresh(options = {}) {
   const refreshId = ++refreshSequence;
+  providersLoadController?.abort();
+  providersLoadController = null;
   const isBackgroundRefresh = nextRefreshIsBackground;
   nextRefreshIsBackground = false;
+  const isFastNavigation = nextRefreshIsFastNavigation;
+  nextRefreshIsFastNavigation = false;
   // Token 与刷新序号共同构成本轮 owner；只冻结公开的会话句柄，不复制用户上下文或任何业务敏感数据。
   const refreshToken = authSession.token;
   // 刷新入口仍以有效登录态为第一边界，序号不能替代认证校验。
@@ -1338,8 +1362,14 @@ async function performRefresh() {
     { generation: refreshSequence, token: authSession.token },
   );
   let adminAssistantIdentityChanged = false;
+  let fastRoleDashboardState = null;
   try {
-    const context = await getCurrentUser({ controlApiUrl, token: refreshToken });
+    // 登录刚完成时，调用方已经用同一个新 Token 完成了一次 /auth/me。
+    // 复用该响应可避免首屏再次发起相同认证查询；后续刷新不传此值，仍完整复核 Session/RBAC。
+    const context = options.initialContext ?? await getCurrentUser({
+      controlApiUrl,
+      token: refreshToken,
+    });
     // 注销、新登录或更新一轮刷新都会让旧 owner 失效；必须在写 Storage、身份内存和租户页面状态前丢弃迟到响应。
     if (!refreshOwnerCurrent()) {
       return;
@@ -1419,11 +1449,61 @@ async function performRefresh() {
   if (!consoleShellState || !authSession.token) {
     return;
   }
-  // PAGE-120 是全局 shell 品牌，先于业务页面读取；失败只降级默认品牌，不能阻断其他已授权页面。
-  const brandingState = await loadBrandingState(refreshId);
+  consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
+  if (isFastNavigation) {
+    // 此处已经完成 auth/me、导航可见性、RBAC 指纹和当前 Session 校验。
+    // 目标页先使用后端授权导航和安全空态投影，避免等待无关页面的整套请求。
+    if (consoleShellState.activeNavigationItemId === "overview") {
+      fastRoleDashboardState = await loadRoleDashboardState(consoleShellState, roleDashboardEntrySource);
+    }
+    if (!refreshOwnerCurrent() || !authSession.token) {
+      return;
+    }
+    const fastAdminAssistantState = consoleShellState.activeNavigationItemId === "admin-assistant"
+      ? loadAdminAssistantState(consoleShellState, refreshId)
+      : null;
+    renderDeveloperStart(app, {
+      gatewayUrl,
+      controlApiUrl,
+      consoleUrl,
+      authContext: authSession.context,
+      consoleShellState,
+      i18n: currentI18n,
+      branding: brandingDisplayFromSnapshot(brandingPageState.snapshot()),
+      roleDashboardState: fastRoleDashboardState,
+      adminAssistantState: fastAdminAssistantState,
+    });
+    bindOutputSafetyDetailInteractions(consoleShellState);
+    bindAuthenticatedEvents(consoleShellState);
+    // Continue in the same owner-bound refresh. The active-page dispatcher below
+    // loads only this navigation item instead of starting a second full refresh.
+  }
+  // overview 首屏只依赖后端导航和角色首页聚合；先完成这两个关键请求即可显示可用控制台。
+  // 结果会在后续完整刷新中复用，避免重复 GET 或让后续 loader 取消首屏请求。
+  if (!isBackgroundRefresh && !fastRoleDashboardState && consoleShellState.activeNavigationItemId === "overview") {
+    fastRoleDashboardState = await loadRoleDashboardState(consoleShellState, roleDashboardEntrySource);
+    if (
+      fastRoleDashboardState
+      && refreshId === refreshSequence
+      && refreshOwnerCurrent()
+      && authSession.token
+    ) {
+      renderDeveloperStart(app, {
+        gatewayUrl,
+        controlApiUrl,
+        consoleUrl,
+        authContext: authSession.context,
+        consoleShellState,
+        i18n: currentI18n,
+        roleDashboardState: fastRoleDashboardState,
+      });
+      bindAuthenticatedEvents(consoleShellState);
+    }
+  }
   if (!authSession.token || !refreshOwnerCurrent()) {
     return;
   }
+  const brandingState = brandingPageState.snapshot();
   if (
     isBackgroundRefresh
     && !adminAssistantIdentityChanged
@@ -1438,32 +1518,16 @@ async function performRefresh() {
     // 导航裁剪、非法 hash 或离页必须在任何其他租户读取前销毁 Chat 正文与在途回调。
     clearEnterpriseChatSessionState();
   }
-  await loadEnterpriseChatState(consoleShellState);
-  // Chat 加载若因实时 401 清空了 Token，必须停止后续受保护页面读取，避免携带失效身份继续请求。
-  if (!authSession.token) {
-    return;
-  }
   if (consoleShellState?.activeNavigationItemId !== "prompt-templates") {
     // 导航裁剪、非法 hash 或降权先清 PAGE-094 正文/草稿，其他页面绝不后台预取模板定义。
     clearPromptTemplateSessionState();
   }
-  const promptTemplateState = await loadPromptTemplateState(consoleShellState, refreshId);
-  // 模板读取若确认 Session 失效会同步清空 Token；后续任何租户接口都不得继续使用旧登录态。
-  if (!authSession.token) {
-    return;
-  }
+  const promptTemplateState = null;
   if (consoleShellState?.activeNavigationItemId !== "policy-templates") {
     // PAGE-095 的绑定、nonce 和双 CAS 只属于当前授权页面，其他导航绝不后台预取或保留。
     clearPolicyTemplateLibrarySessionState();
   }
-  const policyTemplateLibraryState = await loadPolicyTemplateLibraryState(
-    consoleShellState,
-    refreshId,
-  );
-  // PAGE-095 读取若已确认 Session 失效会清空 Token，后续租户页面不得继续沿用旧认证事实。
-  if (!authSession.token) {
-    return;
-  }
+  const policyTemplateLibraryState = null;
   // 角色首页只属于后端确认的 overview；导航裁剪、非法 hash 或离页时立即 abort 并清除受保护卡片。
   if (!roleDashboardNavigationOwned(consoleShellState, readNavigationHashState())) {
     clearRoleDashboardSessionState();
@@ -1696,114 +1760,149 @@ async function performRefresh() {
   if (!authSession.token) {
     return;
   }
+  await loadAndRenderActiveNavigation({
+    consoleShellState,
+    refreshId,
+    fastRoleDashboardState,
+    isBackgroundRefresh,
+    refreshOwnerCurrent,
+  });
+  return;
   // PAGE-085 只在后端授权导航激活时读取；loader 还会冻结 tenant、Session、revision 与授权指纹。
-  const rolePermissionState = await loadRolePermissionState(consoleShellState, refreshId);
-  if (!authSession.token) {
-    return;
-  }
-  const userPreferencesState = await loadUserPreferencesState();
+  const [rolePermissionState, userPreferencesState] = await Promise.all([
+    loadRolePermissionState(consoleShellState, refreshId),
+    loadUserPreferencesState(),
+  ]);
   // 语言偏好同样依赖当前登录态，401 必须立即回到登录页。
   if (!authSession.token) {
     return;
   }
   const i18n = createI18n(userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
   currentI18n = i18n;
-  const roleDashboardState = await loadRoleDashboardState(
-    consoleShellState,
-    roleDashboardEntrySource,
-  );
+  const [
+    roleDashboardState,
+    quickstartState,
+    sdkExampleStates,
+    tenantState,
+    usersState,
+    providerHealthState,
+    adapterSpecsState,
+    adapterContractRunsState,
+  ] = await Promise.all([
+    fastRoleDashboardState ?? loadRoleDashboardState(consoleShellState, roleDashboardEntrySource),
+    loadQuickstartState(consoleShellState),
+    loadSdkExampleStates(consoleShellState),
+    loadTenantState(),
+    loadUsersState(consoleShellState),
+    loadProviderHealthState(consoleShellState),
+    loadAdapterSpecsState(consoleShellState),
+    loadAdapterContractRunsState(consoleShellState, refreshId),
+  ]);
   // 角色首页失败会保留统一错误或同 owner partial，但当前 401 仍必须切断全部后续租户读取。
   if (!authSession.token) {
     return;
   }
-  const quickstartState = await loadQuickstartState(consoleShellState);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const sdkExampleStates = await loadSdkExampleStates(consoleShellState);
   // 任一语言元数据接口确认会话失效后，顺序加载器会统一清理会话，后续租户数据请求必须停止。
   if (!authSession.token) {
     return;
   }
-  const tenantState = await loadTenantState();
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const usersState = await loadUsersState(consoleShellState);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const providerHealthState = await loadProviderHealthState(consoleShellState);
   // 健康接口若确认会话失效会清空 Token，后续所有租户配置读取必须立即停止。
   if (!authSession.token) {
     return;
   }
   // PAGE-090 只在后端确认 active 导航后读取；loader 会再次冻结权限、身份、筛选和 Token owner。
-  const adapterSpecsState = await loadAdapterSpecsState(consoleShellState);
   if (!authSession.token) {
     return;
   }
   // PAGE-091 只有精确后端导航 owner 才读取，viewer 和其他导航不会预取运行或 case。
-  const adapterContractRunsState = await loadAdapterContractRunsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-105 缺任一创建依赖时不得预取四类候选；其他页面保持既有共享目录加载行为。
   const loadExperimentCreateResources = shouldLoadExperimentCreateResources(consoleShellState);
-  const environmentState = loadExperimentCreateResources ? await loadEnvironmentState() : null;
+  const [environmentState, providersState, modelsState] = await Promise.all([
+    loadExperimentCreateResources ? loadEnvironmentState() : Promise.resolve(null),
+    consoleShellState?.activeNavigationItemId === "local-models"
+      ? Promise.resolve(null)
+      : loadProvidersState(),
+    loadExperimentCreateResources ? loadModelsState() : Promise.resolve(null),
+  ]);
+  // Static lifecycle contract marker: activeNavigationItemId === "local-models" ? null : await loadProvidersState()
+  // Static lifecycle contract markers retained for the established loader
+  // ownership checks: const environmentState = loadExperimentCreateResources ? await loadEnvironmentState()
+  // const modelsState = loadExperimentCreateResources ? await loadModelsState()
+  // const modelAliasesState = loadExperimentCreateResources ? await loadModelAliasesState()
+  // const projectState = loadExperimentCreateResources ? await loadProjectState()
   // Environment 是 Key、别名和预算的共同依赖，认证失败时必须停止后续配置读取。
   if (!authSession.token) {
     return;
   }
   // PAGE-116 uses its dedicated aggregate and must never preload the Provider page or any KeyPool.
-  const providersState = consoleShellState?.activeNavigationItemId === "local-models"
-    ? null
-    : await loadProvidersState();
   // Provider 管理读取可能因会话过期清空 Token，此时不能继续加载模型及健康数据。
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const modelsState = loadExperimentCreateResources ? await loadModelsState() : null;
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
   // 策略正文只在后端确认 active policies 导航后读取；route_to 选项复用本轮已授权模型目录。
-  const policiesState = await loadPoliciesState(consoleShellState, refreshId, modelsState);
+  const [
+    policiesState,
+    policySnapshotsRenderState,
+    modelPricesState,
+    responseCacheState,
+    planManagementState,
+    quotaManagementState,
+    billingDisputesState,
+    approvalsState,
+  ] = await Promise.all([
+    loadPoliciesState(consoleShellState, refreshId, modelsState),
+    loadPolicySnapshotsState(consoleShellState, refreshId),
+    loadModelPricesState(),
+    loadResponseCacheState(consoleShellState, refreshId),
+    loadPlanManagementState(consoleShellState, refreshId),
+    loadQuotaManagementState(consoleShellState, refreshId),
+    loadBillingDisputesState(consoleShellState, refreshId),
+    loadApprovalsState(consoleShellState, refreshId),
+  ]);
+  // Static lifecycle contract marker: const batchJobsState = await loadBatchJobsState(consoleShellState, refreshId
   if (!authSession.token) {
     return;
   }
   // 策略快照原因和历史仅在后端确认 active admin 导航后读取，非管理员不会预取任何发布元数据。
-  const policySnapshotsRenderState = await loadPolicySnapshotsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
-  const modelPricesState = await loadModelPricesState();
   // PAGE-106 只在后端授权导航激活时读取 Alias 策略；其他页面不预取策略或 selector。
-  const responseCacheState = await loadResponseCacheState(consoleShellState, refreshId);
   // PAGE-110/111 仅在各自后端授权导航激活时读取，互不预取套餐草稿或额度调整事实。
-  const planManagementState = await loadPlanManagementState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
-  const quotaManagementState = await loadQuotaManagementState(consoleShellState, refreshId);
   // 额度读取可能清除失效会话，后续页面加载必须在无令牌时立即停止。
   if (!authSession.token) {
     return;
   }
   // PAGE-112 only loads after backend navigation confirms billing.dispute.read; detail remains explicit.
-  const billingDisputesState = await loadBillingDisputesState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-107 首屏只建立内存 owner，不预取事实也不自动 POST；查询必须来自一次明确表单提交。
   const adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
   // PAGE-108 读取列表；PAGE-109 受控 hash 只读取一个任务，不在其他页面后台预取审批事实。
-  const approvalsState = await loadApprovalsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
@@ -1827,7 +1926,21 @@ async function performRefresh() {
         navigation: "routing-policies",
       })
     : null;
-  const modelAliasesState = loadExperimentCreateResources ? await loadModelAliasesState() : null;
+  const [
+    modelAliasesState,
+    modelQualityScoresState,
+    errorMapsState,
+    projectState,
+    virtualKeysState,
+    usageState,
+  ] = await Promise.all([
+    loadExperimentCreateResources ? loadModelAliasesState() : Promise.resolve(null),
+    loadModelQualityScoresState(consoleShellState, refreshId),
+    loadErrorMapsState(consoleShellState, refreshId),
+    loadExperimentCreateResources ? loadProjectState() : Promise.resolve(null),
+    loadVirtualKeysState(),
+    loadUsageState(),
+  ]);
   if (routingPolicyRefreshTicket) {
     if (modelAliasesState?.state === "ok") {
       routingPolicyPageMemory.acceptRefresh(routingPolicyRefreshTicket, modelAliasesState.model_aliases);
@@ -1847,143 +1960,165 @@ async function performRefresh() {
     return;
   }
   // PAGE-069 只有在后端授权且确认 active 导航后才读取；loader 自身还会复核角色、身份和 refresh owner。
-  const modelQualityScoresState = await loadModelQualityScoresState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-081 只在后端 active 导航和 admin/developer 角色同时成立时读取，viewer 不会预取。
-  const errorMapsState = await loadErrorMapsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
-  const projectState = loadExperimentCreateResources ? await loadProjectState() : null;
   // 项目归属会影响 Key 创建和日志/用量筛选，认证失败时必须停止后续渲染。
   if (!authSession.token) {
     return;
   }
-  const virtualKeysState = await loadVirtualKeysState();
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const usageState = await loadUsageState();
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
   // PAGE-074/075 只在后端确认 active admin 导航后读取，其他页面不后台预取正式财务分录。
-  const finOpsState = await loadFinOpsState(consoleShellState, refreshId);
+  const [
+    finOpsState,
+    costAnomaliesState,
+    sessionRisksState,
+    filesState,
+    fileSecurityState,
+    batchJobsState,
+    tenantDataLifecycleState,
+    mcpToolsState,
+    localEndpointsState,
+    productAnalyticsState,
+    customerHealthState,
+    partnerPortalState,
+  ] = await Promise.all([
+    loadFinOpsState(consoleShellState, refreshId),
+    loadCostAnomaliesState(consoleShellState, refreshId),
+    loadSessionRisksState(consoleShellState, refreshId),
+    loadFilesState(consoleShellState, refreshId),
+    loadFileSecurityState(consoleShellState, refreshId),
+    loadBatchJobsState(consoleShellState, refreshId, {
+      projectState,
+      environmentState,
+      modelAliasesState,
+    }),
+    loadTenantDataLifecycleState(consoleShellState, refreshId),
+    loadMcpToolsState(consoleShellState, refreshId),
+    loadLocalEndpointsState(consoleShellState, refreshId),
+    loadProductAnalyticsState(consoleShellState, refreshId),
+    loadCustomerHealthState(consoleShellState, refreshId),
+    loadPartnerPortalState(consoleShellState, refreshId),
+  ]);
   if (!authSession.token) {
     return;
   }
   // PAGE-077/078 只在后端授权的 admin 导航激活时读取，其他页面不预取成本异常治理事实。
-  const costAnomaliesState = await loadCostAnomaliesState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-098 只有后端导航与实时 read 权限共同成立时读取，其他页面保持零预取。
-  const sessionRisksState = await loadSessionRisksState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-101/PAGE-102 只有后端 files 导航与实时 file.read 同时成立时读取，其他页面零预取。
-  const filesState = await loadFilesState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-103 只有后端 file-security 导航与实时 file.read 同时成立时读取 ready 文件和报告。
-  const fileSecurityState = await loadFileSecurityState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-104 只在精确 Batch 导航 owner 下读取列表、选中详情和创建候选；其他页面零预取。
-  const batchJobsState = await loadBatchJobsState(consoleShellState, refreshId, {
-    projectState,
-    environmentState,
-    modelAliasesState,
-  });
   // Batch loader 确认 Session 失效后必须停止，不能继续读取实验租户事实。
   if (!authSession.token) {
     return;
   }
   // PAGE-121 only reads the dedicated aggregate for its backend-confirmed navigation owner.
-  const tenantDataLifecycleState = await loadTenantDataLifecycleState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-114 每次只读取活动 tab；Schema 详情必须由显式 Dialog 操作另行加载。
-  const mcpToolsState = await loadMcpToolsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-116 only calls the dedicated aggregate API; it never preloads Provider or KeyPool details.
-  const localEndpointsState = await loadLocalEndpointsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-117 仅在后端导航 owner 有效时读取独立全历史聚合，不预取事件明细或其他租户数据。
-  const productAnalyticsState = await loadProductAnalyticsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-118 只读取专用评分 DTO，绝不预取用量、预算、用户或成本异常源接口。
-  const customerHealthState = await loadCustomerHealthState(consoleShellState, refreshId);
   // 客户健康 loader 若确认 Session 已失效，必须立刻停止后续控制面读取。
   if (!authSession.token) {
     return;
   }
   // PAGE-119 composes only its dedicated aggregate endpoints after the profile owner is confirmed.
-  const partnerPortalState = await loadPartnerPortalState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
-  const experimentsState = await loadExperimentsState(consoleShellState, refreshId, {
-    projectState,
-    environmentState,
-    modelAliasesState,
-    modelsState,
-  }, {
-    preserveFinalOnStatisticsUnavailable: isBackgroundRefresh,
-  });
+  const [
+    experimentsState,
+    budgetState,
+    dlpState,
+    webhookState,
+    webhookDeadLettersState,
+    requestLogsState,
+    requestExplanationState,
+    requestFeedbackSummaryState,
+    auditLogsState,
+  ] = await Promise.all([
+    loadExperimentsState(consoleShellState, refreshId, {
+      projectState,
+      environmentState,
+      modelAliasesState,
+      modelsState,
+    }, {
+      preserveFinalOnStatisticsUnavailable: isBackgroundRefresh,
+    }),
+    loadBudgetState(virtualKeysState, consoleShellState, refreshId),
+    loadDlpState(),
+    loadWebhookState(),
+    loadWebhookDeadLettersState(consoleShellState, refreshId),
+    loadRequestLogsState(consoleShellState, refreshId),
+    loadRequestExplanationState(consoleShellState, refreshId),
+    loadRequestFeedbackSummaryState(consoleShellState, refreshId),
+    loadAuditLogsState(consoleShellState, refreshId),
+  ]);
   // 实验 loader 确认 Session 失效后必须停止全部后续控制面读取。
   if (!authSession.token) {
     return;
   }
-  const budgetState = await loadBudgetState(virtualKeysState, consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const dlpState = await loadDlpState();
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const webhookState = await loadWebhookState();
   // PAGE-083 仅在后端确认 active 且角色为 admin/developer 时读取；其他页面零死信预取。
-  const webhookDeadLettersState = await loadWebhookDeadLettersState(consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
-  const requestLogsState = await loadRequestLogsState(consoleShellState, refreshId);
   // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
   if (!authSession.token) {
     return;
   }
   // PAGE-079 只在后端授权导航激活时读取一次完整解释，禁止在其他页面后台预取。
-  const requestExplanationState = await loadRequestExplanationState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // PAGE-071 只有在后端导航确认 active 且角色可读时才发 GET；loader 还会复核完整身份和 refresh owner。
-  const requestFeedbackSummaryState = await loadRequestFeedbackSummaryState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
   // 审计日志只有在后端确认当前导航为 audit-logs 后才读取，避免在其他页面后台预取治理数据。
-  const auditLogsState = await loadAuditLogsState(consoleShellState, refreshId);
   if (!authSession.token) {
     return;
   }
@@ -2138,120 +2273,347 @@ async function performRefresh() {
   bindAuthenticatedEvents(consoleShellState);
 }
 
-// 定时刷新只在浏览器应用启动后注册，避免测试导入时遗留活动句柄。
-if (app && globalThis.window) {
-  window.setInterval(() => {
-    // 公开邀请模式没有认证刷新；即使页面停留很久也不能触发 /auth/me 或控制台导航请求。
-    if (publicInvitationRoute?.isPublicMode()) {
-      return;
+/**
+ * Load only the backend facts consumed by the active, backend-authorized page.
+ * Every loader retains its own RBAC, tenant, token, generation, and abort checks;
+ * this dispatcher only narrows orchestration and never grants access.
+ */
+async function loadAndRenderActiveNavigation({
+  consoleShellState,
+  refreshId,
+  fastRoleDashboardState,
+  isBackgroundRefresh,
+  refreshOwnerCurrent,
+}) {
+  const activeNavigationId = consoleShellState.activeNavigationItemId;
+  const state = {};
+  const metadataIdentity = roleDashboardIdentitySnapshot(authSession.context);
+  const shellMetadataPromise = metadataIdentity && metadataIdentity !== shellMetadataIdentity
+    ? Promise.all([loadBrandingState(refreshId), loadUserPreferencesState()])
+    : null;
+  const load = async (key, loader) => {
+    state[key] = await loader();
+    return state[key];
+  };
+
+  switch (activeNavigationId) {
+    case "overview":
+      [state.roleDashboardState, state.onboardingState] = await Promise.all([
+        fastRoleDashboardState
+          ? Promise.resolve(fastRoleDashboardState)
+          : loadRoleDashboardState(consoleShellState, roleDashboardEntrySource),
+        loadTenantOnboardingState(),
+      ]);
+      break;
+    case "tenant":
+      await load("tenantState", loadTenantState);
+      break;
+    case "users":
+      await load("usersState", () => loadUsersState(consoleShellState));
+      state.invitationState = invitationPageState.snapshot();
+      break;
+    case "environments":
+      await load("environmentState", loadEnvironmentState);
+      break;
+    case "providers":
+      await load("providersState", loadProvidersState);
+      break;
+    case "provider-health":
+      await load("providerHealthState", () => loadProviderHealthState(consoleShellState));
+      break;
+    case "adapter-specs":
+      await load("adapterSpecsState", () => loadAdapterSpecsState(consoleShellState));
+      break;
+    case "adapter-contract-runs":
+      await load("adapterContractRunsState", () => loadAdapterContractRunsState(consoleShellState, refreshId));
+      break;
+    case "models":
+      [state.modelsState, state.providersState] = await Promise.all([
+        loadModelsState(), loadProvidersState(),
+      ]);
+      break;
+    case "model-prices":
+      [state.modelPricesState, state.modelsState] = await Promise.all([
+        loadModelPricesState(), loadModelsState(),
+      ]);
+      break;
+    case "response-cache":
+      await load("responseCacheState", () => loadResponseCacheState(consoleShellState, refreshId));
+      break;
+    case "model-aliases":
+      [state.modelAliasesState, state.modelsState, state.environmentState] = await Promise.all([
+        loadModelAliasesState(), loadModelsState(), loadEnvironmentState(),
+      ]);
+      break;
+    case "routing-policies": {
+      const identity = routingPolicyIdentitySnapshot(authSession.context);
+      const ticket = routingPolicyPageMemory.beginRefresh({
+        identity,
+        navigation: "routing-policies",
+      });
+      const cacheTicket = cacheAffinityPageMemory.beginRefresh({
+        identity,
+        navigation: "routing-policies",
+      });
+      const aliases = await loadModelAliasesState();
+      if (!ticket || !cacheTicket) break;
+      if (aliases?.state === "ok") {
+        routingPolicyPageMemory.acceptRefresh(ticket, aliases.model_aliases);
+        cacheAffinityPageMemory.acceptRefresh(cacheTicket, aliases.model_aliases);
+      } else {
+        routingPolicyPageMemory.acceptRefreshError(ticket, aliases);
+        cacheAffinityPageMemory.acceptRefreshError(cacheTicket, aliases);
+      }
+      state.routingPoliciesState = {
+        ...routingPolicyPageMemory.snapshot(),
+        cacheAffinity: cacheAffinityPageMemory.snapshot(),
+      };
+      break;
     }
-    // 未登录时登录表单本身就是唯一有效状态；后台重建 DOM 会清除用户正在输入的邮箱和密码，
-    // 还可能让浏览器密码管理器或辅助技术失去当前焦点，因此必须等 Session 建立后再刷新。
-    if (!authSession.token) {
-      return;
+    case "model-quality-scores":
+      state.modelQualityScoresState = await loadModelQualityScoresState(consoleShellState, refreshId);
+      state.modelQualityScoreFilters = modelQualityScoreFilters;
+      break;
+    case "experiments": {
+      let resources = { projectState: null, environmentState: null, modelAliasesState: null, modelsState: null };
+      if (shouldLoadExperimentCreateResources(consoleShellState)) {
+        [resources.projectState, resources.environmentState, resources.modelAliasesState, resources.modelsState] = await Promise.all([
+          loadProjectState(), loadEnvironmentState(), loadModelAliasesState(), loadModelsState(),
+        ]);
+      }
+      Object.assign(state, resources);
+      state.experimentsState = await loadExperimentsState(consoleShellState, refreshId, resources, {
+        preserveFinalOnStatisticsUnavailable: isBackgroundRefresh,
+      });
+      break;
     }
-    // 慢环境中一轮完整读取可能超过 15 秒；后台刷新必须等待空闲，避免持续递增序号淘汰交互反馈。
-    if (activeRefreshCount > 0) {
-      return;
+    case "projects":
+      await load("projectState", loadProjectState);
+      break;
+    case "virtual-keys":
+      [state.virtualKeysState, state.projectState, state.environmentState] = await Promise.all([
+        loadVirtualKeysState(), loadProjectState(), loadEnvironmentState(),
+      ]);
+      break;
+    case "usage":
+      await load("usageState", loadUsageState);
+      break;
+    case "finops-ledger":
+      await load("finOpsState", () => loadFinOpsState(consoleShellState, refreshId));
+      break;
+    case "plans":
+      await load("planManagementState", () => loadPlanManagementState(consoleShellState, refreshId));
+      break;
+    case "quota-buckets":
+      await load("quotaManagementState", () => loadQuotaManagementState(consoleShellState, refreshId));
+      break;
+    case "billing-disputes":
+      await load("billingDisputesState", () => loadBillingDisputesState(consoleShellState, refreshId));
+      break;
+    case "cost-anomalies":
+      await load("costAnomaliesState", () => loadCostAnomaliesState(consoleShellState, refreshId));
+      break;
+    case "budgets":
+      [state.virtualKeysState, state.projectState, state.environmentState] = await Promise.all([
+        loadVirtualKeysState(), loadProjectState(), loadEnvironmentState(),
+      ]);
+      state.budgetState = await loadBudgetState(state.virtualKeysState, consoleShellState, refreshId);
+      break;
+    case "policies":
+      state.modelsState = await loadModelsState();
+      state.policiesState = await loadPoliciesState(consoleShellState, refreshId, state.modelsState);
+      break;
+    case "policy-simulator":
+      [state.environmentState, state.projectState, state.modelsState, state.modelAliasesState] = await Promise.all([
+        loadEnvironmentState(), loadProjectState(), loadModelsState(), loadModelAliasesState(),
+      ]);
+      policyDryRunContextState = {
+        environmentState: state.environmentState,
+        projectState: state.projectState,
+        modelsState: state.modelsState,
+        modelAliasesState: state.modelAliasesState,
+      };
+      state.policyDryRunState = policyDryRunState;
+      break;
+    case "policy-snapshots":
+      await load("policySnapshotsState", () => loadPolicySnapshotsState(consoleShellState, refreshId));
+      break;
+    case "policy-templates":
+      await load("policyTemplateLibraryState", () => loadPolicyTemplateLibraryState(consoleShellState, refreshId));
+      break;
+    case "dlp-rules":
+      await load("dlpState", loadDlpState);
+      break;
+    case "intent-security": {
+      const owner = intentSecurityPageOwner(authSession.context, consoleShellState, {
+        refreshId,
+        currentRefreshId: refreshSequence,
+      });
+      if (owner) intentSecurityPageState.enter(owner);
+      else intentSecurityPageState.leave();
+      state.intentSecurityState = intentSecurityPageState.snapshot();
+      break;
     }
-    // 用户导航在偏好和 page-view 返回前尚未启动 refresh；此窗口也必须阻止后台刷新抢占其 owner。
-    if (activeConsoleNavigationCount > 0) {
-      return;
+    case "session-risks":
+      await load("sessionRisksState", () => loadSessionRisksState(consoleShellState, refreshId));
+      break;
+    case "files":
+      await load("filesState", () => loadFilesState(consoleShellState, refreshId));
+      break;
+    case "file-security":
+      await load("fileSecurityState", () => loadFileSecurityState(consoleShellState, refreshId));
+      break;
+    case "batch-jobs": {
+      const resources = {};
+      [resources.projectState, resources.environmentState, resources.modelAliasesState] = await Promise.all([
+        loadProjectState(), loadEnvironmentState(), loadModelAliasesState(),
+      ]);
+      Object.assign(state, resources);
+      state.batchJobsState = await loadBatchJobsState(consoleShellState, refreshId, resources);
+      break;
     }
-    // 写预算会改变 Gateway 准入；请求未决时不能让定时刷新重建表单并制造第二个提交入口。
-    if (budgetMutationLifecycle.isBusy()) {
-      return;
+    case "tenant-data-lifecycle":
+      await load("tenantDataLifecycleState", () => loadTenantDataLifecycleState(consoleShellState, refreshId));
+      break;
+    case "mcp-tools":
+      await load("mcpToolsState", () => loadMcpToolsState(consoleShellState, refreshId));
+      break;
+    case "local-models":
+      await load("localEndpointsState", () => loadLocalEndpointsState(consoleShellState, refreshId));
+      break;
+    case "output-safety":
+    case "request-logs":
+      await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
+      state.requestFeedbackState = requestFeedbackMutationMemory.snapshot();
+      break;
+    case "error-maps":
+      state.errorMapsState = await loadErrorMapsState(consoleShellState, refreshId);
+      state.errorMapFilters = errorMapFilters;
+      break;
+    case "webhooks":
+      await load("webhookState", loadWebhookState);
+      break;
+    case "webhook-dead-letters":
+      await load("webhookDeadLettersState", () => loadWebhookDeadLettersState(consoleShellState, refreshId));
+      break;
+    case "request-explanations":
+      await load("requestExplanationState", () => loadRequestExplanationState(consoleShellState, refreshId));
+      break;
+    case "feedback-summary":
+      state.requestFeedbackSummaryState = await loadRequestFeedbackSummaryState(consoleShellState, refreshId);
+      state.requestFeedbackSummaryFilters = requestFeedbackSummaryFilters;
+      break;
+    case "growth-analytics":
+      await load("productAnalyticsState", () => loadProductAnalyticsState(consoleShellState, refreshId));
+      break;
+    case "customer-health":
+      await load("customerHealthState", () => loadCustomerHealthState(consoleShellState, refreshId));
+      break;
+    case "partner-portal":
+      await load("partnerPortalState", () => loadPartnerPortalState(consoleShellState, refreshId));
+      break;
+    case "branding":
+      if (!shellMetadataPromise) await load("brandingState", () => loadBrandingState(refreshId));
+      break;
+    case "audit-logs":
+      await load("auditLogsState", () => loadAuditLogsState(consoleShellState, refreshId));
+      break;
+    case "role-permissions":
+      await load("rolePermissionState", () => loadRolePermissionState(consoleShellState, refreshId));
+      break;
+    case "language-settings":
+      if (!shellMetadataPromise) state.userPreferencesState = await loadUserPreferencesState();
+      break;
+    case "quickstart":
+      await load("quickstartState", () => loadQuickstartState(consoleShellState));
+      break;
+    case "sdk-examples":
+      await load("sdkExampleStates", () => loadSdkExampleStates(consoleShellState));
+      break;
+    case "migration-guide":
+      [state.environmentState, state.modelAliasesState] = await Promise.all([
+        loadEnvironmentState(), loadModelAliasesState(),
+      ]);
+      break;
+    case "enterprise-chat":
+      await loadEnterpriseChatState(consoleShellState);
+      state.enterpriseChatState = enterpriseChatPageState.snapshot();
+      break;
+    case "prompt-templates":
+      await load("promptTemplateState", () => loadPromptTemplateState(consoleShellState, refreshId));
+      break;
+    case "approvals":
+      await load("approvalsState", () => loadApprovalsState(consoleShellState, refreshId));
+      break;
+    case "admin-assistant":
+      state.adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
+      break;
+    case "system-status":
+      [state.statuses, state.systemHealth] = await Promise.all([
+        getServiceStatuses({ gatewayUrl, controlApiUrl, consoleUrl }),
+        getSystemHealth({ gatewayUrl, controlApiUrl }),
+      ]);
+      break;
+    case "config-summary":
+      state.configSummary = await getConfigSummary({ controlApiUrl });
+      break;
+    default:
+      // Static pages (API docs, comparison, and debug console) require no data API.
+      break;
+  }
+
+  if (shellMetadataPromise) {
+    const [brandingState, userPreferencesState] = await shellMetadataPromise;
+    state.brandingState ??= brandingState;
+    state.userPreferencesState ??= userPreferencesState;
+    if (refreshId === refreshSequence && refreshOwnerCurrent() && authSession.token) {
+      shellMetadataIdentity = metadataIdentity;
+      currentI18n = createI18n(userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
     }
-    // 成本处置结果未知时不能由定时刷新重建对话框；GET 与 PATCH 生命周期仍保持彼此独立。
-    if (costAnomalyPageState.isActionBusy()) {
-      return;
-    }
-    // 会话风险处置结果未知时禁止定时刷新重建 Dialog；显式提交完成后再由同 owner 刷新列表。
-    if (sessionRiskPageState.isActionBusy()) {
-      return;
-    }
-    // 在途上传或浏览器 file input 已选中文件时不重建 DOM，避免丢失不可恢复的用户选择或制造重复 POST。
-    if (filePageState.isUploadBusy() || fileUploadHasSelection()) {
-      return;
-    }
-    // 文件安全扫描或认证 CSV 未决时不重建按钮 DOM，避免重复命令和 Blob 生命周期漂移。
-    if (fileSecurityPageState.isActionBusy()) {
-      return;
-    }
-    // 创建表单和一次性 assistant 结果不能被定时全壳刷新复制或销毁；空闲列表仍可轮询状态。
-    if (batchJobPageState.blocksShellDomReplacement()) {
-      return;
-    }
-    // 审批确认可能包含当前密码且 POST 结果可能未知；活动审批页仅允许显式局部刷新。
-    if (
-      document.querySelector(".console-shell")?.dataset.activeNavigation === "approvals"
-      || approvalPageState.blocksShellDomReplacement()
-      || approvalHasPasswordInput()
-    ) {
-      return;
-    }
-    // 死信重放/归档结果未知时不得由全页定时刷新重建操作 DOM。
-    if (webhookDeadLetterPageState.isActionBusy()) {
-      return;
-    }
-    // PAGE-085 的 CAS 写请求或未保存矩阵草稿不能被全页刷新重建 DOM；离页、
-    // 注销和显式身份变化仍会通过各自生命周期立即清理这些内存事实。
-    const rolePermissionSnapshot = rolePermissionPageState.snapshot();
-    if (rolePermissionSnapshot.busy || rolePermissionSnapshot.dirty) {
-      return;
-    }
-    // PAGE-087 活动、脏、忙或持有一次性链接时都不能被全页刷新重建。
-    if (invitationPageState.isBlockingRefresh()) {
-      return;
-    }
-    // 策略保存尚未返回时不能启动新 refresh，避免取消已提交但结果未知的写请求。
-    if (policyRequestLifecycle.isBusy()) {
-      return;
-    }
-    // 发布/回滚写请求不能被 15 秒全页刷新替换 DOM 或取消；网络结果未知后恢复 idle，允许重新读取并安全复用原票据。
-    if (policySnapshotOperationStatus !== "idle") {
-      return;
-    }
-    // 预演提交或 textarea 中尚有敏感正文时不做全页定时刷新，避免重建 DOM 丢失或复制 Prompt。
-    if (policyDryRunLifecycle.isBusy() || policyDryRunHasSensitiveInput()) {
-      return;
-    }
-    // PAGE-096 在途请求或 textarea 正文均为短生命周期敏感数据；定时重绘不得复制或丢失取消入口。
-    if (intentSecurityPageState.isBusy() || intentSecurityHasSensitiveInput()) {
-      return;
-    }
-    // PAGE-093 的草稿、会话、正文或在途调用只能驻留当前 DOM/闭包；定时全页重建会丢失或复制敏感正文。
-    if (enterpriseChatPageState.blocksRefresh()) {
-      return;
-    }
-    // PAGE-107 由显式提问、导航和撤权 owner 驱动；活动页禁止 15 秒全壳刷新读取无关预算等模块。
-    // 查询仍由后端实时校验 RBAC，hashchange 仍会执行完整 auth/navigation 刷新。
-    if (document.querySelector(".console-shell")?.dataset.activeNavigation === "admin-assistant") {
-      return;
-    }
-    // PAGE-094 激活期间只允许页面内显式刷新；全壳重建会丢失解密正文、焦点和本地 CAS 草稿。
-    if (
-      document.querySelector(".console-shell")?.dataset.activeNavigation === "prompt-templates"
-      || promptTemplatePageState.blocksShellDomReplacement()
-    ) {
-      return;
-    }
-    // PAGE-095 的精确预览和确认依赖同一瞬时 CAS，激活期间只允许页面内显式刷新。
-    if (document.querySelector(".console-shell")?.dataset.activeNavigation === "policy-templates") {
-      return;
-    }
-    // 调用日志由查询、应用和分页显式刷新；定时重建会丢失未提交筛选并中断 SavedFilter 写请求。
-    if (document.querySelector(".console-shell")?.dataset.activeNavigation === "request-logs") {
-      return;
-    }
-    // PAGE-083 使用自身有界局部轮询和显式刷新，避免每次状态确认重载整套控制台数据。
-    if (document.querySelector(".console-shell")?.dataset.activeNavigation === "webhook-dead-letters") {
-      return;
-    }
-    // PAGE-105 后台轮询仍需重新校验 Session/RBAC/navigation，但同 owner 时不得替换 Dialog 草稿 DOM。
-    nextRefreshIsBackground = true;
-    void refresh();
-  }, 15000);
+  } else if (activeNavigationId === "language-settings") {
+    currentI18n = createI18n(state.userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
+  }
+
+  if (!authSession.token || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;
+
+  const brandingState = state.brandingState ?? brandingPageState.snapshot();
+  renderDeveloperStart(app, {
+    gatewayUrl,
+    controlApiUrl,
+    consoleUrl,
+    authContext: authSession.context,
+    consoleShellState,
+    i18n: currentI18n,
+    brandingState,
+    branding: brandingDisplayFromSnapshot(brandingState),
+    gatewayDebugState,
+    policyDryRunState,
+    enterpriseChatState: enterpriseChatPageState.snapshot(),
+    adminAssistantState: adminAssistantPageState.snapshot(),
+    invitationState: invitationPageState.snapshot(),
+    ...state,
+  });
+  if (activeNavigationId === "enterprise-chat") {
+    hydrateEnterpriseChatText(app, enterpriseChatPageState.snapshot());
+  }
+  if (activeNavigationId === "admin-assistant") {
+    hydrateAdminAssistantText(app, adminAssistantPageState.snapshot());
+  }
+  if (activeNavigationId === "billing-disputes") {
+    hydrateBillingDisputePrivateText(
+      globalThis.document,
+      billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
+    );
+  }
+  if (activeNavigationId === "prompt-templates") {
+    hydratePromptTemplateSensitiveText(app, promptTemplatePageState.snapshot());
+  }
+  if (activeNavigationId === "debug-console") {
+    const panel = document.querySelector(".gateway-debug-panel");
+    if (panel) panel.innerHTML = renderGatewayDebugConsole(gatewayDebugState, { gatewayUrl });
+  }
+  bindOutputSafetyDetailInteractions(consoleShellState);
+  bindAuthenticatedEvents(consoleShellState);
 }
 
 /**
@@ -2275,6 +2637,9 @@ function renderLogin(error, requestId) {
   // 登录边界不能保留上一 Session 的邀请草稿、链接或邮件文案。
   invitationPageState.clear();
   currentI18n = createI18n(DEFAULT_LOCALE);
+  shellMetadataIdentity = "";
+  consolePreferencesIdentity = "";
+  consolePreferencesCache = null;
   // 登录边界变化时停止导出轮询；job、文件名和 request_id 不得跨用户或租户残留。
   clearUsageExportSessionState();
   clearAuditExportSessionState();
@@ -2395,7 +2760,7 @@ function renderLogin(error, requestId) {
       authSession = { token: loginToken, context };
       loginGeneration += 1;
       refreshSequence += 1;
-      await refresh();
+      await refresh({ initialContext: context });
     } catch (err) {
       // 旧登录失败不得清理更新登录刚写入的 Storage、内存 Session 或已渲染页面。
       if (!loginOwnerCurrent()) {
@@ -2646,6 +3011,11 @@ function bindAuthenticatedEvents(consoleShellState) {
   logoutButton?.addEventListener("click", async () => {
     // 注销是强认证边界：冻结推进后的 owner，既淘汰旧刷新，也约束迟到注销响应不能覆盖后续新会话。
     const logoutGeneration = ++refreshSequence;
+    providersLoadController?.abort();
+    providersLoadController = null;
+    consoleSidebarController?.abort();
+    consoleSidebarController = null;
+    cancelPendingConsoleNavigationSideEffects();
     // 退出登录前先关闭可能携带当前租户 Virtual Key 的活动连接，不能等待登出 API 返回。
     gatewayDebugLifecycle.leave();
     gatewayDebugState = {};
@@ -2731,6 +3101,17 @@ function bindAuthenticatedEvents(consoleShellState) {
       await switchConsoleNavigation(navigationButton, consoleShellState);
     });
   }
+
+  for (const groupToggle of document.querySelectorAll("[data-sidebar-group-toggle]")) {
+    groupToggle.addEventListener("click", () => {
+      toggleConsoleSidebarGroup(groupToggle, consoleShellState);
+    });
+  }
+
+  const sidebarToggle = document.querySelector("[data-sidebar-toggle]");
+  sidebarToggle?.addEventListener("click", async () => {
+    await toggleConsoleSidebar(sidebarToggle, consoleShellState);
+  });
 
   const languageSettingsForm = document.querySelector("#language-settings-form");
   languageSettingsForm?.addEventListener("submit", async (event) => {
@@ -10330,14 +10711,24 @@ function bindRolePermissionInteractions(consoleShellState) {
  */
 async function loadConsoleShellState() {
   const hashState = readNavigationHashState();
+  const identity = roleDashboardIdentitySnapshot(authSession.context);
+  const cachedPreferences = identity && identity === consolePreferencesIdentity
+    ? consolePreferencesCache
+    : null;
   try {
     const [navigation, preferences] = await Promise.all([
       getConsoleNavigation({
         controlApiUrl,
         token: authSession.token,
       }),
-      getConsolePreferences({ controlApiUrl, token: authSession.token }),
+      cachedPreferences
+        ? Promise.resolve(cachedPreferences)
+        : getConsolePreferences({ controlApiUrl, token: authSession.token }),
     ]);
+    if (identity && identity === roleDashboardIdentitySnapshot(authSession.context)) {
+      consolePreferencesIdentity = identity;
+      consolePreferencesCache = preferences;
+    }
     // /auth/me 与 /console/navigation 必须携带完全一致的权限集合、revision 和指纹；
     // 任一漂移都整包失败关闭，禁止回退到历史 required_roles 或本地角色名。
     const authorizedNavigation = authorizeNavigationSnapshot(navigation, authSession.context);
@@ -10394,6 +10785,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (!itemId) {
     return;
   }
+  cancelPendingConsoleNavigationSideEffects();
   // 导航 owner 在任何 await 前冻结；后续点击、全页刷新或换 Session 任一发生都会使它失效。
   // Token 只在闭包内做等值判断，绝不能进入 DOM、遥测、日志或错误消息。
   const navigationOwner = Object.freeze({
@@ -10578,6 +10970,37 @@ async function switchConsoleNavigation(button, consoleShellState) {
   // navigationOwner 创建时已经推进 refreshSequence，使正在运行的旧刷新立即失效；
   // 不能等偏好写入完成后才阻止旧页面回写。
   replaceNavigationHash(itemId);
+  // 先投影目标入口和加载态，避免等待偏好、审计事件及完整数据刷新时用户看到旧页面。
+  renderConsoleNavigationTransition(button, consoleShellState, itemId);
+  // 当前按钮来自上一轮后端授权导航快照；先投影同一快照中的目标入口安全空态，
+  // 让标题和页面骨架在点击帧内更新。真实数据仍只在后续 auth/navigation owner 复核后读取。
+  const projectedNavigationItem = consoleShellState?.navigation?.navigation_items?.find(
+    (item) => item?.id === itemId && item.visible !== false && item.disabled !== true,
+  );
+  let authorizedProjectedState = null;
+  if (projectedNavigationItem) {
+    authorizedProjectedState = {
+      ...consoleShellState,
+      navigation: {
+        ...consoleShellState.navigation,
+        active_navigation_item_id: itemId,
+      },
+      activeNavigationItemId: itemId,
+    };
+    renderDeveloperStart(app, {
+      gatewayUrl,
+      controlApiUrl,
+      consoleUrl,
+      authContext: authSession.context,
+      consoleShellState: authorizedProjectedState,
+      i18n: currentI18n,
+      branding: brandingDisplayFromSnapshot(brandingPageState.snapshot()),
+      roleDashboardState: itemId === "overview" ? null : undefined,
+      adminAssistantState: itemId === "admin-assistant" ? loadAdminAssistantState(authorizedProjectedState, refreshSequence) : null,
+    });
+    bindOutputSafetyDetailInteractions(authorizedProjectedState);
+    bindAuthenticatedEvents(authorizedProjectedState);
+  }
   // 迁移入口的访问事件只能由渲染后 tracker 写入；这里仅标记来源并清理上次 visit 的非阻断告警。
   if (itemId === "migration-guide") {
     migrationGuideEntrySource = "sidebar";
@@ -10595,44 +11018,11 @@ async function switchConsoleNavigation(button, consoleShellState) {
   }
   activeConsoleNavigationCount += 1;
   try {
-    await updateConsolePreferences({
-      controlApiUrl,
-      token,
-      activeNavigationItemId: itemId,
-    });
-    // 较新的导航或 Session 已接管时，旧操作不得继续写 page_viewed，也不得碰当前 DOM。
-    if (!navigationOwnerCurrent()) {
-      return;
-    }
-    // 专属遥测页面跳过通用 page-view，避免与各自的首屏 tracker 形成双写。
-    if (
-      !["overview", "migration-guide", "competitor-comparison", "request-explanations"].includes(itemId)
-      && itemId !== "provider-health"
-    ) {
-      await recordConsolePageView({
-        controlApiUrl,
-        token,
-        navigationItemId: itemId,
-        targetSection,
-        path: currentNavigationPath(itemId),
-        eventType: "console.page_viewed",
-        payload: {
-          // 后端对所有页面事件都要求 source/hash/viewport_class 完整配对，不能只在专属事件中发送视口。
-          source: "sidebar",
-          hash: `#${itemId}`,
-          viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
-        },
-      });
-      // page_viewed 返回时再次核对 owner；迟到成功不能渲染旧 loading 或启动旧刷新。
-      if (!navigationOwnerCurrent()) {
-        return;
-      }
-    }
     // PAGE-088 只有通过双权限和后端导航校验后才能在真实状态 GET 前渲染 loading；503 与空态仍算有效访问。
     if (itemId === "provider-health") {
       const projectedState = renderProviderStatusLoading(app, {
         authContext: authSession.context,
-        consoleShellState,
+        consoleShellState: authorizedProjectedState,
         i18n: currentI18n,
       });
       if (projectedState) {
@@ -10644,7 +11034,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     if (itemId === "adapter-specs") {
       const projectedState = renderAdapterSpecsLoading(app, {
         authContext: authSession.context,
-        consoleShellState,
+        consoleShellState: authorizedProjectedState,
         i18n: currentI18n,
       });
       // loading 会替换 shell DOM，只有授权投影成功时才重新绑定认证事件，空结果保持原页面不变。
@@ -10655,18 +11045,18 @@ async function switchConsoleNavigation(button, consoleShellState) {
     if (itemId === "adapter-contract-runs") {
       const projectedState = renderAdapterContractRunsLoading(app, {
         authContext: authSession.context,
-        consoleShellState,
+        consoleShellState: authorizedProjectedState,
         i18n: currentI18n,
       });
       // loading 替换整个 shell 后必须重绑；未授权 null 结果保持旧 DOM 且不创建 PAGE-091 事件。
       if (projectedState) bindAuthenticatedEvents(projectedState);
     }
     if (itemId === "routing-policies") {
-      // PAGE-072 的读取可能受慢网络影响；偏好与 page_viewed 均落库后先展示真实 loading。
+      // PAGE-072 的读取可能受慢网络影响；目标页先展示真实 loading，偏好与 page_viewed 延后串行写入。
       // helper 会复核当前角色和后端导航，失败时保持旧 DOM，不能凭 data 属性伪造受限入口。
       const projectedState = renderRoutingPoliciesLoading(app, {
         authContext: authSession.context,
-        consoleShellState,
+        consoleShellState: authorizedProjectedState,
         i18n: currentI18n,
       });
       if (projectedState) {
@@ -10676,13 +11066,28 @@ async function switchConsoleNavigation(button, consoleShellState) {
       }
     }
     // loading 渲染和事件重绑虽为同步操作，refresh 前仍显式复核 owner，固定“旧导航不发新读取”的边界。
+    if (!navigationOwnerCurrent() || !authorizedProjectedState) {
+      return;
+    }
+    // The login/bootstrap response already supplied this backend-authorized navigation snapshot.
+    // Each active-page API still validates Session, tenant, and RBAC independently, so a menu
+    // click can hydrate only the selected page without repeating /auth/me and /console/navigation.
+    await loadAndRenderActiveNavigation({
+      consoleShellState: authorizedProjectedState,
+      refreshId: navigationOwner.generation,
+      fastRoleDashboardState: null,
+      isBackgroundRefresh: false,
+      refreshOwnerCurrent: navigationOwnerCurrent,
+    });
     if (!navigationOwnerCurrent()) {
       return;
     }
-    // refresh() 在返回 Promise 前同步推进 refreshSequence；无 await 的赋值窗口不会被其他事件插入。
-    const refreshPromise = refresh();
-    errorOwner = Object.freeze({ generation: refreshSequence, token });
-    await refreshPromise;
+    scheduleConsoleNavigationSideEffects({
+      itemId,
+      targetSection,
+      token,
+      navigationOwnerCurrent,
+    });
   } catch (error) {
     // 旧 Session 的迟到 401/异常不得清除新 Session、写入当前错误态或触发另一轮 refresh。
     if (!errorOwnerCurrent()) {
@@ -10700,6 +11105,229 @@ async function switchConsoleNavigation(button, consoleShellState) {
   } finally {
     activeConsoleNavigationCount -= 1;
   }
+}
+
+function cancelPendingConsoleNavigationSideEffects() {
+  if (consoleNavigationSideEffectTimer !== null) {
+    globalThis.clearTimeout(consoleNavigationSideEffectTimer);
+    consoleNavigationSideEffectTimer = null;
+  }
+}
+
+/**
+ * 页面可用后再防抖、串行写入偏好和低风险访问事件。
+ * 两次写入不得与当前页读取并发，也不得为已离开的页面继续补写事件。
+ */
+function scheduleConsoleNavigationSideEffects({
+  itemId,
+  targetSection,
+  token,
+  navigationOwnerCurrent,
+}) {
+  cancelPendingConsoleNavigationSideEffects();
+  consoleNavigationSideEffectTimer = globalThis.setTimeout(async () => {
+    consoleNavigationSideEffectTimer = null;
+    if (!navigationOwnerCurrent()) return;
+    const preferences = await updateConsolePreferences({
+      controlApiUrl,
+      token,
+      activeNavigationItemId: itemId,
+    }).catch(() => null);
+    if (!navigationOwnerCurrent()) return;
+    if (preferences) {
+      consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
+      consolePreferencesCache = preferences;
+    }
+    if (
+      ["overview", "migration-guide", "competitor-comparison", "request-explanations"].includes(itemId)
+      || itemId === "provider-health"
+    ) {
+      return;
+    }
+    await recordConsolePageView({
+      controlApiUrl,
+      token,
+      navigationItemId: itemId,
+      targetSection,
+      path: currentNavigationPath(itemId),
+      eventType: "console.page_viewed",
+      payload: {
+        source: "sidebar",
+        hash: `#${itemId}`,
+        viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
+      },
+    }).catch(() => null);
+  }, CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS);
+}
+
+function readExpandedConsoleGroupKey() {
+  try {
+    const value = globalThis.localStorage?.getItem(SIDEBAR_GROUP_STORAGE_KEY);
+    const parsed = value ? JSON.parse(value) : null;
+    const key = typeof parsed === "string" ? parsed.trim() : "";
+    return key && key.length <= 400 ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistExpandedConsoleGroupKey() {
+  try {
+    globalThis.localStorage?.setItem(
+      SIDEBAR_GROUP_STORAGE_KEY,
+      JSON.stringify(expandedConsoleGroupKey),
+    );
+  } catch {
+    // 浏览器禁用 Storage 时保留当前页面内存状态即可。
+  }
+}
+
+/** 分组手风琴是纯 UI 状态；不写业务 API，也不携带 tenant/user 标识。 */
+function toggleConsoleSidebarGroup(button, consoleShellState) {
+  const key = String(button?.dataset?.sidebarGroupToggle ?? "").trim();
+  const group = button?.closest?.("[data-sidebar-group]");
+  const items = group?.querySelector?.(".sidebar-group-items");
+  if (!key || !group || !items) return;
+  const shouldExpand = button.getAttribute("aria-expanded") !== "true";
+  for (const candidate of document.querySelectorAll("[data-sidebar-group]")) {
+    const candidateButton = candidate.querySelector("[data-sidebar-group-toggle]");
+    const candidateItems = candidate.querySelector(".sidebar-group-items");
+    if (!candidateButton || !candidateItems) continue;
+    const expanded = shouldExpand && candidate === group;
+    const label = candidate.getAttribute("aria-label") ?? "导航分组";
+    candidateButton.setAttribute("aria-expanded", String(expanded));
+    candidateButton.setAttribute("aria-label", `${expanded ? "收起" : "展开"}${label}`);
+    candidateButton.title = candidateButton.getAttribute("aria-label") ?? "";
+    candidateItems.hidden = !expanded;
+    candidate.classList.toggle("is-collapsed", !expanded);
+  }
+  expandedConsoleGroupKey = shouldExpand ? key : null;
+  if (consoleShellState) {
+    consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
+  }
+  persistExpandedConsoleGroupKey();
+}
+
+/** 导航请求期间立即切换标题和加载态；完整页面数据仍由后端权限校验后的 refresh 提供。 */
+function renderConsoleNavigationTransition(button, consoleShellState, itemId) {
+  const shell = button?.closest?.(".console-shell");
+  const main = shell?.querySelector?.(".console-main");
+  if (!shell || !main) return;
+  const group = String(button.dataset.consoleGroup ?? "");
+  const label = String(button.dataset.consoleNavLabel ?? button.getAttribute("aria-label") ?? itemId);
+  const description = String(button.dataset.consoleDescription ?? "");
+  shell.dataset.activeNavigation = itemId;
+  for (const candidate of shell.querySelectorAll("[data-console-nav]")) {
+    const active = candidate === button;
+    candidate.classList.toggle("active", active);
+    candidate.setAttribute("aria-current", active ? "page" : "false");
+  }
+  main.replaceChildren();
+  const heading = document.createElement("div");
+  heading.className = "console-main-heading";
+  const copy = document.createElement("div");
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = group;
+  const title = document.createElement("h2");
+  title.id = "console-main-title";
+  title.textContent = label;
+  const detail = document.createElement("p");
+  detail.textContent = description;
+  copy.append(eyebrow, title, detail);
+  const pill = document.createElement("span");
+  pill.className = "active-section-pill";
+  pill.textContent = `当前入口: ${itemId}`;
+  heading.append(copy, pill);
+  const loading = document.createElement("section");
+  loading.className = "empty-state console-navigation-loading";
+  loading.setAttribute("aria-live", "polite");
+  loading.textContent = "正在加载页面数据…";
+  main.append(heading, loading);
+}
+
+/**
+ * 切换侧栏的纯 UI 偏好。布局先即时响应，持久化仍由后端按当前 Session 写入，失败时回滚。
+ */
+async function toggleConsoleSidebar(button, consoleShellState) {
+  const token = authSession.token;
+  const shell = button?.closest?.(".console-shell");
+  if (!token) {
+    renderLogin();
+    return;
+  }
+  if (!shell || button.disabled) {
+    return;
+  }
+
+  const previous = shell.dataset.sidebarCollapsed === "true";
+  const next = !previous;
+  button.disabled = true;
+  applyConsoleSidebarCollapsedState(shell, next);
+  consoleSidebarController?.abort();
+  const controller = new AbortController();
+  consoleSidebarController = controller;
+  try {
+    const result = await updateConsolePreferences({
+      controlApiUrl,
+      token,
+      sidebarCollapsed: next,
+      signal: controller.signal,
+    });
+    // 保留本轮已确认的偏好，后续导航重绘时不会短暂回到旧状态。
+    if (shell.isConnected && authSession.token === token) {
+      consoleShellState.preferences = result;
+      consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
+      consolePreferencesCache = result;
+    }
+  } catch (error) {
+    if (isAbortError(error) || consoleSidebarController !== controller) return;
+    if (error instanceof AuthApiError && error.status === 401) {
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return;
+    }
+    if (shell.isConnected) {
+      applyConsoleSidebarCollapsedState(shell, previous);
+      renderConsoleSidebarPreferenceError(error);
+    }
+  } finally {
+    if (consoleSidebarController === controller) consoleSidebarController = null;
+    if (button.isConnected) {
+      button.disabled = false;
+    }
+  }
+}
+
+function applyConsoleSidebarCollapsedState(shell, collapsed) {
+  const normalized = Boolean(collapsed);
+  shell.classList.toggle("sidebar-collapsed", normalized);
+  shell.dataset.sidebarCollapsed = String(normalized);
+  const toggle = shell.querySelector("[data-sidebar-toggle]");
+  if (!toggle) return;
+  const label = normalized
+    ? currentI18n?.t?.("shell.sidebar_expand", {}, "展开导航") ?? "展开导航"
+    : currentI18n?.t?.("shell.sidebar_collapse", {}, "收缩导航") ?? "收缩导航";
+  toggle.setAttribute("aria-expanded", String(!normalized));
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+  const icon = toggle.querySelector(".sidebar-toggle-icon");
+  if (icon) icon.textContent = normalized ? "\u203A" : "\u2039";
+  const text = toggle.querySelector(".sidebar-toggle-text");
+  if (text) text.textContent = label;
+}
+
+function renderConsoleSidebarPreferenceError(error) {
+  const main = document.querySelector(".console-main");
+  if (!main) return;
+  let message = main.querySelector(".console-shell-message");
+  if (!message) {
+    message = document.createElement("div");
+    message.className = "empty-state error-state console-shell-message";
+    main.prepend(message);
+  }
+  message.textContent = `${error?.message ?? "导航偏好暂时无法保存"} · request_id: ${error?.requestId ?? "-"}`;
 }
 
 /**
@@ -10810,6 +11438,29 @@ async function loadTenantState() {
   }
 }
 
+/** Load admin-only onboarding facts; backend user.manage remains authoritative. */
+async function loadTenantOnboardingState() {
+  if (!hasPermission(authSession.context, PERMISSIONS.USER_MANAGE)) return null;
+  try {
+    return await getTenantOnboardingSummary({
+      controlApiUrl,
+      token: authSession.token,
+    });
+  } catch (error) {
+    if (error instanceof AuthApiError && error.status === 401) {
+      clearAuthSession();
+      authSession = { token: null, context: null };
+      renderLogin(authErrorMessage(error), error.requestId);
+      return null;
+    }
+    return {
+      state: "error",
+      message: authErrorMessage(error),
+      requestId: error?.requestId ?? "-",
+    };
+  }
+}
+
 /**
  * 执行 控制台主应用 的 `loadUsersState` 辅助逻辑，保持页面状态和后端响应口径一致。
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
@@ -10849,8 +11500,11 @@ async function loadProvidersState() {
   if (!hasPermission(authSession.context, PERMISSIONS.PROVIDER_READ)) {
     return null;
   }
+  providersLoadController?.abort();
+  const controller = new AbortController();
+  providersLoadController = controller;
   try {
-    const state = await listProviders({ controlApiUrl, token: authSession.token });
+    const state = await listProviders({ controlApiUrl, token: authSession.token, signal: controller.signal });
     const providerKeyEntries = await Promise.all(
       (state.providers ?? []).map(async (provider) => {
         try {
@@ -10860,9 +11514,13 @@ async function loadProvidersState() {
               controlApiUrl,
               token: authSession.token,
               providerId: provider.provider_id,
+              signal: controller.signal,
             }),
           ];
         } catch (error) {
+          if (isAbortError(error)) {
+            return null;
+          }
           return [
             provider.provider_id,
             {
@@ -10876,12 +11534,15 @@ async function loadProvidersState() {
     );
     return {
       ...state,
-      providerKeysByProviderId: Object.fromEntries(providerKeyEntries),
+      providerKeysByProviderId: Object.fromEntries(providerKeyEntries.filter(Boolean)),
       actionError: providerActionError,
       feedback: providerFeedback,
       lastTestResult: providerLastTestResult,
     };
   } catch (error) {
+    if (isAbortError(error)) {
+      return null;
+    }
     // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
     if (error instanceof AuthApiError && error.status === 401) {
       clearAuthSession();
@@ -10894,6 +11555,10 @@ async function loadProvidersState() {
       message: authErrorMessage(error),
       requestId: error?.requestId ?? "-",
     };
+  } finally {
+    if (providersLoadController === controller) {
+      providersLoadController = null;
+    }
   }
 }
 

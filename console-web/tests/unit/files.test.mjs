@@ -440,7 +440,8 @@ test("PRD-072 main lifecycle and responsive CSS cover cleanup, permissions, and 
   assert.match(mainSource, /window\.addEventListener\("pagehide"[\s\S]*filePageState\.clear\(\)/);
   assert.match(mainSource, /logoutButton[\s\S]*filePageState\.clear\(\)/);
   assert.match(mainSource, /itemId !== "files"[\s\S]*filePageState\.clear\(\)/);
-  assert.match(mainSource, /filePageState\.isUploadBusy\(\) \|\| fileUploadHasSelection\(\)/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "files":[\s\S]*loadFilesState\(consoleShellState, refreshId\)/);
   // DLP 阻断也是 403，但只有真实 auth.permission_denied 才能进入撤权清理分支。
   assert.match(mainSource, /error\.status === 403[\s\S]*error\.code === "auth\.permission_denied"/);
   assert.match(shellSource, /case "files":/);

@@ -93,23 +93,26 @@ def list_providers(
         params.append(normalized_type)
     where_extra = f" AND {' AND '.join(filters)}" if filters else ""
     connection = _connect(config)
-    rows = connection.execute(
-        f"""
-        SELECT
-          provider_id, tenant_id, provider_code, name, provider_type, base_url, auth_type,
-          status, description, maintenance_note, health_status, last_tested_at, last_test_error,
-          created_at, updated_at, disabled_at
-        FROM providers
-        WHERE tenant_id=? {where_extra}
-        ORDER BY created_at DESC, provider_code ASC
-        """,
-        params,
-    ).fetchall()
-    return ProviderListResponse(
-        providers=[_provider_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT
+              provider_id, tenant_id, provider_code, name, provider_type, base_url, auth_type,
+              status, description, maintenance_note, health_status, last_tested_at,
+              last_test_error, created_at, updated_at, disabled_at
+            FROM providers
+            WHERE tenant_id=? {where_extra}
+            ORDER BY created_at DESC, provider_code ASC
+            """,
+            params,
+        ).fetchall()
+        return ProviderListResponse(
+            providers=[_provider_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_provider(
@@ -321,25 +324,28 @@ def list_provider_keys(
 
 
     connection = _connect(config)
-    provider = _load_provider(connection, context.user.tenant_id, provider_id)
-    _reject_local_endpoint_provider(provider)
-    rows = connection.execute(
-        """
-        SELECT
-          provider_credential_id, tenant_id, provider_id, key_fingerprint, name, key_prefix,
-          weight, status, last_used_at, last_error_at, last_error_code, last_error_message,
-          rate_limited_until, created_at, updated_at, disabled_at
-        FROM provider_credentials
-        WHERE tenant_id=? AND provider_id=?
-        ORDER BY created_at DESC, provider_credential_id ASC
-        """,
-        (context.user.tenant_id, provider_id),
-    ).fetchall()
-    return ProviderKeyListResponse(
-        provider_keys=[_provider_key_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        provider = _load_provider(connection, context.user.tenant_id, provider_id)
+        _reject_local_endpoint_provider(provider)
+        rows = connection.execute(
+            """
+            SELECT
+              provider_credential_id, tenant_id, provider_id, key_fingerprint, name, key_prefix,
+              weight, status, last_used_at, last_error_at, last_error_code, last_error_message,
+              rate_limited_until, created_at, updated_at, disabled_at
+            FROM provider_credentials
+            WHERE tenant_id=? AND provider_id=?
+            ORDER BY created_at DESC, provider_credential_id ASC
+            """,
+            (context.user.tenant_id, provider_id),
+        ).fetchall()
+        return ProviderKeyListResponse(
+            provider_keys=[_provider_key_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_provider_key(

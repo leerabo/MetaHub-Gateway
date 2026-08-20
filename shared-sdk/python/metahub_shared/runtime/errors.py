@@ -1238,6 +1238,13 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Check tenant name and service mode.",
         owner="tenant",
     ),
+    "tenant.onboarding_unavailable": ErrorSpec(
+        503,
+        "Tenant onboarding status is temporarily unavailable.",
+        "Retry later with the same request.",
+        retryable=True,
+        owner="tenant",
+    ),
     "environment.not_found": ErrorSpec(
         404,
         "Environment was not found.",

@@ -804,30 +804,33 @@ def get_console_navigation(
     """
 
     connection = _connect(config)
-    role_permissions = _load_navigation_role_permissions(
-        connection, context.user.tenant_id
-    )
-    items = _visible_navigation_items(
-        context.permission_codes, role_permissions_by_role=role_permissions
-    )
-    preference = _ensure_preference(connection, context, items)
-    active_item_id = _resolve_active_item(
-        requested_active_item_id,
-        preference.active_navigation_item_id,
-        items,
-    )
-    gateway_base_url, gateway_status = _trusted_gateway_base_url(config)
-    return ConsoleNavigationResponse(
-        navigation_items=items,
-        active_navigation_item_id=active_item_id,
-        gateway_base_url=gateway_base_url,
-        gateway_base_url_status=gateway_status,
-        permission_codes=list(context.permission_codes),
-        permission_revision=context.permission_revision,
-        authorization_fingerprint=context.authorization_fingerprint,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        role_permissions = _load_navigation_role_permissions(
+            connection, context.user.tenant_id
+        )
+        items = _visible_navigation_items(
+            context.permission_codes, role_permissions_by_role=role_permissions
+        )
+        preference = _ensure_preference(connection, context, items)
+        active_item_id = _resolve_active_item(
+            requested_active_item_id,
+            preference.active_navigation_item_id,
+            items,
+        )
+        gateway_base_url, gateway_status = _trusted_gateway_base_url(config)
+        return ConsoleNavigationResponse(
+            navigation_items=items,
+            active_navigation_item_id=active_item_id,
+            gateway_base_url=gateway_base_url,
+            gateway_base_url_status=gateway_status,
+            permission_codes=list(context.permission_codes),
+            permission_revision=context.permission_revision,
+            authorization_fingerprint=context.authorization_fingerprint,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def get_user_preferences(
@@ -840,9 +843,14 @@ def get_user_preferences(
     """读取当前用户的控制台偏好，不允许跨租户或跨用户查询。"""
 
     connection = _connect(config)
-    items = _visible_navigation_items(context.permission_codes)
-    preference = _ensure_preference(connection, context, items)
-    return UserPreferenceResponse(preference=preference, request_id=request_id, trace_id=trace_id)
+    try:
+        items = _visible_navigation_items(context.permission_codes)
+        preference = _ensure_preference(connection, context, items)
+        return UserPreferenceResponse(
+            preference=preference, request_id=request_id, trace_id=trace_id
+        )
+    finally:
+        connection.close()
 
 
 def update_user_preferences(
@@ -862,44 +870,47 @@ def update_user_preferences(
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         raise ApiError("console.preference_invalid")
     connection = _connect(config)
-    items = _visible_navigation_items(context.permission_codes)
-    current = _ensure_preference(connection, context, items)
-    active_navigation_item_id = (
-        _validate_navigation_item(payload.active_navigation_item_id, items)
-        if payload.active_navigation_item_id is not None
-        else current.active_navigation_item_id
-    )
-    sidebar_collapsed = (
-        bool(payload.sidebar_collapsed)
-        if payload.sidebar_collapsed is not None
-        else current.sidebar_collapsed
-    )
-    now = _to_db_time(_utcnow())
-    connection.execute(
-        """
-        UPDATE user_preferences
-        SET active_navigation_item_id=?, sidebar_collapsed=?, updated_at=?
-        WHERE tenant_id=? AND user_id=?
-        """,
-        (
-            active_navigation_item_id,
-            1 if sidebar_collapsed else 0,
-            now,
-            context.user.tenant_id,
-            context.user.user_id,
-        ),
-    )
-    connection.commit()
-    return UserPreferenceResponse(
-        preference=_load_preference(
-            connection,
-            context.user.tenant_id,
-            context.user.user_id,
-            items,
-        ),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        items = _visible_navigation_items(context.permission_codes)
+        current = _ensure_preference(connection, context, items)
+        active_navigation_item_id = (
+            _validate_navigation_item(payload.active_navigation_item_id, items)
+            if payload.active_navigation_item_id is not None
+            else current.active_navigation_item_id
+        )
+        sidebar_collapsed = (
+            bool(payload.sidebar_collapsed)
+            if payload.sidebar_collapsed is not None
+            else current.sidebar_collapsed
+        )
+        now = _to_db_time(_utcnow())
+        connection.execute(
+            """
+            UPDATE user_preferences
+            SET active_navigation_item_id=?, sidebar_collapsed=?, updated_at=?
+            WHERE tenant_id=? AND user_id=?
+            """,
+            (
+                active_navigation_item_id,
+                1 if sidebar_collapsed else 0,
+                now,
+                context.user.tenant_id,
+                context.user.user_id,
+            ),
+        )
+        connection.commit()
+        return UserPreferenceResponse(
+            preference=_load_preference(
+                connection,
+                context.user.tenant_id,
+                context.user.user_id,
+                items,
+            ),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def record_console_event(

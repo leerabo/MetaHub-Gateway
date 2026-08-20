@@ -170,6 +170,9 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_INTERNAL_BATCH_TOKEN": "",
     "METAHUB_BATCH_ENCRYPTION_SECRET": "",
     "METAHUB_BATCH_WORKER_ENABLED": "false",
+    # Production and direct launches retain recovery workers. The local
+    # three-service launcher explicitly disables them for a lean dev profile.
+    "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "true",
     "METAHUB_BATCH_POLL_INTERVAL_SECONDS": "1",
     "METAHUB_BATCH_GLOBAL_CONCURRENCY": "2",
     "METAHUB_BATCH_TENANT_CONCURRENCY": "1",
@@ -421,6 +424,7 @@ class AppConfig(BaseModel):
     internal_batch_token: str | None = Field(default=None, exclude=True, repr=False)
     batch_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     batch_worker_enabled: bool = False
+    control_background_schedulers_enabled: bool = True
     batch_poll_interval_seconds: float = 1.0
     batch_global_concurrency: int = 2
     batch_tenant_concurrency: int = 1
@@ -1545,6 +1549,9 @@ def load_app_config(service_name: str) -> AppConfig:
         internal_batch_token=internal_batch_token,
         batch_encryption_secret=batch_encryption_secret,
         batch_worker_enabled=batch_worker_enabled,
+        control_background_schedulers_enabled=_control_background_schedulers_enabled(
+            values, environment
+        ),
         batch_poll_interval_seconds=batch_poll_interval_seconds,
         batch_global_concurrency=batch_global_concurrency,
         batch_tenant_concurrency=batch_tenant_concurrency,
@@ -4156,6 +4163,14 @@ def _boolean(values: dict[str, ConfigValue], key: str) -> bool:
         message=f"{key} must be a boolean.",
         suggestion=f"Set {key}=true or {key}=false.",
     )
+
+
+def _control_background_schedulers_enabled(
+    values: dict[str, ConfigValue], environment: EnvironmentName
+) -> bool:
+    """Read the scheduler profile; local launchers may explicitly disable it."""
+
+    return _boolean(values, "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED")
 
 
 def _bounded_hour(values: dict[str, ConfigValue], key: str) -> int:

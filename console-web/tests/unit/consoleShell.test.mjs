@@ -52,6 +52,7 @@ test("console shell client sends navigation and preference requests without tena
     controlApiUrl: "http://control.local",
     token: "jwt-token",
     activeNavigationItemId: "usage",
+    sidebarCollapsed: true,
   });
   await recordConsolePageView({
     controlApiUrl: "http://control.local",
@@ -64,6 +65,10 @@ test("console shell client sends navigation and preference requests without tena
 
   assert.equal(calls[0].url, "http://control.local/console/navigation?active_item_id=usage");
   assert.equal(calls[1].options.headers.Authorization, "Bearer jwt-token");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    active_navigation_item_id: "usage",
+    sidebar_collapsed: true,
+  });
   assert.equal(JSON.stringify(calls).includes("tenant_id"), false);
   assert.equal(JSON.stringify(calls).includes("jwt-token"), true);
 });
@@ -99,6 +104,29 @@ test("console shell client maps unified errors", async () => {
       return true;
     },
   );
+});
+
+test("console preference update forwards cancellation ownership to fetch", async () => {
+  const controller = new AbortController();
+  let observedSignal = null;
+  globalThis.fetch = async (_url, options = {}) => {
+    observedSignal = options.signal;
+    return {
+      ok: true,
+      headers: new Map(),
+      async json() {
+        return { preference: { sidebar_collapsed: true } };
+      },
+    };
+  };
+
+  await updateConsolePreferences({
+    controlApiUrl: "http://control.local",
+    token: "jwt-token",
+    sidebarCollapsed: true,
+    signal: controller.signal,
+  });
+  assert.equal(observedSignal, controller.signal);
 });
 
 test("navigation hash is resolved only from backend visible items", () => {
@@ -246,11 +274,85 @@ test("renderConsoleShell groups navigation and escapes user controlled fields", 
   });
 
   assert.match(html, /data-console-nav="providers"/);
+  assert.match(html, /data-sidebar-group-toggle="providers"/);
+  assert.match(html, /class="sidebar-group-items"/);
   assert.match(html, /class="sidebar-link active"/);
   assert.doesNotMatch(html, /<Admin>/);
   assert.match(html, /&lt;Admin&gt;/);
   assert.match(html, /&lt;Tenant&gt;/);
   assert.match(html, /Trusted content/);
+});
+
+test("renderConsoleShell restores the persisted collapsed sidebar state", () => {
+  const html = renderConsoleShell({
+    authContext: {
+      user: { display_name: "Admin", email: "admin@example.com", role: "admin", tenant_id: "tenant_1" },
+    },
+    consoleShellState: {
+      preferences: { preference: { sidebar_collapsed: true } },
+      navigation: {
+        active_navigation_item_id: "overview",
+        navigation_items: [
+          { id: "overview", label: "Overview", group: "System", target_section: "overview", order: 1 },
+        ],
+      },
+    },
+    contentHtml: "<section>Content</section>",
+  });
+
+  assert.match(html, /class="console-shell sidebar-collapsed"/);
+  assert.match(html, /data-sidebar-collapsed="true"/);
+  assert.match(html, /id="console-sidebar"/);
+  assert.match(html, /data-sidebar-toggle/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /展开导航/);
+  assert.match(html, /class="sidebar-link-short"/);
+});
+
+test("renderConsoleShell defaults every navigation group to collapsed", () => {
+  const html = renderConsoleShell({
+    authContext: {
+      user: { display_name: "Admin", email: "admin@example.com", role: "admin" },
+    },
+    consoleShellState: {
+      navigation: {
+        active_navigation_item_id: "providers",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "总览", target_section: "overview", order: 1 },
+          { id: "providers", label: "Provider", group: "配置", target_section: "providers", order: 2 },
+        ],
+      },
+    },
+    contentHtml: "<section>Content</section>",
+  });
+
+  assert.match(html, /data-sidebar-group-toggle="overview"[\s\S]*aria-expanded="false"/);
+  assert.match(html, /data-sidebar-group-toggle="providers"[\s\S]*aria-expanded="false"/);
+  assert.equal((html.match(/class="sidebar-group-items" hidden/g) ?? []).length, 2);
+  assert.match(html, /data-console-nav="providers"/);
+});
+
+test("renderConsoleShell restores only one expanded navigation group", () => {
+  const html = renderConsoleShell({
+    authContext: {
+      user: { display_name: "Admin", email: "admin@example.com", role: "admin" },
+    },
+    consoleShellState: {
+      sidebarExpandedGroupKey: "overview",
+      navigation: {
+        active_navigation_item_id: "providers",
+        navigation_items: [
+          { id: "overview", label: "概览", group: "总览", target_section: "overview", order: 1 },
+          { id: "providers", label: "Provider", group: "配置", target_section: "providers", order: 2 },
+        ],
+      },
+    },
+    contentHtml: "<section>Content</section>",
+  });
+
+  assert.match(html, /data-sidebar-group-toggle="overview"[\s\S]*aria-expanded="true"/);
+  assert.match(html, /data-sidebar-group-toggle="providers"[\s\S]*aria-expanded="false"/);
+  assert.equal((html.match(/class="sidebar-group-items" hidden/g) ?? []).length, 1);
 });
 
 test("renderDeveloperStart renders active navigation content when shell state is present", () => {

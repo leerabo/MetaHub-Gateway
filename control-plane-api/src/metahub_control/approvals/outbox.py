@@ -540,7 +540,10 @@ async def drain_approval_writeback_once(
     返回值只表示本轮是否形成持久进展。
     """
 
-    claim, progressed = _claim_next_approval_writeback_with_progress(
+    # Claiming is synchronous SQLite work. Keep it off the FastAPI event loop so
+    # an idle writeback queue cannot delay login or dashboard reads.
+    claim, progressed = await asyncio.to_thread(
+        _claim_next_approval_writeback_with_progress,
         config,
         worker_id=worker_id,
         now=now,

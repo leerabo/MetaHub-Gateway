@@ -129,32 +129,36 @@ def list_webhooks(
         clauses.append("status=?")
         params.append(normalized_status)
     connection = _connect(config)
-    rows = connection.execute(
-        f"""
-        SELECT *
-        FROM webhook_endpoints
-        WHERE {" AND ".join(clauses)}
-        ORDER BY updated_at DESC, name ASC
-        """,
-        params,
-    ).fetchall()
-    endpoints = [
-        _endpoint_info(
-            connection,
-            row,
-            include_deliveries=include_deliveries,
-            event_type=normalized_event_type,
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT *
+            FROM webhook_endpoints
+            WHERE {" AND ".join(clauses)}
+            ORDER BY updated_at DESC, name ASC
+            """,
+            params,
+        ).fetchall()
+        endpoints = [
+            _endpoint_info(
+                connection,
+                row,
+                include_deliveries=include_deliveries,
+                event_type=normalized_event_type,
+            )
+            for row in rows
+            # JSON event types are filtered after the tenant-scoped database query.
+            if normalized_event_type is None
+            or normalized_event_type in _event_types_from_row(row)
+        ]
+        return WebhookEndpointListResponse(
+            webhooks=endpoints,
+            event_types=sorted(WEBHOOK_SUBSCRIBABLE_EVENT_TYPES),
+            request_id=request_id,
+            trace_id=trace_id,
         )
-        for row in rows
-        # event_types 存在 JSON 字段内，M0 数据量很小，先在服务层做白名单过滤保持 SQL 简单可读。
-        if normalized_event_type is None or normalized_event_type in _event_types_from_row(row)
-    ]
-    return WebhookEndpointListResponse(
-        webhooks=endpoints,
-        event_types=sorted(WEBHOOK_SUBSCRIBABLE_EVENT_TYPES),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    finally:
+        connection.close()
 
 
 def create_webhook(
@@ -302,35 +306,38 @@ def list_webhook_deliveries(
     normalized_status = _normalize_delivery_status(status)
     normalized_limit = _normalize_delivery_limit(limit)
     connection = _connect(config)
-    endpoint = _load_endpoint_or_404(connection, context.user.tenant_id, endpoint_id)
-    clauses = ["tenant_id=?", "webhook_endpoint_id=?"]
-    params: list[object] = [context.user.tenant_id, endpoint["webhook_endpoint_id"]]
-    if normalized_event_type:
-        clauses.append("event_type=?")
-        params.append(normalized_event_type)
-    if normalized_status != "all":
-        clauses.append("status=?")
-        params.append(normalized_status)
-    rows = connection.execute(
-        f"""
-        SELECT * FROM webhook_deliveries
-        WHERE {" AND ".join(clauses)}
-        ORDER BY created_at DESC, webhook_delivery_id DESC
-        LIMIT ?
-        """,
-        [*params, normalized_limit],
-    ).fetchall()
-    return WebhookDeliveryListResponse(
-        webhook_endpoint_id=endpoint["webhook_endpoint_id"],
-        deliveries=[_delivery_record_from_row(connection, row) for row in rows],
-        filters=WebhookDeliveryFilters(
-            event_type=normalized_event_type,
-            status=normalized_status,
-            limit=normalized_limit,
-        ),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        endpoint = _load_endpoint_or_404(connection, context.user.tenant_id, endpoint_id)
+        clauses = ["tenant_id=?", "webhook_endpoint_id=?"]
+        params: list[object] = [context.user.tenant_id, endpoint["webhook_endpoint_id"]]
+        if normalized_event_type:
+            clauses.append("event_type=?")
+            params.append(normalized_event_type)
+        if normalized_status != "all":
+            clauses.append("status=?")
+            params.append(normalized_status)
+        rows = connection.execute(
+            f"""
+            SELECT * FROM webhook_deliveries
+            WHERE {" AND ".join(clauses)}
+            ORDER BY created_at DESC, webhook_delivery_id DESC
+            LIMIT ?
+            """,
+            [*params, normalized_limit],
+        ).fetchall()
+        return WebhookDeliveryListResponse(
+            webhook_endpoint_id=endpoint["webhook_endpoint_id"],
+            deliveries=[_delivery_record_from_row(connection, row) for row in rows],
+            filters=WebhookDeliveryFilters(
+                event_type=normalized_event_type,
+                status=normalized_status,
+                limit=normalized_limit,
+            ),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 @dataclass(frozen=True)

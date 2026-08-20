@@ -426,7 +426,8 @@ test("PAGE-094 is wired into authorized shell and lifecycle clears sensitive DOM
   assert.match(mainSource, /function clearPromptTemplateSessionState\(\)[\s\S]*clearPromptTemplateSensitiveDom\(document\)[\s\S]*promptTemplatePageState\.leave\(\)/);
   assert.match(mainSource, /window\.addEventListener\("pagehide"[\s\S]*clearPromptTemplateSessionState\(\)/);
   assert.match(mainSource, /itemId !== "prompt-templates"[\s\S]*clearPromptTemplateSessionState\(\)/);
-  assert.match(mainSource, /promptTemplatePageState\.blocksShellDomReplacement\(\)/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "prompt-templates":[\s\S]*loadPromptTemplateState\(consoleShellState, refreshId\)/);
   assert.match(rendererSource, /content\.textContent\s*=/);
   assert.match(rendererSource, /input\.value\s*=/);
   assert.doesNotMatch(rendererSource, /localStorage|sessionStorage|indexedDB|console\.(?:log|warn|error)/);

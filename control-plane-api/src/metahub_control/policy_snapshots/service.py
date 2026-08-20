@@ -160,6 +160,8 @@ def get_current_policy_snapshot(
     except (sqlite3.Error, TypeError, ValueError, PolicySnapshotValidationError) as exc:
         _safe_rollback(connection)
         raise ApiError("policy_snapshot.unavailable") from exc
+    finally:
+        connection.close()
 
     current_info = _snapshot_info(current_row) if current_row is not None else None
     matches = bool(
@@ -229,6 +231,8 @@ def list_policy_snapshots(
     # 历史读取与 DTO 转换故障不能返回部分租户数据，统一按快照服务不可用处理。
     except (sqlite3.Error, TypeError, ValueError) as exc:
         raise ApiError("policy_snapshot.unavailable") from exc
+    finally:
+        connection.close()
     return PolicySnapshotListResponse(
         policy_snapshots=infos,
         total=total,

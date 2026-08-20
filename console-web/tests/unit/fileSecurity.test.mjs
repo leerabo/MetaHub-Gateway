@@ -788,7 +788,8 @@ test("PRD-073 main lifecycle and narrow CSS freeze cleanup, permissions and no h
   assert.match(mainSource, /window\.addEventListener\("pagehide"[\s\S]*fileSecurityPageState\.clear\(\)/);
   assert.match(mainSource, /logoutButton[\s\S]*fileSecurityPageState\.clear\(\)/);
   assert.match(mainSource, /itemId !== "file-security"[\s\S]*fileSecurityPageState\.clear\(\)/);
-  assert.match(mainSource, /fileSecurityPageState\.isActionBusy\(\)/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "file-security":[\s\S]*loadFileSecurityState\(consoleShellState, refreshId\)/);
   assert.match(mainSource, /error\.status === 403[\s\S]*error\.code === "auth\.permission_denied"/);
   const loaderSource = mainSource.match(
     /async function loadFileSecurityState[\s\S]*?\n}\n\/\*\*\n \* 清除预算页会话内快照/,

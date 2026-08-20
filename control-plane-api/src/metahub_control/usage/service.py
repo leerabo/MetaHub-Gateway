@@ -76,17 +76,20 @@ def get_usage_summary(
     )
     where_sql, params = build_usage_filters(context.user.tenant_id, filters)
     connection = _connect(config)
-    return UsageSummaryResponse(
-        totals=_load_totals(connection, where_sql, params),
-        by_day=_load_by_day(connection, where_sql, params),
-        by_model=_load_by_model(connection, where_sql, params),
-        by_virtual_key=_load_by_virtual_key(connection, where_sql, params),
-        by_environment=_load_by_environment(connection, where_sql, params),
-        by_project=_load_by_project(connection, where_sql, params),
-        by_application=_load_by_application(connection, where_sql, params),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    try:
+        return UsageSummaryResponse(
+            totals=_load_totals(connection, where_sql, params),
+            by_day=_load_by_day(connection, where_sql, params),
+            by_model=_load_by_model(connection, where_sql, params),
+            by_virtual_key=_load_by_virtual_key(connection, where_sql, params),
+            by_environment=_load_by_environment(connection, where_sql, params),
+            by_project=_load_by_project(connection, where_sql, params),
+            by_application=_load_by_application(connection, where_sql, params),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def list_usage_records(
@@ -131,12 +134,13 @@ def list_usage_records(
     normalized_offset = _normalize_offset(offset)
     where_sql, params = build_usage_filters(context.user.tenant_id, filters)
     connection = _connect(config)
-    total_row = connection.execute(
-        f"SELECT COUNT(*) AS total FROM usage_ledger ul LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id {where_sql}",
-        params,
-    ).fetchone()
-    rows = connection.execute(
-        f"""
+    try:
+        total_row = connection.execute(
+            f"SELECT COUNT(*) AS total FROM usage_ledger ul LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id {where_sql}",
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            f"""
         SELECT
           ul.usage_ledger_id, ul.tenant_id, ul.request_id, rl.trace_id,
           COALESCE(ul.virtual_key_id, rl.virtual_key_id) AS virtual_key_id,
@@ -168,16 +172,18 @@ def list_usage_records(
         ORDER BY ul.created_at DESC, ul.usage_ledger_id DESC
         LIMIT ? OFFSET ?
         """,
-        [*params, normalized_limit, normalized_offset],
-    ).fetchall()
-    return UsageRecordListResponse(
-        usage_records=[_usage_record_info(row) for row in rows],
-        total=int(total_row["total"] if total_row else 0),
-        limit=normalized_limit,
-        offset=normalized_offset,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+            [*params, normalized_limit, normalized_offset],
+        ).fetchall()
+        return UsageRecordListResponse(
+            usage_records=[_usage_record_info(row) for row in rows],
+            total=int(total_row["total"] if total_row else 0),
+            limit=normalized_limit,
+            offset=normalized_offset,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def normalize_usage_filters(

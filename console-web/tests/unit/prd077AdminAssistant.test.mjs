@@ -619,10 +619,7 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
   assert.match(main, /pagehide[\s\S]*adminAssistantPageState\.leave\(\)/);
   assert.match(main, /clearAdminAssistantStateOnIdentityChange\(authSession\.context, context\)/);
   assert.match(main, /isBackgroundRefresh[\s\S]*adminAssistantPageState\.blocksShellDomReplacement\(\)/);
-  assert.match(
-    main,
-    /setInterval[\s\S]*activeNavigation === "admin-assistant"[\s\S]*?return;/,
-  );
+  assert.doesNotMatch(main, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
   assert.match(main, /itemId !== "admin-assistant"[\s\S]*adminAssistantPageState\.leave\(\)/);
   assert.match(main, /adminAssistantPageState\.leave\(\)[\s\S]*switchConsoleNavigation/);
   const shellLoadIndex = main.indexOf("const consoleShellState = await loadConsoleShellState();");
@@ -653,10 +650,7 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
     main,
     /activeConsoleNavigationCount \+= 1;[\s\S]*?try \{[\s\S]*?finally \{\s*activeConsoleNavigationCount -= 1;/,
   );
-  assert.match(
-    main,
-    /if \(activeRefreshCount > 0\)[\s\S]*?if \(activeConsoleNavigationCount > 0\)[\s\S]*?nextRefreshIsBackground = true;/,
-  );
+  assert.match(main, /case "admin-assistant":[\s\S]*loadAdminAssistantState\(consoleShellState, refreshId\)/);
   assert.match(main, /function loadAdminAssistantState[\s\S]*adminAssistantPageState\.snapshot/);
   assert.match(main, /function submitAdminAssistantQuery[\s\S]*queryAdminAssistant\(/);
   assert.equal((main.match(/queryAdminAssistant\(/g) ?? []).length, 1);

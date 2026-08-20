@@ -156,6 +156,7 @@ def list_policies(
         ).fetchall()
     # 策略聚合读取失败时不能返回部分 Rule/Action，统一按可重试服务故障处理且不暴露 SQL。
     except sqlite3.Error as exc:
+        connection.close()
         raise ApiError("policy.unavailable") from exc
     try:
         return PolicyListResponse(
@@ -169,6 +170,8 @@ def list_policies(
     # 持久行到响应模型的日期/枚举转换失败属于数据库腐损，不能泄露为 Pydantic 或 Python 500。
     except (TypeError, ValueError) as exc:
         raise ApiError("policy.unavailable") from exc
+    finally:
+        connection.close()
 
 
 def validate_policy(

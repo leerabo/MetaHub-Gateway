@@ -11,6 +11,7 @@ import {
 import { renderBudgetPanel } from "../budgets/renderBudgetPanel.js";
 import { renderAuditLogPanel } from "../audit-logs/renderAuditLogPanel.js";
 import { renderRoleDashboardPanel } from "../dashboard/renderRoleDashboardPanel.js";
+import { renderAdminOnboarding } from "../admin-onboarding/renderAdminOnboarding.js";
 import { renderDebugConsolePanel } from "../debug-console/renderDebugConsolePanel.js";
 import { renderEnterpriseChat } from "../enterprise-chat/renderEnterpriseChat.js";
 import { renderPromptTemplates } from "../prompt-templates/renderPromptTemplates.js";
@@ -651,9 +652,12 @@ function renderActiveContent(activeItemId, options, statuses) {
  */
 function renderOverviewContent(options) {
   return `
-    <section class="panel dashboard-overview-shell" aria-labelledby="role-dashboard-title">
-      ${renderRoleDashboardPanel(options.roleDashboardState, options.authContext, options.consoleShellState)}
-    </section>
+    <div class="dashboard-overview-shell">
+      ${hasPermission(options.authContext, PERMISSIONS.USER_MANAGE) ? renderAdminOnboarding(options.onboardingState) : ""}
+      <section class="panel" aria-labelledby="role-dashboard-title">
+        ${renderRoleDashboardPanel(options.roleDashboardState, options.authContext, options.consoleShellState)}
+      </section>
+    </div>
   `;
 }
 

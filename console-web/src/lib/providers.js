@@ -5,7 +5,7 @@ import { AuthApiError } from "./auth.js";
  *
  * status/provider_type 是控制面过滤参数；租户范围由 Token 决定，前端不允许传 tenant_id。
  */
-export async function listProviders({ controlApiUrl, token, status, providerType }) {
+export async function listProviders({ controlApiUrl, token, status, providerType, signal }) {
   const url = new URL(`${controlApiUrl}/providers`);
   if (status) {
     url.searchParams.set("status", status);
@@ -17,6 +17,7 @@ export async function listProviders({ controlApiUrl, token, status, providerType
   }
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   return providersRequest(url.toString(), {
+    signal,
     headers: { Authorization: `Bearer ${token}` },
   });
 }
@@ -26,8 +27,9 @@ export async function listProviders({ controlApiUrl, token, status, providerType
  *
  * 响应只包含 key_prefix/fingerprint 等脱敏字段，Provider Key 明文不会回到控制台。
  */
-export async function listProviderKeys({ controlApiUrl, token, providerId }) {
+export async function listProviderKeys({ controlApiUrl, token, providerId, signal }) {
   return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}/keys`, {
+    signal,
     headers: { Authorization: `Bearer ${token}` },
   });
 }

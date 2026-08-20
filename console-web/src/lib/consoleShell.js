@@ -141,6 +141,7 @@ export async function updateConsolePreferences({
   token,
   activeNavigationItemId,
   sidebarCollapsed,
+  signal,
 }) {
   const payload = {};
   if (activeNavigationItemId !== undefined) {
@@ -156,6 +157,7 @@ export async function updateConsolePreferences({
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   });
 }
 

@@ -683,25 +683,44 @@ docs/                 PRD 设计、架构、API、ADR、开发、Runbook、安�
 
 ## 本地启动
 
-准备 Python 和 Node.js。Codex 环境里可使用内置 Python；普通开发机可以使用系统 Python。
-
-PowerShell 示例：
+准备 Python 3.12 和 Node.js 20+。Console 不依赖第三方 npm 包；Python 运行依赖使用容器和本地共享的约束文件。首次在 Windows PowerShell 中执行：
 
 ```powershell
-Copy-Item .env.example .env
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r .\infra\docker\requirements.runtime.txt
+
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+启动前先初始化 SQLite 和本地管理员。密码和 Token Secret 只注入当前运行环境，不写入日志：
+
+```powershell
+$env:METAHUB_DATABASE_URL="sqlite:///./.data/metahub.db"
+$env:METAHUB_SEED_ADMIN_PASSWORD="change-me-locally"
+$env:METAHUB_AUTH_TOKEN_SECRET="change-me-auth-token-secret"
+.\scripts\db\migrate.ps1
+.\scripts\db\seed.ps1
 
 # 可选：指定 Python 路径
-$env:METAHUB_PYTHON="python"
+$env:METAHUB_PYTHON=(Resolve-Path .\.venv\Scripts\python.exe).Path
 
-# 方式一：一键启动三个空壳服务
+# 一键启动三个真实服务
 .\scripts\dev\start-all.ps1
 ```
 
-一键启动后访问：
+三个进程分别承担模型调用数据面、管理控制面和 Web Console，不是演示模式。一键启动后访问：
 
 - Gateway Health: <http://localhost:8000/health>
 - Control API Health: <http://localhost:8001/health>
 - Console Web: <http://localhost:5173>
+
+停止时执行：
+
+```powershell
+.\scripts\dev\stop-all.ps1
+```
+
+停止脚本只会停止本次 `start-all.ps1` 记录的启动器及其 Python/Node 子进程，不会扫描或终止机器上的其他 Python/Node 应用。
 
 也可以分别启动：
 
@@ -710,6 +729,8 @@ $env:METAHUB_PYTHON="python"
 .\scripts\dev\start-control-api.ps1
 .\scripts\dev\start-console.ps1
 ```
+
+本地三服务启动器默认关闭只用于后台恢复的可选 Control scheduler，以降低空数据库时的轮询和内存开销；真实 API、SQLite、Session、后端 RBAC 和当前页面数据读取全部保持开启。直接启动或生产配置的 scheduler 默认为开启；需在本地验收恢复任务时，可在启动前显式设置 `$env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED="true"`。
 
 ## 单机 Docker Compose 部署
 
@@ -737,6 +758,17 @@ PRD-028 后，研发和试点客户可以使用 Compose 在单台服务器启动
 ```powershell
 .\scripts\ci\check.ps1
 ```
+
+产品级验收按 WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW 一次成组执行：
+
+```powershell
+.\scripts\quality\run-product-qa.ps1 -Group All -RunBrowserMatrix `
+  -RunLivePerformance -RunPressure -PressureRequests 120 -PressureConcurrency 8 `
+  -PressureDurationSeconds 0
+```
+
+当前最终批次为 `15/15` 任务和 `97/97` 计划项通过；三浏览器三缩放的 36 个数据页切换样本为
+`484-1675 ms`，详见 [产品级 QA 最终报告](docs/testing/product-qa/REPORT-20260820.md)。
 
 该命令会运行：
 
@@ -879,6 +911,8 @@ $env:METAHUB_AUTH_TOKEN_SECRET="change-me-auth-token-secret"
 - 租户：`default`
 - 邮箱：`admin@metahub.local`
 - 密码：来自 `METAHUB_SEED_ADMIN_PASSWORD`
+
+首次登录后从左侧“总览”进入初始化向导，按业务依赖顺序完成：企业资料、Environment、Provider 和 Provider Key、模型、模型别名、Project/Application、Virtual Key，最后执行首次调用。Provider Key 由企业管理员在“配置 > Provider”中录入，只在提交请求中出现，界面、日志和验收证据不会回显明文。在配置可用的真实 Provider Endpoint/Key 前，控制台的治理功能可正常使用，但 Gateway 不会伪造上游模型响应。
 
 认证接口：
 

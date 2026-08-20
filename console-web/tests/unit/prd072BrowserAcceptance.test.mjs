@@ -47,7 +47,8 @@ test("PRD-072 browser lifecycle contract destroys owner state on every strong bo
   assert.match(main, /logoutButton[\s\S]*filePageState\.clear\(\)/);
   assert.match(main, /itemId !== "files"[\s\S]*filePageState\.clear\(\)/);
   assert.match(main, /nextItemId !== "files"[\s\S]*filePageState\.clear\(\)/);
-  assert.match(main, /filePageState\.isUploadBusy\(\) \|\| fileUploadHasSelection\(\)/);
+  assert.doesNotMatch(main, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(main, /case "files":[\s\S]*loadFilesState\(consoleShellState, refreshId\)/);
   assert.match(main, /error\.status === 403[\s\S]*error\.code === "auth\.permission_denied"/);
   assert.match(main, /loadFilesState\(consoleShellState, refreshId\)/);
   assert.match(main, /bindFilesPageInteractions\(consoleShellState\)/);

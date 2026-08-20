@@ -430,11 +430,11 @@ test("renderDeveloperStart renders webhooks active navigation content", () => {
   assert.match(container.innerHTML, /运维告警系统/);
 });
 
-test("periodic refresh waits for interactive refresh so webhook feedback can render", () => {
-  // 一次完整控制台读取可能超过 15 秒；定时器若继续抢占 refreshSequence，会让成功重放和轮换反馈永久不落 DOM。
+test("webhook feedback cannot be superseded by a periodic full-page refresh", () => {
   assert.match(mainSource, /let activeRefreshCount = 0;/);
   assert.match(mainSource, /activeRefreshCount \+= 1;[\s\S]*finally \{[\s\S]*activeRefreshCount -= 1;/);
-  assert.match(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*if \(activeRefreshCount > 0\) \{[\s\S]*return;/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "webhooks":[\s\S]*loadWebhookState/);
 });
 
 test("identity changes clear webhook secret and prior request feedback together", () => {

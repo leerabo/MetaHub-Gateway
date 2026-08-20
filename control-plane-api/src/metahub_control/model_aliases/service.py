@@ -138,19 +138,24 @@ def list_model_aliases(
     connection = _connect(config)
     if environment_id:
         # ID 筛选先在当前租户内解析，避免列表接口泄露其他租户是否存在该 Environment。
-        binding = resolve_environment_binding(
-            connection,
-            context.user.tenant_id,
-            environment_id=environment_id,
-            environment_code=normalized_environment,
-            require_active=False,
-            allow_default=False,
-        )
+        try:
+            binding = resolve_environment_binding(
+                connection,
+                context.user.tenant_id,
+                environment_id=environment_id,
+                environment_code=normalized_environment,
+                require_active=False,
+                allow_default=False,
+            )
+        except BaseException:
+            connection.close()
+            raise
         filters.append("a.environment_id=?")
         params.append(binding.environment_id)
     where_extra = f" AND {' AND '.join(filters)}" if filters else ""
-    rows = connection.execute(
-        f"""
+    try:
+        rows = connection.execute(
+            f"""
         SELECT
           a.model_alias_id, a.tenant_id, a.alias, a.environment,
           e.environment_id AS environment_id, e.name AS environment_name, e.status AS environment_status,
@@ -201,14 +206,16 @@ def list_model_aliases(
           ON ca.model_alias_id=a.model_alias_id AND ca.tenant_id=a.tenant_id
         WHERE a.tenant_id=? {where_extra}
         ORDER BY a.environment ASC, a.alias ASC
-        """,
-        params,
-    ).fetchall()
-    return ModelAliasListResponse(
-        model_aliases=[_model_alias_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+            """,
+            params,
+        ).fetchall()
+        return ModelAliasListResponse(
+            model_aliases=[_model_alias_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_model_alias(
@@ -2092,4 +2099,3 @@ def _log_changed(
             },
         },
     )
-

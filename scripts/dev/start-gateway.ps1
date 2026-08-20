@@ -1,7 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Python = if ($env:METAHUB_PYTHON) { $env:METAHUB_PYTHON } else { "python" }
+$WorkspacePython = Join-Path $Root ".venv\Scripts\python.exe"
+$Python = if ($env:METAHUB_PYTHON) {
+  $env:METAHUB_PYTHON
+} elseif (Test-Path -LiteralPath $WorkspacePython) {
+  $WorkspacePython
+} else {
+  "python"
+}
 
 # PRD-001 uses src layout. Add shared runtime and gateway source before starting.
 $env:PYTHONPATH = "$Root\shared-sdk\python;$Root\gateway-data-plane\src;$env:PYTHONPATH"

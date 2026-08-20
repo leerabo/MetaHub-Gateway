@@ -727,41 +727,37 @@ test("PAGE-072 navigation owner rejects a newer navigation or replacement Sessio
   }
 });
 
-test("main wires PAGE-072 loading after persisted navigation telemetry and before full refresh", async () => {
+test("main hydrates PAGE-072 from the authorized snapshot before deferred telemetry", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const start = source.indexOf("async function switchConsoleNavigation");
   const end = source.indexOf("\n/**", start);
   assert.ok(start >= 0 && end > start);
   const transition = source.slice(start, end);
   const ownerIndex = transition.indexOf("const navigationOwner = Object.freeze");
-  const preferenceIndex = transition.indexOf("await updateConsolePreferences");
-  const preferenceGateIndex = transition.indexOf("if (!navigationOwnerCurrent())", preferenceIndex);
-  const pageViewIndex = transition.indexOf("await recordConsolePageView");
-  const pageViewGateIndex = transition.indexOf("if (!navigationOwnerCurrent())", pageViewIndex);
   const loadingIndex = transition.indexOf("renderRoutingPoliciesLoading(app");
   // 其他治理页也有同名重绑；PAGE-072 门禁必须锁定自己的 loading 之后那一次，避免误命中前序页面分支。
   const rebindIndex = transition.indexOf("bindAuthenticatedEvents(projectedState)", loadingIndex);
-  const refreshGateIndex = transition.indexOf("if (!navigationOwnerCurrent())", rebindIndex);
-  const refreshCallIndex = transition.indexOf("const refreshPromise = refresh();", refreshGateIndex);
-  const refreshOwnerIndex = transition.indexOf("errorOwner = Object.freeze", refreshCallIndex);
-  const refreshAwaitIndex = transition.indexOf("await refreshPromise;", refreshOwnerIndex);
+  const refreshGateIndex = transition.indexOf(
+    "if (!navigationOwnerCurrent() || !authorizedProjectedState)",
+    rebindIndex,
+  );
+  const hydrateIndex = transition.indexOf("await loadAndRenderActiveNavigation({", refreshGateIndex);
+  const postHydrateGateIndex = transition.indexOf("if (!navigationOwnerCurrent())", hydrateIndex);
+  const sideEffectIndex = transition.indexOf("scheduleConsoleNavigationSideEffects({", postHydrateGateIndex);
   const catchIndex = transition.indexOf("} catch (error)");
   const catchGateIndex = transition.indexOf("if (!errorOwnerCurrent())", catchIndex);
   assert.ok(
     ownerIndex >= 0
-      && ownerIndex < preferenceIndex
-      && preferenceIndex < preferenceGateIndex
-      && preferenceGateIndex < pageViewIndex
-      && pageViewIndex < pageViewGateIndex
-      && pageViewGateIndex < loadingIndex
+      && ownerIndex < loadingIndex
       && loadingIndex < rebindIndex
       && rebindIndex < refreshGateIndex
-      && refreshGateIndex < refreshCallIndex
-      && refreshCallIndex < refreshOwnerIndex
-      && refreshOwnerIndex < refreshAwaitIndex
-      && refreshAwaitIndex < catchIndex
+      && refreshGateIndex < hydrateIndex
+      && hydrateIndex < postHydrateGateIndex
+      && postHydrateGateIndex < sideEffectIndex
+      && sideEffectIndex < catchIndex
       && catchIndex < catchGateIndex,
   );
+  assert.doesNotMatch(transition.slice(refreshGateIndex, hydrateIndex), /getCurrentUser|loadConsoleShellState|refresh\(\)/);
   assert.match(
     source,
     /switchConsoleNavigation\(navigationButton, consoleShellState\)/,

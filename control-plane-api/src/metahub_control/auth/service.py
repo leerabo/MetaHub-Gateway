@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -62,6 +63,51 @@ __all__ = (
 _DUMMY_PASSWORD_HASH = (
     "pbkdf2_sha256$200000$AAAAAAAAAAAAAAAAAAAAAA==$9JrZB7v3Jps9SMpi45e5yM/OXh+1xPzXD7fF22bWm6w="
 )
+
+# Read-heavy console refreshes authenticate many requests at once. Updating the
+# same session row for every read turns that fan-out into a SQLite writer queue;
+# identity and permission snapshots are still checked on every request, while
+# this telemetry write is coalesced for a short interval per local worker.
+_LAST_SEEN_MIN_INTERVAL_SECONDS = 5.0
+_LAST_SEEN_GATE_LOCK = threading.Lock()
+_LAST_SEEN_GATE: dict[str, float] = {}
+
+
+def _claim_last_seen_update(session_id: str, now_monotonic: float) -> bool:
+    """Reserve one recent ``last_seen`` write for a session in this worker."""
+
+    with _LAST_SEEN_GATE_LOCK:
+        previous = _LAST_SEEN_GATE.get(session_id)
+        if previous is not None and now_monotonic - previous < _LAST_SEEN_MIN_INTERVAL_SECONDS:
+            return False
+        _LAST_SEEN_GATE[session_id] = now_monotonic
+        # Bound memory if a long-lived worker sees many expired sessions.
+        if len(_LAST_SEEN_GATE) > 4096:
+            cutoff = now_monotonic - _LAST_SEEN_MIN_INTERVAL_SECONDS
+            for key, value in tuple(_LAST_SEEN_GATE.items()):
+                if value < cutoff:
+                    _LAST_SEEN_GATE.pop(key, None)
+        return True
+
+
+def _release_last_seen_update(session_id: str, now_monotonic: float) -> None:
+    """Allow a failed write to be retried instead of suppressing telemetry."""
+
+    with _LAST_SEEN_GATE_LOCK:
+        if _LAST_SEEN_GATE.get(session_id) == now_monotonic:
+            _LAST_SEEN_GATE.pop(session_id, None)
+
+
+def _prime_last_seen_gate(session_id: str) -> None:
+    """Treat the login transaction as the first recent session observation.
+
+    The session row is created with its current activity timestamp during
+    login.  Priming the in-process gate keeps the first authenticated console
+    fan-out read-only, while later requests still refresh the timestamp at the
+    configured interval.
+    """
+
+    _claim_last_seen_update(session_id, time.monotonic())
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +264,9 @@ def login_admin(
         ),
     )
     connection.commit()
+    # Login already persisted the current activity timestamp.  Avoid making
+    # the first dashboard fan-out contend for the same SQLite writer lock.
+    _prime_last_seen_gate(session_id)
 
     auth_user = _auth_user(user, snapshot)
     logger.info(
@@ -469,11 +518,20 @@ def _authenticate_bearer_context(
 
     if update_last_seen:
         # 普通 API 仍在认证成功后立即刷新；PAGE-107 会把该写入并入最终不可变审计事务。
-        connection.execute(
-            "UPDATE sessions SET last_seen_at=?, updated_at=? WHERE session_id=?",
-            (_to_db_time(now), _to_db_time(now), row["session_id"]),
-        )
-        connection.commit()
+        # Console fan-out requests still perform the full live auth/RBAC read;
+        # only the low-value timestamp write is coalesced to avoid serializing
+        # every read behind SQLite's single writer.
+        seen_gate_time = time.monotonic()
+        if _claim_last_seen_update(row["session_id"], seen_gate_time):
+            try:
+                connection.execute(
+                    "UPDATE sessions SET last_seen_at=?, updated_at=? WHERE session_id=?",
+                    (_to_db_time(now), _to_db_time(now), row["session_id"]),
+                )
+                connection.commit()
+            except Exception:
+                _release_last_seen_update(row["session_id"], seen_gate_time)
+                raise
 
     context = AuthContext(
         user=_auth_user(row, snapshot),

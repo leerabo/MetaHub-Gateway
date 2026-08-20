@@ -10,12 +10,28 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from metahub_control.auth import AuthContext, require_tenant_settings_reader
+from metahub_control.auth import AuthContext, require_current_admin, require_tenant_settings_reader
 
 from .models import TenantCurrentResponse, TenantUpdateRequest
+from .onboarding import TenantOnboardingSummaryResponse, get_onboarding_summary
 from .service import get_current_tenant, update_current_tenant
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
+
+
+@router.get("/onboarding/summary", response_model=TenantOnboardingSummaryResponse)
+async def onboarding_summary(
+    request: Request,
+    context: Annotated[AuthContext, Depends(require_current_admin)],
+) -> TenantOnboardingSummaryResponse:
+    """Return backend-authoritative first-use progress for the current tenant."""
+
+    return get_onboarding_summary(
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
 
 
 @router.get("/current", response_model=TenantCurrentResponse)

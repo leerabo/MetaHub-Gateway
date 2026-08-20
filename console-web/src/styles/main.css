@@ -1269,6 +1269,10 @@ h3 {
   align-items: start;
 }
 
+.console-shell.sidebar-collapsed {
+  grid-template-columns: 78px minmax(0, 1fr);
+}
+
 .console-sidebar {
   position: sticky;
   top: 12px;
@@ -1297,6 +1301,12 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
+.sidebar-title-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .sidebar-title strong {
   font-size: 14px;
 }
@@ -1306,15 +1316,89 @@ h3 {
   font-size: 12px;
 }
 
+.sidebar-toggle {
+  flex: 0 0 auto;
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.sidebar-toggle-icon {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.sidebar-toggle-text {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .sidebar-group {
   display: grid;
   gap: 7px;
 }
 
-.sidebar-group h3 {
+.sidebar-group-toggle {
+  width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--muted);
+  font: inherit;
   font-size: 12px;
   font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-group-toggle:hover,
+.sidebar-group-toggle:focus-visible {
+  background: #f1f5f9;
+  color: var(--text);
+  outline: none;
+}
+
+.sidebar-group-chevron {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.sidebar-group.is-collapsed .sidebar-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-group-items {
+  display: grid;
+  gap: 7px;
+}
+
+.sidebar-group-items[hidden] {
+  display: none;
 }
 
 .sidebar-link {
@@ -1342,6 +1426,10 @@ h3 {
   white-space: nowrap;
 }
 
+.sidebar-link-short {
+  display: none;
+}
+
 .sidebar-link span {
   font-size: 14px;
   font-weight: 700;
@@ -1360,12 +1448,80 @@ h3 {
   outline: none;
 }
 
+.sidebar-collapsed .console-sidebar {
+  padding: 10px 6px;
+  gap: 12px;
+}
+
+.sidebar-collapsed .sidebar-title {
+  justify-content: center;
+  padding-bottom: 8px;
+}
+
+.sidebar-collapsed .sidebar-title-copy,
+.sidebar-collapsed .sidebar-toggle-text,
+.sidebar-collapsed .sidebar-group-toggle,
+.sidebar-collapsed .sidebar-link small {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-toggle {
+  width: 36px;
+  padding: 5px;
+}
+
+.sidebar-collapsed .sidebar-group {
+  gap: 5px;
+}
+
+.sidebar-collapsed .sidebar-link {
+  min-height: 46px;
+  padding: 7px 3px;
+  justify-items: center;
+  text-align: center;
+}
+
+.sidebar-collapsed .sidebar-link span {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-link-short {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #b8d8d4;
+  border-radius: 5px;
+  background: #f4fbfa;
+  color: #155e75;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.sidebar-collapsed .sidebar-link small {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-link span.sidebar-link-short {
+  display: inline-flex;
+}
+
 .console-main {
   min-width: 0;
   display: grid;
   /* 单列必须显式允许收缩，否则 Usage 汇总等宽内容会按 max-content 撑破控制台和页面根节点。 */
   grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+}
+
+.console-navigation-loading {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
 }
 
 /* PRD-049 PAGE-070：调用反馈嵌入日志详情，表单保持独立 mutation 尺寸且不形成卡片套卡片。 */
@@ -10712,6 +10868,25 @@ h3 {
     scrollbar-gutter: auto;
   }
 
+  .console-shell.sidebar-collapsed {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .sidebar-collapsed .console-sidebar {
+    padding: 8px 10px;
+  }
+
+  .sidebar-collapsed .sidebar-title {
+    justify-content: flex-end;
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .sidebar-collapsed .sidebar-group {
+    display: none;
+  }
+
   .console-main-heading {
     flex-direction: column;
   }
@@ -13781,10 +13956,185 @@ h3 {
 
 /* PRD-026 Dashboard：总览页承载真实日志和用量聚合，样式保持紧凑可扫描。 */
 .dashboard-overview-shell {
+  display: grid;
+  gap: 18px;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.admin-onboarding {
+  display: grid;
+  gap: 16px;
+  padding: 22px 24px;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #15803d;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+}
+
+.admin-onboarding-heading,
+.admin-onboarding-next {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  min-width: 0;
+}
+
+.admin-onboarding-heading h2,
+.admin-onboarding-next h3 {
+  margin: 3px 0 5px;
+  letter-spacing: 0;
+}
+
+.admin-onboarding-heading h2 {
+  font-size: 21px;
+}
+
+.admin-onboarding-heading p,
+.admin-onboarding-next p {
+  margin: 0;
+  color: #526176;
+  line-height: 1.55;
+}
+
+.admin-onboarding-kicker,
+.admin-onboarding-next > div > span {
+  margin: 0;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-onboarding-progress-label {
+  flex: 0 0 auto;
+  color: #166534;
+  font-size: 20px;
+}
+
+.admin-onboarding-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e2e8f0;
+}
+
+.admin-onboarding-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #15803d;
+}
+
+.admin-onboarding-next {
+  padding: 16px 0;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.admin-onboarding-next h3 {
+  font-size: 16px;
+}
+
+.admin-onboarding-action {
+  flex: 0 0 auto;
+  align-self: center;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.admin-onboarding-details summary {
+  width: fit-content;
+  color: #334155;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-onboarding-details ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-onboarding-step {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.admin-onboarding-step-mark {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  margin-top: 5px;
+  border: 2px solid #94a3b8;
+  border-radius: 50%;
+}
+
+.admin-onboarding-step.status-complete .admin-onboarding-step-mark {
+  border-color: #15803d;
+  background: #15803d;
+}
+
+.admin-onboarding-step.status-current .admin-onboarding-step-mark {
+  border-color: #0369a1;
+  background: #e0f2fe;
+}
+
+.admin-onboarding-step > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-onboarding-step strong,
+.admin-onboarding-step span,
+.admin-onboarding-step small {
+  overflow-wrap: anywhere;
+}
+
+.admin-onboarding-step > div > span,
+.admin-onboarding-step small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.admin-onboarding-step small {
+  grid-column: 1 / -1;
+}
+
+.admin-onboarding-error {
+  border-left-color: #b91c1c;
+}
+
+@media (max-width: 720px) {
+  .admin-onboarding {
+    padding: 18px;
+  }
+
+  .admin-onboarding-heading,
+  .admin-onboarding-next {
+    flex-direction: column;
+  }
+
+  .admin-onboarding-action {
+    width: 100%;
+  }
+
+  .admin-onboarding-details ol {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .dashboard-panel {

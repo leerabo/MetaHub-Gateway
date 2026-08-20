@@ -945,7 +945,7 @@ test("PAGE-105 gates all four create option reads behind the composite owner", a
   for (const stateName of ["environmentState", "modelsState", "modelAliasesState", "projectState"]) {
     assert.match(
       main,
-      new RegExp(`const ${stateName} = loadExperimentCreateResources \\? await load`),
+      new RegExp(`resources\\.${stateName}`),
     );
   }
   // Dialog 只能在重新读取 Session 与后端导航后阻止 DOM 替换，不能让定时器跳过撤权发现。
@@ -953,7 +953,8 @@ test("PAGE-105 gates all four create option reads behind the composite owner", a
     main,
     /activeNavigationItemId !== "experiments"[\s\S]*else if \([\s\S]*isBackgroundRefresh[\s\S]*experimentPageState\.blocksShellDomReplacement\(\)[\s\S]*experimentPageState\.enter\(currentExperimentOwner\(consoleShellState\)\)/,
   );
-  assert.match(main, /nextRefreshIsBackground = true;\s*void refresh\(\);/);
+  assert.match(main, /case "experiments":[\s\S]*shouldLoadExperimentCreateResources\(consoleShellState\)[\s\S]*loadExperimentsState/);
+  assert.doesNotMatch(main, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
   assert.equal(
     main.match(/experimentPageState\.blocksShellDomReplacement\(\)/g)?.length,
     1,

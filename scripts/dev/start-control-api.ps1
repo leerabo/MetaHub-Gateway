@@ -1,13 +1,26 @@
 ﻿$ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$Python = if ($env:METAHUB_PYTHON) { $env:METAHUB_PYTHON } else { "python" }
+$WorkspacePython = Join-Path $Root ".venv\Scripts\python.exe"
+$Python = if ($env:METAHUB_PYTHON) {
+  $env:METAHUB_PYTHON
+} elseif (Test-Path -LiteralPath $WorkspacePython) {
+  $WorkspacePython
+} else {
+  "python"
+}
 
 # Control API 仍是独立进程，但调试控制台复用 Gateway Provider Adapter，因此需加载三个源码根目录。
 if ($env:METAHUB_DEBUG_STARTUP -eq "1") {
   Write-Host "Root=$Root"
   Write-Host "SourceRoots=${Root}\shared-sdk\python;${Root}\gateway-data-plane\src;${Root}\control-plane-api\src"
   Write-Host "Python=$Python"
+}
+
+# Avoid dozens of idle recovery loops in the single-process local profile.
+# An explicit value still wins; production retains AppConfig's enabled default.
+if (-not $env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED) {
+  $env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED = "false"
 }
 
 # 由 Python 显式注入 sys.path，避免部分 Windows PowerShell 宿主静默清空 PYTHONPATH。

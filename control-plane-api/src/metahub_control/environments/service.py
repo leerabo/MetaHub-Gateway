@@ -74,7 +74,9 @@ def list_environments(
     if normalized_code:
         clauses.append("e.code=?")
         params.append(normalized_code)
-    rows = _connect(config).execute(
+    connection = _connect(config)
+    try:
+        rows = connection.execute(
         f"""
         SELECT
           e.environment_id, e.tenant_id, e.code, e.name, e.description, e.status,
@@ -94,12 +96,14 @@ def list_environments(
         ORDER BY CASE e.code WHEN 'dev' THEN 0 WHEN 'test' THEN 1 ELSE 2 END
         """,
         params,
-    ).fetchall()
-    return EnvironmentListResponse(
-        environments=[_environment_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+        ).fetchall()
+        return EnvironmentListResponse(
+            environments=[_environment_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_environment(

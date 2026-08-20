@@ -56,8 +56,8 @@ def get_dashboard_overview(
     window = _business_day_window(generated_at)
     start_db = _to_db_time(window.start_utc)
     end_db = _to_db_time(window.end_utc)
+    connection = _connect(config)
     try:
-        connection = _connect(config)
         totals = _load_request_totals(connection, context.user.tenant_id, start_db, end_db)
         p95_latency_ms = _load_p95_latency(connection, context.user.tenant_id, start_db, end_db)
         cost_totals = _load_usage_totals(connection, context.user.tenant_id, start_db, end_db)
@@ -68,6 +68,8 @@ def get_dashboard_overview(
     except (sqlite3.Error, DbError) as exc:
         # Dashboard 是控制台高频刷新入口，数据库异常必须收敛为统一错误码和 request_id，不能透出 SQL 或路径。
         raise ApiError("dashboard.unavailable") from exc
+    finally:
+        connection.close()
 
     total_requests = _int_value(totals["total_requests"])
     success_count = _int_value(totals["success_count"])

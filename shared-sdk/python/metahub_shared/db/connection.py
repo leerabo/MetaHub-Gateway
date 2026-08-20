@@ -9,10 +9,99 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .errors import DbError
+
+# The local runtime opens one SQLite connection per request. A short default
+# timeout turns the initial dashboard fan-out into avoidable 503 responses
+# when two requests briefly contend for the single SQLite writer.
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+SQLITE_BUSY_TIMEOUT_MILLISECONDS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
+
+
+class _RequestConnection:
+    """One request's connection facade; ``close`` never releases it early."""
+
+    __slots__ = ("_connection", "_closed")
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_closed", False)
+
+    def __getattr__(self, name: str):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return getattr(self._connection, name)
+
+    def __enter__(self) -> _RequestConnection:
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return bool(self._connection.__exit__(exc_type, exc_value, traceback))
+
+    def close(self) -> None:
+        # Service functions keep explicit logical ownership. The request scope owns
+        # the physical close after authentication and response building both finish.
+        return None
+
+    def _release(self) -> None:
+        if self._closed:
+            return
+        object.__setattr__(self, "_closed", True)
+        try:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+        finally:
+            self._connection.close()
+
+
+@dataclass
+class _DatabaseRequestScope:
+    connections: dict[str, _RequestConnection] = field(default_factory=dict)
+
+    def connection(self, database: str) -> _RequestConnection:
+        existing = self.connections.get(database)
+        if existing is not None:
+            return existing
+        raw = _open_sqlite_connection(database, check_same_thread=False)
+        scoped = _RequestConnection(raw)
+        self.connections[database] = scoped
+        return scoped
+
+    def close(self) -> None:
+        for connection in tuple(self.connections.values()):
+            connection._release()
+        self.connections.clear()
+
+
+_DATABASE_REQUEST_SCOPE: ContextVar[_DatabaseRequestScope | None] = ContextVar(
+    "metahub_database_request_scope",
+    default=None,
+)
+
+
+@contextmanager
+def database_request_scope() -> Iterator[None]:
+    """Share one SQLite handle inside one HTTP request and close it at the boundary."""
+
+    scope = _DatabaseRequestScope()
+    token = _DATABASE_REQUEST_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _DATABASE_REQUEST_SCOPE.reset(token)
+        scope.close()
 
 
 def _metahub_sha256(value: str | bytes | None) -> str | None:
@@ -68,17 +157,13 @@ def connect_database(
     try:
         # 默认保持 sqlite3 的线程 owner；只有显式受 admission 串行保护的 runtime
         # 连接才允许跨 worker 复用。
-        connection = sqlite3.connect(database, check_same_thread=check_same_thread)
-        connection.row_factory = sqlite3.Row
-        # schema migration 只比较 canonical sqlite_schema SQL 的摘要；deterministic
-        # 标记允许 SQLite 在同一语句内安全复用结果，且不读取租户业务数据。
-        connection.create_function(
-            "metahub_sha256",
-            1,
-            _metahub_sha256,
-            deterministic=True,
+        scope = _DATABASE_REQUEST_SCOPE.get()
+        if scope is not None and database != ":memory:":
+            return scope.connection(database)  # type: ignore[return-value]
+        connection = _open_sqlite_connection(
+            database,
+            check_same_thread=check_same_thread,
         )
-        connection.execute("PRAGMA foreign_keys = ON")
         return connection
     # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
     except sqlite3.Error as exc:
@@ -88,6 +173,28 @@ def connect_database(
             f"Failed to connect database: {exc}",
             "Check METAHUB_DATABASE_URL and filesystem permissions.",
         ) from exc
+
+
+def _open_sqlite_connection(
+    database: str,
+    *,
+    check_same_thread: bool,
+) -> sqlite3.Connection:
+    connection = sqlite3.connect(
+        database,
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        check_same_thread=check_same_thread,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.create_function(
+        "metahub_sha256",
+        1,
+        _metahub_sha256,
+        deterministic=True,
+    )
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
+    return connection
 
 
 def _sqlite_path(raw_path: str) -> str:

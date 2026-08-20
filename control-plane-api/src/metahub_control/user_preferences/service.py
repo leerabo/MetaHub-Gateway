@@ -33,6 +33,7 @@ def get_user_preferences(
     租户和用户只来自 AuthContext；接口不接受 tenant_id 或 user_id，避免用户读取其他租户的语言偏好。
     """
 
+    connection = None
     try:
         connection = _connect(config)
         row = _ensure_preference(connection, context)
@@ -40,6 +41,9 @@ def get_user_preferences(
     except (sqlite3.Error, DbError) as exc:
         # 用户偏好是控制台基础能力，数据库异常必须收敛为统一错误码并保留 request_id。
         raise ApiError("user_preference.unavailable") from exc
+    finally:
+        if connection is not None:
+            connection.close()
     return UserPreferenceResponse(
         preference=_preference_settings(row),
         request_id=request_id,

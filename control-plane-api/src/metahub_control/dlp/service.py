@@ -86,7 +86,8 @@ def list_dlp_rules(
         clauses.append("scan_scope=?")
         params.append(normalized_scan_scope)
     connection = _connect(config)
-    rows = connection.execute(
+    try:
+        rows = connection.execute(
         f"""
         SELECT *
         FROM dlp_rules
@@ -94,12 +95,14 @@ def list_dlp_rules(
         ORDER BY priority ASC, updated_at DESC, name ASC
         """,
         params,
-    ).fetchall()
-    return DlpRuleListResponse(
-        dlp_rules=[_rule_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+        ).fetchall()
+        return DlpRuleListResponse(
+            dlp_rules=[_rule_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_dlp_rule(

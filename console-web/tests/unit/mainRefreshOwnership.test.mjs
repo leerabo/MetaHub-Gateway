@@ -27,6 +27,7 @@ test("logout invalidates refresh ownership before cleanup and network await", as
   );
   const invalidateIndex = handler.indexOf("const logoutGeneration = ++refreshSequence;");
   const lifecycleIndex = handler.indexOf("gatewayDebugLifecycle.leave();");
+  const sidebarAbortIndex = handler.indexOf("consoleSidebarController?.abort();");
   const clearAuthIndex = handler.indexOf("clearAuthSession();");
   const awaitIndex = handler.indexOf("await logoutAdmin");
   const errorGateIndex = handler.indexOf("logoutGeneration !== refreshSequence || authSession.token", awaitIndex);
@@ -39,6 +40,7 @@ test("logout invalidates refresh ownership before cleanup and network await", as
 
   assert.ok(invalidateIndex > 0);
   assert.ok(invalidateIndex < lifecycleIndex);
+  assert.ok(invalidateIndex < sidebarAbortIndex && sidebarAbortIndex < clearAuthIndex);
   assert.ok(invalidateIndex < clearAuthIndex);
   assert.ok(invalidateIndex < awaitIndex);
   assert.ok(awaitIndex < errorGateIndex && errorGateIndex < errorRenderIndex);
@@ -48,10 +50,10 @@ test("logout invalidates refresh ownership before cleanup and network await", as
 
 test("late current-user response is rejected before identity or storage writeback", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  const refresh = sourceSection(source, "async function performRefresh()", "function renderLogin(");
+  const refresh = sourceSection(source, "async function performRefresh(options = {})", "function renderLogin(");
   const frozenTokenIndex = refresh.indexOf("const refreshToken = authSession.token;");
   const ownerClosureIndex = refresh.indexOf("const refreshOwnerCurrent = () =>", frozenTokenIndex);
-  const currentUserAwaitIndex = refresh.indexOf("await getCurrentUser({ controlApiUrl, token: refreshToken })");
+  const currentUserAwaitIndex = refresh.indexOf("await getCurrentUser({");
   const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent())", currentUserAwaitIndex);
   const identityWriteIndex = refresh.indexOf("clearBudgetStateOnIdentityChange", currentUserAwaitIndex);
   const storageWriteIndex = refresh.indexOf("saveAuthSession(refreshToken, context)", currentUserAwaitIndex);
@@ -67,16 +69,111 @@ test("late current-user response is rejected before identity or storage writebac
 });
 
 
-test("background refresh leaves the unauthenticated login form intact", async () => {
+test("console does not register a periodic full-page refresh", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  const interval = sourceSection(source, "window.setInterval(() => {", "function renderLogin(");
-  const invitationGateIndex = interval.indexOf("publicInvitationRoute?.isPublicMode()");
-  const authGateIndex = interval.indexOf("if (!authSession.token)");
-  const refreshIndex = interval.indexOf("void refresh();");
+  assert.doesNotMatch(source, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.doesNotMatch(source, /},\s*15000\);/);
+});
 
-  // 登录页含密码草稿，必须在任何后台 refresh 之前返回，不能依赖 performRefresh 再重绘登录页。
-  assert.ok(invitationGateIndex >= 0);
-  assert.ok(invitationGateIndex < authGateIndex && authGateIndex < refreshIndex);
+
+test("navigation refresh renders the authorized target before active-page hydration", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const refresh = sourceSection(source, "async function performRefresh(options = {})", "function renderLogin(");
+  const consumeIndex = refresh.indexOf("const isFastNavigation = nextRefreshIsFastNavigation;");
+  const shellIndex = refresh.indexOf("const consoleShellState = await loadConsoleShellState();");
+  const fastGateIndex = refresh.indexOf("if (isFastNavigation)", shellIndex);
+  const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent() || !authSession.token)", fastGateIndex);
+  const renderIndex = refresh.indexOf("renderDeveloperStart(app", ownerGateIndex);
+  const bindIndex = refresh.indexOf("bindAuthenticatedEvents(consoleShellState);", renderIndex);
+  const dispatcherIndex = refresh.indexOf("await loadAndRenderActiveNavigation({", bindIndex);
+  const dispatcherReturnIndex = refresh.indexOf("return;", dispatcherIndex);
+
+  assert.ok(consumeIndex >= 0 && consumeIndex < shellIndex);
+  assert.ok(shellIndex < fastGateIndex && fastGateIndex < ownerGateIndex);
+  assert.ok(ownerGateIndex < renderIndex && renderIndex < bindIndex);
+  assert.ok(bindIndex < dispatcherIndex && dispatcherIndex < dispatcherReturnIndex);
+  assert.doesNotMatch(refresh.slice(fastGateIndex, dispatcherIndex), /void refresh\(\)/);
+});
+
+
+test("active-page dispatcher does not preload unrelated navigation data", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const dispatcher = sourceSection(
+    source,
+    "async function loadAndRenderActiveNavigation({",
+    "function renderLogin(",
+  );
+  const pageCase = (id, nextId) => dispatcher.slice(
+    dispatcher.indexOf(`case "${id}":`),
+    dispatcher.indexOf(`case "${nextId}":`),
+  );
+
+  const overview = pageCase("overview", "tenant");
+  assert.match(overview, /loadRoleDashboardState/);
+  assert.doesNotMatch(overview, /loadProvidersState|loadUsageState|loadProjectState/);
+
+  const providers = pageCase("providers", "provider-health");
+  assert.match(providers, /loadProvidersState/);
+  assert.doesNotMatch(providers, /loadModelsState|loadUsageState|loadProjectState/);
+
+  const usage = pageCase("usage", "finops-ledger");
+  assert.match(usage, /loadUsageState/);
+  assert.doesNotMatch(usage, /loadProvidersState|loadProjectState|loadVirtualKeysState/);
+
+  const assistant = pageCase("admin-assistant", "system-status");
+  assert.match(assistant, /loadAdminAssistantState/);
+  assert.doesNotMatch(assistant, /await|getServiceStatuses|getConfigSummary/);
+});
+
+
+test("console preferences are cached only for the complete authorization identity", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const shellLoader = sourceSection(
+    source,
+    "async function loadConsoleShellState()",
+    "async function switchConsoleNavigation",
+  );
+  assert.match(shellLoader, /roleDashboardIdentitySnapshot\(authSession\.context\)/);
+  assert.match(shellLoader, /identity === consolePreferencesIdentity/);
+  assert.match(shellLoader, /cachedPreferences[\s\S]*Promise\.resolve\(cachedPreferences\)[\s\S]*getConsolePreferences/);
+  assert.match(source, /function renderLogin[\s\S]*consolePreferencesIdentity = "";[\s\S]*consolePreferencesCache = null;/);
+});
+
+
+test("navigation click hydrates only a backend-visible target before deferred telemetry", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const navigation = sourceSection(source, "async function switchConsoleNavigation", "function readExpandedConsoleGroupKey");
+  const transitionIndex = navigation.indexOf("renderConsoleNavigationTransition(button");
+  const authorizedItemIndex = navigation.indexOf("const projectedNavigationItem =", transitionIndex);
+  const visibilityIndex = navigation.indexOf("item.visible !== false && item.disabled !== true", authorizedItemIndex);
+  const renderIndex = navigation.indexOf("renderDeveloperStart(app", visibilityIndex);
+  const bindIndex = navigation.indexOf("bindAuthenticatedEvents(authorizedProjectedState);", renderIndex);
+  const hydrateIndex = navigation.indexOf("await loadAndRenderActiveNavigation({", bindIndex);
+  const sideEffectIndex = navigation.indexOf("scheduleConsoleNavigationSideEffects({", hydrateIndex);
+
+  assert.ok(transitionIndex >= 0 && transitionIndex < authorizedItemIndex);
+  assert.ok(authorizedItemIndex < visibilityIndex && visibilityIndex < renderIndex);
+  assert.ok(renderIndex < bindIndex && bindIndex < hydrateIndex && hydrateIndex < sideEffectIndex);
+  assert.doesNotMatch(navigation.slice(bindIndex, hydrateIndex), /getCurrentUser|loadConsoleShellState|refresh\(\)/);
+  assert.match(source, /clearTimeout\(consoleNavigationSideEffectTimer\)/);
+  assert.match(source, /CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000/);
+  const sideEffects = sourceSection(
+    source,
+    "function scheduleConsoleNavigationSideEffects",
+    "function readExpandedConsoleGroupKey",
+  );
+  assert.ok(sideEffects.indexOf("await updateConsolePreferences") < sideEffects.indexOf("await recordConsolePageView"));
+  assert.match(sideEffects, /if \(!navigationOwnerCurrent\(\)\) return;/);
+});
+
+
+test("sidebar groups use one persisted accordion expansion", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const toggle = sourceSection(source, "function toggleConsoleSidebarGroup", "/** 导航请求期间");
+  assert.match(toggle, /document\.querySelectorAll\("\[data-sidebar-group\]"\)/);
+  assert.match(toggle, /const shouldExpand = button\.getAttribute\("aria-expanded"\) !== "true"/);
+  assert.match(toggle, /expandedConsoleGroupKey = shouldExpand \? key : null/);
+  assert.match(toggle, /persistExpandedConsoleGroupKey\(\)/);
 });
 
 

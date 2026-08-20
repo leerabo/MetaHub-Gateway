@@ -551,10 +551,7 @@ test("main binds export only to an explicit authorized click and clears every ow
   assert.doesNotMatch(clickHandler, /limit:/);
   assert.doesNotMatch(clickHandler, /offset:/);
 
-  const timerStart = source.indexOf("window.setInterval(() => {");
-  const timerEnd = source.indexOf("}, 15000);", timerStart);
-  assert.ok(timerStart >= 0 && timerEnd > timerStart);
-  assert.doesNotMatch(source.slice(timerStart, timerEnd), /exportAuditLogs|audit-logs\/export/);
+  assert.doesNotMatch(source, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
   assert.match(source, /pagehide[\s\S]*?clearAuditExportSessionState\(\)/);
   assert.match(source, /logoutButton\?\.addEventListener\("click"[\s\S]*?clearAuditExportSessionState\(\)/);
   assert.match(source, /itemId !== "audit-logs"[\s\S]*?clearAuditExportSessionState\(\)/);

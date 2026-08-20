@@ -571,9 +571,8 @@ test("PAGE-080 source keeps SavedFilter selection explicit and exposes stable te
   assert.match(acceptance, /stateName:\s*"explain-source"/);
   assert.match(acceptance, /sourceRequestId === explainRequestId/);
   assert.match(acceptance, /await explainAction\.click\(\)/);
-  const intervalStart = main.indexOf("window.setInterval");
-  const periodicRefresh = main.slice(intervalStart, main.indexOf("}, 15000)", intervalStart));
-  assert.match(periodicRefresh, /querySelector\("\.console-shell"\)[\s\S]*activeNavigation === "request-logs"[\s\S]*return;/);
+  assert.doesNotMatch(main, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(main, /case "request-logs":[\s\S]*loadRequestLogsState\(consoleShellState, refreshId\)/);
   assert.match(main, /bindNavigationHashRefresh\(window, refresh\)/);
   assert.match(acceptance, /"browser\.roles\.viewer",\s*"hash_not_sanitized"/);
 });

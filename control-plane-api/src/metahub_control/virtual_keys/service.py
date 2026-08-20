@@ -74,21 +74,22 @@ def list_virtual_keys(
     if normalized_environment:
         filters.append("vk.environment=?")
         params.append(normalized_environment)
-    if environment_id:
-        # environment_id 查询也必须先在当前租户内解析，不能把列表接口变成跨租户 ID 探测器。
-        binding = resolve_environment_binding(
-            _connect(config),
-            context.user.tenant_id,
-            environment_id=environment_id,
-            environment_code=normalized_environment,
-            require_active=False,
-            allow_default=False,
-        )
-        filters.append("vk.environment_id=?")
-        params.append(binding.environment_id)
-    where_extra = f" AND {' AND '.join(filters)}" if filters else ""
     connection = _connect(config)
-    rows = connection.execute(
+    try:
+        if environment_id:
+            # Resolve and list on one tenant-scoped, short-lived database lease.
+            binding = resolve_environment_binding(
+                connection,
+                context.user.tenant_id,
+                environment_id=environment_id,
+                environment_code=normalized_environment,
+                require_active=False,
+                allow_default=False,
+            )
+            filters.append("vk.environment_id=?")
+            params.append(binding.environment_id)
+        where_extra = f" AND {' AND '.join(filters)}" if filters else ""
+        rows = connection.execute(
         f"""
         SELECT
           vk.virtual_key_id, vk.tenant_id, vk.name, vk.key_prefix, vk.environment,
@@ -109,12 +110,14 @@ def list_virtual_keys(
         ORDER BY vk.created_at DESC, vk.name ASC
         """,
         params,
-    ).fetchall()
-    return VirtualKeyListResponse(
-        virtual_keys=[_virtual_key_info(row) for row in rows],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+        ).fetchall()
+        return VirtualKeyListResponse(
+            virtual_keys=[_virtual_key_info(row) for row in rows],
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_virtual_key(

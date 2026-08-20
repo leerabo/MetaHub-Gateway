@@ -517,7 +517,8 @@ test("main lifecycle contains all plaintext cleanup and refresh gates without St
     readFile(new URL("../../src/lib/enterpriseChat.js", import.meta.url), "utf8"),
   ]);
   assert.match(mainSource, /clearEnterpriseChatStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(mainSource, /enterpriseChatPageState\.blocksRefresh\(\)/);
+  assert.doesNotMatch(mainSource, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
+  assert.match(mainSource, /case "enterprise-chat":[\s\S]*loadEnterpriseChatState\(consoleShellState\)/);
   assert.match(mainSource, /window\.addEventListener\("pagehide"[\s\S]*clearEnterpriseChatSessionState\(\)/);
   assert.match(mainSource, /function renderLogin[\s\S]*clearEnterpriseChatSessionState\(\)/);
   assert.match(mainSource, /logoutButton[\s\S]*clearEnterpriseChatSessionState\(\)/);

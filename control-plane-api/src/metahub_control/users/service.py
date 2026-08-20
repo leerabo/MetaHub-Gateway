@@ -48,27 +48,31 @@ def list_users(
 
     normalized_status = _normalize_status(status)
     connection = _connect(config)
-    params: list[str] = [context.user.tenant_id]
-    status_filter = ""
-    if normalized_status:
-        status_filter = "AND status=?"
-        params.append(normalized_status)
+    try:
+        params: list[str] = [context.user.tenant_id]
+        status_filter = ""
+        if normalized_status:
+            status_filter = "AND status=?"
+            params.append(normalized_status)
 
-    rows = connection.execute(
-        f"""
-        SELECT user_id, tenant_id, email, display_name, role, status, created_at, updated_at, last_login_at
-        FROM users
-        WHERE tenant_id=? {status_filter}
-        ORDER BY created_at ASC, email ASC
-        """,
-        params,
-    ).fetchall()
-    return UserListResponse(
-        users=[_user_info(row) for row in rows],
-        roles=_list_roles(connection, context.user.tenant_id),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+        rows = connection.execute(
+            f"""
+            SELECT user_id, tenant_id, email, display_name, role, status,
+                   created_at, updated_at, last_login_at
+            FROM users
+            WHERE tenant_id=? {status_filter}
+            ORDER BY created_at ASC, email ASC
+            """,
+            params,
+        ).fetchall()
+        return UserListResponse(
+            users=[_user_info(row) for row in rows],
+            roles=_list_roles(connection, context.user.tenant_id),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    finally:
+        connection.close()
 
 
 def create_user(

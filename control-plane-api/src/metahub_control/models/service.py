@@ -69,25 +69,32 @@ def list_models(
         params.append(provider_id)
     where_extra = f" AND {' AND '.join(filters)}" if filters else ""
     connection = _connect(config)
-    rows = connection.execute(
-        f"""
-        SELECT
-          m.model_id, m.tenant_id, m.provider_id, m.model_alias, m.upstream_model_name,
-          m.provider_model_id, m.display_name, m.capabilities, m.context_window,
-          m.input_price_per_1k, m.output_price_per_1k, m.currency, m.price_schema_version,
-          m.status, m.description, m.created_at, m.updated_at, m.disabled_at,
-          p.provider_code, p.name AS provider_name
-        FROM models m
-        JOIN providers p ON p.provider_id = m.provider_id AND p.tenant_id = m.tenant_id
-        WHERE m.tenant_id=? {where_extra}
-        ORDER BY m.created_at DESC, m.model_alias ASC
-        """,
-        params,
-    ).fetchall()
-    models = [_model_info(row) for row in rows]
-    if normalized_capability:
-        models = [model for model in models if model.capabilities.get(normalized_capability) is True]
-    return ModelListResponse(models=models, request_id=request_id, trace_id=trace_id)
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT
+              m.model_id, m.tenant_id, m.provider_id, m.model_alias, m.upstream_model_name,
+              m.provider_model_id, m.display_name, m.capabilities, m.context_window,
+              m.input_price_per_1k, m.output_price_per_1k, m.currency, m.price_schema_version,
+              m.status, m.description, m.created_at, m.updated_at, m.disabled_at,
+              p.provider_code, p.name AS provider_name
+            FROM models m
+            JOIN providers p ON p.provider_id = m.provider_id AND p.tenant_id = m.tenant_id
+            WHERE m.tenant_id=? {where_extra}
+            ORDER BY m.created_at DESC, m.model_alias ASC
+            """,
+            params,
+        ).fetchall()
+        models = [_model_info(row) for row in rows]
+        if normalized_capability:
+            models = [
+                model
+                for model in models
+                if model.capabilities.get(normalized_capability) is True
+            ]
+        return ModelListResponse(models=models, request_id=request_id, trace_id=trace_id)
+    finally:
+        connection.close()
 
 
 def create_model(
