@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-20"
 FIRST_PRD = 90
-CURRENT_LAST_PRD = 138
+COMPLETED_THROUGH_PRD = 90
 
 
 def prd(
@@ -42,7 +42,7 @@ def prd(
 ) -> dict[str, object]:
     return {
         "id": f"PRD-{number:03d}",
-        "status": "未启动",
+        "status": "已完成" if number <= COMPLETED_THROUGH_PRD else "未启动",
         "stage": stage,
         "priority": priority,
         "layer": layer,
@@ -79,11 +79,11 @@ INITIAL_DRAFT_PRDS = [
         "SaaS总体架构与兼容迁移基线",
         "产品负责人/架构师/研发/SRE/安全",
         "作为平台负责人，我希望冻结旧私有化路线并形成可执行的SaaS与云管私有网关总架构。",
-        "废弃旧PRD-090..108；冻结云SaaS、企业SaaS、个人空间、云管私有网关四种运行模式；定义全局身份、Workspace、平台域与租户域、云边信任、数据驻留、密钥托管、迁移波次和兼容期；形成ADR、威胁模型、服务边界和目标拓扑。",
+        "废弃旧PRD-090..108；冻结个人SaaS、企业SaaS、云管私有Gateway三种标准形态，以及完全隔离环境的签名包异步管理能力；定义全局身份、Workspace、平台域与租户域、云边信任、数据驻留、密钥托管、迁移波次和兼容期；形成ADR、威胁模型、服务边界和目标拓扑。",
         "不编码业务功能；不修改PRD-001..089完成事实；兼容旧完成标记必须保持false；不承诺完全离线环境可被云端实时管理。",
         "架构决策记录、路线图、迁移评估页原型",
         ("无公开业务API；冻结平台/租户/边缘内部合同草案",),
-        ("Account", "Workspace", "Membership", "PlatformRole", "Deployment", "DesiredState"),
+        ("GlobalAccount", "Workspace", "WorkspaceTenantBinding", "WorkspaceMembership", "PlatformRole", "EdgeDeployment", "DesiredState"),
         (),
         "冻结平台角色与租户角色两套命名空间；任何后续PRD不得混用",
         "两轮独立设计自审关闭P0/P1；现有表/API逐项给出保留、扩展、迁移或废弃结论；所有后续PRD有明确依赖和回滚边界；旧090..108被权威标记为禁止开发。",
@@ -110,7 +110,7 @@ INITIAL_DRAFT_PRDS = [
         ("POST /identity/login", "GET /identity/me", "POST /identity/logout", "GET /identity/sessions", "DELETE /identity/sessions/{session_id}"),
         ("GlobalAccount", "AccountCredential", "GlobalSession", "AccountIdentityLink"),
         ("identity.login_succeeded", "identity.login_failed", "identity.session_revoked"),
-        "账号本人；平台安全只读脱敏状态；Workspace权限必须在后续成员上下文中恢复",
+        "账号本人；platform_security只读脱敏状态；Workspace权限必须在后续成员上下文中恢复",
         "同一邮箱账号可关联多个Workspace；登录Token不包含可伪造tenant选择；现有admin账号可无损映射；失败、锁定和撤销均返回统一错误与request_id。",
         "PRD-090",
         "新增全局表并双写兼容映射；先回填再切读；迁移前后账号数/哈希不变；回滚继续使用旧登录且不丢Session撤销事实。",
@@ -160,7 +160,7 @@ INITIAL_DRAFT_PRDS = [
         ("POST /workspaces", "GET /workspaces", "GET /workspaces/{workspace_id}", "PATCH /workspaces/{workspace_id}"),
         ("Workspace", "OrganizationProfile", "PersonalProfile", "WorkspaceRegion", "WorkspaceProvisioningJob"),
         ("workspace.created", "workspace.profile_confirmed", "workspace.provisioning_failed"),
-        "personal_owner仅本人；organization owner可维护本企业；平台运维只看脱敏生命周期",
+        "personal Workspace的owner仅本人；organization Workspace的owner可维护本企业；platform_ops只看脱敏生命周期",
         "注册后可选择个人或企业；同一账号可安全切换多个空间；创建事务不会产生假Provider；失败可重试且不产生半初始化租户；业务表继续带tenant_id。",
         "PRD-091、PRD-092、现有Tenant/Environment",
         "将现有Tenant投影为organization Workspace；default租户保留但标记legacy_bootstrap；回滚不删除Workspace。",
@@ -179,14 +179,14 @@ INITIAL_DRAFT_PRDS = [
         "成员关系、空间切换与邀请升级",
         "Workspace Owner/管理员/成员",
         "作为加入多个企业的成员，我希望登录后选择空间，并在不重新输入租户标识的情况下安全切换。",
-        "Membership、Owner转移、成员停用、邀请绑定全局账号、空间选择器、后端active_workspace上下文、切换时Session轮换、跨标签页同步、租户角色沿用现有RBAC。",
+        "Membership、Owner转移、成员停用、邀请绑定全局账号、空间选择器、后端active_workspace上下文、切换时Session轮换、跨标签页同步；企业owner/admin邀请职能用户并在授权上限内分配admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer，service_account走独立机器身份流程。",
         "前端不得通过tenant_id参数切换；不允许平台角色自动获得租户成员身份；本条不做SSO/SCIM。",
         "空间选择器、成员列表、Owner转移、邀请页",
         ("GET /identity/workspaces", "POST /identity/workspace-switches", "GET /memberships", "PATCH /memberships/{membership_id}", "POST /workspace-owner-transfers"),
         ("WorkspaceMembership", "WorkspaceSession", "OwnerTransfer", "MembershipRevision"),
         ("membership.created", "membership.disabled", "workspace.switched", "workspace.owner_transferred"),
-        "租户owner/admin管理成员；固定高权限Owner转移需二次验证；developer/viewer后端拒绝",
-        "登录页不再要求租户标识；单空间直达、多空间可选；切换后旧请求/缓存/草稿立即失效；跨租户资源同形404；最后Owner不能被停用。",
+        "租户owner/admin邀请、停用并分配企业职能角色；admin不得授予owner或突破自身权限；Owner转移需二次验证；developer/viewer后端拒绝",
+        "登录页不再要求租户标识；单空间直达、多空间可选；企业管理员可添加职能用户；每种角色只收到后端计算的页面清单；直达URL/API仍逐请求鉴权；切换后旧请求/缓存/草稿立即失效；跨租户资源同形404；最后Owner不能被停用。",
         "PRD-091..093、PRD-059/060",
         "现有User按tenant生成Membership；兼容旧Session一段版本期；切换开关可回退旧流程。",
         "Membership revision实时复核；Session固定account+workspace+role；Owner操作MFA/重认证；事件不含邮箱明文。",
@@ -204,16 +204,16 @@ INITIAL_DRAFT_PRDS = [
         "SaaS平台运营角色与受控支持访问",
         "SaaS总管理员/运维/安全/财务/客服",
         "作为SaaS运营团队，我希望管理平台但默认不能读取客户敏感业务内容。",
-        "平台角色platform_owner/ops/security/billing/support；独立权限矩阵；员工账号MFA；JIT支持访问申请、客户授权、双人审批、原因、时限、撤销；break-glass独立流程；平台操作不可变审计。",
+        "平台角色platform_owner/platform_ops/platform_security/platform_billing/platform_support/platform_verification/platform_compliance/platform_privacy/release_manager/platform_provider_engineer/platform_channel/platform_customer_success/platform_growth；每个角色独立页面与动作矩阵；员工账号MFA；JIT支持访问申请、客户授权、双人审批、原因、时限、撤销；break-glass独立流程；平台操作不可变审计。",
         "平台角色不等于租户admin；禁止永久模拟客户；支持访问不允许读取Provider Key、Token、Prompt、Response。",
-        "平台员工与角色、支持访问申请、审批与审计页",
+        "平台员工与角色、角色页面授权、支持访问申请、审批与审计页",
         ("GET /platform/operators", "POST /platform/operators", "PATCH /platform/operators/{operator_id}", "POST /platform/support-grants", "POST /platform/support-grants/{grant_id}/approve", "POST /platform/support-grants/{grant_id}/revoke"),
         ("PlatformOperator", "PlatformRole", "PlatformPermission", "SupportGrant", "BreakGlassSession", "PlatformAuditLog"),
         ("platform.operator_changed", "support.access_requested", "support.access_granted", "support.access_revoked", "break_glass.used"),
-        "平台角色与租户角色命名空间隔离；support grant只能授予固定只读诊断权限",
-        "无平台角色不能访问/platform；support不能自行审批；到期自动撤权；租户内容字段后端裁剪；所有平台动作有actor/reason/request_id。",
+        "平台角色与租户角色命名空间隔离；platform_support只能通过SupportGrant获得固定只读诊断权限",
+        "无平台角色不能访问/platform；每个角色只收到后端计算的导航和页面数据；直达URL/API再次鉴权；platform_channel只能访问渠道业务页；support不能自行审批；到期自动撤权；租户内容字段后端裁剪；所有平台动作有actor/reason/request_id。",
         "PRD-090、PRD-091、PRD-094",
-        "bootstrap admin@metahub.local迁移为首个平台Owner，仅本地/首次部署可用；生产必须轮换并关闭bootstrap。",
+        "禁止按admin@metahub.local或任何存量邮箱自动提权。生产platform_owner只能通过显式一次性bootstrap ceremony创建：无默认邮箱、强MFA、双人见证或离线恢复密钥、不可变审计，成功后立即关闭入口。回退可关闭平台路由，但不得删除新身份、撤权或审计事实。",
         "强制MFA、JIT、双人审批、不可变审计、客服最小权限、break-glass告警和事后复核。",
         "权限白盒、越权黑盒、双审批竞态、到期撤销、敏感字段裁剪、break-glass、动态撤权浏览器流程。",
         "平台授权判断p95<50ms；撤权传播<5s。",
@@ -227,7 +227,7 @@ INITIAL_DRAFT_PRDS = [
         "平台治理层",
         "租户运营",
         "平台租户目录与生命周期运营台",
-        "平台运维/客服/安全/财务",
+        "platform_ops/platform_customer_success/platform_support/platform_security/platform_billing",
         "作为平台运维，我希望查看租户健康、套餐和部署状态，并安全执行冻结、恢复和联系Owner。",
         "全局租户目录、脱敏搜索、状态/Region/计划/部署筛选、健康摘要、冻结/恢复、风险标签、联系Owner通知、数据导出/删除进度聚合；平台动作与租户动作分离。",
         "不展示请求正文、Provider Endpoint全文、Key、Token或客户成员列表明文；不允许平台直接编辑租户Provider/策略。",
@@ -235,7 +235,7 @@ INITIAL_DRAFT_PRDS = [
         ("GET /platform/workspaces", "GET /platform/workspaces/{workspace_id}", "POST /platform/workspaces/{workspace_id}/suspend", "POST /platform/workspaces/{workspace_id}/restore", "GET /platform/workspaces/{workspace_id}/health"),
         ("WorkspaceOperationalState", "WorkspaceRiskTag", "WorkspaceHealthProjection", "PlatformActionIntent"),
         ("workspace.suspended_by_platform", "workspace.restored_by_platform", "workspace.risk_changed"),
-        "ops可生命周期操作；support只读；security管理风险；billing只读计划/欠费状态",
+        "platform_ops可生命周期操作；platform_customer_success管理客户运营事实；platform_support只读；platform_security管理风险；platform_billing只读计划/欠费状态",
         "平台可管理多租户且无跨租户内容泄漏；冻结阻止新Session/资源并按策略处理Gateway；恢复使用CAS；关键动作需确认、原因和审计。",
         "PRD-095、现有PRD-086/089",
         "从现有Tenant状态建立运营投影；冻结新状态与既有disabled/quiescing兼容；回滚保留审计和最终状态。",
@@ -260,7 +260,7 @@ INITIAL_DRAFT_PRDS = [
         ("GET /workspaces/current/onboarding", "PATCH /workspaces/current/onboarding/steps/{step_id}", "POST /workspaces/current/onboarding/recheck"),
         ("OnboardingProgress", "OnboardingStepFact", "OnboardingAcknowledgement", "ActivationCheckpoint"),
         ("onboarding.step_completed", "onboarding.step_reopened", "workspace.activated"),
-        "Owner/admin可操作；developer可完成技术步骤；个人Owner拥有本空间完整初始化权限",
+        "owner/admin可操作；developer可完成技术步骤；个人owner拥有本空间完整初始化权限",
         "空Workspace初始0个真实接入步骤完成；系统预置与用户配置清晰区分；所有步骤可查看；真实Provider前置成功后才完成；八步全流程可由真人鼠标操作完成。",
         "PRD-093/094、现有Provider/Model/Project/VirtualKey/Usage",
         "现有seed记录标记legacy_seed并不计完成；不得删除客户真实资源；可回滚到旧首页但不能恢复假完成判断。",
@@ -285,7 +285,7 @@ INITIAL_DRAFT_PRDS = [
         ("GET /catalog/plans", "POST /subscriptions", "GET /subscriptions/current", "POST /subscriptions/current/change-plan", "GET /platform/plans", "POST /platform/plans"),
         ("PlanCatalog", "PlanVersion", "Subscription", "EntitlementSnapshot", "Trial", "OrderRecord"),
         ("subscription.created", "subscription.plan_changed", "subscription.expiring", "entitlement.changed"),
-        "租户Owner管理订阅；平台billing管理产品目录；其他租户角色只读或无权",
+        "租户owner管理订阅；platform_billing管理产品目录；其他租户角色只读或无权",
         "个人/企业套餐独立；Entitlement版本冻结并可追踪；超限错误可解释；过期进入宽限且不突然中断存量调用；所有变更幂等。",
         "PRD-093、PRD-095、现有PRD-079",
         "现有Plan/Bucket映射到新PlanVersion/Subscription；双读校验额度一致；回滚继续使用最后有效Entitlement。",
@@ -310,7 +310,7 @@ INITIAL_DRAFT_PRDS = [
         ("GET /billing/summary", "GET /billing/usage", "GET /platform/billing/summary", "POST /platform/billing/adjustments", "GET /billing/reconciliation-export"),
         ("MeterDefinition", "MeterReading", "BillingCycle", "QuotaAllocation", "BillingSummary", "BillingAdjustment"),
         ("quota.threshold_reached", "billing.cycle_closed", "billing.adjusted", "billing.reconciliation_ready"),
-        "租户finance/admin查看；平台billing管理调整；平台ops只看健康计数",
+        "租户finance_admin/admin查看；platform_billing管理调整；platform_ops只看健康计数",
         "每个成功、失败和取消请求可追踪；租户账本与平台Meter可按request_id/周期对账；重复事件不重复计费；跨币种不隐式换算。",
         "PRD-098、现有Usage/FinOps/Budget",
         "以ledger_sequence增量投影，旧账本不改写；可重建Meter；回滚停用新投影但保留append-only事实。",
@@ -360,7 +360,7 @@ INITIAL_DRAFT_PRDS = [
         ("POST /v1/chat/completions", "POST /v1/embeddings", "GET /platform/gateway-cells", "PATCH /platform/workspaces/{workspace_id}/gateway-placement"),
         ("GatewayCell", "WorkspacePlacement", "CapacityLease", "ConfigSnapshotLease", "GatewayRelease"),
         ("gateway.cell_degraded", "gateway.workspace_rebalanced", "gateway.release_changed"),
-        "Virtual Key恢复Workspace；平台ops仅管理placement；租户不能指定其他Cell或Workspace",
+        "Virtual Key恢复Workspace；platform_ops仅管理placement；租户不能指定其他Cell或Workspace",
         "100+租户并发无串租；噪声租户被限流且不拖垮邻居；Cell故障按Region策略恢复；所有用量、成本和失败请求仍可追踪。",
         "PRD-094、098..100、现有Gateway",
         "先单Cell影子流量，再小租户灰度；配置generation可回退；不改变现有OpenAI-compatible合同。",
@@ -627,7 +627,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /workspaces/{workspace_id}/business-verifications；GET /workspaces/{workspace_id}/business-verification；POST /platform/business-verifications/{id}/review；PATCH /workspaces/{workspace_id}/billing-profile",
         "LegalEntityProfile；BusinessVerificationIntent；VerificationEvidence；ContractProfile；BillingProfile",
         "workspace.business_verification_submitted；workspace.business_verified；workspace.business_verification_rejected",
-        "Owner/finance_admin维护本企业资料；平台verification_reviewer只读必要字段并审核；support无权查看证件原件。",
+        "owner/finance_admin维护本企业资料；platform_verification只读必要字段并审核；platform_support无权查看证件原件。",
         "审核状态单调且可补件；重复提交幂等；个人空间不被阻断；企业认证结果可供订阅、合同和发票引用；证件原件不进入通用日志/事件。",
         "PRD-091..099", "内部API p95<500ms，不含外部核验时延；审核队列积压可观测", "5-6人周",
     ),
@@ -638,7 +638,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /subscriptions；PATCH /subscriptions/{id}；POST /payments/intents；POST /payments/webhooks/{provider}；POST /refunds；GET /billing/orders",
         "SubscriptionOrder；PaymentIntent；PaymentAttempt；PaymentWebhookReceipt；Refund；DunningCase",
         "subscription.changed；payment.succeeded；payment.failed；refund.completed；dunning.started",
-        "租户finance_admin管理本空间订阅；平台billing处理渠道和退款；support只读脱敏状态；任何角色不得读取支付凭据。",
+        "租户finance_admin管理本空间订阅；platform_billing处理渠道和退款；platform_support只读脱敏状态；任何角色不得读取支付凭据。",
         "回调验签、乱序、重复和延迟不重复记账；支付成功只发放一次权益；失败/退款/催缴全链可追踪；宽限策略不突然中断已接受的请求。",
         "PRD-098..102、PRD-051/079/080", "内部支付API p95<500ms；回调入库p95<300ms；99.99%重复回调只处理一次", "7-9人周",
     ),
@@ -649,7 +649,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /billing/statements；POST /invoices；GET /invoices/{id}；POST /platform/reconciliations；GET /platform/reconciliations/{id}/differences",
         "BillingStatement；InvoiceRequest；InvoiceArtifact；ReconciliationRun；ReconciliationDifference",
         "invoice.requested；invoice.issued；reconciliation.difference_found；reconciliation.closed",
-        "租户finance_admin仅看本空间；平台billing执行开票/对账；支持人员无金额调整权；红冲需双人审批。",
+        "租户finance_admin仅看本空间；platform_billing执行开票/对账；platform_support无金额调整权；红冲需双人审批。",
         "订单、支付、账本、结算单金额可逐项追溯；币种不隐式换算；差异可关闭且保留证据；下载授权短时且不可跨租户。",
         "PRD-099、PRD-102/103", "月账期百万分录对账在30分钟内完成；列表p95<500ms", "6-8人周",
     ),
@@ -660,7 +660,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /notifications；PATCH /notifications/{id}/read；GET/PATCH /notification-preferences；GET/POST /platform/notification-templates",
         "Notification；NotificationTemplate；NotificationPreference；DeliveryAttempt；ChannelSuppression",
         "notification.queued；notification.delivered；notification.failed；notification.read",
-        "用户管理本人偏好；Workspace管理员只能触发白名单模板；平台运营管理模板；安全强制通知不可被普通退订关闭。",
+        "用户管理本人偏好；Workspace管理员只能触发白名单模板；platform_ops管理模板；安全强制通知不可被普通退订关闭。",
         "事件到通知幂等；偏好即时生效；站内信与外部渠道状态可区分；外部失败不回滚业务事实；模板参数严格白名单且无敏感正文。",
         "PRD-091..104、现有Webhook outbox", "站内信查询p95<300ms；排队到投递启动p95<10s", "5-6人周",
     ),
@@ -671,7 +671,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /platform/job-queues；GET /jobs/{id}；POST /jobs/{id}/retry；POST /jobs/{id}/cancel；POST /platform/job-types",
         "PlatformJob；JobAttempt；WorkQueue；SchedulerLease；JobCheckpoint；DeadLetterJob",
         "platform_job.started；platform_job.failed；platform_job.completed；platform_job.dead_lettered",
-        "平台ops管理队列和任务类型；租户只能查看/取消本空间允许的任务；Worker从持久owner恢复tenant，不接受消息体伪造。",
+        "platform_ops管理队列和任务类型；租户只能查看/取消本空间允许的任务；Worker从持久owner恢复tenant，不接受消息体伪造。",
         "至少一次领取但业务效果恰好一次；租户公平无饥饿；进程崩溃可接管；取消不留下半终态；所有失败和恢复有request_id/attempt。",
         "PRD-057/074/099/100/105", "入队p95<100ms；空闲队列启动p95<10s；崩溃任务接管<60s", "8-10人周",
     ),
@@ -693,7 +693,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /internal/config-snapshots/{workspace_id}；POST /internal/config-snapshots/{id}/acks；POST /platform/config-rebuilds",
         "ConfigSnapshot；ConfigDelta；ConfigAck；CacheWatermark；ConfigRebuildJob",
         "config.snapshot_published；config.ack_lagging；config.rebuild_completed",
-        "快照发布来自后端已授权事实；Gateway仅取所属Cell/租户；平台support不能借快照读取Secret或客户正文。",
+        "快照发布来自后端已授权事实；Gateway仅取所属Cell/租户；platform_support不能借快照读取Secret或客户正文。",
         "动态撤权和Key禁用在目标时间内生效；乱序快照不回退；冷启动可用LKG且标陈旧；重建与增量结果hash一致；签名失败fail closed。",
         "PRD-045/059/098/106/107", "99%配置变更<5s传播；撤权<2s；Gateway本地读取p95<2ms", "8-10人周",
     ),
@@ -704,7 +704,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /platform/observability/services；GET/POST /platform/slos；GET /platform/error-budgets；POST /platform/alerts/{id}/ack",
         "ServiceCatalogEntry；ServiceLevelObjective；ErrorBudget；Alert；OnCallRoute；TelemetryPolicy",
         "slo.breached；error_budget.exhausted；alert.triggered；alert.resolved",
-        "SRE管理；security只读安全指标；租户仅看本空间聚合；平台指标标签不得包含客户敏感字段。",
+        "platform_ops管理；platform_security只读安全指标；租户仅看本空间聚合；平台指标标签不得包含客户敏感字段。",
         "请求可由request_id/trace_id串起但无敏感正文；SLO可重算；告警去重/抑制/恢复完整；指标系统故障不阻塞Gateway热路径。",
         "PRD-004/055/081/106..108", "关键告警检测p95<60s；仪表盘p95<1s；遥测额外CPU<5%", "8-10人周",
     ),
@@ -715,7 +715,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /risk/challenges；GET /platform/risk/cases；POST /platform/risk/cases/{id}/decisions；POST /risk/appeals",
         "RiskSignal；RiskDecision；AbuseCounter；Challenge；RiskCase；RiskAppeal",
         "risk.challenge_required；risk.workspace_restricted；risk.appeal_resolved",
-        "platform_security决策；support只读脱敏原因；用户只能处理本人挑战/申诉；风控不能授予租户业务权限。",
+        "platform_security决策；platform_support只读脱敏原因；用户只能处理本人挑战/申诉；风控不能授予租户业务权限。",
         "账号枚举防护；分布式限流一致；正常用户基线无明显延迟；自动冻结可申诉；风险原因可解释但不泄露规则阈值。",
         "PRD-091/092/098/106/109", "风控判断p95<30ms；攻击流量下登录/网关正常用户p95增幅<20%", "7-9人周",
     ),
@@ -726,7 +726,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /platform/dr/status；POST /platform/dr/drills；POST /platform/regions/{id}/failovers；GET /platform/backups",
         "Region；FailoverPlan；DisasterRecoveryRun；RecoveryPoint；RestoreEvidence",
         "dr.drill_started；region.failover_started；region.failover_completed；dr.objective_missed",
-        "platform_ops双人执行切换；security复核；租户只看本空间状态；任何自动切换不得跨越其数据驻留策略。",
+        "platform_ops双人执行切换；platform_security复核；租户只看本空间状态；任何自动切换不得跨越其数据驻留策略。",
         "单区故障演练达到RPO/RTO；恢复后账本/Outbox/配置水位一致；脑裂被阻断；回切可控；备份加密且季度恢复成功。",
         "PRD-106..110", "Control RPO<=15分钟/RTO<=2小时；Gateway区域切换RTO<=10分钟", "10-12人周",
     ),
@@ -737,7 +737,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /public/status；GET/POST /status/subscriptions；GET /incidents；POST /platform/incidents；POST /platform/maintenance-windows",
         "StatusComponent；Incident；IncidentUpdate；MaintenanceWindow；StatusSubscription；Postmortem",
         "incident.created；incident.updated；incident.resolved；maintenance.scheduled",
-        "SRE发布；security审批安全事故披露；租户成员只看授权范围；公共内容不暴露租户名、内部拓扑和攻击细节。",
+        "platform_ops发布；platform_security审批安全事故披露；租户成员只看授权范围；公共内容不暴露租户名、内部拓扑和攻击细节。",
         "主控制面不可用时状态页仍可访问；事故更新有审计；订阅可验证/退订；影响范围准确；维护不被误报为事故。",
         "PRD-105/109/111", "公共状态页可用性99.99%、p95<500ms；事故确认后10分钟内首条更新", "5-7人周",
     ),
@@ -759,7 +759,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /workspaces/{id}/domains；POST /workspaces/{id}/sso-connections；GET /identity/login-discovery；POST /identity/sso/callback；POST /workspaces/{id}/sso/test",
         "VerifiedDomain；SsoConnection；SsoCertificate；AccountFederationLink；SsoPolicy",
         "domain.verified；sso.connection_changed；sso.login_failed；sso.certificate_expiring",
-        "owner/security_admin管理本企业；平台support无权代改；SSO断言只能映射已验证域和明确Membership。",
+        "owner/security_admin管理本企业；platform_support无权代改；SSO断言只能映射已验证域和明确Membership。",
         "域名抢占被阻断；SAML/OIDC签名/nonce/state/replay防护；强制SSO有安全恢复；证书轮换不中断；登录不要求租户标识。",
         "PRD-091..096、PRD-106", "登录发现p95<200ms；本地回调处理p95<500ms，不含IdP时延", "8-10人周",
     ),
@@ -770,7 +770,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET/POST/PATCH /scim/v2/Users；GET/POST/PATCH /scim/v2/Groups；POST /workspaces/{id}/scim-tokens；GET /workspaces/{id}/scim-syncs",
         "ScimToken；ScimUserLink；ScimGroupLink；ScimRoleMapping；ScimSyncRun；ScimConflict",
         "scim.sync_completed；membership.disabled_by_scim；scim.conflict_detected",
-        "企业security_admin配置；SCIM Token仅显示一次；同步只能作用本Workspace；平台support只能看脱敏错误。",
+        "企业security_admin配置；SCIM Token仅显示一次；同步只能作用本Workspace；platform_support只能看脱敏错误。",
         "SCIM幂等/过滤/分页符合合同；停用在目标时间内撤权；乱序更新不复活成员；最后Owner保护；冲突可人工解决。",
         "PRD-094/114", "SCIM请求p95<500ms；停用到权限失效<5s；1万成员全量同步<30分钟", "7-9人周",
     ),
@@ -792,7 +792,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET/PATCH /workspaces/{id}/data-governance；POST /workspaces/{id}/legal-holds；DELETE /workspaces/{id}/legal-holds/{hold_id}；GET /platform/data-residency/evidence",
         "DataClassification；ResidencyPolicy；RetentionPolicy；LegalHold；DeletionSchedule；ResidencyEvidence",
         "data.retention_changed；legal_hold.created；deletion.executed；residency.violation_detected",
-        "security_admin管理策略；法务角色管理保全；平台合规只读证据；任何跨区操作必须有显式授权和审计。",
+        "security_admin管理策略；legal_admin管理保全；platform_compliance只读证据；任何跨区操作必须有显式授权和审计。",
         "驻留策略在路由/存储/备份均生效；保全阻断删除但不扩大读取权；到期删除可证明；与PRD-089导出注销状态一致。",
         "PRD-089/102/106/111", "策略判断p95<10ms；到期删除调度偏差<24h；驻留违规检测<5分钟", "8-10人周",
     ),
@@ -814,7 +814,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /provider-catalog；POST /providers/from-catalog；POST /providers/{id}/preflight；GET /provider-catalog/{id}/compatibility",
         "ProviderCatalogEntry；ProviderCapability；RegionalEndpointTemplate；ProviderPreflightRun；CompatibilityProfile",
         "provider_catalog.updated；provider.preflight_completed；provider.compatibility_changed",
-        "平台运营发布签名目录；租户admin创建本空间Provider；developer只读；任何目录模板不能携带平台共用客户Key。",
+        "platform_ops发布签名目录；租户admin创建本空间Provider；developer只读；任何目录模板不能携带平台共用客户Key。",
         "默认上游仅为指定官方/云服务和本地Endpoint；OpenRouter/硅基流动只标竞品/迁移兼容；预检失败不落明文凭据；能力可追溯。",
         "PRD-011..014/063/064/084/108", "目录查询p95<300ms；预检状态<30s或明确超时；目录更新传播<5分钟", "6-8人周",
     ),
@@ -836,7 +836,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /edge/deployments/{id}/desired-state；GET /edge/deployments/{id}/desired-state；POST /edge/deployments/{id}/acks；POST /edge/deployments/{id}/rollbacks",
         "DesiredState；SignedSnapshot；SnapshotArtifact；ApplyAttempt；EdgeAck；LastKnownGood",
         "edge.desired_state_published；edge.apply_failed；edge.state_converged；edge.rollback_completed",
-        "租户admin发布本空间配置；平台ops只能发布平台版本策略；Agent只取自身签名制品；高危变更需审批。",
+        "租户admin发布本空间配置；release_manager只能发布平台版本策略；Agent只取自身签名制品；高危变更需审批。",
         "旧/乱序/过期/错误签名被拒绝；部分应用不暴露；失败回LKG；断网继续服务并标陈旧；云端清晰显示期望/实际差异。",
         "PRD-108/120", "在线配置传播p95<60s；本地读取p95<2ms；失败回滚<5分钟", "9-11人周",
     ),
@@ -847,7 +847,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /edge/telemetry/batches；GET /edge/deployments/{id}/telemetry-watermark；PATCH /edge/deployments/{id}/telemetry-policy",
         "TelemetryPolicy；TelemetryBatch；UsageSyncCursor；EdgeFailureSummary；TelemetryReceipt",
         "edge.telemetry_received；edge.telemetry_lagging；edge.usage_reconciled",
-        "租户security_admin控制允许级别；finance读本租户用量；平台只见运营摘要；Agent只能追加自身序列。",
+        "租户security_admin控制允许级别；finance_admin读本租户用量；platform_ops只见运营摘要；Agent只能追加自身序列。",
         "断网恢复无重复/丢水位；失败请求可追踪；Usage/成本与本地账本核对；Key/Token/Prompt/Response/Endpoint原文上传命中为0。",
         "PRD-017/051/099/109/120", "在线遥测延迟p95<60s；断网7天恢复后2小时内追平；热路径额外开销<2%", "8-10人周",
     ),
@@ -869,7 +869,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "CLI metahub preflight；CLI metahub install；CLI metahub connect；CLI metahub uninstall；GET /edge/installers",
         "InstallerRelease；InstallProfile；PreflightReport；Installation；InstallAudit",
         "edge.install_started；edge.install_completed；edge.install_failed",
-        "租户owner下载本空间引导；平台release发布签名包；本地root操作有确认和审计；安装包无预置客户Secret。",
+        "租户owner下载本空间引导；release_manager发布签名包；本地root操作有确认和审计；安装包无预置客户Secret。",
         "全新Linux一条向导可完成；预检失败不半安装；签名/版本不匹配阻断；安装后健康/注册通过；卸载不误删用户选择保留的数据。",
         "PRD-120/121/123、PRD-028", "标准环境安装<20分钟；预检<2分钟；安装失败清理可验证", "9-11人周",
     ),
@@ -880,7 +880,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /edge/deployments/{id}/validations；GET /edge/deployments/{id}/validations/{run_id}；POST /local/support-bundles；GET /edge/support-bundles/{id}",
         "DeploymentValidation；ValidationCheck；SupportBundle；DeliveryAcceptance",
         "edge.validation_completed；edge.support_bundle_ready；edge.delivery_accepted",
-        "租户运维执行；support需JIT授权下载；支持包在本地生成白名单且客户可预览；平台不得远程任意取文件。",
+        "租户admin执行；platform_support需JIT授权下载；支持包在本地生成白名单且客户可预览；平台不得远程任意取文件。",
         "验收覆盖真实调用且Usage/成本/失败可追踪；支持包敏感扫描0；失败项有修复建议和重试；跨版本结果可比较。",
         "PRD-120..124", "全套验证<15分钟（不含模型上游长超时）；支持包<100MB且生成<5分钟", "5-7人周",
     ),
@@ -913,7 +913,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /edge/licenses；GET /edge/licenses/{deployment_id}；POST /edge/licenses/{id}/refresh；CLI metahub license import",
         "EdgeLicense；SignedEntitlement；CapacityGrant；LicenseLease；LicenseAudit",
         "license.issued；license.expiring；license.grace_started；license.capacity_exceeded",
-        "platform_billing签发；租户owner查看/导入；Agent本地验签；support无签发权；License不授予数据访问。",
+        "platform_billing签发；租户owner查看/导入；Agent本地验签；platform_support无签发权；License不授予数据访问。",
         "离线验签、防篡改/回拨；过期先宽限且只限制新增，不突然中断存量；扩容原子；云端与本地状态最终一致。",
         "PRD-098/103/120/127", "本地授权判断p95<2ms；在线刷新p95<1s；默认离线宽限>=7天", "6-8人周",
     ),
@@ -946,7 +946,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /migrations/assessments；POST /migrations/runs；GET /migrations/{id}/differences；POST /migrations/{id}/cutover；POST /migrations/{id}/rollback",
         "MigrationAssessment；MigrationPlan；MigrationRun；MigrationDifference；CutoverCheckpoint；RollbackPlan",
         "migration.started；migration.validation_failed；migration.cutover_completed；migration.rolled_back",
-        "租户owner授权本空间；平台交付JIT；迁移工具不能跨租户扫描；凭据只在目标安全域重录或信封迁移。",
+        "租户owner授权本空间；platform_support通过JIT协助；迁移工具不能跨租户扫描；凭据只在目标安全域重录或信封迁移。",
         "行数/hash/FK/账本序列/审计水位一致；试运行无写；切换可回退；身份/权限不扩大；Provider Key不进入报告。",
         "PRD-090..130、PRD-040/062/089", "10万配置对象评估<30分钟；计划停机窗口可量化；回滚<2小时", "10-12人周",
     ),
@@ -957,7 +957,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET/POST /support/tickets；PATCH /support/tickets/{id}；POST /support/tickets/{id}/attachments；POST /support/tickets/{id}/escalations",
         "SupportTicket；TicketMessage；TicketAttachment；SlaClock；Escalation；SatisfactionSurvey",
         "support.ticket_created；support.sla_at_risk；support.ticket_resolved",
-        "租户只见本空间；support处理但内容字段最小化；内部备注不回传；读取诊断仍需PRD-095 JIT授权。",
+        "租户只见本空间；platform_support处理但内容字段最小化；内部备注不回传；读取诊断仍需PRD-095 JIT授权。",
         "SLA暂停/恢复规则确定；附件恶意内容隔离；租户隔离；关联request_id不自动拉取Prompt/Response；升级和通知不丢。",
         "PRD-095/105/109/112/125/126", "工单列表p95<500ms；P1告警到升级<5分钟；附件扫描有超时状态", "7-9人周",
     ),
@@ -968,7 +968,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /developer/api-versions；GET /developer/changelog；GET /developer/webhook-schemas；GET /developer/sdks/{language}",
         "ApiVersion；ApiContractSnapshot；SdkRelease；DeprecationNotice；WebhookSchemaVersion",
         "api.deprecated；api.sunset_scheduled；sdk.released；webhook.schema_published",
-        "平台release发布合同；租户developer只读/下载；废弃不能绕过现有RBAC；SDK制品不包含默认凭据。",
+        "release_manager发布合同；租户developer只读/下载；废弃不能绕过现有RBAC；SDK制品不包含默认凭据。",
         "合同diff阻断破坏性改动；兼容期>=90天；旧接口到期前多渠道提醒；SDK可复现/验签；错误码/request_id一致。",
         "PRD-038/039/042/057/118", "文档/Schema查询p95<300ms；SDK smoke全平台通过；兼容测试覆盖N/N-1", "6-8人周",
     ),
@@ -979,7 +979,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET/PATCH /identity/privacy-preferences；POST /identity/data-subject-requests；GET /identity/data-subject-requests/{id}；GET /platform/privacy/queue",
         "ConsentRecord；PrivacyPreference；DataSubjectRequest；IdentityExport；ErasureDecision；RetentionException",
         "privacy.consent_changed；privacy.request_received；privacy.request_completed",
-        "用户管理本人；privacy_operator处理最小必要字段；企业不能删除平台全局账号但可移除Membership；法务保全独立审批。",
+        "用户管理本人；platform_privacy处理最小必要字段；企业不能删除平台全局账号但可移除Membership；legal_admin独立审批保全。",
         "身份核验后受理；导出不含其他Workspace；删除与PRD-089/117一致；法定保留可解释；全过程无账号枚举和敏感日志。",
         "PRD-089/091/092/105/117", "请求状态查询p95<500ms；法定SLA前预警；导出大任务异步可恢复", "7-9人周",
     ),
@@ -1001,7 +1001,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GET /releases/{id}/security-report；POST /platform/vulnerabilities/{id}/exceptions；GET /releases/{id}/provenance",
         "SbomReport；ArtifactSignature；BuildProvenance；VulnerabilityFinding；SecurityException；PatchRelease",
         "release.security_scan_failed；vulnerability.critical_found；release.signed；patch.released",
-        "release/security双人审批；高危未修复默认阻断；客户只读公开报告；签名私钥仅KMS构建身份可用。",
+        "release_manager/platform_security双人审批；高危未修复默认阻断；客户只读公开报告；签名私钥仅KMS构建身份可用。",
         "每个制品有SBOM/签名/Provenance；高危阻断或有时限例外；验签失败不可安装；补丁可回滚且覆盖云/边兼容矩阵。",
         "PRD-106/127/133/135", "发布门禁<20分钟；关键漏洞识别<24小时；紧急修复目标<72小时", "7-9人周",
     ),
@@ -1012,22 +1012,137 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "POST /platform/security/assessments；GET /platform/security/assessments/{id}；POST /platform/security/findings/{id}/remediations",
         "SecurityAssessment；IsolationTestRun；PenTestFinding；Remediation；RiskAcceptance",
         "security.assessment_failed；security.finding_created；security.finding_closed",
-        "security团队发起；租户仅见自身相关通知；测试身份/数据专用且验收后清除；风险接受需Owner+security双批。",
+        "platform_security发起；租户仅见自身相关通知；测试身份/数据专用且验收后清除；风险接受需owner+security_admin双批。",
         "所有业务对象owner矩阵覆盖；跨租户读取/写入/侧信道已验证为0；P0/P1关闭；动态撤权和迟到响应全链；禁止测试污染生产客户。",
         "PRD-090..136", "每次发布增量隔离门禁<30分钟；季度完整攻防；P0修复<24小时", "8-10人周",
     ),
     planned(
-        138, "S6-迁移与客户运营", "P0", "发布治理层", "SaaS上线", "SaaS正式上线、迁移波次与全产品门禁",
+        138, "S6-迁移与客户运营", "P0", "发布治理层", "发布候选", "SaaS发布候选、核心迁移波次与全产品门禁",
         "产品负责人/研发/SRE/安全/测试/运营/财务/客服",
-        "内部、个人试点、企业试点、云管私有试点、公开发布五波；功能开关、Runbook、培训、支持排班、财务对账、法务文案、回滚、72小时长稳和发布后观察。",
+        "内部、个人试点、企业试点、云管私有试点四波；功能开关、Runbook、培训、支持排班、财务对账、法务文案、回滚、72小时长稳和发布候选评审。公开发布必须等待PRD-139起的存量控制台分域迁移和最终PRD-148门禁。",
         "GET /platform/launch-gates；POST /platform/launch-gates/{id}/evidence；POST /platform/launches；POST /platform/launches/{id}/rollback",
         "LaunchGate；LaunchEvidence；LaunchWave；GoNoGoDecision；LaunchRollback；PostLaunchReview",
         "launch.gate_failed；launch.wave_started；launch.wave_completed；launch.rolled_back",
-        "Go/No-Go需产品、SRE、安全、测试、财务/法务按范围会签；任何人不能单独绕过P0门禁；租户数据访问边界不变。",
-        "WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW全组通过；迁移可回退；72小时长稳；灾备/支付/Edge演练；敏感与禁止文件审计0；README/Excel/docs一致。",
+        "产品/SRE/安全/测试/财务/法务是会签actor kind，不新增RBAC角色；platform_owner只能在全部会签后执行，任何人不能单独绕过P0门禁；租户数据访问边界不变。",
+        "核心域WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW全组通过；四波试点可回退；72小时长稳；灾备/支付/Edge演练；敏感与禁止文件审计0；生成发布候选但不得标记公开GA。",
         "PRD-090..137", "Control 99.9%、Gateway 99.95%；关键页面p75<1.5s；连续72小时无P0/P1", "12-15人周",
     ),
+    planned(
+        139, "S7-平台运营增量", "P1", "平台增长层", "渠道伙伴", "渠道伙伴、代理商与客户归属管理",
+        "platform_channel/platform_billing/platform_owner/渠道伙伴",
+        "把现有PRD-087 tenant-scoped伙伴门户迁到纯SaaS平台/伙伴域：迁移渠道伙伴组织与成员、代理等级、合同和区域范围、邀请/推荐码、商机报备、Workspace归属、归属变更审批、佣金规则快照、结算对账和伙伴门户；复用并迁移现有/partners数据与审计，不重建第二套事实。企业Workspace不再提供partner-portal。",
+        "GET/POST /platform/channel-partners；POST /platform/channel-leads；POST /platform/workspace-attributions；POST /platform/workspace-attributions/{id}/approve；GET /platform/channel-statements；GET /partner/workspaces",
+        "ChannelPartner；ChannelMembership；ReferralCode；RegisteredLead；WorkspaceAttribution；AttributionChange；CommissionRule；ChannelStatement",
+        "channel.partner_changed；channel.lead_registered；workspace.attribution_changed；channel.statement_closed",
+        "platform_channel管理渠道目录、商机和归属但不能读取客户业务内容；platform_billing复核结算；platform_owner审批高风险归属变更；伙伴身份只能访问/partner白名单；企业角色全部拒绝。",
+        "渠道角色页面与其他平台角色隔离；企业Workspace导航/DOM/预取/API均无渠道、客户管理或增长分析模块；同一Workspace归属状态机可追溯且变更双审批；重复推荐/商机幂等；佣金按版本快照可对账；伙伴不能枚举非归属客户或进入租户控制面。",
+        "PRD-087/095/096/098/099/102..105/132/138", "渠道目录p95<500ms；归属查询p95<300ms；月结1万Workspace<30分钟", "8-10人周",
+    ),
+    planned(
+        140, "S7-平台运营增量", "P1", "平台运营层", "客户成功", "SaaS平台客户管理、健康与续费协同",
+        "platform_customer_success/platform_support/platform_billing/platform_owner",
+        "把现有PRD-086 tenant-scoped customer-health评分迁到纯SaaS平台客户运营投影，并扩展客户目录、联系人和沟通偏好、激活状态、采用率、安全脱敏健康、续费机会、流失风险、成功计划、跟进任务和QBR摘要；复用既有评分事实和审计，不重建第二套。企业Workspace不再提供customer-health。",
+        "GET /platform/customer-accounts；GET /platform/customer-accounts/{id}/health；POST /platform/customer-success-plans；POST /platform/customer-tasks；GET /platform/renewal-pipeline",
+        "CustomerAccountProjection；CustomerContact；CustomerHealthSnapshot；SuccessPlan；CustomerTask；RenewalOpportunity；QbrSummary",
+        "customer.health_changed；customer.task_due；renewal.risk_changed；success_plan.completed",
+        "platform_customer_success管理客户运营；platform_support处理工单协作；platform_billing只读续费财务状态；platform_owner审批批量操作；任何企业角色和伙伴身份均拒绝/platform/customer-*。",
+        "平台客户目录与租户业务数据严格分离；健康结论可解释；联系偏好生效；批量任务有上限和审计；企业Workspace导航/DOM/预取/API无客户管理模块；跨客户枚举为0。",
+        "PRD-086/095/096/099/105/109/132/138", "10万客户目录p95<500ms；健康投影更新<5分钟；续费任务到期偏差<1分钟", "8-10人周",
+    ),
+    planned(
+        141, "S7-平台运营增量", "P1", "平台增长层", "增长分析", "SaaS平台增长漏斗、活动与转化归因",
+        "platform_growth/platform_channel/platform_customer_success/platform_owner",
+        "把现有PRD-085 tenant-scoped product-analytics漏斗迁到纯SaaS平台聚合域，并扩展获客来源、注册/激活/试用/付费/留存漏斗、活动和实验、渠道归因、同期群、转化率、单位经济摘要和脱敏导出；复用既有ProductEvent/outbox事实，不重建第二套。企业Workspace不再提供growth-analytics；接入步骤由PRD-097初始化向导承接。",
+        "GET /platform/growth/funnels；GET /platform/growth/cohorts；GET/POST /platform/growth/campaigns；GET/POST /platform/growth/experiments；GET /platform/growth/attribution",
+        "AcquisitionSource；GrowthFunnelSnapshot；CohortSnapshot；Campaign；GrowthExperiment；ConversionAttribution；GrowthExport",
+        "growth.conversion_recorded；growth.campaign_changed；growth.experiment_decided；growth.exported",
+        "platform_growth管理活动/实验和聚合分析；platform_channel只读渠道归因；platform_customer_success只读采用/留存摘要；platform_owner审批敏感导出；所有企业角色均拒绝。",
+        "漏斗口径版本化且可复算；实验分流有同意/退出和停止规则；归因不跨客户泄漏；高基数与PII受控；企业Workspace导航/DOM/预取/API无增长分析模块；导出审计和删除策略通过。",
+        "PRD-085/092/096/097/099/105/107/110/134/139/140", "聚合查询p95<1s；日增量10分钟内可见；百万事件重算<60分钟", "9-11人周",
+    ),
+    planned(
+        142, "S7-平台运营分域", "P1", "品牌与域名层", "品牌边界", "平台品牌、渠道白标与私有Gateway外观分域",
+        "platform_owner/platform_channel/release_manager/Workspace owner",
+        "拆分现有tenant-scoped branding：SaaS主登录页和平台品牌仅由平台管理；渠道白标归platform_channel且绑定伙伴/合同/域名验证；企业Workspace不再改写SaaS登录页；云管私有Gateway可由Workspace owner在Deployment范围配置本地外观。复用branding_configs/events/outbox并保留tenant_id审计。",
+        "GET/PATCH /platform/branding；GET/PATCH /platform/channel-partners/{id}/branding；GET/PATCH /deployments/{id}/branding；GET /branding/public",
+        "PlatformBrand；ChannelBrand；DeploymentBrand；VerifiedDomain；BrandAsset；BrandMigrationCursor",
+        "platform_brand.changed；channel_brand.changed；deployment_brand.changed；brand_domain.verified",
+        "platform_owner管理SaaS主品牌；platform_channel只能管理获授权伙伴品牌；Workspace owner只能管理本企业Deployment外观；任何企业角色不得修改平台登录页或其他Workspace域名。",
+        "custom_domain全局唯一且重新验证；Logo安全扫描；旧branding行/event/outbox水位保真；企业SaaS页面没有白标管理导航；私有Gateway离线LKG仍可显示最后有效品牌；回滚不恢复跨域写权限。",
+        "PRD-088/093/095/098/120/121/123/139", "公开品牌读取p95<200ms；变更传播99%<5秒；资源上传<5秒", "6-8人周",
+    ),
+    planned(
+        143, "S7-平台运营分域", "P1", "Provider工程层", "Provider工程台", "Provider Adapter目录、合同测试与错误规则分域",
+        "platform_provider_engineer/platform_security/release_manager/Workspace developer",
+        "把adapter-specs、adapter-contract-runs和内置error-map维护迁到平台Provider工程台；官方Adapter目录、合同CI、内置错误规则和发布证明由平台管理。企业开发者只在Provider详情查看兼容版本、健康摘要和自身Endpoint的受限错误覆盖，不展示CI内部case、Runner、构建路径或竞品运营信息。",
+        "GET /platform/provider-adapters；GET /platform/provider-adapters/{id}/contract-runs；POST /platform/provider-error-catalogs/releases；GET/PATCH /workspace/provider-error-overrides",
+        "ProviderAdapterRelease；AdapterContractRunProjection；BuiltinErrorCatalog；WorkspaceErrorOverride；ProviderCompatibilityProjection",
+        "provider_adapter.released；adapter_contract.failed；error_catalog.released；workspace_error_override.changed",
+        "release_manager发布Adapter；platform_provider_engineer维护目录并运行合同测试；platform_security复核失败与供应链；Workspace developer只管理本Workspace覆盖且不能修改内置目录。",
+        "现有0055/0056/0046表与事件按版本保真；企业导航无Adapter规范和CI报告；Provider详情仍能解释兼容性和归一错误；平台内部路径/源码/Runner Secret不进入企业DTO或日志；默认上游与竞品边界不变。",
+        "PRD-063/064/119/123/133/136/137", "目录读取p95<300ms；合同报告10万case分页p95<500ms；发布传播<5分钟", "8-10人周",
+    ),
+    planned(
+        144, "S7-平台运营分域", "P0", "商业账务层", "商业账务分域", "平台套餐账务与企业用量财务边界重构",
+        "platform_billing/platform_channel/finance_admin/Workspace owner",
+        "拆分现有套餐、账单争议和模型价格页面：平台管理套餐目录、订阅、权益、官方建议价、支付/退款/发票、争议裁决和渠道结算；企业finance_admin查看本Workspace订阅、账单、发票、争议进度，并管理BYOK成本价、预算、额度和内部FinOps。平台商业账不得与企业内部成本账混成一套可写事实。",
+        "GET /platform/plans；GET /platform/subscriptions；POST /platform/billing-disputes/{id}/decisions；GET /workspace/subscription；POST /workspace/billing-disputes；GET/PATCH /workspace/provider-cost-rates",
+        "PlatformPlanCatalog；WorkspaceSubscriptionProjection；PlatformInvoice；BillingDisputeCase；ProviderCostRate；InternalFinOpsLedger；BillingDomainReconciliation",
+        "plan.released；subscription.changed；billing_dispute.submitted；billing_dispute.decided；provider_cost_rate.changed",
+        "platform_billing管理商业账和裁决；platform_channel只读渠道结算；finance_admin管理本Workspace财务与争议申请；企业admin无财务授权时不得看金额；平台支持不能查看Provider Secret或业务正文。",
+        "金额、币种、税率和价格版本可复算；平台账与企业内部成本账双边对账但独立授权；旧0072/0073及现有model price/FinOps事实可回滚；企业不出现套餐目录管理或争议裁决按钮；失败请求和费用调整全链可追踪。",
+        "PRD-072/073/098/099/102/103/104/132/139", "账单查询p95<500ms；对账10万分录<10分钟；争议状态传播<5秒", "10-12人周",
+    ),
+    planned(
+        145, "S7-平台运营分域", "P0", "控制台体验层", "共享页面分域", "平台与Workspace总览、审批、助手、状态和设置分域",
+        "platform_owner/platform_ops/platform_security/Workspace owner/职能管理员",
+        "对overview、admin-assistant、approvals、system-status、config-summary、language-settings逐一拆分主体和数据源：平台页面只读平台运营聚合；Workspace页面只读本企业治理事实；审批队列按actor domain隔离；语言属于GlobalAccount偏好；环境信息改为角色受控的Deployment诊断，不向普通用户展示研发配置。页面切换只加载当前路由依赖。",
+        "GET /platform/overview；GET /workspace/overview；POST /platform/assistant/query；POST /workspace/assistant/query；GET /platform/approvals；GET /workspace/approvals；GET /identity/preferences；GET /workspace/deployment-summary",
+        "PlatformDashboardProjection；WorkspaceDashboardProjection；DomainApprovalQueue；AssistantQueryProjection；AccountPreference；DeploymentDiagnosticProjection",
+        "platform_dashboard.refreshed；workspace_dashboard.refreshed；approval.domain_rejected；account_preference.changed",
+        "每个接口只接受对应PlatformSession、WorkspaceSession或GlobalSession；SupportSession不继承任一导航；助手引用来源继续逐对象鉴权；审批申请人不得跨域或自批。",
+        "平台/Workspace同名页面不复用授权；迟到响应不污染切换后的页面；普通角色看不到配置路径、内部token状态或开发环境变量；当前路由可交互p75<1.5秒；语言切换不改变权限或owner。",
+        "PRD-057/070/071/094/095/106/109/112/140..144", "页面切换p75<1.5秒；普通读p95<300ms；在线撤权<2秒", "9-11人周",
+    ),
+    planned(
+        146, "S7-平台运营分域", "P1", "信息架构层", "企业工作区重组", "企业Gateway角色导航、任务首页与高级入口重组",
+        "Workspace owner/admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer",
+        "以现有63项导航处置矩阵重组企业Gateway：默认折叠并保持单组展开；首页按角色显示下一步任务；保留BYOK、Provider/模型/路由、Key、项目、额度预算、用量成本、企业财务、员工权限、安全策略、日志审计、开发工具和私有部署；competitor-comparison移出产品UI；debug、intent测试、Webhook死信、环境诊断等仅高级角色按需进入。",
+        "GET /workspace/navigation；GET /workspace/getting-started；PATCH /identity/preferences/navigation；GET /workspace/advanced-tools",
+        "WorkspaceNavigationProjection；RoleTaskHome；NavigationPreference；AdvancedToolEntitlement；NavigationContractSnapshot",
+        "workspace_navigation.changed；role_task.completed；advanced_tool.opened",
+        "后端按Membership revision和permission返回页面；owner/admin添加职能用户但不能授予platform_*；service_account无浏览器导航；隐藏菜单不能替代API鉴权。",
+        "63项现状导航每项有唯一处置且源码清单无遗漏；所有企业角色只看职责相关页；默认折叠、单组展开、直达URL负测试、真人鼠标主流程、390/1280/1440布局和无研发术语通过；每页只加载当前数据。",
+        "PRD-094/097/119/120/139..145", "导航投影p95<200ms；路由切换p75<1.5秒；首屏关键任务p75<1.5秒", "8-10人周",
+    ),
+    planned(
+        147, "S7-平台运营分域", "P0", "迁移治理层", "控制台分域切换", "存量控制台全面分域迁移与旧入口归零",
+        "platform_owner/platform_ops/platform_security/迁移负责人",
+        "按63项导航处置矩阵对代码、API、权限、表、事件、Scheduler、导航、DOM、文案、遥测和审计执行expand/dual-read/backfill/cutover/contract。盘点control_background_schedulers_enabled当前统一开关下安装的23个后台循环，逐个迁移执行身份、queue owner、lease和水位；Web副本不重复承担无界Worker。平台接管运营、品牌、Provider工程和商业目录；企业保留AI治理；拆分页使用独立主体；退役页面设置固定tombstone，不直接删除历史tenant_id事实。",
+        "GET /platform/console-migration/status；POST /platform/console-migration/backfills；POST /platform/console-migration/cutovers；POST /platform/console-migration/rollbacks",
+        "ConsoleDomainMigration；ConsoleBackfillCursor；LegacyRouteTombstone；NavigationContractSnapshot；DomainReconciliation",
+        "console_domain.backfilled；console_domain.cutover；console_domain.rolled_back；legacy_route.retired",
+        "platform_owner批准切换；platform_ops执行；platform_security复核跨域负测试；Workspace角色拒绝平台旧API；平台角色也不能用PlatformSession或旧WorkspaceSession绕过SupportGrant读取客户业务。",
+        "所有迁移表行数/hash/outbox/审计/Scheduler水位保真；23个后台循环每项有唯一平台/Workspace执行域，Web多副本不重复消费；企业旧平台导航、DOM、预取、直达API归零；平台和企业新页面真实可用；N/N-1与回滚不复活越权；敏感与禁止文件审计0。",
+        "PRD-131/137/139..146", "单Workspace切换<5分钟；10万Workspace回填<4小时；页面切换p75<1.5秒", "12-15人周",
+    ),
+    planned(
+        148, "S8-正式发布", "P0", "发布治理层", "SaaS正式上线", "SaaS公开发布、迁移终验与全产品最终门禁",
+        "产品负责人/研发/SRE/安全/测试/运营/财务/客服/法务",
+        "在PRD-138发布候选和PRD-139..147控制台分域全部通过后执行公开发布：最终数据对账、权限负矩阵、真实注册到付费/企业治理/私有Gateway全流程、72小时长稳、回滚演练、支持排班、用户文档和发布后观察。",
+        "GET /platform/ga-gates；POST /platform/ga-gates/{id}/evidence；POST /platform/ga-launches；POST /platform/ga-launches/{id}/rollback",
+        "GaGate；GaEvidence；GaDecision；GaLaunch；GaRollback；PostGaReview",
+        "ga.gate_failed；ga.approved；ga.launched；ga.rolled_back",
+        "产品/SRE/安全/测试/财务/法务独立会签；platform_owner只执行已批准决策；任何单一角色都不能跳过迁移、安全、财务或隐私门禁。",
+        "PRD-090..147全部完成；63项导航处置落地；平台/企业/伙伴/支持/设备五域负测试通过；WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW全组通过；72小时无P0/P1；README/Excel/docs/HEAD/origin一致。",
+        "PRD-138/139..147", "Control 99.9%、Gateway 99.95%；关键页面p75<1.5s；连续72小时无P0/P1", "12-15人周",
+    ),
 ]
+
+# This is the end of the currently detailed planning batch, not a product-wide
+# PRD ceiling. Appending the next contiguous PRD automatically extends it.
+CURRENT_PLANNED_LAST_PRD = int(PRDS[-1]["id"].removeprefix("PRD-"))
+NEXT_PLANNED_PRD = next(item["id"] for item in PRDS if item["status"] == "未启动")
 
 
 LEGACY_TITLES = (
@@ -1060,7 +1175,9 @@ PHASES = (
     ("S3", "PRD-106..113", "生产云运行与可靠性", "分布式任务、渐进发布、配置分发、SRE、反滥用、容灾、状态和容量", "G3通过；任务可恢复、发布可回退、多区域与100+租户压力达标", "106先行；107/108后接；109/110并行；111-113收口", "68-82人周"),
     ("S4", "PRD-114..119", "企业身份与数据治理", "SSO、SCIM、MFA、驻留、机器身份和官方Provider目录", "G4通过；企业身份生命周期和区域治理闭环", "114先行；115/116并行；117-119可并行集成", "44-56人周"),
     ("S5", "PRD-120..130", "云管私有Gateway", "Edge信任、配置、遥测、Secret、安装、Fleet、升级、授权、灾备和断网异步管理", "G5通过；在线/断网/升级/恢复均可验收", "120先行；121-123并行；124-126后接；127-130收口", "88-108人周"),
-    ("S6", "PRD-131..138", "迁移、客户运营与正式上线", "迁移、客服、API生命周期、隐私、合规、供应链、隔离验证和GA", "G6通过；五波迁移和全产品门禁闭环", "131/132/133并行；134-137门禁化；138最终Go/No-Go", "70-84人周"),
+    ("S6", "PRD-131..138", "迁移、客户运营与发布候选", "迁移、客服、API生命周期、隐私、合规、供应链、隔离验证和RC", "G6通过；四波试点和发布候选门禁闭环，不对外GA", "131/132/133并行；134-137门禁化；138生成发布候选", "70-84人周"),
+    ("S7", "PRD-139..147", "平台运营分域与企业Gateway重组", "把平台运营、品牌、Provider工程与商业目录迁出企业Gateway，企业保留角色化AI治理", "G7通过；63项导航唯一处置、历史保真、企业旧平台入口归零", "139/140可并行；141-145按域迁移；146重组；147统一切换", "80-98人周"),
+    ("S8", "PRD-148", "SaaS正式发布", "全域迁移终验、公开发布和发布后观察", "G8通过；全部PRD完成、72小时长稳和最终Go/No-Go", "只能在G0..G7全部通过后执行", "12-15人周"),
 )
 
 
@@ -1072,15 +1189,47 @@ PERMISSION_ROWS = (
     ("platform_support", "平台", "客服诊断", "无", "只读脱敏目录", "JIT且客户授权", "无", "只读健康", "只读自身"),
     ("platform_verification", "平台", "企业主体审核", "无", "只读审核资料", "无", "只读合同状态", "无", "管理审核审计"),
     ("platform_compliance", "平台", "隐私与合规证据", "只读", "只读治理摘要", "无正文", "无", "只读驻留状态", "管理合规证据"),
+    ("platform_privacy", "平台", "数据主体请求与同意治理", "只读", "只读隐私队列", "无业务正文", "无", "无", "管理隐私审计"),
     ("release_manager", "平台", "云与Edge制品发布", "无", "无", "无", "无", "发布/回滚", "管理发布审计"),
+    ("platform_provider_engineer", "平台", "官方Provider Adapter、合同CI与错误目录", "无", "无", "无客户业务正文", "无", "只读Provider运行摘要", "管理Provider工程审计"),
+    ("platform_channel", "平台", "渠道伙伴、商机与客户归属", "无", "只读归属摘要", "无客户业务内容", "只读结算摘要", "无", "管理渠道审计"),
+    ("platform_customer_success", "平台", "客户运营、健康与续费协同", "无", "管理脱敏客户运营投影", "无客户业务正文", "只读续费摘要", "只读健康", "管理客户成功审计"),
+    ("platform_growth", "平台", "获客、活动、漏斗与增长分析", "无", "只读聚合客户阶段", "无客户业务正文", "只读单位经济摘要", "无", "管理增长审计"),
     ("owner", "租户", "企业/个人空间最高Owner", "无", "管理本空间", "管理本空间", "管理订阅", "管理本空间部署", "管理本空间"),
     ("admin", "租户", "租户日常管理员", "无", "受限管理", "管理本空间", "按授权只读", "按授权管理", "管理本空间"),
     ("developer", "租户", "技术接入", "无", "无", "Provider/模型/Key按现有RBAC", "无", "只读部署状态", "只读技术审计"),
     ("security_admin", "租户", "租户安全", "无", "无", "策略/DLP/安全事件", "无", "管理遥测策略", "管理安全审计"),
     ("finance_admin", "租户", "租户财务", "无", "无", "只读用量归属", "管理账单/预算", "只读成本", "只读财务审计"),
     ("legal_admin", "租户", "合同、隐私与法律保全", "无", "只读本空间", "无正文", "只读合同/发票", "只读驻留状态", "管理保全/隐私审计"),
+    ("auditor", "租户", "企业审计与合规复核", "无", "只读本空间", "只读治理摘要", "只读账单摘要", "只读部署摘要", "只读审计"),
     ("service_account", "租户", "非人类自动化主体", "无", "无", "仅授权Scope", "默认无", "默认无", "记录机器身份审计"),
     ("viewer", "租户", "租户只读", "无", "无", "只读明确授权页面", "只读摘要", "只读摘要", "只读"),
+)
+
+
+ROLE_PAGE_ROWS = (
+    ("platform_owner", "平台", "平台总览；平台人员与角色；租户目录；品牌；套餐账务；SRE；安全合规；发布；渠道；客户成功；增长", "平台授权、全局配置和最终审批", "无SupportGrant不得读取客户业务内容", "显式bootstrap后由platform_owner按委派上限管理"),
+    ("platform_ops", "平台", "平台总览；租户运行摘要；基础设施；Gateway Fleet；Provider工程；事故与容量", "运行、合同测试、冻结/恢复和受控发布操作", "客户业务正文；平台IAM授权；财务调整", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_security", "平台", "安全中心；风险；支持审批；隔离验证；安全审计", "风险冻结、审批和安全处置", "账务调整；默认客户正文", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_billing", "平台", "套餐目录；订阅；支付；退款；发票；争议裁决；对账；渠道结算摘要", "财务审核、调整、争议裁决和对账", "Provider Key/Prompt/Response；平台IAM；企业内部成本价", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_support", "平台", "工单；客户脱敏目录；本人SupportGrant；受控诊断", "工单处理；授权后的字段白名单诊断", "永久模拟租户；Key/Token/Prompt/Response", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_verification", "平台", "企业认证审核；补件；审核审计", "主体资料审核", "租户业务页；非审核所需字段", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_compliance", "平台", "合规控制；驻留证据；例外；审计证据", "合规评估和例外审批", "客户正文；账务和平台IAM", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_privacy", "平台", "隐私请求队列；同意；导出/删除决策；隐私审计", "最小字段处理数据主体请求", "其他Workspace列表和业务正文", "platform_owner或具备平台IAM委派权限者"),
+    ("release_manager", "平台", "版本；制品；SBOM；渐进发布；回滚；发布审计", "签名发布和回滚", "租户成员、账务和业务内容", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_provider_engineer", "平台", "Provider Adapter目录；合同CI；内置错误规则；兼容性发布候选", "维护Adapter和运行合同测试；提交发布候选", "客户Provider Secret/请求正文；租户控制面；最终制品发布", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_channel", "平台", "渠道伙伴；代理商成员；商机报备；客户归属；佣金结算摘要", "渠道目录、商机和归属申请", "租户控制面；客户业务内容；财务最终调整", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_customer_success", "平台", "客户运营目录；健康；成功计划；续费协同；QBR摘要", "客户成功计划、跟进和脱敏运营记录", "租户控制面；客户业务正文；平台IAM", "platform_owner或具备平台IAM委派权限者"),
+    ("platform_growth", "平台", "增长总览；漏斗；同期群；活动；实验；转化归因", "活动/实验和聚合分析", "租户控制面；客户业务正文；个体营销画像", "platform_owner或具备平台IAM委派权限者"),
+    ("owner", "租户", "Workspace任务首页；成员与角色；BYOK/Provider；模型与路由；项目/Key；额度预算；企业财务；安全；日志审计；私有部署", "本空间最高权限、Owner转移和职能授权", "平台控制面；其他Workspace；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析", "Workspace创建或经二次验证的Owner转移"),
+    ("admin", "租户", "Workspace任务首页；成员；BYOK/Provider/模型/路由/Key；额度预算；策略；用量；部署；常规审计", "邀请/停用成员并分配非Owner职能角色；日常治理", "授予owner；平台控制面；平台品牌/套餐目录/争议裁决/Provider工程；渠道/客户管理/增长分析；越过自身权限", "owner或具备成员管理权限的admin"),
+    ("developer", "租户", "开发者快速开始；Provider/模型只读；Virtual Key；调试；调用日志；技术用量", "按授权管理技术接入资源", "成员、合同、付款、法律保全、平台页", "owner/admin在自身委派上限内"),
+    ("security_admin", "租户", "安全中心；策略/DLP；Session；审计；Edge遥测策略", "安全策略、会话撤权和风险处置", "付款调整；平台页；默认Provider Secret", "owner/admin在自身委派上限内"),
+    ("finance_admin", "租户", "用量成本；BYOK成本价；额度预算；内部FinOps；订阅摘要；账单；争议申请；发票；对账", "本Workspace财务资料、预算和争议申请", "Provider Secret；平台套餐目录写入；争议裁决；成员授权；平台页", "owner/admin在自身委派上限内"),
+    ("legal_admin", "租户", "合同主体；隐私；驻留；保留；法律保全；合规审计", "合同、隐私和保全操作", "Provider/Key；成员授权；平台页", "owner/admin在自身委派上限内"),
+    ("auditor", "租户", "只读审计；安全摘要；账单摘要；部署摘要；合规证据", "导出授权范围内的审计证据", "任何写操作；Secret/正文；平台页", "owner/admin在自身委派上限内"),
+    ("service_account", "租户", "无交互页面；仅机器身份详情由管理员查看", "仅后端签发的scope API", "浏览器登录；未授权scope；平台页", "owner/admin通过独立机器身份流程"),
+    ("viewer", "租户", "Workspace总览；被授权的只读用量、日志和状态页", "只读", "所有写操作；敏感配置；平台页", "owner/admin在自身委派上限内"),
 )
 
 
@@ -1091,7 +1240,9 @@ GATES = (
     ("G3", "PRD-106..113", "生产SaaS运行与可靠性", "分布式任务可恢复；渐进发布可回退；配置撤权传播达标；100+租户压力；SLO、反滥用和多区域灾备"),
     ("G4", "PRD-114..119", "企业身份与治理", "域名/SSO/SCIM/MFA全生命周期；驻留/保留生效；机器身份最小授权；Provider目录边界准确"),
     ("G5", "PRD-120..130", "云管私有Gateway", "mTLS设备身份；签名快照/LKG；敏感遥测0；本地Secret不上云；安装、升级、授权、恢复和断网包通过"),
-    ("G6", "PRD-131..138", "迁移与正式上线", "全11类产品QA；五波迁移；72小时长稳；灾备/支付/Edge演练；合规/供应链/隔离门禁；HEAD与origin一致"),
+    ("G6", "PRD-131..138", "迁移与发布候选", "全11类核心产品QA；四波试点；72小时长稳；灾备/支付/Edge演练；合规/供应链/隔离门禁；只生成RC，不标记公开GA"),
+    ("G7", "PRD-139..147", "平台运营分域与企业Gateway重组", "源码63项导航处置100%；平台运营/品牌/Provider工程/商业账务分域；历史行数/hash/outbox/Scheduler/审计水位保真；企业旧平台入口、DOM、预取/API归零"),
+    ("G8", "PRD-148", "SaaS正式上线", "PRD-090..147全部完成；全域11类QA；72小时长稳；最终迁移/安全/财务/隐私会签；HEAD与origin一致"),
 )
 
 
@@ -1105,7 +1256,83 @@ RISKS = (
     ("R-07", "P0", "本地Provider Secret泄漏到云端或支持包", "PRD-122/123/125/129/130", "字段白名单、本地托管、自动敏感扫描和客户预览", "Edge Security"),
     ("R-08", "P1", "断网双向变更产生不可解释覆盖", "PRD-121/130", "单调水位、版本向量、冲突报告和人工决策", "Edge Owner"),
     ("R-09", "P1", "旧PRD-090..108范围被误当作待开发", "PRD-090", "旧表只读保留；新工作簿和Markdown为唯一依据；CI/评审扫描", "Product Owner"),
-    ("R-10", "P0", "为赶发布跳过安全、迁移或真实运行门禁", "PRD-138", "不可单人绕过的Go/No-Go会签；证据缺失即阻断", "Release Owner"),
+    ("R-10", "P0", "为赶发布跳过安全、迁移或真实运行门禁", "PRD-138/148", "RC与GA两段不可单人绕过的Go/No-Go会签；证据缺失即阻断", "Release Owner"),
+    ("R-11", "P0", "渠道角色或伙伴身份枚举、读取或改绑非归属客户", "PRD-095/139", "独立页面/API权限、复合归属、客户确认、平台双审批、跨客户同形失败", "Channel + Security Owner"),
+    ("R-12", "P0", "平台客户管理或增长分析被错误暴露到企业Workspace", "PRD-095/140/141", "平台独立路由和主体；企业导航/DOM/预取/API负测试；聚合数据最小化", "Growth + Security Owner"),
+    ("R-13", "P0", "直接删除或改写旧租户控制台模块造成历史、账务、outbox、Scheduler或审计断链", "PRD-139..147", "expand/dual-read/backfill/cutover/contract；逐表hash和水位；旧路由tombstone；可回滚读路径", "Migration Owner"),
+    ("R-14", "P0", "套餐目录、平台账单与企业BYOK内部成本账混域导致越权或金额错误", "PRD-098/099/144", "双账本域、独立角色、价格版本、争议申请/裁决分离和双边对账", "Billing + FinOps Owner"),
+    ("R-15", "P0", "Adapter CI、内置错误规则或内部配置暴露给普通企业用户", "PRD-119/143/146", "Provider工程台平台化、企业DTO白名单、高级入口分级和源码导航合同测试", "Provider + Security Owner"),
+)
+
+
+# Exact disposition of the tenant Console navigation frozen by PRD-090. This
+# inventory is intentionally exhaustive: the validator compares these IDs with
+# NAVIGATION_DEFINITIONS in the control-plane source so future items cannot be
+# silently omitted from the SaaS/domain migration plan.
+NAVIGATION_DISPOSITION_ROWS = (
+    ("总览", "overview", "概览", "平台/企业拆分", "企业任务首页；平台运营总览", "owner/admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer", "platform_owner/platform_ops/platform_security/platform_billing/platform_support", "GET /dashboard/overview、/dashboard/role-view；租户投影保留，平台另建聚合投影", "PRD-094/095/145/146", "两域Session、缓存、预取和迟到响应完全隔离"),
+    ("总览", "admin-assistant", "管理助手", "平台/企业拆分", "企业治理助手；平台运营助手", "owner/admin及获授权职能角色", "platform_owner/platform_ops/platform_security/platform_billing", "POST /admin-assistant/query；来源仍逐对象鉴权，平台另建知识投影", "PRD-095/145", "不得把平台运营事实或其他Workspace事实带入企业回答"),
+    ("总览", "approvals", "审批中心", "平台/企业拆分", "企业审批；平台审批", "owner/admin/security_admin/finance_admin/legal_admin", "platform_owner/platform_security/platform_billing/platform_compliance/release_manager", "GET/POST /approvals/*；现有企业预算/风险审批保留，平台建立独立队列", "PRD-095/145", "申请、审批、step-up和审计均绑定actor domain；禁止跨域和自批"),
+    ("总览", "growth-analytics", "增长分析", "迁出企业", "SaaS平台增长域", "无", "platform_growth/platform_channel/platform_customer_success/platform_owner", "GET /product-analytics/funnel；product_events、product_event_outbox及触发器", "PRD-141/147", "企业导航、DOM、预取和旧API归零；历史事件/hash/outbox水位保真"),
+    ("总览", "customer-health", "客户健康", "迁出企业", "SaaS平台客户成功域", "无", "platform_customer_success/platform_support/platform_billing/platform_owner", "GET /customer-health；customer_health_scheduler_tenants、scores、score_outbox及Scheduler", "PRD-140/147", "企业不查看平台客户健康；Scheduler与历史评分水位保真"),
+    ("总览", "partner-portal", "伙伴门户", "迁出企业", "SaaS平台渠道域与独立伙伴入口", "无", "platform_channel/platform_billing/platform_owner；伙伴身份", "GET/POST /partners/*；partners、partner_customers、commission_records、outbox及Scheduler", "PRD-139/147", "企业角色全部拒绝；伙伴只能看归属客户；佣金与审计可对账"),
+    ("配置", "branding", "白标设置", "平台/私有部署拆分", "平台品牌/渠道白标/Deployment外观", "owner仅管理本企业私有Deployment外观", "platform_owner/platform_channel/release_manager", "GET/PATCH /branding；branding_configs、branding_events、branding_event_outbox及Scheduler", "PRD-142/147", "企业SaaS不能改平台登录页；域名唯一验证；旧事件与outbox保真"),
+    ("配置", "tenant", "租户设置", "企业保留并改名", "企业资料与Workspace设置", "owner/admin；auditor只读", "platform_ops只读脱敏生命周期", "现有tenant.settings.read；Tenant通过不可变绑定投影为Workspace", "PRD-093/094/096/146", "企业可维护本企业资料，不能修改tenant/workspace绑定或平台状态"),
+    ("配置", "users", "用户与角色", "企业保留并改名", "成员与职能角色", "owner/admin", "无", "现有user.manage、邀请与users表；渐进映射GlobalAccount+Membership", "PRD-091/094/115/146", "owner/admin添加本企业职能用户；不能授予platform_*或越过委派上限"),
+    ("租户治理", "role-permissions", "角色权限", "企业保留", "企业角色与权限", "owner/admin；auditor只读结果", "无", "现有rbac.matrix.manage、roles/permissions/role_permissions", "PRD-094/115/146", "后端权限为权威；service_account走机器身份流程"),
+    ("配置", "environments", "环境设置", "企业保留并归组", "Gateway环境与发布边界", "owner/admin/developer；auditor只读", "platform_ops仅看运行摘要", "现有environment.read及dev/test/prod owner关系", "PRD-101/108/146", "环境、Key、路由、预算均绑定本Workspace；普通viewer不见写入口"),
+    ("配置", "providers", "Provider 与 KeyPool", "企业保留", "BYOK与上游接入", "owner/admin/developer按权限", "platform_support默认无；仅目录角色看非Secret元数据", "现有provider.read及Provider/KeyPool；Secret继续独立托管", "PRD-100/119/123/146", "Key不进入日志、平台支持或验收证据；默认官方上游边界不变"),
+    ("配置", "local-models", "本地模型", "企业保留并归组", "本地OpenAI-compatible Endpoint", "owner/admin/developer按权限", "platform_ops只看脱敏Deployment健康", "现有local_endpoint.read、local_endpoints模块", "PRD-119/120/123/146", "Endpoint和本地Secret属于Workspace/Deployment；平台不得任意读取"),
+    ("配置", "adapter-specs", "Adapter 规范", "迁出普通企业UI", "平台Provider工程台；企业Provider详情仅兼容摘要", "developer只读兼容摘要", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-specs；POST /internal/adapter-specs/{tenant_id}/activate；provider_adapter_catalog_activations", "PRD-143/147", "企业无独立规范导航，不暴露内部schema、构建信息或发布权限"),
+    ("配置", "adapter-contract-runs", "CI 测试报告", "迁出企业", "平台Provider工程台", "无", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-contract-runs及/{id}；POST /internal/tenants/{tenant_id}/adapter-contract-runs；runs/cases/outbox", "PRD-143/147", "Runner、case详情和构建路径不进入企业DTO；企业兼容结论改在Provider详情提供；旧run/outbox水位保真"),
+    ("配置", "provider-health", "Provider 状态", "平台/企业拆分", "本企业Provider健康；平台全局Provider/Cell健康", "owner/admin/developer/security_admin/viewer按授权", "platform_ops/platform_security/platform_support只读脱敏", "GET /provider-health、POST /providers/{id}/probe；真实调用与探测事实", "PRD-109/112/119/143/145", "企业只见自身Endpoint/调用；平台聚合不得泄漏业务正文或Secret"),
+    ("配置", "error-maps", "错误码管理", "平台/企业拆分并降级", "平台内置目录；企业受限覆盖", "owner/admin/developer高级入口", "platform_provider_engineer/platform_security/release_manager", "GET/POST/PATCH /error-maps；builtin catalog、maps、versions、heads、events、facts", "PRD-143/147", "企业不能改内置规则；覆盖只作用本Workspace且每个失败请求可解释追踪"),
+    ("配置", "models", "模型目录", "企业保留", "企业可用模型", "owner/admin/developer；viewer按授权只读", "平台Provider目录仅提供发布源", "GET/POST/PATCH /models；模型owner保留tenant_id", "PRD-119/146", "企业选择并治理自身可用模型；平台目录更新不能自动扩权"),
+    ("配置", "model-aliases", "模型别名", "企业保留", "稳定业务模型别名", "owner/admin/developer按权限", "无", "现有routing.read、model_aliases模块", "PRD-101/108/146", "别名、环境和路由均绑定Workspace，切换可回滚"),
+    ("配置", "routing-policies", "路由策略", "企业保留", "企业模型路由", "owner/admin/developer按权限；auditor只读", "无", "现有routing.read及固定/成本/可用性路由", "PRD-101/108/146", "后端准入与签名快照生效；前端隐藏不构成权限"),
+    ("配置", "model-quality-scores", "模型评分", "企业保留", "企业模型质量与SLO", "owner/admin/developer/viewer按授权", "platform_ops只看平台运行聚合", "现有model_quality.read、真实成功率/延迟与人工先验", "PRD-109/119/146", "企业评分不成为平台客户健康或增长画像；聚合最小化"),
+    ("配置", "experiments", "模型评测", "企业保留", "企业模型评测与A/B", "owner/admin/developer按权限；auditor只读", "无", "现有experiment.read及不可变实验配置/结果", "PRD-101/106/146", "分流、停止、用量和成本都绑定本Workspace并可审计"),
+    ("调用与成本", "projects", "项目与应用", "企业保留", "企业项目与应用", "owner/admin/developer；finance/security按范围只读", "无", "现有project.read；Project/Application为Key、日志、预算归属", "PRD-094/146", "所有对象带tenant_id；职能角色只见授权项目"),
+    ("调用与成本", "virtual-keys", "Virtual Key", "企业保留", "业务调用凭据", "owner/admin/developer按权限", "platform_support与平台运营均不可读Secret", "现有virtual_key.read及Key生命周期", "PRD-100/118/146", "只显示一次的Secret不入日志；撤销、失败、用量和成本可追踪"),
+    ("调用与成本", "usage", "用量与成本", "企业保留；平台另建计量", "企业技术用量与内部成本", "owner/admin/developer/finance_admin/auditor/viewer按字段", "platform_billing只见平台商业计量", "GET /usage/*；Usage与价格快照", "PRD-099/122/144/146", "平台计量与企业业务用量字段分域；成功失败取消重试均可追踪"),
+    ("调用与成本", "finops-ledger", "FinOps 账本", "企业保留；平台账本拆分", "企业内部FinOps", "owner/finance_admin；auditor只读", "platform_billing仅平台商业账", "GET/POST /finops/ledger；不可变分录与价格证据", "PRD-099/104/144/146", "企业内部成本调整与平台收费分录不能互相写入或冒充"),
+    ("调用与成本", "model-prices", "模型价格", "平台/企业拆分", "平台官方建议价；企业BYOK成本价", "owner/finance_admin；developer只读可用价格", "platform_billing/release_manager", "GET/POST /model-prices；历史/当前/未来价格与Usage快照", "PRD-098/119/144/147", "价格来源和版本明确；企业不能发布平台价，平台不能改企业私有成本"),
+    ("调用与成本", "response-cache", "响应缓存", "企业保留并入高级配置", "模型别名/路由详情的缓存策略", "owner/admin/developer/security_admin按权限", "无", "现有response_cache.read及按模型别名的可选能力", "PRD-101/108/117/146", "不占普通一级导航；默认不缓存正文；租户、模型、保留和计费owner一致"),
+    ("调用与成本", "plans", "套餐管理", "平台/企业拆分并改名", "平台套餐目录；企业订阅摘要", "owner/finance_admin只读本Workspace订阅", "platform_owner/platform_billing", "GET/PATCH /plans；plan/trial/quota事实", "PRD-098/144/147", "企业无套餐目录写入；Entitlement后端生效且回滚不扩大权益"),
+    ("调用与成本", "quota-buckets", "额度管理", "企业保留；平台发放拆分", "企业内部额度分配与消费", "owner/admin/finance_admin；developer只读自身", "platform_billing管理Entitlement上限而非企业分配", "GET /quota-buckets；POST /quota-adjustments；四类额度及消费", "PRD-098/099/144/146", "平台权益上限和企业Project/Key额度分别授权、共同失败关闭"),
+    ("调用与成本", "billing-disputes", "账单争议", "平台/企业拆分", "企业争议申请；平台争议裁决", "owner/finance_admin提交和查看自身", "platform_billing裁决；platform_support协作但不裁决", "GET/POST/PATCH /billing-disputes；0073争议/调整状态机", "PRD-104/132/144/147", "申请人不能裁决；金额调整不可变、双审批、统一审计和request_id"),
+    ("调用与成本", "budgets", "预算中心", "企业保留", "企业多级预算", "owner/admin/finance_admin；developer/auditor按范围只读", "无", "GET/POST/PATCH /budgets及/budget-status", "PRD-099/106/146", "tenant/Project/Key预算后端准入；失败、阻断、审批和成本可追踪"),
+    ("调用与成本", "cost-anomalies", "成本异常", "企业保留；平台另建商业异常", "企业BYOK与内部成本异常", "owner/finance_admin/security_admin；auditor只读", "platform_billing只看平台收费异常", "GET/PATCH /cost-anomalies；runs/anomalies/actions/temporary overrides", "PRD-099/106/109/144/146", "企业异常不泄漏到其他客户；平台异常不得获得Prompt/Response"),
+    ("安全与治理", "policies", "策略管理", "企业保留", "企业治理策略", "owner/admin/security_admin；developer/auditor只读授权范围", "无", "现有policy.read及受限DSL", "PRD-108/117/146", "策略owner、版本、发布和回滚可审计；失效按安全类别失败关闭"),
+    ("安全与治理", "policy-simulator", "策略模拟器", "企业保留并归高级工具", "企业策略预演", "owner/admin/security_admin/developer按权限", "无", "现有policy.simulate；不调用真实Provider", "PRD-108/146", "预演不能改变生产事实；输入正文不进入日志或验收证据"),
+    ("安全与治理", "policy-snapshots", "策略发布", "企业保留", "企业策略版本与回滚", "owner/admin/security_admin；auditor只读", "无", "现有policy.read及不可变快照", "PRD-108/121/146", "签名、generation、LKG和动态撤权合同生效"),
+    ("安全与治理", "policy-templates", "策略模板库", "平台/企业拆分", "平台模板目录；企业应用与覆盖", "owner/admin/security_admin应用；auditor只读", "platform_security/platform_compliance/release_manager发布", "GET /policy-templates；POST /policy-templates/{policy_template_id}/apply；内置模板、适配和绑定事实", "PRD-117/119/143/146", "企业不能篡改内置模板；套用产生tenant-scoped版本并可回滚"),
+    ("安全与治理", "dlp-rules", "DLP 规则", "企业保留", "企业DLP", "owner/admin/security_admin；auditor只读", "无", "现有dlp.read及log_only/block规则", "PRD-108/117/146", "Provider前失败关闭；命中证据不保存Prompt/Response正文"),
+    ("安全与治理", "intent-security", "敏感意图分类", "企业保留并降级", "安全管理员测试工具", "security_admin；owner/admin按权限", "无", "现有intent_risk.classify；本地轻量规则", "PRD-110/146", "不作为普通导航；结果不含原文/命中片段；限流与审计"),
+    ("安全与治理", "session-risks", "高危会话", "企业保留", "企业会话风险处置", "owner/admin/security_admin；auditor只读", "platform_support仅经SupportGrant看固定摘要", "现有session_risk.read及冻结/审批记录", "PRD-116/137/146", "处置绑定Workspace并动态撤权；平台默认看不到会话正文"),
+    ("安全与治理", "output-safety", "输出安全事件", "企业保留", "企业输出安全", "owner/admin/security_admin；auditor只读", "platform_security只看脱敏聚合", "现有request_log.read的阻断/扫描事实", "PRD-108/109/117/146", "正文默认不持久化；事件含owner、code、request_id而非输出明文"),
+    ("安全与治理", "webhooks", "Webhook 设置", "企业保留", "企业治理事件订阅", "owner/admin/security_admin", "无", "现有webhook.manage、Endpoint与签名Secret", "PRD-105/133/146", "签名Secret只显示一次；SSRF、重放、出站ACL和审计通过"),
+    ("安全与治理", "webhook-dead-letters", "Webhook 死信", "企业保留并降级", "企业高级运维入口", "owner/admin/security_admin", "无", "现有webhook.manage、持久死信与安全重放", "PRD-106/146", "不默认出现在普通导航；重放幂等、限次且不能修改冻结payload"),
+    ("安全与治理", "audit-logs", "审计日志", "企业保留；平台审计拆分", "企业不可变审计", "owner/admin/security_admin/legal_admin/auditor", "各platform_*只见自身平台审计；支持受Grant限制", "现有audit.read及不可变audit_logs", "PRD-095/117/135/145/146", "平台和企业审计域分离；Key/Token/Prompt/Response不入证据"),
+    ("调用与成本", "request-logs", "调用日志", "企业保留", "企业调用可观测性", "owner/admin/developer/security_admin/auditor/viewer按字段", "platform_support仅JIT白名单摘要", "现有request_log.read及分页/trace", "PRD-109/117/146", "只加载当前页；正文/Secret不记录；失败与用量成本可关联"),
+    ("调用与成本", "request-explanations", "请求解释", "企业保留并入日志详情", "调用日志详情的路由/策略/成本解释", "owner/admin/developer/security_admin/finance_admin/auditor按字段", "platform_support仅JIT白名单摘要", "现有request_explanation.read", "PRD-108/109/146", "不占普通一级导航；解释字段按职能裁剪；不能通过解释恢复Prompt/Response或Key"),
+    ("调用与成本", "feedback-summary", "反馈报表", "企业保留", "企业模型反馈与质量", "owner/admin/developer/viewer按权限", "platform_customer_success只读脱敏采用摘要，不读反馈正文", "现有feedback.use及聚合报表", "PRD-109/140/146", "企业反馈不成为平台个体画像；跨域只传最小聚合"),
+    ("开发者", "quickstart", "快速开始", "企业保留并任务化", "角色化初始化向导", "owner/admin/developer", "platform_support只协助脱敏状态", "现有developer_portal.read；静态步骤改为真实后端完成事实", "PRD-097/146", "步骤可点击、可查看证据、失败可恢复，不以假数据标记已完成"),
+    ("开发者", "sdk-examples", "SDK 示例", "企业保留并入开发者中心", "开发者中心的SDK示例", "developer；owner/admin按需", "无", "现有developer_portal.read及示例", "PRD-133/146", "不占普通一级导航；示例使用占位值，不含真实Key；与N/N-1合同一致"),
+    ("开发者", "migration-guide", "迁移指南", "企业保留并入开发者中心", "开发者中心的迁移兼容指南", "owner/admin/developer", "platform_support可见公开内容", "现有developer_portal.read；迁移平台兼容说明", "PRD-131/133/146", "不占普通一级导航；OpenRouter/硅基流动仅作为迁移兼容对象，不列为默认上游"),
+    ("开发者", "api-docs", "API 文档", "企业保留并入开发者中心", "开发者中心的API文档", "developer；owner/admin按需", "platform_support只见公开合同", "现有console.basic.read；API合同与SDK版本", "PRD-133/146", "不占普通一级导航；文档示例无Secret；错误码/request_id、版本和废弃期明确"),
+    ("帮助中心", "competitor-comparison", "竞品对比", "迁出产品控制台", "平台市场/销售内容或外部文档", "无", "platform_growth/platform_channel只管理已审核内容", "当前主要为console-web静态render，无租户业务API", "PRD-141/146/147", "企业登录后产品UI不展示销售对比；迁移兼容说明仍可在迁移指南出现"),
+    ("开发者", "enterprise-chat", "企业 Chat", "企业保留", "企业AI应用", "获授权业务用户；配置由owner/admin/developer", "无", "现有chat.use及企业会话owner", "PRD-116/117/146", "会话和正文按租户策略处理；不同职能页面与动作不同"),
+    ("开发者", "prompt-templates", "Prompt 模板", "企业保留", "企业Prompt资产", "owner/admin/developer及获授权用户", "platform_support无正文", "现有prompt_template.read及企业模板库", "PRD-117/146", "Prompt不得进入日志或验收证据；版本/权限/审计绑定tenant"),
+    ("开发者", "files", "文件处理", "企业保留", "企业文件调用工具", "owner/admin/developer及获授权用户", "platform_support无正文", "现有file.read、提取与处理任务", "PRD-117/122/146", "文件正文、对象路径和提取文本受驻留/保留/DLP约束"),
+    ("安全与治理", "file-security", "文件安全报告", "企业保留并入详情", "文件详情与安全中心", "owner/admin/security_admin/developer/auditor按字段", "platform_security只看脱敏聚合", "现有file.read、0066 outbox恢复事实", "PRD-117/122/137/146", "不占普通一级导航；不重复实现PRD-073；报告不含正文，outbox水位可恢复"),
+    ("开发者", "batch-jobs", "批处理任务", "企业保留", "企业异步批处理", "owner/admin/developer；finance/auditor只读归属摘要", "platform_ops只看平台队列健康", "现有batch.read、0067 Scheduler/Worker", "PRD-106/113/146", "job/lease/副作用均带tenant owner；企业看不到其他租户或平台队列内部"),
+    ("开发者", "mcp-tools", "MCP 工具", "企业保留并入开发者中心", "开发者中心的MCP治理", "owner/admin/developer/security_admin按权限", "无", "现有mcp.read及注册/权限/网络ACL", "PRD-110/117/118/146", "不占普通一级导航；工具scope、出站网络和机器身份最小授权；Secret不入日志"),
+    ("租户治理", "tenant-data-lifecycle", "数据管理", "企业保留并改名", "Workspace数据与隐私", "owner/legal_admin/security_admin/auditor按动作", "platform_privacy只处理全局账号请求和最小队列", "现有tenant_data.read、导出/删除/注销状态", "PRD-117/134/146", "复核tenant_data_states；导出/删除不允许平台支持绕过客户授权"),
+    ("开发者", "debug-console", "OpenAI 调试台", "企业保留并降级", "开发者高级工具", "developer；owner/admin按权限", "无", "现有debug_console.use；真实Gateway调用", "PRD-110/133/146", "默认不向非开发角色展示；Key/Prompt/Response不进入日志或验收证据"),
+    ("系统", "system-status", "系统状态", "平台/企业拆分", "Workspace服务状态；平台SRE状态", "owner/admin/developer/viewer按授权", "platform_ops/platform_support/platform_owner", "现有console.basic.read/provider status；平台另建Cell/Fleet/依赖状态", "PRD-109/112/145", "企业只见与自身相关的可操作状态；平台状态不暴露客户业务数据"),
+    ("系统", "language-settings", "语言设置", "迁到全局账号壳层", "GlobalAccount偏好", "所有交互式账号本人", "所有平台交互式账号本人", "现有user_preferences；不再作为tenant业务页面", "PRD-091/105/145", "语言不携带tenant角色、不改变权限；跨Workspace一致且可回退"),
+    ("系统", "config-summary", "环境信息", "平台/企业拆分并降级", "Deployment诊断；平台运行配置摘要", "owner/admin/developer高级入口；auditor只读脱敏", "platform_ops/platform_security；support需Grant", "GET /internal/config/summary；当前system.config.read", "PRD-109/120/125/145/147", "普通用户不见环境变量、路径、内部token或研发配置；平台和企业DTO白名单分离"),
 )
 
 
@@ -1145,15 +1372,16 @@ def add_readme_sheet(wb: Workbook) -> None:
     ws.title = "00_变更说明"
     ws.sheet_view.showGridLines = False
     rows = (
-        ("MetaHub SaaS 增量开发计划", f"PRD-{FIRST_PRD:03d} 起（当前详细基线至 PRD-{CURRENT_LAST_PRD:03d}，可继续追加）"),
+        ("MetaHub SaaS 增量开发计划", f"PRD-{FIRST_PRD:03d} 起（当前已细化至 PRD-{CURRENT_PLANNED_LAST_PRD:03d}，后续开放追加）"),
         ("计划日期", PLAN_DATE),
         ("权威状态", "本工作簿是PRD-090起唯一开发依据；旧总清单PRD-090..108全部废弃、禁止开发，仅保留历史审计。"),
-        ("编号策略", "保留PRD-001..089完成事实；从PRD-090重新规划，不设永久总数上限；当前基线49条、至PRD-138，后续只能追加新版本并记录变更。"),
-        ("总体状态", "saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090未启动。"),
+        ("编号策略", f"保留PRD-001..089完成事实；从PRD-090重新规划，不设需求总数或最终编号上限；当前已细化{len(PRDS)}条、至PRD-{CURRENT_PLANNED_LAST_PRD:03d}，后续按连续编号追加并记录变更。"),
+        ("总体状态", f"saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090已完成，下一项{NEXT_PLANNED_PRD}。"),
         ("产品目标", "云端SaaS支持个人和企业自助注册；平台团队统一运营；企业可部署本地Gateway并由SaaS云管。"),
         ("标准模式", "个人SaaS、企业SaaS、云管私有Gateway；完全离线仅支持签名包异步管理，不承诺云端实时管理。"),
         ("身份原则", "全局账号不绑定单租户；Workspace承载个人/企业；Membership恢复租户角色；登录不填写租户标识。"),
         ("权限原则", "平台角色与租户角色完全分域；平台支持默认看不到Provider Key、Token、Prompt、Response或客户正文。"),
+        ("页面原则", "平台员工由平台IAM分配角色；企业owner/admin添加职能用户；导航由后端按角色/权限计算，直达URL和API仍逐请求鉴权；渠道、客户、增长、平台品牌、Provider工程、套餐目录、商业账务裁决和平台SRE不进入企业Workspace。"),
         ("数据原则", "所有业务数据继续携带tenant_id/workspace_id；后端授权权威；统一错误码和request_id；用量、成本和失败可追踪。"),
         ("云边原则", "本地Gateway仅出站mTLS；云端下发签名期望状态；本地使用LKG；Provider Key默认只保存在本地。"),
         ("默认上游", "智谱、通义、月之暗面、文心、火山、混元、DeepSeek官方/云服务及客户本地OpenAI-compatible Endpoint。"),
@@ -1227,7 +1455,10 @@ def add_objects_sheet(wb: Workbook) -> None:
         "FlagVersion", "ProviderCatalogEntry", "ProviderCapability", "RegionalEndpointTemplate", "ApiVersion",
         "ApiContractSnapshot", "SdkRelease", "DeprecationNotice", "WebhookSchemaVersion", "ComplianceControl",
         "ControlMapping", "SbomReport", "ArtifactSignature", "BuildProvenance", "VulnerabilityFinding", "LaunchGate",
-        "LaunchWave", "GoNoGoDecision",
+        "LaunchWave", "GoNoGoDecision", "PlatformBrand", "ChannelBrand", "VerifiedDomain", "BrandMigrationCursor",
+        "ProviderAdapterRelease", "AdapterContractRunProjection", "BuiltinErrorCatalog", "ProviderCompatibilityProjection",
+        "PlatformPlanCatalog", "PlatformInvoice", "BillingDomainReconciliation", "PlatformDashboardProjection",
+        "AccountPreference", "GaGate", "GaEvidence", "GaDecision", "GaLaunch", "GaRollback", "PostGaReview",
     }
     for item in PRDS:
         for name in item["objects"]:
@@ -1265,6 +1496,31 @@ def add_permissions_sheet(wb: Workbook) -> None:
     ws.row_dimensions[1].height = 42
     ws.freeze_panes = "A3"
     ws.auto_filter.ref = f"A2:I{ws.max_row}"
+
+
+def add_role_pages_sheet(wb: Workbook) -> None:
+    ws = wb.create_sheet("10_角色页面矩阵")
+    ws.append(("角色", "角色域", "允许导航/页面", "关键动作", "明确禁止", "分配主体"))
+    for row in ROLE_PAGE_ROWS:
+        ws.append(row)
+    style_table(ws, {1: 24, 2: 12, 3: 68, 4: 55, 5: 58, 6: 48})
+    for row in ws.iter_rows(min_row=2):
+        row[0].font = Font(bold=True, color="16324F")
+        ws.row_dimensions[row[0].row].height = 92
+
+
+def add_navigation_disposition_sheet(wb: Workbook) -> None:
+    ws = wb.create_sheet("11_现有导航处置")
+    ws.append((
+        "现有分组", "navigation_id", "现有页面", "处置", "目标产品域/入口", "企业可见角色",
+        "平台可见角色", "现有API/数据/Scheduler证据", "承接PRD", "切换验收边界",
+    ))
+    for row in NAVIGATION_DISPOSITION_ROWS:
+        ws.append(row)
+    style_table(ws, {1: 16, 2: 24, 3: 25, 4: 22, 5: 38, 6: 50, 7: 50, 8: 70, 9: 28, 10: 72})
+    for row in ws.iter_rows(min_row=2):
+        row[1].font = Font(bold=True, color="16324F")
+        ws.row_dimensions[row[0].row].height = 108
 
 
 def add_test_sheet(wb: Workbook) -> None:
@@ -1322,26 +1578,30 @@ def add_risk_sheet(wb: Workbook) -> None:
 
 
 def verify_workbook(path: Path) -> None:
-    expected_ids = [f"PRD-{number:03d}" for number in range(FIRST_PRD, CURRENT_LAST_PRD + 1)]
+    expected_ids = [f"PRD-{number:03d}" for number in range(FIRST_PRD, FIRST_PRD + len(PRDS))]
     assert [item["id"] for item in PRDS] == expected_ids
     assert len({item["title"] for item in PRDS}) == len(PRDS)
     for item in PRDS:
         current = int(item["id"].removeprefix("PRD-"))
-        dependencies = [int(value) for value in re.findall(r"PRD-(\d{3})", item["dependencies"])]
+        dependencies = [int(value) for value in re.findall(r"(?<!\d)(\d{3})(?!\d)", item["dependencies"])]
         assert all(dependency < current for dependency in dependencies)
 
     workbook = load_workbook(path, read_only=True, data_only=False)
     expected = {
         "00_变更说明", "01_PRD总表", "02_阶段路线图", "03_核心数据对象", "04_API与事件",
         "05_角色权限矩阵", "06_测试与验收计划", "07_旧计划废弃映射", "08_里程碑门禁",
-        "09_风险与决策",
+        "09_风险与决策", "10_角色页面矩阵", "11_现有导航处置",
     }
     assert set(workbook.sheetnames) == expected
     rows = list(workbook["01_PRD总表"].iter_rows(min_row=2, values_only=True))
-    assert len(rows) == CURRENT_LAST_PRD - FIRST_PRD + 1
-    assert rows[0][0] == f"PRD-{FIRST_PRD:03d}" and rows[-1][0] == f"PRD-{CURRENT_LAST_PRD:03d}"
+    assert len(rows) == len(PRDS)
+    assert rows[0][0] == f"PRD-{FIRST_PRD:03d}"
+    assert rows[-1][0] == f"PRD-{CURRENT_PLANNED_LAST_PRD:03d}"
     assert [row[0] for row in rows] == expected_ids
-    assert all(row[1] == "未启动" for row in rows)
+    assert [row[1] for row in rows] == [item["status"] for item in PRDS]
+    navigation_rows = list(workbook["11_现有导航处置"].iter_rows(min_row=2, values_only=True))
+    assert len(navigation_rows) == 63
+    assert len({row[1] for row in navigation_rows}) == 63
     legacy = list(workbook["07_旧计划废弃映射"].iter_rows(min_row=2, values_only=True))
     assert len(legacy) == 19 and all(row[2] == "已废弃-禁止开发" for row in legacy)
     assert "all_108_prds_complete=false" in workbook["00_变更说明"]["B5"].value
@@ -1360,10 +1620,15 @@ def main() -> None:
     add_legacy_sheet(workbook)
     add_gate_sheet(workbook)
     add_risk_sheet(workbook)
+    add_role_pages_sheet(workbook)
+    add_navigation_disposition_sheet(workbook)
     workbook.properties.title = f"MetaHub SaaS增量开发计划 PRD-{FIRST_PRD:03d}起"
     workbook.properties.subject = "废弃旧PRD-090..108，建设可扩展SaaS总控与云管私有Gateway"
     workbook.properties.creator = "MetaHub"
-    workbook.properties.description = f"旧PRD-090..108已废弃；本工作簿为PRD-090起唯一开发依据，当前基线至PRD-{CURRENT_LAST_PRD:03d}。"
+    workbook.properties.description = (
+        "旧PRD-090..108已废弃；本工作簿为PRD-090起唯一开发依据；"
+        f"当前已细化至PRD-{CURRENT_PLANNED_LAST_PRD:03d}，后续编号开放追加。"
+    )
     workbook.save(OUTPUT)
     verify_workbook(OUTPUT)
     print(f"generated={OUTPUT.name}")
