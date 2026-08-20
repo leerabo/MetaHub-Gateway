@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from metahub_shared.db import (
 )
 from metahub_shared.db.errors import DbError
 
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 SELF_SERVICE_TABLES = {
     "registration_intents",
     "password_reset_intents",
@@ -53,9 +55,23 @@ def _healthy(connection) -> None:
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_0084_fresh_up_pristine_down_and_reapply(tmp_path: Path) -> None:
+@pytest.fixture(scope="module")
+def migrations_0084(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("prd092-migrations-0084")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 84:
+            shutil.copy2(source, migrations / source.name)
+    return migrations
+
+
+def test_0084_fresh_up_pristine_down_and_reapply(
+    tmp_path: Path,
+    migrations_0084: Path,
+) -> None:
     database_url = _url(tmp_path / "fresh-0084.sqlite3")
-    applied = apply_migrations(database_url)
+    applied = apply_migrations(database_url, migrations_dir=migrations_0084)
     assert applied.applied == [f"{version:04d}" for version in range(1, 85)]
 
     connection = connect_database(database_url)
@@ -80,9 +96,13 @@ def test_0084_fresh_up_pristine_down_and_reapply(tmp_path: Path) -> None:
     finally:
         connection.close()
 
-    repeated = apply_migrations(database_url)
+    repeated = apply_migrations(database_url, migrations_dir=migrations_0084)
     assert repeated.applied == [] and repeated.skipped[-1] == "0084"
-    rolled_back = rollback_last_migration(database_url, expected_version="0084")
+    rolled_back = rollback_last_migration(
+        database_url,
+        expected_version="0084",
+        migrations_dir=migrations_0084,
+    )
     assert rolled_back.rolled_back == "0084"
 
     connection = connect_database(database_url)
@@ -95,7 +115,7 @@ def test_0084_fresh_up_pristine_down_and_reapply(tmp_path: Path) -> None:
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0084"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0084).applied == ["0084"]
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0084"
@@ -105,9 +125,12 @@ def test_0084_fresh_up_pristine_down_and_reapply(tmp_path: Path) -> None:
         connection.close()
 
 
-def test_0084_irreversible_identity_fact_blocks_down_atomically(tmp_path: Path) -> None:
+def test_0084_irreversible_identity_fact_blocks_down_atomically(
+    tmp_path: Path,
+    migrations_0084: Path,
+) -> None:
     database_url = _url(tmp_path / "guard-0084.sqlite3")
-    apply_migrations(database_url)
+    apply_migrations(database_url, migrations_dir=migrations_0084)
     connection = connect_database(database_url)
     try:
         connection.execute(
@@ -126,7 +149,11 @@ def test_0084_irreversible_identity_fact_blocks_down_atomically(tmp_path: Path) 
         connection.close()
 
     with pytest.raises(DbError):
-        rollback_last_migration(database_url, expected_version="0084")
+        rollback_last_migration(
+            database_url,
+            expected_version="0084",
+            migrations_dir=migrations_0084,
+        )
 
     connection = connect_database(database_url)
     try:

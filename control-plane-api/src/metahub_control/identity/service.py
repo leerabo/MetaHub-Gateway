@@ -389,6 +389,23 @@ def valid_opaque_value(value: str) -> bool:
     return bool(_OPAQUE_RE.fullmatch(value))
 
 
+def authenticate_global_session_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str | None = None,
+    touch: bool = False,
+) -> tuple[AuthenticatedIdentity, datetime]:
+    """Authenticate a GlobalSession against the caller's existing transaction."""
+
+    now = _utcnow()
+    identity = _authenticate(connection, config, session_token, now, touch=touch)
+    if csrf_token is not None:
+        _verify_csrf(connection, config, identity.session_id, csrf_token)
+    return identity, now
+
+
 def issue_global_session_in_transaction(
     connection: sqlite3.Connection,
     config: AppConfig,
@@ -515,21 +532,23 @@ def _replace_credential_hash(
         (account_id,),
     ).fetchall()
     if links:
-        for link in links:
-            updated = connection.execute(
-                """
-                UPDATE users SET password_hash=?,updated_at=?
-                WHERE tenant_id=? AND user_id=?
-                """,
-                (
-                    new_hash,
-                    _db_time(now),
-                    link["legacy_tenant_id"],
-                    link["legacy_user_id"],
-                ),
-            ).rowcount
-            if updated != 1:
-                raise sqlite3.IntegrityError("identity_legacy_projection_missing")
+        # 0085's trigger updates the global credential once and fans the hash out to every
+        # linked legacy User while recursive triggers are disabled at the connection boundary.
+        link = links[0]
+        updated = connection.execute(
+            """
+            UPDATE users SET password_hash=?,updated_at=?
+            WHERE tenant_id=? AND user_id=?
+            """,
+            (
+                new_hash,
+                _db_time(now),
+                link["legacy_tenant_id"],
+                link["legacy_user_id"],
+            ),
+        ).rowcount
+        if updated != 1:
+            raise sqlite3.IntegrityError("identity_legacy_projection_missing")
         return
     connection.execute(
         """

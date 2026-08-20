@@ -56,6 +56,7 @@ class _IdleConnectionPool:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only=OFF")
             connection.execute("PRAGMA read_uncommitted=OFF")
+            connection.execute("PRAGMA recursive_triggers=OFF")
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
             connection.execute("SELECT 1").fetchone()
@@ -295,6 +296,9 @@ def _open_sqlite_connection(
         deterministic=True,
     )
     connection.execute("PRAGMA foreign_keys = ON")
+    # Multi-workspace credential projection intentionally fans out from one User trigger.
+    # Recursive trigger execution would re-enter the global credential revision transition.
+    connection.execute("PRAGMA recursive_triggers = OFF")
     connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
     return connection
 

@@ -96,6 +96,7 @@ from .users.routes import router as users_router
 from .virtual_keys.routes import router as virtual_keys_router
 from .webhooks import install_webhook_replay_scheduler
 from .webhooks.routes import router as webhooks_router
+from .workspaces.routes import router as workspaces_router
 
 # 控制面承载低频管理 API，不直接处理模型调用热路径。PRD-001 只暴露健康和版本接口，
 # 租户、用户、Provider、模型目录等管理能力由后续 PRD 注册。
@@ -170,6 +171,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(identity_router)
+app.include_router(workspaces_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)

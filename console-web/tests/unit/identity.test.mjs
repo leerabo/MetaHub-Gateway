@@ -24,10 +24,16 @@ import {
   rotateIdentityPassword,
   verifyIdentityRegistration,
 } from "../../src/lib/identity.js";
+import {
+  createAccountWorkspace,
+  getAccountWorkspace,
+  listAccountWorkspaces,
+} from "../../src/lib/workspaces.js";
 
 const CONTROL_URL = "http://control.local";
 const SESSION_ONE = "gis_11111111111111111111111111111111";
 const SESSION_TWO = "gis_22222222222222222222222222222222";
+const WORKSPACE_ONE = "wsp_11111111111111111111111111111111";
 
 test("identity login sends only email and password with credential cookies", async () => {
   const calls = installFetch(() => accountSessionResponse());
@@ -71,6 +77,64 @@ test("identity reads include credentials and never send CSRF or Authorization", 
   for (const call of calls) {
     assert.equal("Authorization" in call.options.headers, false);
     assert.equal("X-CSRF-Token" in call.options.headers, false);
+  }
+});
+
+test("workspace client sends exact cookie, CSRF, and idempotency contracts", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "__Host-metahub-global-csrf=workspace%2Dcsrf" };
+  const calls = installFetch((_url, options) =>
+    options.method === "POST"
+      ? jsonResponse(workspaceDetailPayload(), { status: 201 })
+      : jsonResponse(workspaceListPayload()),
+  );
+  try {
+    await listAccountWorkspaces({ controlApiUrl: CONTROL_URL });
+    await createAccountWorkspace({
+      controlApiUrl: CONTROL_URL,
+      kind: "organization",
+      name: "Acme AI",
+      slug: "acme-ai",
+      region: "cn-north-1",
+      serviceMode: "internal_only",
+      idempotencyKey: "workspace-request-0001",
+    });
+    await createAccountWorkspace({
+      controlApiUrl: CONTROL_URL,
+      kind: "personal",
+      region: "cn-east-1",
+      serviceMode: "public_service",
+      idempotencyKey: "workspace-request-0002",
+    });
+  } finally {
+    globalThis.document = originalDocument;
+  }
+
+  assert.deepEqual(
+    calls.map(({ url, options }) => [url, options.method, options.credentials, options.cache]),
+    [
+      ["http://control.local/workspaces", "GET", "include", "no-store"],
+      ["http://control.local/workspaces", "POST", "include", "no-store"],
+      ["http://control.local/workspaces", "POST", "include", "no-store"],
+    ],
+  );
+  assert.equal("X-CSRF-Token" in calls[0].options.headers, false);
+  assert.equal(calls[1].options.headers["X-CSRF-Token"], "workspace-csrf");
+  assert.equal(calls[1].options.headers["Idempotency-Key"], "workspace-request-0001");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    kind: "organization",
+    region: "cn-north-1",
+    service_mode: "internal_only",
+    name: "Acme AI",
+    slug: "acme-ai",
+  });
+  assert.deepEqual(JSON.parse(calls[2].options.body), {
+    kind: "personal",
+    region: "cn-east-1",
+    service_mode: "public_service",
+  });
+  for (const call of calls) {
+    assert.equal("Authorization" in call.options.headers, false);
   }
 });
 
@@ -303,7 +367,46 @@ test("strict DTO validation rejects authorization and internal fields", async ()
   }
 });
 
-test("identity client never reads browser storage", async () => {
+test("workspace request validation fails locally and response DTOs reject internal fields", async () => {
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return jsonResponse(workspaceDetailPayload());
+  };
+  await assert.rejects(
+    () =>
+      createAccountWorkspace({
+        controlApiUrl: CONTROL_URL,
+        kind: "tenant_admin",
+        region: "cn-north-1",
+        serviceMode: "internal_only",
+        idempotencyKey: "workspace-request-0003",
+      }),
+    (error) => error instanceof IdentityApiError && error.code === "workspace.request_invalid",
+  );
+  assert.equal(fetchCount, 0);
+
+  for (const mutate of [
+    (payload) => Object.assign(payload, { tenant_id: "tenant_private" }),
+    (payload) => Object.assign(payload.workspace, { account_id: "gac_private" }),
+    (payload) => Object.assign(payload.workspace.environment, { environment_id: "env_private" }),
+    (payload) => Object.assign(payload.workspace.provisioning, { generation: 7 }),
+  ]) {
+    const payload = workspaceDetailPayload();
+    mutate(payload);
+    installFetch(() => jsonResponse(payload));
+    await assert.rejects(
+      () =>
+        getAccountWorkspace({
+          controlApiUrl: CONTROL_URL,
+          workspaceId: WORKSPACE_ONE,
+        }),
+      (error) => error instanceof IdentityApiError && error.code === "workspace.response_invalid",
+    );
+  }
+});
+
+test("identity and workspace clients never read browser storage", async () => {
   const localDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const sessionDescriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
   Object.defineProperty(globalThis, "localStorage", {
@@ -318,9 +421,12 @@ test("identity client never reads browser storage", async () => {
       throw new Error("sessionStorage must not be accessed");
     },
   });
-  installFetch(() => accountSessionResponse());
+  installFetch((url) =>
+    String(url).endsWith("/workspaces") ? jsonResponse(workspaceListPayload()) : accountSessionResponse(),
+  );
   try {
     await getIdentityMe({ controlApiUrl: CONTROL_URL });
+    await listAccountWorkspaces({ controlApiUrl: CONTROL_URL });
   } finally {
     restoreProperty("localStorage", localDescriptor);
     restoreProperty("sessionStorage", sessionDescriptor);
@@ -344,7 +450,7 @@ test("login renderer exposes only email and password fields", () => {
   assert.match(root.innerHTML, /autocomplete="current-password"/u);
 });
 
-test("security renderer never places account or session internals in the DOM", () => {
+test("security renderer escapes workspace fields and omits all internal identifiers", () => {
   const root = createRoot();
   renderIdentitySecurityPage(root, {
     account: account({ email: "owner@example.com", display_name: "<Owner>" }),
@@ -353,17 +459,75 @@ test("security renderer never places account or session internals in the DOM", (
       session({ session_id: SESSION_ONE, is_current: true }),
       session({ session_id: SESSION_TWO, is_current: false, device_family: "firefox" }),
     ],
+    workspaces: [
+      workspace({
+        workspace_id: WORKSPACE_ONE,
+        name: "<Unsafe Workspace>",
+        slug: "safe-slug",
+      }),
+    ],
   });
 
-  assert.doesNotMatch(root.innerHTML, new RegExp(`${SESSION_ONE}|${SESSION_TWO}`, "u"));
   assert.doesNotMatch(
     root.innerHTML,
-    /account_id|tenant_id|tenant_slug|workspace|permission|issuer|audience|credential_hash|csrf|token/iu,
+    new RegExp(`${SESSION_ONE}|${SESSION_TWO}|${WORKSPACE_ONE}`, "u"),
   );
-  assert.doesNotMatch(root.innerHTML, /<Owner>/u);
+  assert.doesNotMatch(
+    root.innerHTML,
+    /account_id|tenant_id|tenant_slug|workspace_id|permission|issuer|audience|credential_hash|csrf|token/iu,
+  );
+  assert.doesNotMatch(root.innerHTML, /<Owner>|<Unsafe Workspace>/u);
   assert.match(root.innerHTML, /&lt;Owner&gt;/u);
+  assert.match(root.innerHTML, /&lt;Unsafe Workspace&gt;/u);
   assert.match(root.innerHTML, /data-session-index="0"/u);
   assert.match(root.innerHTML, /data-session-index="1"/u);
+});
+
+test("workspace controller reuses a key only for an identical failed body", async () => {
+  const root = createRoot();
+  const attempts = [];
+  const keys = ["workspace-key-one", "workspace-key-two"];
+  const controller = createIdentityPageController({
+    root,
+    newIdempotencyKey: () => keys.shift(),
+    api: workingApi({
+      createWorkspace: async (input) => {
+        attempts.push(input);
+        if (attempts.length < 3) {
+          throw new IdentityApiError({
+            code: "workspace.network_unavailable",
+            message: "<Retry safely>",
+          });
+        }
+        return workspaceDetailPayload();
+      },
+    }),
+  });
+  await controller.mount();
+  controller.showWorkspaceCreate();
+
+  const firstBody = {
+    kind: "organization",
+    name: "<Draft Company>",
+    slug: "draft-company",
+    region: "cn-north-1",
+    serviceMode: "internal_only",
+  };
+  assert.equal(await controller.createWorkspace(firstBody), false);
+  assert.doesNotMatch(root.innerHTML, /<Draft Company>|workspace-key-one/u);
+  assert.match(root.innerHTML, /&lt;Draft Company&gt;|&lt;Retry safely&gt;/u);
+  assert.equal(await controller.createWorkspace(firstBody), false);
+  assert.equal(
+    await controller.createWorkspace({ ...firstBody, region: "cn-east-1" }),
+    true,
+  );
+
+  assert.deepEqual(
+    attempts.map((attempt) => attempt.idempotencyKey),
+    ["workspace-key-one", "workspace-key-one", "workspace-key-two"],
+  );
+  assert.match(root.innerHTML, /空间已创建/u);
+  assert.doesNotMatch(root.innerHTML, /workspace-key-(?:one|two)|wsp_1111/u);
 });
 
 test("other-session revoke confirms and current-session revoke returns to login", async () => {
@@ -612,6 +776,26 @@ function sessionListPayload(customSessions = null) {
   };
 }
 
+function workspaceDetailPayload(customWorkspace = null) {
+  return {
+    workspace: customWorkspace ?? workspace(),
+    request_id: "req_workspace",
+    trace_id: "trc_workspace",
+  };
+}
+
+function workspaceListPayload(customWorkspaces = null) {
+  const workspaces = customWorkspaces ?? [workspace()];
+  return {
+    workspaces,
+    limit: 20,
+    offset: 0,
+    total: workspaces.length,
+    request_id: "req_workspaces",
+    trace_id: "trc_workspaces",
+  };
+}
+
 function pendingChallengePayload(purpose) {
   return {
     intent_id:
@@ -670,6 +854,23 @@ function session(overrides = {}) {
   };
 }
 
+function workspace(overrides = {}) {
+  return {
+    workspace_id: WORKSPACE_ONE,
+    kind: "organization",
+    status: "active",
+    profile_state: "confirmed",
+    name: "Acme AI",
+    slug: "acme-ai",
+    region: "cn-north-1",
+    service_mode: "internal_only",
+    environment: { code: "dev", status: "active", origin: "system_created" },
+    provisioning: { status: "core_committed" },
+    revision: 1,
+    ...overrides,
+  };
+}
+
 function workingApi(overrides = {}) {
   return {
     login: async () => accountSessionPayload(),
@@ -680,6 +881,8 @@ function workingApi(overrides = {}) {
     confirmReset: async () => accountSessionPayload(),
     me: async () => accountSessionPayload(),
     sessions: async () => sessionListPayload(),
+    workspaces: async () => workspaceListPayload(),
+    createWorkspace: async () => workspaceDetailPayload(),
     revoke: async () => revokePayload(),
     logout: async () => logoutPayload(),
     rotate: async () => rotationPayload(),

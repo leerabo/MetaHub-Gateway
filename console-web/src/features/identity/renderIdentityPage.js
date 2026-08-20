@@ -192,6 +192,7 @@ export function renderIdentitySecurityPage(container, state) {
             </div>
           </dl>
         </section>
+        ${renderWorkspaceSection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
@@ -239,6 +240,108 @@ export function renderIdentitySecurityPage(container, state) {
       </div>
     </div>
   `;
+}
+
+function renderWorkspaceSection(state) {
+  const workspaces = Array.isArray(state.workspaces) ? state.workspaces : [];
+  const creating = state.workspaceView === "create";
+  return `
+    <section class="identity-workspaces" aria-labelledby="identity-workspaces-title">
+      <div class="identity-section-heading">
+        <div>
+          <p>空间</p>
+          <h2 id="identity-workspaces-title">我的空间</h2>
+        </div>
+        ${
+          creating
+            ? ""
+            : '<button class="identity-quiet-command" type="button" data-identity-action="show-workspace-create"><span aria-hidden="true">+</span> 创建空间</button>'
+        }
+      </div>
+      ${creating ? renderWorkspaceCreateForm(state.workspaceDraft) : renderWorkspaceList(workspaces)}
+    </section>
+  `;
+}
+
+function renderWorkspaceList(workspaces) {
+  if (workspaces.length === 0) {
+    return '<p class="identity-empty">尚未创建空间。</p>';
+  }
+  return `<div class="identity-workspace-list">${workspaces
+    .map(
+      (workspace) => `
+        <article class="identity-workspace-row">
+          <div class="identity-workspace-mark" aria-hidden="true">${workspace.kind === "personal" ? "P" : "O"}</div>
+          <div>
+            <strong>${escapeHtml(workspace.name)}</strong>
+            <span>${workspace.kind === "personal" ? "个人空间" : "企业空间"}${workspace.slug ? ` · ${escapeHtml(workspace.slug)}` : ""}</span>
+          </div>
+          <dl>
+            <div><dt>Region</dt><dd>${escapeHtml(workspace.region)}</dd></div>
+            <div><dt>环境</dt><dd>${workspace.environment?.code === "dev" ? "dev" : "不可用"}</dd></div>
+            <div><dt>状态</dt><dd>${workspaceStatusLabel(workspace)}</dd></div>
+          </dl>
+        </article>
+      `,
+    )
+    .join("")}</div>`;
+}
+
+function renderWorkspaceCreateForm(draft = {}) {
+  const kind = draft?.kind === "personal" ? "personal" : "organization";
+  return `
+    <form class="identity-workspace-form" data-workspace-create-form>
+      <input type="hidden" name="kind" value="${kind}" />
+      <div class="identity-workspace-kind" role="group" aria-label="空间类型">
+        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="personal" aria-pressed="${kind === "personal"}">个人</button>
+        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="organization" aria-pressed="${kind === "organization"}">企业</button>
+      </div>
+      ${
+        kind === "organization"
+          ? `
+            <label>
+              <span>企业名称</span>
+              <input name="name" type="text" maxlength="160" autocomplete="organization" value="${escapeAttribute(draft?.name ?? "")}" required autofocus />
+            </label>
+            <label>
+              <span>空间标识</span>
+              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required />
+            </label>
+          `
+          : ""
+      }
+      <label>
+        <span>Region</span>
+        <select name="region" required>
+          ${renderOption("cn-north-1", "华北", draft?.region)}
+          ${renderOption("cn-east-1", "华东", draft?.region)}
+        </select>
+      </label>
+      <label>
+        <span>服务模式</span>
+        <select name="serviceMode" required>
+          ${renderOption("internal_only", "内部服务", draft?.serviceMode)}
+          ${renderOption("public_service", "公共服务", draft?.serviceMode)}
+        </select>
+      </label>
+      <div class="identity-workspace-actions">
+        <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create">取消</button>
+        <button class="identity-primary" type="submit">创建</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderOption(value, label, selectedValue) {
+  return `<option value="${value}"${selectedValue === value ? " selected" : ""}>${label}</option>`;
+}
+
+function workspaceStatusLabel(workspace) {
+  if (workspace.status === "migration_conflict" || workspace.provisioning?.status === "failed") {
+    return "需要处理";
+  }
+  if (workspace.profile_state === "draft") return "资料待确认";
+  return "可用";
 }
 
 function renderCurrentSession(session, index) {

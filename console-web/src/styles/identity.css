@@ -25,7 +25,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   letter-spacing: 0;
 }
@@ -292,6 +293,7 @@ a {
 }
 
 .identity-summary,
+.identity-workspaces,
 .identity-sessions,
 .identity-password {
   border-top: 1px solid var(--identity-line);
@@ -418,6 +420,143 @@ a {
   padding: 18px 4px;
 }
 
+.identity-workspace-list {
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-workspace-row {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(300px, 0.8fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 4px;
+}
+
+.identity-workspace-row + .identity-workspace-row {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-workspace-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #9babb8;
+  border-radius: 6px;
+  background: var(--identity-soft);
+  color: #3f5262;
+  font-weight: 800;
+}
+
+.identity-workspace-row > div:nth-child(2) {
+  min-width: 0;
+}
+
+.identity-workspace-row strong,
+.identity-workspace-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-workspace-row span {
+  margin-top: 4px;
+  color: var(--identity-muted);
+  font-size: 0.84rem;
+}
+
+.identity-workspace-row dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.identity-workspace-row dt {
+  color: var(--identity-muted);
+  font-size: 0.74rem;
+}
+
+.identity-workspace-row dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.identity-workspace-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  border-block: 1px solid var(--identity-line);
+  background: var(--identity-soft);
+  padding: 18px;
+}
+
+.identity-workspace-form label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #3e4955;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.identity-workspace-form input,
+.identity-workspace-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 8px 10px;
+}
+
+.identity-workspace-kind {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(320px, 100%);
+  border: 1px solid #aebac5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.identity-workspace-kind button {
+  min-height: 38px;
+  border: 0;
+  background: #fff;
+  color: var(--identity-text);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.identity-workspace-kind button + button {
+  border-left: 1px solid #aebac5;
+}
+
+.identity-workspace-kind button[aria-pressed="true"] {
+  background: var(--identity-accent);
+  color: #fff;
+}
+
+.identity-workspace-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.identity-workspace-form input:focus-visible,
+.identity-workspace-form select:focus-visible,
+.identity-workspace-form button:focus-visible,
+.identity-workspaces > .identity-section-heading button:focus-visible {
+  outline: 3px solid rgba(8, 120, 111, 0.25);
+  outline-offset: 2px;
+}
+
 .identity-password-form {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -440,6 +579,14 @@ a {
 
   .identity-password-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-workspace-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .identity-workspace-row dl {
+    grid-column: 1 / -1;
   }
 
   .identity-password-actions {
@@ -474,5 +621,19 @@ a {
 
   .identity-password-actions button {
     width: 100%;
+  }
+
+  .identity-workspace-form {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 12px;
+  }
+
+  .identity-workspace-kind,
+  .identity-workspace-actions {
+    grid-column: auto;
+  }
+
+  .identity-workspace-actions button {
+    flex: 1 1 0;
   }
 }

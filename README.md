@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-092 - 个人与企业用户自助注册验证` 已完成；当前下一条未完成项是 `PRD-093 - 个人空间与企业Workspace创建`。
+- 新 `PRD-090` 至 `PRD-093 - 个人空间与企业Workspace创建` 已完成；当前下一条未完成项是 `PRD-094 - 成员关系、空间切换与邀请升级`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -428,8 +428,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
   该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；新路线图的
-  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-092 - 个人与企业用户自助注册验证` 已完成；当前
-  权威未完成项为 `PRD-093 - 个人空间与企业Workspace创建`，`saas_incremental_roadmap_complete=false`。
+  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-093 - 个人空间与企业Workspace创建` 已完成；当前
+  权威未完成项为 `PRD-094 - 成员关系、空间切换与邀请升级`，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -675,7 +675,7 @@ fresh SQLite verification is `integrity_check=ok` with zero foreign-key violatio
 is exposed only with `tenant_data.read`. See [PRD-089 design](docs/prd/PRD-089-tenant-data-export-deletion.md)
 and [PRD-089 tests](docs/testing/PRD-089-tests.md). The legacy PRD-090..108 plan is retired. The
 new authoritative roadmap starts at `PRD-090 - SaaS总体架构与兼容迁移基线`; PRD-090 through
-PRD-092 are complete, and the next unfinished item is `PRD-093 - 个人空间与企业Workspace创建`.
+PRD-093 are complete, and the next unfinished item is `PRD-094 - 成员关系、空间切换与邀请升级`.
 `saas_incremental_roadmap_complete=false`, and the compatibility flag remains
 `all_108_prds_complete=false`.
 
@@ -732,6 +732,25 @@ platform role. Migration `0084` supports pristine down and atomically blocks rol
 security fact. See [PRD-092 design](docs/prd/PRD-092-self-service-registration-and-verification.md),
 [Global Identity API](docs/api/global-identity.md) and
 [PRD-092 tests](docs/testing/PRD-092-tests.md).
+
+### PRD-093 个人空间与企业Workspace创建（已完成）
+
+PRD-093 adds personal and organization Workspace creation for verified GlobalAccounts. Migration
+`0085` establishes the immutable one-to-one Workspace-Tenant binding, minimal active owner
+Membership, Region/profile/provisioning/environment-origin facts, durable events/outbox and a
+one-shot proof for linking the legacy admin User to the creating account. Existing tenants are
+backfilled deterministically; pristine rollback is supported and any new Workspace fact blocks
+schema down atomically.
+
+`POST/GET/PATCH /workspaces` enforce strict JSON, GlobalSession, Origin/CSRF and CAS boundaries.
+Creation binds a hashed idempotency key to the canonical body and atomically creates Tenant, RBAC,
+legacy User, owner, default dev Environment and Workspace facts without fake Provider, Key, Model,
+Project, Usage or cost data. The Identity page can create and list safe Workspace summaries while
+keeping drafts and idempotency material in memory only. This PRD deliberately does not issue a
+WorkspaceSession or expose general Membership management; those remain in PRD-094. See
+[PRD-093 design](docs/prd/PRD-093-workspace-creation.md),
+[Global Identity API](docs/api/global-identity.md) and
+[PRD-093 tests](docs/testing/PRD-093-tests.md).
 
 ## 目录结构
 

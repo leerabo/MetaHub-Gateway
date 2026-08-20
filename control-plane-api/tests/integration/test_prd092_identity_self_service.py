@@ -21,6 +21,7 @@ from metahub_shared.db.security import hash_token
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 ORIGIN = "http://localhost:5173"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 ADMIN_PASSWORD = "LocalAdmin!2026"
 NEW_ACCOUNT_PASSWORD = "NewAccount!2026"
 RESET_PASSWORD = "ResetAccount!2026"
@@ -31,7 +32,15 @@ INTERMEDIATE_PASSWORD = "Intermediate!2026"
 def migrated_identity_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd092-api-migrated")
     database = root / "identity-0084.sqlite3"
-    result = apply_migrations(f"sqlite:///{database.as_posix()}")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 84:
+            shutil.copy2(source, migrations / source.name)
+    result = apply_migrations(
+        f"sqlite:///{database.as_posix()}",
+        migrations_dir=migrations,
+    )
     assert result.applied[-1] == "0084"
     return database
 

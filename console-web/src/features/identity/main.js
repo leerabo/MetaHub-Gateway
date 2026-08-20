@@ -11,6 +11,7 @@ import {
   rotateIdentityPassword,
   verifyIdentityRegistration,
 } from "../../lib/identity.js";
+import { createAccountWorkspace, listAccountWorkspaces } from "../../lib/workspaces.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -33,6 +34,8 @@ if (root) {
       revoke: (input) => revokeIdentitySession({ controlApiUrl, ...input }),
       logout: (input) => logoutIdentity({ controlApiUrl, ...input }),
       rotate: (input) => rotateIdentityPassword({ controlApiUrl, ...input }),
+      workspaces: (input) => listAccountWorkspaces({ controlApiUrl, ...input }),
+      createWorkspace: (input) => createAccountWorkspace({ controlApiUrl, ...input }),
     },
   });
   controller.mount();

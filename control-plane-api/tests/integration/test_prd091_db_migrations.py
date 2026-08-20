@@ -93,14 +93,24 @@ def _projection(connection: sqlite3.Connection, tenant_id: str, user_id: str) ->
     return row
 
 
-@pytest.fixture(scope="module")
-def empty_0082(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    root = tmp_path_factory.mktemp("prd091-empty-0082")
+def _copy_migrations_through(root: Path, latest: int) -> Path:
     migrations = root / "migrations"
     migrations.mkdir()
     for source in MIGRATIONS_DIR.glob("*.sql"):
-        if source.name[:4].isdigit() and int(source.name[:4]) <= 82:
+        if source.name[:4].isdigit() and int(source.name[:4]) <= latest:
             shutil.copy2(source, migrations / source.name)
+    return migrations
+
+
+@pytest.fixture(scope="module")
+def migrations_0083(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _copy_migrations_through(tmp_path_factory.mktemp("prd091-migrations-0083"), 83)
+
+
+@pytest.fixture(scope="module")
+def empty_0082(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("prd091-empty-0082")
+    migrations = _copy_migrations_through(root, 82)
 
     database = root / "empty.sqlite3"
     result = apply_migrations(_url(database), migrations_dir=migrations)
@@ -117,11 +127,12 @@ def empty_0082(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_0083_fresh_up_seed_is_idempotent_and_projection_preserves_hash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrations_0083: Path,
 ) -> None:
     database_url = _url(tmp_path / "fresh-0083.sqlite3")
     monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", "Prd091-Seed-Idempotency-Only")
 
-    result = apply_migrations(database_url)
+    result = apply_migrations(database_url, migrations_dir=migrations_0083)
     assert result.applied == [f"{version:04d}" for version in range(1, 84)]
     connection = connect_database(database_url)
     try:
@@ -205,6 +216,7 @@ def test_0083_fresh_up_seed_is_idempotent_and_projection_preserves_hash(
 def test_0082_seed_backfills_one_to_one_and_pristine_down_reapplies(
     empty_0082: Path,
     tmp_path: Path,
+    migrations_0083: Path,
 ) -> None:
     database_url = _clone(empty_0082, tmp_path / "roundtrip-0083.sqlite3")
     seed = apply_seed_data(database_url)
@@ -222,7 +234,7 @@ def test_0082_seed_backfills_one_to_one_and_pristine_down_reapplies(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0083"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0083).applied == ["0083"]
     connection = connect_database(database_url)
     try:
         projected = _projection(connection, str(legacy["tenant_id"]), str(legacy["user_id"]))
@@ -247,9 +259,13 @@ def test_0082_seed_backfills_one_to_one_and_pristine_down_reapplies(
     finally:
         connection.close()
 
-    repeated = apply_migrations(database_url)
+    repeated = apply_migrations(database_url, migrations_dir=migrations_0083)
     assert repeated.applied == [] and repeated.skipped[-1] == "0083"
-    rolled_back = rollback_last_migration(database_url, expected_version="0083")
+    rolled_back = rollback_last_migration(
+        database_url,
+        expected_version="0083",
+        migrations_dir=migrations_0083,
+    )
     assert rolled_back.rolled_back == "0083"
     connection = connect_database(database_url)
     try:
@@ -271,7 +287,7 @@ def test_0082_seed_backfills_one_to_one_and_pristine_down_reapplies(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0083"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0083).applied == ["0083"]
     connection = connect_database(database_url)
     try:
         reapplied = _projection(connection, str(legacy["tenant_id"]), str(legacy["user_id"]))
@@ -289,6 +305,7 @@ def test_0082_seed_backfills_one_to_one_and_pristine_down_reapplies(
 def test_duplicate_normalized_email_isolated_without_account_merge(
     empty_0082: Path,
     tmp_path: Path,
+    migrations_0083: Path,
 ) -> None:
     database_url = _clone(empty_0082, tmp_path / "duplicate-email-0083.sqlite3")
     seed = apply_seed_data(database_url)
@@ -328,7 +345,7 @@ def test_duplicate_normalized_email_isolated_without_account_merge(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0083"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0083).applied == ["0083"]
     connection = connect_database(database_url)
     try:
         accounts = connection.execute(
@@ -383,6 +400,7 @@ def test_duplicate_normalized_email_isolated_without_account_merge(
 def test_unbounded_legacy_password_profile_is_quarantined_before_kdf(
     empty_0082: Path,
     tmp_path: Path,
+    migrations_0083: Path,
 ) -> None:
     database_url = _clone(empty_0082, tmp_path / "unbounded-password-0083.sqlite3")
     seed = apply_seed_data(database_url)
@@ -397,7 +415,7 @@ def test_unbounded_legacy_password_profile_is_quarantined_before_kdf(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0083"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0083).applied == ["0083"]
     connection = connect_database(database_url)
     try:
         row = connection.execute(
@@ -427,10 +445,11 @@ def test_security_fact_blocks_0083_down_atomically(
     empty_0082: Path,
     tmp_path: Path,
     fact_kind: str,
+    migrations_0083: Path,
 ) -> None:
     database_url = _clone(empty_0082, tmp_path / f"guard-{fact_kind}-0083.sqlite3")
     seed = apply_seed_data(database_url)
-    assert apply_migrations(database_url).applied == ["0083"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0083).applied == ["0083"]
     connection = connect_database(database_url)
     try:
         account_id = str(
@@ -490,7 +509,11 @@ def test_security_fact_blocks_0083_down_atomically(
         connection.close()
 
     with pytest.raises(DbError):
-        rollback_last_migration(database_url, expected_version="0083")
+        rollback_last_migration(
+            database_url,
+            expected_version="0083",
+            migrations_dir=migrations_0083,
+        )
 
     connection = connect_database(database_url)
     try:

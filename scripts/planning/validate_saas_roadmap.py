@@ -74,6 +74,18 @@ REQUIRED_DOCS = {
         "敏感审计",
         "PRD-093",
     ),
+    ROOT / "docs/prd/PRD-093-workspace-creation.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "workspace_user_projection_claims",
+    ),
+    ROOT / "docs/testing/PRD-093-tests.md": (
+        "状态：已完成",
+        "敏感审计",
+        "PRD-094",
+        "0085",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -287,6 +299,26 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         and "Challenge根密钥" in prd092_security
         and "PII根密钥" in prd092_security,
         "PRD-092 matches its delivered self-service and independent secret-domain contracts",
+    )
+    prd093 = rows_by_id.get("PRD-093", {})
+    prd093_apis = str(prd093.get("API/动作") or "")
+    prd093_migration = str(prd093.get("数据迁移/回滚") or "")
+    prd093_security = str(prd093.get("安全与合规") or "")
+    report.check(
+        all(
+            endpoint in prd093_apis
+            for endpoint in (
+                "POST /workspaces",
+                "GET /workspaces",
+                "GET /workspaces/{workspace_id}",
+                "PATCH /workspaces/{workspace_id}",
+            )
+        )
+        and "0085" in prd093_migration
+        and "WorkspaceTenantBinding" in prd093_migration
+        and "GlobalSession" in prd093_security
+        and "Idempotency-Key" in prd093_security,
+        "PRD-093 matches its delivered Workspace, migration and request-integrity contracts",
     )
     prd106 = rows_by_id.get("PRD-106", {})
     report.check(
@@ -598,15 +630,20 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 84
+        and migration_versions[-1] == 85
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "PRD-091 migration 0083 remains present after the PRD-090 no-migration baseline",
+        "migration sequence advances through 0085 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
         and (ROOT / "infra/migrations/0084_identity_self_service.down.sql").is_file(),
         "PRD-092 owns reversible migration 0084 with guarded security-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0085_workspace_creation.sql").is_file()
+        and (ROOT / "infra/migrations/0085_workspace_creation.down.sql").is_file(),
+        "PRD-093 owns reversible migration 0085 with guarded Workspace-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

@@ -199,6 +199,8 @@ def create_service_app(
             # Client-provided correlation IDs are therefore never trusted on this prefix.
             or request.url.path == "/identity"
             or request.url.path.startswith("/identity/")
+            or request.url.path == "/workspaces"
+            or request.url.path.startswith("/workspaces/")
             or request.url.path == "/mcp"
             or request.url.path.startswith("/mcp/")
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
@@ -348,6 +350,8 @@ def create_service_app(
             or safe_path == "/billing-disputes/{billing_dispute_id}"
             or safe_path == "/identity"
             or safe_path.startswith("/identity/")
+            or safe_path == "/workspaces"
+            or safe_path.startswith("/workspaces/")
             or safe_path == "/mcp"
             or safe_path.startswith("/mcp/")
             else logger.exception
@@ -501,7 +505,12 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
     """
 
     path = request.url.path
-    if path == "/identity" or path.startswith("/identity/"):
+    if (
+        path == "/identity"
+        or path.startswith("/identity/")
+        or path == "/workspaces"
+        or path.startswith("/workspaces/")
+    ):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"

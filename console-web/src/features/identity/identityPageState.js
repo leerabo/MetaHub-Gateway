@@ -15,6 +15,7 @@ export function createIdentityPageController({
   api,
   confirmAction = defaultConfirm,
   invitationToken = null,
+  newIdempotencyKey = defaultIdempotencyKey,
 } = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
@@ -24,6 +25,9 @@ export function createIdentityPageController({
   let account = null;
   let currentSession = null;
   let sessions = [];
+  let workspaces = [];
+  let workspaceView = "summary";
+  let workspaceDraft = null;
   let pendingChallenge = null;
   let pendingWrite = Promise.resolve();
 
@@ -275,6 +279,81 @@ export function createIdentityPageController({
         return false;
       }
     },
+    showWorkspaceCreate() {
+      workspaceView = "create";
+      workspaceDraft = {
+        kind: "organization",
+        name: "",
+        slug: "",
+        region: "cn-north-1",
+        serviceMode: "internal_only",
+        idempotencyKey: newIdempotencyKey(),
+        requestFingerprint: null,
+      };
+      renderSecurity();
+      return true;
+    },
+    setWorkspaceKind(kind) {
+      if (workspaceView !== "create" || !new Set(["personal", "organization"]).has(kind)) {
+        return false;
+      }
+      workspaceDraft = { ...workspaceDraft, kind };
+      renderSecurity();
+      return true;
+    },
+    cancelWorkspaceCreate() {
+      workspaceView = "summary";
+      workspaceDraft = null;
+      renderSecurity();
+      return true;
+    },
+    async createWorkspace({ kind, name, slug, region, serviceMode }) {
+      if (workspaceView !== "create" || !workspaceDraft) return false;
+      const input = {
+        kind,
+        name: kind === "organization" ? name : undefined,
+        slug: kind === "organization" ? slug : undefined,
+        region,
+        serviceMode,
+      };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey =
+        workspaceDraft.requestFingerprint && workspaceDraft.requestFingerprint !== fingerprint
+          ? newIdempotencyKey()
+          : workspaceDraft.idempotencyKey;
+      workspaceDraft = {
+        ...workspaceDraft,
+        ...input,
+        idempotencyKey,
+        requestFingerprint: fingerprint,
+      };
+      const ticket = beginRequest();
+      renderSecurity();
+      try {
+        const result = await queueWrite(() =>
+          api.createWorkspace({
+            ...input,
+            idempotencyKey,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        workspaces = [
+          ...workspaces.filter(
+            (workspace) => workspace.workspace_id !== result.workspace.workspace_id,
+          ),
+          result.workspace,
+        ];
+        workspaceView = "summary";
+        workspaceDraft = null;
+        renderSecurity({ feedback: "空间已创建。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderSecurity({ error: safePageError(error) });
+        return false;
+      }
+    },
     destroy() {
       generation += 1;
       activeRequest?.abort();
@@ -317,6 +396,28 @@ export function createIdentityPageController({
       const list = await api.sessions({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       sessions = normalizeSessions(list.sessions, currentSession);
+      return loadWorkspaces(ticket, feedback, previousError);
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isExpired(error)) {
+        clearToLogin();
+        return false;
+      }
+      sessions = currentSession ? [currentSession] : [];
+      return loadWorkspaces(ticket, feedback, safePageError(error));
+    }
+  }
+
+  async function loadWorkspaces(ticket, feedback, previousError) {
+    if (typeof api.workspaces !== "function") {
+      workspaces = [];
+      renderSecurity({ feedback, error: previousError });
+      return true;
+    }
+    try {
+      const list = await api.workspaces({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      workspaces = Array.isArray(list.workspaces) ? list.workspaces : [];
       renderSecurity({ feedback, error: previousError });
       return true;
     } catch (error) {
@@ -325,7 +426,7 @@ export function createIdentityPageController({
         clearToLogin();
         return false;
       }
-      sessions = currentSession ? [currentSession] : [];
+      workspaces = [];
       renderSecurity({ feedback, error: safePageError(error) });
       return false;
     }
@@ -371,6 +472,9 @@ export function createIdentityPageController({
       account,
       currentSession,
       sessions,
+      workspaces,
+      workspaceView,
+      workspaceDraft,
       feedback: extra.feedback,
       error: extra.error,
     });
@@ -380,6 +484,9 @@ export function createIdentityPageController({
     account = null;
     currentSession = null;
     sessions = [];
+    workspaces = [];
+    workspaceView = "summary";
+    workspaceDraft = null;
   }
 
   function scrubPasswords() {
@@ -443,6 +550,16 @@ export function createIdentityPageController({
           newPassword: fields.get("newPassword"),
           confirmPassword: fields.get("confirmPassword"),
         });
+      } else if (form?.matches?.("[data-workspace-create-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createWorkspace({
+          kind: fields.get("kind"),
+          name: fields.get("name"),
+          slug: fields.get("slug"),
+          region: fields.get("region"),
+          serviceMode: fields.get("serviceMode"),
+        });
       }
     });
     root.addEventListener?.("click", async (event) => {
@@ -460,6 +577,12 @@ export function createIdentityPageController({
         controller.showLogin();
       } else if (button.dataset.identityAction === "resend-verification") {
         await controller.resendVerification();
+      } else if (button.dataset.identityAction === "show-workspace-create") {
+        controller.showWorkspaceCreate();
+      } else if (button.dataset.identityAction === "cancel-workspace-create") {
+        controller.cancelWorkspaceCreate();
+      } else if (button.dataset.identityAction === "set-workspace-kind") {
+        controller.setWorkspaceKind(button.dataset.workspaceKind);
       }
     });
   }
@@ -493,4 +616,10 @@ function isAbort(error) {
 
 function defaultConfirm(message) {
   return globalThis.confirm?.(message) === true;
+}
+
+function defaultIdempotencyKey() {
+  const value = globalThis.crypto?.randomUUID?.();
+  if (!value) throw new TypeError("secure idempotency key generation is unavailable");
+  return `workspace-${value}`;
 }

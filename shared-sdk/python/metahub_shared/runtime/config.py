@@ -95,6 +95,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_IDENTITY_CHALLENGE_SECRET": DEFAULT_IDENTITY_CHALLENGE_SECRET,
     "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
+    "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
+    "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
     # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
     "METAHUB_RESPONSE_CACHE_ENABLED": "false",
@@ -415,6 +417,8 @@ class AppConfig(BaseModel):
     control_api_base_url: str = "http://localhost:8001"
     gateway_api_base_url: str = "http://localhost:8000"
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    workspace_allowed_regions: tuple[str, ...] = ("cn-north-1", "cn-east-1")
+    workspace_residency_policy_version: str = "cn-residency-v1"
     service_mode: ServiceMode = "internal_only"
     provider_base_urls: dict[str, str] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
@@ -1636,6 +1640,12 @@ def load_app_config(service_name: str) -> AppConfig:
         control_api_base_url=control_api_base_url,
         gateway_api_base_url=gateway_api_base_url,
         allowed_origins=_split_origins(_value(values, "METAHUB_ALLOWED_ORIGINS")),
+        workspace_allowed_regions=_workspace_allowed_regions(
+            _value(values, "METAHUB_WORKSPACE_ALLOWED_REGIONS")
+        ),
+        workspace_residency_policy_version=_workspace_residency_policy_version(
+            _value(values, "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION")
+        ),
         service_mode=service_mode,
         provider_base_urls=provider_base_urls,
         features={
@@ -4051,6 +4061,47 @@ def _split_origins(raw: str | None) -> list[str]:
     if not raw:
         return ["http://localhost:5173"]
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _workspace_allowed_regions(raw: str | None) -> tuple[str, ...]:
+    regions = tuple(dict.fromkeys(item.strip() for item in (raw or "").split(",") if item.strip()))
+    if (
+        not regions
+        or len(regions) > 8
+        or any(
+            region != region.lower()
+            or not region.startswith("cn-")
+            or len(region) not in range(3, 41)
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in region)
+            or region.startswith("-")
+            or region.endswith("-")
+            for region in regions
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Workspace Region allowlist is invalid.",
+            suggestion="Configure one to eight canonical cn-* Region codes.",
+        )
+    return regions
+
+
+def _workspace_residency_policy_version(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if (
+        len(value) not in range(1, 81)
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+            for character in value
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Workspace residency policy version is invalid.",
+            suggestion="Configure a bounded alphanumeric residency policy version.",
+        )
+    return value
 
 
 _LOCAL_ENDPOINT_PRIVATE_NETWORKS = (

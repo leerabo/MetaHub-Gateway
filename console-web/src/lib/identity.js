@@ -152,7 +152,7 @@ async function identityRequest(controlApiUrl, path, options) {
     headers["Content-Type"] = "application/json";
   }
   if (options.csrf) {
-    headers["X-CSRF-Token"] = readUniqueCsrfCookie();
+    headers["X-CSRF-Token"] = readIdentityCsrfCookie();
   }
 
   let response;
@@ -202,7 +202,7 @@ function identityUrl(controlApiUrl, path) {
   return new URL(path, base).toString();
 }
 
-function readUniqueCsrfCookie(cookieText = globalThis.document?.cookie ?? "") {
+export function readIdentityCsrfCookie(cookieText = globalThis.document?.cookie ?? "") {
   const matches = String(cookieText)
     .split(";")
     .map((part) => part.trim())

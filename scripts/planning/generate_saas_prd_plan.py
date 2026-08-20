@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-20"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 92
+COMPLETED_THROUGH_PRD = 93
 
 
 def prd(
@@ -174,13 +174,25 @@ INITIAL_DRAFT_PRDS = [
         "不自动创建Provider、占位Key、模型、Virtual Key或成功调用；不把系统默认环境伪装为用户已完成配置。",
         "创建空间向导、企业资料页、空间选择页",
         ("POST /workspaces", "GET /workspaces", "GET /workspaces/{workspace_id}", "PATCH /workspaces/{workspace_id}"),
-        ("Workspace", "OrganizationProfile", "PersonalProfile", "WorkspaceRegion", "WorkspaceProvisioningJob"),
+        (
+            "Workspace",
+            "WorkspaceTenantBinding",
+            "WorkspaceMembership",
+            "OrganizationProfile",
+            "PersonalProfile",
+            "WorkspaceRegion",
+            "WorkspaceProvisioningJob",
+            "WorkspaceEnvironmentOrigin",
+            "WorkspaceEvent",
+            "WorkspaceEventOutbox",
+            "WorkspaceUserProjectionClaim",
+        ),
         ("workspace.created", "workspace.profile_confirmed", "workspace.provisioning_failed"),
-        "personal Workspace的owner仅本人；organization Workspace的owner可维护本企业；platform_ops只看脱敏生命周期",
-        "注册后可选择个人或企业；同一账号可安全切换多个空间；创建事务不会产生假Provider；失败可重试且不产生半初始化租户；业务表继续带tenant_id。",
+        "GlobalSession只允许已验证账号创建空间；personal/organization Workspace的owner仅本人可读写；本条不授予平台角色或其他成员权限",
+        "注册后可创建个人或企业空间；同一账号可创建并列出多个空间；创建事务不会产生假Provider；失败可重试且不产生半初始化租户；本条不签发WorkspaceSession。",
         "PRD-091、PRD-092、现有Tenant/Environment",
-        "将现有Tenant投影为organization Workspace；default租户保留但标记legacy_bootstrap；回滚不删除Workspace。",
-        "slug防枚举、企业名输出转义、Region不可静默跨境、Owner不可孤儿、创建幂等。",
+        "0085新增Workspace、不可变WorkspaceTenantBinding、owner foundation、Region/profile/provisioning/environment origin、event/outbox和一次性legacy User投影证明；现有Tenant确定性回填；pristine可down，新增安全事实原子阻断回滚。",
+        "GlobalSession与CSRF/Origin边界；Idempotency-Key只存HMAC并绑定规范body；slug冲突同形；企业名输出转义且不进日志/事件/幂等记录；Region允许列表失败关闭；Owner不可孤儿。",
         "个人/企业分支、创建幂等、Owner原子性、默认环境来源标签、跨Workspace隔离、失败补偿。",
         "Workspace创建p95<1s；后台Provisioning不阻塞首屏超过2s。",
         "4-5人周",
