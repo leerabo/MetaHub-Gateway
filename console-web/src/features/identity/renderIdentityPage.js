@@ -21,6 +21,125 @@ export function renderIdentityLoginPage(container, options = {}) {
           </label>
           ${renderError(options.error)}
           <button class="identity-primary" type="submit">登录</button>
+          <div class="identity-access-actions">
+            <button type="button" data-identity-action="show-register">创建账号</button>
+            <button type="button" data-identity-action="show-reset">忘记密码</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+export function renderIdentityRegistrationPage(container, options = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-registration-title">
+        ${renderAccessBrand("identity-registration-title", "创建账号")}
+        <form class="identity-login-form" data-identity-registration-form>
+          <label>
+            <span>邮箱</span>
+            <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
+          </label>
+          <label>
+            <span>显示名称</span>
+            <input name="displayName" type="text" autocomplete="name" maxlength="120" value="${escapeAttribute(options.displayName ?? "")}" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          <label>
+            <span>确认密码</span>
+            <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          <label class="identity-consent">
+            <input name="consent" type="checkbox" required />
+            <span>同意隐私条款</span>
+          </label>
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit">继续验证</button>
+          <div class="identity-access-actions is-single">
+            <button type="button" data-identity-action="show-login">返回登录</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+export function renderIdentityVerificationPage(container, options = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-verification-title">
+        ${renderAccessBrand("identity-verification-title", "验证邮箱")}
+        <form class="identity-login-form" data-identity-verification-form>
+          <label>
+            <span>验证码</span>
+            <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
+          </label>
+          ${renderFeedback(options.feedback)}
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit">完成验证</button>
+          <div class="identity-access-actions">
+            <button type="button" data-identity-action="resend-verification">重新发送</button>
+            <button type="button" data-identity-action="show-login">返回登录</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+export function renderIdentityResetRequestPage(container, options = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-reset-request-title">
+        ${renderAccessBrand("identity-reset-request-title", "找回密码")}
+        <form class="identity-login-form" data-identity-reset-request-form>
+          <label>
+            <span>邮箱</span>
+            <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
+          </label>
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit">发送验证码</button>
+          <div class="identity-access-actions is-single">
+            <button type="button" data-identity-action="show-login">返回登录</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+export function renderIdentityResetConfirmPage(container, options = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-reset-confirm-title">
+        ${renderAccessBrand("identity-reset-confirm-title", "设置新密码")}
+        <form class="identity-login-form" data-identity-reset-confirm-form>
+          <label>
+            <span>验证码</span>
+            <input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
+          </label>
+          <label>
+            <span>新密码</span>
+            <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          <label>
+            <span>确认新密码</span>
+            <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+          </label>
+          ${renderFeedback(options.feedback)}
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit">更新密码</button>
+          <div class="identity-access-actions is-single">
+            <button type="button" data-identity-action="show-login">返回登录</button>
+          </div>
         </form>
       </section>
     </div>
@@ -155,6 +274,18 @@ function renderOtherSession(session, index) {
 
 function renderFeedback(feedback) {
   return feedback ? `<p class="identity-feedback" role="status">${escapeHtml(feedback)}</p>` : "";
+}
+
+function renderAccessBrand(titleId, title) {
+  return `
+    <header class="identity-brand">
+      <span class="identity-brand-mark" aria-hidden="true">M</span>
+      <div>
+        <p>MetaHub</p>
+        <h1 id="${escapeAttribute(titleId)}">${escapeHtml(title)}</h1>
+      </div>
+    </header>
+  `;
 }
 
 function renderError(error) {

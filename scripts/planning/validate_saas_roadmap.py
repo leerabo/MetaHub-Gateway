@@ -58,6 +58,22 @@ REQUIRED_DOCS = {
         "G0与完成状态",
         "PRD-091",
     ),
+    ROOT / "docs/prd/PRD-092-self-service-registration-and-verification.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
+    ),
+    ROOT / "docs/api/global-identity.md": (
+        "POST | `/identity/registrations`",
+        "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
+        "identity.unavailable",
+    ),
+    ROOT / "docs/testing/PRD-092-tests.md": (
+        "状态：已完成",
+        "敏感审计",
+        "PRD-093",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -252,6 +268,25 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         and "/identity/credentials/password/rotate" in str(prd091.get("API/动作") or "")
         and "identity.credential_rotated" in str(prd091.get("事件/Webhook") or ""),
         "PRD-091 remains global-account-only and matches its delivered credential contract",
+    )
+    prd092 = rows_by_id.get("PRD-092", {})
+    prd092_apis = str(prd092.get("API/动作") or "")
+    prd092_security = str(prd092.get("安全与合规") or "")
+    report.check(
+        all(
+            endpoint in prd092_apis
+            for endpoint in (
+                "/identity/registrations",
+                "/identity/verifications",
+                "/identity/verifications/resend",
+                "/identity/password-resets",
+                "/identity/password-resets/confirm",
+            )
+        )
+        and "AES-256-GCM" in prd092_security
+        and "Challenge根密钥" in prd092_security
+        and "PII根密钥" in prd092_security,
+        "PRD-092 matches its delivered self-service and independent secret-domain contracts",
     )
     prd106 = rows_by_id.get("PRD-106", {})
     report.check(
@@ -497,6 +532,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         bool(global_account_rows) and all(row.get("归属域") == "平台全局" for row in global_account_rows),
         "GlobalAccount is consistently classified as platform-global",
     )
+    abuse_counter_rows = [row for row in object_rows if row.get("数据对象") == "AbuseCounter"]
+    report.check(
+        bool(abuse_counter_rows)
+        and all(row.get("归属域") == "平台全局/Identity abuse domain" for row in abuse_counter_rows)
+        and all("不带tenant_id" in str(row.get("租户字段规则") or "") for row in abuse_counter_rows),
+        "AbuseCounter is owned by the tenant-free Global Identity abuse domain",
+    )
 
     report.check("saas_incremental_roadmap_complete=false" in workbook_text, "new roadmap completion flag is false")
     report.check("all_108_prds_complete=false" in workbook_text, "legacy compatibility completion flag is false")
@@ -556,10 +598,15 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 83
+        and migration_versions[-1] == 84
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "PRD-091 owns migration 0083 after the PRD-090 no-migration baseline",
+        "PRD-091 migration 0083 remains present after the PRD-090 no-migration baseline",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
+        and (ROOT / "infra/migrations/0084_identity_self_service.down.sql").is_file(),
+        "PRD-092 owns reversible migration 0084 with guarded security-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

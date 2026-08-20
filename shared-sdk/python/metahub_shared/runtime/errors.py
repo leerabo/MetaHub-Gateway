@@ -173,6 +173,38 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Use a different password between 8 and 1024 UTF-8 bytes.",
         owner="identity",
     ),
+    "identity.registration_invalid": ErrorSpec(
+        422,
+        "Registration request is invalid.",
+        "Use the exact bounded registration fields and password policy.",
+        owner="identity",
+    ),
+    "identity.reset_invalid": ErrorSpec(
+        422,
+        "Password reset request is invalid.",
+        "Use the exact bounded password reset fields.",
+        owner="identity",
+    ),
+    "identity.verification_invalid": ErrorSpec(
+        400,
+        "Identity verification could not be completed.",
+        "Request a new challenge and retry with the latest code.",
+        owner="identity",
+    ),
+    "identity.rate_limited": ErrorSpec(
+        429,
+        "Identity request limit was reached.",
+        "Wait for the public identity limit window before retrying.",
+        retryable=True,
+        owner="identity",
+    ),
+    "identity.delivery_unavailable": ErrorSpec(
+        503,
+        "Identity verification delivery is temporarily unavailable.",
+        "Retry only after the configured verification channel is available.",
+        retryable=True,
+        owner="identity",
+    ),
     "identity.unavailable": ErrorSpec(
         503,
         "Global account service is temporarily unavailable.",

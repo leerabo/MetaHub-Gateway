@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Iterable
 from typing import Any
 
@@ -15,10 +16,19 @@ from metahub_shared.runtime.fastapi_app import clear_identity_cookies_on_error
 
 from .models import (
     IdentityLogoutResponse,
+    IdentityPendingChallengeResponse,
     IdentityRevokeResponse,
     IdentityRotateResponse,
     IdentitySessionResponse,
     IdentitySessionsResponse,
+)
+from .self_service import (
+    PendingIdentityChallenge,
+    begin_password_reset,
+    begin_registration,
+    confirm_password_reset,
+    resend_registration_verification,
+    verify_registration,
 )
 from .service import (
     CSRF_COOKIE,
@@ -34,6 +44,8 @@ from .service import (
 router = APIRouter(prefix="/identity", tags=["identity"])
 _MAX_IDENTITY_BODY_BYTES = 4096
 _IDENTITY_WORK_LIMITER = anyio.CapacityLimiter(4)
+_DEVICE_COOKIE = "__Host-metahub-identity-device"
+_DEVICE_COOKIE_MAX_AGE = 31_536_000
 
 
 @router.post("/login", response_model=IdentitySessionResponse)
@@ -54,6 +66,168 @@ async def login(request: Request, response: Response) -> IdentitySessionResponse
         client_host=request.client.host if request.client else None,
     )
     _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    return IdentitySessionResponse(
+        account=issued.account,
+        current_session=issued.current_session,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/registrations", response_model=IdentityPendingChallengeResponse)
+async def register(
+    request: Request,
+    response: Response,
+) -> IdentityPendingChallengeResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(
+        request,
+        required_fields=("email", "display_name", "password", "consent_version"),
+        optional_fields=("invitation_token",),
+    )
+    device_token = _identity_device_token(request)
+    pending = await _run_identity_operation(
+        begin_registration,
+        _config(request),
+        email=_required_string(payload, "email", minimum=3, maximum=320),
+        display_name=_required_string(payload, "display_name", minimum=1, maximum=120),
+        password=_required_string(
+            payload,
+            "password",
+            minimum=8,
+            maximum=1024,
+            byte_limit=True,
+        ),
+        consent_version=_required_string(
+            payload,
+            "consent_version",
+            minimum=1,
+            maximum=80,
+        ),
+        invitation_token=_optional_string(
+            payload,
+            "invitation_token",
+            minimum=1,
+            maximum=512,
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        user_agent=request.headers.get("User-Agent"),
+        client_host=request.client.host if request.client else None,
+        device_token=device_token,
+    )
+    _set_identity_device_cookie(response, device_token)
+    return _pending_response(pending, request)
+
+
+@router.post("/verifications", response_model=IdentitySessionResponse)
+async def verify(request: Request, response: Response) -> IdentitySessionResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("intent_id", "code"))
+    device_token = _identity_device_token(request)
+    issued = await _run_identity_operation(
+        verify_registration,
+        _config(request),
+        intent_id=_required_string(payload, "intent_id", minimum=36, maximum=36),
+        code=_required_string(payload, "code", minimum=6, maximum=6),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        user_agent=request.headers.get("User-Agent"),
+        client_host=request.client.host if request.client else None,
+        device_token=device_token,
+    )
+    _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _set_identity_device_cookie(response, device_token)
+    return IdentitySessionResponse(
+        account=issued.account,
+        current_session=issued.current_session,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/verifications/resend", response_model=IdentityPendingChallengeResponse)
+async def resend_verification(
+    request: Request,
+    response: Response,
+) -> IdentityPendingChallengeResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("intent_id",))
+    device_token = _identity_device_token(request)
+    pending = await _run_identity_operation(
+        resend_registration_verification,
+        _config(request),
+        intent_id=_required_string(payload, "intent_id", minimum=36, maximum=36),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        user_agent=request.headers.get("User-Agent"),
+        client_host=request.client.host if request.client else None,
+        device_token=device_token,
+    )
+    _set_identity_device_cookie(response, device_token)
+    return _pending_response(pending, request)
+
+
+@router.post("/password-resets", response_model=IdentityPendingChallengeResponse)
+async def request_password_reset(
+    request: Request,
+    response: Response,
+) -> IdentityPendingChallengeResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("email",))
+    device_token = _identity_device_token(request)
+    pending = await _run_identity_operation(
+        begin_password_reset,
+        _config(request),
+        email=_required_string(payload, "email", minimum=3, maximum=320),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        user_agent=request.headers.get("User-Agent"),
+        client_host=request.client.host if request.client else None,
+        device_token=device_token,
+    )
+    _set_identity_device_cookie(response, device_token)
+    return _pending_response(pending, request)
+
+
+@router.post("/password-resets/confirm", response_model=IdentitySessionResponse)
+async def reset_password(request: Request, response: Response) -> IdentitySessionResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(
+        request,
+        required_fields=("intent_id", "code", "new_password"),
+    )
+    device_token = _identity_device_token(request)
+    issued = await _run_identity_operation(
+        confirm_password_reset,
+        _config(request),
+        intent_id=_required_string(payload, "intent_id", minimum=36, maximum=36),
+        code=_required_string(payload, "code", minimum=6, maximum=6),
+        new_password=_required_string(
+            payload,
+            "new_password",
+            minimum=8,
+            maximum=1024,
+            byte_limit=True,
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+        user_agent=request.headers.get("User-Agent"),
+        client_host=request.client.host if request.client else None,
+        device_token=device_token,
+    )
+    _set_identity_cookies(response, _config(request), issued.session_token, issued.csrf_token)
+    _set_identity_device_cookie(response, device_token)
     return IdentitySessionResponse(
         account=issued.account,
         current_session=issued.current_session,
@@ -204,7 +378,12 @@ async def rotate_password(request: Request, response: Response) -> IdentityRotat
     )
 
 
-async def _strict_json(request: Request, *, required_fields: tuple[str, ...]) -> dict[str, Any]:
+async def _strict_json(
+    request: Request,
+    *,
+    required_fields: tuple[str, ...],
+    optional_fields: tuple[str, ...] = (),
+) -> dict[str, Any]:
     content_type_values = _raw_header_values(request, b"content-type")
     if (
         len(content_type_values) != 1
@@ -244,7 +423,14 @@ async def _strict_json(request: Request, *, required_fields: tuple[str, ...]) ->
         payload = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         raise ApiError("identity.request_invalid") from None
-    if type(payload) is not dict or set(payload) != set(required_fields):
+    actual_fields = set(payload) if type(payload) is dict else set()
+    required = set(required_fields)
+    allowed = required | set(optional_fields)
+    if (
+        type(payload) is not dict
+        or not required.issubset(actual_fields)
+        or not actual_fields <= allowed
+    ):
         raise ApiError("identity.request_invalid")
     return payload
 
@@ -280,6 +466,23 @@ def _required_string(
     if length < minimum or length > maximum:
         raise ApiError("identity.request_invalid")
     return value
+
+
+def _optional_string(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> str | None:
+    if field not in payload:
+        return None
+    return _required_string(
+        payload,
+        field,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def _reject_legacy_authorization(request: Request) -> None:
@@ -389,6 +592,47 @@ def _set_identity_cookies(
         secure=True,
         httponly=False,
         samesite="strict",
+    )
+
+
+def _identity_device_token(request: Request) -> str:
+    values: list[str] = []
+    for raw_cookie in _raw_header_values(request, b"cookie"):
+        for segment in raw_cookie.split(";"):
+            key, separator, value = segment.strip().partition("=")
+            if separator and key == _DEVICE_COOKIE:
+                values.append(value)
+    if not values:
+        return secrets.token_urlsafe(32)
+    if len(values) != 1 or not valid_opaque_value(values[0]):
+        raise ApiError("identity.credential_invalid")
+    return values[0]
+
+
+def _set_identity_device_cookie(response: Response, device_token: str) -> None:
+    response.set_cookie(
+        _DEVICE_COOKIE,
+        device_token,
+        max_age=_DEVICE_COOKIE_MAX_AGE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def _pending_response(
+    pending: PendingIdentityChallenge,
+    request: Request,
+) -> IdentityPendingChallengeResponse:
+    return IdentityPendingChallengeResponse(
+        intent_id=pending.intent_id,
+        purpose=pending.purpose,
+        status=pending.status,
+        expires_at=pending.expires_at,
+        resend_available_at=pending.resend_available_at,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
     )
 
 

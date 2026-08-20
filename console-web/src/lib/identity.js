@@ -29,6 +29,74 @@ export async function loginIdentity({ controlApiUrl, email, password, signal } =
   });
 }
 
+export async function registerIdentity({
+  controlApiUrl,
+  email,
+  displayName,
+  password,
+  consentVersion,
+  invitationToken,
+  signal,
+} = {}) {
+  const body = {
+    email,
+    display_name: displayName,
+    password,
+    consent_version: consentVersion,
+  };
+  if (invitationToken !== undefined && invitationToken !== null && invitationToken !== "") {
+    body.invitation_token = invitationToken;
+  }
+  return identityRequest(controlApiUrl, "/identity/registrations", {
+    method: "POST",
+    body,
+    responseType: "pendingChallenge",
+    signal,
+  });
+}
+
+export async function verifyIdentityRegistration({ controlApiUrl, intentId, code, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/verifications", {
+    method: "POST",
+    body: { intent_id: intentId, code },
+    responseType: "accountSession",
+    signal,
+  });
+}
+
+export async function resendIdentityVerification({ controlApiUrl, intentId, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/verifications/resend", {
+    method: "POST",
+    body: { intent_id: intentId },
+    responseType: "pendingChallenge",
+    signal,
+  });
+}
+
+export async function requestIdentityPasswordReset({ controlApiUrl, email, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/password-resets", {
+    method: "POST",
+    body: { email },
+    responseType: "pendingChallenge",
+    signal,
+  });
+}
+
+export async function confirmIdentityPasswordReset({
+  controlApiUrl,
+  intentId,
+  code,
+  newPassword,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/password-resets/confirm", {
+    method: "POST",
+    body: { intent_id: intentId, code, new_password: newPassword },
+    responseType: "accountSession",
+    signal,
+  });
+}
+
 export async function getIdentityMe({ controlApiUrl, signal } = {}) {
   return identityRequest(controlApiUrl, "/identity/me", {
     responseType: "accountSession",
@@ -181,6 +249,37 @@ function validateResponse(payload, responseType) {
       limit: requireNonnegativeInteger(payload.limit, "limit"),
       offset: requireNonnegativeInteger(payload.offset, "offset"),
       total: requireNonnegativeInteger(payload.total, "total"),
+      request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
+      trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
+    };
+  }
+  if (responseType === "pendingChallenge") {
+    requireExactKeys(
+      payload,
+      [
+        "expires_at",
+        "intent_id",
+        "purpose",
+        "request_id",
+        "resend_available_at",
+        "status",
+        "trace_id",
+      ],
+      "response",
+    );
+    const purpose = requireBoundedString(payload.purpose, "identity.response_invalid", 40);
+    if (!new Set(["registration", "password_reset"]).has(purpose) || payload.status !== "pending") {
+      invalidResponse("challenge");
+    }
+    return {
+      intent_id: requireBoundedString(payload.intent_id, "identity.response_invalid", 80),
+      purpose,
+      status: "pending",
+      expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      resend_available_at: requireTimestamp(
+        payload.resend_available_at,
+        "resend_available_at",
+      ),
       request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
       trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
     };

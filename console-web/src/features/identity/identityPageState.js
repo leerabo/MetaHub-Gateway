@@ -1,7 +1,21 @@
 import { IdentityApiError } from "../../lib/identity.js";
-import { renderIdentityLoginPage, renderIdentitySecurityPage } from "./renderIdentityPage.js";
+import {
+  renderIdentityLoginPage,
+  renderIdentityRegistrationPage,
+  renderIdentityResetConfirmPage,
+  renderIdentityResetRequestPage,
+  renderIdentitySecurityPage,
+  renderIdentityVerificationPage,
+} from "./renderIdentityPage.js";
 
-export function createIdentityPageController({ root, api, confirmAction = defaultConfirm } = {}) {
+const CONSENT_VERSION = "privacy-2026-08";
+
+export function createIdentityPageController({
+  root,
+  api,
+  confirmAction = defaultConfirm,
+  invitationToken = null,
+} = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
   }
@@ -10,6 +24,7 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
   let account = null;
   let currentSession = null;
   let sessions = [];
+  let pendingChallenge = null;
   let pendingWrite = Promise.resolve();
 
   const controller = {
@@ -19,6 +34,7 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
     },
     async login({ email, password }) {
       const ticket = beginRequest();
+      pendingChallenge = null;
       renderIdentityLoginPage(root, { email });
       try {
         const result = await queueWrite(() => api.login({ email, password }));
@@ -32,6 +48,163 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
         if (!isCurrent(ticket) || isAbort(error)) return false;
         scrubPasswords();
         renderIdentityLoginPage(root, { email, error: safePageError(error) });
+        return false;
+      }
+    },
+    showLogin() {
+      clearToLogin();
+      return true;
+    },
+    showRegistration() {
+      beginRequest();
+      scrubSensitiveInputs();
+      scrubProtectedState();
+      pendingChallenge = null;
+      renderIdentityRegistrationPage(root);
+      return true;
+    },
+    showReset() {
+      beginRequest();
+      scrubSensitiveInputs();
+      scrubProtectedState();
+      pendingChallenge = null;
+      renderIdentityResetRequestPage(root);
+      return true;
+    },
+    async registerAccount({ email, displayName, password, confirmPassword, consent }) {
+      if (password !== confirmPassword || consent !== true) {
+        scrubSensitiveInputs();
+        renderIdentityRegistrationPage(root, {
+          email,
+          displayName,
+          error: {
+            message: password !== confirmPassword ? "两次输入的密码不一致。" : "请先同意隐私条款。",
+            requestId: "-",
+          },
+        });
+        return false;
+      }
+      const ticket = beginRequest();
+      renderIdentityRegistrationPage(root, { email, displayName });
+      try {
+        const result = await queueWrite(() =>
+          api.register({
+            email,
+            displayName,
+            password,
+            consentVersion: CONSENT_VERSION,
+            invitationToken,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        scrubSensitiveInputs();
+        pendingChallenge = { intentId: result.intent_id, purpose: result.purpose };
+        renderIdentityVerificationPage(root, { feedback: "验证码已发送。" });
+        return true;
+      } catch (error) {
+        scrubSensitiveInputs();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityRegistrationPage(root, {
+          email,
+          displayName,
+          error: safePageError(error),
+        });
+        return false;
+      }
+    },
+    async verifyRegistration({ code }) {
+      if (pendingChallenge?.purpose !== "registration") {
+        clearToLogin();
+        return false;
+      }
+      const intentId = pendingChallenge.intentId;
+      const ticket = beginRequest();
+      try {
+        const result = await queueWrite(() =>
+          api.verify({ intentId, code, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        pendingChallenge = null;
+        applyIdentityResult(result);
+        await loadSessions(ticket, "邮箱已验证。", null);
+        return true;
+      } catch (error) {
+        scrubSensitiveInputs();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityVerificationPage(root, { error: safePageError(error) });
+        return false;
+      }
+    },
+    async resendVerification() {
+      if (pendingChallenge?.purpose !== "registration") return false;
+      const ticket = beginRequest();
+      try {
+        const result = await queueWrite(() =>
+          api.resend({ intentId: pendingChallenge.intentId, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        pendingChallenge = { intentId: result.intent_id, purpose: result.purpose };
+        scrubSensitiveInputs();
+        renderIdentityVerificationPage(root, { feedback: "验证码已重新发送。" });
+        return true;
+      } catch (error) {
+        scrubSensitiveInputs();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityVerificationPage(root, { error: safePageError(error) });
+        return false;
+      }
+    },
+    async requestPasswordReset({ email }) {
+      const ticket = beginRequest();
+      renderIdentityResetRequestPage(root, { email });
+      try {
+        const result = await queueWrite(() =>
+          api.requestReset({ email, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        pendingChallenge = { intentId: result.intent_id, purpose: result.purpose };
+        renderIdentityResetConfirmPage(root, { feedback: "验证码已发送。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityResetRequestPage(root, { email, error: safePageError(error) });
+        return false;
+      }
+    },
+    async confirmPasswordReset({ code, newPassword, confirmPassword }) {
+      if (newPassword !== confirmPassword) {
+        scrubSensitiveInputs();
+        renderIdentityResetConfirmPage(root, {
+          error: { message: "两次输入的新密码不一致。", requestId: "-" },
+        });
+        return false;
+      }
+      if (pendingChallenge?.purpose !== "password_reset") {
+        clearToLogin();
+        return false;
+      }
+      const intentId = pendingChallenge.intentId;
+      const ticket = beginRequest();
+      try {
+        const result = await queueWrite(() =>
+          api.confirmReset({
+            intentId,
+            code,
+            newPassword,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        pendingChallenge = null;
+        scrubSensitiveInputs();
+        applyIdentityResult(result);
+        await loadSessions(ticket, "密码已重置，其他设备已退出。", null);
+        return true;
+      } catch (error) {
+        scrubSensitiveInputs();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityResetConfirmPage(root, { error: safePageError(error) });
         return false;
       }
     },
@@ -106,6 +279,8 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
       generation += 1;
       activeRequest?.abort();
       activeRequest = null;
+      scrubSensitiveInputs();
+      pendingChallenge = null;
       scrubProtectedState();
       root.innerHTML = "";
     },
@@ -174,10 +349,17 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
 
   function clearToLogin() {
     const ticket = beginRequest();
-    scrubPasswords();
+    scrubSensitiveInputs();
+    pendingChallenge = null;
     scrubProtectedState();
     renderIdentityLoginPage(root);
     return ticket;
+  }
+
+  function applyIdentityResult(result) {
+    account = result.account;
+    currentSession = result.current_session;
+    sessions = [currentSession];
   }
 
   function renderSecurity(extra = {}) {
@@ -201,8 +383,18 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
   }
 
   function scrubPasswords() {
-    for (const input of root.querySelectorAll?.('input[type="password"]') ?? []) {
-      input.value = "";
+    scrubSensitiveInputs();
+  }
+
+  function scrubSensitiveInputs() {
+    for (const selector of [
+      'input[type="password"]',
+      'input[name="code"]',
+      'input[autocomplete="one-time-code"]',
+    ]) {
+      for (const input of root.querySelectorAll?.(selector) ?? []) {
+        input.value = "";
+      }
     }
   }
 
@@ -217,6 +409,32 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
         event.preventDefault();
         const fields = new FormData(form);
         await controller.login({ email: fields.get("email"), password: fields.get("password") });
+      } else if (form?.matches?.("[data-identity-registration-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.registerAccount({
+          email: fields.get("email"),
+          displayName: fields.get("displayName"),
+          password: fields.get("password"),
+          confirmPassword: fields.get("confirmPassword"),
+          consent: fields.get("consent") === "on",
+        });
+      } else if (form?.matches?.("[data-identity-verification-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.verifyRegistration({ code: fields.get("code") });
+      } else if (form?.matches?.("[data-identity-reset-request-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.requestPasswordReset({ email: fields.get("email") });
+      } else if (form?.matches?.("[data-identity-reset-confirm-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.confirmPasswordReset({
+          code: fields.get("code"),
+          newPassword: fields.get("newPassword"),
+          confirmPassword: fields.get("confirmPassword"),
+        });
       } else if (form?.matches?.("[data-identity-password-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -234,6 +452,14 @@ export function createIdentityPageController({ root, api, confirmAction = defaul
         await controller.logout();
       } else if (button.dataset.identityAction === "revoke-session") {
         await controller.revokeSession(button.dataset.sessionIndex);
+      } else if (button.dataset.identityAction === "show-register") {
+        controller.showRegistration();
+      } else if (button.dataset.identityAction === "show-reset") {
+        controller.showReset();
+      } else if (button.dataset.identityAction === "show-login") {
+        controller.showLogin();
+      } else if (button.dataset.identityAction === "resend-verification") {
+        await controller.resendVerification();
       }
     });
   }

@@ -2141,7 +2141,7 @@ PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all
 PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
 TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数据生命周期边界关闭。当前下一条
-新 SaaS 路线图的 PRD-090..091 已完成，权威未完成项已切换到 PRD-092，`saas_incremental_roadmap_complete=false`；
+新 SaaS 路线图的 PRD-090..092 已完成，权威未完成项已切换到 PRD-093，`saas_incremental_roadmap_complete=false`；
 兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-090 起 SaaS 增量规划目录
@@ -2155,15 +2155,15 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `scripts/planning/generate_saas_prd_plan.py`：可重复生成并校验工作簿，检查从 PRD-090 起的开放式连续编号、
   完成状态前缀、旧计划废弃映射、12个Sheet、63项导航处置和两个总体未完成状态标记。
 - `scripts/planning/validate_saas_roadmap.py`：失败关闭验证开放式编号、依赖DAG、精确角色、对象域、旧计划退役、
-  源码63项导航一一处置、两轮自审、安全合同、Excel安全性、0083边界和下一未完成项。
+  源码63项导航一一处置、两轮自审、安全合同、Excel安全性、0084边界和下一未完成项。
 - `scripts/planning/retire_legacy_prd090_onward.py`：仅修改旧总清单的两个活动状态指针，保留旧090..108明细供审计。
 - `docs/architecture/saas-target-architecture.md`、`docs/security/saas-threat-model.md`、
   `docs/prd/PRD-090-saas-architecture-migration-baseline.md`、`docs/testing/PRD-090-tests.md`：PRD-090冻结架构、
   威胁、迁移、自审和实际验收记录。
 
-新 `PRD-090 - SaaS总体架构与兼容迁移基线` 与
-`PRD-091 - 全局用户账号与认证凭据` 已完成；当前下一项是
-`PRD-092 - 个人与企业用户自助注册验证`，尚未开始设计或实现。
+新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
+`PRD-092 - 个人与企业用户自助注册验证` 已完成；当前下一项是
+`PRD-093 - 个人空间与企业Workspace创建`，已有冻结设计但尚未实现。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2172,6 +2172,19 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `console-web/identity.html` 与 `console-web/src/features/identity/`：独立账号安全入口，不写浏览器 Storage，不取代旧企业 Console 登录。
 - `infra/migrations/0083_global_account_identity.sql`：expand 回填、冲突隔离、兼容触发器、事件/Outbox 和安全事实回滚门禁。
 - `docs/prd/PRD-091-global-account-and-credentials.md`、`docs/api/global-identity.md` 与 `docs/testing/PRD-091-tests.md`：冻结设计、公开合同和最终验收记录。
+
+## PRD-092 自助注册验证目录
+
+- `control-plane-api/src/metahub_control/identity/{self_service.py,delivery.py}`：tenant-free 注册、邮箱验证、
+  generation 重发、密码找回、持久滥用门禁、Invitation verified binding 和固定投递失败边界。
+- `shared-sdk/python/metahub_shared/identity/crypto.py`：RegistrationIntent owner-bound AES-256-GCM
+  邮箱信封；AAD 绑定 purpose、intent、字段类型和 key version，失败统一为 `identity.unavailable`。
+- `console-web/src/features/identity/` 与 `console-web/src/lib/identity.js`：注册、验证和找回视图；
+  intent/code/password 只在内存与当前输入生命周期存在，不写 URL 或 Storage。
+- `infra/migrations/0084_identity_self_service.sql`：全局 intent/challenge/verification/consent/abuse/
+  binding/event/outbox 表，以及任何安全事实存在时的 down guard。
+- `docs/prd/PRD-092-self-service-registration-and-verification.md`、`docs/api/global-identity.md` 与
+  `docs/testing/PRD-092-tests.md`：冻结设计、公开合同、测试与独立敏感审计记录。
 
 ## MVP 非目标
 

@@ -131,6 +131,43 @@ a {
   padding: 8px 10px;
 }
 
+.identity-login-form .identity-consent {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 9px;
+}
+
+.identity-login-form .identity-consent input {
+  width: 18px;
+  min-height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: var(--identity-accent);
+}
+
+.identity-access-actions {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.identity-access-actions.is-single {
+  justify-content: center;
+}
+
+.identity-access-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--identity-accent-dark);
+  cursor: pointer;
+  padding: 5px 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
 .identity-login-form input:focus-visible,
 .identity-password-form input:focus-visible,
 .identity-login-form button:focus-visible,

@@ -389,6 +389,48 @@ def valid_opaque_value(value: str) -> bool:
     return bool(_OPAQUE_RE.fullmatch(value))
 
 
+def issue_global_session_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    account_id: str,
+    now: datetime,
+    user_agent: str | None,
+    client_host: str | None,
+) -> IssuedIdentitySession:
+    """Issue a PRD-091 GlobalSession inside an existing identity transaction."""
+
+    account = _account_by_id(connection, account_id)
+    return _create_session(
+        connection,
+        config,
+        account,
+        now=now,
+        user_agent=user_agent,
+        client_host=client_host,
+    )
+
+
+def replace_global_password_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    account_id: str,
+    new_hash: str,
+    now: datetime,
+) -> None:
+    """Rotate a credential and revoke prior sessions using the PRD-091 projection rules."""
+
+    _replace_credential_hash(connection, account_id, new_hash, now)
+
+
+def normalize_global_email(value: str) -> str | None:
+    return _normalize_email(value)
+
+
+def validate_global_password(value: str) -> None:
+    _validate_password(value)
+
+
 def _connect(config: AppConfig) -> sqlite3.Connection:
     try:
         return connect_database(config.database_url)

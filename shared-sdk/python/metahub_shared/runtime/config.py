@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
 from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
+from metahub_shared.identity.crypto import DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET
 from metahub_shared.mcp.contracts import McpContractError, McpSchemaLimits, McpVersionedSecret
 from metahub_shared.mcp.crypto import (
     DEFAULT_MCP_ENCRYPTION_SECRET,
@@ -45,10 +46,12 @@ ConfigSource = Literal["default", "file", "env"]
 ConfigStatus = Literal["configured", "missing", "masked", "defaulted"]
 ServiceMode = Literal["internal_only", "public_service"]
 McpExecutorMode = Literal["disabled", "test_loopback", "sandbox_http"]
+IdentityChallengeDeliveryMode = Literal["disabled", "test_capture"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
 DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
+DEFAULT_IDENTITY_CHALLENGE_SECRET = "dev-only-change-me-metahub-identity-challenge-secret-2026"
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
 )
@@ -89,6 +92,9 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_SERVICE_MODE": "internal_only",
     "METAHUB_AUTH_TOKEN_SECRET": "dev-only-change-me-metahub-auth-secret",
     "METAHUB_IDENTITY_SESSION_SECRET": DEFAULT_IDENTITY_SESSION_SECRET,
+    "METAHUB_IDENTITY_CHALLENGE_SECRET": DEFAULT_IDENTITY_CHALLENGE_SECRET,
+    "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
+    "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
     # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
     "METAHUB_RESPONSE_CACHE_ENABLED": "false",
@@ -495,6 +501,17 @@ class AppConfig(BaseModel):
         exclude=True,
         repr=False,
     )
+    identity_challenge_secret: str = Field(
+        default=DEFAULT_IDENTITY_CHALLENGE_SECRET,
+        exclude=True,
+        repr=False,
+    )
+    identity_pii_encryption_secret: str = Field(
+        default=DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
+        exclude=True,
+        repr=False,
+    )
+    identity_challenge_delivery_mode: IdentityChallengeDeliveryMode = "disabled"
     # Prompt 指纹根密钥与登录 Token 密钥必须分域，且不得进入 model_dump、repr 或配置摘要明文。
     cache_affinity_hmac_secret: str = Field(exclude=True, repr=False)
     # Response Cache 的部署级总开关默认关闭；四个根密钥均从 repr/model_dump 排除。
@@ -845,6 +862,13 @@ def load_app_config(service_name: str) -> AppConfig:
     provider_api_keys = _read_provider_api_keys(values)
     auth_token_secret = _value(values, "METAHUB_AUTH_TOKEN_SECRET")
     identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
+    identity_challenge_secret = _value(values, "METAHUB_IDENTITY_CHALLENGE_SECRET")
+    identity_pii_encryption_secret = _value(
+        values, "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET"
+    )
+    identity_challenge_delivery_mode = (
+        _value(values, "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE").strip().lower()
+    )
     cache_affinity_hmac_secret = _value(values, "METAHUB_CACHE_AFFINITY_HMAC_SECRET")
 
     if (
@@ -857,6 +881,72 @@ def load_app_config(service_name: str) -> AppConfig:
             code="infra.config_invalid",
             message="METAHUB_IDENTITY_SESSION_SECRET is not an independent production secret.",
             suggestion="Configure a unique identity session secret of at least 32 characters.",
+        )
+
+    if (
+        len(identity_challenge_secret) < 32
+        or hmac.compare_digest(identity_challenge_secret, auth_token_secret)
+        or hmac.compare_digest(identity_challenge_secret, identity_session_secret)
+        or hmac.compare_digest(identity_challenge_secret, cache_affinity_hmac_secret)
+        or (
+            service_name == "control-plane-api"
+            and environment == "prod"
+            and identity_challenge_secret == DEFAULT_IDENTITY_CHALLENGE_SECRET
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_IDENTITY_CHALLENGE_SECRET is not an independent production secret.",
+            suggestion="Configure a unique identity challenge secret of at least 32 characters.",
+        )
+    if identity_challenge_delivery_mode not in {"disabled", "test_capture"} or (
+        service_name == "control-plane-api"
+        and environment == "prod"
+        and identity_challenge_delivery_mode == "test_capture"
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE is invalid for this environment.",
+            suggestion="Use disabled until a production delivery adapter is configured.",
+        )
+
+    identity_pii_forbidden_secrets = (
+        auth_token_secret,
+        identity_session_secret,
+        identity_challenge_secret,
+        cache_affinity_hmac_secret,
+        _raw_optional_value(values, "METAHUB_BATCH_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_FILE_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_TENANT_DATA_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_RESPONSE_CACHE_HMAC_SECRET"),
+        _raw_optional_value(values, "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET"),
+        _raw_optional_value(values, "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET"),
+        _raw_optional_value(values, "METAHUB_MCP_ENCRYPTION_SECRET"),
+        _raw_optional_value(values, "METAHUB_MCP_HMAC_SECRET"),
+        _raw_optional_value(values, "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET"),
+        _raw_optional_value(values, "METAHUB_SESSION_RISK_HMAC_SECRET"),
+        _raw_optional_value(values, "METAHUB_APPROVAL_HMAC_SECRET"),
+        *provider_api_keys.values(),
+    )
+    if (
+        not _valid_identity_pii_secret(identity_pii_encryption_secret)
+        or _secret_reused(identity_pii_encryption_secret, identity_pii_forbidden_secrets)
+        or (
+            service_name == "control-plane-api"
+            and environment == "prod"
+            and identity_pii_encryption_secret == DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message=(
+                "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET is not an independent production "
+                "secret."
+            ),
+            suggestion="Configure a unique Identity PII secret of at least 32 characters.",
         )
 
     environment_info = EnvironmentInfo(
@@ -1274,6 +1364,8 @@ def load_app_config(service_name: str) -> AppConfig:
         encryption_secret=tenant_data_encryption_secret,
         forbidden_secrets=(
             auth_token_secret,
+            identity_challenge_secret,
+            identity_pii_encryption_secret,
             cache_affinity_hmac_secret,
             internal_config_token,
             internal_chat_token,
@@ -1308,6 +1400,8 @@ def load_app_config(service_name: str) -> AppConfig:
         previous_secret=approval_previous_hmac_secret,
         forbidden_secrets=(
             auth_token_secret,
+            identity_challenge_secret,
+            identity_pii_encryption_secret,
             cache_affinity_hmac_secret,
             internal_config_token,
             internal_chat_token,
@@ -1509,6 +1603,8 @@ def load_app_config(service_name: str) -> AppConfig:
         service_name=service_name,
         forbidden_secrets=(
             auth_token_secret,
+            identity_challenge_secret,
+            identity_pii_encryption_secret,
             cache_affinity_hmac_secret,
             internal_config_token,
             internal_chat_token,
@@ -1660,6 +1756,9 @@ def load_app_config(service_name: str) -> AppConfig:
         file_security_max_total_pixels=file_security_max_total_pixels,
         auth_token_secret=auth_token_secret,
         identity_session_secret=identity_session_secret,
+        identity_challenge_secret=identity_challenge_secret,
+        identity_pii_encryption_secret=identity_pii_encryption_secret,
+        identity_challenge_delivery_mode=identity_challenge_delivery_mode,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
         response_cache_enabled=response_cache_enabled,
         response_cache_hmac_version=response_cache_hmac_version,
@@ -2957,6 +3056,9 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_FILE_SECURITY_MAX_TOTAL_PIXELS",
         "METAHUB_AUTH_TOKEN_SECRET",
         "METAHUB_IDENTITY_SESSION_SECRET",
+        "METAHUB_IDENTITY_CHALLENGE_SECRET",
+        "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
+        "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_RESPONSE_CACHE_ENABLED",
         "METAHUB_RESPONSE_CACHE_HMAC_VERSION",
@@ -4033,6 +4135,33 @@ def _bounded_port_list(raw: str) -> list[int]:
             suggestion="Configure between one and 32 allowed ports.",
         )
     return sorted(ports)
+
+
+def _valid_identity_pii_secret(secret: object) -> bool:
+    if type(secret) is not str or secret != secret.strip():
+        return False
+    try:
+        encoded = secret.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return False
+    return 32 <= len(encoded) <= 512 and all(ord(character) >= 33 for character in secret)
+
+
+def _secret_reused(candidate: str, forbidden: tuple[object, ...]) -> bool:
+    try:
+        encoded_candidate = candidate.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return True
+    for value in forbidden:
+        if type(value) is not str or not value:
+            continue
+        try:
+            encoded_value = value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            continue
+        if hmac.compare_digest(encoded_candidate, encoded_value):
+            return True
+    return False
 
 
 def _value(values: dict[str, ConfigValue], key: str) -> str:

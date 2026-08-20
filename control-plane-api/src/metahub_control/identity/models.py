@@ -57,3 +57,13 @@ class IdentityRotateResponse(BaseModel):
     current_session: GlobalSessionSummary
     request_id: str
     trace_id: str
+
+
+class IdentityPendingChallengeResponse(BaseModel):
+    intent_id: str
+    purpose: str
+    status: str
+    expires_at: datetime
+    resend_available_at: datetime
+    request_id: str
+    trace_id: str

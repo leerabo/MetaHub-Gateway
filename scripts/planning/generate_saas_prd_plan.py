@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-20"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 91
+COMPLETED_THROUGH_PRD = 92
 
 
 def prd(
@@ -129,17 +129,33 @@ INITIAL_DRAFT_PRDS = [
         "个人与企业用户自助注册验证",
         "未登录个人/企业注册人",
         "作为新用户，我希望自助注册、验证身份并安全找回账号。",
-        "注册、邮箱或手机号验证、验证码重发、密码设置、找回密码、同形响应、防滥用限流、同意隐私条款版本；支持企业邀请接受与已存在全局账号合并。",
-        "不在本条创建Workspace业务资源；不做社交登录；不把验证码或找回Token放入URL查询、日志或Storage。",
+        "注册、邮箱验证、验证码重发、密码设置、找回密码、同形响应、防滥用限流、同意隐私条款版本；支持企业邀请验证接续和已有全局账号的密码加邮箱双重证明；未验证邮箱只以HMAC和owner-bound AES-256-GCM信封落库。",
+        "不在本条创建Workspace业务资源；不做手机号或社交登录；不按邮箱/Hash合并账号；不把验证码或找回Token放入URL查询、日志或Storage。",
         "注册页、验证页、找回密码页、邀请接续页",
         ("POST /identity/registrations", "POST /identity/verifications", "POST /identity/verifications/resend", "POST /identity/password-resets", "POST /identity/password-resets/confirm"),
-        ("RegistrationIntent", "VerificationChallenge", "PasswordResetIntent", "ConsentRecord", "AbuseCounter"),
-        ("identity.registered", "identity.verified", "identity.password_reset"),
+        (
+            "RegistrationIntent",
+            "VerificationChallenge",
+            "PasswordResetIntent",
+            "AccountVerification",
+            "ConsentRecord",
+            "AbuseCounter",
+            "InvitationIdentityBinding",
+            "IdentityLifecycleEvent",
+            "IdentityLifecycleOutbox",
+        ),
+        (
+            "identity.challenge_dispatched",
+            "identity.challenge_delivery_failed",
+            "identity.registered",
+            "identity.verified",
+            "identity.password_reset",
+        ),
         "公开入口仅能操作一次性意图；账号本人完成验证后获得全局Session",
         "注册全流程可恢复；重复邮箱不泄露存在性；验证码过期/重放/并发只成功一次；邀请用户注册后继续原邀请；所有响应带request_id。",
         "PRD-091、现有PRD-060邀请",
-        "现有邀请Token合同保持兼容；新账号建立后原子绑定；回滚时未完成意图可过期，已创建账号不可删除。",
-        "验证码哈希、频率/设备/IP限流、CSRF/Origin、弱密码拒绝、审计最小化、国内隐私同意留痕。",
+        "0084新增全局Identity intent/challenge/verification/consent/binding/event表；现有邀请Token合同保持兼容；pristine可down，任何安全事实阻断回滚；已创建账号不可删除。",
+        "验证码使用独立Challenge根密钥分域HMAC；未验证邮箱使用独立PII根密钥和owner-bound AES-256-GCM；频率/设备/IP限流、CSRF/Origin、弱密码拒绝、审计最小化、国内隐私同意留痕。",
         "公开黑盒、枚举防护、并发重放、验证码渠道故障、邀请接续、真人鼠标/键盘、移动端兼容。",
         "注册/验证API p95<500ms（不含短信邮件送达）；同IP/账号限流不拖慢正常登录。",
         "4-5人周",
@@ -1376,7 +1392,7 @@ def add_readme_sheet(wb: Workbook) -> None:
         ("计划日期", PLAN_DATE),
         ("权威状态", "本工作簿是PRD-090起唯一开发依据；旧总清单PRD-090..108全部废弃、禁止开发，仅保留历史审计。"),
         ("编号策略", f"保留PRD-001..089完成事实；从PRD-090重新规划，不设需求总数或最终编号上限；当前已细化{len(PRDS)}条、至PRD-{CURRENT_PLANNED_LAST_PRD:03d}，后续按连续编号追加并记录变更。"),
-        ("总体状态", f"saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090..091已完成，下一项{NEXT_PLANNED_PRD}。"),
+        ("总体状态", f"saas_incremental_roadmap_complete=false；兼容旧状态all_108_prds_complete=false；PRD-090..{COMPLETED_THROUGH_PRD:03d}已完成，下一项{NEXT_PLANNED_PRD}。"),
         ("产品目标", "云端SaaS支持个人和企业自助注册；平台团队统一运营；企业可部署本地Gateway并由SaaS云管。"),
         ("标准模式", "个人SaaS、企业SaaS、云管私有Gateway；完全离线仅支持签名包异步管理，不承诺云端实时管理。"),
         ("身份原则", "全局账号不绑定单租户；Workspace承载个人/企业；Membership恢复租户角色；登录不填写租户标识。"),
@@ -1448,7 +1464,8 @@ def add_objects_sheet(wb: Workbook) -> None:
     ws.append(("PRD_ID", "数据对象", "归属域", "租户字段规则", "生命周期/关键约束"))
     global_objects = {
         "GlobalAccount", "AccountCredential", "GlobalSession", "AccountIdentityLink", "RegistrationIntent",
-        "VerificationChallenge", "PasswordResetIntent", "ConsentRecord", "PlatformOperator", "PlatformRole",
+        "VerificationChallenge", "PasswordResetIntent", "AccountVerification", "ConsentRecord", "AbuseCounter",
+        "InvitationIdentityBinding", "IdentityLifecycleEvent", "IdentityLifecycleOutbox", "PlatformOperator", "PlatformRole",
         "PlatformPermission", "PlatformAuditLog", "PlanCatalog", "PlanVersion", "DatabaseCluster", "CacheCluster",
         "ObjectStore", "KeyRing", "GatewayCell", "GatewayRelease", "ServiceCatalogEntry", "ServiceLevelObjective",
         "ErrorBudget", "Alert", "OnCallRoute", "Region", "FailoverPlan", "DisasterRecoveryRun", "RecoveryPoint",
@@ -1463,8 +1480,18 @@ def add_objects_sheet(wb: Workbook) -> None:
     }
     for item in PRDS:
         for name in item["objects"]:
-            domain = "平台全局" if name in global_objects or name.startswith("Platform") else "Workspace/租户"
-            tenant_rule = "全局对象不带tenant_id；通过受控关联引用Workspace" if domain == "平台全局" else "必须带workspace_id/tenant_id并以复合外键绑定owner"
+            domain = (
+                "平台全局/Identity abuse domain"
+                if name == "AbuseCounter"
+                else "平台全局"
+                if name in global_objects or name.startswith("Platform")
+                else "Workspace/租户"
+            )
+            tenant_rule = (
+                "全局对象不带tenant_id；通过受控关联引用Workspace"
+                if domain.startswith("平台全局")
+                else "必须带workspace_id/tenant_id并以复合外键绑定owner"
+            )
             constraint = "版本化/状态机/CAS；删除或停用保留审计事实；公开DTO使用字段白名单"
             ws.append((item["id"], name, domain, tenant_rule, constraint))
     style_table(ws, {1: 12, 2: 32, 3: 18, 4: 52, 5: 62})

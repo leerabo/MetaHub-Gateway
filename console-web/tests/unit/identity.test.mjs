@@ -4,17 +4,25 @@ import test from "node:test";
 
 import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
 import {
+  renderIdentityRegistrationPage,
+  renderIdentityResetConfirmPage,
   renderIdentityLoginPage,
   renderIdentitySecurityPage,
+  renderIdentityVerificationPage,
 } from "../../src/features/identity/renderIdentityPage.js";
 import {
+  confirmIdentityPasswordReset,
   IdentityApiError,
   getIdentityMe,
   listIdentitySessions,
   loginIdentity,
   logoutIdentity,
+  registerIdentity,
+  requestIdentityPasswordReset,
+  resendIdentityVerification,
   revokeIdentitySession,
   rotateIdentityPassword,
+  verifyIdentityRegistration,
 } from "../../src/lib/identity.js";
 
 const CONTROL_URL = "http://control.local";
@@ -64,6 +72,151 @@ test("identity reads include credentials and never send CSRF or Authorization", 
     assert.equal("Authorization" in call.options.headers, false);
     assert.equal("X-CSRF-Token" in call.options.headers, false);
   }
+});
+
+test("self-service identity clients send exact in-memory challenge contracts", async () => {
+  const calls = installFetch((url) =>
+    String(url).endsWith("/verifications") || String(url).endsWith("/confirm")
+      ? accountSessionResponse()
+      : jsonResponse(pendingChallengePayload(String(url).includes("password-resets") ? "password_reset" : "registration")),
+  );
+
+  await registerIdentity({
+    controlApiUrl: CONTROL_URL,
+    email: "new@example.com",
+    displayName: "New Owner",
+    password: "PrivateRegistrationPassword",
+    consentVersion: "privacy-2026-08",
+    invitationToken: "invitation-token-private",
+  });
+  await verifyIdentityRegistration({
+    controlApiUrl: CONTROL_URL,
+    intentId: "rgi_11111111111111111111111111111111",
+    code: "123456",
+  });
+  await resendIdentityVerification({
+    controlApiUrl: CONTROL_URL,
+    intentId: "rgi_11111111111111111111111111111111",
+  });
+  await requestIdentityPasswordReset({
+    controlApiUrl: CONTROL_URL,
+    email: "new@example.com",
+  });
+  await confirmIdentityPasswordReset({
+    controlApiUrl: CONTROL_URL,
+    intentId: "pri_11111111111111111111111111111111",
+    code: "654321",
+    newPassword: "PrivateReplacementPassword",
+  });
+
+  assert.deepEqual(
+    calls.map(({ url, options }) => [url, options.method, JSON.parse(options.body)]),
+    [
+      [
+        "http://control.local/identity/registrations",
+        "POST",
+        {
+          email: "new@example.com",
+          display_name: "New Owner",
+          password: "PrivateRegistrationPassword",
+          consent_version: "privacy-2026-08",
+          invitation_token: "invitation-token-private",
+        },
+      ],
+      [
+        "http://control.local/identity/verifications",
+        "POST",
+        { intent_id: "rgi_11111111111111111111111111111111", code: "123456" },
+      ],
+      [
+        "http://control.local/identity/verifications/resend",
+        "POST",
+        { intent_id: "rgi_11111111111111111111111111111111" },
+      ],
+      [
+        "http://control.local/identity/password-resets",
+        "POST",
+        { email: "new@example.com" },
+      ],
+      [
+        "http://control.local/identity/password-resets/confirm",
+        "POST",
+        {
+          intent_id: "pri_11111111111111111111111111111111",
+          code: "654321",
+          new_password: "PrivateReplacementPassword",
+        },
+      ],
+    ],
+  );
+  for (const call of calls) {
+    assert.equal(call.options.credentials, "include");
+    assert.equal(call.options.cache, "no-store");
+    assert.equal("Authorization" in call.options.headers, false);
+    assert.equal("X-CSRF-Token" in call.options.headers, false);
+  }
+});
+
+test("registration and reset renderers keep intent and secrets out of DOM", () => {
+  const root = createRoot();
+  renderIdentityRegistrationPage(root, { email: '<unsafe>@example.com', displayName: "<Owner>" });
+  assert.match(root.innerHTML, /data-identity-registration-form/u);
+  assert.match(root.innerHTML, /autocomplete="new-password"/u);
+  assert.match(root.innerHTML, /name="consent" type="checkbox"/u);
+  assert.doesNotMatch(root.innerHTML, /<unsafe>|<Owner>|invitation_token|intent_id/u);
+
+  renderIdentityVerificationPage(root, { feedback: "验证码已发送。" });
+  assert.match(root.innerHTML, /autocomplete="one-time-code"/u);
+  assert.match(root.innerHTML, /pattern="\[0-9\]\{6\}"/u);
+  assert.doesNotMatch(root.innerHTML, /rgi_|intent_id|invitation/u);
+
+  renderIdentityResetConfirmPage(root);
+  assert.match(root.innerHTML, /data-identity-reset-confirm-form/u);
+  assert.doesNotMatch(root.innerHTML, /pri_|intent_id/u);
+});
+
+test("self-service controller keeps challenge in memory and scrubs secret inputs", async () => {
+  const passwordInputs = [{ value: "RegistrationSecret" }, { value: "RegistrationSecret" }];
+  const codeInputs = [{ value: "123456" }];
+  const root = createRoot(passwordInputs, codeInputs);
+  const seen = [];
+  const controller = createIdentityPageController({
+    root,
+    invitationToken: "private-invitation-token",
+    api: workingApi({
+      register: async (input) => {
+        seen.push(["register", input]);
+        return pendingChallengePayload("registration");
+      },
+      verify: async (input) => {
+        seen.push(["verify", input]);
+        return accountSessionPayload();
+      },
+    }),
+  });
+
+  controller.showRegistration();
+  assert.equal(
+    await controller.registerAccount({
+      email: "new@example.com",
+      displayName: "New Owner",
+      password: "RegistrationSecret",
+      confirmPassword: "RegistrationSecret",
+      consent: true,
+    }),
+    true,
+  );
+  assert.match(root.innerHTML, /data-identity-verification-form/u);
+  assert.doesNotMatch(root.innerHTML, /private-invitation-token|rgi_/u);
+  assert.deepEqual(passwordInputs.map((input) => input.value), ["", ""]);
+
+  assert.equal(await controller.verifyRegistration({ code: "123456" }), true);
+  assert.deepEqual(codeInputs.map((input) => input.value), [""]);
+  assert.match(root.innerHTML, /账号保护状态/u);
+  assert.equal(seen[0][0], "register");
+  assert.equal(seen[0][1].invitationToken, "private-invitation-token");
+  assert.equal(seen[1][0], "verify");
+  assert.equal(seen[1][1].intentId, "rgi_11111111111111111111111111111111");
 });
 
 test("protected writes use the unique CSRF cookie and encode session paths", async () => {
@@ -459,6 +612,21 @@ function sessionListPayload(customSessions = null) {
   };
 }
 
+function pendingChallengePayload(purpose) {
+  return {
+    intent_id:
+      purpose === "registration"
+        ? "rgi_11111111111111111111111111111111"
+        : "pri_11111111111111111111111111111111",
+    purpose,
+    status: "pending",
+    expires_at: "2026-08-21T01:15:00Z",
+    resend_available_at: "2026-08-21T01:01:00Z",
+    request_id: "req_pending",
+    trace_id: "trc_pending",
+  };
+}
+
 function logoutPayload() {
   return { logged_out: true, request_id: "req_logout", trace_id: "trc_logout" };
 }
@@ -505,6 +673,11 @@ function session(overrides = {}) {
 function workingApi(overrides = {}) {
   return {
     login: async () => accountSessionPayload(),
+    register: async () => pendingChallengePayload("registration"),
+    verify: async () => accountSessionPayload(),
+    resend: async () => pendingChallengePayload("registration"),
+    requestReset: async () => pendingChallengePayload("password_reset"),
+    confirmReset: async () => accountSessionPayload(),
     me: async () => accountSessionPayload(),
     sessions: async () => sessionListPayload(),
     revoke: async () => revokePayload(),
@@ -514,7 +687,7 @@ function workingApi(overrides = {}) {
   };
 }
 
-function createRoot(passwordInputs = []) {
+function createRoot(passwordInputs = [], codeInputs = []) {
   return {
     innerHTML: "",
     addEventListener() {},
@@ -522,7 +695,10 @@ function createRoot(passwordInputs = []) {
       return true;
     },
     querySelectorAll(selector) {
-      return selector === 'input[type="password"]' ? passwordInputs : [];
+      if (selector === 'input[type="password"]') return passwordInputs;
+      if (selector === 'input[name="code"]') return codeInputs;
+      if (selector === 'input[autocomplete="one-time-code"]') return codeInputs;
+      return [];
     },
   };
 }
