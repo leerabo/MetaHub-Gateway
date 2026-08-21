@@ -34,6 +34,8 @@
 - 未验证邮箱使用独立 PII 根密钥 AES-256-GCM。格式、owner、tag 或密钥失败固定映射为
   `503 identity.unavailable`，事务回滚且 Challenge 保持 pending，不能形成密码学 oracle。
 - 注册邮箱、IP、设备只以分域 HMAC 参与持久限流；公开限流在 Argon2id KDF 前执行，存储故障失败关闭。
+  新账号的已接纳请求只执行一次 Argon2id hash，已有账号只执行一次密码 verify；sink intent 使用固定且
+  不可认证的非空 Argon2id 占位，不额外派生或持久化错误密码。
 - Invitation 验证只写 `verified_pending_membership` binding；旧 Invitation 仍 pending，User/Membership
   不新增。成功注册只签发 GlobalSession，不授予 tenant/workspace/role/permission。
 
@@ -43,8 +45,12 @@
   溢出或 Console warning/error。PII 加密接入后又在真实 `1280` 视口完成注册、generation 2 重发和
   验证，URL 始终为 `/identity.html`，终态 document width `1265 <= 1280`，密码字段全部清空。
 - 当前真实 Socket 冷注册/重发/验证单样本分别为 `593/45/53 ms`；冷注册包含首次完整 schema 解析，
-  不作为 warm p95。自动化 12 个 warm 注册与 12 个验证样本均满足 p95 `<500 ms`，40 个持久 abuse
+  不作为 warm p95。自动化 20 个 warm 注册与 20 个验证样本均满足 nearest-rank p95 `<500 ms`，
+  避免不足 20 个样本时 p95 退化为最大值；40 个持久 abuse
   bucket warm 样本满足 p95 `<30 ms`。
+- 每个 abuse scope 通过单条 `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` 原子累计并返回封禁状态，
+  不再先查询后写入；限额、5 分钟窗口、持久封禁和失败关闭语义保持不变。优化后 PRD-092 完整专项
+  `11 passed`，PRD-092..094 统一 Python 门禁 `69 passed`。
 - Identity 流程不产生模型 Usage 或成本账，标记为 N/A。
 
 ## 敏感审计

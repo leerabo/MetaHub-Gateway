@@ -6,6 +6,7 @@ import asyncio
 import math
 import shutil
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import pytest
@@ -219,7 +220,26 @@ async def test_existing_account_requires_password_and_email_proofs_without_mergi
     tmp_path: Path,
     migrated_identity_database: Path,
 ) -> None:
+    import metahub_control.identity.self_service as self_service
+
     database_url, app = _prepare(monkeypatch, tmp_path, migrated_identity_database)
+    original_hash = self_service.hash_password_argon2id
+    original_verify = self_service.verify_password
+    hash_calls = 0
+    verify_calls = 0
+
+    def counted_hash(password: str) -> str:
+        nonlocal hash_calls
+        hash_calls += 1
+        return original_hash(password)
+
+    def counted_verify(password: str, stored_hash: str) -> bool:
+        nonlocal verify_calls
+        verify_calls += 1
+        return original_verify(password, stored_hash)
+
+    monkeypatch.setattr(self_service, "hash_password_argon2id", counted_hash)
+    monkeypatch.setattr(self_service, "verify_password", counted_verify)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://testserver") as client:
         wrong = await _register(
@@ -257,6 +277,9 @@ async def test_existing_account_requires_password_and_email_proofs_without_mergi
         )
         assert verified.status_code == 200
 
+    assert hash_calls == 0
+    assert verify_calls == 2
+
     connection = connect_database(database_url)
     try:
         assert connection.execute("SELECT COUNT(*) FROM global_accounts").fetchone()[0] == 1
@@ -267,6 +290,13 @@ async def test_existing_account_requires_password_and_email_proofs_without_mergi
             )
         ]
         assert kinds == ["sink", "existing_account"]
+        password_hashes = [
+            row[0]
+            for row in connection.execute(
+                "SELECT candidate_password_hash FROM registration_intents ORDER BY created_at"
+            )
+        ]
+        assert password_hashes == [self_service._REGISTRATION_SINK_PASSWORD_HASH, None]
         assert connection.execute("SELECT COUNT(*) FROM account_identity_links").fetchone()[0] == 1
     finally:
         connection.close()
@@ -879,26 +909,45 @@ async def test_warm_registration_verification_and_abuse_buckets_meet_latency_bud
     import metahub_control.identity.self_service as self_service
 
     _database_url, app = _prepare(monkeypatch, tmp_path, migrated_identity_database)
-    transport = ASGITransport(app=app)
 
     def p95(samples: list[float]) -> float:
         return sorted(samples)[math.ceil(len(samples) * 0.95) - 1]
 
-    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+    warm_transport = ASGITransport(app=app, client=("127.0.0.2", 443))
+    async with AsyncClient(
+        transport=warm_transport,
+        base_url="https://testserver",
+    ) as warm_client:
         warm = await _register(
-            client,
+            warm_client,
             email="perf-warm@example.com",
             password=NEW_ACCOUNT_PASSWORD,
         )
         assert warm.status_code == 200
         assert pop_test_identity_challenge("registration", warm.json()["intent_id"]) is not None
 
+    async with AsyncExitStack() as stack:
+        measured_clients = [
+            await stack.enter_async_context(
+                AsyncClient(
+                    transport=ASGITransport(
+                        app=app,
+                        client=(f"127.0.0.{index + 10}", 443),
+                    ),
+                    base_url="https://testserver",
+                )
+            )
+            for index in range(4)
+        ]
         pending: list[tuple[str, str]] = []
         registration_samples: list[float] = []
-        for index in range(12):
+        # 至少 20 个样本才能让 nearest-rank p95 不退化为最大值；单次调度抖动不应
+        # 冒充 p95 回归。四个独立客户端各采五次，避免把单设备滥用上限误测成服务 SLO；
+        # 持续出现两个及以上超预算样本仍会使本门禁失败。
+        for index in range(20):
             started_at = time.perf_counter()
             response = await _register(
-                client,
+                measured_clients[index % len(measured_clients)],
                 email=f"perf-{index}@example.com",
                 password=NEW_ACCOUNT_PASSWORD,
             )
@@ -910,9 +959,9 @@ async def test_warm_registration_verification_and_abuse_buckets_meet_latency_bud
             pending.append((intent_id, challenge.code))
 
         verification_samples: list[float] = []
-        for intent_id, code in pending:
+        for index, (intent_id, code) in enumerate(pending):
             started_at = time.perf_counter()
-            response = await client.post(
+            response = await measured_clients[index % len(measured_clients)].post(
                 "/identity/verifications",
                 json={"intent_id": intent_id, "code": code},
                 headers=_write_headers(),

@@ -46,6 +46,12 @@ _REGISTRATION_INTENT_RE = re.compile(r"^rgi_[0-9a-f]{32}$")
 _RESET_INTENT_RE = re.compile(r"^pri_[0-9a-f]{32}$")
 _INVITATION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _CODE_RE = re.compile(r"^[0-9]{6}$")
+# 0084 要求 sink intent 保留非空占位。固定 dummy 只满足结构约束，永不用于认证，
+# 避免为已存在账号的错误密码再做一次 KDF 或持久化其派生值。
+_REGISTRATION_SINK_PASSWORD_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=2$"
+    "bWV0YWh1Yi1zaW5rLXYxIQ$3DflkObXMIMmTH2goBOQivhvAYrIAkfY0Z5Bo+WE5K4"
+)
 _INTENT_TTL = timedelta(minutes=15)
 _RESEND_COOLDOWN = timedelta(seconds=60)
 _RATE_WINDOW = timedelta(minutes=5)
@@ -118,12 +124,8 @@ def begin_registration(
     try:
         pre_candidates = _account_candidates(connection, normalized_email)
         proof = _registration_proof_candidate(pre_candidates, _utcnow())
-        candidate_hash = hash_password_argon2id(password)
-        password_matches = (
-            verify_password(password, proof["secret_hash"])
-            if proof is not None
-            else verify_password(password, candidate_hash)
-        )
+        candidate_hash = hash_password_argon2id(password) if proof is None else None
+        password_matches = proof is not None and verify_password(password, proof["secret_hash"])
 
         connection.execute("BEGIN IMMEDIATE")
         now = _utcnow()
@@ -150,7 +152,7 @@ def begin_registration(
             intent_kind = "sink"
             target_account_id = None
             target_credential_revision = None
-            stored_candidate_hash = candidate_hash
+            stored_candidate_hash = _REGISTRATION_SINK_PASSWORD_HASH
 
         email_hmac = _secret_hmac(config, "email-identifier", normalized_email)
         _supersede_registration_intents(connection, email_hmac, now)
@@ -1068,49 +1070,35 @@ def _consume_rate_limits(
             bucket_hmac = _secret_hmac(config, f"abuse:{scope}", raw_key)
             row = connection.execute(
                 """
-                SELECT identity_abuse_bucket_id,attempt_count,blocked_until
-                FROM identity_abuse_buckets
-                WHERE scope=? AND bucket_hmac=? AND window_started_at=?
-                """,
-                (scope, bucket_hmac, _db_time(window_started)),
-            ).fetchone()
-            if row is None:
-                connection.execute(
-                    """
-                    INSERT INTO identity_abuse_buckets(
-                      identity_abuse_bucket_id,scope,bucket_hmac,window_started_at,
-                      attempt_count,blocked_until,expires_at,updated_at)
-                    VALUES(?,?,?,?,1,NULL,?,?)
-                    """,
-                    (
-                        f"iab_{uuid4().hex}",
-                        scope,
-                        bucket_hmac,
-                        _db_time(window_started),
-                        _db_time(expires_at),
-                        _db_time(now),
-                    ),
-                )
-                continue
-            attempts = int(row["attempt_count"]) + 1
-            already_blocked = row["blocked_until"] is not None and _parse_time(
-                row["blocked_until"]
-            ) > now
-            limit_reached = attempts > _RATE_LIMITS[scope]
-            blocked = blocked or already_blocked or limit_reached
-            connection.execute(
-                """
-                UPDATE identity_abuse_buckets
-                SET attempt_count=?,blocked_until=?,updated_at=?
-                WHERE identity_abuse_bucket_id=?
+                INSERT INTO identity_abuse_buckets(
+                  identity_abuse_bucket_id,scope,bucket_hmac,window_started_at,
+                  attempt_count,blocked_until,expires_at,updated_at)
+                VALUES(?,?,?,?,1,NULL,?,?)
+                ON CONFLICT(scope,bucket_hmac,window_started_at) DO UPDATE SET
+                  attempt_count=identity_abuse_buckets.attempt_count+1,
+                  blocked_until=CASE
+                    WHEN (
+                      identity_abuse_buckets.blocked_until IS NOT NULL
+                      AND unixepoch(identity_abuse_buckets.blocked_until)>unixepoch(?)
+                    ) OR identity_abuse_buckets.attempt_count+1>?
+                    THEN ? ELSE NULL END,
+                  expires_at=excluded.expires_at,
+                  updated_at=excluded.updated_at
+                RETURNING blocked_until
                 """,
                 (
-                    attempts,
-                    _db_time(window_end) if already_blocked or limit_reached else None,
+                    f"iab_{uuid4().hex}",
+                    scope,
+                    bucket_hmac,
+                    _db_time(window_started),
+                    _db_time(expires_at),
                     _db_time(now),
-                    row["identity_abuse_bucket_id"],
+                    _db_time(now),
+                    _RATE_LIMITS[scope],
+                    _db_time(window_end),
                 ),
-            )
+            ).fetchone()
+            blocked = blocked or row["blocked_until"] is not None
         connection.commit()
     except (sqlite3.Error, DbError, OSError, TypeError, ValueError):
         if connection.in_transaction:
