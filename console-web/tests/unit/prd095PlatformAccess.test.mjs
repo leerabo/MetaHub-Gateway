@@ -303,8 +303,8 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   assert.match(root.innerHTML, /Billing/u);
   assert.match(root.innerHTML, /Customer success/u);
   controller.selectView("workspaces");
-  assert.match(root.innerHTML, /<h1>Workspaces<\/h1>/u);
-  assert.match(root.innerHTML, /暂无数据/u);
+  assert.match(root.innerHTML, /<h1>Workspace 目录<\/h1>/u);
+  assert.match(root.innerHTML, /没有符合条件的 Workspace/u);
   controller.selectView("not-authorized");
   assert.match(root.innerHTML, /平台工作台/u);
   assert.equal(await controller.openSession("123456"), true);

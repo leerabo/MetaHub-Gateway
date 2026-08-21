@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from fastapi import APIRouter, Request, Response
@@ -58,6 +58,26 @@ from .service import (
     revoke_support_grant_workspace,
     update_platform_operator,
 )
+from .workspace_models import (
+    OwnerNotificationResponse,
+    PlatformWorkspaceDetailResponse,
+    PlatformWorkspaceHealthResponse,
+    PlatformWorkspaceListResponse,
+    PlatformWorkspaceMutationResponse,
+    WorkspaceOperationalEventListResponse,
+)
+from .workspace_service import (
+    add_workspace_risk_tag,
+    authorize_workspace_write,
+    get_platform_workspace,
+    get_platform_workspace_health,
+    list_platform_workspaces,
+    list_workspace_events,
+    notify_workspace_owner,
+    remove_workspace_risk_tag,
+    restore_workspace,
+    suspend_workspace,
+)
 
 router = APIRouter(tags=["platform"])
 _WORK_LIMITER = anyio.CapacityLimiter(4)
@@ -69,6 +89,20 @@ _SUPPORT_REVOKE_REASONS = frozenset(
     {"operator_revoked", "diagnostics_complete", "customer_revoked", "security_revoked"}
 )
 _BREAK_GLASS_REASONS = frozenset({"incident_containment", "service_recovery"})
+_WORKSPACE_FILTERS = frozenset(
+    {
+        "search",
+        "kind",
+        "operational_status",
+        "region",
+        "risk_tag",
+        "health_status",
+        "health_risk",
+        "plan_status",
+        "deployment_status",
+    }
+)
+_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 
 
 @router.post("/platform/bootstrap", response_model=PlatformBootstrapResponse)
@@ -207,6 +241,244 @@ async def navigation(request: Request, response: Response) -> PlatformNavigation
         get_platform_navigation,
         _config(request),
         session_token=_required_platform_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/workspaces",
+    response_model=PlatformWorkspaceListResponse,
+    response_model_exclude_none=True,
+)
+async def platform_workspaces(
+    request: Request, response: Response
+) -> PlatformWorkspaceListResponse:
+    _platform_read_boundary(request, allowed_query=("limit", "cursor", *_WORKSPACE_FILTERS))
+    limit, cursor, filters = _workspace_pagination(request)
+    result = await _run(
+        list_platform_workspaces,
+        _config(request),
+        session_token=_required_platform_cookie(request),
+        limit=limit,
+        cursor=cursor,
+        filters=filters,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/workspaces/{workspace_id}",
+    response_model=PlatformWorkspaceDetailResponse,
+    response_model_exclude_none=True,
+)
+async def platform_workspace_detail(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspaceDetailResponse:
+    _platform_read_boundary(request)
+    result = await _run(
+        get_platform_workspace,
+        _config(request),
+        session_token=_required_platform_cookie(request),
+        workspace_id=workspace_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.workspace.operational_revision)
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/workspaces/{workspace_id}/health",
+    response_model=PlatformWorkspaceHealthResponse,
+    response_model_exclude_none=True,
+)
+async def platform_workspace_health(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspaceHealthResponse:
+    _platform_read_boundary(request)
+    result = await _run(
+        get_platform_workspace_health,
+        _config(request),
+        session_token=_required_platform_cookie(request),
+        workspace_id=workspace_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/workspaces/{workspace_id}/suspend",
+    response_model=PlatformWorkspaceMutationResponse,
+    response_model_exclude_none=True,
+)
+async def suspend_platform_workspace(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspaceMutationResponse:
+    credentials = await _authorize_workspace_write(request, "lifecycle")
+    expected_revision = _if_match(request)
+    idempotency_key = _idempotency_key(request)
+    payload = await _strict_json(request, required_fields=("reason_code", "confirmed"))
+    if payload["confirmed"] is not True:
+        raise ApiError("platform.request_invalid")
+    result = await _run(
+        suspend_workspace,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        reason_code=_string(payload, "reason_code", 2, 80),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.workspace.operational_revision)
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/workspaces/{workspace_id}/restore",
+    response_model=PlatformWorkspaceMutationResponse,
+    response_model_exclude_none=True,
+)
+async def restore_platform_workspace(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspaceMutationResponse:
+    credentials = await _authorize_workspace_write(request, "lifecycle")
+    expected_revision = _if_match(request)
+    idempotency_key = _idempotency_key(request)
+    payload = await _strict_json(request, required_fields=("reason_code", "confirmed"))
+    if payload["confirmed"] is not True:
+        raise ApiError("platform.request_invalid")
+    result = await _run(
+        restore_workspace,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        reason_code=_string(payload, "reason_code", 2, 80),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.workspace.operational_revision)
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/workspaces/{workspace_id}/risk-tags",
+    response_model=PlatformWorkspaceMutationResponse,
+    response_model_exclude_none=True,
+)
+async def add_platform_workspace_risk_tag(
+    workspace_id: str, request: Request, response: Response
+) -> PlatformWorkspaceMutationResponse:
+    credentials = await _authorize_workspace_write(request, "risk")
+    expected_revision = _if_match(request)
+    idempotency_key = _idempotency_key(request)
+    payload = await _strict_json(request, required_fields=("tag_code", "reason_code"))
+    result = await _run(
+        add_workspace_risk_tag,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        tag_code=_string(payload, "tag_code", 2, 40),
+        reason_code=_string(payload, "reason_code", 2, 80),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.workspace.risk_revision)
+    _private(response)
+    return result
+
+
+@router.delete(
+    "/platform/workspaces/{workspace_id}/risk-tags/{tag_code}",
+    response_model=PlatformWorkspaceMutationResponse,
+    response_model_exclude_none=True,
+)
+async def remove_platform_workspace_risk_tag(
+    workspace_id: str, tag_code: str, request: Request, response: Response
+) -> PlatformWorkspaceMutationResponse:
+    credentials = await _authorize_workspace_write(request, "risk")
+    expected_revision = _if_match(request)
+    idempotency_key = _idempotency_key(request)
+    payload = await _strict_json(request, required_fields=("reason_code",))
+    result = await _run(
+        remove_workspace_risk_tag,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        tag_code=tag_code,
+        reason_code=_string(payload, "reason_code", 2, 80),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _etag(result.workspace.risk_revision)
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/workspaces/{workspace_id}/owner-notifications",
+    response_model=OwnerNotificationResponse,
+)
+async def create_workspace_owner_notification(
+    workspace_id: str, request: Request, response: Response
+) -> OwnerNotificationResponse:
+    credentials = await _authorize_workspace_write(request, "contact")
+    expected_revision = _if_match(request)
+    idempotency_key = _idempotency_key(request)
+    payload = await _strict_json(request, required_fields=("template_code", "reason_code"))
+    result = await _run(
+        notify_workspace_owner,
+        _config(request),
+        session_token=credentials[0],
+        csrf_token=credentials[1],
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+        template_code=_string(payload, "template_code", 2, 80),
+        reason_code=_string(payload, "reason_code", 2, 80),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/workspaces/{workspace_id}/events",
+    response_model=WorkspaceOperationalEventListResponse,
+)
+async def platform_workspace_events(
+    workspace_id: str, request: Request, response: Response
+) -> WorkspaceOperationalEventListResponse:
+    _platform_read_boundary(request, allowed_query=("limit",))
+    result = await _run(
+        list_workspace_events,
+        _config(request),
+        session_token=_required_platform_cookie(request),
+        workspace_id=workspace_id,
+        limit=_limit_only(request),
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
@@ -489,6 +761,23 @@ async def _run(function, *args, **kwargs):
     return await anyio.to_thread.run_sync(run_in_scope, limiter=_WORK_LIMITER)
 
 
+async def _authorize_workspace_write(
+    request: Request,
+    capability: Literal["lifecycle", "risk", "contact"],
+) -> tuple[str, str]:
+    _platform_write_boundary(request)
+    session_token = _required_platform_cookie(request)
+    csrf_token = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    await _run(
+        authorize_workspace_write,
+        _config(request),
+        session_token=session_token,
+        csrf_token=csrf_token,
+        capability=capability,
+    )
+    return session_token, csrf_token
+
+
 async def _strict_json(
     request: Request,
     *,
@@ -689,6 +978,49 @@ def _cursor_pagination(request: Request) -> tuple[int, str | None]:
     if not 1 <= limit <= 100 or cursor == "" or (cursor is not None and len(cursor) > 2048):
         raise ApiError("platform.request_invalid")
     return limit, cursor
+
+
+def _workspace_pagination(request: Request) -> tuple[int, str | None, dict[str, str]]:
+    items = list(request.query_params.multi_items())
+    if any(sum(item_key == key for item_key, _ in items) > 1 for key in request.query_params):
+        raise ApiError("platform.request_invalid")
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except ValueError:
+        raise ApiError("platform.request_invalid") from None
+    cursor = request.query_params.get("cursor")
+    if not 1 <= limit <= 100 or cursor == "" or (cursor is not None and len(cursor) > 2048):
+        raise ApiError("platform.request_invalid")
+    filters = {
+        key: value
+        for key, value in items
+        if key not in {"limit", "cursor"} and key in _WORKSPACE_FILTERS
+    }
+    return limit, cursor, filters
+
+
+def _limit_only(request: Request) -> int:
+    items = list(request.query_params.multi_items())
+    if sum(key == "limit" for key, _ in items) > 1:
+        raise ApiError("platform.request_invalid")
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except ValueError:
+        raise ApiError("platform.request_invalid") from None
+    if not 1 <= limit <= 100:
+        raise ApiError("platform.request_invalid")
+    return limit
+
+
+def _idempotency_key(request: Request) -> str:
+    values = _raw_headers(request, b"idempotency-key")
+    if len(values) != 1 or _IDEMPOTENCY_RE.fullmatch(values[0]) is None:
+        raise ApiError("platform.request_invalid")
+    return values[0]
+
+
+def _etag(revision: int) -> str:
+    return f'"{revision}"'
 
 
 def _reject_query(request: Request, allowed: Iterable[str]) -> None:

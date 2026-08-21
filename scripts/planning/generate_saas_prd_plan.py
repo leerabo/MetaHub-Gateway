@@ -11,9 +11,9 @@ from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
-PLAN_DATE = "2026-08-21"
+PLAN_DATE = "2026-08-22"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 95
+COMPLETED_THROUGH_PRD = 96
 
 
 def prd(
@@ -261,15 +261,15 @@ INITIAL_DRAFT_PRDS = [
         "全局租户目录、脱敏搜索、状态/Region/计划/部署筛选、健康摘要、冻结/恢复、风险标签、联系Owner通知、数据导出/删除进度聚合；平台动作与租户动作分离。",
         "不展示请求正文、Provider Endpoint全文、Key、Token或客户成员列表明文；不允许平台直接编辑租户Provider/策略。",
         "平台总览、租户目录、租户运营详情、事件时间线",
-        ("GET /platform/workspaces", "GET /platform/workspaces/{workspace_id}", "POST /platform/workspaces/{workspace_id}/suspend", "POST /platform/workspaces/{workspace_id}/restore", "GET /platform/workspaces/{workspace_id}/health"),
-        ("WorkspaceOperationalState", "WorkspaceRiskTag", "WorkspaceHealthProjection", "PlatformActionIntent"),
-        ("workspace.suspended_by_platform", "workspace.restored_by_platform", "workspace.risk_changed"),
+        ("GET /platform/workspaces", "GET /platform/workspaces/{workspace_id}", "GET /platform/workspaces/{workspace_id}/health", "POST /platform/workspaces/{workspace_id}/suspend", "POST /platform/workspaces/{workspace_id}/restore", "POST/DELETE /platform/workspaces/{workspace_id}/risk-tags", "POST /platform/workspaces/{workspace_id}/owner-notifications", "GET /platform/workspaces/{workspace_id}/events"),
+        ("WorkspaceOperationalState", "WorkspaceRiskTag", "WorkspaceHealthProjection", "PlatformActionIntent", "WorkspaceOwnerNotificationOutbox", "WorkspaceOperationalEvent", "WorkspaceOperationalEventOutbox"),
+        ("workspace.suspended", "workspace.restored", "workspace.risk_tag_added", "workspace.risk_tag_removed", "workspace.owner_notification_requested"),
         "platform_ops可生命周期操作；platform_customer_success管理客户运营事实；platform_support只读；platform_security管理风险；platform_billing只读计划/欠费状态",
-        "平台可管理多租户且无跨租户内容泄漏；冻结阻止新Session/资源并按策略处理Gateway；恢复使用CAS；关键动作需确认、原因和审计。",
+        "平台可管理多租户且无跨租户内容泄漏；冻结撤销WorkspaceSession并阻止新Session/tenant资源写；Gateway明确展示transition_pending而不伪造传播；恢复与风险操作使用独立CAS；关键动作需确认、原因、幂等和审计。",
         "PRD-095、现有PRD-086/089",
-        "从现有Tenant状态建立运营投影；冻结新状态与既有disabled/quiescing兼容；回滚保留审计和最终状态。",
-        "防枚举、固定安全摘要、敏感列投影、批量操作上限、平台与租户Audit分域。",
-        "多租户筛选、分页游标绑定、冻结竞态、恢复失败、跨角色、10万租户查询计划和可访问性。",
+        "0088从完整0087回填operational/health投影并安装N/N-1 Session失败关闭guard；pristine可down/re-up，任何生命周期、风险、通知、事件或Session撤销事实存在时down原子失败。",
+        "exact ID/slug搜索、防枚举、HMAC游标绑定Session/角色/Operator revision/筛选摘要、固定健康与风险投影、Owner邮箱不落outbox、平台与租户Audit分域。",
+        "0087->0088/fresh/down/up、五角色字段裁剪、游标篡改/跨角色、health fresh/stale/坏源、风险职责隔离、冻结恢复CAS/幂等/并发、Session撤权、Owner通知无邮箱、Console迟到响应与390响应布局。",
         "10万租户目录查询p95<500ms；单租户详情p95<300ms。",
         "5-6人周",
         "后端2、前端1、测试1、SRE0.5",

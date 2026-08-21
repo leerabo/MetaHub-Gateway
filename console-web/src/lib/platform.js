@@ -2,6 +2,40 @@ const GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf";
 const PLATFORM_CSRF_COOKIE = "__Host-metahub-platform-csrf";
 const WORKSPACE_CSRF_COOKIE = "__Host-metahub-workspace-csrf";
 const OPAQUE_ID = /^(?:pto|wsp|sgr|bgs|pau)_[0-9a-f]{32}$/u;
+const WORKSPACE_SLUG = /^[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])$/u;
+const WORKSPACE_REGION = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/u;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
+const WORKSPACE_FILTER_VALUES = Object.freeze({
+  kind: new Set(["personal", "organization"]),
+  operational_status: new Set([
+    "active",
+    "suspended",
+    "deletion_pending",
+    "deleted",
+    "migration_conflict",
+  ]),
+  risk_tag: new Set([
+    "security_review",
+    "payment_attention",
+    "adoption_attention",
+    "compliance_hold",
+  ]),
+  health_status: new Set(["fresh", "stale", "not_ready", "unavailable"]),
+  health_risk: new Set(["healthy", "watch", "at_risk", "critical"]),
+  plan_status: new Set(["not_available"]),
+  deployment_status: new Set(["not_configured"]),
+});
+const WORKSPACE_RISK_TAGS = new Set([
+  "security_review",
+  "payment_attention",
+  "adoption_attention",
+  "compliance_hold",
+]);
+const OWNER_NOTIFICATION_TEMPLATES = new Set([
+  "workspace_operational_notice",
+  "workspace_risk_follow_up",
+  "workspace_service_update",
+]);
 
 export class PlatformApiError extends Error {
   constructor({ status = 0, code = "platform.request_failed", message, requestId = "-" } = {}) {
@@ -32,6 +66,142 @@ export function getPlatformNavigation({ controlApiUrl, signal } = {}) {
 
 export function listPlatformOperators({ controlApiUrl, signal } = {}) {
   return request(controlApiUrl, "/platform/operators?limit=100&offset=0", { signal });
+}
+
+export function listPlatformWorkspaces({
+  controlApiUrl,
+  filters = {},
+  cursor,
+  limit = 50,
+  signal,
+} = {}) {
+  const parameters = new URLSearchParams({ limit: String(boundedInteger(limit, 1, 100)) });
+  if (cursor !== undefined && cursor !== null) parameters.set("cursor", workspaceCursor(cursor));
+  for (const [key, value] of Object.entries(workspaceFilters(filters))) {
+    parameters.set(key, value);
+  }
+  return request(controlApiUrl, `/platform/workspaces?${parameters.toString()}`, { signal });
+}
+
+export function getPlatformWorkspace({ controlApiUrl, workspaceId, signal } = {}) {
+  return request(
+    controlApiUrl,
+    `/platform/workspaces/${encodeURIComponent(opaque(workspaceId, "wsp"))}`,
+    { signal },
+  );
+}
+
+export function getPlatformWorkspaceHealth({ controlApiUrl, workspaceId, signal } = {}) {
+  return request(
+    controlApiUrl,
+    `/platform/workspaces/${encodeURIComponent(opaque(workspaceId, "wsp"))}/health`,
+    { signal },
+  );
+}
+
+export function listPlatformWorkspaceEvents({
+  controlApiUrl,
+  workspaceId,
+  limit = 50,
+  signal,
+} = {}) {
+  const path = `/platform/workspaces/${encodeURIComponent(opaque(workspaceId, "wsp"))}/events`;
+  return request(controlApiUrl, `${path}?limit=${boundedInteger(limit, 1, 100)}`, { signal });
+}
+
+export function suspendPlatformWorkspace({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  reasonCode,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return workspaceMutation(controlApiUrl, workspaceId, "suspend", {
+    method: "POST",
+    revision,
+    idempotencyKey,
+    body: { reason_code: reason(reasonCode), confirmed: true },
+    signal,
+  });
+}
+
+export function restorePlatformWorkspace({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  reasonCode,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return workspaceMutation(controlApiUrl, workspaceId, "restore", {
+    method: "POST",
+    revision,
+    idempotencyKey,
+    body: { reason_code: reason(reasonCode), confirmed: true },
+    signal,
+  });
+}
+
+export function addPlatformWorkspaceRiskTag({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  tagCode,
+  reasonCode,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return workspaceMutation(controlApiUrl, workspaceId, "risk-tags", {
+    method: "POST",
+    revision,
+    idempotencyKey,
+    body: { tag_code: riskTag(tagCode), reason_code: reason(reasonCode) },
+    signal,
+  });
+}
+
+export function removePlatformWorkspaceRiskTag({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  tagCode,
+  reasonCode,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return workspaceMutation(
+    controlApiUrl,
+    workspaceId,
+    `risk-tags/${encodeURIComponent(riskTag(tagCode))}`,
+    {
+      method: "DELETE",
+      revision,
+      idempotencyKey,
+      body: { reason_code: reason(reasonCode) },
+      signal,
+    },
+  );
+}
+
+export function createPlatformWorkspaceOwnerNotification({
+  controlApiUrl,
+  workspaceId,
+  revision,
+  templateCode,
+  reasonCode,
+  idempotencyKey,
+  signal,
+} = {}) {
+  const template = String(templateCode ?? "");
+  if (!OWNER_NOTIFICATION_TEMPLATES.has(template)) invalidRequest();
+  return workspaceMutation(controlApiUrl, workspaceId, "owner-notifications", {
+    method: "POST",
+    revision,
+    idempotencyKey,
+    body: { template_code: template, reason_code: reason(reasonCode) },
+    signal,
+  });
 }
 
 export function createPlatformOperator({ controlApiUrl, accountId, roles, signal } = {}) {
@@ -175,6 +345,23 @@ async function request(controlApiUrl, path, options = {}) {
   return payload;
 }
 
+function workspaceMutation(controlApiUrl, workspaceId, suffix, options) {
+  return request(
+    controlApiUrl,
+    `/platform/workspaces/${encodeURIComponent(opaque(workspaceId, "wsp"))}/${suffix}`,
+    {
+      method: options.method,
+      body: options.body,
+      csrf: PLATFORM_CSRF_COOKIE,
+      headers: {
+        "If-Match": `"${positiveInteger(options.revision)}"`,
+        "Idempotency-Key": idempotency(options.idempotencyKey),
+      },
+      signal: options.signal,
+    },
+  );
+}
+
 function apiUrl(controlApiUrl, path) {
   let base;
   try {
@@ -236,6 +423,57 @@ function roleList(value) {
     invalidRequest();
   }
   return roles;
+}
+
+function workspaceFilters(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) invalidRequest();
+  const normalized = {};
+  for (const key of Object.keys(value).sort()) {
+    const text = String(value[key] ?? "").trim();
+    if (!text) continue;
+    if (key === "search") {
+      if (!text.startsWith("wsp_") && !WORKSPACE_SLUG.test(text)) invalidRequest();
+      if (text.startsWith("wsp_") && (!OPAQUE_ID.test(text) || !text.startsWith("wsp_"))) {
+        invalidRequest();
+      }
+    } else if (key === "region") {
+      if (!WORKSPACE_REGION.test(text)) invalidRequest();
+    } else if (!WORKSPACE_FILTER_VALUES[key]?.has(text)) {
+      invalidRequest();
+    }
+    normalized[key] = text;
+  }
+  return normalized;
+}
+
+function workspaceCursor(value) {
+  const text = String(value ?? "");
+  if (text.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(text)) invalidRequest();
+  return text;
+}
+
+function riskTag(value) {
+  const text = String(value ?? "");
+  if (!WORKSPACE_RISK_TAGS.has(text)) invalidRequest();
+  return text;
+}
+
+function idempotency(value) {
+  const text = value === undefined || value === null ? generatedIdempotencyKey() : String(value);
+  if (!IDEMPOTENCY_KEY.test(text)) invalidRequest();
+  return text;
+}
+
+function generatedIdempotencyKey() {
+  const crypto = globalThis.crypto;
+  if (!crypto || typeof crypto.getRandomValues !== "function") {
+    throw new PlatformApiError({
+      code: "platform.configuration_invalid",
+      message: "当前环境无法生成安全请求标识。",
+    });
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return `platform:${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function reason(value) {

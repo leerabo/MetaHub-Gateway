@@ -61,6 +61,40 @@ Operator role/status 变更在同一事务递增 revision，并撤销该 Operato
 SupportSession 和未激活 grant。所有后续请求都会重新验证 GlobalAccount、GlobalSession、MFA factor、
 Operator、role binding、revision 和 role-set fingerprint。
 
+## Workspace 目录与运营
+
+PRD-096 在同一 PlatformSession 域提供跨 Workspace 的最小运营投影，不创建 Workspace Membership，也不
+返回 tenant ID、成员身份、Owner 邮箱、Provider/Endpoint、Key/Token、Prompt/Response、文件或调用日志
+正文。所有读取均为 `no-store, private`；不存在与无权读取的 Workspace 使用同形 404。
+
+| 方法 | 路径 | 权限与请求 | 成功结果 |
+| --- | --- | --- | --- |
+| GET | `/platform/workspaces` | 目录角色；`limit=1..100`、可选 HMAC `cursor`、exact `search` 与固定筛选 | 角色裁剪的最小摘要、`has_more` 和下一游标 |
+| GET | `/platform/workspaces/{workspace_id}` | 同上 | 摘要、operational/risk revision 与最近平台动作 |
+| GET | `/platform/workspaces/{workspace_id}/health` | 同上 | `fresh/stale/not_ready/unavailable`、band/risk 和按角色裁剪的固定 tags |
+| POST | `/platform/workspaces/{workspace_id}/suspend` | `platform.workspace.lifecycle.manage`；operational `If-Match`、`Idempotency-Key`、固定 reason、`confirmed:true` | active 到 suspended；撤销 WorkspaceSession 并禁用 legacy tenant |
+| POST | `/platform/workspaces/{workspace_id}/restore` | 同上 | 仅恢复具有完整平台 suspend 证明且数据生命周期仍 active 的 Workspace |
+| POST | `/platform/workspaces/{workspace_id}/risk-tags` | security/customer-success 对应 allowlist；risk `If-Match` 与幂等键 | 添加固定风险标签并递增 risk revision |
+| DELETE | `/platform/workspaces/{workspace_id}/risk-tags/{tag_code}` | 同上；严格 JSON `{reason_code}` | 撤销固定风险标签并递增 risk revision |
+| POST | `/platform/workspaces/{workspace_id}/owner-notifications` | ops/customer-success；operational `If-Match`、幂等键、固定 template/reason | 只返回 pending/sent/failed，不返回联系地址 |
+| GET | `/platform/workspaces/{workspace_id}/events` | 目录角色；`limit=1..100` | 仅含平台 operational event 安全摘要 |
+
+目录只支持 exact Workspace ID 或 organization normalized slug 搜索。筛选白名单为 `kind`、
+`operational_status`、`region`、`risk_tag`、`health_status`、`health_risk`、`plan_status` 和
+`deployment_status`。游标使用规范 JSON、URL-safe Base64 与 HMAC，绑定当前 PlatformSession、Operator
+revision、role set 和规范筛选摘要；篡改、跨角色、跨 Session 或筛选漂移固定返回请求无效。搜索词不写入
+游标、审计、日志、浏览器 URL 或 Storage。
+
+所有 Workspace 写请求在读取 JSON 正文前完成 PlatformSession、Origin、CSRF 和 capability 校验。
+`If-Match` 使用带引号的正整数 revision；`Idempotency-Key` 为 16..128 字符的固定安全字符集。同一键与同一
+请求重放原完整结果；同一键配不同请求固定冲突。revision 竞争返回 `412`，客户端必须重读详情，不能在
+本地推测下一状态。
+
+冻结只声明控制面状态：本地 WorkspaceSession 和 tenant 资源立即失败关闭，Gateway 在后续快照接入前返回
+`transition_pending`，不能被描述为已完成跨 Cell 传播。恢复不会复活旧 Session，也不能复活 deletion、
+deleted 或 migration conflict。Owner notification outbox 只保存 active Membership/Account 引用与固定
+模板 payload，发送 adapter 才受控解析当前验证地址。
+
 ## 受控支持访问
 
 SupportGrant 固定绑定一个 requester、一个 active Workspace、`workspace.diagnostics.read` scope、固定

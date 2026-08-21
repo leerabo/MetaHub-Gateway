@@ -2141,7 +2141,7 @@ PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all
 PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
 TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数据生命周期边界关闭。当前下一条
-新 SaaS 路线图的 PRD-090..095 已完成，权威未完成项已切换到 PRD-096，`saas_incremental_roadmap_complete=false`；
+新 SaaS 路线图的 PRD-090..096 已完成，权威未完成项已切换到 PRD-097，`saas_incremental_roadmap_complete=false`；
 兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-090 起 SaaS 增量规划目录
@@ -2162,8 +2162,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-095 - SaaS平台运营角色与受控支持访问` 已完成；当前下一项是
-`PRD-096 - 平台租户目录与生命周期运营台`。
+`PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前下一项是
+`PRD-097 - 个人与企业初始化向导重构`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2242,7 +2242,29 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   负矩阵、双审批、100 并发、warm p95、签名游标、Support 裁剪、敏感审计和前端生命周期。
 - `docs/prd/PRD-095-platform-iam-controlled-support.md`、`docs/api/platform-access.md` 与
   `docs/testing/PRD-095-tests.md`：保存两轮设计自审、公开合同、自动化、真实 Browser 和独立敏感
-  审计证据。下一权威项为 PRD-096。
+  审计证据。该历史下一项已由下方 PRD-096 完成项关闭。
+
+## PRD-096 Platform Workspace 目录与运营（已完成）
+
+- `control-plane-api/src/metahub_control/platform_access/workspace_{models,service}.py` 与 `routes.py`：
+  提供角色裁剪目录、exact ID/slug 搜索、Session/角色/Operator revision/筛选绑定的 HMAC 游标、详情、
+  health 和事件时间线，以及 suspend/restore、风险标签和 Owner 通知的 CAS/幂等写路径。
+- `control-plane-api/src/metahub_control/{workspace_access,workspaces}/service.py` 与共享 seed：在 0088
+  schema 存在时叠加 operational state；冻结、删除或冲突状态拒绝 WorkspaceSession 和身份目录恢复，
+  新 Workspace 显式初始化 state，兼容 N/N-1 schema。
+- `infra/migrations/0088_platform_workspace_operations.sql/.down.sql`：建立 operational state、risk tag、
+  health projection、action intent、Owner notification outbox、operational event/outbox 和 31 个 PRD-096
+  对象；数据库 guard 使旧应用在 inactive Workspace 上失败关闭，非 pristine down 原子阻断。
+- `console-web/src/lib/platform.js`、`src/features/platform/` 与 `src/styles/platform.css`：交付紧凑目录、
+  状态/Region/风险/健康筛选、游标分页、全宽详情、健康/动作/事件时间线、页面内生命周期确认、风险与
+  通知操作，以及写后 generation + abort 重载；390px 使用字段标签堆叠行，宽屏保持高密度表格。
+- `control-plane-api/tests/integration/test_prd096_{platform_workspaces,db_migrations}.py` 与
+  `console-web/tests/unit/prd096PlatformWorkspaces.test.mjs`：覆盖 0087->0088、pristine/non-pristine down、
+  五角色字段裁剪、游标篡改/跨角色、health fresh/stale/坏源、风险职责隔离、生命周期并发、通知无邮箱、
+  迟到响应和移动布局；PRD-093/094/095 六文件兼容组和 Console 全量同步通过。
+- `docs/prd/PRD-096-platform-workspace-directory-operations.md`、`docs/api/platform-access.md` 与
+  `docs/testing/PRD-096-tests.md`：保存冻结设计、两轮自审、公开合同、完整门禁和敏感审计。下一权威项
+  为 PRD-097。
 
 ## MVP 非目标
 

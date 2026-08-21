@@ -8,12 +8,11 @@ import hashlib
 import json
 import re
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from openpyxl import load_workbook
-
 
 ROOT = Path(__file__).resolve().parents[2]
 OLD_PLAN = ROOT / "企业级AI_Gateway_PRD开发总清单_给CodexClaude.xlsx"
@@ -118,12 +117,29 @@ REQUIRED_DOCS = {
         "POST | `/platform/support-grants`",
         "next_cursor",
         "METAHUB_PLATFORM_SESSION_SECRET",
+        "GET | `/platform/workspaces`",
+        "POST | `/platform/workspaces/{workspace_id}/suspend`",
+        "POST | `/platform/workspaces/{workspace_id}/owner-notifications`",
+        "Idempotency-Key",
+        "transition_pending",
     ),
     ROOT / "docs/testing/PRD-095-tests.md": (
         "状态：已完成",
         "敏感审计",
         "PRD-096",
         "0087",
+    ),
+    ROOT / "docs/prd/PRD-096-platform-workspace-directory-operations.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0088",
+    ),
+    ROOT / "docs/testing/PRD-096-tests.md": (
+        "状态：已完成",
+        "敏感审计",
+        "PRD-097",
+        "0088",
     ),
 }
 
@@ -443,6 +459,41 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         and "100并发审批/Session" in prd095_tests,
         "PRD-095 matches its delivered Platform IAM, support and subject-isolation contracts",
     )
+    prd096 = rows_by_id.get("PRD-096", {})
+    prd096_apis = str(prd096.get("API/动作") or "")
+    prd096_objects = str(prd096.get("核心数据对象") or "")
+    prd096_migration = str(prd096.get("数据迁移/回滚") or "")
+    prd096_security = str(prd096.get("安全与合规") or "")
+    prd096_tests = str(prd096.get("测试重点") or "")
+    report.check(
+        all(
+            endpoint in prd096_apis
+            for endpoint in (
+                "GET /platform/workspaces",
+                "GET /platform/workspaces/{workspace_id}/health",
+                "POST /platform/workspaces/{workspace_id}/suspend",
+                "POST/DELETE /platform/workspaces/{workspace_id}/risk-tags",
+                "POST /platform/workspaces/{workspace_id}/owner-notifications",
+                "GET /platform/workspaces/{workspace_id}/events",
+            )
+        )
+        and all(
+            object_name in prd096_objects
+            for object_name in (
+                "WorkspaceOperationalState",
+                "WorkspaceRiskTag",
+                "WorkspaceHealthProjection",
+                "PlatformActionIntent",
+                "WorkspaceOwnerNotificationOutbox",
+                "WorkspaceOperationalEvent",
+            )
+        )
+        and "0088" in prd096_migration
+        and "pristine" in prd096_migration
+        and "HMAC游标" in prd096_security
+        and "五角色字段裁剪" in prd096_tests,
+        "PRD-096 matches its delivered directory, lifecycle and privacy contracts",
+    )
     prd106 = rows_by_id.get("PRD-106", {})
     report.check(
         "租户管理员" not in str(prd106.get("主要用户/角色") or "")
@@ -753,10 +804,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 87
+        and migration_versions[-1] == 88
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0087 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0088 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -777,6 +828,11 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0087_platform_iam_controlled_support.sql").is_file()
         and (ROOT / "infra/migrations/0087_platform_iam_controlled_support.down.sql").is_file(),
         "PRD-095 owns reversible migration 0087 with guarded platform-security-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0088_platform_workspace_operations.sql").is_file()
+        and (ROOT / "infra/migrations/0088_platform_workspace_operations.down.sql").is_file(),
+        "PRD-096 owns reversible migration 0088 with guarded operational-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

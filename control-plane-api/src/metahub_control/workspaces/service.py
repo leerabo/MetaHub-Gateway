@@ -190,6 +190,17 @@ def create_workspace(
             """,
             (_id("wtb"), workspace_id, tenant_id, stamp),
         )
+        if _table_exists(connection, "workspace_operational_states"):
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO workspace_operational_states(
+                  workspace_operational_state_id,workspace_id,tenant_id,status,
+                  revision,risk_revision,source,suspended_reason_code,
+                  suspended_by_operator_id,suspended_at,created_at,updated_at)
+                VALUES(?,?,?,'active',1,1,'workspace_creation',NULL,NULL,NULL,?,?)
+                """,
+                (_id("wos"), workspace_id, tenant_id, stamp, stamp),
+            )
         connection.execute(
             """
             INSERT INTO workspace_regions(
@@ -691,10 +702,13 @@ def _idempotency_hmac(config: AppConfig, value: str) -> str:
 
 
 def _require_verified_account(connection: sqlite3.Connection, account_id: str) -> None:
-    if connection.execute(
-        "SELECT 1 FROM account_verifications WHERE account_id=? LIMIT 1",
-        (account_id,),
-    ).fetchone() is None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM account_verifications WHERE account_id=? LIMIT 1",
+            (account_id,),
+        ).fetchone()
+        is None
+    ):
         raise ApiError("workspace.account_unverified")
 
 
@@ -898,6 +912,16 @@ def _is_create_conflict(error: sqlite3.IntegrityError) -> bool:
         "slug" in text
         or "workspace_creation_requests.account_id" in text
         or "workspaces.created_by_account_id" in text
+    )
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        is not None
     )
 
 

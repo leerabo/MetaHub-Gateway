@@ -66,6 +66,11 @@ _SECURITY_AUDIT_ACTIONS = (
     "support.access_requested",
     "support.access_revoked",
     "support.session_issued",
+    "workspace.owner_notification_requested",
+    "workspace.restored",
+    "workspace.risk_tag_added",
+    "workspace.risk_tag_removed",
+    "workspace.suspended",
 )
 _ROLE_CODES = frozenset(
     {

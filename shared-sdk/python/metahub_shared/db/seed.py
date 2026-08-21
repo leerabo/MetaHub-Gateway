@@ -30,10 +30,9 @@ from .security import (
 @dataclass(frozen=True)
 class SeedResult:
     """承载 数据库基础设施 的 SeedResult 数据结构，明确跨模块传递时允许出现的字段。
-    
+
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
-
 
     run_id: str
     tenant_id: str
@@ -55,7 +54,9 @@ def apply_seed_data(
     """
 
     run_id = f"seed_{uuid4().hex}"
-    seed = _load_seed(seed_file or Path(os.getenv("METAHUB_SEED_FILE", "infra/seeds/default_seed.json")))
+    seed = _load_seed(
+        seed_file or Path(os.getenv("METAHUB_SEED_FILE", "infra/seeds/default_seed.json"))
+    )
     tenant = seed["tenant"]
     admin = seed["admin"]
     provider = seed["provider"]
@@ -67,7 +68,9 @@ def apply_seed_data(
     model_id = _stable_uuid(f"model:{tenant_id}:{model['model_alias']}")
     user_id = _stable_uuid(f"user:{tenant_id}:{admin['email'].lower()}")
     virtual_key_id = _stable_uuid(f"virtual-key:{tenant_id}:{virtual_key}")
-    credential_secret = configured_secret("METAHUB_SEED_PROVIDER_API_KEY", provider["api_key_placeholder"])
+    credential_secret = configured_secret(
+        "METAHUB_SEED_PROVIDER_API_KEY", provider["api_key_placeholder"]
+    )
     credential_id = _stable_uuid(f"provider-credential:{tenant_id}:{provider_id}")
 
     connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
@@ -75,11 +78,18 @@ def apply_seed_data(
         _upsert_tenant(connection, tenant_id, tenant)
         _upsert_roles(connection, tenant_id)
         _upsert_user(connection, user_id, tenant_id, admin)
+        _ensure_workspace_operational_states(connection, tenant_id)
         _upsert_provider(connection, provider_id, tenant_id, provider)
-        _upsert_provider_credential(connection, credential_id, tenant_id, provider_id, credential_secret)
+        _upsert_provider_credential(
+            connection, credential_id, tenant_id, provider_id, credential_secret
+        )
         _upsert_model(connection, model_id, tenant_id, provider_id, model)
-        _upsert_virtual_key(connection, virtual_key_id, tenant_id, virtual_key, seed["virtual_key"]["name"])
-        _record_seed_run(connection, run_id, tenant_id, seed_file or Path("infra/seeds/default_seed.json"))
+        _upsert_virtual_key(
+            connection, virtual_key_id, tenant_id, virtual_key, seed["virtual_key"]["name"]
+        )
+        _record_seed_run(
+            connection, run_id, tenant_id, seed_file or Path("infra/seeds/default_seed.json")
+        )
         connection.commit()
     # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
     except sqlite3.IntegrityError as exc:
@@ -115,10 +125,9 @@ def apply_seed_data(
 
 def _load_seed(path: Path) -> dict[str, dict[str, str]]:
     """按当前租户加载 数据库基础设施 的 load seed 目标对象，供后续写入或详情响应复用。
-    
+
     安全：查询必须带 tenant_id 或可信上下文，避免跨租户读取。
     """
-
 
     if not path.exists():
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
@@ -132,20 +141,18 @@ def _load_seed(path: Path) -> dict[str, dict[str, str]]:
 
 def _stable_uuid(value: str) -> str:
     """在 数据库基础设施 内部复用 stable uuid 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     return str(uuid5(NAMESPACE_URL, f"https://metahub.local/{value}"))
 
 
 def _upsert_tenant(connection: sqlite3.Connection, tenant_id: str, tenant: dict[str, str]) -> None:
     """在 数据库基础设施 内部复用 upsert tenant 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     connection.execute(
         """
@@ -161,6 +168,35 @@ def _upsert_tenant(connection: sqlite3.Connection, tenant_id: str, tenant: dict[
     )
 
 
+def _ensure_workspace_operational_states(connection: sqlite3.Connection, tenant_id: str) -> None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='workspace_operational_states'"
+        ).fetchone()
+        is None
+    ):
+        return
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO workspace_operational_states(
+          workspace_operational_state_id,workspace_id,tenant_id,status,revision,risk_revision,
+          source,suspended_reason_code,suspended_by_operator_id,suspended_at,created_at,updated_at)
+        SELECT 'wos_'||lower(hex(randomblob(16))),workspace.workspace_id,binding.tenant_id,
+          CASE WHEN workspace.status='active' AND binding.status='active'
+              AND tenant.status='active' AND data_state.lifecycle_status='active'
+            THEN 'active' ELSE 'migration_conflict' END,
+          1,1,'workspace_creation',NULL,NULL,NULL,
+          strftime('%Y-%m-%dT%H:%M:%SZ','now'),strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        FROM workspace_tenant_bindings binding
+        JOIN workspaces workspace ON workspace.workspace_id=binding.workspace_id
+        JOIN tenants tenant ON tenant.tenant_id=binding.tenant_id
+        JOIN tenant_data_states data_state ON data_state.tenant_id=binding.tenant_id
+        WHERE binding.tenant_id=?
+        """,
+        (tenant_id,),
+    )
+
+
 def _upsert_roles(connection: sqlite3.Connection, tenant_id: str) -> None:
     """初始化或验证当前迁移版本对应的固定角色目录。
 
@@ -168,9 +204,7 @@ def _upsert_roles(connection: sqlite3.Connection, tenant_id: str) -> None:
     tenant 初始化触发器原子创建，这里只复核六角色，禁止 seed 更新不可变角色或恢复已撤销权限。
     """
 
-    columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(roles)").fetchall()
-    }
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(roles)").fetchall()}
     if "matrix_sha256" in columns:
         _validate_permission_roles(connection, tenant_id)
         return
@@ -242,6 +276,7 @@ def _validate_permission_roles(connection: sqlite3.Connection, tenant_id: str) -
             # 单行 owner、revision、hash 或不可变标志异常都表明租户目录损坏，必须整体失败。
             raise sqlite3.IntegrityError("rbac_seed_role_catalog_invalid")
 
+
 def _upsert_user(
     connection: sqlite3.Connection,
     user_id: str,
@@ -249,10 +284,9 @@ def _upsert_user(
     admin: dict[str, str],
 ) -> None:
     """在 数据库基础设施 内部复用 upsert user 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     password = configured_secret("METAHUB_SEED_ADMIN_PASSWORD", admin["password"])
     email = os.getenv("METAHUB_SEED_ADMIN_EMAIL", admin["email"]).lower()
@@ -293,10 +327,9 @@ def _upsert_provider(
     provider: dict[str, str],
 ) -> None:
     """在 数据库基础设施 内部复用 upsert provider 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     base_url = os.getenv(
         f"METAHUB_PROVIDER_{provider['provider_code'].upper()}_BASE_URL",
@@ -329,10 +362,9 @@ def _upsert_provider_credential(
     secret: str,
 ) -> None:
     """在 数据库基础设施 内部复用 upsert provider credential 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     connection.execute(
         """
@@ -364,10 +396,9 @@ def _upsert_model(
     model: dict[str, str],
 ) -> None:
     """在 数据库基础设施 内部复用 upsert model 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     capabilities = json.dumps({"chat": True, "stream": True}, ensure_ascii=False)
     provider_model_id = model.get("provider_model_id") or model["upstream_model_name"]
@@ -418,10 +449,9 @@ def _upsert_virtual_key(
     name: str,
 ) -> None:
     """在 数据库基础设施 内部复用 upsert virtual key 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
-
 
     environment = connection.execute(
         """
@@ -466,12 +496,13 @@ def _record_seed_run(
     seed_file: Path,
 ) -> None:
     """在 数据库基础设施 内部复用 record seed run 辅助逻辑，集中处理边界值和错误映射。
-    
+
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-
-    checksum_source = seed_file.read_text(encoding="utf-8") if seed_file.exists() else str(seed_file)
+    checksum_source = (
+        seed_file.read_text(encoding="utf-8") if seed_file.exists() else str(seed_file)
+    )
     checksum = hash_secret(checksum_source)
     connection.execute(
         """

@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-095 - SaaS平台运营角色与受控支持访问` 已完成；当前下一条未完成项是 `PRD-096 - 平台租户目录与生命周期运营台`。
+- 新 `PRD-090` 至 `PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前下一条未完成项是 `PRD-097 - 个人与企业初始化向导重构`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -428,8 +428,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
   该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；新路线图的
-  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-095 - SaaS平台运营角色与受控支持访问` 已完成；当前
-  权威未完成项为 `PRD-096 - 平台租户目录与生命周期运营台`，`saas_incremental_roadmap_complete=false`。
+  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前
+  权威未完成项为 `PRD-097 - 个人与企业初始化向导重构`，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -789,7 +789,25 @@ snapshots or browser Storage. See [PRD-095 design](docs/prd/PRD-095-platform-iam
 [Platform Access API](docs/api/platform-access.md) and
 [PRD-095 tests](docs/testing/PRD-095-tests.md). Migration, concurrency, warm performance, signed
 cursor, security, full Console and real-browser 390/1280/1440 gates are complete; the authoritative
-next item is PRD-096.
+next delivery is recorded in the PRD-096 section below.
+
+### PRD-096 平台租户目录与生命周期运营台（已完成）
+
+PRD-096 adds migration `0088` and a role-trimmed Platform Workspace directory without granting any
+Workspace Membership. The directory exposes only operational, Region, lifecycle, bounded count,
+health, plan/deployment placeholder and contact-status projections. Exact ID/slug search and HMAC
+keyset cursors are bound to the PlatformSession, Operator revision, role set and normalized filters.
+
+Platform ops can suspend or restore a Workspace through revision CAS, CSRF, explicit confirmation
+and idempotency. Security and customer-success roles have disjoint fixed risk-tag allowlists, while
+Owner notifications persist only controlled account references and template payloads. Suspend
+revokes active WorkspaceSession facts and keeps N-1 code fail-closed; restore cannot revive deleted
+or conflicting data. The workbench now provides a dense directory, filters, full-width detail,
+health and event timelines, lifecycle confirmation, risk operations and notification state with
+generation-fenced reloads. See [PRD-096 design](docs/prd/PRD-096-platform-workspace-directory-operations.md),
+[Platform Access API](docs/api/platform-access.md) and [PRD-096 tests](docs/testing/PRD-096-tests.md).
+Migration, role projection, cursor, health corruption, concurrency, Console and compatibility gates
+are complete; the authoritative next item is PRD-097.
 
 ## 目录结构
 

@@ -145,11 +145,21 @@ def list_identity_workspaces(
             session_token=session_token,
             touch=True,
         )
-        where = """
+        operational_filter = (
+            "AND EXISTS(SELECT 1 FROM workspace_operational_states operational "
+            "WHERE operational.workspace_id=member.workspace_id "
+            "AND operational.tenant_id=member.tenant_id AND operational.status='active')"
+            if _table_exists(connection, "workspace_operational_states")
+            else ""
+        )
+        where = (
+            """
           member.account_id=? AND member.status='active'
           AND member.role_code!='service_account'
           AND workspace.status='active' AND binding.status='active'
         """
+            + operational_filter
+        )
         total = int(
             connection.execute(
                 f"""
@@ -420,8 +430,10 @@ def list_memberships(
             touch=True,
         )
         manager = context.membership_role in _MANAGER_ROLES
-        owner_filter = "member.workspace_id=?" if manager else (
-            "member.workspace_id=? AND member.workspace_membership_id=?"
+        owner_filter = (
+            "member.workspace_id=?"
+            if manager
+            else ("member.workspace_id=? AND member.workspace_membership_id=?")
         )
         owner_values: tuple[object, ...] = (
             (context.workspace_id,) if manager else (context.workspace_id, context.membership_id)
@@ -623,22 +635,28 @@ def create_membership_invitation(
             """,
             (stamp, context.workspace_id, email_hmac, stamp),
         )
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM membership_invitations
             WHERE workspace_id=? AND target_email_hmac=? AND status='pending'
             """,
-            (context.workspace_id, email_hmac),
-        ).fetchone() is not None:
+                (context.workspace_id, email_hmac),
+            ).fetchone()
+            is not None
+        ):
             raise ApiError("membership.invitation_conflict")
-        if connection.execute(
-            """
+        if (
+            connection.execute(
+                """
             SELECT 1 FROM global_accounts account
             JOIN workspace_memberships member ON member.account_id=account.account_id
             WHERE member.workspace_id=? AND lower(account.email_normalized)=?
             """,
-            (context.workspace_id, normalized_email),
-        ).fetchone() is not None:
+                (context.workspace_id, normalized_email),
+            ).fetchone()
+            is not None
+        ):
             raise ApiError("membership.invitation_conflict")
         raw_token = secrets.token_urlsafe(32)
         token_digest = hash_token(raw_token)
@@ -1134,10 +1152,13 @@ def _consume_invitation(
         binding = None
         if invitation["legacy_status"] != "accepted":
             return False
-    if connection.execute(
-        "SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND account_id=?",
-        (invitation["workspace_id"], account_id),
-    ).fetchone() is not None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND account_id=?",
+            (invitation["workspace_id"], account_id),
+        ).fetchone()
+        is not None
+    ):
         return False
     stamp = _db_time(now)
     user_id = existing_user_id
@@ -1299,8 +1320,18 @@ def _authenticate_workspace(
     if not valid_opaque_value(session_token):
         raise ApiError("workspace_session.invalid")
     now = _utcnow()
+    if _table_exists(connection, "workspace_operational_states"):
+        operational_select = "operational.status operational_status,"
+        operational_join = (
+            "LEFT JOIN workspace_operational_states operational "
+            "ON operational.workspace_id=member.workspace_id "
+            "AND operational.tenant_id=member.tenant_id"
+        )
+    else:
+        operational_select = "'active' operational_status,"
+        operational_join = ""
     row = connection.execute(
-        """
+        f"""
         SELECT session.*,
           member.revision current_membership_revision,member.role_code,
           member.status membership_status,member.account_id membership_account_id,
@@ -1316,7 +1347,9 @@ def _authenticate_workspace(
           global_session.account_id global_session_account_id,
           global_session.expires_at global_expires_at,
           global_session.idle_expires_at global_idle_expires_at,
-          tenant.status tenant_status,tenant.slug tenant_slug,tenant.name tenant_name
+          tenant.status tenant_status,tenant.slug tenant_slug,tenant.name tenant_name,
+          {operational_select}
+          1 operational_projection_version
         FROM workspace_sessions session
         JOIN workspace_memberships member ON member.workspace_membership_id=session.membership_id
         JOIN users user ON user.tenant_id=member.tenant_id AND user.user_id=member.legacy_user_id
@@ -1326,6 +1359,7 @@ def _authenticate_workspace(
         JOIN global_accounts account ON account.account_id=member.account_id
         JOIN global_sessions global_session ON global_session.session_id=session.global_session_id
         JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
+        {operational_join}
         LEFT JOIN organization_profiles organization
           ON organization.workspace_id=workspace.workspace_id
         LEFT JOIN personal_profiles personal ON personal.workspace_id=workspace.workspace_id
@@ -1363,6 +1397,7 @@ def _authenticate_workspace(
         or row["workspace_status"] != "active"
         or row["binding_status"] != "active"
         or row["tenant_status"] != "active"
+        or row["operational_status"] != "active"
         or row["account_status"] != "active"
         or row["login_enabled"] != 1
         or row["global_session_status"] != "active"
@@ -1389,9 +1424,8 @@ def _authenticate_workspace(
             connection, row["workspace_session_id"], now, "permission_changed"
         )
         raise ApiError("workspace_session.revoked") from None
-    if (
-        row["legacy_permission_revision"] != snapshot.permission_revision
-        or not hmac.compare_digest(row["matrix_fingerprint"], snapshot.authorization_fingerprint)
+    if row["legacy_permission_revision"] != snapshot.permission_revision or not hmac.compare_digest(
+        row["matrix_fingerprint"], snapshot.authorization_fingerprint
     ):
         _revoke_workspace_session(
             connection, row["workspace_session_id"], now, "permission_changed"
@@ -1438,8 +1472,15 @@ def _switch_target(
     account_id: str,
     workspace_id: str,
 ) -> sqlite3.Row | None:
+    operational_filter = (
+        "AND EXISTS(SELECT 1 FROM workspace_operational_states operational "
+        "WHERE operational.workspace_id=member.workspace_id "
+        "AND operational.tenant_id=member.tenant_id AND operational.status='active')"
+        if _table_exists(connection, "workspace_operational_states")
+        else ""
+    )
     row = connection.execute(
-        """
+        f"""
         SELECT member.workspace_membership_id,member.workspace_id,member.tenant_id,
           member.account_id,member.legacy_user_id,member.role_code,
           member.revision membership_revision,workspace.revision workspace_revision,
@@ -1460,6 +1501,7 @@ def _switch_target(
           AND member.role_code!='service_account' AND workspace.status='active'
           AND binding.status='active' AND account.status='active' AND account.login_enabled=1
           AND user.status='active' AND tenant.status='active'
+          {operational_filter}
         """,
         (account_id, workspace_id),
     ).fetchone()
@@ -1521,10 +1563,10 @@ def _membership_summary(
     row: sqlite3.Row,
     context: WorkspaceSessionContext,
 ) -> MembershipSummary:
-    can_manage = (
-        context.membership_role in _MANAGER_ROLES
-        and row["role_code"] not in {"owner", "service_account"}
-    )
+    can_manage = context.membership_role in _MANAGER_ROLES and row["role_code"] not in {
+        "owner",
+        "service_account",
+    }
     return MembershipSummary(
         membership_id=row["workspace_membership_id"],
         display_name=row["display_name"],
@@ -1661,10 +1703,13 @@ def _legacy_email_fingerprint(invitation_id: str, email: str) -> str:
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
-        (name,),
-    ).fetchone() is not None
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
