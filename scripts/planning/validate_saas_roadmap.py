@@ -106,6 +106,25 @@ REQUIRED_DOCS = {
         "PRD-095",
         "0086",
     ),
+    ROOT / "docs/prd/PRD-095-platform-iam-controlled-support.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0087",
+    ),
+    ROOT / "docs/api/platform-access.md": (
+        "POST | `/platform/bootstrap`",
+        "POST | `/platform/sessions`",
+        "POST | `/platform/support-grants`",
+        "next_cursor",
+        "METAHUB_PLATFORM_SESSION_SECRET",
+    ),
+    ROOT / "docs/testing/PRD-095-tests.md": (
+        "状态：已完成",
+        "敏感审计",
+        "PRD-096",
+        "0087",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -386,6 +405,43 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             )
         ),
         "PRD-094 matches its delivered Workspace access, migration and subject-isolation contracts",
+    )
+    prd095 = rows_by_id.get("PRD-095", {})
+    prd095_apis = str(prd095.get("API/动作") or "")
+    prd095_objects = str(prd095.get("核心数据对象") or "")
+    prd095_migration = str(prd095.get("数据迁移/回滚") or "")
+    prd095_security = str(prd095.get("安全与合规") or "")
+    prd095_tests = str(prd095.get("测试重点") or "")
+    report.check(
+        all(
+            endpoint in prd095_apis
+            for endpoint in (
+                "POST /identity/mfa/totp/enrollments",
+                "POST /platform/bootstrap",
+                "POST /platform/sessions",
+                "POST /platform/support-grants",
+                "POST /workspace/support-grants/{grant_id}/approve",
+                "GET /support/workspace/diagnostics",
+                "POST /platform/break-glass-sessions",
+                "GET /platform/audit-logs",
+            )
+        )
+        and all(
+            object_name in prd095_objects
+            for object_name in (
+                "AccountMfaFactor",
+                "PlatformSession",
+                "SupportGrantApproval",
+                "SupportSession",
+                "BreakGlassReview",
+                "PlatformAuditLog",
+            )
+        )
+        and "0087" in prd095_migration
+        and "pristine" in prd095_migration
+        and "Global/Workspace/Platform/Support" in prd095_security
+        and "100并发审批/Session" in prd095_tests,
+        "PRD-095 matches its delivered Platform IAM, support and subject-isolation contracts",
     )
     prd106 = rows_by_id.get("PRD-106", {})
     report.check(
@@ -697,10 +753,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 86
+        and migration_versions[-1] == 87
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0086 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0087 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -716,6 +772,11 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0086_membership_workspace_sessions.sql").is_file()
         and (ROOT / "infra/migrations/0086_membership_workspace_sessions.down.sql").is_file(),
         "PRD-094 owns reversible migration 0086 with guarded authorization-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0087_platform_iam_controlled_support.sql").is_file()
+        and (ROOT / "infra/migrations/0087_platform_iam_controlled_support.down.sql").is_file(),
+        "PRD-095 owns reversible migration 0087 with guarded platform-security-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

@@ -66,6 +66,7 @@ from .partner_portal import router as partner_portal_router
 from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
 from .plan_billing import router as plan_billing_router
+from .platform_access.routes import router as platform_access_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -168,6 +169,11 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/workspace-owner-transfers",
         }
         or request.url.path.startswith("/memberships/")
+        or request.url.path == "/platform/bootstrap"
+        or request.url.path.startswith("/platform/")
+        or request.url.path.startswith("/support/")
+        or request.url.path.startswith("/workspace/support-grants/")
+        or request.url.path.startswith("/workspace/break-glass-sessions/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         # Preserve endpoint-specific directives while covering error responses
@@ -183,6 +189,7 @@ app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
+app.include_router(platform_access_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)

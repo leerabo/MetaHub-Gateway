@@ -380,6 +380,26 @@ def authenticate_workspace_session_as_auth_context(
         connection.close()
 
 
+def authenticate_workspace_session_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str | None = None,
+    touch: bool = False,
+) -> WorkspaceSessionContext:
+    """Authenticate one WorkspaceSession inside a caller-owned transaction."""
+
+    context, _row = _authenticate_workspace(
+        connection,
+        config,
+        session_token=session_token,
+        csrf_token=csrf_token,
+        touch=touch,
+    )
+    return context
+
+
 def list_memberships(
     config: AppConfig,
     *,

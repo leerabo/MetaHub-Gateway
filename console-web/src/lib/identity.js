@@ -97,9 +97,45 @@ export async function confirmIdentityPasswordReset({
   });
 }
 
+export async function beginIdentityTotpEnrollment({
+  controlApiUrl,
+  currentPassword,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/mfa/totp/enrollments", {
+    method: "POST",
+    body: { current_password: currentPassword },
+    responseType: "mfaEnrollment",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function verifyIdentityTotpEnrollment({
+  controlApiUrl,
+  factorId,
+  code,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/mfa/totp/verifications", {
+    method: "POST",
+    body: { factor_id: factorId, code },
+    responseType: "mfaVerification",
+    csrf: true,
+    signal,
+  });
+}
+
 export async function getIdentityMe({ controlApiUrl, signal } = {}) {
   return identityRequest(controlApiUrl, "/identity/me", {
     responseType: "accountSession",
+    signal,
+  });
+}
+
+export async function getIdentityPlatformAccess({ controlApiUrl, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/platform-access", {
+    responseType: "platformAccess",
     signal,
   });
 }
@@ -280,6 +316,73 @@ function validateResponse(payload, responseType) {
         payload.resend_available_at,
         "resend_available_at",
       ),
+      request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
+      trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
+    };
+  }
+  if (responseType === "mfaEnrollment") {
+    requireExactKeys(
+      payload,
+      ["expires_at", "factor_id", "provisioning_uri", "request_id", "secret", "trace_id"],
+      "response",
+    );
+    const factorId = requireBoundedString(payload.factor_id, "identity.response_invalid", 36);
+    const secret = requireBoundedString(payload.secret, "identity.response_invalid", 128);
+    const provisioningUri = requireBoundedString(
+      payload.provisioning_uri,
+      "identity.response_invalid",
+      1024,
+    );
+    if (!/^mfa_[0-9a-f]{32}$/u.test(factorId) || !/^[A-Z2-7]{16,128}$/u.test(secret)) {
+      invalidResponse("mfa_enrollment");
+    }
+    let uri;
+    try {
+      uri = new URL(provisioningUri);
+    } catch {
+      invalidResponse("mfa_enrollment.provisioning_uri");
+    }
+    if (uri.protocol !== "otpauth:" || uri.hostname !== "totp") {
+      invalidResponse("mfa_enrollment.provisioning_uri");
+    }
+    return {
+      factor_id: factorId,
+      secret,
+      provisioning_uri: provisioningUri,
+      expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
+      trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
+    };
+  }
+  if (responseType === "mfaVerification") {
+    requireExactKeys(
+      payload,
+      ["factor_id", "request_id", "revision", "status", "trace_id", "verified_at"],
+      "response",
+    );
+    const factorId = requireBoundedString(payload.factor_id, "identity.response_invalid", 36);
+    if (
+      !/^mfa_[0-9a-f]{32}$/u.test(factorId)
+      || payload.status !== "active"
+      || !Number.isSafeInteger(payload.revision)
+      || payload.revision < 2
+    ) {
+      invalidResponse("mfa_verification");
+    }
+    return {
+      factor_id: factorId,
+      status: "active",
+      revision: payload.revision,
+      verified_at: requireTimestamp(payload.verified_at, "verified_at"),
+      request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
+      trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
+    };
+  }
+  if (responseType === "platformAccess") {
+    requireExactKeys(payload, ["available", "request_id", "trace_id"], "response");
+    if (typeof payload.available !== "boolean") invalidResponse("platform_access.available");
+    return {
+      available: payload.available,
       request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
       trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
     };

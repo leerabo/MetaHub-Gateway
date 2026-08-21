@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GlobalAccountSummary(BaseModel):
@@ -65,5 +66,33 @@ class IdentityPendingChallengeResponse(BaseModel):
     status: str
     expires_at: datetime
     resend_available_at: datetime
+    request_id: str
+    trace_id: str
+
+
+class IdentitySecurityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MfaEnrollmentResponse(IdentitySecurityResponse):
+    factor_id: str
+    secret: str = Field(repr=False)
+    provisioning_uri: str = Field(repr=False)
+    expires_at: datetime
+    request_id: str
+    trace_id: str
+
+
+class MfaVerificationResponse(IdentitySecurityResponse):
+    factor_id: str
+    status: Literal["active"] = "active"
+    revision: int = Field(ge=2)
+    verified_at: datetime
+    request_id: str
+    trace_id: str
+
+
+class IdentityPlatformAccessResponse(IdentitySecurityResponse):
+    available: bool
     request_id: str
     trace_id: str

@@ -2141,7 +2141,7 @@ PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all
 PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
 TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数据生命周期边界关闭。当前下一条
-新 SaaS 路线图的 PRD-090..094 已完成，权威未完成项已切换到 PRD-095，`saas_incremental_roadmap_complete=false`；
+新 SaaS 路线图的 PRD-090..095 已完成，权威未完成项已切换到 PRD-096，`saas_incremental_roadmap_complete=false`；
 兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-090 起 SaaS 增量规划目录
@@ -2162,8 +2162,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-094 - 成员关系、空间切换与邀请升级` 已完成；当前下一项是
-`PRD-095 - SaaS平台运营角色与受控支持访问`。
+`PRD-095 - SaaS平台运营角色与受控支持访问` 已完成；当前下一项是
+`PRD-096 - 平台租户目录与生命周期运营台`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2219,6 +2219,30 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/testing/PRD-094-tests.md`：保存冻结设计、两轮自审、公开合同、自动化与真实 Browser 证据。
   390/1280/1440 三视口、键盘流程、Owner 转移显式确认、Console 零错误和切换 p75 `805.8 ms` 均通过；
   开发启动器 access-log canary 证明邀请 token 不进入原始请求日志。下一权威项为 PRD-095。
+
+## PRD-095 Platform IAM 与受控支持目录（已完成）
+
+- `shared-sdk/python/metahub_shared/identity/` 与 `control-plane-api/src/metahub_control/identity/`：
+  owner-bound AES-256-GCM TOTP、counter 防重放、持久尝试门禁、enrollment/activation 和 active factor
+  权威投影；不修改旧 `mfa_state` CHECK，也不提供客服 MFA 绕过。
+- `control-plane-api/src/metahub_control/platform_access/`：一次性 owner bootstrap、13 角色目录、
+  PlatformSession 动态鉴权、Operator CAS、双域 SupportGrant、短 SupportSession、诊断白名单、
+  break-glass 双复核，以及会话/角色绑定的 HMAC keyset 审计游标。
+- `console-web/platform.html`、`console-web/src/features/platform/`、`src/lib/platform.js` 与
+  `src/styles/platform.css`：独立平台工作台、后端权限导航、Operator/Support/Audit 流程、页面内确认、
+  敏感输入清理和 390/1280/1440 响应布局；不复用企业 Console DOM 或 Storage。
+- `console-web/src/features/identity/` 与 `src/lib/identity.js`：账号安全页 TOTP enrollment/activation，
+  以及只由 `GET /identity/platform-access` 控制的“进入平台工作台”入口。
+- `infra/migrations/0087_platform_iam_controlled_support.sql/.down.sql`：MFA、bootstrap、Platform IAM、
+  Platform/Support Session、grant/approval、break-glass review、不可变审计/outbox、固定目录和业务事实
+  down guard。
+- `shared-sdk/python/tests/test_prd095_platform_security.py`、
+  `control-plane-api/tests/integration/test_prd095_{db_migrations,platform_iam}.py` 与
+  `console-web/tests/unit/prd095PlatformAccess.test.mjs`：覆盖密钥域、0087 往返、MFA/bootstrap、凭据
+  负矩阵、双审批、100 并发、warm p95、签名游标、Support 裁剪、敏感审计和前端生命周期。
+- `docs/prd/PRD-095-platform-iam-controlled-support.md`、`docs/api/platform-access.md` 与
+  `docs/testing/PRD-095-tests.md`：保存两轮设计自审、公开合同、自动化、真实 Browser 和独立敏感
+  审计证据。下一权威项为 PRD-096。
 
 ## MVP 非目标
 

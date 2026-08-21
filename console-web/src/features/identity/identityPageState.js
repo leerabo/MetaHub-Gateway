@@ -42,6 +42,8 @@ export function createIdentityPageController({
   let invitationSecretLink = null;
   let invitationSecretMail = null;
   let pendingChallenge = null;
+  let mfaEnrollment = null;
+  let platformAccess = false;
   let pendingWrite = Promise.resolve();
   let contextGeneration = 0;
   let contextChannel = null;
@@ -298,6 +300,44 @@ export function createIdentityPageController({
           clearToLogin();
           return false;
         }
+        renderSecurity({ error: safePageError(error) });
+        return false;
+      }
+    },
+    async beginMfaEnrollment({ currentPassword }) {
+      if (typeof api.beginMfa !== "function" || account?.mfa_configured) return false;
+      const ticket = beginRequest();
+      mfaEnrollment = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在创建多重验证密钥…" });
+      try {
+        const result = await queueWrite(() =>
+          api.beginMfa({ currentPassword, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        mfaEnrollment = result;
+        renderSecurity({ feedback: "多重验证密钥已创建。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderSecurity({ error: safePageError(error) });
+        return false;
+      }
+    },
+    async verifyMfaEnrollment({ code }) {
+      if (typeof api.verifyMfa !== "function" || !mfaEnrollment) return false;
+      const factorId = mfaEnrollment.factor_id;
+      const ticket = beginRequest();
+      mfaEnrollment = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在验证动态验证码…" });
+      try {
+        await queueWrite(() => api.verifyMfa({ factorId, code, signal: ticket.signal }));
+        if (!isCurrent(ticket)) return false;
+        account = { ...account, mfa_configured: true };
+        return loadProtectedState("多重验证已启用。", ticket);
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
         renderSecurity({ error: safePageError(error) });
         return false;
       }
@@ -582,7 +622,7 @@ export function createIdentityPageController({
       const list = await api.sessions({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       sessions = normalizeSessions(list.sessions, currentSession);
-      return loadWorkspaces(ticket, feedback, previousError);
+      return loadPlatformAccess(ticket, feedback, previousError);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
@@ -590,7 +630,27 @@ export function createIdentityPageController({
         return false;
       }
       sessions = currentSession ? [currentSession] : [];
-      return loadWorkspaces(ticket, feedback, safePageError(error));
+      return loadPlatformAccess(ticket, feedback, safePageError(error));
+    }
+  }
+
+  async function loadPlatformAccess(ticket, feedback, previousError) {
+    platformAccess = false;
+    if (typeof api.platformAccess !== "function") {
+      return loadWorkspaces(ticket, feedback, previousError);
+    }
+    try {
+      const projection = await api.platformAccess({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      platformAccess = projection.available === true;
+      return loadWorkspaces(ticket, feedback, previousError);
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isExpired(error)) {
+        clearToLogin();
+        return false;
+      }
+      return loadWorkspaces(ticket, feedback, previousError ?? safePageError(error));
     }
   }
 
@@ -863,6 +923,8 @@ export function createIdentityPageController({
       workspaceDraft,
       invitationResult,
       hasInvitationSecret: Boolean(invitationSecretLink),
+      mfaEnrollment,
+      platformAccess,
       feedback: extra.feedback,
       error: extra.error,
     });
@@ -872,6 +934,8 @@ export function createIdentityPageController({
     account = null;
     currentSession = null;
     sessions = [];
+    mfaEnrollment = null;
+    platformAccess = false;
     autoSwitchAttempted = false;
     scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
   }
@@ -996,6 +1060,14 @@ export function createIdentityPageController({
           newPassword: fields.get("newPassword"),
           confirmPassword: fields.get("confirmPassword"),
         });
+      } else if (form?.matches?.("[data-identity-mfa-enrollment-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.beginMfaEnrollment({ currentPassword: fields.get("currentPassword") });
+      } else if (form?.matches?.("[data-identity-mfa-verification-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.verifyMfaEnrollment({ code: fields.get("code") });
       } else if (form?.matches?.("[data-workspace-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);

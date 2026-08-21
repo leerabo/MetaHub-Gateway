@@ -406,12 +406,87 @@ a {
 }
 
 .identity-summary,
+.identity-mfa,
 .identity-workspaces,
 .identity-memberships,
 .identity-sessions,
 .identity-password {
   border-top: 1px solid var(--identity-line);
   padding-top: 20px;
+}
+
+.identity-mfa-start,
+.identity-mfa-enrollment,
+.identity-mfa-enrollment form {
+  display: grid;
+  gap: 14px;
+}
+
+.identity-mfa-start {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+  max-width: 620px;
+}
+
+.identity-mfa-start label,
+.identity-mfa-enrollment label {
+  display: grid;
+  gap: 7px;
+  color: #3e4955;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.identity-mfa-start input,
+.identity-mfa-enrollment input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 8px 10px;
+}
+
+.identity-mfa-enrollment {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 340px);
+  align-items: end;
+  padding: 16px;
+  border: 1px solid var(--identity-line);
+  background: #fff;
+}
+
+.identity-mfa-enrollment > div {
+  min-width: 0;
+}
+
+.identity-mfa-enrollment span,
+.identity-mfa-enrollment code,
+.identity-mfa-enrollment a {
+  display: block;
+}
+
+.identity-mfa-enrollment span {
+  color: var(--identity-muted);
+  font-size: 0.78rem;
+}
+
+.identity-mfa-enrollment code {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  font-size: 0.96rem;
+}
+
+.identity-mfa-enrollment a {
+  color: var(--identity-accent-dark);
+  font-size: 0.82rem;
+}
+
+.identity-platform-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .identity-section-heading {
@@ -904,6 +979,11 @@ a {
   }
 
   .identity-password-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-mfa-start,
+  .identity-mfa-enrollment {
     grid-template-columns: minmax(0, 1fr);
   }
 

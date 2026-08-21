@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
 from metahub_shared.identity.crypto import DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET
+from metahub_shared.identity.mfa import DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET
 from metahub_shared.mcp.contracts import McpContractError, McpSchemaLimits, McpVersionedSecret
 from metahub_shared.mcp.crypto import (
     DEFAULT_MCP_ENCRYPTION_SECRET,
@@ -53,6 +54,11 @@ DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-
 DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
 DEFAULT_IDENTITY_CHALLENGE_SECRET = "dev-only-change-me-metahub-identity-challenge-secret-2026"
 DEFAULT_WORKSPACE_SESSION_SECRET = "dev-only-change-me-metahub-workspace-session-secret-2026"
+DEFAULT_PLATFORM_SESSION_SECRET = "dev-only-change-me-metahub-platform-session-secret-2026"
+DEFAULT_SUPPORT_SESSION_SECRET = "dev-only-change-me-metahub-support-session-secret-2026"
+DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET = (
+    "dev-only-change-me-metahub-platform-bootstrap-recovery-secret-2026"
+)
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
 )
@@ -97,6 +103,13 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
     "METAHUB_WORKSPACE_SESSION_SECRET": DEFAULT_WORKSPACE_SESSION_SECRET,
+    "METAHUB_PLATFORM_SESSION_SECRET": DEFAULT_PLATFORM_SESSION_SECRET,
+    "METAHUB_PLATFORM_SESSION_TTL_SECONDS": "3600",
+    "METAHUB_SUPPORT_SESSION_SECRET": DEFAULT_SUPPORT_SESSION_SECRET,
+    "METAHUB_SUPPORT_SESSION_TTL_SECONDS": "900",
+    "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET,
+    "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "false",
+    "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET,
     "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
     "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
@@ -518,6 +531,21 @@ class AppConfig(BaseModel):
         repr=False,
     )
     workspace_session_ttl_seconds: int = 7200
+    platform_session_secret: str = Field(
+        default=DEFAULT_PLATFORM_SESSION_SECRET, exclude=True, repr=False
+    )
+    platform_session_ttl_seconds: int = 3600
+    support_session_secret: str = Field(
+        default=DEFAULT_SUPPORT_SESSION_SECRET, exclude=True, repr=False
+    )
+    support_session_ttl_seconds: int = 900
+    identity_mfa_encryption_secret: str = Field(
+        default=DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET, exclude=True, repr=False
+    )
+    platform_bootstrap_enabled: bool = False
+    platform_bootstrap_recovery_secret: str = Field(
+        default=DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET, exclude=True, repr=False
+    )
     identity_pii_encryption_secret: str = Field(
         default=DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
         exclude=True,
@@ -876,6 +904,14 @@ def load_app_config(service_name: str) -> AppConfig:
     identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
     identity_challenge_secret = _value(values, "METAHUB_IDENTITY_CHALLENGE_SECRET")
     workspace_session_secret = _value(values, "METAHUB_WORKSPACE_SESSION_SECRET")
+    platform_session_secret = _value(values, "METAHUB_PLATFORM_SESSION_SECRET")
+    support_session_secret = _value(values, "METAHUB_SUPPORT_SESSION_SECRET")
+    identity_mfa_encryption_secret = _value(
+        values, "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET"
+    )
+    platform_bootstrap_recovery_secret = _value(
+        values, "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET"
+    )
     identity_pii_encryption_secret = _value(
         values, "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET"
     )
@@ -980,6 +1016,49 @@ def load_app_config(service_name: str) -> AppConfig:
             code="infra.config_invalid",
             message="METAHUB_WORKSPACE_SESSION_SECRET is not an independent production secret.",
             suggestion="Configure a unique Workspace session secret of at least 32 characters.",
+        )
+
+    platform_secret_domains = (
+        platform_session_secret,
+        support_session_secret,
+        identity_mfa_encryption_secret,
+        platform_bootstrap_recovery_secret,
+    )
+    existing_identity_domains = (
+        auth_token_secret,
+        identity_session_secret,
+        identity_challenge_secret,
+        identity_pii_encryption_secret,
+        workspace_session_secret,
+        cache_affinity_hmac_secret,
+        _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
+    )
+    platform_defaults = (
+        DEFAULT_PLATFORM_SESSION_SECRET,
+        DEFAULT_SUPPORT_SESSION_SECRET,
+        DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET,
+        DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET,
+    )
+    invalid_platform_domain = any(
+        len(value.encode("utf-8")) < 32 for value in platform_secret_domains
+    ) or any(_secret_reused(value, existing_identity_domains) for value in platform_secret_domains)
+    invalid_platform_domain = invalid_platform_domain or any(
+        hmac.compare_digest(left, right)
+        for index, left in enumerate(platform_secret_domains)
+        for right in platform_secret_domains[index + 1 :]
+    )
+    if invalid_platform_domain or (
+        service_name == "control-plane-api"
+        and environment == "prod"
+        and any(
+            hmac.compare_digest(value, default)
+            for value, default in zip(platform_secret_domains, platform_defaults, strict=True)
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Platform IAM secrets are not independent production secrets.",
+            suggestion="Configure four unique Platform IAM secrets of at least 32 characters.",
         )
 
     environment_info = EnvironmentInfo(
@@ -1797,6 +1876,17 @@ def load_app_config(service_name: str) -> AppConfig:
         identity_session_secret=identity_session_secret,
         identity_challenge_secret=identity_challenge_secret,
         workspace_session_secret=workspace_session_secret,
+        platform_session_secret=platform_session_secret,
+        platform_session_ttl_seconds=_bounded_int(
+            values, "METAHUB_PLATFORM_SESSION_TTL_SECONDS", minimum=60, maximum=3600
+        ),
+        support_session_secret=support_session_secret,
+        support_session_ttl_seconds=_bounded_int(
+            values, "METAHUB_SUPPORT_SESSION_TTL_SECONDS", minimum=60, maximum=900
+        ),
+        identity_mfa_encryption_secret=identity_mfa_encryption_secret,
+        platform_bootstrap_enabled=_boolean(values, "METAHUB_PLATFORM_BOOTSTRAP_ENABLED"),
+        platform_bootstrap_recovery_secret=platform_bootstrap_recovery_secret,
         identity_pii_encryption_secret=identity_pii_encryption_secret,
         identity_challenge_delivery_mode=identity_challenge_delivery_mode,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
@@ -3100,6 +3190,13 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE",
         "METAHUB_WORKSPACE_SESSION_SECRET",
+        "METAHUB_PLATFORM_SESSION_SECRET",
+        "METAHUB_PLATFORM_SESSION_TTL_SECONDS",
+        "METAHUB_SUPPORT_SESSION_SECRET",
+        "METAHUB_SUPPORT_SESSION_TTL_SECONDS",
+        "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET",
+        "METAHUB_PLATFORM_BOOTSTRAP_ENABLED",
+        "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_RESPONSE_CACHE_ENABLED",
         "METAHUB_RESPONSE_CACHE_HMAC_VERSION",

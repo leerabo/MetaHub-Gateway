@@ -11,9 +11,9 @@ from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
-PLAN_DATE = "2026-08-20"
+PLAN_DATE = "2026-08-21"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 94
+COMPLETED_THROUGH_PRD = 95
 
 
 def prd(
@@ -236,16 +236,16 @@ INITIAL_DRAFT_PRDS = [
         "平台角色platform_owner/platform_ops/platform_security/platform_billing/platform_support/platform_verification/platform_compliance/platform_privacy/release_manager/platform_provider_engineer/platform_channel/platform_customer_success/platform_growth；每个角色独立页面与动作矩阵；员工账号MFA；JIT支持访问申请、客户授权、双人审批、原因、时限、撤销；break-glass独立流程；平台操作不可变审计。",
         "平台角色不等于租户admin；禁止永久模拟客户；支持访问不允许读取Provider Key、Token、Prompt、Response。",
         "平台员工与角色、角色页面授权、支持访问申请、审批与审计页",
-        ("GET /platform/operators", "POST /platform/operators", "PATCH /platform/operators/{operator_id}", "POST /platform/support-grants", "POST /platform/support-grants/{grant_id}/approve", "POST /platform/support-grants/{grant_id}/revoke"),
-        ("PlatformOperator", "PlatformRole", "PlatformPermission", "SupportGrant", "BreakGlassSession", "PlatformAuditLog"),
+        ("POST /identity/mfa/totp/enrollments", "POST /identity/mfa/totp/verifications", "GET /identity/platform-access", "POST /platform/bootstrap", "POST /platform/sessions", "GET /platform/session", "GET /platform/navigation", "GET/POST /platform/operators", "PATCH /platform/operators/{operator_id}", "GET/POST /platform/support-grants", "POST /platform/support-grants/{grant_id}/approve", "POST /workspace/support-grants/{grant_id}/approve", "POST /platform/support-grants/{grant_id}/sessions", "POST .../{grant_id}/revoke", "GET /support/workspace/diagnostics", "POST /platform/break-glass-sessions", "POST .../{id}/reviews", "GET /platform/audit-logs"),
+        ("AccountMfaFactor", "PlatformBootstrapState", "PlatformOperator", "PlatformRole", "PlatformPermission", "PlatformSession", "SupportGrant", "SupportGrantApproval", "SupportSession", "BreakGlassSession", "BreakGlassReview", "PlatformAuditLog", "PlatformEventOutbox"),
         ("platform.operator_changed", "support.access_requested", "support.access_granted", "support.access_revoked", "break_glass.used"),
         "平台角色与租户角色命名空间隔离；platform_support只能通过SupportGrant获得固定只读诊断权限",
-        "无平台角色不能访问/platform；每个角色只收到后端计算的导航和页面数据；直达URL/API再次鉴权；platform_channel只能访问渠道业务页；support不能自行审批；到期自动撤权；租户内容字段后端裁剪；所有平台动作有actor/reason/request_id。",
+        "无平台角色不能访问/platform；真实TOTP与一次性bootstrap完成；每个角色只收到后端计算的导航和页面数据；直达URL/API再次鉴权；support不能自行审批；到期自动撤权；租户内容字段后端裁剪；审计使用会话/角色绑定HMAC游标；所有平台动作有actor/reason/request_id。",
         "PRD-090、PRD-091、PRD-094",
-        "禁止按admin@metahub.local或任何存量邮箱自动提权。生产platform_owner只能通过显式一次性bootstrap ceremony创建：无默认邮箱、强MFA、双人见证或离线恢复密钥、不可变审计，成功后立即关闭入口。回退可关闭平台路由，但不得删除新身份、撤权或审计事实。",
-        "强制MFA、JIT、双人审批、不可变审计、客服最小权限、break-glass告警和事后复核。",
-        "权限白盒、越权黑盒、双审批竞态、到期撤销、敏感字段裁剪、break-glass、动态撤权浏览器流程。",
-        "平台授权判断p95<50ms；撤权传播<5s。",
+        "0087从完整0086 expand TOTP、bootstrap、Platform IAM/Session、Support grant/approval/session、break-glass review和不可变审计/outbox；pristine可往返，任何安全事实存在时down原子失败。禁止按admin@metahub.local或任何存量邮箱自动提权；成功bootstrap后数据库tombstone永久关闭入口。",
+        "强制真实MFA与counter防重放；Global/Workspace/Platform/Support主体、Cookie和根密钥分域；JIT双域审批；逐请求动态撤权；不可变审计；客服最小权限；break-glass告警和事后复核；秘密不进日志、DOM、Storage或证据。",
+        "0086->0087/fresh/down/up、角色目录、权限白盒、越权黑盒、MFA加密/重放/限流、bootstrap并发、100并发审批/Session、游标绑定、到期撤销、敏感裁剪、break-glass双复核、动态撤权与三视口浏览器流程。",
+        "平台授权warm p95<50ms；Operator/grant列表warm p95<300ms；撤权传播<5s。",
         "5-6人周",
         "后端2、前端1、测试1、安全1",
     ),

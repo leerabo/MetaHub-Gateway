@@ -171,6 +171,44 @@ def authenticate_global_session(
         connection.close()
 
 
+def project_platform_access(config: AppConfig, *, session_token: str) -> bool:
+    """Return only whether the current Global Account is an active platform operator."""
+    connection = _connect(config)
+    try:
+        now = _utcnow()
+        identity = _authenticate(connection, config, session_token, now, touch=True)
+        capability = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='platform_operators'"
+        ).fetchone()
+        available = False
+        if capability is not None:
+            available = (
+                connection.execute(
+                    """
+                    SELECT 1 FROM platform_operators
+                    WHERE account_id=? AND status='active'
+                    """,
+                    (identity.account_id,),
+                ).fetchone()
+                is not None
+            )
+        connection.commit()
+        return available
+    except ApiError as exc:
+        if connection.in_transaction:
+            if exc.code == "identity.session_expired":
+                connection.commit()
+            else:
+                connection.rollback()
+        raise
+    except (sqlite3.Error, DbError, ValueError, TypeError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("identity.unavailable") from None
+    finally:
+        connection.close()
+
+
 def list_global_sessions(
     config: AppConfig,
     *,
@@ -618,7 +656,7 @@ def _create_session(
         ),
     )
     return IssuedIdentitySession(
-        account=_account_summary(account),
+        account=_account_summary(connection, account),
         current_session=GlobalSessionSummary(
             session_id=session_id,
             device_family=device_family,
@@ -686,7 +724,7 @@ def _authenticate(
         return AuthenticatedIdentity(
             account_id=row["account_id"],
             session_id=row["session_id"],
-            account=_account_summary(account),
+            account=_account_summary(connection, account),
             current_session=_session_summary(row, current_session_id=row["session_id"]),
         )
     return AuthenticatedIdentity(
@@ -696,7 +734,9 @@ def _authenticate(
             email=row["email_normalized"],
             display_name=row["display_name"],
             status=row["account_status"],
-            mfa_configured=row["mfa_state"] != "not_enrolled",
+            mfa_configured=_mfa_configured(
+                connection, row["account_id"], row["mfa_state"]
+            ),
         ),
         current_session=_session_summary(row, current_session_id=row["session_id"]),
     )
@@ -823,13 +863,27 @@ def _device_family(user_agent: str | None) -> str:
     return "unknown"
 
 
-def _account_summary(row: sqlite3.Row) -> GlobalAccountSummary:
+def _account_summary(connection: sqlite3.Connection, row: sqlite3.Row) -> GlobalAccountSummary:
     return GlobalAccountSummary(
         email=row["email_normalized"],
         display_name=row["display_name"],
         status=row["status"] if "status" in row.keys() else row["account_status"],
-        mfa_configured=row["mfa_state"] != "not_enrolled",
+        mfa_configured=_mfa_configured(connection, row["account_id"], row["mfa_state"]),
     )
+
+
+def _mfa_configured(
+    connection: sqlite3.Connection, account_id: str, legacy_state: str
+) -> bool:
+    capability = connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='account_mfa_factors'"
+    ).fetchone()
+    if capability is None:
+        return legacy_state != "not_enrolled"
+    return connection.execute(
+        "SELECT 1 FROM account_mfa_factors WHERE account_id=? AND status='active'",
+        (account_id,),
+    ).fetchone() is not None
 
 
 def _session_summary(row: sqlite3.Row, *, current_session_id: str) -> GlobalSessionSummary:

@@ -193,6 +193,7 @@ export function renderIdentitySecurityPage(container, state) {
             </div>
           </dl>
         </section>
+        ${renderMfaSection(state)}
         ${renderWorkspaceSection(state)}
         ${renderMembershipSection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
@@ -242,6 +243,63 @@ export function renderIdentitySecurityPage(container, state) {
       </div>
     </div>
   `;
+}
+
+function renderMfaSection(state) {
+  if (state.account.mfa_configured) {
+    return `
+      <section class="identity-mfa" aria-labelledby="identity-mfa-title">
+        <div class="identity-section-heading">
+          <div>
+            <p>多重验证</p>
+            <h2 id="identity-mfa-title">动态验证已启用</h2>
+          </div>
+          ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="/platform.html">进入平台工作台</a>' : ""}
+        </div>
+      </section>`;
+  }
+  const enrollment = state.mfaEnrollment;
+  if (enrollment) {
+    return `
+      <section class="identity-mfa" aria-labelledby="identity-mfa-title">
+        <div class="identity-section-heading">
+          <div>
+            <p>多重验证</p>
+            <h2 id="identity-mfa-title">激活动态验证</h2>
+          </div>
+        </div>
+        <div class="identity-mfa-enrollment">
+          <div>
+            <span>认证器密钥</span>
+            <code>${escapeHtml(enrollment.secret)}</code>
+            <a href="${escapeAttribute(enrollment.provisioning_uri)}">在认证器中打开</a>
+          </div>
+          <form data-identity-mfa-verification-form autocomplete="off">
+            <label>
+              <span>动态验证码</span>
+              <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+            </label>
+            <button class="identity-primary" type="submit">验证并启用</button>
+          </form>
+        </div>
+      </section>`;
+  }
+  return `
+    <section class="identity-mfa" aria-labelledby="identity-mfa-title">
+      <div class="identity-section-heading">
+        <div>
+          <p>多重验证</p>
+          <h2 id="identity-mfa-title">启用动态验证</h2>
+        </div>
+      </div>
+      <form class="identity-mfa-start" data-identity-mfa-enrollment-form autocomplete="off">
+        <label>
+          <span>当前密码</span>
+          <input name="currentPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="identity-primary" type="submit">创建认证器密钥</button>
+      </form>
+    </section>`;
 }
 
 function renderWorkspaceSelector(state) {

@@ -19,13 +19,17 @@ from metahub_control.workspace_access.constants import (
     WORKSPACE_SESSION_COOKIE,
 )
 
+from .mfa_service import begin_totp_enrollment, verify_totp_enrollment
 from .models import (
     IdentityLogoutResponse,
     IdentityPendingChallengeResponse,
+    IdentityPlatformAccessResponse,
     IdentityRevokeResponse,
     IdentityRotateResponse,
     IdentitySessionResponse,
     IdentitySessionsResponse,
+    MfaEnrollmentResponse,
+    MfaVerificationResponse,
 )
 from .self_service import (
     PendingIdentityChallenge,
@@ -41,6 +45,7 @@ from .service import (
     authenticate_global_session,
     list_global_sessions,
     login_global_account,
+    project_platform_access,
     revoke_global_session,
     rotate_global_password,
     valid_opaque_value,
@@ -241,6 +246,71 @@ async def reset_password(request: Request, response: Response) -> IdentitySessio
     )
 
 
+@router.post("/mfa/totp/enrollments", response_model=MfaEnrollmentResponse)
+async def create_totp_enrollment(
+    request: Request,
+    response: Response,
+) -> MfaEnrollmentResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("current_password",))
+    pending = await _run_identity_operation(
+        begin_totp_enrollment,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        current_password=_required_string(
+            payload, "current_password", minimum=1, maximum=1024, byte_limit=True
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return MfaEnrollmentResponse(
+        factor_id=pending.factor_id,
+        secret=pending.secret,
+        provisioning_uri=pending.uri,
+        expires_at=pending.expires_at,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/mfa/totp/verifications", response_model=MfaVerificationResponse)
+async def activate_totp_factor(
+    request: Request,
+    response: Response,
+) -> MfaVerificationResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("factor_id", "code"))
+    verified = await _run_identity_operation(
+        verify_totp_enrollment,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        factor_id=_required_string(payload, "factor_id", minimum=36, maximum=36),
+        code=_required_string(payload, "code", minimum=6, maximum=6),
+        device_fingerprint=(
+            (request.headers.get("User-Agent") or "unknown")
+            + "|"
+            + (request.client.host if request.client else "unknown")
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return MfaVerificationResponse(
+        factor_id=verified.factor_id,
+        revision=verified.revision,
+        verified_at=verified.verified_at,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
 @router.get("/me", response_model=IdentitySessionResponse)
 async def me(request: Request) -> IdentitySessionResponse:
     _reject_legacy_authorization(request)
@@ -253,6 +323,23 @@ async def me(request: Request) -> IdentitySessionResponse:
     return IdentitySessionResponse(
         account=identity.account,
         current_session=identity.current_session,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.get("/platform-access", response_model=IdentityPlatformAccessResponse)
+async def platform_access(request: Request, response: Response) -> IdentityPlatformAccessResponse:
+    _reject_legacy_authorization(request)
+    _reject_query(request, ())
+    available = await _run_identity_operation(
+        project_platform_access,
+        _config(request),
+        session_token=_required_session_cookie(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return IdentityPlatformAccessResponse(
+        available=available,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

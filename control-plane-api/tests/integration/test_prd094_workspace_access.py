@@ -38,9 +38,9 @@ GLOBAL_SESSION_COOKIE = "__Host-metahub-global-session"
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd094-api-migrated")
-    database = root / "workspace-0086.sqlite3"
+    database = root / "workspace-current.sqlite3"
     result = apply_migrations(f"sqlite:///{database.as_posix()}")
-    assert result.applied[-1] == "0086"
+    assert "0086" in result.applied
     return database
 
 

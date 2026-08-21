@@ -1,6 +1,8 @@
 import {
+  beginIdentityTotpEnrollment,
   confirmIdentityPasswordReset,
   getIdentityMe,
+  getIdentityPlatformAccess,
   listIdentitySessions,
   loginIdentity,
   logoutIdentity,
@@ -9,6 +11,7 @@ import {
   resendIdentityVerification,
   revokeIdentitySession,
   rotateIdentityPassword,
+  verifyIdentityTotpEnrollment,
   verifyIdentityRegistration,
 } from "../../lib/identity.js";
 import {
@@ -43,7 +46,10 @@ if (root) {
       resend: (input) => resendIdentityVerification({ controlApiUrl, ...input }),
       requestReset: (input) => requestIdentityPasswordReset({ controlApiUrl, ...input }),
       confirmReset: (input) => confirmIdentityPasswordReset({ controlApiUrl, ...input }),
+      beginMfa: (input) => beginIdentityTotpEnrollment({ controlApiUrl, ...input }),
+      verifyMfa: (input) => verifyIdentityTotpEnrollment({ controlApiUrl, ...input }),
       me: (input) => getIdentityMe({ controlApiUrl, ...input }),
+      platformAccess: (input) => getIdentityPlatformAccess({ controlApiUrl, ...input }),
       sessions: (input) => listIdentitySessions({ controlApiUrl, ...input }),
       revoke: (input) => revokeIdentitySession({ controlApiUrl, ...input }),
       logout: (input) => logoutIdentity({ controlApiUrl, ...input }),

@@ -55,7 +55,13 @@ def seeded_0085(tmp_path_factory: pytest.TempPathFactory) -> Path:
     result = apply_migrations(_url(database), migrations_dir=migrations)
     assert result.applied[-1] == "0085"
     apply_seed_data(_url(database))
+    for source in MIGRATIONS_DIR.glob("0086_*.sql"):
+        shutil.copy2(source, migrations / source.name)
     return database
+
+
+def _apply_0086(database_url: str, seeded_0085: Path):
+    return apply_migrations(database_url, migrations_dir=seeded_0085.parent / "migrations")
 
 
 def test_0086_backfills_all_legacy_roles_and_pristine_round_trip(
@@ -97,7 +103,7 @@ def test_0086_backfills_all_legacy_roles_and_pristine_round_trip(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0086"]
+    assert _apply_0086(database_url, seeded_0085).applied == ["0086"]
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0086"
@@ -141,7 +147,7 @@ def test_0086_backfills_all_legacy_roles_and_pristine_round_trip(
         _healthy(connection)
     finally:
         connection.close()
-    assert apply_migrations(database_url).applied == ["0086"]
+    assert _apply_0086(database_url, seeded_0085).applied == ["0086"]
 
 
 def test_0086_committed_membership_fact_blocks_down_atomically(
@@ -151,7 +157,7 @@ def test_0086_committed_membership_fact_blocks_down_atomically(
     database = tmp_path / "down-guard.sqlite3"
     shutil.copy2(seeded_0085, database)
     database_url = _url(database)
-    apply_migrations(database_url)
+    _apply_0086(database_url, seeded_0085)
     connection = connect_database(database_url)
     try:
         row = connection.execute(
@@ -201,7 +207,7 @@ def test_0086_reserves_pending_service_subject_without_browser_projection(
     database = tmp_path / "service-subject.sqlite3"
     shutil.copy2(seeded_0085, database)
     database_url = _url(database)
-    apply_migrations(database_url)
+    _apply_0086(database_url, seeded_0085)
     connection = connect_database(database_url)
     try:
         owner = connection.execute(
@@ -277,7 +283,7 @@ def test_0086_new_legacy_user_backfills_membership_without_replacing_owner(
     database = tmp_path / "legacy-user-after-up.sqlite3"
     shutil.copy2(seeded_0085, database)
     database_url = _url(database)
-    apply_migrations(database_url)
+    _apply_0086(database_url, seeded_0085)
     connection = connect_database(database_url)
     try:
         owner = connection.execute(
