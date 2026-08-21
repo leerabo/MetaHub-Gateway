@@ -32,12 +32,19 @@ from .request_id import REQUEST_ID_HEADER, TRACE_ID_HEADER, resolve_request_id, 
 
 logger = logging.getLogger("metahub.runtime")
 _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE = "metahub_clear_identity_cookies_on_error"
+_CLEAR_WORKSPACE_COOKIES_ON_ERROR_STATE = "metahub_clear_workspace_cookies_on_error"
 
 
 def clear_identity_cookies_on_error(request: Request) -> None:
     """Ensure an authorized logout attempt clears browser credentials on every outcome."""
 
     setattr(request.state, _CLEAR_IDENTITY_COOKIES_ON_ERROR_STATE, True)
+
+
+def clear_workspace_cookies_on_error(request: Request) -> None:
+    """Clear a rejected Workspace credential when authentication returns 401."""
+
+    setattr(request.state, _CLEAR_WORKSPACE_COOKIES_ON_ERROR_STATE, True)
 
 
 # 业务路由仅在已提交安全事实后向这里绑定任务；统一错误处理器据此保留响应后的尽力副作用。
@@ -790,4 +797,27 @@ def _error_response(request: Request, error: ApiError) -> JSONResponse:
             httponly=False,
             samesite="strict",
         )
+        _delete_workspace_cookies(error_response)
+    if (
+        error.http_status == 401
+        and getattr(request.state, _CLEAR_WORKSPACE_COOKIES_ON_ERROR_STATE, False) is True
+    ):
+        _delete_workspace_cookies(error_response)
     return error_response
+
+
+def _delete_workspace_cookies(response: Response) -> None:
+    response.delete_cookie(
+        "__Host-metahub-workspace-session",
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        "__Host-metahub-workspace-csrf",
+        path="/",
+        secure=True,
+        httponly=False,
+        samesite="strict",
+    )

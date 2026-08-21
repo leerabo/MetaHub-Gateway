@@ -37,6 +37,11 @@ from metahub_control.audit import (
 )
 from metahub_control.auth import AuthContext
 from metahub_control.webhooks.service import dispatch_webhook_event
+from metahub_control.workspace_access.service import (
+    bridge_legacy_invitation_in_transaction,
+    consume_legacy_invitation_in_transaction,
+    workspace_access_schema_available_in_transaction,
+)
 
 from .models import (
     AcceptedInvitationUser,
@@ -146,6 +151,20 @@ def create_invitation(
                 occurred_at_text,
                 occurred_at_text,
             ),
+        )
+        bridge_legacy_invitation_in_transaction(
+            connection,
+            config,
+            legacy_invitation_id=invitation_id,
+            tenant_id=tenant_id,
+            inviter_user_id=context.user.user_id,
+            target_email=email,
+            legacy_role=role_code,
+            token_hash=token_digest,
+            expires_at=expires_at_text,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=occurred_at,
         )
         after_summary = _audit_summary(
             email_fingerprint=email_fingerprint,
@@ -424,6 +443,26 @@ def accept_invitation(
         if cursor.rowcount != 1:
             # 锁内 CAS 未命中只能按公开同形不可用处理，不能暴露真实终态。
             raise ApiError("invitation.not_available")
+        if workspace_access_schema_available_in_transaction(connection):
+            account = connection.execute(
+                """
+                SELECT account_id FROM account_identity_links
+                WHERE legacy_tenant_id=? AND legacy_user_id=? AND status='active'
+                """,
+                (tenant_id, user_id),
+            ).fetchone()
+            if account is None or not consume_legacy_invitation_in_transaction(
+                connection,
+                config,
+                legacy_invitation_id=invitation_id,
+                account_id=account["account_id"],
+                email=email,
+                existing_user_id=user_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=occurred_at,
+            ):
+                raise ApiError("invitation.not_available")
 
         before_summary = _audit_summary(
             email_fingerprint=email_fingerprint,
@@ -729,7 +768,10 @@ def _normalize_email(value: object, error_code: str) -> str:
         len(normalized) < 3
         or len(normalized) > 255
         or normalized.count("@") != 1
-        or any(character.isspace() or unicodedata.category(character).startswith("C") for character in normalized)
+        or any(
+            character.isspace() or unicodedata.category(character).startswith("C")
+            for character in normalized
+        )
     ):
         # 长度、@ 数量、空白或控制字符任一异常都使用调用方指定的稳定错误码。
         raise ApiError(error_code)
@@ -792,7 +834,7 @@ def _token_digest(value: object) -> str:
 def _email_fingerprint(invitation_id: str, email: str) -> str:
     """用随机 Invitation ID 加盐生成不可逆邮箱指纹，供审计和事件关联。"""
 
-    return hashlib.sha256(f"{invitation_id}\x00{email}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{invitation_id}\x00{email}".encode()).hexdigest()
 
 
 def _require_active_role(

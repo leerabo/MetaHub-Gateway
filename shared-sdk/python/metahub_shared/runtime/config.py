@@ -52,6 +52,7 @@ IdentityChallengeDeliveryMode = Literal["disabled", "test_capture"]
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
 DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
 DEFAULT_IDENTITY_CHALLENGE_SECRET = "dev-only-change-me-metahub-identity-challenge-secret-2026"
+DEFAULT_WORKSPACE_SESSION_SECRET = "dev-only-change-me-metahub-workspace-session-secret-2026"
 CACHE_AFFINITY_EXAMPLE_HMAC_SECRET = (
     "replace-with-cache-affinity-hmac-secret-at-least-32-characters"
 )
@@ -95,6 +96,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_IDENTITY_CHALLENGE_SECRET": DEFAULT_IDENTITY_CHALLENGE_SECRET,
     "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
+    "METAHUB_WORKSPACE_SESSION_SECRET": DEFAULT_WORKSPACE_SESSION_SECRET,
     "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
     "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
@@ -510,6 +512,12 @@ class AppConfig(BaseModel):
         exclude=True,
         repr=False,
     )
+    workspace_session_secret: str = Field(
+        default=DEFAULT_WORKSPACE_SESSION_SECRET,
+        exclude=True,
+        repr=False,
+    )
+    workspace_session_ttl_seconds: int = 7200
     identity_pii_encryption_secret: str = Field(
         default=DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
         exclude=True,
@@ -867,6 +875,7 @@ def load_app_config(service_name: str) -> AppConfig:
     auth_token_secret = _value(values, "METAHUB_AUTH_TOKEN_SECRET")
     identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
     identity_challenge_secret = _value(values, "METAHUB_IDENTITY_CHALLENGE_SECRET")
+    workspace_session_secret = _value(values, "METAHUB_WORKSPACE_SESSION_SECRET")
     identity_pii_encryption_secret = _value(
         values, "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET"
     )
@@ -918,6 +927,7 @@ def load_app_config(service_name: str) -> AppConfig:
         auth_token_secret,
         identity_session_secret,
         identity_challenge_secret,
+        workspace_session_secret,
         cache_affinity_hmac_secret,
         _raw_optional_value(values, "METAHUB_BATCH_ENCRYPTION_SECRET"),
         _raw_optional_value(values, "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET"),
@@ -951,6 +961,25 @@ def load_app_config(service_name: str) -> AppConfig:
                 "secret."
             ),
             suggestion="Configure a unique Identity PII secret of at least 32 characters.",
+        )
+
+    if (
+        len(workspace_session_secret) < 32
+        or hmac.compare_digest(workspace_session_secret, auth_token_secret)
+        or hmac.compare_digest(workspace_session_secret, identity_session_secret)
+        or hmac.compare_digest(workspace_session_secret, identity_challenge_secret)
+        or hmac.compare_digest(workspace_session_secret, identity_pii_encryption_secret)
+        or hmac.compare_digest(workspace_session_secret, cache_affinity_hmac_secret)
+        or (
+            service_name == "control-plane-api"
+            and environment == "prod"
+            and workspace_session_secret == DEFAULT_WORKSPACE_SESSION_SECRET
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_WORKSPACE_SESSION_SECRET is not an independent production secret.",
+            suggestion="Configure a unique Workspace session secret of at least 32 characters.",
         )
 
     environment_info = EnvironmentInfo(
@@ -1767,6 +1796,7 @@ def load_app_config(service_name: str) -> AppConfig:
         auth_token_secret=auth_token_secret,
         identity_session_secret=identity_session_secret,
         identity_challenge_secret=identity_challenge_secret,
+        workspace_session_secret=workspace_session_secret,
         identity_pii_encryption_secret=identity_pii_encryption_secret,
         identity_challenge_delivery_mode=identity_challenge_delivery_mode,
         cache_affinity_hmac_secret=cache_affinity_hmac_secret,
@@ -3069,6 +3099,7 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_IDENTITY_CHALLENGE_SECRET",
         "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE",
+        "METAHUB_WORKSPACE_SESSION_SECRET",
         "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
         "METAHUB_RESPONSE_CACHE_ENABLED",
         "METAHUB_RESPONSE_CACHE_HMAC_VERSION",

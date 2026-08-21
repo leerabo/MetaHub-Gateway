@@ -14,6 +14,9 @@ from typing import Annotated
 from fastapi import Header, Request
 from metahub_shared.feedback import FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
 from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+
+from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
 
 from .service import (
     AuthContext,
@@ -34,6 +37,7 @@ def _require_request_permissions(
     返回：带当前 tenant_id、revision 和授权指纹的上下文；任一权限缺失即统一 403。
     """
 
+    _reject_mixed_workspace_credential(request, authorization)
     context = authenticate_bearer(request.app.state.config, authorization)
     for permission_code in permission_codes:
         # 复合旧守卫采用全部命中语义，避免读写尚未拆路由时把已撤销的写权限重新放大。
@@ -51,7 +55,65 @@ def require_current_user(
     """
 
     # 认证请求是访问控制边界，调用方必须透传统一错误和 request_id。
+    _reject_mixed_workspace_credential(request, authorization)
     return authenticate_bearer(request.app.state.config, authorization)
+
+
+def require_console_user(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    """Authenticate Console navigation with exactly one legacy or Workspace credential."""
+
+    workspace_token = _workspace_cookie(request)
+    if workspace_token is not None:
+        if authorization is not None or _raw_authorization_present(request):
+            raise ApiError("workspace_session.credential_conflict")
+        clear_workspace_cookies_on_error(request)
+        # Delay the cross-domain adapter import so auth package initialization remains acyclic.
+        from metahub_control.workspace_access.service import (
+            authenticate_workspace_session_as_auth_context,
+        )
+
+        context = authenticate_workspace_session_as_auth_context(
+            request.app.state.config,
+            workspace_token,
+        )
+        request.state.workspace_session_authenticated = True
+        return context
+    return authenticate_bearer(request.app.state.config, authorization)
+
+
+def _reject_mixed_workspace_credential(
+    request: Request,
+    authorization: str | None,
+) -> None:
+    if _workspace_cookie(request) is not None and (
+        authorization is not None or _raw_authorization_present(request)
+    ):
+        raise ApiError("workspace_session.credential_conflict")
+
+
+def _workspace_cookie(request: Request) -> str | None:
+    values: list[str] = []
+    for raw_name, raw_value in request.scope.get("headers", ()):
+        if raw_name.lower() != b"cookie":
+            continue
+        for segment in raw_value.decode("latin-1").split(";"):
+            name, separator, value = segment.strip().partition("=")
+            if separator and name == WORKSPACE_SESSION_COOKIE:
+                values.append(value)
+    if not values:
+        return None
+    if len(values) != 1 or not values[0]:
+        raise ApiError("workspace_session.invalid")
+    return values[0]
+
+
+def _raw_authorization_present(request: Request) -> bool:
+    return any(
+        name.lower() == b"authorization" for name, _value in request.scope.get("headers", ())
+    )
 
 
 async def require_admin_assistant_authentication(request: Request) -> AsyncIterator[AuthContext]:
@@ -91,6 +153,7 @@ async def require_admin_assistant_authentication(request: Request) -> AsyncItera
         else:
             # 无凭据仍交由统一认证器产生标准错误信封和 request_id，不在依赖层自造响应。
             authorization = None
+        _reject_mixed_workspace_credential(request, authorization)
         attempt_owner = admin_assistant_request_owner(request)
 
         # Session SELECT、权限扫描和 admission 排队共用 middleware 入口的 source deadline；
@@ -602,6 +665,7 @@ def require_feedback_summary_user(
     deadline = started + FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
     # deadline 只驻留当前请求，路由不得重新用当前时刻生成另一份 250ms 预算。
     request.state.feedback_summary_deadline = deadline
+    _reject_mixed_workspace_credential(request, authorization)
     context = authenticate_bearer(
         request.app.state.config,
         authorization,
@@ -1555,6 +1619,7 @@ def require_prompt_template_catalog_user(
     ``/prompt-templates/options``，不能授予 Project/路由管理权限，也不能按角色名或共享默认值补权。
     """
 
+    _reject_mixed_workspace_credential(request, authorization)
     context = authenticate_bearer(request.app.state.config, authorization)
     # options 只允许管理侧 read/write 用户，缺权时统一拒绝，避免借候选目录枚举项目或模型。
     if not {"prompt_template.read", "prompt_template.write"}.intersection(context.permission_codes):

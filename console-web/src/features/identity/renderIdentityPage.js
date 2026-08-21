@@ -164,6 +164,7 @@ export function renderIdentitySecurityPage(container, state) {
           <span class="identity-brand-mark" aria-hidden="true">M</span>
           <strong>MetaHub</strong>
         </a>
+        ${renderWorkspaceSelector(state)}
         <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
       </header>
       <div class="identity-security-main">
@@ -193,6 +194,7 @@ export function renderIdentitySecurityPage(container, state) {
           </dl>
         </section>
         ${renderWorkspaceSection(state)}
+        ${renderMembershipSection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
@@ -240,6 +242,264 @@ export function renderIdentitySecurityPage(container, state) {
       </div>
     </div>
   `;
+}
+
+function renderWorkspaceSelector(state) {
+  const choices = Array.isArray(state.workspaceChoices) ? state.workspaceChoices : [];
+  const context = state.workspaceContext ?? null;
+  if (choices.length === 0) {
+    return '<div class="identity-workspace-selector is-empty"><span>空间</span><strong>尚未进入</strong></div>';
+  }
+  const current = context
+    ? choices.find((choice) => choice.workspace_id === context.workspace_id) ?? context
+    : null;
+  if (choices.length === 1) {
+    const choice = choices[0];
+    return `
+      <div class="identity-workspace-selector">
+        <span>空间</span>
+        ${
+          current
+            ? `<strong>${escapeHtml(current.name)}</strong><small>${escapeHtml(roleLabel(context.role))}</small>`
+            : `<button type="button" data-identity-action="switch-workspace" data-workspace-index="0">进入 ${escapeHtml(choice.name)}</button>`
+        }
+      </div>
+    `;
+  }
+  return `
+    <details class="identity-workspace-selector">
+      <summary>
+        <span>空间</span>
+        <strong>${escapeHtml(current?.name ?? "选择空间")}</strong>
+        ${current ? `<small>${escapeHtml(roleLabel(context.role))}</small>` : ""}
+      </summary>
+      <div class="identity-workspace-popover">
+        <label>
+          <span class="identity-visually-hidden">搜索空间</span>
+          <input type="search" autocomplete="off" placeholder="搜索空间" data-workspace-search />
+        </label>
+        <div class="identity-workspace-options">
+          ${choices.map((choice, index) => renderWorkspaceOption(choice, index, context)).join("")}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function renderWorkspaceOption(choice, index, context) {
+  const active = context?.workspace_id === choice.workspace_id;
+  const machine = choice.role === "service_account";
+  const searchText = `${choice.name} ${choice.slug ?? ""}`;
+  return `
+    <button
+      type="button"
+      data-workspace-option
+      data-workspace-search-text="${escapeAttribute(searchText)}"
+      data-identity-action="switch-workspace"
+      data-workspace-index="${index}"
+      ${active || machine ? "disabled" : ""}
+    >
+      <span>${escapeHtml(choice.name)}</span>
+      <small>${machine ? "机器主体" : escapeHtml(roleLabel(choice.role))}${active ? " · 当前" : ""}</small>
+    </button>
+  `;
+}
+
+function renderMembershipSection(state) {
+  const context = state.workspaceContext ?? null;
+  const members = Array.isArray(state.memberships) ? state.memberships : [];
+  const navigationCount = Array.isArray(state.navigationItems)
+    ? state.navigationItems.filter((item) => item.visible !== false && item.disabled !== true).length
+    : 0;
+  return `
+    <section class="identity-memberships" aria-labelledby="identity-memberships-title">
+      <div class="identity-section-heading">
+        <div>
+          <p>成员与权限</p>
+          <h2 id="identity-memberships-title">当前空间成员</h2>
+        </div>
+        <button class="identity-quiet-command" type="button" data-identity-action="refresh-workspace-context">刷新</button>
+      </div>
+      ${
+        context
+          ? `
+            <div class="identity-context-summary">
+              <div><span>当前职责</span><strong>${escapeHtml(roleLabel(context.role))}</strong></div>
+              <div><span>可访问功能</span><strong>${navigationCount} 项</strong></div>
+              <div><span>会话有效至</span><strong>${escapeHtml(formatDateTime(context.expires_at))}</strong></div>
+            </div>
+            ${renderMembershipList(members)}
+            ${renderInvitationForm(state)}
+            ${renderOwnerTransferForm(context, members)}
+          `
+          : '<p class="identity-empty">选择一个空间后可查看成员与职责。</p>'
+      }
+    </section>
+  `;
+}
+
+function renderMembershipList(members) {
+  if (members.length === 0) {
+    return '<p class="identity-empty">当前职责没有可查看的成员记录。</p>';
+  }
+  return `<div class="identity-membership-list">${members
+    .map((member, index) => renderMembershipRow(member, index))
+    .join("")}</div>`;
+}
+
+function renderMembershipRow(member, index) {
+  const machine = member.role === "service_account";
+  const identityLabel = machine ? "机器主体" : member.is_current ? "当前账号" : "成员";
+  if (!member.can_manage || machine || member.role === "owner") {
+    return `
+      <article class="identity-membership-row">
+        <div class="identity-member-mark" aria-hidden="true">${machine ? "S" : "U"}</div>
+        <div class="identity-member-name">
+          <strong>${escapeHtml(member.display_name)}</strong>
+          <span>${identityLabel}</span>
+        </div>
+        <div class="identity-member-facts">
+          <span>${escapeHtml(roleLabel(member.role))}</span>
+          <span>${escapeHtml(statusLabel(member.status))}</span>
+        </div>
+      </article>
+    `;
+  }
+  return `
+    <form class="identity-membership-row is-editable" data-membership-update-form data-membership-index="${index}">
+      <div class="identity-member-mark" aria-hidden="true">U</div>
+      <div class="identity-member-name">
+        <strong>${escapeHtml(member.display_name)}</strong>
+        <span>${identityLabel}</span>
+      </div>
+      <label>
+        <span>职责</span>
+        <select name="role" aria-label="${escapeAttribute(`${member.display_name} 职责`)}">
+          ${renderRoleOptions(member.role)}
+        </select>
+      </label>
+      <label>
+        <span>状态</span>
+        <select name="status" aria-label="${escapeAttribute(`${member.display_name} 状态`)}">
+          ${renderOption("active", "启用", member.status)}
+          ${renderOption("disabled", "停用", member.status)}
+        </select>
+      </label>
+      <button class="identity-quiet-command" type="submit">保存</button>
+    </form>
+  `;
+}
+
+function renderInvitationForm(state) {
+  const context = state.workspaceContext;
+  if (!new Set(["owner", "admin"]).has(context?.role)) return "";
+  const result = state.invitationResult;
+  return `
+    <div class="identity-membership-action">
+      <div class="identity-section-heading">
+        <div><p>邀请</p><h3>添加成员</h3></div>
+      </div>
+      <form class="identity-membership-form" data-membership-invitation-form>
+        <label>
+          <span>邮箱</span>
+          <input name="email" type="email" autocomplete="email" maxlength="320" required />
+        </label>
+        <label>
+          <span>职责</span>
+          <select name="role" required>${renderRoleOptions("developer")}</select>
+        </label>
+        <label>
+          <span>有效期</span>
+          <select name="expiresInHours" required>
+            ${renderOption("24", "24 小时", "72")}
+            ${renderOption("72", "72 小时", "72")}
+            ${renderOption("168", "7 天", "72")}
+          </select>
+        </label>
+        <button class="identity-primary" type="submit">生成邀请</button>
+      </form>
+      ${
+        result && state.hasInvitationSecret
+          ? `
+            <div class="identity-invitation-result" role="status">
+              <div><strong>${escapeHtml(result.email)}</strong><span>${escapeHtml(roleLabel(result.role))} · ${escapeHtml(formatDateTime(result.expiresAt))}</span></div>
+              <button type="button" class="identity-quiet-command" data-identity-action="copy-invitation-link">复制链接</button>
+              <button type="button" class="identity-quiet-command" data-identity-action="copy-invitation-mail">复制文案</button>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderOwnerTransferForm(context, members) {
+  if (context?.role !== "owner") return "";
+  const eligible = members
+    .map((member, index) => ({ member, index }))
+    .filter(({ member }) =>
+      member.status === "active" && !new Set(["owner", "service_account"]).has(member.role),
+    );
+  if (eligible.length === 0) return "";
+  return `
+    <div class="identity-membership-action is-owner-transfer">
+      <div class="identity-section-heading">
+        <div><p>所有权</p><h3>转移空间所有权</h3></div>
+      </div>
+      <form class="identity-membership-form" data-owner-transfer-form>
+        <label>
+          <span>新 Owner</span>
+          <select name="targetIndex" required>
+            ${eligible
+              .map(({ member, index }) => `<option value="${index}">${escapeHtml(member.display_name)} · ${escapeHtml(roleLabel(member.role))}</option>`)
+              .join("")}
+          </select>
+        </label>
+        <label>
+          <span>当前密码</span>
+          <input name="currentPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <label class="identity-owner-transfer-confirmation">
+          <input name="confirmTransfer" type="checkbox" required />
+          <span>我确认将空间所有权转移给所选成员；转移后当前账号将失去 Owner 权限。</span>
+        </label>
+        <button class="identity-danger-command" type="submit">确认转移</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderRoleOptions(selectedRole) {
+  return [
+    ["admin", "管理员"],
+    ["developer", "开发者"],
+    ["security_admin", "安全管理员"],
+    ["finance_admin", "财务管理员"],
+    ["legal_admin", "法务管理员"],
+    ["auditor", "审计员"],
+    ["viewer", "只读成员"],
+  ]
+    .map(([value, label]) => renderOption(value, label, selectedRole))
+    .join("");
+}
+
+function roleLabel(role) {
+  const labels = {
+    owner: "Owner",
+    admin: "管理员",
+    developer: "开发者",
+    security_admin: "安全管理员",
+    finance_admin: "财务管理员",
+    legal_admin: "法务管理员",
+    auditor: "审计员",
+    viewer: "只读成员",
+    service_account: "服务账号",
+  };
+  return labels[role] ?? "成员";
+}
+
+function statusLabel(status) {
+  return { active: "启用", disabled: "停用", pending: "待激活" }[status] ?? "未知";
 }
 
 function renderWorkspaceSection(state) {

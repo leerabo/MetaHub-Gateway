@@ -86,6 +86,26 @@ REQUIRED_DOCS = {
         "PRD-094",
         "0085",
     ),
+    ROOT / "docs/prd/PRD-094-membership-and-workspace-switching.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "METAHUB_WORKSPACE_SESSION_SECRET",
+        "0086",
+    ),
+    ROOT / "docs/api/workspace-access.md": (
+        "POST | `/identity/workspace-switches`",
+        "GET | `/workspace/session`",
+        "POST | `/membership-invitations`",
+        "GET | `/console/navigation`",
+        "METAHUB_WORKSPACE_SESSION_SECRET",
+    ),
+    ROOT / "docs/testing/PRD-094-tests.md": (
+        "状态：已完成",
+        "敏感审计",
+        "PRD-095",
+        "0086",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -319,6 +339,53 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         and "GlobalSession" in prd093_security
         and "Idempotency-Key" in prd093_security,
         "PRD-093 matches its delivered Workspace, migration and request-integrity contracts",
+    )
+    prd094 = rows_by_id.get("PRD-094", {})
+    prd094_apis = str(prd094.get("API/动作") or "")
+    prd094_objects = str(prd094.get("核心数据对象") or "")
+    prd094_migration = str(prd094.get("数据迁移/回滚") or "")
+    prd094_security = str(prd094.get("安全与合规") or "")
+    prd094_boundary = str(prd094.get("明确不做/边界") or "")
+    report.check(
+        all(
+            endpoint in prd094_apis
+            for endpoint in (
+                "GET /identity/workspaces",
+                "POST /identity/workspace-switches",
+                "GET /workspace/session",
+                "GET /memberships",
+                "PATCH /memberships/{membership_id}",
+                "POST /membership-invitations",
+                "POST /workspace-owner-transfers",
+                "GET /console/navigation",
+            )
+        )
+        and all(
+            object_name in prd094_objects
+            for object_name in (
+                "WorkspaceMembership",
+                "WorkspaceSession",
+                "MembershipInvitation",
+                "OwnerTransfer",
+                "MembershipEvent",
+                "MembershipEventOutbox",
+            )
+        )
+        and "0086" in prd094_migration
+        and "pristine" in prd094_migration
+        and "METAHUB_WORKSPACE_SESSION_SECRET" in prd094_security
+        and "每请求" in prd094_security
+        and all(
+            subject in prd094_boundary
+            for subject in (
+                "GlobalSession",
+                "Legacy Bearer",
+                "Platform",
+                "Device",
+                "service_account",
+            )
+        ),
+        "PRD-094 matches its delivered Workspace access, migration and subject-isolation contracts",
     )
     prd106 = rows_by_id.get("PRD-106", {})
     report.check(
@@ -630,10 +697,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 85
+        and migration_versions[-1] == 86
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0085 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0086 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -644,6 +711,11 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0085_workspace_creation.sql").is_file()
         and (ROOT / "infra/migrations/0085_workspace_creation.down.sql").is_file(),
         "PRD-093 owns reversible migration 0085 with guarded Workspace-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0086_membership_workspace_sessions.sql").is_file()
+        and (ROOT / "infra/migrations/0086_membership_workspace_sessions.down.sql").is_file(),
+        "PRD-094 owns reversible migration 0086 with guarded authorization-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

@@ -279,8 +279,9 @@ def create_workspace(
             """
             INSERT INTO workspace_memberships(
               workspace_membership_id,workspace_id,tenant_id,account_id,legacy_user_id,
-              role_code,status,source,revision,created_at,updated_at)
-            VALUES(?,?,?,?,?,'owner','active','workspace_creator',1,?,?)
+              role_code,status,source,revision,created_by_account_id,updated_by_account_id,
+              created_at,updated_at)
+            VALUES(?,?,?,?,?,'owner','active','workspace_creator',1,?,?,?,?)
             """,
             (
                 _id("wmb"),
@@ -288,6 +289,8 @@ def create_workspace(
                 tenant_id,
                 identity.account_id,
                 legacy_user_id,
+                identity.account_id,
+                identity.account_id,
                 stamp,
                 stamp,
             ),
@@ -410,7 +413,7 @@ def list_workspaces(
             connection.execute(
                 """
                 SELECT COUNT(*) FROM workspace_memberships
-                WHERE account_id=? AND role_code='owner' AND status='active'
+                WHERE account_id=? AND status='active'
                 """,
                 (identity.account_id,),
             ).fetchone()[0]
@@ -418,7 +421,7 @@ def list_workspaces(
         rows = connection.execute(
             """
             SELECT workspace_id FROM workspace_memberships
-            WHERE account_id=? AND role_code='owner' AND status='active'
+            WHERE account_id=? AND status='active'
             ORDER BY created_at,workspace_id LIMIT ? OFFSET ?
             """,
             (identity.account_id, limit, offset),
@@ -855,7 +858,7 @@ def _load_workspace(
         LEFT JOIN organization_profiles op ON op.workspace_id=w.workspace_id
         LEFT JOIN personal_profiles pp ON pp.workspace_id=w.workspace_id
         WHERE w.workspace_id=? AND membership.account_id=?
-          AND membership.role_code='owner' AND membership.status='active'
+          AND membership.status='active'
         """,
         (workspace_id, account_id),
     ).fetchone()

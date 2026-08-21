@@ -14,6 +14,11 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_identity_cookies_on_error
 
+from metahub_control.workspace_access.constants import (
+    WORKSPACE_CSRF_COOKIE,
+    WORKSPACE_SESSION_COOKIE,
+)
+
 from .models import (
     IdentityLogoutResponse,
     IdentityPendingChallengeResponse,
@@ -646,6 +651,20 @@ def _clear_identity_cookies(response: Response) -> None:
     )
     response.delete_cookie(
         CSRF_COOKIE,
+        path="/",
+        secure=True,
+        httponly=False,
+        samesite="strict",
+    )
+    response.delete_cookie(
+        WORKSPACE_SESSION_COOKIE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        WORKSPACE_CSRF_COOKIE,
         path="/",
         secure=True,
         httponly=False,

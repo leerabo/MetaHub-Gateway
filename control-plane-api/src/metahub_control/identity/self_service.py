@@ -25,6 +25,11 @@ from metahub_shared.identity.crypto import (
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.workspace_access.service import (
+    consume_verified_invitation_in_transaction,
+    workspace_access_schema_available_in_transaction,
+)
+
 from .delivery import (
     IdentityChallengeDelivery,
     identity_challenge_delivery,
@@ -441,6 +446,21 @@ def verify_registration(
             email=registration_email,
             now=now,
         )
+        if (
+            invitation_bound
+            and workspace_access_schema_available_in_transaction(connection)
+            and not consume_verified_invitation_in_transaction(
+                connection,
+                config,
+                legacy_invitation_id=row["invitation_id"],
+                account_id=account_id,
+                email=registration_email,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=now,
+            )
+        ):
+            raise ApiError("identity.verification_invalid")
         connection.execute(
             """
             UPDATE verification_challenges

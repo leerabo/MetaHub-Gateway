@@ -1,0 +1,1690 @@
+"""Database-authoritative WorkspaceSession, Membership and invitation services."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import re
+import secrets
+import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from metahub_shared.db.connection import connect_database
+from metahub_shared.db.errors import DbError
+from metahub_shared.db.security import hash_token, verify_password
+from metahub_shared.runtime.config import AppConfig
+from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
+
+from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
+from metahub_control.auth.service import AuthContext
+from metahub_control.identity.service import (
+    authenticate_global_session_in_transaction,
+    normalize_global_email,
+    valid_opaque_value,
+)
+
+from .models import (
+    IdentityWorkspaceListResponse,
+    IdentityWorkspaceSummary,
+    MembershipInvitationResponse,
+    MembershipInvitationSummary,
+    MembershipListResponse,
+    MembershipResponse,
+    MembershipSummary,
+    OwnerTransferResponse,
+    WorkspaceContextSummary,
+    WorkspaceSessionResponse,
+    WorkspaceSwitchResponse,
+)
+
+logger = logging.getLogger("metahub.control.workspace_access")
+
+_WORKSPACE_ID_RE = re.compile(r"^wsp_[0-9a-f]{32}$")
+_MEMBERSHIP_ID_RE = re.compile(r"^wmb_[0-9a-f]{32}$")
+_HUMAN_ROLES = frozenset(
+    {
+        "owner",
+        "admin",
+        "developer",
+        "security_admin",
+        "finance_admin",
+        "legal_admin",
+        "auditor",
+        "viewer",
+    }
+)
+_DELEGABLE_ROLES = _HUMAN_ROLES - {"owner"}
+_MANAGER_ROLES = frozenset({"owner", "admin"})
+_LEGACY_ROLE_BY_WORKSPACE_ROLE = {
+    "owner": "admin",
+    "admin": "admin",
+    "developer": "developer",
+    "security_admin": "security_admin",
+    "finance_admin": "finance_admin",
+    "legal_admin": "viewer",
+    "auditor": "viewer",
+    "viewer": "viewer",
+}
+_WORKSPACE_ROLE_BY_LEGACY_ROLE = {
+    "admin": "admin",
+    "ops_admin": "admin",
+    "developer": "developer",
+    "security_admin": "security_admin",
+    "finance_admin": "finance_admin",
+    "viewer": "viewer",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSessionContext:
+    workspace_session_id: str
+    global_session_id: str
+    account_id: str
+    workspace_id: str
+    tenant_id: str
+    membership_id: str
+    legacy_user_id: str
+    membership_role: str
+    legacy_role: str
+    account_email: str
+    display_name: str
+    tenant_slug: str
+    tenant_name: str
+    permission_codes: tuple[str, ...]
+    permission_revision: int
+    authorization_fingerprint: str
+    expires_at: datetime
+    token: str
+
+    def as_auth_context(self) -> AuthContext:
+        return AuthContext(
+            user=AuthUser(
+                user_id=self.legacy_user_id,
+                tenant_id=self.tenant_id,
+                email=self.account_email,
+                display_name=self.display_name,
+                role=self.legacy_role,
+                permission_codes=self.permission_codes,
+                permission_revision=self.permission_revision,
+                authorization_fingerprint=self.authorization_fingerprint,
+            ),
+            tenant=AuthTenant(
+                tenant_id=self.tenant_id,
+                slug=self.tenant_slug,
+                name=self.tenant_name,
+            ),
+            session=AuthSession(
+                session_id=self.workspace_session_id,
+                expires_at=self.expires_at,
+            ),
+            token=self.token,
+            token_jti=self.workspace_session_id,
+        )
+
+
+def list_identity_workspaces(
+    config: AppConfig,
+    *,
+    session_token: str,
+    limit: int,
+    offset: int,
+    request_id: str,
+    trace_id: str,
+) -> IdentityWorkspaceListResponse:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        identity, _now = authenticate_global_session_in_transaction(
+            connection,
+            config,
+            session_token=session_token,
+            touch=True,
+        )
+        where = """
+          member.account_id=? AND member.status='active'
+          AND member.role_code!='service_account'
+          AND workspace.status='active' AND binding.status='active'
+        """
+        total = int(
+            connection.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM workspace_memberships member
+                JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+                JOIN workspace_tenant_bindings binding
+                  ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
+                WHERE {where}
+                """,
+                (identity.account_id,),
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT workspace.workspace_id,workspace.kind,
+              COALESCE(organization.name,personal.display_label) display_name,
+              organization.slug_normalized,member.role_code
+            FROM workspace_memberships member
+            JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+            JOIN workspace_tenant_bindings binding
+              ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
+            LEFT JOIN organization_profiles organization
+              ON organization.workspace_id=workspace.workspace_id
+            LEFT JOIN personal_profiles personal
+              ON personal.workspace_id=workspace.workspace_id
+            WHERE {where}
+            ORDER BY workspace.created_at,workspace.workspace_id
+            LIMIT ? OFFSET ?
+            """,
+            (identity.account_id, limit, offset),
+        ).fetchall()
+        connection.commit()
+        return IdentityWorkspaceListResponse(
+            workspaces=tuple(_identity_workspace(row) for row in rows),
+            limit=limit,
+            offset=offset,
+            total=total,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except ApiError as exc:
+        _finish_global_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def switch_workspace(
+    config: AppConfig,
+    *,
+    global_session_token: str,
+    global_csrf_token: str,
+    workspace_id: str,
+    request_id: str,
+    trace_id: str,
+) -> tuple[WorkspaceSwitchResponse, str, str]:
+    if not _WORKSPACE_ID_RE.fullmatch(workspace_id):
+        raise ApiError("workspace.not_found")
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        identity, now = authenticate_global_session_in_transaction(
+            connection,
+            config,
+            session_token=global_session_token,
+            csrf_token=global_csrf_token,
+            touch=True,
+        )
+        row = _switch_target(connection, identity.account_id, workspace_id)
+        if row is None:
+            raise ApiError("workspace.not_found")
+        snapshot = _permission_snapshot(connection, row)
+        stamp = _db_time(now)
+        connection.execute(
+            """
+            UPDATE workspace_sessions
+            SET status='revoked',revoked_at=?,revoked_reason='workspace_switched',updated_at=?
+            WHERE global_session_id=? AND status='active'
+            """,
+            (stamp, stamp, identity.session_id),
+        )
+        raw_token = secrets.token_urlsafe(32)
+        raw_csrf = secrets.token_urlsafe(32)
+        session_id = _id("wss")
+        absolute_expires = min(
+            now + timedelta(seconds=config.workspace_session_ttl_seconds),
+            identity.current_session.expires_at,
+        )
+        connection.execute(
+            """
+            INSERT INTO workspace_sessions(
+              workspace_session_id,global_session_id,account_id,workspace_id,tenant_id,
+              membership_id,token_hmac,csrf_hmac,status,membership_revision,
+              workspace_revision,account_session_revision,legacy_permission_revision,
+              matrix_fingerprint,created_at,last_seen_at,absolute_expires_at,
+              idle_expires_at,revoked_at,revoked_reason,updated_at)
+            VALUES(?,?,?,?,?,?,?,?, 'active',?,?,?,?,?,?,?,?,?,NULL,NULL,?)
+            """,
+            (
+                session_id,
+                identity.session_id,
+                identity.account_id,
+                row["workspace_id"],
+                row["tenant_id"],
+                row["workspace_membership_id"],
+                _session_hmac(config, "token", raw_token),
+                _session_hmac(config, "csrf", raw_csrf),
+                row["membership_revision"],
+                row["workspace_revision"],
+                row["account_session_revision"],
+                snapshot.permission_revision,
+                snapshot.authorization_fingerprint,
+                stamp,
+                stamp,
+                _db_time(absolute_expires),
+                _db_time(absolute_expires),
+                stamp,
+            ),
+        )
+        _write_event(
+            connection,
+            workspace_id=row["workspace_id"],
+            tenant_id=row["tenant_id"],
+            actor_account_id=identity.account_id,
+            subject_membership_id=row["workspace_membership_id"],
+            event_type="workspace.switched",
+            reason_code="user_selected",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload={
+                "schema_version": 1,
+                "role_code": row["role_code"],
+                "membership_revision": row["membership_revision"],
+            },
+            now=now,
+        )
+        connection.commit()
+        logger.info(
+            "workspace.switched",
+            extra={
+                "event": "workspace.switched",
+                "workspace_id": row["workspace_id"],
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "role_code": row["role_code"],
+            },
+        )
+        response = WorkspaceSwitchResponse(
+            context=_context_summary(row, absolute_expires),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        return response, raw_token, raw_csrf
+    except ApiError as exc:
+        _finish_global_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def get_workspace_session(
+    config: AppConfig,
+    *,
+    session_token: str,
+    request_id: str,
+    trace_id: str,
+) -> WorkspaceSessionResponse:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context, row = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=None,
+            touch=True,
+        )
+        connection.commit()
+        return WorkspaceSessionResponse(
+            context=_context_summary(row, context.expires_at),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def authenticate_workspace_session_as_auth_context(
+    config: AppConfig,
+    session_token: str,
+) -> AuthContext:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context, _row = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=None,
+            touch=True,
+        )
+        connection.commit()
+        return context.as_auth_context()
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def list_memberships(
+    config: AppConfig,
+    *,
+    session_token: str,
+    limit: int,
+    offset: int,
+    request_id: str,
+    trace_id: str,
+) -> MembershipListResponse:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context, _session = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=None,
+            touch=True,
+        )
+        manager = context.membership_role in _MANAGER_ROLES
+        owner_filter = "member.workspace_id=?" if manager else (
+            "member.workspace_id=? AND member.workspace_membership_id=?"
+        )
+        owner_values: tuple[object, ...] = (
+            (context.workspace_id,) if manager else (context.workspace_id, context.membership_id)
+        )
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM workspace_memberships member WHERE {owner_filter}",
+                owner_values,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT member.*,account.display_name
+            FROM workspace_memberships member
+            JOIN global_accounts account ON account.account_id=member.account_id
+            WHERE {owner_filter}
+            ORDER BY CASE member.role_code WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+              account.display_name,member.workspace_membership_id
+            LIMIT ? OFFSET ?
+            """,
+            (*owner_values, limit, offset),
+        ).fetchall()
+        connection.commit()
+        return MembershipListResponse(
+            memberships=tuple(_membership_summary(row, context) for row in rows),
+            limit=limit,
+            offset=offset,
+            total=total,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("membership.unavailable") from None
+    finally:
+        connection.close()
+
+
+def update_membership(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    membership_id: str,
+    expected_revision: int,
+    role: str | None,
+    status: str | None,
+    request_id: str,
+    trace_id: str,
+) -> MembershipResponse:
+    if not _MEMBERSHIP_ID_RE.fullmatch(membership_id):
+        raise ApiError("membership.not_found")
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        context, _session = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        _require_manager(context)
+        target = _membership_row(connection, context.workspace_id, membership_id)
+        if target is None:
+            raise ApiError("membership.not_found")
+        if int(target["revision"]) != expected_revision:
+            raise ApiError("membership.revision_conflict")
+        if target["role_code"] == "owner" or target["role_code"] == "service_account":
+            raise ApiError("membership.update_invalid")
+        next_role = target["role_code"] if role is None else _delegable_role(role)
+        next_status = target["status"] if status is None else _membership_status(status)
+        if context.membership_role == "admin" and next_role not in _DELEGABLE_ROLES:
+            raise ApiError("workspace_session.permission_denied")
+        if next_role == target["role_code"] and next_status == target["status"]:
+            raise ApiError("membership.update_invalid")
+        now = _utcnow()
+        stamp = _db_time(now)
+        legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE[next_role]
+        connection.execute(
+            """
+            UPDATE users SET role=?,status=?,updated_at=?
+            WHERE tenant_id=? AND user_id=?
+            """,
+            (
+                legacy_role,
+                "active" if next_status == "active" else "disabled",
+                stamp,
+                context.tenant_id,
+                target["legacy_user_id"],
+            ),
+        )
+        changed = connection.execute(
+            """
+            UPDATE workspace_memberships
+            SET role_code=?,status=?,revision=revision+1,updated_by_account_id=?,updated_at=?
+            WHERE workspace_id=? AND workspace_membership_id=? AND revision=?
+            """,
+            (
+                next_role,
+                next_status,
+                context.account_id,
+                stamp,
+                context.workspace_id,
+                membership_id,
+                expected_revision,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise ApiError("membership.revision_conflict")
+        event_type = "membership.disabled" if next_status == "disabled" else "membership.updated"
+        _write_event(
+            connection,
+            workspace_id=context.workspace_id,
+            tenant_id=context.tenant_id,
+            actor_account_id=context.account_id,
+            subject_membership_id=membership_id,
+            event_type=event_type,
+            reason_code="member_admin_update",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload={
+                "schema_version": 1,
+                "role_code": next_role,
+                "status": next_status,
+                "membership_revision": expected_revision + 1,
+            },
+            now=now,
+        )
+        updated = _membership_row(connection, context.workspace_id, membership_id)
+        if updated is None:
+            raise ApiError("membership.unavailable")
+        response = MembershipResponse(
+            membership=_membership_summary(updated, context),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        connection.commit()
+        return response
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except sqlite3.IntegrityError:
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("membership.update_invalid") from None
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("membership.unavailable") from None
+    finally:
+        connection.close()
+
+
+def create_membership_invitation(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    email: str,
+    role: str,
+    expires_in_hours: int,
+    request_id: str,
+    trace_id: str,
+) -> MembershipInvitationResponse:
+    normalized_email = normalize_global_email(email)
+    if normalized_email is None:
+        raise ApiError("membership.invitation_invalid")
+    target_role = _delegable_role(role, error_code="membership.invitation_invalid")
+    if type(expires_in_hours) is not int or not 1 <= expires_in_hours <= 168:
+        raise ApiError("membership.invitation_invalid")
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        context, _session = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        _require_manager(context)
+        if context.membership_role == "admin" and target_role not in _DELEGABLE_ROLES:
+            raise ApiError("workspace_session.permission_denied")
+        now = _utcnow()
+        stamp = _db_time(now)
+        expires_at = now + timedelta(hours=expires_in_hours)
+        expires_text = _db_time(expires_at)
+        email_hmac = _membership_email_hmac(config, normalized_email)
+        connection.execute(
+            """
+            UPDATE membership_invitations SET status='expired',updated_at=?
+            WHERE workspace_id=? AND target_email_hmac=? AND status='pending'
+              AND unixepoch(expires_at)<=unixepoch(?)
+            """,
+            (stamp, context.workspace_id, email_hmac, stamp),
+        )
+        if connection.execute(
+            """
+            SELECT 1 FROM membership_invitations
+            WHERE workspace_id=? AND target_email_hmac=? AND status='pending'
+            """,
+            (context.workspace_id, email_hmac),
+        ).fetchone() is not None:
+            raise ApiError("membership.invitation_conflict")
+        if connection.execute(
+            """
+            SELECT 1 FROM global_accounts account
+            JOIN workspace_memberships member ON member.account_id=account.account_id
+            WHERE member.workspace_id=? AND lower(account.email_normalized)=?
+            """,
+            (context.workspace_id, normalized_email),
+        ).fetchone() is not None:
+            raise ApiError("membership.invitation_conflict")
+        raw_token = secrets.token_urlsafe(32)
+        token_digest = hash_token(raw_token)
+        legacy_invitation_id = _id("inv")
+        invitation_id = _id("min")
+        legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE[target_role]
+        connection.execute(
+            """
+            INSERT INTO invitations(
+              invitation_id,tenant_id,email,email_fingerprint,role_code,token_hash,status,
+              invited_by,accepted_user_id,expires_at,accepted_at,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,'pending',?,NULL,?,NULL,?,?)
+            """,
+            (
+                legacy_invitation_id,
+                context.tenant_id,
+                normalized_email,
+                _legacy_email_fingerprint(legacy_invitation_id, normalized_email),
+                legacy_role,
+                token_digest,
+                context.legacy_user_id,
+                expires_text,
+                stamp,
+                stamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO membership_invitations(
+              membership_invitation_id,workspace_id,tenant_id,legacy_invitation_id,
+              target_email_hmac,target_role_code,inviter_membership_id,
+              inviter_membership_revision,token_hash,status,target_account_id,
+              accepted_membership_id,expires_at,accepted_at,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,'pending',NULL,NULL,?,NULL,?,?)
+            """,
+            (
+                invitation_id,
+                context.workspace_id,
+                context.tenant_id,
+                legacy_invitation_id,
+                email_hmac,
+                target_role,
+                context.membership_id,
+                _current_membership_revision(connection, context.membership_id),
+                token_digest,
+                expires_text,
+                stamp,
+                stamp,
+            ),
+        )
+        _write_event(
+            connection,
+            workspace_id=context.workspace_id,
+            tenant_id=context.tenant_id,
+            actor_account_id=context.account_id,
+            subject_membership_id=None,
+            event_type="membership.invited",
+            reason_code="workspace_invitation_created",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload={"schema_version": 1, "role_code": target_role},
+            now=now,
+        )
+        connection.commit()
+        return MembershipInvitationResponse(
+            invitation=MembershipInvitationSummary(
+                invitation_id=invitation_id,
+                role=target_role,
+                expires_at=expires_at,
+            ),
+            accept_token=raw_token,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except sqlite3.IntegrityError:
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("membership.invitation_conflict") from None
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("membership.unavailable") from None
+    finally:
+        connection.close()
+
+
+def transfer_owner(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    target_membership_id: str,
+    current_password: str,
+    request_id: str,
+    trace_id: str,
+) -> OwnerTransferResponse:
+    if not _MEMBERSHIP_ID_RE.fullmatch(target_membership_id) or not current_password:
+        raise ApiError("owner_transfer.request_invalid")
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        initial, _row = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        if initial.membership_role != "owner":
+            raise ApiError("workspace_session.permission_denied")
+        credential = connection.execute(
+            """
+            SELECT secret_hash FROM account_credentials
+            WHERE account_id=? AND credential_type='password' AND status='active'
+            """,
+            (initial.account_id,),
+        ).fetchone()
+        if credential is None:
+            raise ApiError("owner_transfer.reauthentication_failed")
+        expected_hash = str(credential["secret_hash"])
+        connection.rollback()
+        if not verify_password(current_password, expected_hash):
+            raise ApiError("owner_transfer.reauthentication_failed")
+
+        connection.execute("BEGIN IMMEDIATE")
+        context, _row = _authenticate_workspace(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        if context.membership_role != "owner":
+            raise ApiError("owner_transfer.conflict")
+        account = connection.execute(
+            """
+            SELECT account.mfa_state,credential.secret_hash
+            FROM global_accounts account
+            JOIN account_credentials credential ON credential.account_id=account.account_id
+              AND credential.credential_type='password' AND credential.status='active'
+            WHERE account.account_id=?
+            """,
+            (context.account_id,),
+        ).fetchone()
+        if account is None or not hmac.compare_digest(str(account["secret_hash"]), expected_hash):
+            raise ApiError("owner_transfer.conflict")
+        if account["mfa_state"] != "not_enrolled":
+            raise ApiError("owner_transfer.mfa_required")
+        source = _membership_row(connection, context.workspace_id, context.membership_id)
+        target = _membership_row(connection, context.workspace_id, target_membership_id)
+        if (
+            source is None
+            or target is None
+            or source["role_code"] != "owner"
+            or source["status"] != "active"
+            or target["status"] != "active"
+            or target["role_code"] in {"owner", "service_account"}
+        ):
+            raise ApiError("owner_transfer.conflict")
+        workspace = connection.execute(
+            "SELECT revision FROM workspaces WHERE workspace_id=? AND status='active'",
+            (context.workspace_id,),
+        ).fetchone()
+        if workspace is None:
+            raise ApiError("owner_transfer.conflict")
+        now = _utcnow()
+        stamp = _db_time(now)
+        transfer_id = _id("owt")
+        connection.execute(
+            """
+            INSERT INTO owner_transfers(
+              owner_transfer_id,workspace_id,tenant_id,source_membership_id,
+              target_membership_id,source_membership_revision,target_membership_revision,
+              workspace_revision,status,reauthenticated_at,request_id,reason_code,
+              completed_at,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?, 'pending',?,?,?,NULL,?,?)
+            """,
+            (
+                transfer_id,
+                context.workspace_id,
+                context.tenant_id,
+                context.membership_id,
+                target_membership_id,
+                source["revision"],
+                target["revision"],
+                workspace["revision"],
+                stamp,
+                request_id,
+                "owner_reauthenticated",
+                stamp,
+                stamp,
+            ),
+        )
+        target_changed = connection.execute(
+            """
+            UPDATE workspace_memberships
+            SET role_code='owner',revision=revision+1,updated_by_account_id=?,updated_at=?
+            WHERE workspace_membership_id=? AND workspace_id=? AND revision=?
+              AND status='active' AND role_code!='owner' AND role_code!='service_account'
+            """,
+            (
+                context.account_id,
+                stamp,
+                target_membership_id,
+                context.workspace_id,
+                target["revision"],
+            ),
+        ).rowcount
+        if target_changed != 1:
+            raise ApiError("owner_transfer.conflict")
+        legacy_target_changed = connection.execute(
+            """
+            UPDATE users SET role='admin',updated_at=?
+            WHERE tenant_id=? AND user_id=? AND status='active'
+            """,
+            (stamp, context.tenant_id, target["legacy_user_id"]),
+        ).rowcount
+        if legacy_target_changed != 1:
+            raise ApiError("owner_transfer.conflict")
+        source_changed = connection.execute(
+            """
+            UPDATE workspace_memberships
+            SET role_code='admin',revision=revision+1,updated_by_account_id=?,updated_at=?
+            WHERE workspace_membership_id=? AND workspace_id=? AND revision=?
+              AND status='active' AND role_code='owner'
+            """,
+            (
+                context.account_id,
+                stamp,
+                context.membership_id,
+                context.workspace_id,
+                source["revision"],
+            ),
+        ).rowcount
+        if source_changed != 1:
+            raise ApiError("owner_transfer.conflict")
+        workspace_changed = connection.execute(
+            """
+            UPDATE workspaces SET revision=revision+1,updated_at=?
+            WHERE workspace_id=? AND revision=? AND status='active'
+            """,
+            (stamp, context.workspace_id, workspace["revision"]),
+        ).rowcount
+        if workspace_changed != 1:
+            raise ApiError("owner_transfer.conflict")
+        completed = connection.execute(
+            """
+            UPDATE owner_transfers SET status='completed',completed_at=?,updated_at=?
+            WHERE owner_transfer_id=? AND status='pending'
+            """,
+            (stamp, stamp, transfer_id),
+        ).rowcount
+        if completed != 1:
+            raise ApiError("owner_transfer.conflict")
+        _write_event(
+            connection,
+            workspace_id=context.workspace_id,
+            tenant_id=context.tenant_id,
+            actor_account_id=context.account_id,
+            subject_membership_id=target_membership_id,
+            event_type="workspace.owner_transferred",
+            reason_code="owner_reauthenticated",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload={
+                "schema_version": 1,
+                "source_revision": int(source["revision"]) + 1,
+                "target_revision": int(target["revision"]) + 1,
+            },
+            now=now,
+        )
+        source_updated = _membership_row(connection, context.workspace_id, context.membership_id)
+        target_updated = _membership_row(connection, context.workspace_id, target_membership_id)
+        if source_updated is None or target_updated is None:
+            raise ApiError("owner_transfer.unavailable")
+        response = OwnerTransferResponse(
+            source=_membership_summary(source_updated, context),
+            target=_membership_summary(target_updated, context),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        connection.commit()
+        return response
+    except ApiError as exc:
+        _finish_workspace_error(connection, exc)
+        raise
+    except sqlite3.IntegrityError:
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("owner_transfer.conflict") from None
+    except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("owner_transfer.unavailable") from None
+    finally:
+        connection.close()
+
+
+def bridge_legacy_invitation_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    legacy_invitation_id: str,
+    tenant_id: str,
+    inviter_user_id: str,
+    target_email: str,
+    legacy_role: str,
+    token_hash: str,
+    expires_at: str,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> bool:
+    if not _table_exists(connection, "membership_invitations"):
+        return False
+    inviter = connection.execute(
+        """
+        SELECT member.* FROM workspace_memberships member
+        JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+        WHERE member.tenant_id=? AND member.legacy_user_id=?
+          AND member.status='active' AND member.role_code IN('owner','admin')
+          AND workspace.status='active'
+        """,
+        (tenant_id, inviter_user_id),
+    ).fetchone()
+    target_role = _WORKSPACE_ROLE_BY_LEGACY_ROLE.get(legacy_role)
+    if inviter is None or target_role not in _DELEGABLE_ROLES:
+        raise ApiError("invitation.create_invalid")
+    normalized_email = normalize_global_email(target_email)
+    if normalized_email is None:
+        raise ApiError("invitation.create_invalid")
+    connection.execute(
+        """
+        INSERT INTO membership_invitations(
+          membership_invitation_id,workspace_id,tenant_id,legacy_invitation_id,
+          target_email_hmac,target_role_code,inviter_membership_id,
+          inviter_membership_revision,token_hash,status,target_account_id,
+          accepted_membership_id,expires_at,accepted_at,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,'pending',NULL,NULL,?,NULL,?,?)
+        """,
+        (
+            _id("min"),
+            inviter["workspace_id"],
+            tenant_id,
+            legacy_invitation_id,
+            _membership_email_hmac(config, normalized_email),
+            target_role,
+            inviter["workspace_membership_id"],
+            inviter["revision"],
+            token_hash,
+            expires_at,
+            _db_time(now),
+            _db_time(now),
+        ),
+    )
+    _write_event(
+        connection,
+        workspace_id=inviter["workspace_id"],
+        tenant_id=tenant_id,
+        actor_account_id=inviter["account_id"],
+        subject_membership_id=None,
+        event_type="membership.invited",
+        reason_code="legacy_invitation_bridge",
+        request_id=request_id,
+        trace_id=trace_id,
+        payload={"schema_version": 1, "role_code": target_role},
+        now=now,
+    )
+    return True
+
+
+def workspace_access_schema_available_in_transaction(connection: sqlite3.Connection) -> bool:
+    """Report whether PRD-094 tables are available to a versioned legacy transaction."""
+
+    return _table_exists(connection, "membership_invitations")
+
+
+def consume_verified_invitation_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    legacy_invitation_id: str,
+    account_id: str,
+    email: str,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> bool:
+    return _consume_invitation(
+        connection,
+        config,
+        legacy_invitation_id=legacy_invitation_id,
+        account_id=account_id,
+        email=email,
+        existing_user_id=None,
+        require_identity_binding=True,
+        request_id=request_id,
+        trace_id=trace_id,
+        now=now,
+    )
+
+
+def consume_legacy_invitation_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    legacy_invitation_id: str,
+    account_id: str,
+    email: str,
+    existing_user_id: str,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> bool:
+    return _consume_invitation(
+        connection,
+        config,
+        legacy_invitation_id=legacy_invitation_id,
+        account_id=account_id,
+        email=email,
+        existing_user_id=existing_user_id,
+        require_identity_binding=False,
+        request_id=request_id,
+        trace_id=trace_id,
+        now=now,
+    )
+
+
+def _consume_invitation(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    legacy_invitation_id: str,
+    account_id: str,
+    email: str,
+    existing_user_id: str | None,
+    require_identity_binding: bool,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> bool:
+    if not _table_exists(connection, "membership_invitations"):
+        return False
+    normalized_email = normalize_global_email(email)
+    if normalized_email is None:
+        return False
+    invitation = connection.execute(
+        """
+        SELECT membership_invitation.*,legacy.status legacy_status,
+          inviter.status inviter_status,inviter.role_code inviter_role,
+          inviter.revision inviter_current_revision,inviter.account_id inviter_account_id,
+          workspace.status workspace_status
+        FROM membership_invitations membership_invitation
+        JOIN invitations legacy
+          ON legacy.tenant_id=membership_invitation.tenant_id
+         AND legacy.invitation_id=membership_invitation.legacy_invitation_id
+        JOIN workspace_memberships inviter
+          ON inviter.workspace_membership_id=membership_invitation.inviter_membership_id
+        JOIN workspaces workspace ON workspace.workspace_id=membership_invitation.workspace_id
+        WHERE membership_invitation.legacy_invitation_id=?
+          AND membership_invitation.status='pending'
+        """,
+        (legacy_invitation_id,),
+    ).fetchone()
+    if (
+        invitation is None
+        or invitation["workspace_status"] != "active"
+        or invitation["inviter_status"] != "active"
+        or invitation["inviter_role"] not in _MANAGER_ROLES
+        or invitation["inviter_current_revision"] != invitation["inviter_membership_revision"]
+        or _parse_time(invitation["expires_at"]) <= now
+        or not hmac.compare_digest(
+            invitation["target_email_hmac"],
+            _membership_email_hmac(config, normalized_email),
+        )
+    ):
+        return False
+    if require_identity_binding:
+        binding = connection.execute(
+            """
+            SELECT * FROM invitation_identity_bindings
+            WHERE invitation_id=? AND account_id=?
+              AND status='verified_pending_membership'
+            """,
+            (legacy_invitation_id, account_id),
+        ).fetchone()
+        if binding is None or invitation["legacy_status"] != "pending":
+            return False
+    else:
+        binding = None
+        if invitation["legacy_status"] != "accepted":
+            return False
+    if connection.execute(
+        "SELECT 1 FROM workspace_memberships WHERE workspace_id=? AND account_id=?",
+        (invitation["workspace_id"], account_id),
+    ).fetchone() is not None:
+        return False
+    stamp = _db_time(now)
+    user_id = existing_user_id
+    if user_id is None:
+        account = connection.execute(
+            """
+            SELECT account.account_id,account.email_normalized,account.display_name,
+              account.credential_revision,credential.secret_hash
+            FROM global_accounts account
+            JOIN account_credentials credential ON credential.account_id=account.account_id
+              AND credential.credential_type='password' AND credential.status='active'
+            WHERE account.account_id=? AND account.status='active' AND account.login_enabled=1
+            """,
+            (account_id,),
+        ).fetchone()
+        if account is None or not hmac.compare_digest(
+            account["email_normalized"], normalized_email
+        ):
+            return False
+        user_id = _id("usr")
+        claim_id = _id("wpc")
+        connection.execute(
+            """
+            INSERT INTO workspace_user_projection_claims(
+              workspace_user_projection_claim_id,workspace_id,tenant_id,account_id,
+              legacy_user_id,credential_revision,email_normalized,status,
+              expires_at,consumed_at,created_at)
+            VALUES(?,?,?,?,?,?,?,'pending',?,NULL,?)
+            """,
+            (
+                claim_id,
+                invitation["workspace_id"],
+                invitation["tenant_id"],
+                account_id,
+                user_id,
+                account["credential_revision"],
+                normalized_email,
+                _db_time(now + timedelta(minutes=5)),
+                stamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO users(
+              user_id,tenant_id,email,display_name,password_hash,role,status,
+              created_at,updated_at,failed_login_count,locked_until,last_login_at,
+              password_changed_at)
+            VALUES(?,?,?,?,?,?,'active',?,?,0,NULL,NULL,?)
+            """,
+            (
+                user_id,
+                invitation["tenant_id"],
+                normalized_email,
+                account["display_name"],
+                account["secret_hash"],
+                _LEGACY_ROLE_BY_WORKSPACE_ROLE[invitation["target_role_code"]],
+                stamp,
+                stamp,
+                stamp,
+            ),
+        )
+        claim = connection.execute(
+            """
+            SELECT status FROM workspace_user_projection_claims
+            WHERE workspace_user_projection_claim_id=?
+            """,
+            (claim_id,),
+        ).fetchone()
+        if claim is None or claim["status"] != "consumed":
+            raise sqlite3.IntegrityError("membership_projection_claim_not_consumed")
+    link = connection.execute(
+        """
+        SELECT 1 FROM account_identity_links
+        WHERE account_id=? AND legacy_tenant_id=? AND legacy_user_id=? AND status='active'
+        """,
+        (account_id, invitation["tenant_id"], user_id),
+    ).fetchone()
+    if link is None:
+        return False
+    membership_id = _id("wmb")
+    connection.execute(
+        """
+        INSERT INTO workspace_memberships(
+          workspace_membership_id,workspace_id,tenant_id,account_id,legacy_user_id,
+          role_code,status,source,revision,created_by_account_id,updated_by_account_id,
+          created_at,updated_at)
+        VALUES(?,?,?,?,?,?,'active','membership_invitation',1,?,?,?,?)
+        """,
+        (
+            membership_id,
+            invitation["workspace_id"],
+            invitation["tenant_id"],
+            account_id,
+            user_id,
+            invitation["target_role_code"],
+            invitation["inviter_account_id"],
+            invitation["inviter_account_id"],
+            stamp,
+            stamp,
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE membership_invitations
+        SET status='accepted',target_account_id=?,accepted_membership_id=?,
+          accepted_at=?,updated_at=?
+        WHERE membership_invitation_id=? AND status='pending'
+        """,
+        (account_id, membership_id, stamp, stamp, invitation["membership_invitation_id"]),
+    )
+    if require_identity_binding and binding is not None:
+        connection.execute(
+            """
+            UPDATE invitation_identity_bindings
+            SET status='consumed',revision=2,consumed_at=?
+            WHERE invitation_identity_binding_id=?
+              AND status='verified_pending_membership' AND revision=1
+            """,
+            (stamp, binding["invitation_identity_binding_id"]),
+        )
+        connection.execute(
+            """
+            UPDATE invitations
+            SET status='accepted',accepted_user_id=?,accepted_at=?,updated_at=?
+            WHERE tenant_id=? AND invitation_id=? AND status='pending'
+            """,
+            (user_id, stamp, stamp, invitation["tenant_id"], legacy_invitation_id),
+        )
+    _write_event(
+        connection,
+        workspace_id=invitation["workspace_id"],
+        tenant_id=invitation["tenant_id"],
+        actor_account_id=account_id,
+        subject_membership_id=membership_id,
+        event_type="invitation.accepted",
+        reason_code="verified_identity_bound",
+        request_id=request_id,
+        trace_id=trace_id,
+        payload={
+            "schema_version": 1,
+            "role_code": invitation["target_role_code"],
+            "membership_revision": 1,
+        },
+        now=now,
+    )
+    return True
+
+
+def _authenticate_workspace(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str | None,
+    touch: bool,
+) -> tuple[WorkspaceSessionContext, sqlite3.Row]:
+    if not connection.in_transaction:
+        raise ApiError("workspace_session.unavailable")
+    if not valid_opaque_value(session_token):
+        raise ApiError("workspace_session.invalid")
+    now = _utcnow()
+    row = connection.execute(
+        """
+        SELECT session.*,
+          member.revision current_membership_revision,member.role_code,
+          member.status membership_status,member.account_id membership_account_id,
+          member.workspace_id membership_workspace_id,member.tenant_id membership_tenant_id,
+          member.legacy_user_id,user.status user_status,user.role legacy_role,
+          user.email,user.display_name,workspace.status workspace_status,
+          workspace.revision current_workspace_revision,workspace.kind,
+          COALESCE(organization.name,personal.display_label) workspace_name,
+          organization.slug_normalized,binding.status binding_status,
+          account.status account_status,account.login_enabled,
+          account.session_revision current_account_session_revision,
+          global_session.status global_session_status,
+          global_session.account_id global_session_account_id,
+          global_session.expires_at global_expires_at,
+          global_session.idle_expires_at global_idle_expires_at,
+          tenant.status tenant_status,tenant.slug tenant_slug,tenant.name tenant_name
+        FROM workspace_sessions session
+        JOIN workspace_memberships member ON member.workspace_membership_id=session.membership_id
+        JOIN users user ON user.tenant_id=member.tenant_id AND user.user_id=member.legacy_user_id
+        JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+        JOIN workspace_tenant_bindings binding
+          ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
+        JOIN global_accounts account ON account.account_id=member.account_id
+        JOIN global_sessions global_session ON global_session.session_id=session.global_session_id
+        JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
+        LEFT JOIN organization_profiles organization
+          ON organization.workspace_id=workspace.workspace_id
+        LEFT JOIN personal_profiles personal ON personal.workspace_id=workspace.workspace_id
+        WHERE session.token_hmac=?
+        """,
+        (_session_hmac(config, "token", session_token),),
+    ).fetchone()
+    if row is None:
+        raise ApiError("workspace_session.invalid")
+    if row["status"] == "revoked":
+        raise ApiError("workspace_session.revoked")
+    if row["status"] == "expired":
+        raise ApiError("workspace_session.expired")
+    if (
+        _parse_time(row["absolute_expires_at"]) <= now
+        or _parse_time(row["idle_expires_at"]) <= now
+        or _parse_time(row["global_expires_at"]) <= now
+        or _parse_time(row["global_idle_expires_at"]) <= now
+    ):
+        connection.execute(
+            """
+            UPDATE workspace_sessions SET status='expired',updated_at=?
+            WHERE workspace_session_id=?
+            """,
+            (_db_time(now), row["workspace_session_id"]),
+        )
+        raise ApiError("workspace_session.expired")
+    expected_legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"])
+    stale = (
+        row["membership_status"] != "active"
+        or row["role_code"] == "service_account"
+        or row["membership_account_id"] != row["account_id"]
+        or row["membership_workspace_id"] != row["workspace_id"]
+        or row["membership_tenant_id"] != row["tenant_id"]
+        or row["workspace_status"] != "active"
+        or row["binding_status"] != "active"
+        or row["tenant_status"] != "active"
+        or row["account_status"] != "active"
+        or row["login_enabled"] != 1
+        or row["global_session_status"] != "active"
+        or row["global_session_account_id"] != row["account_id"]
+        or row["user_status"] != "active"
+        or row["legacy_role"] != expected_legacy_role
+        or row["membership_revision"] != row["current_membership_revision"]
+        or row["workspace_revision"] != row["current_workspace_revision"]
+        or row["account_session_revision"] != row["current_account_session_revision"]
+    )
+    if stale:
+        _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")
+        raise ApiError("workspace_session.revoked")
+    try:
+        snapshot = require_actor_runtime_permissions(
+            connection,
+            tenant_id=row["tenant_id"],
+            user_id=row["legacy_user_id"],
+            permission_codes=("console.basic.read",),
+            unavailable_error_code="workspace_session.unavailable",
+        )
+    except ApiError:
+        _revoke_workspace_session(
+            connection, row["workspace_session_id"], now, "permission_changed"
+        )
+        raise ApiError("workspace_session.revoked") from None
+    if (
+        row["legacy_permission_revision"] != snapshot.permission_revision
+        or not hmac.compare_digest(row["matrix_fingerprint"], snapshot.authorization_fingerprint)
+    ):
+        _revoke_workspace_session(
+            connection, row["workspace_session_id"], now, "permission_changed"
+        )
+        raise ApiError("workspace_session.revoked")
+    if csrf_token is not None:
+        if not valid_opaque_value(csrf_token) or not hmac.compare_digest(
+            row["csrf_hmac"], _session_hmac(config, "csrf", csrf_token)
+        ):
+            raise ApiError("workspace_session.csrf_invalid")
+    if touch and _parse_time(row["last_seen_at"]) <= now - timedelta(seconds=60):
+        connection.execute(
+            """
+            UPDATE workspace_sessions SET last_seen_at=?,updated_at=?
+            WHERE workspace_session_id=?
+            """,
+            (_db_time(now), _db_time(now), row["workspace_session_id"]),
+        )
+    context = WorkspaceSessionContext(
+        workspace_session_id=row["workspace_session_id"],
+        global_session_id=row["global_session_id"],
+        account_id=row["account_id"],
+        workspace_id=row["workspace_id"],
+        tenant_id=row["tenant_id"],
+        membership_id=row["membership_id"],
+        legacy_user_id=row["legacy_user_id"],
+        membership_role=row["role_code"],
+        legacy_role=row["legacy_role"],
+        account_email=row["email"],
+        display_name=row["display_name"],
+        tenant_slug=row["tenant_slug"],
+        tenant_name=row["tenant_name"],
+        permission_codes=snapshot.permission_codes,
+        permission_revision=snapshot.permission_revision,
+        authorization_fingerprint=snapshot.authorization_fingerprint,
+        expires_at=_parse_time(row["absolute_expires_at"]),
+        token=session_token,
+    )
+    return context, row
+
+
+def _switch_target(
+    connection: sqlite3.Connection,
+    account_id: str,
+    workspace_id: str,
+) -> sqlite3.Row | None:
+    row = connection.execute(
+        """
+        SELECT member.workspace_membership_id,member.workspace_id,member.tenant_id,
+          member.account_id,member.legacy_user_id,member.role_code,
+          member.revision membership_revision,workspace.revision workspace_revision,
+          workspace.kind,COALESCE(organization.name,personal.display_label) workspace_name,
+          organization.slug_normalized,account.session_revision account_session_revision,
+          user.role legacy_role,user.status user_status,tenant.status tenant_status
+        FROM workspace_memberships member
+        JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+        JOIN workspace_tenant_bindings binding
+          ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
+        JOIN global_accounts account ON account.account_id=member.account_id
+        JOIN users user ON user.tenant_id=member.tenant_id AND user.user_id=member.legacy_user_id
+        JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
+        LEFT JOIN organization_profiles organization
+          ON organization.workspace_id=workspace.workspace_id
+        LEFT JOIN personal_profiles personal ON personal.workspace_id=workspace.workspace_id
+        WHERE member.account_id=? AND member.workspace_id=? AND member.status='active'
+          AND member.role_code!='service_account' AND workspace.status='active'
+          AND binding.status='active' AND account.status='active' AND account.login_enabled=1
+          AND user.status='active' AND tenant.status='active'
+        """,
+        (account_id, workspace_id),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["legacy_role"] != _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"]):
+        return None
+    return row
+
+
+def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
+    return require_actor_runtime_permissions(
+        connection,
+        tenant_id=row["tenant_id"],
+        user_id=row["legacy_user_id"],
+        permission_codes=("console.basic.read",),
+        unavailable_error_code="workspace_session.unavailable",
+    )
+
+
+def _identity_workspace(row: sqlite3.Row) -> IdentityWorkspaceSummary:
+    return IdentityWorkspaceSummary(
+        workspace_id=row["workspace_id"],
+        kind=row["kind"],
+        name=row["display_name"],
+        slug=row["slug_normalized"],
+        role=row["role_code"],
+    )
+
+
+def _context_summary(row: sqlite3.Row, expires_at: datetime) -> WorkspaceContextSummary:
+    return WorkspaceContextSummary(
+        workspace_id=row["workspace_id"],
+        kind=row["kind"],
+        name=row["workspace_name"],
+        slug=row["slug_normalized"],
+        role=row["role_code"],
+        expires_at=expires_at,
+    )
+
+
+def _membership_row(
+    connection: sqlite3.Connection,
+    workspace_id: str,
+    membership_id: str,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT member.*,account.display_name
+        FROM workspace_memberships member
+        JOIN global_accounts account ON account.account_id=member.account_id
+        WHERE member.workspace_id=? AND member.workspace_membership_id=?
+        """,
+        (workspace_id, membership_id),
+    ).fetchone()
+
+
+def _membership_summary(
+    row: sqlite3.Row,
+    context: WorkspaceSessionContext,
+) -> MembershipSummary:
+    can_manage = (
+        context.membership_role in _MANAGER_ROLES
+        and row["role_code"] not in {"owner", "service_account"}
+    )
+    return MembershipSummary(
+        membership_id=row["workspace_membership_id"],
+        display_name=row["display_name"],
+        role=row["role_code"],
+        status=row["status"],
+        revision=int(row["revision"]),
+        is_current=row["workspace_membership_id"] == context.membership_id,
+        can_manage=can_manage,
+    )
+
+
+def _current_membership_revision(connection: sqlite3.Connection, membership_id: str) -> int:
+    row = connection.execute(
+        "SELECT revision FROM workspace_memberships WHERE workspace_membership_id=?",
+        (membership_id,),
+    ).fetchone()
+    if row is None:
+        raise ApiError("workspace_session.revoked")
+    return int(row["revision"])
+
+
+def _require_manager(context: WorkspaceSessionContext) -> None:
+    if context.membership_role not in _MANAGER_ROLES:
+        raise ApiError("workspace_session.permission_denied")
+
+
+def _delegable_role(value: str, *, error_code: str = "membership.update_invalid") -> str:
+    if type(value) is not str:
+        raise ApiError(error_code)
+    normalized = value.strip().lower()
+    if normalized not in _DELEGABLE_ROLES:
+        raise ApiError(error_code)
+    return normalized
+
+
+def _membership_status(value: str) -> str:
+    if type(value) is not str:
+        raise ApiError("membership.update_invalid")
+    normalized = value.strip().lower()
+    if normalized not in {"active", "disabled"}:
+        raise ApiError("membership.update_invalid")
+    return normalized
+
+
+def _write_event(
+    connection: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    actor_account_id: str,
+    subject_membership_id: str | None,
+    event_type: str,
+    reason_code: str,
+    request_id: str,
+    trace_id: str,
+    payload: dict[str, object],
+    now: datetime,
+) -> None:
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    event_id = _id("mev")
+    stamp = _db_time(now)
+    connection.execute(
+        """
+        INSERT INTO membership_events(
+          membership_event_id,workspace_id,tenant_id,actor_account_id,
+          subject_membership_id,event_type,reason_code,request_id,trace_id,
+          payload_json,payload_sha256,occurred_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            event_id,
+            workspace_id,
+            tenant_id,
+            actor_account_id,
+            subject_membership_id,
+            event_type,
+            reason_code,
+            request_id,
+            trace_id,
+            payload_json,
+            payload_hash,
+            stamp,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO membership_event_outbox(
+          membership_event_outbox_id,membership_event_id,status,attempt_count,
+          next_attempt_at,delivered_at,created_at,updated_at)
+        VALUES(?,?,'pending',0,?,NULL,?,?)
+        """,
+        (_id("mob"), event_id, stamp, stamp, stamp),
+    )
+
+
+def _revoke_workspace_session(
+    connection: sqlite3.Connection,
+    session_id: str,
+    now: datetime,
+    reason: str,
+) -> None:
+    stamp = _db_time(now)
+    connection.execute(
+        """
+        UPDATE workspace_sessions
+        SET status='revoked',revoked_at=?,revoked_reason=?,updated_at=?
+        WHERE workspace_session_id=? AND status='active'
+        """,
+        (stamp, reason, stamp, session_id),
+    )
+
+
+def _session_hmac(config: AppConfig, purpose: str, value: str) -> str:
+    payload = f"metahub-workspace-session-v1\x00{purpose}\x00{value}".encode("ascii")
+    return hmac.new(
+        config.workspace_session_secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _membership_email_hmac(config: AppConfig, email: str) -> str:
+    payload = f"metahub-membership-email-v1\x00{email}".encode()
+    return hmac.new(
+        config.workspace_session_secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _legacy_email_fingerprint(invitation_id: str, email: str) -> str:
+    return hashlib.sha256(f"{invitation_id}\x00{email}".encode()).hexdigest()
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone() is not None
+
+
+def _connect(config: AppConfig) -> sqlite3.Connection:
+    try:
+        return connect_database(config.database_url)
+    except DbError:
+        raise ApiError("workspace_session.unavailable") from None
+
+
+def _finish_global_error(connection: sqlite3.Connection, error: ApiError) -> None:
+    if not connection.in_transaction:
+        return
+    if error.code == "identity.session_expired":
+        connection.commit()
+    else:
+        connection.rollback()
+
+
+def _finish_workspace_error(connection: sqlite3.Connection, error: ApiError) -> None:
+    if not connection.in_transaction:
+        return
+    if error.code in {"workspace_session.expired", "workspace_session.revoked"}:
+        connection.commit()
+    else:
+        connection.rollback()
+
+
+def _id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def _db_time(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_time(value: object) -> datetime:
+    if type(value) is not str:
+        raise ValueError("invalid database time")
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)

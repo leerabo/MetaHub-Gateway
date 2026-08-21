@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-093 - 个人空间与企业Workspace创建` 已完成；当前下一条未完成项是 `PRD-094 - 成员关系、空间切换与邀请升级`。
+- 新 `PRD-090` 至 `PRD-094 - 成员关系、空间切换与邀请升级` 已完成；当前下一条未完成项是 `PRD-095 - SaaS平台运营角色与受控支持访问`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -428,8 +428,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
   该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；新路线图的
-  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-093 - 个人空间与企业Workspace创建` 已完成；当前
-  权威未完成项为 `PRD-094 - 成员关系、空间切换与邀请升级`，`saas_incremental_roadmap_complete=false`。
+  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-094 - 成员关系、空间切换与邀请升级` 已完成；当前
+  权威未完成项为 `PRD-095 - SaaS平台运营角色与受控支持访问`，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -751,6 +751,27 @@ WorkspaceSession or expose general Membership management; those remain in PRD-09
 [PRD-093 design](docs/prd/PRD-093-workspace-creation.md),
 [Global Identity API](docs/api/global-identity.md) and
 [PRD-093 tests](docs/testing/PRD-093-tests.md).
+
+### PRD-094 成员关系、空间切换与邀请升级（已完成）
+
+PRD-094 adds database-authoritative Membership, independent WorkspaceSession cookies, Workspace
+switching, role/status management, MembershipInvitation upgrade, atomic Owner transfer and
+Workspace-aware Console navigation. Migration `0086` backfills all legacy account links without
+replacing the immutable Workspace creator, preserves the PRD-060 N/N-1 invitation path, and blocks
+schema down after any new authorization fact.
+
+The seven Workspace/Membership routes use strict Global or Workspace credential interpretation,
+Origin/CSRF, revision CAS, delegation ceilings and same-shape cross-Workspace failures. Every
+Workspace request re-checks the account, Workspace, binding, Membership and legacy permission
+revisions; a committed role/status change, Owner transfer or GlobalSession revocation invalidates
+the next request. The Identity page provides a compact searchable Workspace selector, member and
+invitation management, and Owner transfer without putting tokens or identity internals in DOM or
+browser Storage. BroadcastChannel carries only an anonymous invalidation generation, and stale
+requests are aborted and fenced. See [PRD-094 design](docs/prd/PRD-094-membership-and-workspace-switching.md),
+[Workspace Access API](docs/api/workspace-access.md) and
+[PRD-094 tests](docs/testing/PRD-094-tests.md). Automated gates and real-browser login, keyboard,
+390/1280/1440 viewport, access-log privacy and interaction performance evidence are complete; the
+authoritative next item is PRD-095.
 
 ## 目录结构
 

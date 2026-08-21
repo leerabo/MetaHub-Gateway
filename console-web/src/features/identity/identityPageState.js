@@ -1,4 +1,5 @@
 import { IdentityApiError } from "../../lib/identity.js";
+import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import {
   renderIdentityLoginPage,
   renderIdentityRegistrationPage,
@@ -13,9 +14,14 @@ const CONSENT_VERSION = "privacy-2026-08";
 export function createIdentityPageController({
   root,
   api,
+  channelFactory = defaultChannelFactory,
   confirmAction = defaultConfirm,
+  copyText = defaultCopyText,
+  consoleUrl = globalThis.window?.location?.origin ?? "http://localhost",
   invitationToken = null,
+  monotonicNow = defaultMonotonicNow,
   newIdempotencyKey = defaultIdempotencyKey,
+  recordWorkspaceSwitch = () => {},
 } = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
@@ -26,14 +32,27 @@ export function createIdentityPageController({
   let currentSession = null;
   let sessions = [];
   let workspaces = [];
+  let workspaceChoices = [];
+  let workspaceContext = null;
+  let memberships = [];
+  let navigationItems = [];
   let workspaceView = "summary";
   let workspaceDraft = null;
+  let invitationResult = null;
+  let invitationSecretLink = null;
+  let invitationSecretMail = null;
   let pendingChallenge = null;
   let pendingWrite = Promise.resolve();
+  let contextGeneration = 0;
+  let contextChannel = null;
+  let autoSwitchAttempted = false;
+  let destroyed = false;
 
   const controller = {
     async mount() {
+      destroyed = false;
       bindInteractions();
+      bindContextChannel();
       return loadProtectedState();
     },
     async login({ email, password }) {
@@ -214,6 +233,7 @@ export function createIdentityPageController({
     },
     async logout() {
       clearToLogin();
+      broadcastContextInvalidation();
       try {
         await queueWrite(() => api.logout({}));
       } catch (error) {
@@ -229,6 +249,7 @@ export function createIdentityPageController({
       }
       if (session.is_current) {
         clearToLogin();
+        broadcastContextInvalidation();
         try {
           await queueWrite(() => api.revoke({ sessionId: session.session_id }));
         } catch (error) {
@@ -266,6 +287,8 @@ export function createIdentityPageController({
         account = result.account;
         currentSession = result.current_session;
         sessions = [currentSession];
+        scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
+        broadcastContextInvalidation();
         await loadSessions(ticket, "密码已更新，其他设备已退出。", null);
         return true;
       } catch (error) {
@@ -280,6 +303,8 @@ export function createIdentityPageController({
       }
     },
     showWorkspaceCreate() {
+      clearInvitationSecret();
+      invitationResult = null;
       workspaceView = "create";
       workspaceDraft = {
         kind: "organization",
@@ -346,18 +371,179 @@ export function createIdentityPageController({
         ];
         workspaceView = "summary";
         workspaceDraft = null;
-        renderSecurity({ feedback: "空间已创建。" });
-        return true;
+        autoSwitchAttempted = false;
+        return loadWorkspaceAccess(ticket, "空间已创建。", null);
       } catch (error) {
         if (!isCurrent(ticket) || isAbort(error)) return false;
         renderSecurity({ error: safePageError(error) });
         return false;
       }
     },
+    async switchWorkspace(index) {
+      const choice = workspaceChoices[Number(index)];
+      if (!choice || choice.role === "service_account" || typeof api.switchWorkspace !== "function") {
+        return false;
+      }
+      const startedAt = monotonicNow();
+      const ticket = beginRequest();
+      scrubWorkspaceScope();
+      renderSecurity({ feedback: "正在进入空间…" });
+      try {
+        const sessionResult = await queueWrite(() =>
+          api.switchWorkspace({ workspaceId: choice.workspace_id, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        autoSwitchAttempted = true;
+        broadcastContextInvalidation();
+        const interactive = await loadWorkspaceAuthorization(
+          ticket,
+          sessionResult,
+          "空间上下文已更新。",
+          null,
+        );
+        if (interactive) {
+          recordWorkspaceSwitch({ durationMs: Math.max(0, monotonicNow() - startedAt) });
+        }
+        return interactive;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        return handleWorkspaceActionError(error, "无法进入该空间。", ticket);
+      }
+    },
+    async updateMembership(index, { role, status }) {
+      const target = memberships[Number(index)];
+      if (!target?.can_manage || typeof api.updateMembership !== "function") return false;
+      const changes = {};
+      if (role && role !== target.role) changes.role = role;
+      if (status && status !== target.status) changes.status = status;
+      if (Object.keys(changes).length === 0) {
+        renderSecurity({ error: { message: "成员信息没有变化。", requestId: "-" } });
+        return false;
+      }
+      const ticket = beginRequest();
+      clearInvitationSecret();
+      try {
+        await queueWrite(() =>
+          api.updateMembership({
+            membershipId: target.membership_id,
+            revision: target.revision,
+            ...changes,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        broadcastContextInvalidation();
+        return invalidateWorkspaceContext({
+          broadcast: false,
+          feedback: "成员权限已更新。",
+          existingTicket: ticket,
+        });
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        return handleWorkspaceActionError(error, "成员更新失败。", ticket);
+      }
+    },
+    async inviteMembership({ email, role, expiresInHours }) {
+      if (!workspaceContext || !new Set(["owner", "admin"]).has(workspaceContext.role)) {
+        return false;
+      }
+      if (typeof api.inviteMembership !== "function") return false;
+      const ticket = beginRequest();
+      clearInvitationSecret();
+      invitationResult = null;
+      renderSecurity();
+      try {
+        const result = await queueWrite(() =>
+          api.inviteMembership({ email, role, expiresInHours, signal: ticket.signal }),
+        );
+        if (!isCurrent(ticket)) return false;
+        const normalizedEmail = String(email ?? "").trim().toLowerCase();
+        invitationSecretLink = buildInvitationAcceptLink(consoleUrl, result.accept_token);
+        invitationSecretMail = [
+          "MetaHub 团队邀请",
+          `受邀邮箱：${normalizedEmail}`,
+          `角色：${result.invitation.role}`,
+          `接受邀请：${invitationSecretLink}`,
+        ].join("\n");
+        invitationResult = {
+          email: normalizedEmail,
+          role: result.invitation.role,
+          expiresAt: result.invitation.expires_at,
+        };
+        renderSecurity({ feedback: "邀请已生成，请通过受控渠道发送。" });
+        return true;
+      } catch (error) {
+        clearInvitationSecret();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        return handleWorkspaceActionError(error, "邀请创建失败。", ticket);
+      }
+    },
+    async copyInvitationSecret(kind = "link") {
+      const value = kind === "mail" ? invitationSecretMail : invitationSecretLink;
+      if (!value) return false;
+      try {
+        await copyText(value);
+        if (invitationSecretLink === null) return false;
+        renderSecurity({ feedback: kind === "mail" ? "邀请文案已复制。" : "邀请链接已复制。" });
+        return true;
+      } catch {
+        if (invitationSecretLink === null) return false;
+        renderSecurity({
+          error: { message: "浏览器未允许访问剪贴板，请检查站点权限。", requestId: "-" },
+        });
+        return false;
+      }
+    },
+    async transferOwner({ targetIndex, currentPassword, confirmed = false }) {
+      const target = memberships[Number(targetIndex)];
+      if (
+        workspaceContext?.role !== "owner" ||
+        !target ||
+        target.status !== "active" ||
+        new Set(["owner", "service_account"]).has(target.role) ||
+        typeof api.transferOwner !== "function"
+      ) {
+        scrubPasswords();
+        return false;
+      }
+      if (confirmed !== true) {
+        scrubPasswords();
+        return false;
+      }
+      const ticket = beginRequest();
+      clearInvitationSecret();
+      try {
+        await queueWrite(() =>
+          api.transferOwner({
+            targetMembershipId: target.membership_id,
+            currentPassword,
+            signal: ticket.signal,
+          }),
+        );
+        scrubPasswords();
+        if (!isCurrent(ticket)) return false;
+        broadcastContextInvalidation();
+        return invalidateWorkspaceContext({
+          broadcast: false,
+          feedback: "所有权已转移，请重新进入空间。",
+          existingTicket: ticket,
+        });
+      } catch (error) {
+        scrubPasswords();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        return handleWorkspaceActionError(error, "所有权转移失败。", ticket);
+      }
+    },
+    async refreshWorkspaceContext() {
+      return invalidateWorkspaceContext({ broadcast: false, feedback: "空间上下文已刷新。" });
+    },
     destroy() {
+      destroyed = true;
       generation += 1;
       activeRequest?.abort();
       activeRequest = null;
+      contextChannel?.close?.();
+      contextChannel = null;
       scrubSensitiveInputs();
       pendingChallenge = null;
       scrubProtectedState();
@@ -408,18 +594,16 @@ export function createIdentityPageController({
     }
   }
 
-  async function loadWorkspaces(ticket, feedback, previousError) {
+  async function loadWorkspaces(ticket, feedback, previousError, retryAuthorizationDrift = true) {
     if (typeof api.workspaces !== "function") {
       workspaces = [];
-      renderSecurity({ feedback, error: previousError });
-      return true;
+      return loadWorkspaceAccess(ticket, feedback, previousError, retryAuthorizationDrift);
     }
     try {
       const list = await api.workspaces({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       workspaces = Array.isArray(list.workspaces) ? list.workspaces : [];
-      renderSecurity({ feedback, error: previousError });
-      return true;
+      return loadWorkspaceAccess(ticket, feedback, previousError, retryAuthorizationDrift);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
@@ -427,9 +611,207 @@ export function createIdentityPageController({
         return false;
       }
       workspaces = [];
+      return loadWorkspaceAccess(
+        ticket,
+        feedback,
+        safePageError(error),
+        retryAuthorizationDrift,
+      );
+    }
+  }
+
+  async function loadWorkspaceAccess(
+    ticket,
+    feedback,
+    previousError,
+    retryAuthorizationDrift = true,
+  ) {
+    if (typeof api.identityWorkspaces !== "function") {
+      workspaceChoices = workspaces.map((workspace) => ({
+        workspace_id: workspace.workspace_id,
+        kind: workspace.kind,
+        name: workspace.name,
+        slug: workspace.slug,
+        role: "owner",
+      }));
+      workspaceContext = null;
+      memberships = [];
+      navigationItems = [];
+      renderSecurity({ feedback, error: previousError });
+      return true;
+    }
+    try {
+      const result = await api.identityWorkspaces({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      workspaceChoices = Array.isArray(result.workspaces) ? result.workspaces : [];
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isExpired(error)) {
+        clearToLogin();
+        return false;
+      }
+      workspaceChoices = [];
+      scrubWorkspaceAuthorization();
       renderSecurity({ feedback, error: safePageError(error) });
       return false;
     }
+
+    if (typeof api.workspaceSession !== "function") {
+      scrubWorkspaceAuthorization();
+      renderSecurity({ feedback, error: previousError });
+      return true;
+    }
+
+    let sessionResult = null;
+    try {
+      sessionResult = await api.workspaceSession({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (!isWorkspaceSessionMissing(error)) {
+        if (isWorkspaceAuthorizationDrift(error)) {
+          scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
+          renderSecurity({ feedback: "空间权限已变化，正在重新校验。" });
+          return retryAuthorizationDrift
+            ? loadWorkspaces(ticket, feedback, null, false)
+            : false;
+        }
+        scrubWorkspaceAuthorization();
+        renderSecurity({ feedback, error: safePageError(error) });
+        return false;
+      }
+    }
+
+    if (
+      sessionResult === null &&
+      workspaceChoices.length === 1 &&
+      workspaceChoices[0].role !== "service_account" &&
+      !autoSwitchAttempted &&
+      typeof api.switchWorkspace === "function"
+    ) {
+      autoSwitchAttempted = true;
+      try {
+        await queueWrite(() =>
+          api.switchWorkspace({
+            workspaceId: workspaceChoices[0].workspace_id,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        broadcastContextInvalidation();
+        sessionResult = await api.workspaceSession({ signal: ticket.signal });
+        if (!isCurrent(ticket)) return false;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        if (isExpired(error)) {
+          clearToLogin();
+          return false;
+        }
+        scrubWorkspaceAuthorization();
+        renderSecurity({ feedback, error: safePageError(error) });
+        return false;
+      }
+    }
+
+    if (sessionResult === null) {
+      scrubWorkspaceAuthorization();
+      renderSecurity({ feedback, error: previousError });
+      return true;
+    }
+
+    return loadWorkspaceAuthorization(
+      ticket,
+      sessionResult,
+      feedback,
+      previousError,
+      retryAuthorizationDrift,
+    );
+  }
+
+  async function loadWorkspaceAuthorization(
+    ticket,
+    sessionResult,
+    feedback,
+    previousError,
+    retryAuthorizationDrift = true,
+  ) {
+    workspaceContext = sessionResult.context;
+    if (
+      workspaceContext.role === "service_account" ||
+      !workspaceChoices.some((choice) => choice.workspace_id === workspaceContext.workspace_id)
+    ) {
+      scrubWorkspaceAuthorization();
+      renderSecurity({
+        feedback,
+        error: { message: "当前空间上下文与账号空间列表不一致。", requestId: "-" },
+      });
+      return false;
+    }
+
+    try {
+      const [membershipResult, navigationResult] = await Promise.all([
+        typeof api.memberships === "function"
+          ? api.memberships({ signal: ticket.signal })
+          : Promise.resolve({ memberships: [] }),
+        typeof api.workspaceNavigation === "function"
+          ? api.workspaceNavigation({ signal: ticket.signal })
+          : Promise.resolve({ navigation_items: [] }),
+      ]);
+      if (!isCurrent(ticket)) return false;
+      memberships = Array.isArray(membershipResult.memberships)
+        ? membershipResult.memberships
+        : [];
+      navigationItems = Array.isArray(navigationResult.navigation_items)
+        ? navigationResult.navigation_items
+        : [];
+      renderSecurity({ feedback, error: previousError });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) {
+        scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
+        renderSecurity({ feedback: "空间权限已变化，正在重新校验。" });
+        return retryAuthorizationDrift
+          ? loadWorkspaces(ticket, feedback, null, false)
+          : false;
+      } else {
+        memberships = [];
+        navigationItems = [];
+      }
+      renderSecurity({ feedback, error: safePageError(error) });
+      return false;
+    }
+  }
+
+  async function invalidateWorkspaceContext({
+    broadcast = true,
+    feedback = "空间上下文已失效，正在重新校验。",
+    existingTicket = null,
+  } = {}) {
+    const ticket = existingTicket ?? beginRequest();
+    scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
+    renderSecurity({ feedback });
+    if (broadcast) broadcastContextInvalidation();
+    return loadWorkspaces(ticket, feedback, null);
+  }
+
+  function handleWorkspaceActionError(error, fallbackMessage, ticket) {
+    if (isWorkspaceAuthorizationDrift(error)) {
+      broadcastContextInvalidation();
+      return invalidateWorkspaceContext({
+        broadcast: false,
+        feedback: "空间权限已变化，正在重新校验。",
+        existingTicket: ticket,
+      });
+    }
+    const safe = safePageError(error);
+    renderSecurity({
+      error: {
+        message: safe.message || fallbackMessage,
+        requestId: safe.requestId,
+      },
+    });
+    return false;
   }
 
   function beginRequest() {
@@ -473,8 +855,14 @@ export function createIdentityPageController({
       currentSession,
       sessions,
       workspaces,
+      workspaceChoices,
+      workspaceContext,
+      memberships,
+      navigationItems,
       workspaceView,
       workspaceDraft,
+      invitationResult,
+      hasInvitationSecret: Boolean(invitationSecretLink),
       feedback: extra.feedback,
       error: extra.error,
     });
@@ -484,9 +872,29 @@ export function createIdentityPageController({
     account = null;
     currentSession = null;
     sessions = [];
-    workspaces = [];
+    autoSwitchAttempted = false;
+    scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
+  }
+
+  function scrubWorkspaceScope({ clearChoices = false, clearRichWorkspaces = false } = {}) {
+    if (clearChoices) workspaceChoices = [];
+    if (clearRichWorkspaces) workspaces = [];
+    scrubWorkspaceAuthorization();
     workspaceView = "summary";
     workspaceDraft = null;
+    invitationResult = null;
+    clearInvitationSecret();
+  }
+
+  function scrubWorkspaceAuthorization() {
+    workspaceContext = null;
+    memberships = [];
+    navigationItems = [];
+  }
+
+  function clearInvitationSecret() {
+    invitationSecretLink = null;
+    invitationSecretMail = null;
   }
 
   function scrubPasswords() {
@@ -507,6 +915,44 @@ export function createIdentityPageController({
 
   function isCurrent(ticket) {
     return ticket.generation === generation && ticket.signal.aborted !== true;
+  }
+
+  function bindContextChannel() {
+    if (contextChannel || destroyed) return;
+    try {
+      contextChannel = channelFactory?.("metahub-workspace-context-v1") ?? null;
+    } catch {
+      contextChannel = null;
+    }
+    if (!contextChannel) return;
+    contextChannel.onmessage = (event) => {
+      const message = event?.data;
+      if (
+        destroyed ||
+        !message ||
+        typeof message !== "object" ||
+        Array.isArray(message) ||
+        Object.keys(message).length !== 2 ||
+        message.type !== "context-invalidated" ||
+        !Number.isSafeInteger(message.generation) ||
+        message.generation < 1
+      ) {
+        return;
+      }
+      void invalidateWorkspaceContext({ broadcast: false });
+    };
+  }
+
+  function broadcastContextInvalidation() {
+    contextGeneration += 1;
+    try {
+      contextChannel?.postMessage?.({
+        type: "context-invalidated",
+        generation: contextGeneration,
+      });
+    } catch {
+      // A closed or unavailable channel must not block server-authoritative revalidation.
+    }
   }
 
   function bindInteractions() {
@@ -560,6 +1006,29 @@ export function createIdentityPageController({
           region: fields.get("region"),
           serviceMode: fields.get("serviceMode"),
         });
+      } else if (form?.matches?.("[data-membership-update-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.updateMembership(form.dataset.membershipIndex, {
+          role: fields.get("role"),
+          status: fields.get("status"),
+        });
+      } else if (form?.matches?.("[data-membership-invitation-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.inviteMembership({
+          email: fields.get("email"),
+          role: fields.get("role"),
+          expiresInHours: Number(fields.get("expiresInHours")),
+        });
+      } else if (form?.matches?.("[data-owner-transfer-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.transferOwner({
+          targetIndex: fields.get("targetIndex"),
+          currentPassword: fields.get("currentPassword"),
+          confirmed: fields.get("confirmTransfer") === "on",
+        });
       }
     });
     root.addEventListener?.("click", async (event) => {
@@ -583,8 +1052,29 @@ export function createIdentityPageController({
         controller.cancelWorkspaceCreate();
       } else if (button.dataset.identityAction === "set-workspace-kind") {
         controller.setWorkspaceKind(button.dataset.workspaceKind);
+      } else if (button.dataset.identityAction === "switch-workspace") {
+        await controller.switchWorkspace(button.dataset.workspaceIndex);
+      } else if (button.dataset.identityAction === "refresh-workspace-context") {
+        await controller.refreshWorkspaceContext();
+      } else if (button.dataset.identityAction === "copy-invitation-link") {
+        await controller.copyInvitationSecret("link");
+      } else if (button.dataset.identityAction === "copy-invitation-mail") {
+        await controller.copyInvitationSecret("mail");
       }
     });
+    root.addEventListener?.("input", (event) => {
+      if (event.target?.matches?.("[data-workspace-search]")) {
+        filterWorkspaceOptions(event.target.value);
+      }
+    });
+  }
+
+  function filterWorkspaceOptions(value) {
+    const query = String(value ?? "").trim().toLocaleLowerCase("zh-CN");
+    for (const option of root.querySelectorAll?.("[data-workspace-option]") ?? []) {
+      const text = String(option.dataset?.workspaceSearchText ?? "").toLocaleLowerCase("zh-CN");
+      option.hidden = Boolean(query) && !text.includes(query);
+    }
   }
 }
 
@@ -610,12 +1100,37 @@ function isExpired(error) {
   return error instanceof IdentityApiError && error.status === 401;
 }
 
+function isWorkspaceSessionMissing(error) {
+  return error instanceof IdentityApiError && error.status === 401;
+}
+
+function isWorkspaceAuthorizationDrift(error) {
+  return error instanceof IdentityApiError && new Set([401, 403]).has(error.status);
+}
+
 function isAbort(error) {
   return error?.name === "AbortError";
 }
 
 function defaultConfirm(message) {
   return globalThis.confirm?.(message) === true;
+}
+
+function defaultChannelFactory(name) {
+  return globalThis.window && typeof globalThis.BroadcastChannel === "function"
+    ? new globalThis.BroadcastChannel(name)
+    : null;
+}
+
+async function defaultCopyText(value) {
+  if (typeof globalThis.navigator?.clipboard?.writeText !== "function") {
+    throw new Error("clipboard unavailable");
+  }
+  await globalThis.navigator.clipboard.writeText(value);
+}
+
+function defaultMonotonicNow() {
+  return globalThis.performance?.now?.() ?? Date.now();
 }
 
 function defaultIdempotencyKey() {

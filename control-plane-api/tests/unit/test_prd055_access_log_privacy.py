@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from metahub_control import main as control_main
 
 
@@ -26,3 +28,13 @@ def test_control_plane_disables_raw_url_access_log(monkeypatch) -> None:
     assert captured["target"] == "metahub_control.app:app"
     assert captured["access_log"] is False
     assert captured["proxy_headers"] is False
+
+
+def test_local_control_launcher_cannot_bypass_safe_access_log_entrypoint() -> None:
+    launcher = (
+        Path(__file__).parents[3] / "scripts" / "dev" / "start-control-api.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "run_module('metahub_control.main', run_name='__main__')" in launcher
+    assert "uvicorn metahub_control.app:app" not in launcher
+    assert "python -m uvicorn" not in launcher.lower()

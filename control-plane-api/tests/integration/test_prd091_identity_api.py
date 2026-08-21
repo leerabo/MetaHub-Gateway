@@ -316,10 +316,22 @@ async def test_expired_write_commits_tombstone_and_logout_error_clears_cookies(
         assert logout.status_code == 401
         assert logout.json()["code"] == "identity.session_expired"
         cleared = logout.headers.get_list("set-cookie")
-        assert len(cleared) == 2
+        assert {item.split("=", 1)[0] for item in cleared} == {
+            "__Host-metahub-global-session",
+            "__Host-metahub-global-csrf",
+            "__Host-metahub-workspace-session",
+            "__Host-metahub-workspace-csrf",
+        }
         assert all("Max-Age=0" in item and "Secure" in item for item in cleared)
-        assert "__Host-metahub-global-session" not in client.cookies
-        assert "__Host-metahub-global-csrf" not in client.cookies
+        assert all(
+            name not in client.cookies
+            for name in (
+                "__Host-metahub-global-session",
+                "__Host-metahub-global-csrf",
+                "__Host-metahub-workspace-session",
+                "__Host-metahub-workspace-csrf",
+            )
+        )
 
 
 @pytest.mark.anyio
@@ -344,7 +356,14 @@ async def test_unavailable_logout_clears_cookies_and_invalid_rotate_skips_argon2
         )
         assert logout.status_code == 503
         assert logout.json()["code"] == "identity.unavailable"
-        assert len(logout.headers.get_list("set-cookie")) == 2
+        assert {
+            item.split("=", 1)[0] for item in logout.headers.get_list("set-cookie")
+        } == {
+            "__Host-metahub-global-session",
+            "__Host-metahub-global-csrf",
+            "__Host-metahub-workspace-session",
+            "__Host-metahub-workspace-csrf",
+        }
 
     monkeypatch.undo()
     _database_url, app = _prepare(

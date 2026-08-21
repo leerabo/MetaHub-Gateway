@@ -2141,7 +2141,7 @@ PRD-088；该历史登记随后已由下方 PRD-088 目录完成项关闭，`all
 PRD-088 的实现、迁移、专项、必要回归、真实 HTTP 和三视口 Browser 已形成正式记录。Excel `01_PRD总表`
 第 90 行、`03_M2-M3扩展交付` 第 26 行、PAGE-121、API-402..406、OBJ-122/123、EVT-101/102 与
 TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数据生命周期边界关闭。当前下一条
-新 SaaS 路线图的 PRD-090..093 已完成，权威未完成项已切换到 PRD-094，`saas_incremental_roadmap_complete=false`；
+新 SaaS 路线图的 PRD-090..094 已完成，权威未完成项已切换到 PRD-095，`saas_incremental_roadmap_complete=false`；
 兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-090 起 SaaS 增量规划目录
@@ -2162,8 +2162,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-093 - 个人空间与企业Workspace创建` 已完成；当前下一项是
-`PRD-094 - 成员关系、空间切换与邀请升级`，已有冻结设计但尚未实现。
+`PRD-094 - 成员关系、空间切换与邀请升级` 已完成；当前下一项是
+`PRD-095 - SaaS平台运营角色与受控支持访问`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2196,6 +2196,29 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   Region/profile/provisioning/environment origin、event/outbox、一次性 legacy User 投影证明和确定性 Tenant 回填。
 - `docs/prd/PRD-093-workspace-creation.md`、`docs/api/global-identity.md` 与
   `docs/testing/PRD-093-tests.md`：冻结设计、公开合同、迁移/性能/浏览器门禁和独立敏感审计记录。
+
+## PRD-094 Workspace 授权目录（已完成）
+
+- `control-plane-api/src/metahub_control/workspace_access/`：七个 Global/Workspace 路由、独立 Cookie
+  解释、数据库权威 revision 复核、成员委派、邀请升级和 Owner 转移 CAS；WorkspaceSession 与
+  Legacy Bearer 混用失败关闭。
+- `control-plane-api/src/metahub_control/{auth,console,identity,invitations,workspaces}/`：装配
+  WorkspaceSession tenant auth、Workspace 导航投影、GlobalSession 联动撤权、PRD-092 verified binding
+  消费和 PRD-060 N/N-1 邀请桥。
+- `console-web/src/lib/workspaces.js` 与 `console-web/src/features/identity/`：紧凑可搜索 Workspace
+  选择器、成员角色/状态、邀请和 Owner 转移；BroadcastChannel 仅发匿名 generation，Abort/fence
+  丢弃迟到响应，邀请 token 不进 DOM，浏览器 Storage 零调用。
+- `infra/migrations/0086_membership_workspace_sessions.sql/.down.sql`：完整 Membership、WorkspaceSession、
+  MembershipInvitation、OwnerTransfer、MembershipEvent/Outbox、legacy link 回填、动态撤权 trigger 和
+  授权事实 down guard；新 legacy User 回填不能替换 immutable Workspace creator。
+- `shared-sdk/python/tests/test_prd094_workspace_session_config.py`、
+  `control-plane-api/tests/integration/test_prd094_{db_migrations,workspace_access}.py` 与
+  `console-web/tests/unit/prd094WorkspaceAccess.test.mjs`：覆盖独立根密钥、0086 往返、九角色委派、
+  七路由、100 并发、warm p95、敏感 canary、跨标签页和 Storage/DOM 隐私。
+- `docs/prd/PRD-094-membership-and-workspace-switching.md`、`docs/api/workspace-access.md` 与
+  `docs/testing/PRD-094-tests.md`：保存冻结设计、两轮自审、公开合同、自动化与真实 Browser 证据。
+  390/1280/1440 三视口、键盘流程、Owner 转移显式确认、Console 零错误和切换 p75 `805.8 ms` 均通过；
+  开发启动器 access-log canary 证明邀请 token 不进入原始请求日志。下一权威项为 PRD-095。
 
 ## MVP 非目标
 

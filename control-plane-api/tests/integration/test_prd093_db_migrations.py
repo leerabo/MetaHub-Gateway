@@ -65,14 +65,26 @@ def seeded_0084(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return database
 
 
+@pytest.fixture(scope="module")
+def migrations_0085(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("prd093-migrations-0085")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 85:
+            shutil.copy2(source, migrations / source.name)
+    return migrations
+
+
 def test_0085_backfills_owner_foundation_and_pristine_round_trip(
     seeded_0084: Path,
+    migrations_0085: Path,
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "roundtrip.sqlite3"
     shutil.copy2(seeded_0084, database)
     database_url = _url(database)
-    assert apply_migrations(database_url).applied == ["0085"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0085).applied == ["0085"]
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0085"
@@ -116,7 +128,14 @@ def test_0085_backfills_owner_foundation_and_pristine_round_trip(
     finally:
         connection.close()
 
-    assert rollback_last_migration(database_url, expected_version="0085").rolled_back == "0085"
+    assert (
+        rollback_last_migration(
+            database_url,
+            expected_version="0085",
+            migrations_dir=migrations_0085,
+        ).rolled_back
+        == "0085"
+    )
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0084"
@@ -132,11 +151,12 @@ def test_0085_backfills_owner_foundation_and_pristine_round_trip(
         _healthy(connection)
     finally:
         connection.close()
-    assert apply_migrations(database_url).applied == ["0085"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0085).applied == ["0085"]
 
 
 def test_0085_owner_election_is_deterministic_and_missing_admin_conflicts(
     seeded_0084: Path,
+    migrations_0085: Path,
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "owner-election.sqlite3"
@@ -180,7 +200,7 @@ def test_0085_owner_election_is_deterministic_and_missing_admin_conflicts(
     finally:
         connection.close()
 
-    assert apply_migrations(database_url).applied == ["0085"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0085).applied == ["0085"]
     connection = connect_database(database_url)
     try:
         elected = connection.execute(
@@ -217,12 +237,13 @@ def test_0085_owner_election_is_deterministic_and_missing_admin_conflicts(
 
 def test_0085_profile_fact_blocks_down_atomically(
     seeded_0084: Path,
+    migrations_0085: Path,
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "down-guard.sqlite3"
     shutil.copy2(seeded_0084, database)
     database_url = _url(database)
-    apply_migrations(database_url)
+    apply_migrations(database_url, migrations_dir=migrations_0085)
     connection = connect_database(database_url)
     try:
         connection.execute(
@@ -233,7 +254,11 @@ def test_0085_profile_fact_blocks_down_atomically(
     finally:
         connection.close()
     with pytest.raises(DbError):
-        rollback_last_migration(database_url, expected_version="0085")
+        rollback_last_migration(
+            database_url,
+            expected_version="0085",
+            migrations_dir=migrations_0085,
+        )
     connection = connect_database(database_url)
     try:
         assert _version(connection) == "0085"

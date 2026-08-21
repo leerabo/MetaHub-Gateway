@@ -565,28 +565,23 @@ async def test_permission_matrix_get_patch_noop_cas_and_event_trace(
     )
     connection.close()
 
-    # 本用例没有 PRD-077/076 业务事实，可从真实栈顶安全回退两版；自定义 Developer
-    # 矩阵仍持有 PRD-075 的实验权限，因此 0068 必须在首项持久 DDL 前失败关闭。
-    # PRD-073 的 0065 guard 继续由其独立迁移专项在冻结历史栈上覆盖。
-    for expected_version in ("0070", "0069"):
+    # 本用例没有 PRD-089..PRD-092 的业务事实，因此 0086..0082 可安全回退。
+    # 自定义 Developer 矩阵不再匹配 PRD-088 默认授权，0081 必须在首项持久 DDL
+    # 前失败关闭；更早的 0068 历史 guard 由 PRD-075 冻结迁移专项独立覆盖。
+    for expected_version in ("0086", "0085", "0084", "0083", "0082"):
         assert rollback_last_migration(database_url).rolled_back == expected_version
     with pytest.raises(DbError) as rollback_error:
         rollback_last_migration(database_url)
     assert rollback_error.value.code == "db.migration_failed"
-    assert "prd075_down_role_guard_ok" in rollback_error.value.message
+    assert "prd088_down_guard_failed" in rollback_error.value.message
 
     connection = connect_database(database_url)
+    for version in ("0086", "0085", "0084", "0083", "0082"):
+        assert connection.execute(
+            "SELECT status FROM schema_migrations WHERE version=?", (version,)
+        ).fetchone()[0] == "rolled_back"
     assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0070'"
-    ).fetchone()[0] == "rolled_back"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0069'"
-    ).fetchone()[0] == "rolled_back"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0068'"
-    ).fetchone()[0] == "applied"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0061'"
+        "SELECT status FROM schema_migrations WHERE version='0081'"
     ).fetchone()[0] == "applied"
     assert connection.execute(
         "SELECT status FROM schema_migrations WHERE version='0054'"

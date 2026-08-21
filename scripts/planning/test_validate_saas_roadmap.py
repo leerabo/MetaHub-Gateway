@@ -6,7 +6,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).with_name("validate_saas_roadmap.py")
 SPEC = importlib.util.spec_from_file_location("validate_saas_roadmap", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -16,7 +15,9 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 def test_dependency_extraction_only_accepts_explicit_prd_references() -> None:
-    assert VALIDATOR._explicit_dependencies("PRD-090..105、PRD-040/062/089") == {40, 62, 89, 90, 105}
+    assert VALIDATOR._explicit_dependencies(
+        "PRD-090..105、PRD-040/062/089"
+    ) == {40, 62, 89, 90, 105}
 
 
 def test_roadmap_sequence_has_no_fixed_upper_limit() -> None:
@@ -32,7 +33,7 @@ def test_cycle_detector_accepts_backward_dag_and_rejects_cycle() -> None:
     assert not VALIDATOR._is_acyclic({90: {91}, 91: {90}})
 
 
-def test_repository_roadmap_baseline_passes_after_prd093_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-094")
+def test_repository_roadmap_baseline_passes_after_prd094_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-095")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-094"
+    assert report.next_prd == "PRD-095"

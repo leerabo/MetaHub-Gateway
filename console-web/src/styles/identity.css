@@ -250,6 +250,119 @@ a {
   padding: 10px max(20px, calc((100vw - 1040px) / 2));
 }
 
+.identity-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.identity-workspace-selector {
+  position: relative;
+  min-width: 150px;
+  max-width: min(360px, 42vw);
+  margin-left: auto;
+}
+
+.identity-workspace-selector:not(details),
+.identity-workspace-selector > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 9px;
+  min-height: 40px;
+  border: 1px solid #bdc7d2;
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 10px;
+}
+
+.identity-workspace-selector > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.identity-workspace-selector > summary::-webkit-details-marker {
+  display: none;
+}
+
+.identity-workspace-selector span,
+.identity-workspace-selector small {
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+}
+
+.identity-workspace-selector strong,
+.identity-workspace-selector button {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--identity-text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 750;
+}
+
+.identity-workspace-selector:not(details) > button {
+  grid-column: 2 / -1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.identity-workspace-selector.is-empty {
+  opacity: 0.72;
+}
+
+.identity-workspace-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  width: min(360px, calc(100vw - 28px));
+  border: 1px solid #aebac5;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(24, 33, 43, 0.16);
+  padding: 10px;
+}
+
+.identity-workspace-popover input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #bdc7d2;
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+.identity-workspace-options {
+  display: grid;
+  max-height: 280px;
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.identity-workspace-options button {
+  display: grid;
+  gap: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 9px;
+}
+
+.identity-workspace-options button:hover:not(:disabled) {
+  background: var(--identity-soft);
+}
+
+.identity-workspace-options button:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
 .identity-wordmark {
   gap: 9px;
   color: var(--identity-text);
@@ -294,6 +407,7 @@ a {
 
 .identity-summary,
 .identity-workspaces,
+.identity-memberships,
 .identity-sessions,
 .identity-password {
   border-top: 1px solid var(--identity-line);
@@ -552,9 +666,208 @@ a {
 .identity-workspace-form input:focus-visible,
 .identity-workspace-form select:focus-visible,
 .identity-workspace-form button:focus-visible,
-.identity-workspaces > .identity-section-heading button:focus-visible {
+.identity-workspaces > .identity-section-heading button:focus-visible,
+.identity-memberships button:focus-visible,
+.identity-memberships input:focus-visible,
+.identity-memberships select:focus-visible,
+.identity-workspace-selector input:focus-visible,
+.identity-workspace-selector summary:focus-visible {
   outline: 3px solid rgba(8, 120, 111, 0.25);
   outline-offset: 2px;
+}
+
+.identity-context-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid var(--identity-line);
+  background: var(--identity-soft);
+}
+
+.identity-context-summary > div {
+  min-width: 0;
+  padding: 13px 16px;
+}
+
+.identity-context-summary > div + div {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-context-summary span,
+.identity-context-summary strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-context-summary span {
+  color: var(--identity-muted);
+  font-size: 0.76rem;
+}
+
+.identity-context-summary strong {
+  margin-top: 4px;
+  font-size: 0.88rem;
+}
+
+.identity-membership-list {
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-membership-row {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr) minmax(220px, 0.8fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 4px;
+}
+
+.identity-membership-row + .identity-membership-row {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-membership-row.is-editable {
+  grid-template-columns: auto minmax(130px, 1fr) minmax(130px, 0.7fr) minmax(100px, 0.55fr) auto;
+}
+
+.identity-member-mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #aebac5;
+  border-radius: 50%;
+  color: #425466;
+  font-weight: 800;
+}
+
+.identity-member-name,
+.identity-member-facts {
+  min-width: 0;
+}
+
+.identity-member-name strong,
+.identity-member-name span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-member-name span,
+.identity-member-facts span {
+  color: var(--identity-muted);
+  font-size: 0.78rem;
+}
+
+.identity-member-name span {
+  margin-top: 3px;
+}
+
+.identity-member-facts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.identity-member-facts span {
+  border: 1px solid #d1d8df;
+  border-radius: 4px;
+  background: var(--identity-soft);
+  padding: 4px 7px;
+}
+
+.identity-membership-row label,
+.identity-membership-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #3e4955;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.identity-membership-row select,
+.identity-membership-form input,
+.identity-membership-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 7px 9px;
+}
+
+.identity-membership-action {
+  margin-top: 24px;
+  border-top: 1px solid var(--identity-line);
+  padding-top: 18px;
+}
+
+.identity-membership-action h3 {
+  margin: 4px 0 0;
+  font-size: 1rem;
+}
+
+.identity-membership-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.8fr) minmax(120px, 0.55fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.identity-membership-action.is-owner-transfer .identity-membership-form {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.identity-owner-transfer-confirmation {
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  align-items: start;
+  border-left: 3px solid #a83d3d;
+  background: #fff5f5;
+  padding: 10px 12px;
+  color: #6f2525 !important;
+  line-height: 1.45;
+}
+
+.identity-membership-form .identity-owner-transfer-confirmation input {
+  width: 16px;
+  min-height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: #8f2f2f;
+}
+
+.identity-membership-action.is-owner-transfer .identity-danger-command {
+  grid-column: 2;
+  justify-self: end;
+}
+
+.identity-invitation-result {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  border-left: 3px solid var(--identity-accent);
+  background: #edf8f6;
+  padding: 10px 12px;
+}
+
+.identity-invitation-result > div {
+  min-width: 0;
+  margin-right: auto;
+}
+
+.identity-invitation-result strong,
+.identity-invitation-result span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-invitation-result span {
+  margin-top: 3px;
+  color: var(--identity-muted);
+  font-size: 0.78rem;
 }
 
 .identity-password-form {
@@ -577,6 +890,19 @@ a {
     padding-top: 30px;
   }
 
+  .identity-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .identity-workspace-selector {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+
   .identity-password-form {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -587,6 +913,27 @@ a {
 
   .identity-workspace-row dl {
     grid-column: 1 / -1;
+  }
+
+  .identity-membership-row.is-editable {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .identity-membership-row.is-editable label {
+    grid-column: auto;
+  }
+
+  .identity-membership-row.is-editable button {
+    grid-column: 1 / -1;
+  }
+
+  .identity-membership-form,
+  .identity-membership-action.is-owner-transfer .identity-membership-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-membership-form button {
+    width: 100%;
   }
 
   .identity-password-actions {
@@ -601,6 +948,52 @@ a {
 
   .identity-summary-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-context-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-context-summary > div + div {
+    border-top: 1px solid var(--identity-line);
+    border-left: 0;
+  }
+
+  .identity-membership-row,
+  .identity-membership-row.is-editable {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .identity-member-facts,
+  .identity-membership-row.is-editable label,
+  .identity-membership-row.is-editable button {
+    grid-column: 1 / -1;
+  }
+
+  .identity-member-facts {
+    justify-content: flex-start;
+  }
+
+  .identity-membership-form,
+  .identity-membership-action.is-owner-transfer .identity-membership-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-membership-action.is-owner-transfer .identity-danger-command {
+    grid-column: 1;
+  }
+
+  .identity-invitation-result {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-invitation-result > div {
+    grid-column: 1 / -1;
+  }
+
+  .identity-invitation-result button {
+    width: 100%;
   }
 
   .identity-summary-list > div + div {

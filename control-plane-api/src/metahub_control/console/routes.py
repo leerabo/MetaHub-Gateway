@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息
+脱敏语义，Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/console/routes.py
 """
 
@@ -10,7 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from metahub_control.auth import AuthContext, require_current_user
+from metahub_control.auth import AuthContext, require_console_user, require_current_user
 
 from .models import (
     ConsoleEventRequest,
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/console", tags=["console"])
 @router.get("/navigation", response_model=ConsoleNavigationResponse)
 async def get_console_navigation_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_current_user)],
+    context: Annotated[AuthContext, Depends(require_console_user)],
     active_item_id: Annotated[str | None, Query()] = None,
 ) -> ConsoleNavigationResponse:
     """读取当前登录用户可见的控制台导航项。
@@ -44,6 +45,7 @@ async def get_console_navigation_route(
         request.app.state.config,
         context,
         requested_active_item_id=active_item_id,
+        workspace_scoped=getattr(request.state, "workspace_session_authenticated", False) is True,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

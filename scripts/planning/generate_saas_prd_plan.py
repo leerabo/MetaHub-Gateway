@@ -8,11 +8,12 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-20"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 93
+COMPLETED_THROUGH_PRD = 94
 
 
 def prd(
@@ -207,17 +208,17 @@ INITIAL_DRAFT_PRDS = [
         "成员关系、空间切换与邀请升级",
         "Workspace Owner/管理员/成员",
         "作为加入多个企业的成员，我希望登录后选择空间，并在不重新输入租户标识的情况下安全切换。",
-        "Membership、Owner转移、成员停用、邀请绑定全局账号、空间选择器、后端active_workspace上下文、切换时Session轮换、跨标签页同步；企业owner/admin邀请职能用户并在授权上限内分配admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer，service_account走独立机器身份流程。",
-        "前端不得通过tenant_id参数切换；不允许平台角色自动获得租户成员身份；本条不做SSO/SCIM。",
+        "完整Membership、Owner转移、成员停用、MembershipInvitation升级桥、空间选择器、独立WorkspaceSession、后端导航投影和跨标签页失效；企业owner/admin在委派上限内分配admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer，service_account只保留机器主体枚举。",
+        "前端不得通过tenant_id参数切换；GlobalSession不授予tenant权限；Legacy Bearer、Platform/Support/Device主体不能解释为WorkspaceSession或Membership；service_account不能签发浏览器Session；本条不做SSO/SCIM。",
         "空间选择器、成员列表、Owner转移、邀请页",
-        ("GET /identity/workspaces", "POST /identity/workspace-switches", "GET /memberships", "PATCH /memberships/{membership_id}", "POST /workspace-owner-transfers"),
-        ("WorkspaceMembership", "WorkspaceSession", "OwnerTransfer", "MembershipRevision"),
-        ("membership.created", "membership.disabled", "workspace.switched", "workspace.owner_transferred"),
+        ("GET /identity/workspaces", "POST /identity/workspace-switches", "GET /workspace/session", "GET /memberships", "PATCH /memberships/{membership_id}", "POST /membership-invitations", "POST /workspace-owner-transfers；GET /console/navigation接受WorkspaceSession"),
+        ("WorkspaceMembership", "WorkspaceSession", "MembershipInvitation", "OwnerTransfer", "MembershipEvent", "MembershipEventOutbox"),
+        ("membership.invited", "membership.created", "membership.updated", "membership.disabled", "invitation.accepted", "workspace.switched", "workspace.owner_transferred"),
         "租户owner/admin邀请、停用并分配企业职能角色；admin不得授予owner或突破自身权限；Owner转移需二次验证；developer/viewer后端拒绝",
         "登录页不再要求租户标识；单空间直达、多空间可选；企业管理员可添加职能用户；每种角色只收到后端计算的页面清单；直达URL/API仍逐请求鉴权；切换后旧请求/缓存/草稿立即失效；跨租户资源同形404；最后Owner不能被停用。",
         "PRD-091..093、PRD-059/060",
-        "现有User按tenant生成Membership；兼容旧Session一段版本期；切换开关可回退旧流程。",
-        "Membership revision实时复核；Session固定account+workspace+role；Owner操作MFA/重认证；事件不含邮箱明文。",
+        "0086从0085重建完整Membership，回填legacy link并校验唯一owner与复合所有权；新增WorkspaceSession、MembershipInvitation、OwnerTransfer、MembershipEvent/Outbox；pristine可down，任何新授权事实、revision变化、Session、邀请消费或转移均原子阻断回滚。",
+        "Workspace Cookie与METAHUB_WORKSPACE_SESSION_SECRET独立于Global/Legacy/Challenge/Cache等域；每请求按数据库权威复核account/workspace/membership/legacy permission revision；Owner转移密码重认证；事件不含邮箱、Token、Cookie或密码。",
         "权限矩阵、并发切换、迟到响应、Owner竞争、邀请已存在账号、跨标签页、浏览器Storage清理。",
         "空间切换API p95<300ms；切换后首个页面可交互p75<1.5s。",
         "5-6人周",

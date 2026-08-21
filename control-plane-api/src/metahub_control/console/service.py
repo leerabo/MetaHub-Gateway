@@ -788,12 +788,29 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
     ),
 )
 
+WORKSPACE_NAVIGATION_EXCLUDED_IDS = frozenset(
+    {
+        "growth-analytics",
+        "customer-health",
+        "partner-portal",
+        "providers",
+        "local-models",
+        "adapter-specs",
+        "adapter-contract-runs",
+        "provider-health",
+        "error-maps",
+        "billing-disputes",
+        "competitor-comparison",
+    }
+)
+
 
 def get_console_navigation(
     config: AppConfig,
     context: AuthContext,
     *,
     requested_active_item_id: str | None,
+    workspace_scoped: bool = False,
     request_id: str,
     trace_id: str,
 ) -> ConsoleNavigationResponse:
@@ -811,6 +828,8 @@ def get_console_navigation(
         items = _visible_navigation_items(
             context.permission_codes, role_permissions_by_role=role_permissions
         )
+        if workspace_scoped:
+            items = [item for item in items if item.id not in WORKSPACE_NAVIGATION_EXCLUDED_IDS]
         preference = _ensure_preference(connection, context, items)
         active_item_id = _resolve_active_item(
             requested_active_item_id,

@@ -11,7 +11,18 @@ import {
   rotateIdentityPassword,
   verifyIdentityRegistration,
 } from "../../lib/identity.js";
-import { createAccountWorkspace, listAccountWorkspaces } from "../../lib/workspaces.js";
+import {
+  createAccountWorkspace,
+  createWorkspaceMembershipInvitation,
+  getCurrentWorkspaceSession,
+  getWorkspaceConsoleNavigation,
+  listAccountWorkspaces,
+  listIdentityWorkspaces,
+  listWorkspaceMemberships,
+  switchIdentityWorkspace,
+  transferWorkspaceOwner,
+  updateWorkspaceMembership,
+} from "../../lib/workspaces.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -22,6 +33,9 @@ if (root) {
     : globalThis.window.location.origin;
   const controller = createIdentityPageController({
     root,
+    recordWorkspaceSwitch: ({ durationMs }) => {
+      globalThis.console?.debug?.(`workspace_switch_interactive_ms=${durationMs.toFixed(1)}`);
+    },
     api: {
       login: (input) => loginIdentity({ controlApiUrl, ...input }),
       register: (input) => registerIdentity({ controlApiUrl, ...input }),
@@ -36,6 +50,15 @@ if (root) {
       rotate: (input) => rotateIdentityPassword({ controlApiUrl, ...input }),
       workspaces: (input) => listAccountWorkspaces({ controlApiUrl, ...input }),
       createWorkspace: (input) => createAccountWorkspace({ controlApiUrl, ...input }),
+      identityWorkspaces: (input) => listIdentityWorkspaces({ controlApiUrl, ...input }),
+      switchWorkspace: (input) => switchIdentityWorkspace({ controlApiUrl, ...input }),
+      workspaceSession: (input) => getCurrentWorkspaceSession({ controlApiUrl, ...input }),
+      memberships: (input) => listWorkspaceMemberships({ controlApiUrl, ...input }),
+      updateMembership: (input) => updateWorkspaceMembership({ controlApiUrl, ...input }),
+      inviteMembership: (input) =>
+        createWorkspaceMembershipInvitation({ controlApiUrl, ...input }),
+      transferOwner: (input) => transferWorkspaceOwner({ controlApiUrl, ...input }),
+      workspaceNavigation: (input) => getWorkspaceConsoleNavigation({ controlApiUrl, ...input }),
     },
   });
   controller.mount();

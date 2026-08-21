@@ -96,6 +96,7 @@ from .users.routes import router as users_router
 from .virtual_keys.routes import router as virtual_keys_router
 from .webhooks import install_webhook_replay_scheduler
 from .webhooks.routes import router as webhooks_router
+from .workspace_access.routes import router as workspace_access_router
 from .workspaces.routes import router as workspaces_router
 
 # 控制面承载低频管理 API，不直接处理模型调用热路径。PRD-001 只暴露健康和版本接口，
@@ -158,6 +159,15 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/partners/")
         or request.url.path == "/branding"
         or request.url.path.startswith("/branding/")
+        or request.url.path in {
+            "/identity/workspaces",
+            "/identity/workspace-switches",
+            "/workspace/session",
+            "/memberships",
+            "/membership-invitations",
+            "/workspace-owner-transfers",
+        }
+        or request.url.path.startswith("/memberships/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         # Preserve endpoint-specific directives while covering error responses
@@ -172,6 +182,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(workspaces_router)
+app.include_router(workspace_access_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
