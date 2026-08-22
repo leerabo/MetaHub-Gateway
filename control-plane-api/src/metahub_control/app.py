@@ -29,6 +29,7 @@ from .billing_disputes import router as billing_disputes_router
 from .branding import router as branding_router
 from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
+from .business_verification import router as business_verification_router
 from .config.routes import router as config_router
 from .config_transfer.routes import router as config_transfer_router
 from .console.routes import router as console_router
@@ -187,6 +188,12 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path == "/billing/summary"
         or request.url.path == "/billing/usage"
         or request.url.path == "/billing/reconciliation-export"
+        or request.url.path.startswith("/workspaces/")
+        and (
+            request.url.path.endswith("/business-verification")
+            or request.url.path.endswith("/business-verifications")
+            or request.url.path.endswith("/billing-profile")
+        )
         or request.url.path == "/workspaces/current/onboarding"
         or request.url.path.startswith("/workspaces/current/onboarding/")
         or request.url.path == "/tenant/current"
@@ -222,6 +229,7 @@ app.include_router(identity_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
+app.include_router(business_verification_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)

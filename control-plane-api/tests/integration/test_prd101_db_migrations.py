@@ -137,10 +137,10 @@ def test_gateway_fact_blocks_0093_down(
     _healthy(database_url)
 
 
-def test_fresh_schema_installs_0093(tmp_path: Path) -> None:
-    """验证空数据库完整迁移链最终安装 0093，并通过完整性与外键检查。"""
+def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
+    """验证后续 PRD 追加后空数据库仍能完整安装当前迁移 head。"""
 
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0093"
+    assert result.applied[-1] == "0094"
     _healthy(database_url)

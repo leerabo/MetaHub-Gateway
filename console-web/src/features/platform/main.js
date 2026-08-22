@@ -39,6 +39,11 @@ import {
   getPlatformGatewayCells,
   updatePlatformGatewayPlacement,
 } from "../../lib/platformGateway.js";
+import {
+  issuePlatformEvidenceDownloadToken,
+  listPlatformBusinessVerifications,
+  reviewPlatformBusinessVerification,
+} from "../../lib/businessVerification.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -88,6 +93,18 @@ if (root) {
       backup: (input) => getPlatformBackup({ controlApiUrl, ...input }),
       gatewayCells: (input) => getPlatformGatewayCells({ controlApiUrl, ...input }),
       updateGatewayPlacement: (input) => updatePlatformGatewayPlacement({
+        controlApiUrl,
+        ...input,
+      }),
+      businessVerifications: (input) => listPlatformBusinessVerifications({
+        controlApiUrl,
+        ...input,
+      }),
+      reviewBusinessVerification: (input) => reviewPlatformBusinessVerification({
+        controlApiUrl,
+        ...input,
+      }),
+      evidenceToken: (input) => issuePlatformEvidenceDownloadToken({
         controlApiUrl,
         ...input,
       }),

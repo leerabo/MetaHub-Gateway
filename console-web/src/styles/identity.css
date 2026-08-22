@@ -410,6 +410,7 @@ a {
 .identity-onboarding,
 .identity-subscription,
 .identity-billing,
+.identity-business-verification,
 .identity-workspaces,
 .identity-memberships,
 .identity-sessions,
@@ -666,6 +667,84 @@ a {
 
 .identity-billing-table .is-overage {
   color: #a6382c;
+}
+
+.identity-business-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 18px;
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-business-facts > div {
+  min-width: 0;
+  padding: 13px 14px;
+}
+
+.identity-business-facts > div:not(:nth-child(3n + 1)) {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-business-facts > div:nth-child(n + 4) {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-business-facts dt {
+  color: var(--identity-muted);
+  font-size: 0.76rem;
+}
+
+.identity-business-facts dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.identity-business-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 14px;
+}
+
+.identity-business-form label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  color: #3e4955;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.identity-business-form .is-wide {
+  grid-column: span 2;
+}
+
+.identity-business-form input:not([type="checkbox"]),
+.identity-business-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 7px 9px;
+}
+
+.identity-business-form .identity-confirm {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.identity-business-form .identity-confirm input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--identity-accent);
 }
 
 .identity-mfa-start,
@@ -1719,6 +1798,29 @@ a {
 }
 
 @media (max-width: 720px) {
+  .identity-business-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .identity-business-facts > div,
+  .identity-business-facts > div:not(:nth-child(3n + 1)),
+  .identity-business-facts > div:nth-child(n + 4) {
+    border-left: 0;
+    border-top: 1px solid var(--identity-line);
+  }
+
+  .identity-business-facts > div:first-child {
+    border-top: 0;
+  }
+
+  .identity-business-form {
+    grid-template-columns: 1fr;
+  }
+
+  .identity-business-form .is-wide {
+    grid-column: auto;
+  }
+
   .identity-billing-toolbar {
     align-items: flex-start;
     flex-direction: column;

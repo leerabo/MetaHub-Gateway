@@ -2262,6 +2262,16 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
+    if _table_exists(connection, "platform_verification_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_verification_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
     extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
     parameters: tuple[object, ...] = tuple(
         [operator_id, *([operator_id] * len(extension_queries))]

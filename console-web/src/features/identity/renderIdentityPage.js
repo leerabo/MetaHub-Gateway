@@ -1,3 +1,4 @@
+// 账号安全渲染层只展示后端脱敏投影，企业认证表单可见性不构成服务端授权。
 export function renderIdentityLoginPage(container, options = {}) {
   if (!container) return;
   container.innerHTML = `
@@ -178,6 +179,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderOnboardingSection(state)}
         ${renderSaasSubscriptionSection(state)}
         ${renderWorkspaceBillingSection(state)}
+        ${renderBusinessVerificationSection(state)}
         <section class="identity-summary" aria-labelledby="identity-summary-title">
           <div class="identity-section-heading">
             <div>
@@ -363,6 +365,70 @@ function renderWorkspaceBillingSection(state) {
       </div>
       ${state.billingError ? renderError(state.billingError) : ""}
       ${cycle ? renderBillingCycle(cycle, available, state.billingBusy) : renderNoBillingCycle()}
+    </section>
+  `;
+}
+
+/** 渲染组织 Workspace 企业认证与开票面板，响应摘要不得包含主体或账号明文。 */
+function renderBusinessVerificationSection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context || context.kind !== "organization"
+    || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
+  const response = state.businessVerification ?? {};
+  const legal = response.legal_entity ?? null;
+  const verification = response.verification ?? null;
+  const contract = response.contract ?? null;
+  const billing = response.billing_profile ?? null;
+  const busy = state.businessVerificationBusy === true;
+  return `
+    <section class="identity-business-verification" aria-labelledby="identity-business-verification-title" aria-busy="${busy}">
+      <div class="identity-section-heading">
+        <div><p>企业主体</p><h2 id="identity-business-verification-title">企业认证</h2></div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-business-verification" aria-label="刷新企业认证" title="刷新企业认证" ${busy ? "disabled" : ""}>↻</button>
+      </div>
+      ${state.businessVerificationError ? renderError(state.businessVerificationError) : ""}
+      <dl class="identity-business-facts">
+        <div><dt>认证状态</dt><dd>${escapeHtml(businessVerificationStatusLabel(verification?.status ?? "not_submitted"))}</dd></div>
+        <div><dt>国家/主体</dt><dd>${legal ? `${escapeHtml(legal.country_code)} · ${escapeHtml(entityTypeLabel(legal.entity_type))}` : "未配置"}</dd></div>
+        <div><dt>登记号</dt><dd>${escapeHtml(legal?.registration_number_masked ?? "未配置")}</dd></div>
+        <div><dt>资料版本</dt><dd>${legal ? `Rev ${formatIdentityNumber(legal.revision)}` : "-"}</dd></div>
+        <div><dt>证据扫描</dt><dd>${escapeHtml(scanSummaryLabel(verification?.evidence))}</dd></div>
+        <div><dt>合同主体</dt><dd>${escapeHtml(contract?.signing_status ? contractStatusLabel(contract.signing_status) : "未生成")}</dd></div>
+      </dl>
+      <form class="identity-business-form" data-business-verification-form autocomplete="off">
+        <label><span>国家/地区</span><select name="countryCode"><option value="CN">CN</option></select></label>
+        <label><span>主体类型</span><select name="entityType"><option value="company">企业</option><option value="nonprofit">非营利组织</option><option value="government">政府机构</option></select></label>
+        <label class="is-wide"><span>法定名称</span><input name="legalName" maxlength="240" autocomplete="off" required /></label>
+        <label class="is-wide"><span>登记号</span><input name="registrationNumber" maxlength="128" autocomplete="off" required /></label>
+        <label><span>证据类型</span><select name="evidenceType"><option value="business_license">营业执照</option><option value="registration_certificate">登记证书</option><option value="authorization_letter">授权文件</option></select></label>
+        <label class="is-wide"><span>受控对象引用</span><input name="objectReference" pattern="obj_[A-Za-z0-9._:-]+" maxlength="256" autocomplete="off" required /></label>
+        <label class="is-wide"><span>内容 SHA-256</span><input name="contentSha256" pattern="[0-9a-f]{64}" maxlength="64" autocomplete="off" required /></label>
+        <label><span>MIME</span><select name="mimeType"><option value="application/pdf">PDF</option><option value="image/png">PNG</option><option value="image/jpeg">JPEG</option></select></label>
+        <label><span>大小（bytes）</span><input name="sizeBytes" type="number" min="1" max="10485760" required /></label>
+        <label><span>KMS 版本</span><input name="kmsKeyVersion" type="number" min="1" max="1000000" required /></label>
+        <label class="is-wide"><span>扫描证明</span><input name="scanAttestation" pattern="[0-9a-f]{64}" maxlength="64" autocomplete="off" required /></label>
+        <label class="identity-confirm is-wide"><input name="confirmed" type="checkbox" required /><span>确认提交</span></label>
+        <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>${verification ? "重新提交认证" : "提交认证"}</button>
+      </form>
+    </section>
+    <section class="identity-business-verification" aria-labelledby="identity-business-billing-title" aria-busy="${busy}">
+      <div class="identity-section-heading"><div><p>合同与开票</p><h2 id="identity-business-billing-title">开票资料</h2></div></div>
+      <dl class="identity-business-facts">
+        <div><dt>验证状态</dt><dd>${escapeHtml(billingVerificationLabel(billing?.verification_status ?? "unverified"))}</dd></div>
+        <div><dt>税号</dt><dd>${escapeHtml(billing?.tax_number_masked ?? "未配置")}</dd></div>
+        <div><dt>地址/电话</dt><dd>${configuredPair(billing?.address_configured, billing?.phone_configured)}</dd></div>
+        <div><dt>银行账号</dt><dd>${escapeHtml(billing?.bank_account_masked ?? "未配置")}</dd></div>
+      </dl>
+      <form class="identity-business-form" data-business-billing-form autocomplete="off">
+        <label class="is-wide"><span>发票抬头</span><input name="invoiceTitle" maxlength="240" autocomplete="off" required /></label>
+        <label class="is-wide"><span>税号</span><input name="taxNumber" maxlength="128" autocomplete="off" required /></label>
+        <label class="is-wide"><span>地址</span><input name="address" maxlength="500" autocomplete="off" /></label>
+        <label><span>电话</span><input name="phone" maxlength="80" autocomplete="off" /></label>
+        <label class="is-wide"><span>开户行</span><input name="bankName" maxlength="240" autocomplete="off" /></label>
+        <label class="is-wide"><span>银行账号</span><input name="bankAccount" maxlength="128" autocomplete="off" /></label>
+        <label class="identity-confirm is-wide"><input name="confirmed" type="checkbox" required /><span>确认更新</span></label>
+        <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>更新开票资料</button>
+      </form>
     </section>
   `;
 }
@@ -1086,6 +1152,53 @@ function renderAccessBrand(titleId, title) {
 function renderError(error) {
   if (!error) return "";
   return `<div class="identity-error" role="alert"><span>${escapeHtml(error.message ?? error)}</span>${error.requestId && error.requestId !== "-" ? `<small>request_id: ${escapeHtml(error.requestId)}</small>` : ""}</div>`;
+}
+
+/** 将企业认证固定状态映射为页面文案，未知值保持不可用而不显示原文。 */
+function businessVerificationStatusLabel(value) {
+  return ({
+    not_submitted: "未提交",
+    submitted: "待审核",
+    in_review: "审核中",
+    approved: "已通过",
+    rejected: "已拒绝",
+    expired: "已过期",
+  })[value] ?? "状态不可用";
+}
+
+/** 将法定主体枚举映射为显示文本，未知主体不透传后端自由字段。 */
+function entityTypeLabel(value) {
+  return ({ company: "企业", nonprofit: "非营利组织", government: "政府机构" })[value]
+    ?? "未知主体";
+}
+
+/** 汇总证据扫描状态，只显示数量和聚合结论，不显示对象引用或文件地址。 */
+function scanSummaryLabel(value) {
+  if (!value || !value.evidence_count) return "无证据";
+  if (value.malware_status === "passed" && value.dlp_status === "passed") {
+    return `${formatIdentityNumber(value.evidence_count)} 份 · 已通过`;
+  }
+  if (value.malware_status === "blocked" || value.dlp_status === "blocked") return "已阻断";
+  if (value.malware_status === "pending" || value.dlp_status === "pending") return "扫描中";
+  return "扫描失败";
+}
+
+/** 将不可变合同状态映射为最小用户文案，不渲染合同正文或内部标识。 */
+function contractStatusLabel(value) {
+  return ({ verified: "主体已验证", signed: "已签约", expired: "已过期" })[value] ?? "未生成";
+}
+
+/** 将开票资料验证状态映射为固定文案，资料变化后明确提示重新验证。 */
+function billingVerificationLabel(value) {
+  return ({ unverified: "未验证", verified: "已验证", stale: "需重新验证" })[value]
+    ?? "未验证";
+}
+
+/** 汇总成对字段的配置状态，页面只显示是否配置而不回填任何明文。 */
+function configuredPair(first, second) {
+  if (first && second) return "均已配置";
+  if (first || second) return "部分配置";
+  return "未配置";
 }
 
 function accountStatusLabel(status) {

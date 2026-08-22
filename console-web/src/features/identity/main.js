@@ -1,3 +1,4 @@
+// 账号安全入口只装配分域 Cookie API；企业资料和一次性证明不得进入全局或浏览器存储。
 import {
   beginIdentityTotpEnrollment,
   confirmIdentityPasswordReset,
@@ -40,6 +41,11 @@ import {
   getWorkspaceBillingSummary,
   saveWorkspaceBillingExport,
 } from "../../lib/platformBilling.js";
+import {
+  getWorkspaceBusinessVerification,
+  submitWorkspaceBusinessVerification,
+  updateWorkspaceBusinessBillingProfile,
+} from "../../lib/businessVerification.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -88,6 +94,18 @@ if (root) {
       createSubscription: (input) => createWorkspaceSubscription({ controlApiUrl, ...input }),
       changeSubscription: (input) => changeWorkspaceSubscription({ controlApiUrl, ...input }),
       billingSummary: (input) => getWorkspaceBillingSummary({ controlApiUrl, ...input }),
+      businessVerification: (input) => getWorkspaceBusinessVerification({
+        controlApiUrl,
+        ...input,
+      }),
+      submitBusinessVerification: (input) => submitWorkspaceBusinessVerification({
+        controlApiUrl,
+        ...input,
+      }),
+      updateBusinessBilling: (input) => updateWorkspaceBusinessBillingProfile({
+        controlApiUrl,
+        ...input,
+      }),
       billingExport: async (input) => {
         const result = await downloadWorkspaceBillingExport({ controlApiUrl, ...input });
         saveWorkspaceBillingExport(result);

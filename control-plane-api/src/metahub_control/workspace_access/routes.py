@@ -1,4 +1,4 @@
-"""Strict browser transport for PRD-094 Workspace authorization."""
+"""实现 Workspace 浏览器授权的严格传输边界，并在身份切换时收敛单一凭据域。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ from metahub_control.identity.service import (
     SESSION_COOKIE as GLOBAL_SESSION_COOKIE,
 )
 from metahub_control.identity.service import valid_opaque_value
+from metahub_control.platform_access.constants import (
+    PLATFORM_CSRF_COOKIE,
+    PLATFORM_SESSION_COOKIE,
+    SUPPORT_SESSION_COOKIE,
+)
 
 from .constants import WORKSPACE_CSRF_COOKIE, WORKSPACE_SESSION_COOKIE
 from .models import (
@@ -93,6 +98,7 @@ async def post_workspace_switch(request: Request, response: Response) -> Workspa
         trace_id=_trace_id(request),
     )
     _set_workspace_cookies(response, _config(request), session_token, csrf_token)
+    _clear_platform_and_support_cookies(response)
     return result
 
 
@@ -434,6 +440,20 @@ def _set_workspace_cookies(
         secure=True,
         httponly=False,
         samesite="strict",
+    )
+
+
+def _clear_platform_and_support_cookies(response: Response) -> None:
+    """Workspace 切换成功后清除其他浏览器身份域，维持单一活动凭据域。"""
+
+    response.delete_cookie(
+        PLATFORM_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
+    )
+    response.delete_cookie(
+        PLATFORM_CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict"
+    )
+    response.delete_cookie(
+        SUPPORT_SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
     )
 
 

@@ -71,7 +71,41 @@ function renderView(state, permissions) {
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
   if (state.view === "billing") return billingView(state, permissions);
+  if (state.view === "verification") return verificationView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+/** 渲染企业认证审核队列，案件投影不显示 Workspace、主体明文或对象引用。 */
+function verificationView(state, permissions) {
+  const cases = state.verification?.cases ?? [];
+  const canReview = permissions.has("platform.verification.review");
+  return `
+    <header class="platform-page-heading"><div><p>Business identity</p><h1>企业认证审核</h1></div><span>${number(state.verification?.total ?? 0)} 个案件</span></header>
+    <section class="platform-band">
+      <form class="platform-billing-filter" data-platform-verification-filter-form>
+        <label><span>案件状态</span><select name="status"><option value="" ${state.verificationStatus ? "" : "selected"}>全部</option>${verificationStatusOptions(state.verificationStatus)}</select></label>
+        <button type="submit">筛选</button>
+      </form>
+      <div class="platform-table-wrap"><table class="platform-verification-table">
+        <thead><tr><th>案件</th><th>主体</th><th>状态</th><th>扫描</th><th>证据</th><th>操作</th></tr></thead>
+        <tbody>${cases.map((item) => verificationRow(item, canReview)).join("") || emptyRow("暂无认证案件", 6)}</tbody>
+      </table></div>
+      <div class="platform-pagination"><span>第 ${number(Math.floor((state.verificationOffset ?? 0) / 20) + 1)} 页</span><div><button type="button" data-platform-action="verification-previous" ${(state.verificationOffset ?? 0) > 0 ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="verification-next" ${(state.verificationOffset ?? 0) + cases.length < (state.verification?.total ?? 0) ? "" : "disabled"}>下一页</button></div></div>
+    </section>`;
+}
+
+/** 渲染单个安全案件；证据 ID 和审核控件仅对动态 reviewer 权限可见。 */
+function verificationRow(item, canReview) {
+  const active = new Set(["submitted", "in_review"]).has(item.status);
+  const evidence = item.evidence_items ?? [];
+  return `<tr>
+    <td data-label="案件"><strong>${escapeHtml(item.business_verification_intent_id)}</strong><small>Profile rev ${number(item.profile_revision)} · Case rev ${number(item.revision)}</small></td>
+    <td data-label="主体"><strong>${escapeHtml(item.country_code)}</strong><small>${escapeHtml(entityTypeLabel(item.entity_type))}</small></td>
+    <td data-label="状态">${status(item.status)}<small>${formatTime(item.submitted_at)}</small></td>
+    <td data-label="扫描"><strong>${escapeHtml(scanStateLabel(item.evidence))}</strong><small>${number(item.evidence?.evidence_count ?? 0)} 份</small></td>
+    <td data-label="证据"><div class="platform-evidence-list">${evidence.map((entry) => `<div><span>${escapeHtml(evidenceTypeLabel(entry.evidence_type))} · ${escapeHtml(entry.mime_type)} · ${number(entry.size_bytes)} B</span>${canReview && active ? `<button class="platform-icon-button" type="button" data-platform-action="verification-evidence-token" data-intent-id="${escapeAttribute(item.business_verification_intent_id)}" data-evidence-id="${escapeAttribute(entry.verification_evidence_id)}" title="签发证据授权" aria-label="签发证据授权">↓</button>` : ""}</div>`).join("") || '<span class="platform-restricted">无 active 证据</span>'}</div></td>
+    <td data-label="操作">${canReview && active ? `<div class="platform-verification-actions"><button class="platform-primary" type="button" data-platform-action="verification-approve" data-intent-id="${escapeAttribute(item.business_verification_intent_id)}" data-revision="${number(item.revision)}">批准</button><form data-platform-verification-reject-form><input name="intentId" type="hidden" value="${escapeAttribute(item.business_verification_intent_id)}" /><input name="revision" type="hidden" value="${number(item.revision)}" /><select name="reasonCode"><option value="document_invalid">证件无效</option><option value="identity_mismatch">主体不一致</option><option value="scan_failed">扫描失败</option><option value="profile_changed">资料已变化</option></select><button type="submit">拒绝</button></form></div>` : '<span class="platform-restricted">只读</span>'}</td>
+  </tr>`;
 }
 
 function infrastructureView(state, permissions) {
@@ -550,6 +584,20 @@ function domainLabel(value) { return value === "workspace" ? "客户" : value ==
 function statusLabel(value) { return String(value).replaceAll("_", " "); }
 function billingStatusLabel(value) { return ({ open: "进行中", closed: "已关账", reconciliation_required: "需要对账" })[value] ?? statusLabel(value); }
 function billingStatusOptions(current) { return [["open", "进行中"], ["closed", "已关账"], ["reconciliation_required", "需要对账"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
+/** 构造审核状态筛选选项，选择值只能来自后端固定枚举。 */
+function verificationStatusOptions(current) { return [["submitted", "待审核"], ["in_review", "审核中"], ["approved", "已通过"], ["rejected", "已拒绝"], ["expired", "已过期"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
+/** 将主体类型映射为安全文案，不显示法定名称或登记号。 */
+function entityTypeLabel(value) { return ({ company: "企业", nonprofit: "非营利组织", government: "政府机构" })[value] ?? "未知主体"; }
+/** 将证据类型映射为固定标签，不显示文件名和受控对象引用。 */
+function evidenceTypeLabel(value) { return ({ business_license: "营业执照", registration_certificate: "登记证书", authorization_letter: "授权文件" })[value] ?? "证据"; }
+/** 汇总证据扫描结论，Platform 列表不暴露各扫描器内部错误。 */
+function scanStateLabel(value) {
+  if (!value || !value.evidence_count) return "无证据";
+  if (value.malware_status === "passed" && value.dlp_status === "passed") return "已通过";
+  if (value.malware_status === "blocked" || value.dlp_status === "blocked") return "已阻断";
+  if (value.malware_status === "pending" || value.dlp_status === "pending") return "扫描中";
+  return "扫描失败";
+}
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }

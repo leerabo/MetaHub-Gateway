@@ -54,6 +54,9 @@ export function createPlatformPageController({
     billingCursor: null,
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
+    verification: null,
+    verificationStatus: "",
+    verificationOffset: 0,
     infrastructure: null,
     gatewayCells: null,
     gatewayPlacement: null,
@@ -423,6 +426,48 @@ export function createPlatformPageController({
       render();
       return true;
     },
+    async filterVerification(status) {
+      state.verificationStatus = normalizeVerificationStatus(status);
+      state.verificationOffset = 0;
+      return loadVerificationPage();
+    },
+    async nextVerificationPage() {
+      if ((state.verificationOffset ?? 0) + (state.verification?.cases?.length ?? 0)
+        >= (state.verification?.total ?? 0)) return false;
+      state.verificationOffset += 20;
+      return loadVerificationPage();
+    },
+    async previousVerificationPage() {
+      if ((state.verificationOffset ?? 0) === 0) return false;
+      state.verificationOffset = Math.max(0, state.verificationOffset - 20);
+      return loadVerificationPage();
+    },
+    async approveVerification(intentId, revision) {
+      return reviewVerification({ intentId, revision, decision: "approve", reasonCode: "verified" });
+    },
+    async rejectVerification(intentId, revision, reasonCode) {
+      return reviewVerification({ intentId, revision, decision: "reject", reasonCode });
+    },
+    async issueEvidenceToken(intentId, evidenceId) {
+      if (typeof api.evidenceToken !== "function") return false;
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      let result = null;
+      try {
+        result = await api.evidenceToken({ intentId, evidenceId, signal: ticket.signal });
+        if (result && typeof result === "object") result.download_token = "";
+        result = null;
+        if (!current(ticket)) return false;
+        state.feedback = "证据授权已签发。";
+        return reload(ticket);
+      } catch (error) {
+        if (result && typeof result === "object") result.download_token = "";
+        result = null;
+        return fail(ticket, error);
+      }
+    },
     async confirmWorkspaceLifecycle(reasonCode) {
       const pending = state.pendingAction;
       if (!pending || !/^workspace-(?:suspend|restore)$/u.test(pending.kind)) return false;
@@ -488,6 +533,7 @@ export function createPlatformPageController({
         operators: null,
         plans: null,
         billing: null,
+        verification: null,
         infrastructure: null,
         gatewayCells: null,
         grants: null,
@@ -510,6 +556,14 @@ export function createPlatformPageController({
           cursor: state.billingCursor,
           signal: ticket.signal,
         }).then((value) => { next.billing = value; }));
+      }
+      if (permissions.has("platform.verification.read")
+        && typeof api.businessVerifications === "function") {
+        tasks.push(api.businessVerifications({
+          status: state.verificationStatus,
+          offset: state.verificationOffset,
+          signal: ticket.signal,
+        }).then((value) => { next.verification = value; }));
       }
       if (permissions.has("platform.infrastructure.read")
         && typeof api.infrastructureStatus === "function") {
@@ -598,6 +652,52 @@ export function createPlatformPageController({
       state.loading = false;
       render();
       return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  /** 读取有界 Platform 审核分页，权限仍由后端按当前 Session 动态裁决。 */
+  async function loadVerificationPage() {
+    if (typeof api.businessVerifications !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.verification = await api.businessVerifications({
+        status: state.verificationStatus,
+        offset: state.verificationOffset,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  /** 以新幂等键和案件 CAS 提交审核决定，成功后重新读取安全队列投影。 */
+  async function reviewVerification({ intentId, revision, decision, reasonCode }) {
+    if (typeof api.reviewBusinessVerification !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await api.reviewBusinessVerification({
+        intentId,
+        revision: Number(revision),
+        decision,
+        reasonCode,
+        idempotencyKey: newIdempotencyKey(),
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.feedback = decision === "approve" ? "认证已批准。" : "认证已拒绝。";
+      return reload(ticket);
     } catch (error) {
       return fail(ticket, error);
     }
@@ -696,6 +796,16 @@ export function createPlatformPageController({
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
+      if (form.matches("[data-platform-verification-filter-form]")) {
+        controller.filterVerification(data.get("status"));
+      }
+      if (form.matches("[data-platform-verification-reject-form]")) {
+        controller.rejectVerification(
+          data.get("intentId"),
+          Number(data.get("revision")),
+          data.get("reasonCode"),
+        );
+      }
       if (form.matches("[data-platform-billing-adjustment-form]")) {
         controller.createBillingAdjustment({
           targetKey: data.get("targetKey"),
@@ -764,6 +874,14 @@ export function createPlatformPageController({
       if (action === "workspace-previous") controller.previousWorkspacePage();
       if (action === "billing-next") controller.nextBillingPage();
       if (action === "billing-previous") controller.previousBillingPage();
+      if (action === "verification-next") controller.nextVerificationPage();
+      if (action === "verification-previous") controller.previousVerificationPage();
+      if (action === "verification-approve") {
+        controller.approveVerification(target.dataset.intentId, Number(target.dataset.revision));
+      }
+      if (action === "verification-evidence-token") {
+        controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
+      }
       if (action === "backup-refresh") controller.refreshBackup();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
@@ -795,6 +913,9 @@ export function createPlatformPageController({
     state.billingCursor = null;
     state.billingCursorHistory = [];
     state.billingAdjustmentIntent = null;
+    state.verification = null;
+    state.verificationStatus = "";
+    state.verificationOffset = 0;
     state.infrastructure = null;
     state.gatewayCells = null;
     state.gatewayPlacement = null;
@@ -846,6 +967,13 @@ function hasWorkspaceRead(permissions) {
 function normalizeBillingStatus(value) {
   const text = String(value ?? "");
   return new Set(["", "open", "closed", "reconciliation_required"]).has(text) ? text : "";
+}
+
+/** 将审核筛选限制为固定状态枚举，未知输入回退为无筛选而不透传。 */
+function normalizeVerificationStatus(value) {
+  const text = String(value ?? "");
+  return new Set(["", "submitted", "in_review", "approved", "rejected", "expired"])
+    .has(text) ? text : "";
 }
 
 function billingAdjustmentTarget(billing, targetKey) {

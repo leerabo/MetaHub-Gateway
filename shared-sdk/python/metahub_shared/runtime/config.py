@@ -20,6 +20,11 @@ from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field
 
+from metahub_shared.business_verification import (
+    DEFAULT_BUSINESS_VERIFICATION_ENCRYPTION_SECRET,
+    BusinessVerificationCryptoError,
+    validate_business_verification_secret,
+)
 from metahub_shared.files.crypto import DEFAULT_FILE_ENCRYPTION_SECRET
 from metahub_shared.identity.crypto import DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET
 from metahub_shared.identity.mfa import DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET
@@ -126,6 +131,10 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT": "50",
     "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT": "10",
     "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT": "500",
+    # 企业认证字段使用独立根密钥；空生产配置只关闭对应业务入口，不得回退其他密钥域。
+    "METAHUB_BUSINESS_VERIFICATION_KEY_VERSION": "1",
+    "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET": "",
+    "METAHUB_BUSINESS_VERIFICATION_DOWNLOAD_TTL_SECONDS": "120",
     # PRD-100 keeps local/test SQLite explicit while production uses PostgreSQL.
     # Infrastructure credentials remain absent by default and are always masked.
     "METAHUB_DATABASE_POOL_MIN_SIZE": "1",
@@ -479,6 +488,11 @@ class AppConfig(BaseModel):
     gateway_capacity_workspace_limit: int = 50
     gateway_capacity_key_limit: int = 10
     gateway_capacity_cell_limit: int = 500
+    business_verification_key_version: int = 1
+    business_verification_encryption_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    business_verification_download_ttl_seconds: int = 120
     service_mode: ServiceMode = "internal_only"
     provider_base_urls: dict[str, str] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
@@ -1042,6 +1056,47 @@ def load_app_config(service_name: str) -> AppConfig:
             message="Gateway placement requires an explicit local Cell code.",
             suggestion="Configure METAHUB_GATEWAY_CELL_CODE with the assigned active Cell code.",
         )
+
+    business_verification_key_version = _positive_int(
+        values, "METAHUB_BUSINESS_VERIFICATION_KEY_VERSION"
+    )
+    configured_business_verification_secret = _raw_optional_value(
+        values, "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET"
+    )
+    business_verification_encryption_secret = configured_business_verification_secret or (
+        DEFAULT_BUSINESS_VERIFICATION_ENCRYPTION_SECRET
+        if environment in {"dev", "test"}
+        else None
+    )
+    if business_verification_encryption_secret is not None:
+        try:
+            validate_business_verification_secret(
+                business_verification_encryption_secret,
+                production=environment == "prod",
+                forbidden_secrets=(
+                    auth_token_secret,
+                    identity_session_secret,
+                    identity_challenge_secret,
+                    workspace_session_secret,
+                    platform_session_secret,
+                    support_session_secret,
+                    identity_mfa_encryption_secret,
+                    platform_bootstrap_recovery_secret,
+                    identity_pii_encryption_secret,
+                    cache_affinity_hmac_secret,
+                    gateway_placement_signing_secret,
+                ),
+            )
+        # 企业认证根密钥错误只映射部署合同，不暴露与哪个既有密钥重复。
+        except BusinessVerificationCryptoError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Business verification encryption requires an independent secret.",
+                suggestion=(
+                    "Configure METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET with an "
+                    "independent 32-512 byte value."
+                ),
+            ) from None
 
     if (
         len(identity_session_secret) < 32
@@ -1948,6 +2003,14 @@ def load_app_config(service_name: str) -> AppConfig:
         ),
         gateway_capacity_cell_limit=_bounded_int(
             values, "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT", minimum=1, maximum=1000000
+        ),
+        business_verification_key_version=business_verification_key_version,
+        business_verification_encryption_secret=business_verification_encryption_secret,
+        business_verification_download_ttl_seconds=_bounded_int(
+            values,
+            "METAHUB_BUSINESS_VERIFICATION_DOWNLOAD_TTL_SECONDS",
+            minimum=30,
+            maximum=300,
         ),
         service_mode=service_mode,
         provider_base_urls=provider_base_urls,
@@ -3365,6 +3428,9 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT",
         "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT",
         "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT",
+        "METAHUB_BUSINESS_VERIFICATION_KEY_VERSION",
+        "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
+        "METAHUB_BUSINESS_VERIFICATION_DOWNLOAD_TTL_SECONDS",
         "METAHUB_DATABASE_URL",
         "METAHUB_REDIS_URL",
         "METAHUB_DATABASE_POOL_MIN_SIZE",

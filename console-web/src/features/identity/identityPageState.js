@@ -1,3 +1,4 @@
+// 账号安全状态机统一管理 Workspace 授权、企业认证敏感值清理和过期请求取消。
 import { IdentityApiError } from "../../lib/identity.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import {
@@ -49,6 +50,9 @@ export function createIdentityPageController({
   let billingSummary = null;
   let billingBusy = false;
   let billingError = null;
+  let businessVerification = null;
+  let businessVerificationBusy = false;
+  let businessVerificationError = null;
   let workspaceView = "summary";
   let workspaceDraft = null;
   let invitationResult = null;
@@ -526,6 +530,87 @@ export function createIdentityPageController({
         return false;
       }
     },
+    async refreshBusinessVerification() {
+      if (!workspaceBusinessAllowed() || typeof api.businessVerification !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      businessVerificationBusy = true;
+      businessVerificationError = null;
+      renderSecurity();
+      return loadBusinessVerification(ticket, "企业认证已刷新。");
+    },
+    async submitBusinessVerification(input) {
+      if (!workspaceBusinessAllowed() || businessVerificationBusy
+        || typeof api.submitBusinessVerification !== "function") return false;
+      const ticket = beginRequest();
+      businessVerificationBusy = true;
+      businessVerificationError = null;
+      renderSecurity();
+      try {
+        const result = await queueWrite(() => api.submitBusinessVerification({
+          workspaceId: workspaceContext.workspace_id,
+          submission: input,
+          idempotencyKey: newIdempotencyKey(),
+          signal: ticket.signal,
+        }));
+        scrubBusinessInput(input);
+        if (!isCurrent(ticket)) return false;
+        businessVerification = result;
+        businessVerificationBusy = false;
+        renderSecurity({ feedback: "企业认证已提交。" });
+        return true;
+      } catch (error) {
+        scrubBusinessInput(input);
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        businessVerificationBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        businessVerificationError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async updateBusinessBilling(input) {
+      if (!workspaceBusinessAllowed() || businessVerificationBusy
+        || typeof api.updateBusinessBilling !== "function") return false;
+      const ticket = beginRequest();
+      businessVerificationBusy = true;
+      businessVerificationError = null;
+      renderSecurity();
+      try {
+        const result = await queueWrite(() => api.updateBusinessBilling({
+          workspaceId: workspaceContext.workspace_id,
+          billingProfile: input.billingProfile,
+          revision: input.revision,
+          idempotencyKey: newIdempotencyKey(),
+          signal: ticket.signal,
+        }));
+        scrubBusinessInput(input);
+        if (!isCurrent(ticket)) return false;
+        businessVerification = {
+          ...(businessVerification ?? {}),
+          workspace_id: workspaceContext.workspace_id,
+          billing_profile: result.billing_profile,
+          request_id: result.request_id,
+          trace_id: result.trace_id,
+        };
+        businessVerificationBusy = false;
+        renderSecurity({ feedback: "开票资料已更新。" });
+        return true;
+      } catch (error) {
+        scrubBusinessInput(input);
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        businessVerificationBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        businessVerificationError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
     selectOnboardingStep(index) {
       const step = onboarding?.steps?.[Number(index)];
       if (!step) return false;
@@ -975,6 +1060,11 @@ export function createIdentityPageController({
     );
   }
 
+  /** 企业认证只适用于组织 Workspace，且前端可见性仍不替代后端动态权限校验。 */
+  function workspaceBusinessAllowed() {
+    return workspaceFinanceAllowed() && workspaceContext?.kind === "organization";
+  }
+
   async function loadSaasBilling(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
       || typeof api.subscription !== "function") {
@@ -1033,6 +1123,38 @@ export function createIdentityPageController({
       billingSummary = null;
       billingBusy = false;
       billingError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  /** 读取企业认证脱敏摘要，并在 Workspace 授权漂移时交由统一恢复链路处理。 */
+  async function loadBusinessVerification(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceBusinessAllowed() || typeof api.businessVerification !== "function") {
+      businessVerification = null;
+      businessVerificationBusy = false;
+      businessVerificationError = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    businessVerificationBusy = true;
+    try {
+      const result = await api.businessVerification({
+        workspaceId: workspaceContext.workspace_id,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket)) return false;
+      businessVerification = result;
+      businessVerificationBusy = false;
+      businessVerificationError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      businessVerification = null;
+      businessVerificationBusy = false;
+      businessVerificationError = safePageError(error);
       if (render) renderSecurity();
       return false;
     }
@@ -1251,6 +1373,7 @@ export function createIdentityPageController({
       await Promise.all([
         loadSaasBilling(ticket, "", { render: false }),
         loadWorkspaceBilling(ticket, null, "", { render: false }),
+        loadBusinessVerification(ticket, "", { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
@@ -1359,6 +1482,9 @@ export function createIdentityPageController({
       billingSummary,
       billingBusy,
       billingError,
+      businessVerification,
+      businessVerificationBusy,
+      businessVerificationError,
       workspaceView,
       workspaceDraft,
       invitationResult,
@@ -1407,6 +1533,9 @@ export function createIdentityPageController({
     billingSummary = null;
     billingBusy = false;
     billingError = null;
+    businessVerification = null;
+    businessVerificationBusy = false;
+    businessVerificationError = null;
   }
 
   function clearInvitationSecret() {
@@ -1569,6 +1698,47 @@ export function createIdentityPageController({
         event.preventDefault();
         const fields = new FormData(form);
         await controller.selectBillingCycle(fields.get("cycleId"));
+      } else if (form?.matches?.("[data-business-verification-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          country_code: fields.get("countryCode"),
+          entity_type: fields.get("entityType"),
+          legal_name: fields.get("legalName"),
+          registration_number: fields.get("registrationNumber"),
+          evidence: [{
+            evidence_type: fields.get("evidenceType"),
+            object_reference: fields.get("objectReference"),
+            content_sha256: fields.get("contentSha256"),
+            mime_type: fields.get("mimeType"),
+            size_bytes: Number(fields.get("sizeBytes")),
+            kms_key_version: Number(fields.get("kmsKeyVersion")),
+            malware_status: "passed",
+            dlp_status: "passed",
+            scan_attestation: fields.get("scanAttestation"),
+          }],
+          reason_code: businessVerification?.verification ? "resubmission" : "initial_submission",
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubBusinessForm(form);
+        await controller.submitBusinessVerification(input);
+      } else if (form?.matches?.("[data-business-billing-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          revision: Number(businessVerification?.billing_profile?.revision ?? 0),
+          billingProfile: {
+            invoice_title: fields.get("invoiceTitle"),
+            tax_number: fields.get("taxNumber"),
+            address: fields.get("address") || null,
+            phone: fields.get("phone") || null,
+            bank_name: fields.get("bankName") || null,
+            bank_account: fields.get("bankAccount") || null,
+            confirmed: fields.get("confirmed") === "on",
+          },
+        };
+        scrubBusinessForm(form);
+        await controller.updateBusinessBilling(input);
       }
     });
     root.addEventListener?.("click", async (event) => {
@@ -1614,6 +1784,8 @@ export function createIdentityPageController({
         await controller.refreshBilling();
       } else if (button.dataset.identityAction === "download-billing-export") {
         await controller.downloadBillingExport();
+      } else if (button.dataset.identityAction === "refresh-business-verification") {
+        await controller.refreshBusinessVerification();
       } else if (button.dataset.identityAction === "copy-invitation-link") {
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {
@@ -1633,6 +1805,32 @@ export function createIdentityPageController({
       const text = String(option.dataset?.workspaceSearchText ?? "").toLocaleLowerCase("zh-CN");
       option.hidden = Boolean(query) && !text.includes(query);
     }
+  }
+}
+
+/** 提交开始后立即清空可见企业资料控件，隐藏 revision 不属于敏感明文。 */
+function scrubBusinessForm(form) {
+  for (const input of form?.querySelectorAll?.("input, textarea") ?? []) {
+    if (input.type === "hidden") continue;
+    if (input.type === "checkbox" || input.type === "radio") input.checked = false;
+    else input.value = "";
+  }
+}
+
+/** 擦除控制器调用栈中的主体、证据和开票明文，避免异步状态长期持有。 */
+function scrubBusinessInput(input) {
+  if (!input || typeof input !== "object") return;
+  for (const key of ["legal_name", "registration_number"]) {
+    if (key in input) input[key] = "";
+  }
+  for (const evidence of input.evidence ?? []) {
+    evidence.object_reference = "";
+    evidence.scan_attestation = "";
+  }
+  if (input.billingProfile) {
+    for (const key of [
+      "invoice_title", "tax_number", "address", "phone", "bank_name", "bank_account",
+    ]) input.billingProfile[key] = null;
   }
 }
 

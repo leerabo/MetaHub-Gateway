@@ -1,4 +1,4 @@
-"""PRD-094 WorkspaceSession, Membership, invitation, and owner transfer APIs."""
+"""验证 PRD-094 WorkspaceSession、成员、邀请、owner 转移与跨凭据域清理合同。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,11 @@ from metahub_control.identity.delivery import (
 )
 from metahub_control.identity.routes import router as identity_router
 from metahub_control.invitations.routes import router as invitations_router
+from metahub_control.platform_access.constants import (
+    PLATFORM_CSRF_COOKIE,
+    PLATFORM_SESSION_COOKIE,
+    SUPPORT_SESSION_COOKIE,
+)
 from metahub_control.workspace_access.constants import (
     WORKSPACE_CSRF_COOKIE,
     WORKSPACE_SESSION_COOKIE,
@@ -229,8 +234,33 @@ async def test_workspace_switch_navigation_mixed_credentials_and_logout_cleanup(
         assert listed.json()["total"] == 1
         workspace_id = listed.json()["workspaces"][0]["workspace_id"]
 
+        client.cookies.set(
+            PLATFORM_SESSION_COOKIE, "p" * 43, domain="testserver.local", path="/"
+        )
+        client.cookies.set(
+            PLATFORM_CSRF_COOKIE, "c" * 43, domain="testserver.local", path="/"
+        )
+        client.cookies.set(
+            SUPPORT_SESSION_COOKIE, "s" * 43, domain="testserver.local", path="/"
+        )
         switched = await _switch(client, workspace_id)
         assert switched.json()["context"]["role"] == "owner"
+        switch_cookies = switched.headers.get_list("set-cookie")
+        assert any(
+            PLATFORM_SESSION_COOKIE in value and "Max-Age=0" in value
+            for value in switch_cookies
+        )
+        assert any(
+            PLATFORM_CSRF_COOKIE in value and "Max-Age=0" in value
+            for value in switch_cookies
+        )
+        assert any(
+            SUPPORT_SESSION_COOKIE in value and "Max-Age=0" in value
+            for value in switch_cookies
+        )
+        assert client.cookies.get(PLATFORM_SESSION_COOKIE) is None
+        assert client.cookies.get(PLATFORM_CSRF_COOKIE) is None
+        assert client.cookies.get(SUPPORT_SESSION_COOKIE) is None
         assert client.cookies.get(WORKSPACE_SESSION_COOKIE)
         assert client.cookies.get(WORKSPACE_CSRF_COOKIE)
 
