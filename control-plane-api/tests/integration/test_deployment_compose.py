@@ -1,6 +1,7 @@
 """测试职责：验证 PRD-028 单机 Docker Compose 部署包的结构、安全边界和 CLI 异常路径。
 
-维护边界：这些测试不依赖 Docker daemon；真实容器启动由可选 smoke 覆盖，静态和 dry-run 必须先保证不会泄露 secret。
+维护边界：这些测试不依赖 Docker daemon；真实容器启动由可选 smoke 覆盖，
+静态和 dry-run 必须先保证不会泄露 secret。
 来源文件：control-plane-api/tests/integration/test_deployment_compose.py
 """
 
@@ -18,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[3]
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 
 
-def run_powershell(args: list[str], *, expect_success: bool = True) -> subprocess.CompletedProcess[str]:
+def run_powershell(
+    args: list[str], *, expect_success: bool = True
+) -> subprocess.CompletedProcess[str]:
     """执行部署 PowerShell 脚本，并把 stdout/stderr 保留给断言。
 
     部署 CLI 必须能被交付流水线稳定调用；测试只跑 dry-run 和错误路径，避免误启动或删除容器。
@@ -51,7 +54,7 @@ def ps_single_quote(value: Path) -> str:
 def test_compose_file_defines_core_services_and_optional_infra() -> None:
     """验证 compose 文件包含默认可运行服务和 compose-full 可选基础设施。
 
-    默认 profile 不能把应用切到 PostgreSQL；当前运行时仍只支持 sqlite://，否则一条命令启动会失败。
+    默认 profile 保持显式 SQLite；compose-full 增加生产适配器依赖和独立备份 worker。
     """
 
     compose = (ROOT / "infra/compose/docker-compose.yml").read_text(encoding="utf-8")
@@ -66,11 +69,13 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     assert "postgres:" in compose
     assert "redis:" in compose
     assert "minio:" in compose
+    assert "minio-init:" in compose
+    assert "backup-worker:" in compose
     assert "healthcheck:" in compose
-    assert compose.count('${METAHUB_COMPOSE_ENV_FILE:-.env.compose}') == 2
+    assert compose.count('${METAHUB_COMPOSE_ENV_FILE:-.env.compose}') == 3
     console_section = compose.split("  console:", 1)[1].split("  redis:", 1)[0]
     assert "env_file:" not in console_section
-    worker_section = compose.split("  batch-worker:", 1)[1].split("  console:", 1)[0]
+    worker_section = compose.split("  batch-worker:", 1)[1].split("  backup-worker:", 1)[0]
     assert "env_file:" not in worker_section
     assert "METAHUB_INTERNAL_BATCH_TOKEN:" in worker_section
     assert "METAHUB_BATCH_ENCRYPTION_SECRET:" in worker_section
@@ -86,6 +91,18 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     ) in compose
     assert "sqlite:///./.data/compose/metahub.db" not in compose
     assert "METAHUB_DATABASE_URL:" in worker_section
+    backup_section = compose.split("  backup-worker:", 1)[1].split("  console:", 1)[0]
+    assert "metahub_control.platform_infrastructure.worker_main" in backup_section
+    assert 'METAHUB_BACKUP_WORKER_ENABLED: "true"' in backup_section
+    assert "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY:" in backup_section
+    assert "METAHUB_KMS_TEST_MASTER_KEY:" in backup_section
+    assert "ports:" not in backup_section
+    assert "read_only: true" in backup_section
+    redis_section = compose.split("  redis:", 1)[1].split("  postgres:", 1)[0]
+    assert '["redis-server", "--save", "", "--appendonly", "no"]' in redis_section
+    assert "volumes:" not in redis_section
+    assert "minio/minio:RELEASE.2025-09-07T16-13-09Z" in compose
+    assert "minio/mc:RELEASE.2025-08-13T08-35-41Z" in compose
     scheduler_section = compose.split("  mcp-scheduler-worker:", 1)[1].split(
         "  mcp-sandbox:", 1
     )[0]
@@ -256,10 +273,13 @@ def test_stop_remove_volumes_requires_explicit_confirmation() -> None:
     assert "ConfirmRemoveVolumes" in payload["message"]
 
 
-def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(tmp_path: Path) -> None:
+def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
+    tmp_path: Path,
+) -> None:
     """验证 env 初始化会替换占位符，且 stdout 只允许一次性返回管理员密码。
 
-    Provider Key、PostgreSQL 密码、MinIO Secret 和 Token Secret 必须只写入本地 env，不进入 CLI 输出。
+    Provider Key、PostgreSQL 密码、MinIO Secret 和 Token Secret 必须只写入本地 env，
+    不进入 CLI 输出。
     """
 
     env_path = tmp_path / ".env.compose"

@@ -6,8 +6,12 @@
 
 - 默认部署 profile：`local-sqlite`。
 - 默认启动服务：`gateway`、`control-api`、`mcp-scheduler-worker`、`mcp-sandbox`、`batch-worker`、`console`。
-- 可选基础设施 profile：`compose-full`，额外启动 `redis`、`postgres`、`minio`。
-- 当前应用运行时只支持 `sqlite://` 数据库 URL，因此 `compose-full` 中的 PostgreSQL 是后续 PostgreSQL driver/迁移方言接入前的基础设施预留，不会被应用默认使用。
+- 可选基础设施 profile：`compose-full`，额外启动 `redis`、`postgres`、`minio`、bucket 初始化和独立
+  `backup-worker`。
+- 应用包含显式 `sqlite://` 本地/测试后端和 `postgresql://` 连接池适配器；不会在 PostgreSQL 故障时回退
+  SQLite。历史迁移尚无 PostgreSQL-native bundle，标准 migrate/rollback CLI 会在连接前以
+  `db.migration_backend_unsupported` 失败关闭，因此当前 Compose 发布仍使用 SQLite 数据库。生产
+  PostgreSQL、Redis 和对象存储必须启用 TLS。
 - 不包含 Kubernetes Helm、高可用、TLS、域名、反向代理和生产密钥托管。
 
 ## 前置条件
@@ -50,7 +54,8 @@ Dry run 只输出计划步骤、端口、profile 和 `request_id`，不会创建
 .\scripts\deploy\stop.ps1
 ```
 
-`stop.ps1` 默认保留 volume，因此重启后 SQLite 数据文件、可选 PostgreSQL/Redis/MinIO 数据卷不会被删除。
+`stop.ps1` 默认保留 volume，因此重启后 SQLite、可选 PostgreSQL 和 MinIO 数据不会被删除。Redis 关闭
+RDB/AOF 且不挂载 volume，只承载可重建缓存、限流与短租约。
 
 删除 volume 必须显式传入两个参数：
 
@@ -115,12 +120,21 @@ Provider API、配置导入、Compose tenant 环境变量或前端表单放宽�
 .\scripts\deploy\install.ps1 -Profile compose-full
 ```
 
-该 profile 会额外启动 Redis、PostgreSQL 和 MinIO。当前应用仍使用 `METAHUB_DATABASE_URL=sqlite:///./.data/compose/metahub.db`，以保证 M0 可运行；PostgreSQL 真正接入需要后续 PRD 增加驱动、SQL 方言和迁移验证。
+该 profile 会额外启动 Redis 7、PostgreSQL 16、MinIO、bucket 初始化和独立 Backup Worker。模板仍以显式
+SQLite 保证默认本地 profile 可运行；PostgreSQL 服务当前只用于连接池、健康探测和故障边界集成，不得把
+应用 `METAHUB_DATABASE_URL` 切换到 PostgreSQL 后执行标准安装流程。必须先交付覆盖全部历史版本的
+PostgreSQL-native migration bundle；在此之前迁移 CLI 固定失败关闭。生产环境的 URL 必须包含
+`sslmode=require|verify-ca|verify-full`，Redis 使用 `rediss://`，对象存储使用 HTTPS。
+
+Backup Worker 要求完整的对象存储和 KMS 配置。`METAHUB_KMS_PROVIDER=test` 只允许 dev/test；生产必须使用
+独立 AWS KMS key。PostgreSQL 备份还必须设置与源库身份不同的 `METAHUB_BACKUP_RESTORE_DATABASE_URL`，
+用于 `ready` 前的隔离恢复验证。worker 不提供恢复生产库的 HTTP 或自动化入口。
 
 ## 安全约束
 
 - `infra/compose/.env.compose` 已加入 `.gitignore`，不得提交。
-- `.env.compose.example` 只能包含 `replace-with-generated-*` 占位符。
+- `.env.compose.example` 只能包含 `replace-with-generated-*` 占位符；安装器会独立生成数据库、MinIO 和本地
+  测试 KMS 值。
 - `deployment.completed` 事件只记录 profile、服务 URL 和 `request_id`，不记录管理员密码、Provider Key、Virtual Key、Token Secret、数据库密码或 MinIO Secret。
 - Provider Key 和 Virtual Key 明文仍只允许在首次创建/本地 env 中出现，不得进入日志。
 - MCP Endpoint、Bearer、permit、Sandbox internal/envelope/response secret 不得进入部署事件、容器日志、

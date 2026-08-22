@@ -8,14 +8,19 @@ Provider Key 与 Token 不得明文落日志。
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import sqlite3
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
 from .errors import DbError
@@ -28,6 +33,211 @@ SQLITE_BUSY_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MILLISECONDS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
 _MAX_IDLE_CONNECTIONS_PER_DATABASE = 4
 _MAX_IDLE_DATABASES = 4
+DatabaseBackend = Literal["sqlite", "postgresql"]
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseCapabilities:
+    backend: DatabaseBackend
+    server_side_pool: bool
+    advisory_locks: bool
+    transactional_ddl: bool
+    returning: bool
+
+
+_DATABASE_CAPABILITIES = {
+    "sqlite": DatabaseCapabilities(
+        backend="sqlite",
+        server_side_pool=False,
+        advisory_locks=False,
+        transactional_ddl=True,
+        returning=True,
+    ),
+    "postgresql": DatabaseCapabilities(
+        backend="postgresql",
+        server_side_pool=True,
+        advisory_locks=True,
+        transactional_ddl=True,
+        returning=True,
+    ),
+}
+
+
+class _DatabaseRow(Sequence[object]):
+    """Expose PostgreSQL tuple rows with the sqlite3.Row access contract."""
+
+    __slots__ = ("_folded_index", "_index", "_names", "_values")
+
+    def __init__(self, names: tuple[str, ...], values: tuple[object, ...]) -> None:
+        self._names = names
+        self._values = values
+        self._index: dict[str, int] = {}
+        self._folded_index: dict[str, int] = {}
+        for index, name in enumerate(names):
+            # sqlite3.Row resolves duplicate aliases to the first column and performs
+            # ASCII-insensitive named access. Preserve that compatibility contract.
+            self._index.setdefault(name, index)
+            self._folded_index.setdefault(name.casefold(), index)
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            index = self._index.get(key)
+            if index is None:
+                index = self._folded_index[key.casefold()]
+            return self._values[index]
+        return self._values[key]
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def keys(self) -> list[str]:
+        return list(self._names)
+
+
+class _PostgresCursor:
+    __slots__ = ("_cursor", "_names")
+
+    def __init__(self, cursor) -> None:
+        self._cursor = cursor
+        self._names = tuple(column.name for column in cursor.description or ())
+
+    @property
+    def rowcount(self) -> int:
+        return int(self._cursor.rowcount)
+
+    @property
+    def lastrowid(self) -> None:
+        return None
+
+    def fetchone(self):
+        try:
+            row = self._cursor.fetchone()
+        except Exception as exc:
+            _raise_postgres_error(exc)
+        return self._row(row)
+
+    def fetchall(self):
+        try:
+            return [self._row(row) for row in self._cursor.fetchall()]
+        except Exception as exc:
+            _raise_postgres_error(exc)
+
+    def __iter__(self):
+        try:
+            for row in self._cursor:
+                yield self._row(row)
+        except Exception as exc:
+            _raise_postgres_error(exc)
+
+    def close(self) -> None:
+        try:
+            self._cursor.close()
+        except Exception as exc:
+            _raise_postgres_error(exc)
+
+    def _row(self, row):
+        if row is None:
+            return None
+        values = tuple(_postgres_compat_value(value) for value in row)
+        return _DatabaseRow(self._names, values)
+
+
+class _PostgresConnection:
+    """Small DB-API compatibility facade around one psycopg pool checkout."""
+
+    __slots__ = ("_connection", "_pool", "_closed")
+
+    def __init__(self, connection, pool) -> None:
+        self._connection = connection
+        self._pool = pool
+        self._closed = False
+
+    @property
+    def backend(self) -> DatabaseBackend:
+        return "postgresql"
+
+    @property
+    def in_transaction(self) -> bool:
+        status = getattr(self._connection.info, "transaction_status", None)
+        return getattr(status, "name", str(status)) not in {"IDLE", "0"}
+
+    def execute(self, sql: str, parameters: object | None = None) -> _PostgresCursor:
+        if self._closed:
+            raise RuntimeError("Cannot operate on a closed database.")
+        statement = _postgres_sql(sql)
+        cursor = None
+        try:
+            cursor = self._connection.cursor()
+            if parameters is None:
+                cursor.execute(statement)
+            else:
+                cursor.execute(statement, parameters)
+        except Exception as exc:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            _raise_postgres_error(exc)
+        return _PostgresCursor(cursor)
+
+    def executemany(self, sql: str, parameters) -> _PostgresCursor:
+        if self._closed:
+            raise RuntimeError("Cannot operate on a closed database.")
+        cursor = None
+        try:
+            cursor = self._connection.cursor()
+            cursor.executemany(_postgres_sql(sql), parameters)
+        except Exception as exc:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            _raise_postgres_error(exc)
+        return _PostgresCursor(cursor)
+
+    def commit(self) -> None:
+        try:
+            self._connection.commit()
+        except Exception as exc:
+            _raise_postgres_error(exc)
+
+    def rollback(self) -> None:
+        try:
+            self._connection.rollback()
+        except Exception as exc:
+            _raise_postgres_error(exc)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self.in_transaction:
+                try:
+                    self._connection.rollback()
+                except Exception:
+                    pass
+        finally:
+            try:
+                self._pool.putconn(self._connection)
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        return False
+
+
+_POSTGRES_POOL_LOCK = threading.Lock()
+_POSTGRES_POOLS: dict[str, Any] = {}
 
 
 class _IdleConnectionPool:
@@ -106,8 +316,8 @@ class _RequestConnection:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
-        release_connection: Callable[[sqlite3.Connection], None] | None = None,
+        connection: Any,
+        release_connection: Callable[[Any], None] | None = None,
     ) -> None:
         object.__setattr__(self, "_connection", connection)
         object.__setattr__(self, "_closed", False)
@@ -154,20 +364,17 @@ class _DatabaseRequestScope:
     reuse_connections: bool = False
     connections: dict[str, _RequestConnection] = field(default_factory=dict)
 
-    def connection(self, database: str) -> _RequestConnection:
-        existing = self.connections.get(database)
+    def connection(
+        self,
+        key: str,
+        opener: Callable[[], Any],
+        release_connection: Callable[[Any], None] | None = None,
+    ) -> _RequestConnection:
+        existing = self.connections.get(key)
         if existing is not None:
             return existing
-        if self.reuse_connections:
-            raw = _IDLE_CONNECTION_POOL.acquire(database)
-            scoped = _RequestConnection(
-                raw,
-                lambda connection: _IDLE_CONNECTION_POOL.release(database, connection),
-            )
-        else:
-            raw = _open_sqlite_connection(database, check_same_thread=False)
-            scoped = _RequestConnection(raw)
-        self.connections[database] = scoped
+        scoped = _RequestConnection(opener(), release_connection)
+        self.connections[key] = scoped
         return scoped
 
     def close(self) -> None:
@@ -184,7 +391,7 @@ _DATABASE_REQUEST_SCOPE: ContextVar[_DatabaseRequestScope | None] = ContextVar(
 
 @contextmanager
 def database_request_scope(*, reuse_connections: bool = False) -> Iterator[None]:
-    """Share one SQLite handle inside one HTTP request and close it at the boundary."""
+    """Share one backend handle inside one HTTP request and release it at the boundary."""
 
     scope = _DatabaseRequestScope(reuse_connections=reuse_connections)
     token = _DATABASE_REQUEST_SCOPE.set(scope)
@@ -220,12 +427,8 @@ def connect_database(
     database_url: str | None,
     *,
     check_same_thread: bool = True,
-) -> sqlite3.Connection:
-    """连接 PRD-003 支持的本地数据库。
-
-    当前运行时没有 PostgreSQL 驱动，因此 M0 的可运行实现使用 sqlite:// URL 完成
-    迁移框架、约束、幂等和 seed 验证。生产 PostgreSQL 接入时保留同一 CLI 入口。
-    """
+) -> Any:
+    """Connect to an explicit SQLite local/test or PostgreSQL production backend."""
 
     if not database_url:
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
@@ -235,13 +438,17 @@ def connect_database(
             "Set METAHUB_DATABASE_URL=sqlite:///./.data/metahub.db for local development.",
         )
     parsed = urlparse(database_url)
-    if parsed.scheme != "sqlite":
+    backend = database_backend(database_url)
+    if backend is None:
         # 错误分支统一收敛为标准错误码，避免泄露上游原始敏感信息。
         raise DbError(
             "db.connection_failed",
             f"Unsupported database URL scheme: {parsed.scheme}",
-            "Current local runtime supports sqlite:// URLs; install a PostgreSQL driver later for postgresql://.",
+            "Use sqlite:// for explicit local/test use or postgresql:// for production.",
         )
+
+    if backend == "postgresql":
+        return _connect_postgresql(database_url)
 
     path = _sqlite_path(parsed.path)
     if path != ":memory:":
@@ -256,7 +463,16 @@ def connect_database(
         # 连接才允许跨 worker 复用。
         scope = _DATABASE_REQUEST_SCOPE.get()
         if scope is not None and database != ":memory:":
-            return scope.connection(database)  # type: ignore[return-value]
+            if scope.reuse_connections:
+                return scope.connection(
+                    f"sqlite:{database}",
+                    lambda: _IDLE_CONNECTION_POOL.acquire(database),
+                    lambda connection: _IDLE_CONNECTION_POOL.release(database, connection),
+                )
+            return scope.connection(
+                f"sqlite:{database}",
+                lambda: _open_sqlite_connection(database, check_same_thread=False),
+            )
         connection = _open_sqlite_connection(
             database,
             check_same_thread=check_same_thread,
@@ -270,6 +486,183 @@ def connect_database(
             f"Failed to connect database: {exc}",
             "Check METAHUB_DATABASE_URL and filesystem permissions.",
         ) from exc
+
+
+def database_backend(database_url: str | None) -> DatabaseBackend | None:
+    if not database_url:
+        return None
+    scheme = urlparse(database_url).scheme.lower()
+    if scheme == "sqlite":
+        return "sqlite"
+    if scheme in {"postgres", "postgresql"}:
+        return "postgresql"
+    return None
+
+
+def database_capabilities(database_url: str | None) -> DatabaseCapabilities:
+    backend = database_backend(database_url)
+    if backend is None:
+        raise DbError(
+            "db.connection_failed",
+            "Database backend is unsupported.",
+            "Use an explicit sqlite:// or postgresql:// database URL.",
+        )
+    return _DATABASE_CAPABILITIES[backend]
+
+
+def _connect_postgresql(database_url: str) -> Any:
+    """Checkout one bounded pooled connection without exposing DSN failures."""
+
+    try:
+        from psycopg_pool import ConnectionPool, PoolTimeout
+    except ImportError as exc:
+        raise DbError(
+            "db.driver_missing",
+            "PostgreSQL driver is not installed.",
+            "Install the production runtime dependencies before starting the service.",
+        ) from exc
+
+    pool_key = hashlib.sha256(database_url.encode("utf-8")).hexdigest()
+    try:
+        with _POSTGRES_POOL_LOCK:
+            pool = _POSTGRES_POOLS.get(pool_key)
+            if pool is None:
+                minimum = _bounded_pool_setting("METAHUB_DATABASE_POOL_MIN_SIZE", 1, 0, 32)
+                maximum = _bounded_pool_setting("METAHUB_DATABASE_POOL_MAX_SIZE", 10, 1, 128)
+                if minimum > maximum:
+                    raise DbError(
+                        "db.config_invalid",
+                        "Database pool minimum exceeds its maximum.",
+                        "Set a bounded pool minimum no greater than the maximum.",
+                    )
+                timeout = _bounded_pool_setting(
+                    "METAHUB_DATABASE_POOL_TIMEOUT_SECONDS", 3, 1, 30
+                )
+                statement_ms = _bounded_pool_setting(
+                    "METAHUB_DATABASE_STATEMENT_TIMEOUT_MS", 30_000, 100, 300_000
+                )
+                lock_ms = _bounded_pool_setting(
+                    "METAHUB_DATABASE_LOCK_TIMEOUT_MS", 5_000, 100, 60_000
+                )
+                pool = ConnectionPool(
+                    conninfo=database_url,
+                    min_size=minimum,
+                    max_size=maximum,
+                    timeout=timeout,
+                    kwargs={
+                        "autocommit": False,
+                        "options": (
+                            "-c timezone=UTC "
+                            f"-c statement_timeout={statement_ms} "
+                            f"-c lock_timeout={lock_ms}"
+                        ),
+                    },
+                    open=True,
+                    name=f"metahub-{pool_key[:12]}",
+                )
+                _POSTGRES_POOLS[pool_key] = pool
+    except DbError:
+        raise
+    except Exception:
+        raise DbError(
+            "db.connection_failed",
+            "Failed to initialize the configured PostgreSQL connection pool.",
+            "Check database availability, TLS, credentials, and pool settings.",
+        ) from None
+    try:
+        scope = _DATABASE_REQUEST_SCOPE.get()
+        if scope is not None:
+            return scope.connection(
+                f"postgresql:{pool_key}",
+                lambda: _PostgresConnection(pool.getconn(), pool),
+            )
+        return _PostgresConnection(pool.getconn(), pool)
+    except PoolTimeout:
+        raise DbError(
+            "db.pool_exhausted",
+            "Database connection pool is exhausted.",
+            "Retry after an in-flight database operation completes.",
+        ) from None
+    except DbError:
+        raise
+    except Exception:
+        raise DbError(
+            "db.connection_failed",
+            "Failed to connect to the configured PostgreSQL database.",
+            "Check database availability, TLS, credentials, and pool settings.",
+        ) from None
+
+
+def close_database_pools() -> None:
+    """Close PostgreSQL pools during orderly shutdown and isolated tests."""
+
+    with _POSTGRES_POOL_LOCK:
+        pools = tuple(_POSTGRES_POOLS.values())
+        _POSTGRES_POOLS.clear()
+    for pool in pools:
+        pool.close()
+
+
+def _bounded_pool_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = minimum - 1
+    if not minimum <= value <= maximum:
+        raise DbError(
+            "db.config_invalid",
+            f"{name} is outside the supported range.",
+            "Configure a bounded integer value for the database pool.",
+        )
+    return value
+
+
+def _postgres_compat_value(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+def _raise_postgres_error(error: Exception) -> NoReturn:
+    """Map provider failures to the existing fixed, non-sensitive DB-API surface."""
+
+    sqlstate = str(getattr(error, "sqlstate", "") or "")
+    if sqlstate.startswith("23"):
+        raise sqlite3.IntegrityError("Database integrity constraint failed.") from None
+    if sqlstate.startswith("40") or sqlstate == "55P03":
+        raise sqlite3.OperationalError("Database transaction conflict.") from None
+    raise sqlite3.DatabaseError("Database operation failed.") from None
+
+
+def _postgres_sql(sql: str) -> str:
+    """Translate the narrow DB-API surface without rewriting SQL structure."""
+
+    normalized = re.sub(r"^\s*BEGIN\s+IMMEDIATE\s*;?\s*$", "BEGIN", sql, flags=re.I)
+    output: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(normalized):
+        character = normalized[index]
+        if quote is not None:
+            output.append(character)
+            if character == quote:
+                if index + 1 < len(normalized) and normalized[index + 1] == quote:
+                    output.append(normalized[index + 1])
+                    index += 1
+                else:
+                    quote = None
+        elif character in {"'", '"'}:
+            quote = character
+            output.append(character)
+        elif character == "?":
+            output.append("%s")
+        else:
+            output.append(character)
+        index += 1
+    return "".join(output)
 
 
 def _open_sqlite_connection(

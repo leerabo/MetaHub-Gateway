@@ -69,6 +69,7 @@ from .plan_billing import router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
 from .platform_billing import install_platform_billing_scheduler
 from .platform_billing import router as platform_billing_router
+from .platform_infrastructure import router as platform_infrastructure_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -221,6 +222,7 @@ app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
+app.include_router(platform_infrastructure_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)

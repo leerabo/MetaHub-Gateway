@@ -1526,6 +1526,50 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="platform_billing",
     ),
+    "infrastructure.request_invalid": ErrorSpec(
+        422,
+        "Infrastructure request is invalid.",
+        "Use the documented backup scope, owner, retention, confirmation, and idempotency fields.",
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.backup_not_found": ErrorSpec(
+        404,
+        "Backup set was not found.",
+        "Refresh the authorized backup list or verify the opaque backup identifier.",
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.backup_owner_not_found": ErrorSpec(
+        404,
+        "Backup Workspace owner was not found.",
+        "Use an active Workspace and Tenant ownership pair.",
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.idempotency_conflict": ErrorSpec(
+        409,
+        "Backup idempotency key is bound to another request.",
+        "Reuse the key only for the same canonical backup intent.",
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.backup_conflict": ErrorSpec(
+        409,
+        "Backup state changed before this operation completed.",
+        "Reload the BackupSet and resume from its durable state.",
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.pool_exhausted": ErrorSpec(
+        503,
+        "The database connection pool is temporarily exhausted.",
+        "Retry after an in-flight database operation completes.",
+        retryable=True,
+        owner="platform_infrastructure",
+    ),
+    "infrastructure.unavailable": ErrorSpec(
+        503,
+        "Production infrastructure control is temporarily unavailable.",
+        "Retry after database, cache, object storage, or key management recovers.",
+        retryable=True,
+        owner="platform_infrastructure",
+    ),
     "gateway.plan_suspended": ErrorSpec(
         402,
         "The tenant Plan is suspended.",
@@ -5069,6 +5113,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         500,
         "Database migration failed.",
         "Inspect migration logs and fix the failing migration.",
+        owner="db",
+    ),
+    "db.migration_backend_unsupported": ErrorSpec(
+        500,
+        "Database migration backend is unsupported.",
+        "Use a reviewed backend-native migration bundle before starting application services.",
         owner="db",
     ),
     "db.migration_checksum_changed": ErrorSpec(

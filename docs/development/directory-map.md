@@ -97,7 +97,9 @@ PRD-003 建立了可运行的迁移与种子数据基础：
 - Provider Key、Virtual Key、管理员密码不能明文落库或落日志。
 - 访问 Token 只允许保存 `token_hash`，不能明文落库或落日志。
 
-当前运行时没有 PostgreSQL 驱动，因此本地/CI 使用 `sqlite://` URL 验证迁移行为。PostgreSQL 生产接入后仍应保留相同 CLI、错误码和测试语义。
+当前运行时已有有界 PostgreSQL 连接池适配器，但历史迁移仍是 SQLite-native SQL。本地/CI 使用
+`sqlite://` 验证完整迁移行为；标准 migrate/rollback CLI 对 `postgresql://` 在连接前固定返回
+`db.migration_backend_unsupported`，直到独立 PostgreSQL-native migration bundle 覆盖全部历史版本。
 
 ## 可观测边界
 
@@ -454,7 +456,9 @@ PRD-028 建立了单机 Docker Compose 部署边界：
 - `infra/compose/.env.compose.example` 只能保存占位符；真实 `.env.compose` 由 `scripts/deploy/install.ps1` 生成并被 `.gitignore` 排除。
 - `deployment.completed` 事件只写入 `.logs/deploy/deployment-events.jsonl`，只记录 profile、服务 URL 和 `request_id`，不记录管理员密码、Provider Key、Virtual Key、Token Secret、数据库密码或 MinIO Secret。
 - `stop.ps1` 默认保留 volume；删除 volume 必须同时传入 `-RemoveVolumes` 和 `-ConfirmRemoveVolumes`。
-- `compose-full` 会启动 Redis、PostgreSQL 和 MinIO，但当前应用运行时仍只支持 `sqlite://`；PostgreSQL 真正接入需要后续驱动、迁移方言和 seed 方言验证。
+- `compose-full` 会启动无持久化 Redis、PostgreSQL 16、MinIO、bucket 初始化和独立 Backup Worker；运行时可
+  显式选择 SQLite 本地/测试或 PostgreSQL 连接池适配器，数据库失败不得跨后端回退；PostgreSQL 服务当前
+  只用于适配器集成，native migration bundle 完成前不构成生产发布能力。
 - 该 PRD 不包含 Kubernetes/Helm、高可用、TLS、域名、反向代理和生产密钥托管。
 ## PRD-030 Environment 隔离目录
 

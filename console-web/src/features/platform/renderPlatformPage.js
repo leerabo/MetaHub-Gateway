@@ -63,12 +63,72 @@ export function renderPlatformWorkspace(container, state) {
 
 function renderView(state, permissions) {
   if (state.view === "overview") return overviewView(state);
+  if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
   if (state.view === "billing") return billingView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function infrastructureView(state, permissions) {
+  const value = state.infrastructure;
+  const resources = value?.resources ?? [];
+  const backup = state.backup?.backup;
+  return `
+    <header class="platform-page-heading"><div><p>Production runtime</p><h1>基础设施</h1></div><span>${status(value?.overall_status ?? "unavailable")}</span></header>
+    <section class="platform-metrics" aria-label="恢复目标">
+      ${metric("组件", resources.length, "受控生产依赖")}
+      ${metric("RPO", value?.rpo_minutes ?? 0, "分钟")}
+      ${metric("RTO", value?.rto_minutes ?? 0, "分钟")}
+    </section>
+    <section class="platform-band platform-infrastructure-status">
+      <div class="platform-section-heading"><div><p>Health projection</p><h2>组件状态</h2></div><span>${number(resources.filter((item) => item.verified).length)} 个已验证</span></div>
+      <div class="platform-table-wrap"><table><thead><tr><th>组件</th><th>后端</th><th>状态</th><th>延迟</th><th>最近验证</th></tr></thead><tbody>${resources.map(infrastructureResourceRow).join("") || emptyRow("暂无基础设施状态", 5)}</tbody></table></div>
+    </section>
+    ${permissions.has("platform.backup.create") ? backupForm() : ""}
+    ${backup ? backupPanel(backup) : ""}`;
+}
+
+function infrastructureResourceRow(resource) {
+  return `<tr>
+    <td data-label="组件"><strong>${escapeHtml(infrastructureKindLabel(resource.resource_kind))}</strong><small>${escapeHtml(resource.version_summary ?? "-")}</small></td>
+    <td data-label="后端">${escapeHtml(statusLabel(resource.provider_code))}</td>
+    <td data-label="状态">${status(resource.status)}${resource.error_code ? `<small>${escapeHtml(resource.error_code)}</small>` : ""}</td>
+    <td data-label="延迟">${resource.latency_ms === null ? "-" : `${number(resource.latency_ms)} ms`}</td>
+    <td data-label="最近验证">${formatTime(resource.last_verified_at)}</td>
+  </tr>`;
+}
+
+function backupForm() {
+  return `
+    <section class="platform-band platform-backup-create">
+      <div class="platform-section-heading"><div><p>Verified recovery</p><h2>创建备份</h2></div><span>隔离恢复门禁</span></div>
+      <form data-platform-backup-form autocomplete="off">
+        <label><span>备份类型</span><select name="backupType"><option value="full">完整备份</option><option value="incremental">增量备份</option></select></label>
+        <label><span>保留天数</span><input name="retentionDays" type="number" min="1" max="3650" value="30" required /></label>
+        <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认创建平台备份</span></label>
+        <button class="platform-primary" type="submit">创建备份</button>
+      </form>
+    </section>`;
+}
+
+function backupPanel(backup) {
+  const verification = backup.verification ?? {};
+  return `
+    <section class="platform-band platform-backup-detail">
+      <div class="platform-section-heading"><div><p>BackupSet</p><h2>${escapeHtml(backup.backup_id)}</h2></div><div class="platform-row-actions">${status(backup.status)}<button class="platform-icon-button" type="button" data-platform-action="backup-refresh" title="刷新备份状态" aria-label="刷新备份状态">↻</button></div></div>
+      <dl>
+        ${fact("来源", statusLabel(backup.source_backend))}
+        ${fact("水位", backup.source_watermark ?? "-")}
+        ${fact("Schema head", backup.schema_head ?? "-")}
+        ${fact("内容摘要", shortHash(backup.content_sha256))}
+        ${fact("保留至", formatTime(backup.retention_until))}
+        ${fact("恢复校验", statusLabel(verification.status ?? "pending"))}
+      </dl>
+      ${backup.error_code ? `<div class="platform-feedback is-error"><strong>${escapeHtml(backup.error_code)}</strong></div>` : ""}
+    </section>`;
 }
 
 function overviewView(state) {
@@ -409,7 +469,7 @@ function status(value) {
   const text = String(value ?? "unknown");
   const kind = /active|healthy|ready|reviewed|fresh/u.test(text)
     ? "is-ok"
-    : /pending|watch|stale|at_risk/u.test(text)
+    : /pending|watch|stale|at_risk|not_configured/u.test(text)
       ? "is-warn"
       : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable/u.test(text)
         ? "is-danger"
@@ -425,7 +485,9 @@ function billingStatusOptions(current) { return [["open", "进行中"], ["closed
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
+function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
 function number(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0"; }
 function signedNumber(value) { const amount = Number(value); return `${amount > 0 ? "+" : ""}${number(amount)}`; }

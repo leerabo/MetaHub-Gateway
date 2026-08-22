@@ -29,6 +29,11 @@ import {
   createPlatformBillingAdjustment,
   listPlatformBillingSummary,
 } from "../../lib/platformBilling.js";
+import {
+  createPlatformBackup,
+  getPlatformBackup,
+  getPlatformInfrastructureStatus,
+} from "../../lib/platformInfrastructure.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -70,6 +75,12 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      infrastructureStatus: (input) => getPlatformInfrastructureStatus({
+        controlApiUrl,
+        ...input,
+      }),
+      createBackup: (input) => createPlatformBackup({ controlApiUrl, ...input }),
+      backup: (input) => getPlatformBackup({ controlApiUrl, ...input }),
     },
   }).mount();
 }

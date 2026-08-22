@@ -902,7 +902,11 @@ PRD-028 后，研发和试点客户可以使用 Compose 在单台服务器启动
 .\scripts\deploy\install.ps1
 ```
 
-默认 profile 为 `local-sqlite`，启动 `gateway`、`control-api`、`console`，并使用持久化 SQLite volume 保存 MVP 数据。`compose-full` profile 会额外启动 Redis、PostgreSQL 和 MinIO，但当前应用运行时仍只支持 `sqlite://`，PostgreSQL 真正接入需要后续驱动和迁移方言 PRD。
+默认 profile 为 `local-sqlite`，使用显式 SQLite volume 保存本地数据。PRD-100 后，`compose-full` 还会启动
+PostgreSQL 16、无持久化 Redis、MinIO、bucket 初始化和独立 Backup Worker；生产适配器使用有界 psycopg
+连接池、S3-compatible 对象存储和 KMS 信封加密，基础设施故障不会回退到 SQLite。历史迁移链尚未提供
+PostgreSQL-native bundle，标准迁移 CLI 会以 `db.migration_backend_unsupported` 失败关闭；当前 Compose
+应用数据库仍固定使用 SQLite，不能把依赖服务已启动误判为 PostgreSQL 生产发布已放行。
 
 常用命令：
 

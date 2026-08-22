@@ -2,6 +2,7 @@ import { PlatformApiError } from "../../lib/platform.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
+  "infrastructure",
   "operators",
   "workspaces",
   "support",
@@ -51,6 +52,9 @@ export function createPlatformPageController({
     billingCursor: null,
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
+    infrastructure: null,
+    backup: null,
+    backupIntent: null,
     grants: null,
     audit: null,
     diagnostics: null,
@@ -126,6 +130,54 @@ export function createPlatformPageController({
     },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
+    },
+    async createBackup({ backupType, retentionDays }) {
+      if (typeof api.createBackup !== "function") return false;
+      const intent = JSON.stringify({ backupType, retentionDays: Number(retentionDays) });
+      const idempotencyKey = state.backupIntent?.intent === intent
+        ? state.backupIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.backupIntent = { intent, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.backup = await api.createBackup({
+          backupType,
+          retentionDays: Number(retentionDays),
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.backupIntent = null;
+        state.loading = false;
+        state.feedback = "备份请求已创建。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.backupIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async refreshBackup() {
+      const backupId = state.backup?.backup?.backup_id;
+      if (!backupId || typeof api.backup !== "function") return false;
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.backup = await api.backup({ backupId, signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.loading = false;
+        render();
+        return true;
+      } catch (error) {
+        return fail(ticket, error);
+      }
     },
     async filterBilling(status) {
       state.billingStatus = normalizeBillingStatus(status);
@@ -375,6 +427,7 @@ export function createPlatformPageController({
         operators: null,
         plans: null,
         billing: null,
+        infrastructure: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -395,6 +448,12 @@ export function createPlatformPageController({
           cursor: state.billingCursor,
           signal: ticket.signal,
         }).then((value) => { next.billing = value; }));
+      }
+      if (permissions.has("platform.infrastructure.read")
+        && typeof api.infrastructureStatus === "function") {
+        tasks.push(api.infrastructureStatus({ signal: ticket.signal }).then((value) => {
+          next.infrastructure = value;
+        }));
       }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
@@ -578,6 +637,12 @@ export function createPlatformPageController({
           amount: data.get("amount"),
         });
       }
+      if (form.matches("[data-platform-backup-form]")) {
+        controller.createBackup({
+          backupType: data.get("backupType"),
+          retentionDays: data.get("retentionDays"),
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -621,6 +686,7 @@ export function createPlatformPageController({
       if (action === "workspace-previous") controller.previousWorkspacePage();
       if (action === "billing-next") controller.nextBillingPage();
       if (action === "billing-previous") controller.previousBillingPage();
+      if (action === "backup-refresh") controller.refreshBackup();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
     });
@@ -651,6 +717,9 @@ export function createPlatformPageController({
     state.billingCursor = null;
     state.billingCursorHistory = [];
     state.billingAdjustmentIntent = null;
+    state.infrastructure = null;
+    state.backup = null;
+    state.backupIntent = null;
     state.grants = null;
     state.audit = null;
     state.diagnostics = null;

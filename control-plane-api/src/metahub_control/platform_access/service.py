@@ -90,6 +90,12 @@ _ROLE_CODES = frozenset(
     }
 )
 _NAVIGATION = (
+    (
+        "platform.infrastructure.read",
+        "infrastructure",
+        "Infrastructure",
+        "/platform.html#infrastructure",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -2235,6 +2241,16 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
+    if _table_exists(connection, "platform_infrastructure_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_infrastructure_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
     extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
     parameters: tuple[object, ...] = tuple(
         [operator_id, *([operator_id] * len(extension_queries))]
@@ -2387,6 +2403,8 @@ def _support_hmac(config: AppConfig, value: str) -> str:
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        return connection.execute("SELECT to_regclass(?)", (name,)).fetchone()[0] is not None
     return (
         connection.execute(
             "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)

@@ -84,7 +84,8 @@ function Assert-MetaHubEnvFile {
     "METAHUB_SEED_VIRTUAL_KEY",
     "METAHUB_POSTGRES_PASSWORD",
     "METAHUB_MINIO_ACCESS_KEY",
-    "METAHUB_MINIO_SECRET_KEY"
+    "METAHUB_MINIO_SECRET_KEY",
+    "METAHUB_KMS_TEST_MASTER_KEY"
   )
   $invalid = $false
   foreach ($entry in $values.GetEnumerator()) {
@@ -372,6 +373,7 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-postgres-password" = (New-MetaHubLocalSecret)
     "replace-with-generated-minio-access-key" = "metahub" + (New-MetaHubLocalSecret -Length 8)
     "replace-with-generated-minio-secret-key" = (New-MetaHubLocalSecret)
+    "replace-with-generated-kms-test-master-key" = (New-MetaHubLocalSecret)
   }
   foreach ($key in $replacements.Keys) {
     $content = $content.Replace($key, [string]$replacements[$key])

@@ -11,11 +11,12 @@ import hmac
 import ipaddress
 import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -113,6 +114,27 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
     "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
+    # PRD-100 keeps local/test SQLite explicit while production uses PostgreSQL.
+    # Infrastructure credentials remain absent by default and are always masked.
+    "METAHUB_DATABASE_POOL_MIN_SIZE": "1",
+    "METAHUB_DATABASE_POOL_MAX_SIZE": "10",
+    "METAHUB_DATABASE_POOL_TIMEOUT_SECONDS": "3",
+    "METAHUB_DATABASE_STATEMENT_TIMEOUT_MS": "30000",
+    "METAHUB_DATABASE_LOCK_TIMEOUT_MS": "5000",
+    "METAHUB_INFRASTRUCTURE_PROBE_TIMEOUT_SECONDS": "3",
+    "METAHUB_OBJECT_STORE_ENDPOINT_URL": "",
+    "METAHUB_OBJECT_STORE_REGION": "",
+    "METAHUB_OBJECT_STORE_BUCKET": "",
+    "METAHUB_OBJECT_STORE_ACCESS_KEY_ID": "",
+    "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY": "",
+    "METAHUB_OBJECT_STORE_FORCE_PATH_STYLE": "true",
+    "METAHUB_KMS_PROVIDER": "disabled",
+    "METAHUB_KMS_KEY_ID": "",
+    "METAHUB_KMS_TEST_MASTER_KEY": "",
+    "METAHUB_BACKUP_WORKER_ENABLED": "false",
+    "METAHUB_BACKUP_POLL_INTERVAL_SECONDS": "5",
+    "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS": "30",
+    "METAHUB_BACKUP_RESTORE_DATABASE_URL": "",
     # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
     "METAHUB_RESPONSE_CACHE_ENABLED": "false",
     "METAHUB_RESPONSE_CACHE_HMAC_VERSION": "1",
@@ -442,6 +464,25 @@ class AppConfig(BaseModel):
     sensitive_keys_masked: bool = True
     database_url: str | None = Field(default=None, exclude=True, repr=False)
     redis_url: str | None = Field(default=None, exclude=True, repr=False)
+    database_pool_min_size: int = 1
+    database_pool_max_size: int = 10
+    database_pool_timeout_seconds: int = 3
+    database_statement_timeout_ms: int = 30_000
+    database_lock_timeout_ms: int = 5_000
+    infrastructure_probe_timeout_seconds: int = 3
+    object_store_endpoint_url: str | None = Field(default=None, exclude=True, repr=False)
+    object_store_region: str | None = Field(default=None, exclude=True, repr=False)
+    object_store_bucket: str | None = Field(default=None, exclude=True, repr=False)
+    object_store_access_key_id: str | None = Field(default=None, exclude=True, repr=False)
+    object_store_secret_access_key: str | None = Field(default=None, exclude=True, repr=False)
+    object_store_force_path_style: bool = True
+    kms_provider: Literal["disabled", "aws", "test"] = "disabled"
+    kms_key_id: str | None = Field(default=None, exclude=True, repr=False)
+    kms_test_master_key: str | None = Field(default=None, exclude=True, repr=False)
+    backup_worker_enabled: bool = False
+    backup_poll_interval_seconds: int = 5
+    backup_default_retention_days: int = 30
+    backup_restore_database_url: str | None = Field(default=None, exclude=True, repr=False)
     provider_api_keys: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     internal_config_token: str | None = Field(default=None, exclude=True, repr=False)
     # 内部 Chat Token 只供 Control 与 Gateway 之间的服务身份校验，不能复用用户 Session、
@@ -1739,6 +1780,56 @@ def load_app_config(service_name: str) -> AppConfig:
         ),
     )
 
+    database_pool_min_size = _bounded_int(
+        values, "METAHUB_DATABASE_POOL_MIN_SIZE", minimum=0, maximum=32
+    )
+    database_pool_max_size = _bounded_int(
+        values, "METAHUB_DATABASE_POOL_MAX_SIZE", minimum=1, maximum=128
+    )
+    database_pool_timeout_seconds = _bounded_int(
+        values, "METAHUB_DATABASE_POOL_TIMEOUT_SECONDS", minimum=1, maximum=30
+    )
+    database_statement_timeout_ms = _bounded_int(
+        values, "METAHUB_DATABASE_STATEMENT_TIMEOUT_MS", minimum=100, maximum=300000
+    )
+    database_lock_timeout_ms = _bounded_int(
+        values, "METAHUB_DATABASE_LOCK_TIMEOUT_MS", minimum=100, maximum=60000
+    )
+    infrastructure_probe_timeout_seconds = _bounded_int(
+        values, "METAHUB_INFRASTRUCTURE_PROBE_TIMEOUT_SECONDS", minimum=1, maximum=10
+    )
+    kms_provider = _kms_provider(values)
+    backup_worker_enabled = _boolean(values, "METAHUB_BACKUP_WORKER_ENABLED")
+    backup_poll_interval_seconds = _bounded_int(
+        values, "METAHUB_BACKUP_POLL_INTERVAL_SECONDS", minimum=1, maximum=300
+    )
+    backup_default_retention_days = _bounded_int(
+        values, "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS", minimum=1, maximum=3650
+    )
+    _validate_production_infrastructure_config(
+        environment=environment,
+        database_url=_optional_value(values, "METAHUB_DATABASE_URL"),
+        database_pool_min_size=database_pool_min_size,
+        database_pool_max_size=database_pool_max_size,
+        redis_url=_optional_value(values, "METAHUB_REDIS_URL"),
+        object_store_endpoint_url=_optional_value(values, "METAHUB_OBJECT_STORE_ENDPOINT_URL"),
+        object_store_region=_optional_value(values, "METAHUB_OBJECT_STORE_REGION"),
+        object_store_bucket=_optional_value(values, "METAHUB_OBJECT_STORE_BUCKET"),
+        object_store_access_key_id=_optional_value(
+            values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"
+        ),
+        object_store_secret_access_key=_optional_value(
+            values, "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY"
+        ),
+        kms_provider=kms_provider,
+        kms_key_id=_optional_value(values, "METAHUB_KMS_KEY_ID"),
+        kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
+        backup_worker_enabled=backup_worker_enabled,
+        backup_restore_database_url=_optional_value(
+            values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"
+        ),
+    )
+
     return AppConfig(
         service_name=service_name,
         environment=environment,
@@ -1777,6 +1868,35 @@ def load_app_config(service_name: str) -> AppConfig:
         warnings=warnings,
         database_url=_optional_value(values, "METAHUB_DATABASE_URL"),
         redis_url=_optional_value(values, "METAHUB_REDIS_URL"),
+        database_pool_min_size=database_pool_min_size,
+        database_pool_max_size=database_pool_max_size,
+        database_pool_timeout_seconds=database_pool_timeout_seconds,
+        database_statement_timeout_ms=database_statement_timeout_ms,
+        database_lock_timeout_ms=database_lock_timeout_ms,
+        infrastructure_probe_timeout_seconds=infrastructure_probe_timeout_seconds,
+        object_store_endpoint_url=_optional_value(
+            values, "METAHUB_OBJECT_STORE_ENDPOINT_URL"
+        ),
+        object_store_region=_optional_value(values, "METAHUB_OBJECT_STORE_REGION"),
+        object_store_bucket=_optional_value(values, "METAHUB_OBJECT_STORE_BUCKET"),
+        object_store_access_key_id=_optional_value(
+            values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"
+        ),
+        object_store_secret_access_key=_optional_value(
+            values, "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY"
+        ),
+        object_store_force_path_style=_boolean(
+            values, "METAHUB_OBJECT_STORE_FORCE_PATH_STYLE"
+        ),
+        kms_provider=kms_provider,
+        kms_key_id=_optional_value(values, "METAHUB_KMS_KEY_ID"),
+        kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
+        backup_worker_enabled=backup_worker_enabled,
+        backup_poll_interval_seconds=backup_poll_interval_seconds,
+        backup_default_retention_days=backup_default_retention_days,
+        backup_restore_database_url=_optional_value(
+            values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"
+        ),
         provider_api_keys=provider_api_keys,
         internal_config_token=internal_config_token,
         internal_chat_token=internal_chat_token,
@@ -3133,6 +3253,25 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_SERVICE_MODE",
         "METAHUB_DATABASE_URL",
         "METAHUB_REDIS_URL",
+        "METAHUB_DATABASE_POOL_MIN_SIZE",
+        "METAHUB_DATABASE_POOL_MAX_SIZE",
+        "METAHUB_DATABASE_POOL_TIMEOUT_SECONDS",
+        "METAHUB_DATABASE_STATEMENT_TIMEOUT_MS",
+        "METAHUB_DATABASE_LOCK_TIMEOUT_MS",
+        "METAHUB_INFRASTRUCTURE_PROBE_TIMEOUT_SECONDS",
+        "METAHUB_OBJECT_STORE_ENDPOINT_URL",
+        "METAHUB_OBJECT_STORE_REGION",
+        "METAHUB_OBJECT_STORE_BUCKET",
+        "METAHUB_OBJECT_STORE_ACCESS_KEY_ID",
+        "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY",
+        "METAHUB_OBJECT_STORE_FORCE_PATH_STYLE",
+        "METAHUB_KMS_PROVIDER",
+        "METAHUB_KMS_KEY_ID",
+        "METAHUB_KMS_TEST_MASTER_KEY",
+        "METAHUB_BACKUP_WORKER_ENABLED",
+        "METAHUB_BACKUP_POLL_INTERVAL_SECONDS",
+        "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS",
+        "METAHUB_BACKUP_RESTORE_DATABASE_URL",
         "METAHUB_INTERNAL_CONFIG_TOKEN",
         "METAHUB_INTERNAL_CHAT_TOKEN",
         "METAHUB_INTERNAL_BATCH_TOKEN",
@@ -4158,6 +4297,174 @@ def _build_warnings(
     return warnings
 
 
+def _kms_provider(values: dict[str, ConfigValue]) -> Literal["disabled", "aws", "test"]:
+    value = _value(values, "METAHUB_KMS_PROVIDER").strip().lower()
+    if value not in {"disabled", "aws", "test"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_KMS_PROVIDER is unsupported.",
+            suggestion="Use disabled, aws, or the explicit local/test provider.",
+        )
+    return value  # type: ignore[return-value]
+
+
+def _database_url_identity(value: str | None) -> tuple[str, str, int | None, str]:
+    parsed = urlsplit(value or "")
+    return parsed.scheme.lower(), parsed.hostname or "", parsed.port, parsed.path
+
+
+def _validate_production_infrastructure_config(
+    *,
+    environment: EnvironmentName,
+    database_url: str | None,
+    database_pool_min_size: int,
+    database_pool_max_size: int,
+    redis_url: str | None,
+    object_store_endpoint_url: str | None,
+    object_store_region: str | None,
+    object_store_bucket: str | None,
+    object_store_access_key_id: str | None,
+    object_store_secret_access_key: str | None,
+    kms_provider: Literal["disabled", "aws", "test"],
+    kms_key_id: str | None,
+    kms_test_master_key: str | None,
+    backup_worker_enabled: bool,
+    backup_restore_database_url: str | None,
+) -> None:
+    """Reject ambiguous production fallback and incomplete backup security domains."""
+
+    if database_pool_min_size > database_pool_max_size:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Database pool minimum cannot exceed its maximum.",
+            suggestion="Lower the pool minimum or increase the bounded maximum.",
+        )
+    database_scheme = urlsplit(database_url).scheme.lower() if database_url else None
+    if database_scheme not in {None, "sqlite", "postgres", "postgresql"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_DATABASE_URL uses an unsupported backend.",
+            suggestion="Use explicit SQLite for local/test or PostgreSQL for production.",
+        )
+    if environment == "prod" and database_scheme == "sqlite":
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="SQLite is not a production database backend.",
+            suggestion="Configure a PostgreSQL 16 URL; production never falls back to SQLite.",
+        )
+    if environment == "prod" and database_scheme in {"postgres", "postgresql"}:
+        sslmode = parse_qs(urlsplit(database_url).query).get("sslmode", [""])[-1].lower()
+        if sslmode not in {"require", "verify-ca", "verify-full"}:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Production PostgreSQL must require TLS.",
+                suggestion="Set sslmode=require, verify-ca, or verify-full in the database URL.",
+            )
+    redis_scheme = urlsplit(redis_url).scheme.lower() if redis_url else None
+    if redis_scheme not in {None, "redis", "rediss"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_REDIS_URL uses an unsupported scheme.",
+            suggestion="Use redis:// locally or rediss:// with TLS in production.",
+        )
+    if environment == "prod" and redis_url and redis_scheme != "rediss":
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Production Redis must use TLS.",
+            suggestion="Configure a rediss:// URL and server certificate validation.",
+        )
+
+    object_values = (
+        object_store_endpoint_url,
+        object_store_region,
+        object_store_bucket,
+        object_store_access_key_id,
+        object_store_secret_access_key,
+    )
+    if any(object_values) and not all(object_values):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="S3-compatible object store configuration is incomplete.",
+            suggestion="Configure endpoint, region, bucket, access key, and secret together.",
+        )
+    if object_store_bucket and re.fullmatch(
+        r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", object_store_bucket
+    ) is None:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Object store bucket name is invalid.",
+            suggestion="Use a valid lower-case S3 bucket name.",
+        )
+    if object_store_endpoint_url:
+        endpoint = urlsplit(object_store_endpoint_url)
+        if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Object store endpoint is invalid.",
+                suggestion="Configure an absolute HTTP(S) S3-compatible endpoint.",
+            )
+        if environment == "prod" and endpoint.scheme != "https":
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Production object storage must use TLS.",
+                suggestion="Configure an HTTPS S3-compatible endpoint.",
+            )
+
+    if kms_provider == "aws" and not kms_key_id:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="AWS KMS requires an explicit key identifier.",
+            suggestion="Configure the deployment KeyRing identifier.",
+        )
+    if kms_provider == "test" and (
+        environment == "prod" or not kms_test_master_key or len(kms_test_master_key) < 32
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="The local KMS test provider is not valid for this environment.",
+            suggestion="Use it only in dev/test with an explicit 32-character test key.",
+        )
+    if backup_worker_enabled and (
+        not database_url
+        or not all(object_values)
+        or kms_provider == "disabled"
+        or (
+            database_scheme in {"postgres", "postgresql"}
+            and not backup_restore_database_url
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Backup worker infrastructure is incomplete.",
+            suggestion=(
+                "Configure database, isolated restore target, object storage, and KMS before "
+                "enabling the backup worker."
+            ),
+        )
+    restore_scheme = (
+        urlsplit(backup_restore_database_url).scheme.lower()
+        if backup_restore_database_url
+        else None
+    )
+    if restore_scheme not in {None, "sqlite", "postgres", "postgresql"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Backup restore verification target is unsupported.",
+            suggestion="Use an explicit isolated SQLite or PostgreSQL restore target.",
+        )
+    if (
+        database_scheme in {"postgres", "postgresql"}
+        and backup_restore_database_url
+        and _database_url_identity(database_url)
+        == _database_url_identity(backup_restore_database_url)
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Backup restore target must be isolated from the source database.",
+            suggestion="Configure a distinct restore-verification database.",
+        )
+
+
 def _ensure_no_secret_preview(items: list[ConfigItemSummary]) -> None:
     """在 运行配置 内部复用 ensure no secret preview 辅助逻辑，集中处理边界值和错误映射。
 
@@ -4557,6 +4864,12 @@ def _is_sensitive_config_key(key: str) -> bool:
         is_sensitive_key(key)
         or "database_url" in normalized
         or "redis_url" in normalized
+        or "object_store_endpoint_url" in normalized
+        or "object_store_region" in normalized
+        or "object_store_bucket" in normalized
+        or "object_store_access_key_id" in normalized
+        or "kms_key_id" in normalized
+        or "kms_test_master_key" in normalized
         or normalized == "metahub_finops_usage_spool_root"
         or normalized == "metahub_response_cache_failure_spool_root"
         or normalized.endswith("_url_with_password")

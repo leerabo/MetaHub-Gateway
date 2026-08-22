@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from .connection import connect_database
+from .connection import connect_database, database_backend
 from .errors import DbError
 
 # 共享运行时必须保持租户、权限、用量和错误合同兼容，避免敏感信息进入日志。
@@ -70,7 +70,9 @@ def apply_migrations(
     """
 
     run_id = f"dbm_{uuid4().hex}"
-    connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
+    configured_url = database_url or os.getenv("METAHUB_DATABASE_URL")
+    _require_supported_migration_backend(configured_url)
+    connection = connect_database(configured_url)
     try:
         return _apply_migrations_with_connection(
             connection,
@@ -136,7 +138,9 @@ def rollback_last_migration(
     if expected_version is not None:
         _validate_expected_version(expected_version)
     run_id = f"dbr_{uuid4().hex}"
-    connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
+    configured_url = database_url or os.getenv("METAHUB_DATABASE_URL")
+    _require_supported_migration_backend(configured_url)
+    connection = connect_database(configured_url)
     try:
         return _rollback_last_migration_with_connection(
             connection,
@@ -304,6 +308,18 @@ def _validate_expected_version(expected_version: str) -> None:
             "Expected rollback version is invalid.",
             "Use the four-digit version from the reviewed migration owner.",
         )
+
+
+def _require_supported_migration_backend(database_url: str | None) -> None:
+    """Reject PostgreSQL before any SQLite migration SQL reaches the driver."""
+
+    if database_backend(database_url) != "postgresql":
+        return
+    raise DbError(
+        "db.migration_backend_unsupported",
+        "PostgreSQL migrations are not available in this migration runner.",
+        "Use a reviewed PostgreSQL-native migration bundle before starting application services.",
+    )
 
 
 def _migration_version_mismatch() -> DbError:

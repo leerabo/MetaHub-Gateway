@@ -7,6 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# PRD-100 uses the PostgreSQL client only in the isolated Backup Worker.  The
+# application connection path remains psycopg pooled and never shells out SQL.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # 先安装运行时依赖，减少后续源码变更导致的镜像层失效。
 COPY infra/docker/requirements.runtime.txt /tmp/metahub-requirements.txt
 RUN python -m pip install --upgrade pip \
