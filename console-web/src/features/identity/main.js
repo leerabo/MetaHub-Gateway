@@ -29,6 +29,12 @@ import {
   updateWorkspaceMembership,
   updateWorkspaceOnboardingStep,
 } from "../../lib/workspaces.js";
+import {
+  changeWorkspaceSubscription,
+  createWorkspaceSubscription,
+  getWorkspaceSubscription,
+  listPublicSaasPlans,
+} from "../../lib/saasBilling.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -72,6 +78,10 @@ if (root) {
       updateOnboardingStep: (input) =>
         updateWorkspaceOnboardingStep({ controlApiUrl, ...input }),
       recheckOnboarding: (input) => recheckWorkspaceOnboarding({ controlApiUrl, ...input }),
+      saasCatalog: (input) => listPublicSaasPlans({ controlApiUrl, ...input }),
+      subscription: (input) => getWorkspaceSubscription({ controlApiUrl, ...input }),
+      createSubscription: (input) => createWorkspaceSubscription({ controlApiUrl, ...input }),
+      changeSubscription: (input) => changeWorkspaceSubscription({ controlApiUrl, ...input }),
     },
   });
   controller.mount();

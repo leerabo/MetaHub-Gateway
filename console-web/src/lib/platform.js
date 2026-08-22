@@ -310,6 +310,19 @@ export function listPlatformAudit({ controlApiUrl, signal } = {}) {
   return request(controlApiUrl, "/platform/audit-logs?limit=100", { signal });
 }
 
+export function listPlatformSaasPlans({ controlApiUrl, signal } = {}) {
+  return request(controlApiUrl, "/platform/plans", { signal });
+}
+
+export function createPlatformSaasPlan({ controlApiUrl, plan, signal } = {}) {
+  return request(controlApiUrl, "/platform/plans", {
+    method: "POST",
+    body: platformPlanPayload(plan),
+    csrf: PLATFORM_CSRF_COOKIE,
+    signal,
+  });
+}
+
 export function readPlatformCsrfCookie(cookieText = globalThis.document?.cookie ?? "") {
   return readCookie(PLATFORM_CSRF_COOKIE, cookieText);
 }
@@ -480,6 +493,46 @@ function reason(value) {
   const text = String(value ?? "").trim();
   if (!/^[a-z0-9][a-z0-9._-]{1,79}$/u.test(text)) invalidRequest();
   return text;
+}
+
+function platformPlanPayload(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) invalidRequest();
+  const planCode = String(value.plan_code ?? "").trim();
+  const displayName = String(value.display_name ?? "").trim();
+  const billingPeriod = String(value.billing_period ?? "");
+  const currency = String(value.currency ?? "");
+  const unitPrice = String(value.unit_price ?? "");
+  const entitlements = value.entitlements;
+  if (!/^[a-z0-9][a-z0-9_-]{1,39}$/u.test(planCode)
+    || displayName.length < 1 || displayName.length > 80
+    || !new Set(["none", "monthly", "yearly"]).has(billingPeriod)
+    || !new Set(["CNY", "USD"]).has(currency)
+    || !/^(?:0|[1-9][0-9]{0,10})\.[0-9]{2}$/u.test(unitPrice)
+    || !entitlements || Object.getPrototypeOf(entitlements) !== Object.prototype) {
+    invalidRequest();
+  }
+  const displayOrder = boundedInteger(value.display_order, 0, 10000);
+  const trialDays = boundedInteger(value.trial_days, 0, 90);
+  const normalizedEntitlements = {
+    gateway_requests_per_month: boundedInteger(
+      entitlements.gateway_requests_per_month, 0, 1_000_000_000,
+    ),
+    workspace_seats: boundedInteger(entitlements.workspace_seats, 1, 100_000),
+    model_aliases: boundedInteger(entitlements.model_aliases, 1, 100_000),
+    retention_days: boundedInteger(entitlements.retention_days, 1, 3650),
+    priority_support: entitlements.priority_support === true,
+  };
+  return {
+    plan_code: planCode,
+    display_name: displayName,
+    display_order: displayOrder,
+    billing_period: billingPeriod,
+    currency,
+    unit_price: unitPrice,
+    trial_days: trialDays,
+    entitlements: normalizedEntitlements,
+    publish: value.publish === true,
+  };
 }
 
 function totp(value) {

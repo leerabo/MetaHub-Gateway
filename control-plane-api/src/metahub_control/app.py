@@ -85,6 +85,8 @@ from .request_logs import install_request_log_query_event_scheduler
 from .request_logs.routes import router as request_logs_router
 from .response_cache import install_response_cache_outbox_scheduler
 from .response_cache import router as response_cache_router
+from .saas_billing import install_saas_billing_scheduler
+from .saas_billing import router as saas_billing_router
 from .security_events import install_security_event_scheduler
 from .session_risks import router as session_risks_router
 from .tenant_data import install_tenant_data_scheduler
@@ -175,6 +177,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/support/")
         or request.url.path.startswith("/workspace/support-grants/")
         or request.url.path.startswith("/workspace/break-glass-sessions/")
+        or request.url.path == "/subscriptions"
+        or request.url.path.startswith("/subscriptions/")
         or request.url.path == "/workspaces/current/onboarding"
         or request.url.path.startswith("/workspaces/current/onboarding/")
         or request.url.path == "/tenant/current"
@@ -264,6 +268,7 @@ app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
 app.include_router(request_logs_router)
 app.include_router(response_cache_router)
+app.include_router(saas_billing_router)
 app.include_router(session_risks_router)
 app.include_router(request_explanations_router)
 app.include_router(usage_router)
@@ -290,6 +295,7 @@ if app.state.config.control_background_schedulers_enabled:
     install_product_event_scheduler(app)
     install_approval_scheduler(app)
     install_plan_billing_scheduler(app)
+    install_saas_billing_scheduler(app)
     install_partner_portal_scheduler(app)
     install_branding_scheduler(app)
     install_billing_dispute_scheduler(app)

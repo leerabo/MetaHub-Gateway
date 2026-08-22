@@ -68,6 +68,19 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-chip-row span, .platform-role { display: inline-block; padding: 4px 7px; border: 1px solid #c7d2ca; border-radius: 4px; background: #f7faf7; font-size: 11px; }
 .platform-form-band { max-width: 940px; }
 .platform-inline-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(360px, 2fr) auto; align-items: end; gap: 18px; }
+.platform-plan-publisher form { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); align-items: end; gap: 14px; }
+.platform-plan-publisher form > * { min-width: 0; }
+.platform-plan-publisher input, .platform-plan-publisher select { width: 100%; min-width: 0; }
+.platform-plan-switches { display: flex; min-height: 40px; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.platform-plan-switches legend { width: 100%; margin-bottom: 0; }
+.platform-plan-publisher button { min-width: 118px; }
+.platform-plan-table { table-layout: auto; }
+.platform-plan-table th:last-child, .platform-plan-table td:last-child { width: auto; text-align: left; }
+.platform-plan-table th:nth-child(1) { width: 16%; }
+.platform-plan-table th:nth-child(2) { width: 19%; }
+.platform-plan-table th:nth-child(3) { width: 11%; }
+.platform-plan-table th:nth-child(4) { width: 15%; }
+.platform-plan-table th:nth-child(5) { width: 8%; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 legend { margin-bottom: 7px; color: #455048; font-size: 13px; font-weight: 650; }
 .platform-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 12px; }
@@ -163,6 +176,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-sidebar { position: sticky; z-index: 4; top: 64px; width: 100%; height: auto; display: flex; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .platform-sidebar button { width: auto; min-width: 148px; white-space: normal; overflow-wrap: normal; }
   .platform-inline-form, .platform-form-split { grid-template-columns: 1fr; }
+  .platform-plan-publisher form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-form-split form { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--line); }
   .platform-role-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-diagnostics dl { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
@@ -179,6 +193,8 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-metrics { grid-template-columns: 1fr; }
   .platform-metrics > div, .platform-metrics > div + div { padding: 18px 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .platform-role-grid { grid-template-columns: 1fr; }
+  .platform-plan-publisher form { grid-template-columns: 1fr; }
+  .platform-plan-publisher button { width: 100%; }
   .platform-confirm { align-items: flex-start; flex-direction: column; }
   .platform-confirm div { align-items: flex-start; flex-direction: column; }
   .platform-lifecycle-confirm form { width: 100%; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -187,6 +203,13 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-filter-form { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-filter-search { grid-column: 1 / -1; }
   .platform-workspace-table { min-width: 0; }
+  .platform-plan-table { min-width: 0; }
+  .platform-plan-table thead { display: none; }
+  .platform-plan-table tbody, .platform-plan-table tr, .platform-plan-table td { display: block; width: 100%; }
+  .platform-plan-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-plan-table td,
+  .platform-plan-table td:last-child { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px; width: 100%; padding: 6px 0; border: 0; text-align: left; }
+  .platform-plan-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-workspace-table thead { display: none; }
   .platform-workspace-table tbody, .platform-workspace-table tr, .platform-workspace-table td { display: block; width: 100%; }
   .platform-workspace-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }

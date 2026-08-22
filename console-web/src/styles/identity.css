@@ -408,12 +408,178 @@ a {
 .identity-summary,
 .identity-mfa,
 .identity-onboarding,
+.identity-subscription,
 .identity-workspaces,
 .identity-memberships,
 .identity-sessions,
 .identity-password {
   border-top: 1px solid var(--identity-line);
   padding-top: 20px;
+}
+
+.identity-icon-command {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #bdc7d2;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.identity-icon-command:disabled,
+.identity-subscription-command button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.identity-subscription-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-subscription-summary > div {
+  min-width: 0;
+  padding: 14px 16px;
+}
+
+.identity-subscription-summary > div:not(:nth-child(3n + 1)) {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-subscription-summary > div:nth-child(n + 4) {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-subscription-summary dt,
+.identity-entitlement-strip span,
+.identity-saas-plan-row span,
+.identity-subscription-empty span {
+  color: var(--identity-muted);
+  font-size: 0.76rem;
+}
+
+.identity-subscription-summary dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.identity-subscription-empty {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-block: 1px solid var(--identity-line);
+  padding: 15px 4px;
+}
+
+.identity-entitlement-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-entitlement-strip > div {
+  min-width: 0;
+  padding: 13px 14px;
+}
+
+.identity-entitlement-strip > div + div {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-entitlement-strip strong,
+.identity-saas-plan-row strong,
+.identity-saas-plan-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-entitlement-strip strong,
+.identity-saas-plan-row span {
+  margin-top: 4px;
+}
+
+.identity-saas-plan-list {
+  margin-top: 18px;
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-saas-plan-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(130px, 0.8fr)) minmax(80px, 0.45fr);
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  border-bottom: 1px solid var(--identity-line);
+  padding: 14px 4px;
+}
+
+.identity-saas-plan-row > div {
+  min-width: 0;
+}
+
+.identity-plan-marker {
+  display: inline-block !important;
+  width: fit-content;
+  margin: 0 !important;
+  border: 1px solid #9dcbb8;
+  border-radius: 4px;
+  background: #edf8f2;
+  color: #146c4c !important;
+  padding: 4px 7px;
+  font-weight: 750;
+}
+
+.identity-subscription-command {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.identity-subscription-command > label:first-child {
+  display: grid;
+  gap: 7px;
+  color: #3e4955;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.identity-subscription-command select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 7px 9px;
+}
+
+.identity-subscription-trial {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  color: #3e4955;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.identity-subscription-trial input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--identity-accent);
 }
 
 .identity-mfa-start,
@@ -976,7 +1142,11 @@ a {
 .identity-memberships input:focus-visible,
 .identity-memberships select:focus-visible,
 .identity-workspace-selector input:focus-visible,
-.identity-workspace-selector summary:focus-visible {
+.identity-workspace-selector summary:focus-visible,
+.identity-icon-command:focus-visible,
+.identity-subscription-command select:focus-visible,
+.identity-subscription-command input:focus-visible,
+.identity-subscription-command button:focus-visible {
   outline: 3px solid rgba(8, 120, 111, 0.25);
   outline-offset: 2px;
 }
@@ -1216,6 +1386,41 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .identity-subscription-summary,
+  .identity-entitlement-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-subscription-summary > div,
+  .identity-subscription-summary > div:not(:nth-child(3n + 1)),
+  .identity-entitlement-strip > div,
+  .identity-entitlement-strip > div + div {
+    border-top: 0;
+    border-left: 0;
+  }
+
+  .identity-subscription-summary > div:nth-child(even),
+  .identity-entitlement-strip > div:nth-child(even) {
+    border-left: 1px solid var(--identity-line);
+  }
+
+  .identity-subscription-summary > div:nth-child(n + 3),
+  .identity-entitlement-strip > div:nth-child(n + 3) {
+    border-top: 1px solid var(--identity-line);
+  }
+
+  .identity-saas-plan-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-subscription-command {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .identity-subscription-command > label:first-child {
+    grid-column: 1 / -1;
+  }
+
   .identity-onboarding-steps {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1281,6 +1486,31 @@ a {
 
   .identity-summary-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-subscription-summary,
+  .identity-entitlement-strip,
+  .identity-saas-plan-row,
+  .identity-subscription-command {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-subscription-summary > div:nth-child(even),
+  .identity-entitlement-strip > div:nth-child(even) {
+    border-left: 0;
+  }
+
+  .identity-subscription-summary > div + div,
+  .identity-entitlement-strip > div + div {
+    border-top: 1px solid var(--identity-line);
+  }
+
+  .identity-subscription-command > label:first-child {
+    grid-column: auto;
+  }
+
+  .identity-subscription-command button {
+    width: 100%;
   }
 
   .identity-onboarding-heading {

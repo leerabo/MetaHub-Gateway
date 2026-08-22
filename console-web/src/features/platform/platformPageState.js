@@ -41,6 +41,7 @@ export function createPlatformPageController({ root, api } = {}) {
     session: null,
     navigation: [],
     operators: null,
+    plans: null,
     grants: null,
     audit: null,
     diagnostics: null,
@@ -113,6 +114,9 @@ export function createPlatformPageController({ root, api } = {}) {
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
+    },
+    async createPlan(plan) {
+      return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
     },
     async toggleOperator(input) {
       return write("操作员状态已更新。", () => api.updateOperator(input));
@@ -299,6 +303,7 @@ export function createPlatformPageController({ root, api } = {}) {
       const next = {
         navigation: normalizeNavigation(navigation.items),
         operators: null,
+        plans: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -309,6 +314,9 @@ export function createPlatformPageController({ root, api } = {}) {
       const tasks = [];
       if (permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
+      }
+      if (permissions.has("platform.catalog.read") && typeof api.plans === "function") {
+        tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
       }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
@@ -440,6 +448,25 @@ export function createPlatformPageController({ root, api } = {}) {
       const data = new FormData(form);
       if (form.matches("[data-platform-session-form]")) controller.openSession(data.get("totpCode"));
       if (form.matches("[data-operator-form]")) controller.createOperator(data.get("accountId"), data.getAll("roles"));
+      if (form.matches("[data-platform-plan-form]")) {
+        controller.createPlan({
+          plan_code: data.get("planCode"),
+          display_name: data.get("displayName"),
+          display_order: Number(data.get("displayOrder")),
+          billing_period: data.get("billingPeriod"),
+          currency: data.get("currency"),
+          unit_price: data.get("unitPrice"),
+          trial_days: Number(data.get("trialDays")),
+          entitlements: {
+            gateway_requests_per_month: Number(data.get("gatewayRequests")),
+            workspace_seats: Number(data.get("workspaceSeats")),
+            model_aliases: Number(data.get("modelAliases")),
+            retention_days: Number(data.get("retentionDays")),
+            priority_support: data.get("prioritySupport") === "on",
+          },
+          publish: data.get("publish") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -505,6 +532,7 @@ export function createPlatformPageController({ root, api } = {}) {
   function clearProtectedFacts() {
     state.navigation = [];
     state.operators = null;
+    state.plans = null;
     state.grants = null;
     state.audit = null;
     state.diagnostics = null;

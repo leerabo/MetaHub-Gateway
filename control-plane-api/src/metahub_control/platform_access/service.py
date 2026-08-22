@@ -138,6 +138,55 @@ class IssuedSupportSession:
     session_token: str
 
 
+def authenticate_platform_session_context(
+    config: AppConfig,
+    session_token: str,
+    *,
+    csrf_token: str | None = None,
+) -> PlatformContext:
+    """Restore one Platform principal for domain routers before body parsing."""
+
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        context = _authenticate_platform(
+            connection,
+            config,
+            session_token,
+            csrf_token=csrf_token,
+            touch=True,
+        )
+        connection.commit()
+        return context
+    except ApiError as exc:
+        _finish_auth_error(connection, exc)
+        raise
+    except (sqlite3.Error, ValueError, TypeError):
+        _rollback(connection)
+        raise ApiError("platform.unavailable") from None
+    finally:
+        connection.close()
+
+
+def authenticate_platform_session_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str | None = None,
+    touch: bool = False,
+) -> PlatformContext:
+    """Authenticate a PlatformSession inside a caller-owned transaction."""
+
+    return _authenticate_platform(
+        connection,
+        config,
+        session_token,
+        csrf_token=csrf_token,
+        touch=touch,
+    )
+
+
 def bootstrap_platform_owner(
     config: AppConfig,
     *,
@@ -622,6 +671,7 @@ def get_platform_navigation(
             PlatformNavigationItem(id=item_id, label=label, href=href)
             for permission, item_id, label, href in _NAVIGATION
             if permission in permission_set
+            or (item_id == "billing" and "platform.catalog.read" in permission_set)
         )
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
@@ -2164,17 +2214,33 @@ def _authority(
             (operator_id,),
         ).fetchall()
     )
+    extension = (
+        """
+        UNION
+        SELECT extension.permission_code
+        FROM platform_operator_role_bindings binding
+        JOIN platform_role_permission_extensions extension
+          ON extension.role_code=binding.role_code
+        WHERE binding.operator_id=? AND binding.status='active'
+        """
+        if _table_exists(connection, "platform_role_permission_extensions")
+        else ""
+    )
+    parameters: tuple[object, ...] = (
+        (operator_id, operator_id) if extension else (operator_id,)
+    )
     permissions = tuple(
         row[0]
         for row in connection.execute(
-            """
-            SELECT DISTINCT permission.permission_code
+            f"""
+            SELECT permission.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_role_permissions permission ON permission.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
-            ORDER BY permission.permission_code
+            {extension}
+            ORDER BY permission_code
             """,
-            (operator_id,),
+            parameters,
         ).fetchall()
     )
     fingerprint = hashlib.sha256(

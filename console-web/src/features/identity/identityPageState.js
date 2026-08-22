@@ -41,6 +41,11 @@ export function createIdentityPageController({
   let onboardingBusy = false;
   let onboardingError = null;
   let onboardingIntent = null;
+  let saasCatalog = null;
+  let subscription = null;
+  let subscriptionBusy = false;
+  let subscriptionError = null;
+  let subscriptionIntent = null;
   let workspaceView = "summary";
   let workspaceDraft = null;
   let invitationResult = null;
@@ -454,6 +459,30 @@ export function createIdentityPageController({
         if (!isCurrent(ticket) || isAbort(error)) return false;
         return handleWorkspaceActionError(error, "无法进入该空间。", ticket);
       }
+    },
+    async refreshSubscription() {
+      if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
+        || typeof api.subscription !== "function") return false;
+      const ticket = beginRequest();
+      subscriptionBusy = true;
+      subscriptionError = null;
+      renderSecurity();
+      return loadSaasBilling(ticket, "套餐与权益已刷新。");
+    },
+    async createSubscription({ planVersionId, startTrial }) {
+      if (!workspaceFinanceAllowed() || subscription?.subscription
+        || typeof api.createSubscription !== "function") return false;
+      return mutateSubscription({
+        kind: "create",
+        planVersionId,
+        startTrial: startTrial === true,
+      });
+    },
+    async changeSubscription({ planVersionId }) {
+      const revision = Number(subscription?.subscription?.state_revision);
+      if (!workspaceFinanceAllowed() || !Number.isSafeInteger(revision) || revision < 1
+        || typeof api.changeSubscription !== "function") return false;
+      return mutateSubscription({ kind: "change", planVersionId, revision });
     },
     selectOnboardingStep(index) {
       const step = onboarding?.steps?.[Number(index)];
@@ -897,6 +926,96 @@ export function createIdentityPageController({
     }
   }
 
+  function workspaceFinanceAllowed() {
+    return Boolean(
+      workspaceContext
+      && new Set(["owner", "finance_admin"]).has(workspaceContext.role),
+    );
+  }
+
+  async function loadSaasBilling(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
+      || typeof api.subscription !== "function") {
+      saasCatalog = null;
+      subscription = null;
+      subscriptionBusy = false;
+      subscriptionError = null;
+      subscriptionIntent = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    subscriptionBusy = true;
+    const [catalogOutcome, subscriptionOutcome] = await Promise.all([
+      api.saasCatalog({ signal: ticket.signal }).then(
+        (value) => ({ value, error: null }),
+        (error) => ({ value: null, error }),
+      ),
+      api.subscription({ signal: ticket.signal }).then(
+        (value) => ({ value, error: null }),
+        (error) => ({ value: null, error }),
+      ),
+    ]);
+    if (!isCurrent(ticket)) return false;
+    const drift = [catalogOutcome.error, subscriptionOutcome.error]
+      .find((error) => error && isWorkspaceAuthorizationDrift(error));
+    if (drift) throw drift;
+    saasCatalog = catalogOutcome.value;
+    subscription = subscriptionOutcome.value;
+    subscriptionBusy = false;
+    const error = catalogOutcome.error ?? subscriptionOutcome.error;
+    subscriptionError = error ? safePageError(error) : null;
+    if (render) renderSecurity({ feedback: error ? "" : feedback });
+    return !error;
+  }
+
+  async function mutateSubscription(input) {
+    if (subscriptionBusy) return false;
+    const planVersionId = String(input.planVersionId ?? "");
+    const fingerprint = JSON.stringify({
+      kind: input.kind,
+      planVersionId,
+      revision: input.revision ?? null,
+      startTrial: input.startTrial === true,
+    });
+    const idempotencyKey = subscriptionIntent?.fingerprint === fingerprint
+      ? subscriptionIntent.idempotencyKey
+      : newIdempotencyKey();
+    subscriptionIntent = { fingerprint, idempotencyKey };
+    const ticket = beginRequest();
+    subscriptionBusy = true;
+    subscriptionError = null;
+    renderSecurity();
+    try {
+      const operation = input.kind === "create" ? api.createSubscription : api.changeSubscription;
+      const result = await queueWrite(() => operation({
+        planVersionId,
+        startTrial: input.startTrial === true,
+        revision: input.revision,
+        idempotencyKey,
+        signal: ticket.signal,
+      }));
+      if (!isCurrent(ticket)) return false;
+      subscription = result;
+      subscriptionBusy = false;
+      subscriptionIntent = null;
+      renderSecurity({ feedback: input.kind === "create" ? "订阅意图已创建。" : "套餐变更已登记。" });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      subscriptionBusy = false;
+      if (isWorkspaceAuthorizationDrift(error)) {
+        subscriptionIntent = null;
+        return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+      }
+      if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+        subscriptionIntent = null;
+      }
+      subscriptionError = safePageError(error);
+      renderSecurity();
+      return false;
+    }
+  }
+
   async function loadWorkspaceAccess(
     ticket,
     feedback,
@@ -1059,6 +1178,8 @@ export function createIdentityPageController({
         onboardingError = null;
         applyOnboardingProjection(onboardingOutcome.value);
       }
+      await loadSaasBilling(ticket, "", { render: false });
+      if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
     } catch (error) {
@@ -1158,6 +1279,10 @@ export function createIdentityPageController({
       onboardingSelectedStepId,
       onboardingBusy,
       onboardingError,
+      saasCatalog,
+      subscription,
+      subscriptionBusy,
+      subscriptionError,
       workspaceView,
       workspaceDraft,
       invitationResult,
@@ -1198,6 +1323,11 @@ export function createIdentityPageController({
     onboardingBusy = false;
     onboardingError = null;
     onboardingIntent = null;
+    saasCatalog = null;
+    subscription = null;
+    subscriptionBusy = false;
+    subscriptionError = null;
+    subscriptionIntent = null;
   }
 
   function clearInvitationSecret() {
@@ -1345,6 +1475,17 @@ export function createIdentityPageController({
           currentPassword: fields.get("currentPassword"),
           confirmed: fields.get("confirmTransfer") === "on",
         });
+      } else if (form?.matches?.("[data-saas-subscription-create-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createSubscription({
+          planVersionId: fields.get("planVersionId"),
+          startTrial: fields.get("startTrial") === "on",
+        });
+      } else if (form?.matches?.("[data-saas-subscription-change-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.changeSubscription({ planVersionId: fields.get("planVersionId") });
       }
     });
     root.addEventListener?.("click", async (event) => {
@@ -1384,6 +1525,8 @@ export function createIdentityPageController({
         await controller.recheckOnboarding();
       } else if (button.dataset.identityAction === "refresh-onboarding") {
         await controller.refreshOnboarding();
+      } else if (button.dataset.identityAction === "refresh-subscription") {
+        await controller.refreshSubscription();
       } else if (button.dataset.identityAction === "copy-invitation-link") {
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {

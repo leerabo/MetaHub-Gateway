@@ -176,6 +176,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderFeedback(state.feedback)}
         ${renderError(state.error)}
         ${renderOnboardingSection(state)}
+        ${renderSaasSubscriptionSection(state)}
         <section class="identity-summary" aria-labelledby="identity-summary-title">
           <div class="identity-section-heading">
             <div>
@@ -305,6 +306,142 @@ function renderOnboardingSection(state) {
       </div>
     </section>
   `;
+}
+
+function renderSaasSubscriptionSection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
+  const plans = Array.isArray(state.saasCatalog?.plans) ? state.saasCatalog.plans : [];
+  const versions = plans.flatMap((plan) => (plan.versions ?? []).map((version) => ({
+    ...version,
+    plan_code: plan.plan_code,
+    display_name: plan.display_name,
+  })));
+  const response = state.subscription ?? {};
+  const current = response.subscription ?? null;
+  const entitlement = response.entitlement ?? null;
+  const trial = response.trial ?? null;
+  const order = response.latest_order ?? null;
+  const currentPlan = versions.find((version) => version.plan_version_id === current?.plan_version_id);
+  const pendingPlan = versions.find(
+    (version) => version.plan_version_id === current?.pending_plan_version_id,
+  );
+  const candidates = versions.filter((version) => (
+    version.status === "published"
+    && version.plan_version_id !== current?.plan_version_id
+    && version.plan_version_id !== current?.pending_plan_version_id
+  ));
+  return `
+    <section class="identity-subscription" aria-labelledby="identity-subscription-title">
+      <div class="identity-section-heading">
+        <div><p>SaaS 商业化</p><h2 id="identity-subscription-title">套餐与权益</h2></div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-subscription" aria-label="刷新套餐与权益" title="刷新套餐与权益" ${state.subscriptionBusy ? "disabled" : ""}>↻</button>
+      </div>
+      ${state.subscriptionError ? renderError(state.subscriptionError) : ""}
+      ${current ? renderCurrentSubscription(current, currentPlan, pendingPlan, trial, order) : renderNoSubscription()}
+      ${entitlement ? renderEntitlementFacts(entitlement.entitlements) : ""}
+      <div class="identity-saas-plan-list" aria-label="可用套餐">
+        ${plans.map((plan) => renderSaasPlan(plan, current?.plan_version_id, current?.pending_plan_version_id)).join("") || '<p class="identity-empty">当前没有已发布套餐。</p>'}
+      </div>
+      ${renderSubscriptionCommand(current, candidates, state.subscriptionBusy)}
+    </section>
+  `;
+}
+
+function renderNoSubscription() {
+  return '<div class="identity-subscription-empty"><strong>尚未订阅</strong><span>未创建 Workspace 订阅记录</span></div>';
+}
+
+function renderCurrentSubscription(current, currentPlan, pendingPlan, trial, order) {
+  return `
+    <dl class="identity-subscription-summary">
+      <div><dt>当前套餐</dt><dd>${escapeHtml(currentPlan?.display_name ?? current.plan_version_id)}</dd></div>
+      <div><dt>订阅状态</dt><dd>${escapeHtml(subscriptionStatusLabel(current.status))}</dd></div>
+      <div><dt>周期结束</dt><dd>${escapeHtml(formatIdentityDate(current.current_period_ends_at))}</dd></div>
+      <div><dt>待生效套餐</dt><dd>${escapeHtml(pendingPlan?.display_name ?? (current.pending_plan_version_id ? "已登记" : "无"))}</dd></div>
+      <div><dt>试用结束</dt><dd>${escapeHtml(formatIdentityDate(trial?.ends_at))}</dd></div>
+      <div><dt>最近订单</dt><dd>${escapeHtml(order ? subscriptionStatusLabel(order.status) : "无")}</dd></div>
+    </dl>
+  `;
+}
+
+function renderEntitlementFacts(entitlements = {}) {
+  return `
+    <div class="identity-entitlement-strip" aria-label="当前权益">
+      ${entitlementFact("月请求", formatIdentityNumber(entitlements.gateway_requests_per_month))}
+      ${entitlementFact("席位", formatIdentityNumber(entitlements.workspace_seats))}
+      ${entitlementFact("模型别名", formatIdentityNumber(entitlements.model_aliases))}
+      ${entitlementFact("留存", `${formatIdentityNumber(entitlements.retention_days)} 天`)}
+      ${entitlementFact("优先支持", entitlements.priority_support ? "包含" : "不包含")}
+    </div>
+  `;
+}
+
+function entitlementFact(label, value) {
+  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function renderSaasPlan(plan, currentPlanVersionId, pendingPlanVersionId) {
+  const version = (plan.versions ?? []).find((item) => item.status === "published")
+    ?? plan.versions?.[0];
+  if (!version) return "";
+  const marker = version.plan_version_id === currentPlanVersionId
+    ? "当前"
+    : version.plan_version_id === pendingPlanVersionId ? "待生效" : "";
+  return `
+    <article class="identity-saas-plan-row">
+      <div><strong>${escapeHtml(plan.display_name)}</strong><span>${escapeHtml(plan.plan_code)} · v${formatIdentityNumber(version.version_number)}</span></div>
+      <div><strong>${escapeHtml(formatPlanPrice(version))}</strong><span>${escapeHtml(billingPeriodLabel(version.billing_period))}</span></div>
+      <div><strong>${formatIdentityNumber(version.entitlements?.workspace_seats)} 席位</strong><span>${formatIdentityNumber(version.entitlements?.gateway_requests_per_month)} 次/月</span></div>
+      <div>${marker ? `<span class="identity-plan-marker">${escapeHtml(marker)}</span>` : `<span>${formatIdentityNumber(version.trial_days)} 天试用</span>`}</div>
+    </article>
+  `;
+}
+
+function renderSubscriptionCommand(current, candidates, busy) {
+  if (candidates.length === 0) return "";
+  const create = !current;
+  return `
+    <form class="identity-subscription-command" ${create ? "data-saas-subscription-create-form" : "data-saas-subscription-change-form"}>
+      <label><span>目标套餐</span><select name="planVersionId" required>${candidates.map((version) => `<option value="${escapeAttribute(version.plan_version_id)}">${escapeHtml(version.display_name)} · ${escapeHtml(formatPlanPrice(version))}</option>`).join("")}</select></label>
+      ${create ? '<label class="identity-subscription-trial"><input name="startTrial" type="checkbox" /><span>使用可用试用期</span></label>' : ""}
+      <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>${create ? "创建订阅" : "登记套餐变更"}</button>
+    </form>
+  `;
+}
+
+function formatPlanPrice(version) {
+  if (version.billing_period === "none" || version.unit_price === "0.00") return "免费";
+  return `${version.currency} ${version.unit_price}`;
+}
+
+function billingPeriodLabel(value) {
+  return ({ none: "无周期", monthly: "每月", yearly: "每年" })[value] ?? String(value ?? "-");
+}
+
+function subscriptionStatusLabel(value) {
+  return ({
+    pending: "待支付",
+    active: "生效中",
+    trialing: "试用中",
+    past_due: "逾期",
+    canceled: "已取消",
+    expired: "已到期",
+    pending_payment: "待支付",
+    not_required: "无需支付",
+    scheduled: "已排期",
+  })[value] ?? String(value ?? "-").replaceAll("_", " ");
+}
+
+function formatIdentityDate(value) {
+  const date = new Date(value);
+  return value && !Number.isNaN(date.valueOf())
+    ? new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date)
+    : "-";
+}
+
+function formatIdentityNumber(value) {
+  return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0";
 }
 
 function renderOnboardingStepButton(step, index, selectedIndex, busy) {

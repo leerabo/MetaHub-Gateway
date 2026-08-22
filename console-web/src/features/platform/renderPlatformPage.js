@@ -67,6 +67,7 @@ function renderView(state, permissions) {
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
+  if (state.view === "billing") return billingView(state, permissions);
   return domainPlaceholderView(state);
 }
 
@@ -252,6 +253,59 @@ function auditView(state) {
   return `<header class="platform-page-heading"><div><p>Immutable Audit</p><h1>平台审计</h1></div><span>${entries.length} 条记录</span></header><section class="platform-band"><ol class="platform-timeline">${entries.map((entry) => `<li><time>${formatTime(entry.occurred_at)}</time><div><strong>${escapeHtml(actionLabel(entry.action))}</strong><span>${escapeHtml(entry.object_type)} · ${escapeHtml(entry.object_id)}</span><small>${escapeHtml(entry.reason_code)}</small></div></li>`).join("") || '<li class="platform-empty">暂无审计记录</li>'}</ol></section>`;
 }
 
+function billingView(state, permissions) {
+  const catalogs = state.plans?.plans ?? [];
+  const versions = catalogs.flatMap((catalog) => (catalog.versions ?? []).map((version) => ({
+    ...version,
+    plan_code: catalog.plan_code,
+    display_name: catalog.display_name,
+    catalog_status: catalog.status,
+  })));
+  return `
+    <header class="platform-page-heading"><div><p>SaaS catalog</p><h1>套餐目录</h1></div><span>${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本</span></header>
+    ${permissions.has("platform.catalog.write") ? platformPlanForm() : ""}
+    <section class="platform-band platform-plan-versions">
+      <div class="platform-section-heading"><div><p>Immutable versions</p><h2>版本记录</h2></div></div>
+      <div class="platform-table-wrap"><table class="platform-plan-table"><thead><tr><th>套餐</th><th>版本</th><th>状态</th><th>价格</th><th>试用</th><th>权益</th></tr></thead><tbody>${versions.map(platformPlanRow).join("") || emptyRow("暂无套餐版本", 6)}</tbody></table></div>
+    </section>
+  `;
+}
+
+function platformPlanForm() {
+  return `
+    <section class="platform-band platform-plan-publisher">
+      <div class="platform-section-heading"><div><p>Version publisher</p><h2>创建套餐版本</h2></div></div>
+      <form data-platform-plan-form autocomplete="off">
+        <label><span>Plan code</span><input name="planCode" pattern="[a-z0-9][a-z0-9_-]{1,39}" maxlength="40" required /></label>
+        <label><span>展示名称</span><input name="displayName" maxlength="80" required /></label>
+        <label><span>展示顺序</span><input name="displayOrder" type="number" min="0" max="10000" value="100" required /></label>
+        <label><span>计费周期</span><select name="billingPeriod"><option value="monthly">每月</option><option value="yearly">每年</option><option value="none">免费</option></select></label>
+        <label><span>币种</span><select name="currency"><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
+        <label><span>单价</span><input name="unitPrice" inputmode="decimal" pattern="(?:0|[1-9][0-9]{0,10})\.[0-9]{2}" value="0.00" required /></label>
+        <label><span>试用天数</span><input name="trialDays" type="number" min="0" max="90" value="0" required /></label>
+        <label><span>月请求数</span><input name="gatewayRequests" type="number" min="0" max="1000000000" value="10000" required /></label>
+        <label><span>Workspace 席位</span><input name="workspaceSeats" type="number" min="1" max="100000" value="5" required /></label>
+        <label><span>模型别名</span><input name="modelAliases" type="number" min="1" max="100000" value="10" required /></label>
+        <label><span>留存天数</span><input name="retentionDays" type="number" min="1" max="3650" value="30" required /></label>
+        <fieldset class="platform-plan-switches"><legend>发布选项</legend><label class="platform-check"><input name="prioritySupport" type="checkbox" /><span>优先支持</span></label><label class="platform-check"><input name="publish" type="checkbox" /><span>立即发布</span></label></fieldset>
+        <button class="platform-primary" type="submit">创建版本</button>
+      </form>
+    </section>
+  `;
+}
+
+function platformPlanRow(version) {
+  const entitlements = version.entitlements ?? {};
+  return `<tr>
+    <td data-label="套餐"><strong>${escapeHtml(version.display_name)}</strong><small>${escapeHtml(version.plan_code)}</small></td>
+    <td data-label="版本"><strong>v${number(version.version_number)}</strong><small>${escapeHtml(version.plan_version_id)}</small></td>
+    <td data-label="状态">${status(version.status)}<small>${escapeHtml(version.catalog_status)}</small></td>
+    <td data-label="价格"><strong>${escapeHtml(version.billing_period === "none" ? "免费" : `${version.currency} ${version.unit_price}`)}</strong><small>${escapeHtml(statusLabel(version.billing_period))}</small></td>
+    <td data-label="试用">${number(version.trial_days)} 天</td>
+    <td data-label="权益"><strong>${number(entitlements.workspace_seats)} 席位 · ${number(entitlements.gateway_requests_per_month)} 次/月</strong><small>${number(entitlements.model_aliases)} 别名 · ${number(entitlements.retention_days)} 天留存${entitlements.priority_support ? " · 优先支持" : ""}</small></td>
+  </tr>`;
+}
+
 function domainPlaceholderView(state) {
   const item = (state.navigation ?? []).find((candidate) => candidate.id === state.view);
   return `
@@ -309,7 +363,7 @@ function domainLabel(value) { return value === "workspace" ? "客户" : value ==
 function statusLabel(value) { return String(value).replaceAll("_", " "); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", operators: "◎", workspaces: "▦", support: "◇", audit: "≡" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
 function number(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0"; }
 function formatTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
