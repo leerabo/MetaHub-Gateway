@@ -38,6 +38,12 @@ from metahub_shared.mcp.network import (
     MCP_SANDBOX_RESPONSE_RESERVE_SECONDS,
     McpNetworkPolicyCaps,
 )
+from metahub_shared.payment_commerce import (
+    DEFAULT_PAYMENT_RECEIPT_ENCRYPTION_SECRET,
+    DEFAULT_PAYMENT_WEBHOOK_SECRET,
+    PaymentCryptoError,
+    validate_payment_secret,
+)
 from metahub_shared.response_cache import (
     ResponseCacheContractError,
     VersionedResponseCacheSecret,
@@ -135,6 +141,17 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_BUSINESS_VERIFICATION_KEY_VERSION": "1",
     "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET": "",
     "METAHUB_BUSINESS_VERIFICATION_DOWNLOAD_TTL_SECONDS": "120",
+    # 支付验签与原始 receipt 密文使用两个独立根域；上一验签 key 只在显式轮换窗口启用。
+    "METAHUB_PAYMENT_WEBHOOK_KEY_VERSION": "1",
+    "METAHUB_PAYMENT_WEBHOOK_SECRET": "",
+    "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_KEY_VERSION": "",
+    "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_SECRET": "",
+    "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_KEY_VERSION": "1",
+    "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET": "",
+    "METAHUB_PAYMENT_RECEIPT_STORAGE_ROOT": ".data/payment-receipts",
+    "METAHUB_PAYMENT_WEBHOOK_TOLERANCE_SECONDS": "300",
+    "METAHUB_PAYMENT_WEBHOOK_MAX_BODY_BYTES": "65536",
+    "METAHUB_PAYMENT_WORKER_POLL_INTERVAL_SECONDS": "2",
     # PRD-100 keeps local/test SQLite explicit while production uses PostgreSQL.
     # Infrastructure credentials remain absent by default and are always masked.
     "METAHUB_DATABASE_POOL_MIN_SIZE": "1",
@@ -493,6 +510,20 @@ class AppConfig(BaseModel):
         default=None, exclude=True, repr=False
     )
     business_verification_download_ttl_seconds: int = 120
+    payment_webhook_key_version: int = 1
+    payment_webhook_secret: str | None = Field(default=None, exclude=True, repr=False)
+    payment_webhook_previous_key_version: int | None = None
+    payment_webhook_previous_secret: str | None = Field(default=None, exclude=True, repr=False)
+    payment_receipt_encryption_key_version: int = 1
+    payment_receipt_encryption_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    payment_receipt_storage_root: str = Field(
+        default=".data/payment-receipts", exclude=True, repr=False
+    )
+    payment_webhook_tolerance_seconds: int = 300
+    payment_webhook_max_body_bytes: int = 65_536
+    payment_worker_poll_interval_seconds: int = 2
     service_mode: ServiceMode = "internal_only"
     provider_base_urls: dict[str, str] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
@@ -1097,6 +1128,77 @@ def load_app_config(service_name: str) -> AppConfig:
                     "independent 32-512 byte value."
                 ),
             ) from None
+
+    payment_webhook_key_version = _positive_int(values, "METAHUB_PAYMENT_WEBHOOK_KEY_VERSION")
+    payment_webhook_previous_key_version = _optional_positive_int(
+        values, "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_KEY_VERSION"
+    )
+    configured_payment_webhook_secret = _raw_optional_value(
+        values, "METAHUB_PAYMENT_WEBHOOK_SECRET"
+    )
+    payment_webhook_previous_secret = _raw_optional_value(
+        values, "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_SECRET"
+    )
+    configured_payment_receipt_secret = _raw_optional_value(
+        values, "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET"
+    )
+    payment_webhook_secret = configured_payment_webhook_secret or (
+        DEFAULT_PAYMENT_WEBHOOK_SECRET if environment in {"dev", "test"} else None
+    )
+    payment_receipt_encryption_secret = configured_payment_receipt_secret or (
+        DEFAULT_PAYMENT_RECEIPT_ENCRYPTION_SECRET
+        if environment in {"dev", "test"}
+        else None
+    )
+    if (payment_webhook_previous_key_version is None) != (
+        payment_webhook_previous_secret is None
+    ) or payment_webhook_previous_key_version == payment_webhook_key_version:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Payment webhook previous key configuration is incomplete.",
+            suggestion="Configure both previous key fields with a version different from current.",
+        )
+    payment_forbidden = (
+        auth_token_secret,
+        identity_session_secret,
+        identity_challenge_secret,
+        workspace_session_secret,
+        platform_session_secret,
+        support_session_secret,
+        identity_mfa_encryption_secret,
+        platform_bootstrap_recovery_secret,
+        identity_pii_encryption_secret,
+        cache_affinity_hmac_secret,
+        gateway_placement_signing_secret,
+        business_verification_encryption_secret,
+    )
+    try:
+        if payment_webhook_secret is not None:
+            validate_payment_secret(
+                payment_webhook_secret,
+                production=environment == "prod",
+                forbidden_secrets=payment_forbidden,
+            )
+        if payment_receipt_encryption_secret is not None:
+            validate_payment_secret(
+                payment_receipt_encryption_secret,
+                production=environment == "prod",
+                forbidden_secrets=payment_forbidden + (payment_webhook_secret,),
+            )
+        if payment_webhook_previous_secret is not None:
+            validate_payment_secret(
+                payment_webhook_previous_secret,
+                production=environment == "prod",
+                forbidden_secrets=payment_forbidden
+                + (payment_webhook_secret, payment_receipt_encryption_secret),
+            )
+    # 支付密钥错误只报告固定部署合同，不能透露发生复用的具体密钥域。
+    except PaymentCryptoError:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Payment webhook and receipt encryption require independent secrets.",
+            suggestion="Configure distinct payment secrets with 32-512 UTF-8 bytes.",
+        ) from None
 
     if (
         len(identity_session_secret) < 32
@@ -2012,6 +2114,26 @@ def load_app_config(service_name: str) -> AppConfig:
             minimum=30,
             maximum=300,
         ),
+        payment_webhook_key_version=payment_webhook_key_version,
+        payment_webhook_secret=payment_webhook_secret,
+        payment_webhook_previous_key_version=payment_webhook_previous_key_version,
+        payment_webhook_previous_secret=payment_webhook_previous_secret,
+        payment_receipt_encryption_key_version=_positive_int(
+            values, "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_KEY_VERSION"
+        ),
+        payment_receipt_encryption_secret=payment_receipt_encryption_secret,
+        payment_receipt_storage_root=_validated_file_storage_root(
+            _value(values, "METAHUB_PAYMENT_RECEIPT_STORAGE_ROOT")
+        ),
+        payment_webhook_tolerance_seconds=_bounded_int(
+            values, "METAHUB_PAYMENT_WEBHOOK_TOLERANCE_SECONDS", minimum=30, maximum=900
+        ),
+        payment_webhook_max_body_bytes=_bounded_int(
+            values, "METAHUB_PAYMENT_WEBHOOK_MAX_BODY_BYTES", minimum=1024, maximum=1048576
+        ),
+        payment_worker_poll_interval_seconds=_bounded_int(
+            values, "METAHUB_PAYMENT_WORKER_POLL_INTERVAL_SECONDS", minimum=1, maximum=60
+        ),
         service_mode=service_mode,
         provider_base_urls=provider_base_urls,
         features={
@@ -2031,6 +2153,10 @@ def load_app_config(service_name: str) -> AppConfig:
             "response_cache_enabled": response_cache_enabled,
             "mcp_enabled": bool(mcp_values["mcp_enabled"]),
             "gateway_placement_enabled": gateway_placement_enabled,
+            "payment_commerce_enabled": (
+                payment_webhook_secret is not None
+                and payment_receipt_encryption_secret is not None
+            ),
         },
         config_items=config_items,
         warnings=warnings,
@@ -3431,6 +3557,16 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_BUSINESS_VERIFICATION_KEY_VERSION",
         "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
         "METAHUB_BUSINESS_VERIFICATION_DOWNLOAD_TTL_SECONDS",
+        "METAHUB_PAYMENT_WEBHOOK_KEY_VERSION",
+        "METAHUB_PAYMENT_WEBHOOK_SECRET",
+        "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_KEY_VERSION",
+        "METAHUB_PAYMENT_WEBHOOK_PREVIOUS_SECRET",
+        "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_KEY_VERSION",
+        "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET",
+        "METAHUB_PAYMENT_RECEIPT_STORAGE_ROOT",
+        "METAHUB_PAYMENT_WEBHOOK_TOLERANCE_SECONDS",
+        "METAHUB_PAYMENT_WEBHOOK_MAX_BODY_BYTES",
+        "METAHUB_PAYMENT_WORKER_POLL_INTERVAL_SECONDS",
         "METAHUB_DATABASE_URL",
         "METAHUB_REDIS_URL",
         "METAHUB_DATABASE_POOL_MIN_SIZE",

@@ -42,6 +42,12 @@ import {
   saveWorkspaceBillingExport,
 } from "../../lib/platformBilling.js";
 import {
+  cancelWorkspaceSubscription,
+  createWorkspacePaymentIntent,
+  listWorkspaceBillingOrders,
+  requestWorkspaceRefund,
+} from "../../lib/paymentCommerce.js";
+import {
   getWorkspaceBusinessVerification,
   submitWorkspaceBusinessVerification,
   updateWorkspaceBusinessBillingProfile,
@@ -93,7 +99,11 @@ if (root) {
       subscription: (input) => getWorkspaceSubscription({ controlApiUrl, ...input }),
       createSubscription: (input) => createWorkspaceSubscription({ controlApiUrl, ...input }),
       changeSubscription: (input) => changeWorkspaceSubscription({ controlApiUrl, ...input }),
+      cancelSubscription: (input) => cancelWorkspaceSubscription({ controlApiUrl, ...input }),
       billingSummary: (input) => getWorkspaceBillingSummary({ controlApiUrl, ...input }),
+      billingOrders: (input) => listWorkspaceBillingOrders({ controlApiUrl, ...input }),
+      createPaymentIntent: (input) => createWorkspacePaymentIntent({ controlApiUrl, ...input }),
+      requestRefund: (input) => requestWorkspaceRefund({ controlApiUrl, ...input }),
       businessVerification: (input) => getWorkspaceBusinessVerification({
         controlApiUrl,
         ...input,

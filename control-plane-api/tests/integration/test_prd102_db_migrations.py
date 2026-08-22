@@ -153,10 +153,10 @@ def test_business_fact_blocks_0094_down(
     _healthy(database_url)
 
 
-def test_fresh_schema_installs_0094(tmp_path: Path) -> None:
-    """验证空数据库完整迁移链最终安装 0094。"""
+def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
+    """验证空数据库完整迁移链最终安装当前 0095。"""
 
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0094"
+    assert result.applied[-1] == "0095"
     _healthy(database_url)

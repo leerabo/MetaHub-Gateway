@@ -428,6 +428,7 @@ function billingView(state, permissions) {
   return `
     <header class="platform-page-heading"><div><p>SaaS billing</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
     ${canReadBilling ? platformBillingCycles(state, permissions) : ""}
+    ${canReadBilling ? platformRefundQueue(state, permissions) : ""}
     ${canReadCatalog ? platformCatalog(catalogs, versions, permissions) : ""}
   `;
 }
@@ -479,6 +480,50 @@ function platformBillingAdjustmentForm(targets) {
         <button class="platform-primary" type="submit">追加调整</button>
       </form>` : '<p class="platform-empty">当前页没有可调整的已冻结摘要。</p>'}
     </section>
+  `;
+}
+
+function platformRefundQueue(state, permissions) {
+  const refunds = state.refunds?.refunds ?? [];
+  const canReview = permissions.has("platform.billing.adjust");
+  return `
+    <section class="platform-band platform-refund-queue">
+      <div class="platform-section-heading"><div><p>Refund review</p><h2>退款审核队列</h2></div><span>${number(refunds.length)} 笔</span></div>
+      <form class="platform-billing-filter" data-platform-refund-filter-form>
+        <label><span>退款状态</span><select name="status">${refundStatusOptions(state.refundStatus)}</select></label>
+        <button type="submit">查询</button>
+      </form>
+      <div class="platform-table-wrap">
+        <table class="platform-refund-table">
+          <thead><tr><th>退款 / 订单</th><th>金额</th><th>原因</th><th>状态</th><th>申请时间</th><th>审核</th></tr></thead>
+          <tbody>${refunds.map((refund) => platformRefundRow(refund, canReview)).join("") || emptyRow("当前筛选下没有退款申请", 6)}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function platformRefundRow(refund, canReview) {
+  const requested = refund.status === "requested";
+  return `
+    <tr>
+      <td data-label="退款 / 订单"><strong>${escapeHtml(refund.refund_id)}</strong><small>${escapeHtml(refund.order_id)}</small></td>
+      <td data-label="金额"><strong>${escapeHtml(formatMinorMoney(refund.amount_minor, refund.currency))}</strong><small>原币最小单位 ${number(refund.amount_minor)}</small></td>
+      <td data-label="原因">${escapeHtml(refundReasonLabel(refund.reason_code))}</td>
+      <td data-label="状态"><span class="platform-status">${escapeHtml(refundStatusLabel(refund.status))}</span></td>
+      <td data-label="申请时间">${formatTime(refund.requested_at)}</td>
+      <td data-label="审核">${canReview && requested ? `
+        <div class="platform-refund-actions">
+          <button class="platform-primary" type="button" data-platform-action="refund-approve" data-refund-id="${escapeAttribute(refund.refund_id)}" data-revision="${number(refund.state_revision)}">批准</button>
+          <form data-platform-refund-reject-form autocomplete="off">
+            <input name="refundId" type="hidden" value="${escapeAttribute(refund.refund_id)}" />
+            <input name="revision" type="hidden" value="${number(refund.state_revision)}" />
+            <select name="reasonCode" aria-label="拒绝原因"><option value="amount_invalid">金额不符</option><option value="evidence_missing">证据不足</option></select>
+            <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认</span></label>
+            <button type="submit">拒绝</button>
+          </form>
+        </div>` : '<span class="platform-restricted">只读</span>'}</td>
+    </tr>
   `;
 }
 
@@ -584,6 +629,10 @@ function domainLabel(value) { return value === "workspace" ? "客户" : value ==
 function statusLabel(value) { return String(value).replaceAll("_", " "); }
 function billingStatusLabel(value) { return ({ open: "进行中", closed: "已关账", reconciliation_required: "需要对账" })[value] ?? statusLabel(value); }
 function billingStatusOptions(current) { return [["open", "进行中"], ["closed", "已关账"], ["reconciliation_required", "需要对账"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
+function refundStatusLabel(value) { return ({ requested: "待审核", processing: "处理中", succeeded: "已退款", failed: "失败", rejected: "已拒绝" })[value] ?? statusLabel(value); }
+function refundStatusOptions(current) { return [["requested", "待审核"], ["processing", "处理中"], ["succeeded", "已退款"], ["failed", "失败"], ["rejected", "已拒绝"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
+function refundReasonLabel(value) { return ({ customer_request: "客户申请", service_failure: "服务故障", duplicate_charge: "重复扣款" })[value] ?? statusLabel(value); }
+function formatMinorMoney(value, currency) { const amount = Number(value); return Number.isSafeInteger(amount) ? new Intl.NumberFormat("zh-CN", { style: "currency", currency: new Set(["CNY", "USD"]).has(currency) ? currency : "CNY", currencyDisplay: "code" }).format(amount / 100) : "-"; }
 /** 构造审核状态筛选选项，选择值只能来自后端固定枚举。 */
 function verificationStatusOptions(current) { return [["submitted", "待审核"], ["in_review", "审核中"], ["approved", "已通过"], ["rejected", "已拒绝"], ["expired", "已过期"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
 /** 将主体类型映射为安全文案，不显示法定名称或登记号。 */

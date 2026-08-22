@@ -98,6 +98,16 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-billing-adjustment input,
 .platform-billing-adjustment select { width: 100%; min-width: 0; }
 .platform-billing-adjustment button { min-width: 110px; }
+.platform-refund-table { min-width: 940px; table-layout: auto; }
+.platform-refund-table th:first-child { width: 23%; }
+.platform-refund-table th:last-child { width: 280px; }
+.platform-refund-actions,
+.platform-refund-actions form { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.platform-refund-actions select,
+.platform-refund-actions button { min-height: 34px; border: 1px solid #bdc7bf; border-radius: 4px; background: #fff; color: var(--ink); padding: 5px 7px; }
+.platform-refund-actions button { cursor: pointer; font-weight: 700; }
+.platform-refund-actions button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
+.platform-refund-actions .platform-check { white-space: nowrap; }
 .platform-backup-create form { display: grid; grid-template-columns: minmax(180px,.8fr) minmax(150px,.6fr) minmax(190px,1fr) auto; align-items: end; gap: 14px; }
 .platform-backup-create form > * { min-width: 0; }
 .platform-backup-create input, .platform-backup-create select { width: 100%; }
@@ -241,6 +251,8 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-billing-filter label,
   .platform-billing-filter button { width: 100%; min-width: 0; }
   .platform-billing-adjustment form { grid-template-columns: 1fr; }
+  .platform-refund-actions { align-items: stretch; flex-direction: column; }
+  .platform-refund-actions form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
   .platform-backup-create form, .platform-backup-detail dl { grid-template-columns: 1fr; }
   .platform-gateway-placement form { grid-template-columns: 1fr; }
   .platform-billing-target { grid-column: auto; }

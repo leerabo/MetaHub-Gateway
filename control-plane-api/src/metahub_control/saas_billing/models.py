@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BillingPeriod = Literal["none", "monthly", "yearly"]
 Currency = Literal["CNY", "USD"]
@@ -74,6 +74,21 @@ class SubscriptionCreateRequest(SaasResponseModel):
 
 class SubscriptionChangeRequest(SaasResponseModel):
     plan_version_id: str
+
+
+class SubscriptionPatchRequest(SaasResponseModel):
+    """统一 PATCH 支持计划变更与取消，并保持字段组合不可歧义。"""
+
+    operation: Literal["change_plan", "cancel"]
+    plan_version_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_fields(self) -> SubscriptionPatchRequest:
+        """变更必须提供计划，取消则禁止携带计划字段。"""
+
+        if (self.operation == "change_plan") != (self.plan_version_id is not None):
+            raise ValueError("subscription patch fields invalid")
+        return self
 
 
 class SubscriptionInfo(SaasResponseModel):

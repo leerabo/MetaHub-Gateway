@@ -31,6 +31,10 @@ import {
   listPlatformBillingSummary,
 } from "../../lib/platformBilling.js";
 import {
+  listPlatformRefunds,
+  reviewPlatformRefund,
+} from "../../lib/paymentCommerce.js";
+import {
   createPlatformBackup,
   getPlatformBackup,
   getPlatformInfrastructureStatus,
@@ -85,6 +89,8 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      refunds: (input) => listPlatformRefunds({ controlApiUrl, ...input }),
+      reviewRefund: (input) => reviewPlatformRefund({ controlApiUrl, ...input }),
       infrastructureStatus: (input) => getPlatformInfrastructureStatus({
         controlApiUrl,
         ...input,

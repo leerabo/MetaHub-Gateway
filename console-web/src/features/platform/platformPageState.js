@@ -38,6 +38,7 @@ const WORKSPACE_FILTER_KEYS = new Set([
 export function createPlatformPageController({
   root,
   api,
+  confirmAction = defaultConfirm,
   newIdempotencyKey = defaultIdempotencyKey,
 } = {}) {
   if (!root || !api) throw new TypeError("platform page requires root and api");
@@ -54,6 +55,8 @@ export function createPlatformPageController({
     billingCursor: null,
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
+    refunds: null,
+    refundStatus: "requested",
     verification: null,
     verificationStatus: "",
     verificationOffset: 0,
@@ -260,6 +263,30 @@ export function createPlatformPageController({
       if (state.billingCursorHistory.length === 0) return false;
       state.billingCursor = state.billingCursorHistory.pop() ?? null;
       return loadBillingPage();
+    },
+    async filterRefunds(status) {
+      state.refundStatus = normalizeRefundStatus(status);
+      return loadRefundQueue();
+    },
+    async approveRefund(refundId, revision) {
+      if (!confirmAction("确认批准这笔退款申请？")) return false;
+      return reviewRefund({
+        refundId,
+        revision,
+        decision: "approve",
+        reasonCode: "policy_approved",
+        confirmed: true,
+      });
+    },
+    async rejectRefund({ refundId, revision, reasonCode, confirmed }) {
+      if (confirmed !== true) return false;
+      return reviewRefund({
+        refundId,
+        revision,
+        decision: "reject",
+        reasonCode,
+        confirmed: true,
+      });
     },
     async createBillingAdjustment({ targetKey, reasonCode, quantity, amount }) {
       const target = billingAdjustmentTarget(state.billing, targetKey);
@@ -533,6 +560,7 @@ export function createPlatformPageController({
         operators: null,
         plans: null,
         billing: null,
+        refunds: null,
         verification: null,
         infrastructure: null,
         gatewayCells: null,
@@ -556,6 +584,12 @@ export function createPlatformPageController({
           cursor: state.billingCursor,
           signal: ticket.signal,
         }).then((value) => { next.billing = value; }));
+      }
+      if (permissions.has("platform.billing.read") && typeof api.refunds === "function") {
+        tasks.push(api.refunds({
+          status: state.refundStatus,
+          signal: ticket.signal,
+        }).then((value) => { next.refunds = value; }));
       }
       if (permissions.has("platform.verification.read")
         && typeof api.businessVerifications === "function") {
@@ -652,6 +686,49 @@ export function createPlatformPageController({
       state.loading = false;
       render();
       return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadRefundQueue() {
+    if (typeof api.refunds !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.refunds = await api.refunds({
+        status: state.refundStatus,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function reviewRefund({ refundId, revision, decision, reasonCode, confirmed }) {
+    if (typeof api.reviewRefund !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await api.reviewRefund({
+        refundId,
+        revision: Number(revision),
+        decision,
+        reasonCode,
+        confirmed,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.feedback = decision === "approve" ? "退款申请已批准。" : "退款申请已拒绝。";
+      return reload(ticket);
     } catch (error) {
       return fail(ticket, error);
     }
@@ -796,6 +873,17 @@ export function createPlatformPageController({
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
+      if (form.matches("[data-platform-refund-filter-form]")) {
+        controller.filterRefunds(data.get("status"));
+      }
+      if (form.matches("[data-platform-refund-reject-form]")) {
+        controller.rejectRefund({
+          refundId: data.get("refundId"),
+          revision: Number(data.get("revision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-verification-filter-form]")) {
         controller.filterVerification(data.get("status"));
       }
@@ -874,6 +962,9 @@ export function createPlatformPageController({
       if (action === "workspace-previous") controller.previousWorkspacePage();
       if (action === "billing-next") controller.nextBillingPage();
       if (action === "billing-previous") controller.previousBillingPage();
+      if (action === "refund-approve") {
+        controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
+      }
       if (action === "verification-next") controller.nextVerificationPage();
       if (action === "verification-previous") controller.previousVerificationPage();
       if (action === "verification-approve") {
@@ -913,6 +1004,8 @@ export function createPlatformPageController({
     state.billingCursor = null;
     state.billingCursorHistory = [];
     state.billingAdjustmentIntent = null;
+    state.refunds = null;
+    state.refundStatus = "requested";
     state.verification = null;
     state.verificationStatus = "";
     state.verificationOffset = 0;
@@ -969,6 +1062,13 @@ function normalizeBillingStatus(value) {
   return new Set(["", "open", "closed", "reconciliation_required"]).has(text) ? text : "";
 }
 
+function normalizeRefundStatus(value) {
+  const text = String(value ?? "");
+  return new Set(["requested", "processing", "succeeded", "failed", "rejected"]).has(text)
+    ? text
+    : "requested";
+}
+
 /** 将审核筛选限制为固定状态枚举，未知输入回退为无筛选而不透传。 */
 function normalizeVerificationStatus(value) {
   const text = String(value ?? "");
@@ -989,6 +1089,10 @@ function defaultIdempotencyKey() {
   const value = globalThis.crypto?.randomUUID?.();
   if (!value) throw new TypeError("secure idempotency key generation is unavailable");
   return `platform-billing-${value}`;
+}
+
+function defaultConfirm(message) {
+  return typeof globalThis.confirm === "function" ? globalThis.confirm(message) : false;
 }
 
 function isPlatformSessionFailure(error) {

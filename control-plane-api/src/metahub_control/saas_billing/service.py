@@ -571,6 +571,7 @@ def change_subscription_plan(
     idempotency_key: str,
     request_id: str,
     trace_id: str,
+    subscription_id: str | None = None,
 ) -> SubscriptionResponse:
     _validate_plan_version_id(payload.plan_version_id)
     _validate_idempotency(idempotency_key)
@@ -606,6 +607,8 @@ def change_subscription_plan(
             (actor.workspace_id,),
         ).fetchone()
         if subscription is None:
+            raise ApiError("subscription.not_found")
+        if subscription_id is not None and subscription["subscription_id"] != subscription_id:
             raise ApiError("subscription.not_found")
         if int(subscription["state_revision"]) != expected_revision:
             raise ApiError("subscription.revision_conflict")
@@ -686,6 +689,118 @@ def change_subscription_plan(
                 "change_kind": "downgrade" if downgrade else "upgrade",
             },
             now=now,
+        )
+        response = _subscription_response(
+            connection,
+            actor.workspace_id,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+        connection.commit()
+        return response
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        _rollback(connection)
+        raise ApiError("subscription.unavailable") from None
+    finally:
+        connection.close()
+
+
+def cancel_subscription(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    subscription_id: str,
+    expected_revision: int,
+    idempotency_key: str,
+    request_id: str,
+    trace_id: str,
+) -> SubscriptionResponse:
+    """幂等取消当前订阅，并以 0090 兼容订单记录冻结客户取消 intent。"""
+
+    if re.fullmatch(r"^sub_[0-9a-f]{32}$", subscription_id) is None:
+        raise ApiError("subscription.request_invalid")
+    _validate_idempotency(idempotency_key)
+    request_sha256 = _intent_hash(
+        "cancel", {"subscription_id": subscription_id, "revision": expected_revision}
+    )
+    key_sha256 = _sha256(idempotency_key)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        actor = authenticate_workspace_session_in_transaction(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        _require_finance(actor)
+        _require_schema(connection)
+        if _order_replay(connection, actor.workspace_id, key_sha256, request_sha256):
+            response = _subscription_response(
+                connection,
+                actor.workspace_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                replay=True,
+            )
+            connection.commit()
+            return response
+        subscription = connection.execute(
+            "SELECT * FROM workspace_subscriptions WHERE workspace_id=?",
+            (actor.workspace_id,),
+        ).fetchone()
+        if subscription is None or subscription["subscription_id"] != subscription_id:
+            raise ApiError("subscription.not_found")
+        if (
+            int(subscription["state_revision"]) != expected_revision
+            or subscription["status"] in {"canceled", "expired"}
+        ):
+            raise ApiError("subscription.revision_conflict")
+        plan = connection.execute(
+            "SELECT * FROM saas_plan_versions WHERE plan_version_id=?",
+            (subscription["plan_version_id"],),
+        ).fetchone()
+        if plan is None:
+            raise ApiError("subscription.unavailable")
+        now = _utcnow()
+        updated = connection.execute(
+            """
+            UPDATE workspace_subscriptions
+            SET status='canceled',pending_plan_version_id=NULL,pending_effective_at=NULL,
+              state_revision=state_revision+1,updated_at=?
+            WHERE subscription_id=? AND state_revision=?
+            """,
+            (_db_time(now), subscription_id, expected_revision),
+        ).rowcount
+        if updated != 1:
+            raise ApiError("subscription.revision_conflict")
+        # 0090 没有 cancel order_kind；使用零额 not_required 兼容记录仅承载幂等 owner，
+        # 正式 0095 支付订单不会物化该记录，避免把取消伪装为应付账单。
+        connection.execute(
+            """
+            INSERT INTO subscription_order_records(
+              order_record_id,workspace_id,tenant_id,subscription_id,plan_version_id,
+              order_kind,status,currency,amount_minor,idempotency_sha256,request_sha256,
+              created_by_membership_id,created_at)
+            VALUES(?,?,?,?,?,'downgrade','not_required',?,0,?,?,?,?)
+            """,
+            (
+                _id("sor_"),
+                actor.workspace_id,
+                actor.tenant_id,
+                subscription_id,
+                subscription["plan_version_id"],
+                plan["currency"],
+                key_sha256,
+                request_sha256,
+                actor.membership_id,
+                _db_time(now),
+            ),
         )
         response = _subscription_response(
             connection,

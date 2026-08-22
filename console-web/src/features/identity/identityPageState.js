@@ -1,6 +1,7 @@
 // 账号安全状态机统一管理 Workspace 授权、企业认证敏感值清理和过期请求取消。
 import { IdentityApiError } from "../../lib/identity.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
+import { consumePaymentClientToken } from "../../lib/paymentCommerce.js";
 import {
   renderIdentityLoginPage,
   renderIdentityRegistrationPage,
@@ -19,6 +20,7 @@ export function createIdentityPageController({
   confirmAction = defaultConfirm,
   copyText = defaultCopyText,
   consoleUrl = globalThis.window?.location?.origin ?? "http://localhost",
+  consumePaymentToken = () => {},
   invitationToken = null,
   monotonicNow = defaultMonotonicNow,
   newIdempotencyKey = defaultIdempotencyKey,
@@ -50,6 +52,11 @@ export function createIdentityPageController({
   let billingSummary = null;
   let billingBusy = false;
   let billingError = null;
+  let billingOrders = null;
+  let paymentBusy = false;
+  let paymentError = null;
+  let paymentIntentIntent = null;
+  let refundIntent = null;
   let businessVerification = null;
   let businessVerificationBusy = false;
   let businessVerificationError = null;
@@ -490,6 +497,113 @@ export function createIdentityPageController({
       if (!workspaceFinanceAllowed() || !Number.isSafeInteger(revision) || revision < 1
         || typeof api.changeSubscription !== "function") return false;
       return mutateSubscription({ kind: "change", planVersionId, revision });
+    },
+    async cancelSubscription() {
+      const current = subscription?.subscription;
+      const revision = Number(current?.state_revision);
+      if (!workspaceFinanceAllowed() || !current
+        || !Number.isSafeInteger(revision) || revision < 1
+        || typeof api.cancelSubscription !== "function"
+        || !confirmAction("确认取消当前订阅？待支付订单也将被取消。")) return false;
+      return mutateSubscription({
+        kind: "cancel",
+        subscriptionId: current.subscription_id,
+        revision,
+      });
+    },
+    async refreshPaymentCommerce() {
+      if (!workspaceFinanceAllowed() || typeof api.billingOrders !== "function") return false;
+      const ticket = beginRequest();
+      paymentBusy = true;
+      paymentError = null;
+      renderSecurity();
+      return loadPaymentCommerce(ticket, "订单与支付状态已刷新。");
+    },
+    async createPaymentIntent({ orderId, provider }) {
+      const payable = billingOrders?.orders?.some(
+        (order) => order.order_id === orderId && order.status === "pending_payment",
+      );
+      if (!workspaceFinanceAllowed() || paymentBusy || !payable
+        || typeof api.createPaymentIntent !== "function") return false;
+      const fingerprint = JSON.stringify({ orderId, provider });
+      const idempotencyKey = paymentIntentIntent?.fingerprint === fingerprint
+        ? paymentIntentIntent.idempotencyKey
+        : newIdempotencyKey();
+      paymentIntentIntent = { fingerprint, idempotencyKey };
+      const ticket = beginRequest();
+      paymentBusy = true;
+      paymentError = null;
+      renderSecurity();
+      let result = null;
+      try {
+        result = await queueWrite(() => api.createPaymentIntent({
+          orderId,
+          provider,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        await consumePaymentClientToken(result, consumePaymentToken);
+        result = null;
+        if (!isCurrent(ticket)) return false;
+        paymentIntentIntent = null;
+        return loadPaymentCommerce(ticket, "支付意图已创建。");
+      } catch (error) {
+        if (result && typeof result === "object") result.client_token = "";
+        result = null;
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        paymentBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          paymentIntentIntent = null;
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+          paymentIntentIntent = null;
+        }
+        paymentError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async requestRefund({ orderId, amountMinor, reasonCode, confirmed }) {
+      const order = billingOrders?.orders?.find((item) => item.order_id === orderId);
+      const refundable = Number(order?.captured_amount_minor) - Number(order?.refunded_amount_minor);
+      const amount = Number(amountMinor);
+      if (!workspaceFinanceAllowed() || paymentBusy || !order || confirmed !== true
+        || !Number.isSafeInteger(amount) || amount < 1 || amount > refundable
+        || typeof api.requestRefund !== "function") return false;
+      const input = { orderId, amountMinor: amount, reasonCode, confirmed: true };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = refundIntent?.fingerprint === fingerprint
+        ? refundIntent.idempotencyKey
+        : newIdempotencyKey();
+      refundIntent = { fingerprint, idempotencyKey };
+      const ticket = beginRequest();
+      paymentBusy = true;
+      paymentError = null;
+      renderSecurity();
+      try {
+        await queueWrite(() => api.requestRefund({
+          ...input,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        refundIntent = null;
+        return loadPaymentCommerce(ticket, "退款申请已提交审核。");
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        paymentBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          refundIntent = null;
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+          refundIntent = null;
+        }
+        paymentError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
     },
     async refreshBilling() {
       if (!workspaceFinanceAllowed() || typeof api.billingSummary !== "function") return false;
@@ -1128,6 +1242,36 @@ export function createIdentityPageController({
     }
   }
 
+  async function loadPaymentCommerce(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceFinanceAllowed() || typeof api.billingOrders !== "function") {
+      billingOrders = null;
+      paymentBusy = false;
+      paymentError = null;
+      paymentIntentIntent = null;
+      refundIntent = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    paymentBusy = true;
+    try {
+      const result = await api.billingOrders({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      billingOrders = result;
+      paymentBusy = false;
+      paymentError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      billingOrders = null;
+      paymentBusy = false;
+      paymentError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
   /** 读取企业认证脱敏摘要，并在 Workspace 授权漂移时交由统一恢复链路处理。 */
   async function loadBusinessVerification(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceBusinessAllowed() || typeof api.businessVerification !== "function") {
@@ -1167,6 +1311,7 @@ export function createIdentityPageController({
       kind: input.kind,
       planVersionId,
       revision: input.revision ?? null,
+      subscriptionId: input.subscriptionId ?? null,
       startTrial: input.startTrial === true,
     });
     const idempotencyKey = subscriptionIntent?.fingerprint === fingerprint
@@ -1178,9 +1323,12 @@ export function createIdentityPageController({
     subscriptionError = null;
     renderSecurity();
     try {
-      const operation = input.kind === "create" ? api.createSubscription : api.changeSubscription;
+      const operation = input.kind === "create"
+        ? api.createSubscription
+        : input.kind === "change" ? api.changeSubscription : api.cancelSubscription;
       const result = await queueWrite(() => operation({
         planVersionId,
+        subscriptionId: input.subscriptionId,
         startTrial: input.startTrial === true,
         revision: input.revision,
         idempotencyKey,
@@ -1190,7 +1338,10 @@ export function createIdentityPageController({
       subscription = result;
       subscriptionBusy = false;
       subscriptionIntent = null;
-      renderSecurity({ feedback: input.kind === "create" ? "订阅意图已创建。" : "套餐变更已登记。" });
+      const feedback = input.kind === "create"
+        ? "订阅意图已创建。"
+        : input.kind === "change" ? "套餐变更已登记。" : "订阅已取消。";
+      renderSecurity({ feedback });
       return true;
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
@@ -1373,6 +1524,7 @@ export function createIdentityPageController({
       await Promise.all([
         loadSaasBilling(ticket, "", { render: false }),
         loadWorkspaceBilling(ticket, null, "", { render: false }),
+        loadPaymentCommerce(ticket, "", { render: false }),
         loadBusinessVerification(ticket, "", { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -1482,6 +1634,9 @@ export function createIdentityPageController({
       billingSummary,
       billingBusy,
       billingError,
+      billingOrders,
+      paymentBusy,
+      paymentError,
       businessVerification,
       businessVerificationBusy,
       businessVerificationError,
@@ -1533,6 +1688,11 @@ export function createIdentityPageController({
     billingSummary = null;
     billingBusy = false;
     billingError = null;
+    billingOrders = null;
+    paymentBusy = false;
+    paymentError = null;
+    paymentIntentIntent = null;
+    refundIntent = null;
     businessVerification = null;
     businessVerificationBusy = false;
     businessVerificationError = null;
@@ -1698,6 +1858,22 @@ export function createIdentityPageController({
         event.preventDefault();
         const fields = new FormData(form);
         await controller.selectBillingCycle(fields.get("cycleId"));
+      } else if (form?.matches?.("[data-payment-intent-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createPaymentIntent({
+          orderId: fields.get("orderId"),
+          provider: fields.get("provider"),
+        });
+      } else if (form?.matches?.("[data-refund-request-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.requestRefund({
+          orderId: fields.get("orderId"),
+          amountMinor: fields.get("amountMinor"),
+          reasonCode: fields.get("reasonCode"),
+          confirmed: fields.get("confirmed") === "on",
+        });
       } else if (form?.matches?.("[data-business-verification-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -1782,6 +1958,10 @@ export function createIdentityPageController({
         await controller.refreshSubscription();
       } else if (button.dataset.identityAction === "refresh-billing") {
         await controller.refreshBilling();
+      } else if (button.dataset.identityAction === "refresh-payment-commerce") {
+        await controller.refreshPaymentCommerce();
+      } else if (button.dataset.identityAction === "cancel-subscription") {
+        await controller.cancelSubscription();
       } else if (button.dataset.identityAction === "download-billing-export") {
         await controller.downloadBillingExport();
       } else if (button.dataset.identityAction === "refresh-business-verification") {

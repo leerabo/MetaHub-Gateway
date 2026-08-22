@@ -35,9 +35,11 @@ from .models import (
     SaasPlanCreateRequest,
     SubscriptionChangeRequest,
     SubscriptionCreateRequest,
+    SubscriptionPatchRequest,
     SubscriptionResponse,
 )
 from .service import (
+    cancel_subscription,
     change_subscription_plan,
     create_platform_plan,
     create_subscription,
@@ -186,6 +188,47 @@ async def post_subscription_change(
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )
+    if result.subscription is not None:
+        response.headers["ETag"] = _etag(result.subscription.state_revision)
+    _private(response)
+    return result
+
+
+@router.patch("/subscriptions/{subscription_id}", response_model=SubscriptionResponse)
+async def patch_subscription(
+    subscription_id: str,
+    request: Request,
+    response: Response,
+    _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_finance)],
+) -> SubscriptionResponse:
+    """以强 ETag 和幂等键变更或取消指定的当前订阅。"""
+
+    _reject_query(request, "subscription.request_invalid")
+    payload = _model(
+        await _strict_json(request, "subscription.request_invalid"),
+        SubscriptionPatchRequest,
+    )
+    common = {
+        "config": request.app.state.config,
+        "session_token": _required_cookie(
+            request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
+        ),
+        "csrf_token": _required_csrf(
+            request, WORKSPACE_CSRF_COOKIE, "workspace_session.csrf_invalid"
+        ),
+        "expected_revision": _if_match(request),
+        "idempotency_key": _idempotency_key(request),
+        "request_id": _request_id(request),
+        "trace_id": _trace_id(request),
+    }
+    if payload.operation == "change_plan":
+        result = change_subscription_plan(
+            **common,
+            payload=SubscriptionChangeRequest(plan_version_id=payload.plan_version_id),
+            subscription_id=subscription_id,
+        )
+    else:
+        result = cancel_subscription(**common, subscription_id=subscription_id)
     if result.subscription is not None:
         response.headers["ETag"] = _etag(result.subscription.state_revision)
     _private(response)

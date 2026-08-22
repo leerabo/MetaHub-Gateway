@@ -308,6 +308,8 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" in generated_env
     assert "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT=" in generated_env
     assert "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET=" in generated_env
+    assert "METAHUB_PAYMENT_WEBHOOK_SECRET=" in generated_env
+    assert "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET=" in generated_env
     assert "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET=" in generated_env
@@ -319,6 +321,8 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" not in completed.stdout
     assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" not in completed.stdout
     assert "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET=" not in completed.stdout
+    assert "METAHUB_PAYMENT_WEBHOOK_SECRET=" not in completed.stdout
+    assert "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET=" not in completed.stdout
     assert not list(tmp_path.glob(".metahub-env-*"))
 
     deploy_module = (ROOT / "scripts/deploy/lib/MetaHub.Deploy.psm1").read_text(

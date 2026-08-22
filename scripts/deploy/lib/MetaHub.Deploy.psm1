@@ -79,6 +79,8 @@ function Assert-MetaHubEnvFile {
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
+    "METAHUB_PAYMENT_WEBHOOK_SECRET",
+    "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
     "METAHUB_APPROVAL_HMAC_SECRET",
     "METAHUB_SEED_ADMIN_PASSWORD",
@@ -130,6 +132,8 @@ function Assert-MetaHubEnvFile {
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
+    "METAHUB_PAYMENT_WEBHOOK_SECRET",
+    "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
     "METAHUB_APPROVAL_HMAC_SECRET"
   )) {
@@ -367,6 +371,8 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-gateway-placement-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-business-verification-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-payment-webhook-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-payment-receipt-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-approval-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-response-cache-hmac-secret" = (New-MetaHubLocalSecret)

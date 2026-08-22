@@ -64,6 +64,8 @@ from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
 from .partner_portal import install_partner_portal_scheduler
 from .partner_portal import router as partner_portal_router
+from .payment_commerce import install_payment_commerce_scheduler
+from .payment_commerce import router as payment_commerce_router
 from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
 from .plan_billing import router as plan_billing_router
@@ -234,6 +236,7 @@ app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
 app.include_router(platform_gateway_router)
+app.include_router(payment_commerce_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
@@ -319,6 +322,7 @@ if app.state.config.control_background_schedulers_enabled:
     install_plan_billing_scheduler(app)
     install_saas_billing_scheduler(app)
     install_platform_billing_scheduler(app)
+    install_payment_commerce_scheduler(app)
     install_partner_portal_scheduler(app)
     install_branding_scheduler(app)
     install_billing_dispute_scheduler(app)
