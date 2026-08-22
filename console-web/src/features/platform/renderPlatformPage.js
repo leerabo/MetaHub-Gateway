@@ -254,6 +254,8 @@ function auditView(state) {
 }
 
 function billingView(state, permissions) {
+  const canReadBilling = permissions.has("platform.billing.read");
+  const canReadCatalog = permissions.has("platform.catalog.read");
   const catalogs = state.plans?.plans ?? [];
   const versions = catalogs.flatMap((catalog) => (catalog.versions ?? []).map((version) => ({
     ...version,
@@ -262,10 +264,67 @@ function billingView(state, permissions) {
     catalog_status: catalog.status,
   })));
   return `
-    <header class="platform-page-heading"><div><p>SaaS catalog</p><h1>套餐目录</h1></div><span>${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本</span></header>
+    <header class="platform-page-heading"><div><p>SaaS billing</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
+    ${canReadBilling ? platformBillingCycles(state, permissions) : ""}
+    ${canReadCatalog ? platformCatalog(catalogs, versions, permissions) : ""}
+  `;
+}
+
+function platformBillingCycles(state, permissions) {
+  const cycles = state.billing?.cycles ?? [];
+  const adjustable = cycles.flatMap((cycle) => (
+    cycle.status === "open" ? [] : cycle.meters
+      .filter((meter) => meter.summary_sha256)
+      .map((meter) => ({ cycle, meter }))
+  ));
+  return `
+    <section class="platform-band platform-billing-cycles">
+      <div class="platform-section-heading"><div><p>Cycle reconciliation</p><h2>周期与差异状态</h2></div><span>${number(cycles.filter((cycle) => cycle.status === "reconciliation_required").length)} 个待对账</span></div>
+      <form class="platform-billing-filter" data-platform-billing-filter-form>
+        <label><span>周期状态</span><select name="status"><option value="" ${state.billingStatus ? "" : "selected"}>全部</option>${billingStatusOptions(state.billingStatus)}</select></label>
+        <button type="submit">筛选</button>
+      </form>
+      <div class="platform-table-wrap"><table class="platform-billing-table"><thead><tr><th>Workspace</th><th>周期</th><th>状态</th><th>请求</th><th>Token</th><th>有效金额</th><th>更新</th></tr></thead><tbody>${cycles.map(platformBillingCycleRow).join("") || emptyRow("暂无账单周期", 7)}</tbody></table></div>
+      <div class="platform-pagination"><span>第 ${number((state.billingCursorHistory?.length ?? 0) + 1)} 页</span><div><button type="button" data-platform-action="billing-previous" ${state.billingCursorHistory?.length ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="billing-next" ${state.billing?.next_cursor ? "" : "disabled"}>下一页</button></div></div>
+    </section>
+    ${permissions.has("platform.billing.adjust") ? platformBillingAdjustmentForm(adjustable) : ""}
+  `;
+}
+
+function platformBillingCycleRow(cycle) {
+  const requests = cycle.meters.find((meter) => meter.meter_code === "api_requests");
+  const tokens = cycle.meters.find((meter) => meter.meter_code === "total_tokens");
+  return `<tr>
+    <td data-label="Workspace"><strong>${escapeHtml(cycle.workspace_id)}</strong><small>${escapeHtml(cycle.billing_cycle_id)}</small></td>
+    <td data-label="周期"><strong>${formatDate(cycle.period_started_at)} - ${formatDate(cycle.period_ends_at)}</strong><small>Rev ${number(cycle.revision)} · watermark ${number(cycle.source_watermark)}</small></td>
+    <td data-label="状态">${status(cycle.status)}</td>
+    <td data-label="请求"><strong>${number(requests?.usage_quantity)} / ${number(requests?.allocated_quantity)}</strong><small>超额 ${number(requests?.overage_quantity)}</small></td>
+    <td data-label="Token"><strong>${number(tokens?.usage_quantity)}</strong><small>调整 ${signedNumber(tokens?.adjustment_quantity)}</small></td>
+    <td data-label="有效金额"><strong>${escapeHtml(requests ? `${requests.currency} ${requests.effective_amount}` : "-")}</strong></td>
+    <td data-label="更新">${formatTime(cycle.updated_at)}</td>
+  </tr>`;
+}
+
+function platformBillingAdjustmentForm(targets) {
+  return `
+    <section class="platform-band platform-billing-adjustment">
+      <div class="platform-section-heading"><div><p>Append-only adjustment</p><h2>追加账单调整</h2></div><span>摘要哈希 CAS</span></div>
+      ${targets.length ? `<form data-platform-billing-adjustment-form autocomplete="off">
+        <label class="platform-billing-target"><span>账单摘要</span><select name="targetKey" required>${targets.map(({ cycle, meter }) => `<option value="${escapeAttribute(`${cycle.billing_cycle_id}:${meter.meter_code}`)}">${escapeHtml(shortWorkspace(cycle.workspace_id))} · ${escapeHtml(meterLabel(meter.meter_code))} · ${escapeHtml(billingStatusLabel(cycle.status))}</option>`).join("")}</select></label>
+        <label><span>方向</span><select name="reasonCode"><option value="manual_credit">贷记</option><option value="manual_debit">借记</option></select></label>
+        <label><span>数量</span><input name="quantity" type="number" min="0" max="1000000000000" step="1" value="0" required /></label>
+        <label><span>金额</span><input name="amount" inputmode="decimal" pattern="(?:0|[1-9][0-9]{0,10})\.[0-9]{2}" value="0.00" required /></label>
+        <button class="platform-primary" type="submit">追加调整</button>
+      </form>` : '<p class="platform-empty">当前页没有可调整的已冻结摘要。</p>'}
+    </section>
+  `;
+}
+
+function platformCatalog(catalogs, versions, permissions) {
+  return `
     ${permissions.has("platform.catalog.write") ? platformPlanForm() : ""}
     <section class="platform-band platform-plan-versions">
-      <div class="platform-section-heading"><div><p>Immutable versions</p><h2>版本记录</h2></div></div>
+      <div class="platform-section-heading"><div><p>Immutable versions</p><h2>套餐版本记录</h2></div><span>${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本</span></div>
       <div class="platform-table-wrap"><table class="platform-plan-table"><thead><tr><th>套餐</th><th>版本</th><th>状态</th><th>价格</th><th>试用</th><th>权益</th></tr></thead><tbody>${versions.map(platformPlanRow).join("") || emptyRow("暂无套餐版本", 6)}</tbody></table></div>
     </section>
   `;
@@ -361,12 +420,18 @@ function status(value) {
 function roleLabel(value) { return String(value ?? "").replace(/^platform_/u, "").replaceAll("_", " "); }
 function domainLabel(value) { return value === "workspace" ? "客户" : value === "platform" ? "平台" : value; }
 function statusLabel(value) { return String(value).replaceAll("_", " "); }
+function billingStatusLabel(value) { return ({ open: "进行中", closed: "已关账", reconciliation_required: "需要对账" })[value] ?? statusLabel(value); }
+function billingStatusOptions(current) { return [["open", "进行中"], ["closed", "已关账"], ["reconciliation_required", "需要对账"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
+function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
 function navSymbol(view) { return ({ overview: "⌂", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
 function number(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0"; }
+function signedNumber(value) { const amount = Number(value); return `${amount > 0 ? "+" : ""}${number(amount)}`; }
+function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
 function formatTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
+function shortWorkspace(value) { const text = String(value ?? ""); return text.length > 16 ? `${text.slice(0, 12)}…${text.slice(-4)}` : text; }
 function fact(label, value) { return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`; }
 function filterOptions(current, options) { return options.map(([value, label]) => `<option value="${escapeAttribute(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`).join(""); }
 function riskTagList(tags) { return tags.length ? `<div class="platform-tag-list">${tags.map((tag) => `<span>${escapeHtml(statusLabel(tag))}</span>`).join("")}</div>` : '<span class="platform-restricted">无</span>'; }

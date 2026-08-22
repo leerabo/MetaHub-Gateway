@@ -46,6 +46,9 @@ export function createIdentityPageController({
   let subscriptionBusy = false;
   let subscriptionError = null;
   let subscriptionIntent = null;
+  let billingSummary = null;
+  let billingBusy = false;
+  let billingError = null;
   let workspaceView = "summary";
   let workspaceDraft = null;
   let invitationResult = null;
@@ -483,6 +486,45 @@ export function createIdentityPageController({
       if (!workspaceFinanceAllowed() || !Number.isSafeInteger(revision) || revision < 1
         || typeof api.changeSubscription !== "function") return false;
       return mutateSubscription({ kind: "change", planVersionId, revision });
+    },
+    async refreshBilling() {
+      if (!workspaceFinanceAllowed() || typeof api.billingSummary !== "function") return false;
+      const ticket = beginRequest();
+      billingBusy = true;
+      billingError = null;
+      renderSecurity();
+      return loadWorkspaceBilling(ticket, null, "账单摘要已刷新。");
+    },
+    async selectBillingCycle(cycleId) {
+      if (!workspaceFinanceAllowed() || typeof api.billingSummary !== "function") return false;
+      const ticket = beginRequest();
+      billingBusy = true;
+      billingError = null;
+      renderSecurity();
+      return loadWorkspaceBilling(ticket, cycleId, "账单周期已更新。");
+    },
+    async downloadBillingExport() {
+      const cycleId = billingSummary?.cycle?.billing_cycle_id;
+      if (!workspaceFinanceAllowed() || !cycleId || typeof api.billingExport !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      billingBusy = true;
+      billingError = null;
+      renderSecurity();
+      try {
+        await api.billingExport({ cycleId, signal: ticket.signal });
+        if (!isCurrent(ticket)) return false;
+        billingBusy = false;
+        renderSecurity({ feedback: "账单对账 CSV 已下载。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        billingBusy = false;
+        billingError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
     },
     selectOnboardingStep(index) {
       const step = onboarding?.steps?.[Number(index)];
@@ -968,6 +1010,34 @@ export function createIdentityPageController({
     return !error;
   }
 
+  async function loadWorkspaceBilling(ticket, cycleId = null, feedback = "", { render = true } = {}) {
+    if (!workspaceFinanceAllowed() || typeof api.billingSummary !== "function") {
+      billingSummary = null;
+      billingBusy = false;
+      billingError = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    billingBusy = true;
+    try {
+      const result = await api.billingSummary({ cycleId, signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      billingSummary = result;
+      billingBusy = false;
+      billingError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      billingSummary = null;
+      billingBusy = false;
+      billingError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
   async function mutateSubscription(input) {
     if (subscriptionBusy) return false;
     const planVersionId = String(input.planVersionId ?? "");
@@ -1178,7 +1248,10 @@ export function createIdentityPageController({
         onboardingError = null;
         applyOnboardingProjection(onboardingOutcome.value);
       }
-      await loadSaasBilling(ticket, "", { render: false });
+      await Promise.all([
+        loadSaasBilling(ticket, "", { render: false }),
+        loadWorkspaceBilling(ticket, null, "", { render: false }),
+      ]);
       if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
       return true;
@@ -1283,6 +1356,9 @@ export function createIdentityPageController({
       subscription,
       subscriptionBusy,
       subscriptionError,
+      billingSummary,
+      billingBusy,
+      billingError,
       workspaceView,
       workspaceDraft,
       invitationResult,
@@ -1328,6 +1404,9 @@ export function createIdentityPageController({
     subscriptionBusy = false;
     subscriptionError = null;
     subscriptionIntent = null;
+    billingSummary = null;
+    billingBusy = false;
+    billingError = null;
   }
 
   function clearInvitationSecret() {
@@ -1486,6 +1565,10 @@ export function createIdentityPageController({
         event.preventDefault();
         const fields = new FormData(form);
         await controller.changeSubscription({ planVersionId: fields.get("planVersionId") });
+      } else if (form?.matches?.("[data-workspace-billing-cycle-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.selectBillingCycle(fields.get("cycleId"));
       }
     });
     root.addEventListener?.("click", async (event) => {
@@ -1527,6 +1610,10 @@ export function createIdentityPageController({
         await controller.refreshOnboarding();
       } else if (button.dataset.identityAction === "refresh-subscription") {
         await controller.refreshSubscription();
+      } else if (button.dataset.identityAction === "refresh-billing") {
+        await controller.refreshBilling();
+      } else if (button.dataset.identityAction === "download-billing-export") {
+        await controller.downloadBillingExport();
       } else if (button.dataset.identityAction === "copy-invitation-link") {
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {

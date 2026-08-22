@@ -81,6 +81,23 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-plan-table th:nth-child(3) { width: 11%; }
 .platform-plan-table th:nth-child(4) { width: 15%; }
 .platform-plan-table th:nth-child(5) { width: 8%; }
+.platform-billing-table { min-width: 980px; table-layout: auto; }
+.platform-billing-table th:first-child { width: 21%; }
+.platform-billing-table th:nth-child(2) { width: 21%; }
+.platform-billing-filter { display: flex; align-items: end; gap: 9px; margin-bottom: 16px; }
+.platform-billing-filter label { display: grid; min-width: 190px; gap: 6px; }
+.platform-billing-filter select,
+.platform-billing-filter button,
+.platform-billing-adjustment input,
+.platform-billing-adjustment select { min-height: 38px; border: 1px solid #bdc7bf; border-radius: 4px; background: #fff; color: var(--ink); padding: 7px 9px; }
+.platform-billing-filter button { cursor: pointer; font-weight: 700; }
+.platform-billing-adjustment form { display: grid; grid-template-columns: minmax(260px, 1.5fr) repeat(3, minmax(120px, .7fr)) auto; align-items: end; gap: 12px; }
+.platform-billing-adjustment label { display: grid; min-width: 0; gap: 6px; }
+.platform-billing-adjustment label > span,
+.platform-billing-filter label > span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.platform-billing-adjustment input,
+.platform-billing-adjustment select { width: 100%; min-width: 0; }
+.platform-billing-adjustment button { min-width: 110px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 legend { margin-bottom: 7px; color: #455048; font-size: 13px; font-weight: 650; }
 .platform-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 12px; }
@@ -177,6 +194,8 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-sidebar button { width: auto; min-width: 148px; white-space: normal; overflow-wrap: normal; }
   .platform-inline-form, .platform-form-split { grid-template-columns: 1fr; }
   .platform-plan-publisher form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-billing-adjustment form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-billing-target { grid-column: 1 / -1; }
   .platform-form-split form { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--line); }
   .platform-role-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-diagnostics dl { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
@@ -195,6 +214,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-role-grid { grid-template-columns: 1fr; }
   .platform-plan-publisher form { grid-template-columns: 1fr; }
   .platform-plan-publisher button { width: 100%; }
+  .platform-billing-filter { align-items: stretch; flex-direction: column; }
+  .platform-billing-filter label,
+  .platform-billing-filter button { width: 100%; min-width: 0; }
+  .platform-billing-adjustment form { grid-template-columns: 1fr; }
+  .platform-billing-target { grid-column: auto; }
+  .platform-billing-adjustment button { width: 100%; }
   .platform-confirm { align-items: flex-start; flex-direction: column; }
   .platform-confirm div { align-items: flex-start; flex-direction: column; }
   .platform-lifecycle-confirm form { width: 100%; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }

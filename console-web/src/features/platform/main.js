@@ -25,6 +25,10 @@ import {
   suspendPlatformWorkspace,
   updatePlatformOperator,
 } from "../../lib/platform.js";
+import {
+  createPlatformBillingAdjustment,
+  listPlatformBillingSummary,
+} from "../../lib/platformBilling.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -61,6 +65,11 @@ if (root) {
       diagnostics: (input) => getSupportDiagnostics({ controlApiUrl, ...input }),
       breakGlass: (input) => createBreakGlassSession({ controlApiUrl, ...input }),
       audit: (input) => listPlatformAudit({ controlApiUrl, ...input }),
+      billingSummary: (input) => listPlatformBillingSummary({ controlApiUrl, ...input }),
+      createBillingAdjustment: (input) => createPlatformBillingAdjustment({
+        controlApiUrl,
+        ...input,
+      }),
     },
   }).mount();
 }

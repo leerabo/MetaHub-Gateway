@@ -177,6 +177,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderError(state.error)}
         ${renderOnboardingSection(state)}
         ${renderSaasSubscriptionSection(state)}
+        ${renderWorkspaceBillingSection(state)}
         <section class="identity-summary" aria-labelledby="identity-summary-title">
           <div class="identity-section-heading">
             <div>
@@ -348,6 +349,67 @@ function renderSaasSubscriptionSection(state) {
   `;
 }
 
+function renderWorkspaceBillingSection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
+  const response = state.billingSummary ?? {};
+  const cycle = response.cycle ?? null;
+  const available = Array.isArray(response.available_cycles) ? response.available_cycles : [];
+  return `
+    <section class="identity-billing" aria-labelledby="identity-billing-title" aria-busy="${state.billingBusy === true}">
+      <div class="identity-section-heading">
+        <div><p>计量与结算</p><h2 id="identity-billing-title">账单摘要</h2></div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-billing" aria-label="刷新账单摘要" title="刷新账单摘要" ${state.billingBusy ? "disabled" : ""}>↻</button>
+      </div>
+      ${state.billingError ? renderError(state.billingError) : ""}
+      ${cycle ? renderBillingCycle(cycle, available, state.billingBusy) : renderNoBillingCycle()}
+    </section>
+  `;
+}
+
+function renderBillingCycle(cycle, available, busy) {
+  return `
+    <div class="identity-billing-toolbar">
+      <div>
+        <strong>${escapeHtml(formatIdentityDate(cycle.period_started_at))} 至 ${escapeHtml(formatIdentityDate(cycle.period_ends_at))}</strong>
+        <span>${escapeHtml(billingCycleStatusLabel(cycle.status))} · ${escapeHtml(cycle.currency)} · 水位 ${formatIdentityNumber(cycle.source_watermark)}</span>
+      </div>
+      <div class="identity-billing-actions">
+        ${available.length > 1 ? `
+          <form data-workspace-billing-cycle-form>
+            <label><span class="identity-visually-hidden">账单周期</span><select name="cycleId" aria-label="账单周期">${available.map((cycleId, index) => `<option value="${escapeAttribute(cycleId)}" ${cycleId === cycle.billing_cycle_id ? "selected" : ""}>${cycleId === cycle.billing_cycle_id ? "当前周期" : `历史周期 ${index + 1}`}</option>`).join("")}</select></label>
+            <button type="submit" ${busy ? "disabled" : ""}>查看</button>
+          </form>` : ""}
+        <button type="button" data-identity-action="download-billing-export" ${busy ? "disabled" : ""}>导出 CSV</button>
+      </div>
+    </div>
+    <div class="identity-billing-table-wrap">
+      <table class="identity-billing-table">
+        <thead><tr><th>Meter</th><th>用量</th><th>配额</th><th>超额</th><th>调整</th><th>有效金额</th></tr></thead>
+        <tbody>${cycle.meters.map(renderWorkspaceMeterRow).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderWorkspaceMeterRow(meter) {
+  const amount = meter.billing_mode === "informational"
+    ? "未计价"
+    : `${meter.currency} ${meter.effective_amount}`;
+  return `<tr>
+    <td data-label="Meter"><strong>${escapeHtml(meterLabel(meter.meter_code))}</strong><span>${escapeHtml(meter.unit)}</span></td>
+    <td data-label="用量">${formatIdentityNumber(meter.usage_quantity)}</td>
+    <td data-label="配额">${meter.billing_mode === "informational" ? "信息项" : formatIdentityNumber(meter.allocated_quantity)}</td>
+    <td data-label="超额"><strong class="${meter.overage_quantity > 0 ? "is-overage" : ""}">${formatIdentityNumber(meter.overage_quantity)}</strong></td>
+    <td data-label="调整">${formatSignedNumber(meter.adjustment_quantity)}</td>
+    <td data-label="有效金额"><strong>${escapeHtml(amount)}</strong></td>
+  </tr>`;
+}
+
+function renderNoBillingCycle() {
+  return '<div class="identity-subscription-empty"><strong>暂无计量周期</strong><span>首条可计量 Usage 到达后会生成账单周期</span></div>';
+}
+
 function renderNoSubscription() {
   return '<div class="identity-subscription-empty"><strong>尚未订阅</strong><span>未创建 Workspace 订阅记录</span></div>';
 }
@@ -442,6 +504,29 @@ function formatIdentityDate(value) {
 
 function formatIdentityNumber(value) {
   return Number.isFinite(Number(value)) ? new Intl.NumberFormat("zh-CN").format(Number(value)) : "0";
+}
+
+function formatSignedNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return `${number > 0 ? "+" : ""}${formatIdentityNumber(number)}`;
+}
+
+function billingCycleStatusLabel(value) {
+  return ({
+    open: "进行中",
+    closed: "已关账",
+    reconciliation_required: "需要对账",
+  })[value] ?? String(value ?? "-").replaceAll("_", " ");
+}
+
+function meterLabel(value) {
+  return ({
+    api_requests: "API 请求",
+    input_tokens: "输入 Token",
+    output_tokens: "输出 Token",
+    total_tokens: "总 Token",
+  })[value] ?? String(value ?? "-").replaceAll("_", " ");
 }
 
 function renderOnboardingStepButton(step, index, selectedIndex, busy) {

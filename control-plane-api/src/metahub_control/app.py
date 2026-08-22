@@ -67,6 +67,8 @@ from .permissions.routes import router as permissions_router
 from .plan_billing import install_plan_billing_scheduler
 from .plan_billing import router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
+from .platform_billing import install_platform_billing_scheduler
+from .platform_billing import router as platform_billing_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -179,6 +181,9 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/workspace/break-glass-sessions/")
         or request.url.path == "/subscriptions"
         or request.url.path.startswith("/subscriptions/")
+        or request.url.path == "/billing/summary"
+        or request.url.path == "/billing/usage"
+        or request.url.path == "/billing/reconciliation-export"
         or request.url.path == "/workspaces/current/onboarding"
         or request.url.path.startswith("/workspaces/current/onboarding/")
         or request.url.path == "/tenant/current"
@@ -215,6 +220,7 @@ app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(platform_access_router)
+app.include_router(platform_billing_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
@@ -296,6 +302,7 @@ if app.state.config.control_background_schedulers_enabled:
     install_approval_scheduler(app)
     install_plan_billing_scheduler(app)
     install_saas_billing_scheduler(app)
+    install_platform_billing_scheduler(app)
     install_partner_portal_scheduler(app)
     install_branding_scheduler(app)
     install_billing_dispute_scheduler(app)

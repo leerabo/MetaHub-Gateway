@@ -32,7 +32,11 @@ const WORKSPACE_FILTER_KEYS = new Set([
   "health_risk",
 ]);
 
-export function createPlatformPageController({ root, api } = {}) {
+export function createPlatformPageController({
+  root,
+  api,
+  newIdempotencyKey = defaultIdempotencyKey,
+} = {}) {
   if (!root || !api) throw new TypeError("platform page requires root and api");
   let generation = 0;
   let request = null;
@@ -42,6 +46,11 @@ export function createPlatformPageController({ root, api } = {}) {
     navigation: [],
     operators: null,
     plans: null,
+    billing: null,
+    billingStatus: "",
+    billingCursor: null,
+    billingCursorHistory: [],
+    billingAdjustmentIntent: null,
     grants: null,
     audit: null,
     diagnostics: null,
@@ -117,6 +126,67 @@ export function createPlatformPageController({ root, api } = {}) {
     },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
+    },
+    async filterBilling(status) {
+      state.billingStatus = normalizeBillingStatus(status);
+      state.billingCursor = null;
+      state.billingCursorHistory = [];
+      return loadBillingPage();
+    },
+    async nextBillingPage() {
+      const cursor = state.billing?.next_cursor;
+      if (!cursor) return false;
+      state.billingCursorHistory.push(state.billingCursor);
+      state.billingCursor = cursor;
+      return loadBillingPage();
+    },
+    async previousBillingPage() {
+      if (state.billingCursorHistory.length === 0) return false;
+      state.billingCursor = state.billingCursorHistory.pop() ?? null;
+      return loadBillingPage();
+    },
+    async createBillingAdjustment({ targetKey, reasonCode, quantity, amount }) {
+      const target = billingAdjustmentTarget(state.billing, targetKey);
+      if (!target || typeof api.createBillingAdjustment !== "function") return false;
+      const magnitudeQuantity = Number(quantity);
+      const magnitudeAmount = String(amount ?? "");
+      if (!Number.isSafeInteger(magnitudeQuantity) || magnitudeQuantity < 0
+        || !/^(?:0|[1-9][0-9]{0,10})\.[0-9]{2}$/u.test(magnitudeAmount)
+        || (magnitudeQuantity === 0 && magnitudeAmount === "0.00")) return false;
+      const sign = reasonCode === "manual_credit" ? -1 : reasonCode === "manual_debit" ? 1 : 0;
+      if (sign === 0) return false;
+      const adjustment = {
+        workspace_id: target.cycle.workspace_id,
+        billing_cycle_id: target.cycle.billing_cycle_id,
+        meter_code: target.meter.meter_code,
+        reason_code: reasonCode,
+        quantity_delta: sign * magnitudeQuantity,
+        amount_delta: sign < 0 && magnitudeAmount !== "0.00" ? `-${magnitudeAmount}` : magnitudeAmount,
+        expected_summary_sha256: target.meter.summary_sha256,
+      };
+      const fingerprint = JSON.stringify(adjustment);
+      const idempotencyKey = state.billingAdjustmentIntent?.fingerprint === fingerprint
+        ? state.billingAdjustmentIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.billingAdjustmentIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        await api.createBillingAdjustment({ adjustment, idempotencyKey, signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.billingAdjustmentIntent = null;
+        state.billingCursor = null;
+        state.billingCursorHistory = [];
+        state.feedback = "账单调整已追加。";
+        return reload(ticket);
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.billingAdjustmentIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async toggleOperator(input) {
       return write("操作员状态已更新。", () => api.updateOperator(input));
@@ -304,6 +374,7 @@ export function createPlatformPageController({ root, api } = {}) {
         navigation: normalizeNavigation(navigation.items),
         operators: null,
         plans: null,
+        billing: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -317,6 +388,13 @@ export function createPlatformPageController({ root, api } = {}) {
       }
       if (permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
+      }
+      if (permissions.has("platform.billing.read") && typeof api.billingSummary === "function") {
+        tasks.push(api.billingSummary({
+          status: state.billingStatus,
+          cursor: state.billingCursor,
+          signal: ticket.signal,
+        }).then((value) => { next.billing = value; }));
       }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
@@ -369,6 +447,28 @@ export function createPlatformPageController({ root, api } = {}) {
       });
       if (!current(ticket)) return false;
       state.workspaces = workspaces;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadBillingPage() {
+    if (typeof api.billingSummary !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const billing = await api.billingSummary({
+        status: state.billingStatus,
+        cursor: state.billingCursor,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.billing = billing;
       state.loading = false;
       render();
       return true;
@@ -467,6 +567,17 @@ export function createPlatformPageController({ root, api } = {}) {
           publish: data.get("publish") === "on",
         });
       }
+      if (form.matches("[data-platform-billing-filter-form]")) {
+        controller.filterBilling(data.get("status"));
+      }
+      if (form.matches("[data-platform-billing-adjustment-form]")) {
+        controller.createBillingAdjustment({
+          targetKey: data.get("targetKey"),
+          reasonCode: data.get("reasonCode"),
+          quantity: data.get("quantity"),
+          amount: data.get("amount"),
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -508,6 +619,8 @@ export function createPlatformPageController({ root, api } = {}) {
       if (action === "close-workspace") controller.closeWorkspace();
       if (action === "workspace-next") controller.nextWorkspacePage();
       if (action === "workspace-previous") controller.previousWorkspacePage();
+      if (action === "billing-next") controller.nextBillingPage();
+      if (action === "billing-previous") controller.previousBillingPage();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
     });
@@ -533,6 +646,11 @@ export function createPlatformPageController({ root, api } = {}) {
     state.navigation = [];
     state.operators = null;
     state.plans = null;
+    state.billing = null;
+    state.billingStatus = "";
+    state.billingCursor = null;
+    state.billingCursorHistory = [];
+    state.billingAdjustmentIntent = null;
     state.grants = null;
     state.audit = null;
     state.diagnostics = null;
@@ -573,6 +691,26 @@ function normalizeWorkspaceFilters(input) {
 
 function hasWorkspaceRead(permissions) {
   return [...WORKSPACE_READ_PERMISSIONS].some((permission) => permissions.has(permission));
+}
+
+function normalizeBillingStatus(value) {
+  const text = String(value ?? "");
+  return new Set(["", "open", "closed", "reconciliation_required"]).has(text) ? text : "";
+}
+
+function billingAdjustmentTarget(billing, targetKey) {
+  const [cycleId, meterCode, ...extra] = String(targetKey ?? "").split(":");
+  if (extra.length > 0) return null;
+  const cycle = billing?.cycles?.find((item) => item.billing_cycle_id === cycleId);
+  const meter = cycle?.meters?.find((item) => item.meter_code === meterCode);
+  if (!cycle || cycle.status === "open" || !meter?.summary_sha256) return null;
+  return { cycle, meter };
+}
+
+function defaultIdempotencyKey() {
+  const value = globalThis.crypto?.randomUUID?.();
+  if (!value) throw new TypeError("secure idempotency key generation is unavailable");
+  return `platform-billing-${value}`;
 }
 
 function isPlatformSessionFailure(error) {

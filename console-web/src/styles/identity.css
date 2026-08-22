@@ -409,6 +409,7 @@ a {
 .identity-mfa,
 .identity-onboarding,
 .identity-subscription,
+.identity-billing,
 .identity-workspaces,
 .identity-memberships,
 .identity-sessions,
@@ -580,6 +581,91 @@ a {
   height: 17px;
   margin: 0;
   accent-color: var(--identity-accent);
+}
+
+.identity-billing-toolbar,
+.identity-billing-actions,
+.identity-billing-actions form {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.identity-billing-toolbar {
+  justify-content: space-between;
+  border-block: 1px solid var(--identity-line);
+  padding: 13px 4px;
+}
+
+.identity-billing-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.identity-billing-toolbar strong,
+.identity-billing-toolbar span {
+  overflow-wrap: anywhere;
+}
+
+.identity-billing-toolbar span,
+.identity-billing-table td > span {
+  color: var(--identity-muted);
+  font-size: 0.76rem;
+}
+
+.identity-billing-actions select,
+.identity-billing-actions button {
+  min-height: 36px;
+  border: 1px solid #bbc5d0;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 6px 9px;
+}
+
+.identity-billing-actions button {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.identity-billing-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.identity-billing-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.identity-billing-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.identity-billing-table th,
+.identity-billing-table td {
+  border-bottom: 1px solid var(--identity-line);
+  padding: 12px 9px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.identity-billing-table th:first-child,
+.identity-billing-table td:first-child {
+  text-align: left;
+}
+
+.identity-billing-table td > strong,
+.identity-billing-table td > span {
+  display: block;
+}
+
+.identity-billing-table .is-overage {
+  color: #a6382c;
 }
 
 .identity-mfa-start,
@@ -1629,5 +1715,45 @@ a {
 
   .identity-workspace-actions button {
     flex: 1 1 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .identity-billing-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .identity-billing-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .identity-billing-actions form {
+    min-width: 0;
+  }
+
+  .identity-billing-actions select {
+    max-width: 170px;
+  }
+
+  .identity-billing-table {
+    min-width: 680px;
+  }
+}
+
+@media (max-width: 520px) {
+  .identity-billing-actions,
+  .identity-billing-actions form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .identity-billing-actions form,
+  .identity-billing-actions label,
+  .identity-billing-actions select,
+  .identity-billing-actions button {
+    width: 100%;
+    max-width: none;
   }
 }

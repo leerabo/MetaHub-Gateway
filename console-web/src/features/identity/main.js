@@ -35,6 +35,11 @@ import {
   getWorkspaceSubscription,
   listPublicSaasPlans,
 } from "../../lib/saasBilling.js";
+import {
+  downloadWorkspaceBillingExport,
+  getWorkspaceBillingSummary,
+  saveWorkspaceBillingExport,
+} from "../../lib/platformBilling.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -82,6 +87,12 @@ if (root) {
       subscription: (input) => getWorkspaceSubscription({ controlApiUrl, ...input }),
       createSubscription: (input) => createWorkspaceSubscription({ controlApiUrl, ...input }),
       changeSubscription: (input) => changeWorkspaceSubscription({ controlApiUrl, ...input }),
+      billingSummary: (input) => getWorkspaceBillingSummary({ controlApiUrl, ...input }),
+      billingExport: async (input) => {
+        const result = await downloadWorkspaceBillingExport({ controlApiUrl, ...input });
+        saveWorkspaceBillingExport(result);
+        return result;
+      },
     },
   });
   controller.mount();
