@@ -105,6 +105,10 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-backup-detail dl { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 0; gap: 20px 28px; }
 .platform-backup-detail dt { color: var(--muted); font-size: 11px; }
 .platform-backup-detail dd { margin: 5px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.platform-gateway-placement form { display: grid; grid-template-columns: repeat(4,minmax(150px,1fr)); align-items: end; gap: 14px; }
+.platform-gateway-placement form > * { min-width: 0; }
+.platform-gateway-placement input, .platform-gateway-placement select { width: 100%; min-width: 0; }
+.platform-gateway-table { min-width: 760px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 legend { margin-bottom: 7px; color: #455048; font-size: 13px; font-weight: 650; }
 .platform-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 12px; }
@@ -203,6 +207,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-plan-publisher form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-billing-adjustment form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-backup-create form { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .platform-gateway-placement form { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-billing-target { grid-column: 1 / -1; }
   .platform-form-split form { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid var(--line); }
   .platform-role-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -227,6 +232,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-billing-filter button { width: 100%; min-width: 0; }
   .platform-billing-adjustment form { grid-template-columns: 1fr; }
   .platform-backup-create form, .platform-backup-detail dl { grid-template-columns: 1fr; }
+  .platform-gateway-placement form { grid-template-columns: 1fr; }
   .platform-billing-target { grid-column: auto; }
   .platform-billing-adjustment button { width: 100%; }
   .platform-confirm { align-items: flex-start; flex-direction: column; }

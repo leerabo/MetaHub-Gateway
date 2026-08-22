@@ -81,6 +81,9 @@ DEFAULT_INTERNAL_CHAT_TOKEN = "dev-only-change-me-metahub-internal-chat-token-20
 DEFAULT_INTERNAL_BATCH_TOKEN = "dev-only-change-me-metahub-internal-batch-token-2026"
 DEFAULT_BATCH_ENCRYPTION_SECRET = "dev-only-change-me-metahub-batch-encryption-secret-2026"
 DEFAULT_APPROVAL_HMAC_SECRET = "dev-only-change-me-metahub-approval-hmac-secret-2026"
+DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET = (
+    "dev-only-change-me-metahub-gateway-placement-signing-secret-2026"
+)
 # 租户导出 ZIP 与注销留存分段共享一个 PRD-089 根密钥，但通过固定 AAD/domain 分离用途。
 # 公开默认值只服务 dev/test；生产缺失时仅 tenant-data 功能关闭失败，不能回退到 Auth/Provider 密钥。
 DEFAULT_TENANT_DATA_ENCRYPTION_SECRET = (
@@ -114,6 +117,15 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1,cn-east-1",
     "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION": "cn-residency-v1",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET": DEFAULT_CACHE_AFFINITY_HMAC_SECRET,
+    "METAHUB_GATEWAY_PLACEMENT_ENABLED": "false",
+    "METAHUB_GATEWAY_CELL_CODE": "",
+    "METAHUB_GATEWAY_PLACEMENT_SIGNING_VERSION": "1",
+    "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET": "",
+    "METAHUB_GATEWAY_PLACEMENT_SNAPSHOT_TTL_SECONDS": "30",
+    "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT": "100",
+    "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT": "50",
+    "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT": "10",
+    "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT": "500",
     # PRD-100 keeps local/test SQLite explicit while production uses PostgreSQL.
     # Infrastructure credentials remain absent by default and are always masked.
     "METAHUB_DATABASE_POOL_MIN_SIZE": "1",
@@ -456,6 +468,17 @@ class AppConfig(BaseModel):
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     workspace_allowed_regions: tuple[str, ...] = ("cn-north-1", "cn-east-1")
     workspace_residency_policy_version: str = "cn-residency-v1"
+    gateway_placement_enabled: bool = False
+    gateway_cell_code: str | None = None
+    gateway_placement_signing_version: int = 1
+    gateway_placement_signing_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    gateway_placement_snapshot_ttl_seconds: int = 30
+    gateway_capacity_tenant_limit: int = 100
+    gateway_capacity_workspace_limit: int = 50
+    gateway_capacity_key_limit: int = 10
+    gateway_capacity_cell_limit: int = 500
     service_mode: ServiceMode = "internal_only"
     provider_base_urls: dict[str, str] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
@@ -960,6 +983,65 @@ def load_app_config(service_name: str) -> AppConfig:
         _value(values, "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE").strip().lower()
     )
     cache_affinity_hmac_secret = _value(values, "METAHUB_CACHE_AFFINITY_HMAC_SECRET")
+    gateway_placement_enabled = _boolean(values, "METAHUB_GATEWAY_PLACEMENT_ENABLED")
+    gateway_cell_code = _optional_value(values, "METAHUB_GATEWAY_CELL_CODE")
+    gateway_placement_signing_version = _positive_int(
+        values, "METAHUB_GATEWAY_PLACEMENT_SIGNING_VERSION"
+    )
+    configured_gateway_placement_secret = _raw_optional_value(
+        values, "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET"
+    )
+    gateway_placement_signing_secret = configured_gateway_placement_secret or (
+        DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET
+        if environment in {"dev", "test"}
+        else None
+    )
+    if gateway_placement_enabled and (
+        gateway_placement_signing_secret is None
+        or len(gateway_placement_signing_secret.encode("utf-8")) < 32
+        or _secret_reused(
+            gateway_placement_signing_secret,
+            (
+                auth_token_secret,
+                identity_session_secret,
+                identity_challenge_secret,
+                workspace_session_secret,
+                platform_session_secret,
+                support_session_secret,
+                identity_mfa_encryption_secret,
+                platform_bootstrap_recovery_secret,
+                identity_pii_encryption_secret,
+                cache_affinity_hmac_secret,
+            ),
+        )
+        or (
+            environment == "prod"
+            and hmac.compare_digest(
+                gateway_placement_signing_secret,
+                DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET,
+            )
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Gateway placement signing requires an independent production secret.",
+            suggestion=(
+                "Configure METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET with at least 32 characters."
+            ),
+        )
+
+    if gateway_placement_enabled and service_name == "gateway-data-plane" and (
+        gateway_cell_code is None
+        or re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?", gateway_cell_code
+        )
+        is None
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Gateway placement requires an explicit local Cell code.",
+            suggestion="Configure METAHUB_GATEWAY_CELL_CODE with the assigned active Cell code.",
+        )
 
     if (
         len(identity_session_secret) < 32
@@ -1845,6 +1927,28 @@ def load_app_config(service_name: str) -> AppConfig:
         workspace_residency_policy_version=_workspace_residency_policy_version(
             _value(values, "METAHUB_WORKSPACE_RESIDENCY_POLICY_VERSION")
         ),
+        gateway_placement_enabled=gateway_placement_enabled,
+        gateway_cell_code=gateway_cell_code,
+        gateway_placement_signing_version=gateway_placement_signing_version,
+        gateway_placement_signing_secret=gateway_placement_signing_secret,
+        gateway_placement_snapshot_ttl_seconds=_bounded_int(
+            values,
+            "METAHUB_GATEWAY_PLACEMENT_SNAPSHOT_TTL_SECONDS",
+            minimum=5,
+            maximum=300,
+        ),
+        gateway_capacity_tenant_limit=_bounded_int(
+            values, "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT", minimum=1, maximum=100000
+        ),
+        gateway_capacity_workspace_limit=_bounded_int(
+            values, "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT", minimum=1, maximum=100000
+        ),
+        gateway_capacity_key_limit=_bounded_int(
+            values, "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT", minimum=1, maximum=100000
+        ),
+        gateway_capacity_cell_limit=_bounded_int(
+            values, "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT", minimum=1, maximum=1000000
+        ),
         service_mode=service_mode,
         provider_base_urls=provider_base_urls,
         features={
@@ -1863,6 +1967,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "batch_worker_enabled": batch_worker_enabled,
             "response_cache_enabled": response_cache_enabled,
             "mcp_enabled": bool(mcp_values["mcp_enabled"]),
+            "gateway_placement_enabled": gateway_placement_enabled,
         },
         config_items=config_items,
         warnings=warnings,
@@ -3251,6 +3356,15 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_GATEWAY_API_BASE_URL",
         "METAHUB_ALLOWED_ORIGINS",
         "METAHUB_SERVICE_MODE",
+        "METAHUB_GATEWAY_PLACEMENT_ENABLED",
+        "METAHUB_GATEWAY_CELL_CODE",
+        "METAHUB_GATEWAY_PLACEMENT_SIGNING_VERSION",
+        "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
+        "METAHUB_GATEWAY_PLACEMENT_SNAPSHOT_TTL_SECONDS",
+        "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT",
         "METAHUB_DATABASE_URL",
         "METAHUB_REDIS_URL",
         "METAHUB_DATABASE_POOL_MIN_SIZE",

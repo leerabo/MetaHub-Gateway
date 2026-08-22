@@ -63,10 +63,22 @@ async def test_config_summary_requires_internal_token_in_prod(
     monkeypatch.setenv("METAHUB_ENV", "prod")
     internal_token = "expected-control-token-0123456789abcdef"
     monkeypatch.setenv("METAHUB_INTERNAL_CONFIG_TOKEN", internal_token)
-    monkeypatch.setenv(
-        "METAHUB_IDENTITY_SESSION_SECRET",
-        "test-config-summary-identity-session-secret-0123456789abcdef",
-    )
+    production_values = {
+        "METAHUB_AUTH_TOKEN_SECRET": "config-summary-prod-auth-secret-0123456789abcdef",
+        "METAHUB_IDENTITY_SESSION_SECRET": "config-summary-prod-session-secret-0123456789abcdef",
+        "METAHUB_IDENTITY_CHALLENGE_SECRET": "config-summary-prod-challenge-secret-0123456789abcdef",
+        "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": "config-summary-prod-pii-secret-0123456789abcdef",
+        "METAHUB_WORKSPACE_SESSION_SECRET": "config-summary-prod-workspace-secret-0123456789abcdef",
+        "METAHUB_PLATFORM_SESSION_SECRET": "config-summary-prod-platform-secret-0123456789abcdef",
+        "METAHUB_SUPPORT_SESSION_SECRET": "config-summary-prod-support-secret-0123456789abcdef",
+        "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": "config-summary-prod-mfa-secret-0123456789abcdef",
+        "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": "config-summary-prod-recovery-secret-0123456789abcdef",
+        "METAHUB_CACHE_AFFINITY_HMAC_SECRET": "config-summary-prod-cache-secret-0123456789abcdef",
+        "METAHUB_DATABASE_URL": "postgresql://app@db.test/metahub?sslmode=require",
+        "METAHUB_REDIS_URL": "rediss://cache.test:6379/0",
+    }
+    for key, value in production_values.items():
+        monkeypatch.setenv(key, value)
     app = build_test_app()
 
     transport = ASGITransport(app=app)

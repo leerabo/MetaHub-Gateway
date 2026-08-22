@@ -24,6 +24,7 @@ from metahub_gateway.providers.base import UpstreamApiError
 from metahub_gateway.providers.openai_compatible import OpenAICompatibleAdapter
 from metahub_gateway.routing import models as routing_models
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.gateway_fleet import create_placement_snapshot, install_placement_snapshot
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 from metahub_shared.runtime.policy_snapshot import (
@@ -369,6 +370,41 @@ def prepare_database(
     )
     connection.commit()
     return database_url
+
+
+def install_prd101_gateway_placement(app, database_url: str) -> None:
+    """从服务端 owner 事实构造启用态签名快照，禁止测试请求注入 Workspace 或 Cell。"""
+
+    connection = connect_database(database_url)
+    try:
+        owner = connection.execute(
+            """
+            SELECT binding.tenant_id,binding.workspace_id,key.virtual_key_id,
+              cell.gateway_cell_id,cell.cell_code,cell.region_code
+            FROM workspace_tenant_bindings binding
+            JOIN virtual_keys key ON key.tenant_id=binding.tenant_id
+            JOIN gateway_cells cell ON cell.cell_code='cn-north-1-a'
+            WHERE binding.status='active'
+            LIMIT 1
+            """
+        ).fetchone()
+        assert owner is not None
+    finally:
+        connection.close()
+    snapshot = create_placement_snapshot(
+        signing_secret=app.state.config.gateway_placement_signing_secret,
+        signing_key_version=app.state.config.gateway_placement_signing_version,
+        tenant_id=str(owner["tenant_id"]),
+        workspace_id=str(owner["workspace_id"]),
+        gateway_cell_id=str(owner["gateway_cell_id"]),
+        cell_code=str(owner["cell_code"]),
+        region_code=str(owner["region_code"]),
+        placement_revision=1,
+        residency_policy_version="cn-residency-v1",
+        generation=1,
+        ttl_seconds=30,
+    )
+    install_placement_snapshot(app.state, snapshot)
 
 
 def configure_prd079_exhausted_quota_with_budget(database_url: str) -> str:
@@ -1512,14 +1548,31 @@ async def test_fallback_local_request_error_keeps_only_primary_budget_estimate(
     )
     real_provider_request = openai_api._provider_request
 
-    def fail_fallback_provider_request(adapter, route, endpoint, payload, config, request):
+    def fail_fallback_provider_request(
+        adapter,
+        route,
+        endpoint,
+        payload,
+        config,
+        request,
+        *,
+        routing_attempt_id=None,
+    ):
         """保留主请求构造，只在备用 attempt 入库后模拟本地 Provider Key 不可用。"""
 
         # default-chat 是本夹具冻结的备用模型；主模型仍必须走真实 HTTP 5xx 才能进入该分支。
         if route.model_alias == "default-chat":
             # 本地 Key/请求构造错误没有产生备用网络用量，因此备用冻结额必须释放。
             raise ApiError("provider_key.unavailable")
-        return real_provider_request(adapter, route, endpoint, payload, config, request)
+        return real_provider_request(
+            adapter,
+            route,
+            endpoint,
+            payload,
+            config,
+            request,
+            routing_attempt_id=routing_attempt_id,
+        )
 
     monkeypatch.setattr(openai_api, "_provider_request", fail_fallback_provider_request)
     request_id = "req_prd047_fallback_local_failure"
@@ -1996,6 +2049,126 @@ async def test_embeddings_json_flow(
     ).fetchone()
     assert usage["input_tokens"] == 2
     assert usage["output_tokens"] == 0
+
+
+@pytest.mark.anyio
+async def test_prd101_enabled_placement_covers_chat_embeddings_and_stream_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """启用态三条 OpenAI 热路径共用签名准入，流完成后必须释放唯一容量令牌。"""
+
+    upstream_url, captured = fake_upstream
+    monkeypatch.setenv("METAHUB_GATEWAY_PLACEMENT_ENABLED", "true")
+    monkeypatch.setenv("METAHUB_GATEWAY_CELL_CODE", "cn-north-1-a")
+    monkeypatch.setenv(
+        "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
+        "test-prd101-hot-path-signing-secret-independent-2026",
+    )
+    for key in (
+        "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT",
+        "METAHUB_GATEWAY_CAPACITY_CELL_LIMIT",
+    ):
+        monkeypatch.setenv(key, "1")
+    database_url = prepare_database(monkeypatch, tmp_path, upstream_url)
+    app = build_gateway_app()
+    install_prd101_gateway_placement(app, database_url)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        chat = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd101_placement_chat",
+            },
+            json={
+                "model": "default-chat",
+                "messages": [{"role": "user", "content": "placement chat"}],
+            },
+        )
+        embeddings = await client.post(
+            "/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd101_placement_embeddings",
+            },
+            json={"model": "default-embedding", "input": "placement embeddings"},
+        )
+        async with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd101_placement_stream",
+            },
+            json={
+                "model": "default-chat",
+                "messages": [{"role": "user", "content": "placement stream"}],
+                "stream": True,
+            },
+        ) as stream:
+            stream_body = await stream.aread()
+        after_stream = await client.post(
+            "/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd101_after_stream_release",
+            },
+            json={"model": "default-embedding", "input": "after stream"},
+        )
+
+    assert chat.status_code == 200, chat.text
+    assert embeddings.status_code == 200, embeddings.text
+    assert stream.status_code == 200
+    assert b"[DONE]" in stream_body
+    assert after_stream.status_code == 200, after_stream.text
+    assert [item["path"] for item in captured] == [
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/chat/completions",
+        "/v1/embeddings",
+    ]
+    assert app.state.gateway_capacity_controller._counts == {}
+
+
+@pytest.mark.anyio
+async def test_prd101_missing_placement_fails_before_request_body_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_upstream,
+) -> None:
+    """缺少本地签名快照时先返回固定 503，畸形正文不得进入解析器或 Provider。"""
+
+    upstream_url, captured = fake_upstream
+    monkeypatch.setenv("METAHUB_GATEWAY_PLACEMENT_ENABLED", "true")
+    monkeypatch.setenv("METAHUB_GATEWAY_CELL_CODE", "cn-north-1-a")
+    monkeypatch.setenv(
+        "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
+        "test-prd101-pre-body-signing-secret-independent-2026",
+    )
+    prepare_database(monkeypatch, tmp_path, upstream_url)
+    app = build_gateway_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {VIRTUAL_KEY}",
+                "X-Request-ID": "req_prd101_pre_body_failure",
+                "Content-Type": "application/json",
+            },
+            content=b'{"model":',
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "gateway.placement_unavailable"
+    assert captured == []
 
 
 @pytest.mark.anyio

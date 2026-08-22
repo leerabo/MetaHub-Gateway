@@ -1,3 +1,4 @@
+// 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 const ROLE_OPTIONS = [
   "platform_owner",
   "platform_ops",
@@ -64,6 +65,7 @@ export function renderPlatformWorkspace(container, state) {
 function renderView(state, permissions) {
   if (state.view === "overview") return overviewView(state);
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
+  if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -99,6 +101,72 @@ function infrastructureResourceRow(resource) {
     <td data-label="延迟">${resource.latency_ms === null ? "-" : `${number(resource.latency_ms)} ms`}</td>
     <td data-label="最近验证">${formatTime(resource.last_verified_at)}</td>
   </tr>`;
+}
+
+// Gateway 视图仅展示有界 Cell 摘要，并按实时权限裁剪 placement 写表单。
+function gatewayView(state, permissions) {
+  const cells = state.gatewayCells?.cells ?? [];
+  const active = cells.filter((cell) => cell.status === "active" && cell.health_status === "healthy");
+  const placement = state.gatewayPlacement?.placement;
+  return `
+    <header class="platform-page-heading"><div><p>Regional data plane</p><h1>Gateway</h1></div><span>${number(active.length)} 个可用 Cell</span></header>
+    <section class="platform-metrics" aria-label="Gateway fleet summary">
+      ${metric("Cells", cells.length, "区域分片")}
+      ${metric("可用", active.length, "健康且接流")}
+      ${metric("配置水位", Math.max(0, ...cells.map((cell) => cell.config_watermark)), "最新 generation")}
+    </section>
+    <section class="platform-band platform-gateway-cells">
+      <div class="platform-section-heading"><div><p>Bounded fleet projection</p><h2>Cell 状态</h2></div><span>${number(cells.length)} 个 Cell</span></div>
+      <div class="platform-table-wrap"><table class="platform-gateway-table"><thead><tr><th>Cell</th><th>Region</th><th>容量</th><th>服务状态</th><th>健康</th><th>Release</th><th>Config</th></tr></thead><tbody>${cells.map(gatewayCellRow).join("") || emptyRow("暂无 Gateway Cell", 7)}</tbody></table></div>
+    </section>
+    ${permissions.has("platform.gateway.manage") ? gatewayPlacementForm(active) : ""}
+    ${placement ? gatewayPlacementResult(placement) : ""}`;
+}
+
+// Cell 行保持固定枚举列，避免把拓扑地址或客户信息扩展进运维表格。
+function gatewayCellRow(cell) {
+  return `<tr>
+    <td data-label="Cell"><strong>${escapeHtml(cell.cell_code)}</strong><small>${escapeHtml(statusLabel(cell.capacity_class))}</small></td>
+    <td data-label="Region">${escapeHtml(cell.region_code)}</td>
+    <td data-label="容量">${status(cell.capacity_band)}</td>
+    <td data-label="服务状态">${status(cell.status)}</td>
+    <td data-label="健康">${status(cell.health_status)}</td>
+    <td data-label="Release">${number(cell.release_watermark)}</td>
+    <td data-label="Config">${number(cell.config_watermark)}</td>
+  </tr>`;
+}
+
+// Placement 表单要求显式 revision、驻留版本和确认，写入仍由服务端 CAS 与权限复核裁决。
+function gatewayPlacementForm(cells) {
+  const options = cells.map((cell) => `<option value="${escapeAttribute(cell.cell_code)}">${escapeHtml(cell.cell_code)} · ${escapeHtml(cell.region_code)}</option>`).join("");
+  return `
+    <section class="platform-band platform-gateway-placement">
+      <div class="platform-section-heading"><div><p>Signed placement</p><h2>发布 Workspace placement</h2></div><span>Workspace 路由</span></div>
+      <form data-platform-gateway-placement-form autocomplete="off">
+        <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label>
+        <label><span>当前 revision</span><input name="revision" type="number" min="0" value="0" required /></label>
+        <label><span>Primary Cell</span><select name="primaryCellCode" required>${options}</select></label>
+        <label><span>Failover Cell</span><select name="failoverCellCode"><option value="">禁止 failover</option>${options}</select></label>
+        <label><span>Residency policy</span><input name="residencyPolicyVersion" value="" placeholder="cn-residency-v1" maxlength="80" required /></label>
+        <label><span>变更原因</span><select name="reasonCode"><option value="initial_placement">Initial placement</option><option value="capacity_rebalance">Capacity rebalance</option><option value="regional_recovery">Regional recovery</option></select></label>
+        <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认发布新 generation</span></label>
+        <button class="platform-primary" type="submit">发布 placement</button>
+      </form>
+    </section>`;
+}
+
+// 写入结果只回显安全 placement 投影和 generation，不渲染签名制品。
+function gatewayPlacementResult(placement) {
+  return `
+    <section class="platform-band platform-gateway-result">
+      <div class="platform-section-heading"><div><p>Current response</p><h2>${escapeHtml(shortWorkspace(placement.workspace_id))}</h2></div>${status("active")}</div>
+      <dl class="platform-fact-grid">
+        ${fact("Primary", `${placement.primary_cell_code} · ${placement.primary_region_code}`)}
+        ${fact("Failover", placement.failover_cell_code ?? "禁止")}
+        ${fact("Revision", String(placement.revision))}
+        ${fact("Generation", String(placement.snapshot_generation))}
+      </dl>
+    </section>`;
 }
 
 function backupForm() {
@@ -485,7 +553,7 @@ function billingStatusOptions(current) { return [["open", "进行中"], ["closed
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

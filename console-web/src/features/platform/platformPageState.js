@@ -1,8 +1,10 @@
+// 平台页面状态机负责取消过期请求、权限裁剪和幂等意图；敏感认证值只由 HttpOnly Cookie 承载。
 import { PlatformApiError } from "../../lib/platform.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
   "infrastructure",
+  "gateway",
   "operators",
   "workspaces",
   "support",
@@ -53,6 +55,9 @@ export function createPlatformPageController({
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
     infrastructure: null,
+    gatewayCells: null,
+    gatewayPlacement: null,
+    gatewayPlacementIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -158,6 +163,62 @@ export function createPlatformPageController({
       } catch (error) {
         if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
           state.backupIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async updateGatewayPlacement({
+      workspaceId,
+      revision,
+      primaryCellCode,
+      failoverCellCode,
+      residencyPolicyVersion,
+      reasonCode,
+      confirmed,
+    }) {
+      // 发布属于显式运维写入，程序化 submit 也必须携带用户确认，不能只依赖浏览器 required 行为。
+      if (typeof api.updateGatewayPlacement !== "function" || confirmed !== true) return false;
+      const primary = state.gatewayCells?.cells?.find(
+        (cell) => cell.cell_code === primaryCellCode,
+      );
+      if (!primary) return false;
+      const placement = {
+        primary_region_code: primary.region_code,
+        primary_cell_code: primary.cell_code,
+        failover_policy: failoverCellCode ? "explicit" : "deny",
+        failover_cell_code: failoverCellCode || null,
+        residency_policy_version: String(residencyPolicyVersion ?? ""),
+        reason_code: String(reasonCode ?? ""),
+        confirmed: true,
+      };
+      const fingerprint = JSON.stringify({ workspaceId, revision: Number(revision), placement });
+      const idempotencyKey = state.gatewayPlacementIntent?.fingerprint === fingerprint
+        ? state.gatewayPlacementIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.gatewayPlacementIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.gatewayPlacement = await api.updateGatewayPlacement({
+          workspaceId,
+          revision: Number(revision),
+          placement,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.gatewayPlacementIntent = null;
+        state.gatewayCells = await api.gatewayCells({ signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.loading = false;
+        state.feedback = "Gateway placement 已发布。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.gatewayPlacementIntent = null;
         }
         return fail(ticket, error);
       }
@@ -428,6 +489,7 @@ export function createPlatformPageController({
         plans: null,
         billing: null,
         infrastructure: null,
+        gatewayCells: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -453,6 +515,11 @@ export function createPlatformPageController({
         && typeof api.infrastructureStatus === "function") {
         tasks.push(api.infrastructureStatus({ signal: ticket.signal }).then((value) => {
           next.infrastructure = value;
+        }));
+      }
+      if (permissions.has("platform.gateway.read") && typeof api.gatewayCells === "function") {
+        tasks.push(api.gatewayCells({ signal: ticket.signal }).then((value) => {
+          next.gatewayCells = value;
         }));
       }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
@@ -643,6 +710,17 @@ export function createPlatformPageController({
           retentionDays: data.get("retentionDays"),
         });
       }
+      if (form.matches("[data-platform-gateway-placement-form]")) {
+        controller.updateGatewayPlacement({
+          workspaceId: data.get("workspaceId"),
+          revision: data.get("revision"),
+          primaryCellCode: data.get("primaryCellCode"),
+          failoverCellCode: data.get("failoverCellCode"),
+          residencyPolicyVersion: data.get("residencyPolicyVersion"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -718,6 +796,9 @@ export function createPlatformPageController({
     state.billingCursorHistory = [];
     state.billingAdjustmentIntent = null;
     state.infrastructure = null;
+    state.gatewayCells = null;
+    state.gatewayPlacement = null;
+    state.gatewayPlacementIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;

@@ -1,3 +1,4 @@
+// 平台入口只装配受权限约束的 API 与页面控制器；不得在全局状态持有 Session、TOTP 或 Gateway 签名材料。
 import {
   addPlatformWorkspaceRiskTag,
   approveSupportGrant,
@@ -34,6 +35,10 @@ import {
   getPlatformBackup,
   getPlatformInfrastructureStatus,
 } from "../../lib/platformInfrastructure.js";
+import {
+  getPlatformGatewayCells,
+  updatePlatformGatewayPlacement,
+} from "../../lib/platformGateway.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -81,6 +86,11 @@ if (root) {
       }),
       createBackup: (input) => createPlatformBackup({ controlApiUrl, ...input }),
       backup: (input) => getPlatformBackup({ controlApiUrl, ...input }),
+      gatewayCells: (input) => getPlatformGatewayCells({ controlApiUrl, ...input }),
+      updateGatewayPlacement: (input) => updatePlatformGatewayPlacement({
+        controlApiUrl,
+        ...input,
+      }),
     },
   }).mount();
 }

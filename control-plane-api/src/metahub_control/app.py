@@ -69,6 +69,8 @@ from .plan_billing import router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
 from .platform_billing import install_platform_billing_scheduler
 from .platform_billing import router as platform_billing_router
+from .platform_gateway import install_gateway_snapshot_scheduler
+from .platform_gateway import router as platform_gateway_router
 from .platform_infrastructure import router as platform_infrastructure_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
@@ -223,6 +225,7 @@ app.include_router(workspace_onboarding_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
+app.include_router(platform_gateway_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
@@ -282,6 +285,9 @@ app.include_router(request_explanations_router)
 app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
+# 短期 placement 快照属于启用态数据面可用性的必要续租，不受可选治理 scheduler 总开关影响。
+if app.state.config.gateway_placement_enabled:
+    install_gateway_snapshot_scheduler(app)
 # PRD-077 runtime 必须先于其他 scheduler 预建 WAL/FULL 连接；后安装的 lifespan 会在
 # shutdown 时先停止各自 worker，再由本 runtime 最后关闭长期连接。单进程本地开发默认
 # 可关闭这组可选恢复 worker，避免大量空队列轮询争用 SQLite；生产默认保持开启。

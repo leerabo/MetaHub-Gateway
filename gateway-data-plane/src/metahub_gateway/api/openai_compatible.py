@@ -20,6 +20,7 @@ from typing import Any
 import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from metahub_shared.gateway_fleet import GatewayAdmission, admit_gateway_request
 from metahub_shared.intent_security import (
     DETECTOR_VERSION,
     RISK_SCORE_SCALE,
@@ -409,6 +410,7 @@ async def _handle_gateway_request(
     request_log_context: RequestLogContext | None = None
     request_model: str | None = None
     rate_limit_lease: RateLimitLease | None = None
+    gateway_admission: GatewayAdmission | None = None
     policy_lease: PolicySnapshotLeaseDecision | None = None
     budget_guard_result: BudgetGuardResult | None = None
     quota_guard_result: QuotaGuardResult | None = None
@@ -515,6 +517,15 @@ async def _handle_gateway_request(
         # 不可执行 lease 表示快照已过期或同步不可用，必须在读取正文和路由前失败关闭。
         if not policy_lease.executable:
             raise ApiError(policy_lease.error_code or "gateway.policy_snapshot_unavailable")
+
+        gateway_admission = await admit_gateway_request(
+            config,
+            request.app.state,
+            tenant_id=auth_context.tenant_id,
+            workspace_id=auth_context.workspace_id,
+            virtual_key_id=auth_context.virtual_key_id,
+            resource_class="chat" if request_kind == "chat" else "embeddings",
+        )
 
         # 风险身份只允许来自公开规范 Header 或已消费 grant，且冻结 overlay
         # 必须在读取 Prompt 前点查。
@@ -1160,6 +1171,7 @@ async def _handle_gateway_request(
                 None,
                 started,
                 rate_limit_lease,
+                gateway_admission=gateway_admission,
                 client_request=request,
                 route=route,
                 endpoint=endpoint,
@@ -1176,6 +1188,7 @@ async def _handle_gateway_request(
             )
             experiment_stream_handed_off = experiment_guard is not None
             rate_limit_lease = None
+            gateway_admission = None
             return streaming_response
 
         if request_kind == "chat" and output_safety_scan is None:
@@ -1397,6 +1410,8 @@ async def _handle_gateway_request(
             )
         if rate_limit_lease is not None:
             await rate_limit_lease.release()
+        if gateway_admission is not None:
+            await gateway_admission.release()
         if realtime_gateway_lease is not None:
             await realtime_gateway_lease.release()
 
@@ -2934,6 +2949,7 @@ async def _stream_response(
     started: float,
     rate_limit_lease: RateLimitLease | None,
     *,
+    gateway_admission: GatewayAdmission | None = None,
     client_request: Request | None = None,
     route: GatewayRoute | None = None,
     endpoint: str | None = None,
@@ -4024,6 +4040,7 @@ async def _stream_response(
                                 },
                             )
                     await _safe_release_rate_limit_lease(rate_limit_lease, session_context)
+                    await _safe_release_gateway_admission(gateway_admission, session_context)
 
             await _run_stream_finalizer_shielded(
                 finalize_body_state(),
@@ -4189,6 +4206,26 @@ async def _safe_release_rate_limit_lease(
                 "tenant_id": context.tenant_id,
                 "error_code": LOCAL_STREAM_PROCESSING_ERROR_CODE,
                 "payload": {"exception_type": exc.__class__.__name__},
+            },
+        )
+
+
+async def _safe_release_gateway_admission(
+    admission: GatewayAdmission | None,
+    context: RequestLogContext,
+) -> None:
+    if admission is None:
+        return
+    try:
+        await admission.release()
+    except Exception:
+        logger.warning(
+            "gateway_capacity.release_failed",
+            extra={
+                "event": "gateway_capacity.release_failed",
+                "request_id": context.request_id,
+                "trace_id": context.trace_id,
+                "tenant_id": context.tenant_id,
             },
         )
 

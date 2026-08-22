@@ -77,6 +77,7 @@ function Assert-MetaHubEnvFile {
     "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
     "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+    "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
     "METAHUB_APPROVAL_HMAC_SECRET",
     "METAHUB_SEED_ADMIN_PASSWORD",
@@ -126,6 +127,7 @@ function Assert-MetaHubEnvFile {
     "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
     "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+    "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_SESSION_RISK_HMAC_SECRET",
     "METAHUB_APPROVAL_HMAC_SECRET"
   )) {
@@ -361,6 +363,7 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-mcp-sandbox-permit-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-mcp-sandbox-response-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-gateway-placement-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-session-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-approval-hmac-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-response-cache-hmac-secret" = (New-MetaHubLocalSecret)

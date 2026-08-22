@@ -15,6 +15,7 @@ from metahub_gateway.cache_affinity import install_cache_affinity_recovery
 from metahub_gateway.error_maps import install_provider_error_map_cache
 from metahub_gateway.events import install_runtime_event_dispatcher
 from metahub_gateway.feedback.routes import router as feedback_router
+from metahub_gateway.gateway_fleet import install_gateway_placement_sync
 from metahub_gateway.intent_security import install_intent_security_dispatcher
 from metahub_gateway.local_model_events import install_local_model_event_recovery
 from metahub_gateway.policies import install_policy_snapshot_cache
@@ -64,3 +65,6 @@ install_policy_snapshot_cache(app)
 # Provider 错误规则只轮询已认证请求见过的 tenant；安装为组合 lifespan，任何同步失败都
 # 由 cache 内部降级到 builtin/LKG，不把控制面网络依赖带入模型请求热路径。
 install_provider_error_map_cache(app)
+# Placement artifacts are verified into process-local memory; database or signature failures keep
+# the previous valid snapshot and new requests fail closed once its explicit expiry is reached.
+install_gateway_placement_sync(app)

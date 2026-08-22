@@ -32,6 +32,7 @@ class GatewayAuthContext:
     virtual_key_id: str
     key_prefix: str = field(repr=False)
     environment: str
+    workspace_id: str = ""
     environment_id: str = ""
     environment_name: str = ""
     environment_status: str = "active"
@@ -56,10 +57,13 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
               e.environment_id AS environment_id,
               e.name AS environment_name,
               e.status AS environment_status,
+              binding.workspace_id,
               vk.project_id, vk.application_id,
               vk.status, t.status AS tenant_status
             FROM virtual_keys vk
             JOIN tenants t ON t.tenant_id = vk.tenant_id
+            JOIN workspace_tenant_bindings binding
+              ON binding.tenant_id=vk.tenant_id AND binding.status='active'
             JOIN environments e
               ON e.tenant_id=vk.tenant_id
              AND (e.environment_id=vk.environment_id
@@ -78,6 +82,7 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
             virtual_key_id=row["virtual_key_id"],
             key_prefix=row["key_prefix"],
             environment=row["environment"],
+            workspace_id=row["workspace_id"],
             environment_id=row["environment_id"],
             environment_name=row["environment_name"],
             environment_status=row["environment_status"],
