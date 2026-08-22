@@ -16,6 +16,8 @@ from metahub_shared.runtime.errors import ApiError
 from pydantic import BaseModel, ConfigDict, Field
 
 from metahub_control.auth import AuthContext
+from metahub_control.workspace_onboarding.models import WorkspaceOnboardingResponse
+from metahub_control.workspace_onboarding.service import get_legacy_workspace_onboarding
 
 OnboardingStepStatus = Literal["complete", "current", "blocked", "optional"]
 
@@ -71,6 +73,14 @@ def get_onboarding_summary(
     """
 
     tenant_id = context.user.tenant_id
+    workspace_summary = get_legacy_workspace_onboarding(
+        config,
+        context,
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    if workspace_summary is not None:
+        return _map_workspace_summary(tenant_id, workspace_summary)
     try:
         connection = connect_database(config.database_url)
     except DbError as exc:
@@ -94,6 +104,93 @@ def get_onboarding_summary(
         steps=steps,
         request_id=request_id,
         trace_id=trace_id,
+    )
+
+
+def _map_workspace_summary(
+    tenant_id: str,
+    summary: WorkspaceOnboardingResponse,
+) -> TenantOnboardingSummaryResponse:
+    """Map the shared eight-step evaluator to the frozen Legacy Console DTO."""
+
+    by_id = {step.id: step for step in summary.steps}
+    mappings = (
+        ("tenant-profile", "workspace_profile", "准备企业资料", "#tenant", "查看企业设置"),
+        ("environment", "environment", "准备开发环境", "#environments", "配置环境"),
+        (
+            "provider-keypool",
+            "provider",
+            "接入模型服务",
+            "#providers",
+            "配置模型服务",
+        ),
+        ("model-alias", "model_alias", "准备模型别名", "#model-aliases", "配置模型别名"),
+        (
+            "project-application",
+            "project_application",
+            "建立业务归属",
+            "#projects",
+            "创建项目和应用",
+        ),
+        ("virtual-key", "virtual_key", "创建调用凭据", "#virtual-keys", "创建 Virtual Key"),
+        (
+            "first-governed-call",
+            "first_call",
+            "完成首次受控调用",
+            "#quickstart",
+            "发起首次调用",
+        ),
+        ("usage-evidence", "first_call", "核对用量证据", "#usage", "查看用量"),
+    )
+    steps: list[OnboardingStep] = []
+    for order, (legacy_id, current_id, title, target, action) in enumerate(mappings, start=1):
+        current = by_id[current_id]
+        status: OnboardingStepStatus
+        if current.status == "complete":
+            status = "complete"
+        elif current.status == "blocked":
+            status = "blocked"
+        else:
+            status = "current"
+        steps.append(
+            OnboardingStep(
+                id=legacy_id,
+                order=order,
+                status=status,
+                title=title,
+                description="按当前 Workspace 的真实配置和验证事实完成此步骤。",
+                target_hash=target,
+                action_label=action,
+                blocking_reason=(
+                    "请先完成前置初始化步骤。" if status == "blocked" else None
+                ),
+            )
+        )
+    for legacy_id, title, target, action in (
+        ("policy", "配置安全策略", "#policies", "配置策略"),
+        ("budget", "设置预算约束", "#budgets", "设置预算"),
+        ("team", "邀请协作成员", "#users", "管理成员"),
+    ):
+        steps.append(
+            OnboardingStep(
+                id=legacy_id,
+                order=len(steps) + 1,
+                status="optional",
+                title=title,
+                description="可在完成基础初始化后继续配置。",
+                target_hash=target,
+                action_label=action,
+            )
+        )
+    completed = sum(step.status == "complete" for step in steps[:8])
+    return TenantOnboardingSummaryResponse(
+        tenant_id=tenant_id,
+        completed_steps=completed,
+        total_steps=8,
+        is_complete=completed == 8,
+        steps=steps,
+        request_id=summary.request_id,
+        trace_id=summary.trace_id,
     )
 
 

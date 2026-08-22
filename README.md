@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前下一条未完成项是 `PRD-097 - 个人与企业初始化向导重构`。
+- 新 `PRD-090` 至 `PRD-097 - 个人与企业初始化向导重构` 已完成；当前下一条未完成项是 `PRD-098 - SaaS套餐、试用、订阅与Entitlement`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -428,8 +428,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   交叉确认。PRD-088 之后的下一条权威未完成项为
   `PRD-089 | M2-企业增强 | P2 | 扩展层 | 数据导出删除 | 租户数据导出与注销流程`，不是仅按编号推断。
   该历史登记已由下方 PRD-089 完成项关闭。旧总清单的 PRD-090..108 已整体废弃；新路线图的
-  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前
-  权威未完成项为 `PRD-097 - 个人与企业初始化向导重构`，`saas_incremental_roadmap_complete=false`。
+  `PRD-090 - SaaS总体架构与兼容迁移基线` 至 `PRD-097 - 个人与企业初始化向导重构` 已完成；当前
+  权威未完成项为 `PRD-098 - SaaS套餐、试用、订阅与Entitlement`，`saas_incremental_roadmap_complete=false`。
 - PRD-068 已完成：设计与两轮自审、0060、租户/权限/错误、Shared/Gateway/Control/Console 专项、
   Snapshot v12 真实 apply、数据库完整性和三服务运行均通过。最终 PAGE-095 聚焦回归为 `16 passed`；
   应用内 Browser `1280x720` 与 `390x844` 验证了五模板、已应用后的 incompatible 防重复、预算模板
@@ -807,7 +807,25 @@ health and event timelines, lifecycle confirmation, risk operations and notifica
 generation-fenced reloads. See [PRD-096 design](docs/prd/PRD-096-platform-workspace-directory-operations.md),
 [Platform Access API](docs/api/platform-access.md) and [PRD-096 tests](docs/testing/PRD-096-tests.md).
 Migration, role projection, cursor, health corruption, concurrency, Console and compatibility gates
-are complete; the authoritative next item is PRD-097.
+are complete; the authoritative next delivery is recorded in the PRD-097 section below.
+
+### PRD-097 个人与企业初始化向导重构（已完成）
+
+PRD-097 adds migration `0089` and replaces active-row onboarding guesses with an eight-step,
+backend-derived Workspace projection. System-created environments, legacy seed resources,
+placeholder credentials and orphan success requests do not count as completion. Activation requires
+user-confirmed profile/environment facts plus a verified Provider, Model, Alias, Project,
+Application, Virtual Key and real Gateway success with Usage/ledger evidence.
+
+The Identity Workspace page now provides a compact initialization center with progress, selectable
+steps, safe diagnostics, role-trimmed actions and configuration links. Mutations use WorkspaceSession,
+Origin, workspace CSRF, revision CAS and idempotency; developer access cannot mutate organization
+profile state. Evidence loss returns an activated Workspace to incomplete while preserving immutable
+history. See [PRD-097 design](docs/prd/PRD-097-workspace-onboarding-rebuild.md),
+[Workspace Onboarding API](docs/api/workspace-onboarding.md) and
+[PRD-097 tests](docs/testing/PRD-097-tests.md). Migration, strict transport, resource-chain,
+compatibility, Console and real-browser 390/1280/1440 gates are complete; the authoritative next item
+is PRD-098.
 
 ## 目录结构
 

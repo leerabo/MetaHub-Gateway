@@ -8,8 +8,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 
 from metahub_control.auth import (
     AuthContext,
-    require_provider_health_prober,
-    require_provider_health_reader,
+    require_workspace_or_legacy_permissions,
 )
 
 from .models import ProbeProviderRequest, ProviderHealthListResponse, ProviderProbeResponse
@@ -21,7 +20,10 @@ router = APIRouter(tags=["provider-health"])
 @router.get("/provider-health", response_model=ProviderHealthListResponse)
 async def get_provider_health(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_health_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.health.read")),
+    ],
     health_status: str | None = None,
     provider_status: str | None = None,
     provider_type: str | None = None,
@@ -49,7 +51,10 @@ async def get_provider_health(
 async def post_provider_probe(
     provider_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_health_prober)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.health.probe")),
+    ],
     payload: Annotated[ProbeProviderRequest | None, Body()] = None,
 ) -> ProviderProbeResponse:
     """立即探测一个当前租户 Provider；空 body 与 `{}` 等价，额外字段会被拒绝。"""

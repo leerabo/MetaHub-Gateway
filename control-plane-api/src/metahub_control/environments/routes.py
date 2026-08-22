@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
-from metahub_control.auth import AuthContext, require_environment_admin, require_environment_reader
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     CreateEnvironmentRequest,
@@ -26,7 +26,10 @@ router = APIRouter(tags=["environments"])
 @router.get("/environments", response_model=EnvironmentListResponse)
 async def get_environments(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_environment_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("environment.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     code: str | None = None,
 ) -> EnvironmentListResponse:
@@ -42,11 +45,18 @@ async def get_environments(
     )
 
 
-@router.post("/environments", response_model=EnvironmentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/environments",
+    response_model=EnvironmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def post_environment(
     payload: CreateEnvironmentRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_environment_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("environment.write")),
+    ],
 ) -> EnvironmentResponse:
     """创建当前租户标准环境，并记录 environment.created。"""
 
@@ -64,7 +74,10 @@ async def patch_environment(
     environment_id: str,
     payload: UpdateEnvironmentRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_environment_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("environment.write")),
+    ],
 ) -> EnvironmentResponse:
     """更新 Environment 名称、说明或状态，代码不可修改。"""
 

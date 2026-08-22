@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated
 
 from fastapi import Header, Request
@@ -16,7 +16,15 @@ from metahub_shared.feedback import FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
-from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
+from metahub_control.identity.service import valid_opaque_value
+from metahub_control.platform_access.constants import (
+    PLATFORM_SESSION_COOKIE,
+    SUPPORT_SESSION_COOKIE,
+)
+from metahub_control.workspace_access.constants import (
+    WORKSPACE_CSRF_COOKIE,
+    WORKSPACE_SESSION_COOKIE,
+)
 
 from .service import (
     AuthContext,
@@ -84,6 +92,53 @@ def require_console_user(
     return authenticate_bearer(request.app.state.config, authorization)
 
 
+def require_workspace_or_legacy_permissions(
+    *permission_codes: str,
+) -> Callable[..., AuthContext]:
+    """Build an explicit resource-route guard for one Workspace or Legacy credential."""
+
+    if not permission_codes:
+        raise ValueError("permission codes are required")
+
+    def dependency(
+        request: Request,
+        authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    ) -> AuthContext:
+        workspace_token = _workspace_cookie(request)
+        foreign_session = _cookie_present(request, PLATFORM_SESSION_COOKIE) or _cookie_present(
+            request, SUPPORT_SESSION_COOKIE
+        )
+        if foreign_session:
+            raise ApiError("workspace_session.credential_conflict")
+        if workspace_token is not None:
+            if authorization is not None or _raw_authorization_present(request):
+                raise ApiError("workspace_session.credential_conflict")
+            clear_workspace_cookies_on_error(request)
+            csrf_token = None
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                _require_workspace_origin(request)
+                csrf_token = _workspace_csrf(request)
+            from metahub_control.workspace_access.service import (
+                authenticate_workspace_session_as_auth_context,
+            )
+
+            context = authenticate_workspace_session_as_auth_context(
+                request.app.state.config,
+                workspace_token,
+                csrf_token=csrf_token,
+            )
+            request.state.workspace_session_authenticated = True
+            request.state.credential_domain = "workspace"
+        else:
+            context = authenticate_bearer(request.app.state.config, authorization)
+            request.state.credential_domain = "legacy"
+        for permission_code in permission_codes:
+            require_permission(context, permission_code)
+        return context
+
+    return dependency
+
+
 def _reject_mixed_workspace_credential(
     request: Request,
     authorization: str | None,
@@ -105,9 +160,64 @@ def _workspace_cookie(request: Request) -> str | None:
                 values.append(value)
     if not values:
         return None
-    if len(values) != 1 or not values[0]:
+    if len(values) != 1 or not valid_opaque_value(values[0]):
         raise ApiError("workspace_session.invalid")
     return values[0]
+
+
+def _cookie_present(request: Request, cookie_name: str) -> bool:
+    return any(
+        segment.strip().partition("=")[0] == cookie_name
+        for raw_name, raw_value in request.scope.get("headers", ())
+        if raw_name.lower() == b"cookie"
+        for segment in raw_value.decode("latin-1").split(";")
+    )
+
+
+def _workspace_csrf(request: Request) -> str:
+    cookie_values: list[str] = []
+    for raw_name, raw_value in request.scope.get("headers", ()):
+        if raw_name.lower() != b"cookie":
+            continue
+        for segment in raw_value.decode("latin-1").split(";"):
+            name, separator, value = segment.strip().partition("=")
+            if separator and name == WORKSPACE_CSRF_COOKIE:
+                cookie_values.append(value)
+    header_values = [
+        raw_value.decode("latin-1")
+        for raw_name, raw_value in request.scope.get("headers", ())
+        if raw_name.lower() == b"x-csrf-token"
+    ]
+    if (
+        len(cookie_values) != 1
+        or len(header_values) != 1
+        or not valid_opaque_value(cookie_values[0])
+        or not valid_opaque_value(header_values[0])
+        or not secrets.compare_digest(cookie_values[0], header_values[0])
+    ):
+        raise ApiError("workspace_session.csrf_invalid")
+    return cookie_values[0]
+
+
+def _require_workspace_origin(request: Request) -> None:
+    origins = [
+        raw_value.decode("latin-1")
+        for raw_name, raw_value in request.scope.get("headers", ())
+        if raw_name.lower() == b"origin"
+    ]
+    sites = [
+        raw_value.decode("latin-1")
+        for raw_name, raw_value in request.scope.get("headers", ())
+        if raw_name.lower() == b"sec-fetch-site"
+    ]
+    if (
+        len(origins) != 1
+        or "," in origins[0]
+        or origins[0] not in request.app.state.config.allowed_origins
+        or len(sites) > 1
+        or (sites and sites[0].lower() == "cross-site")
+    ):
+        raise ApiError("onboarding.origin_invalid")
 
 
 def _raw_authorization_present(request: Request) -> bool:

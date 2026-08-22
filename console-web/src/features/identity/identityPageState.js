@@ -36,6 +36,11 @@ export function createIdentityPageController({
   let workspaceContext = null;
   let memberships = [];
   let navigationItems = [];
+  let onboarding = null;
+  let onboardingSelectedStepId = null;
+  let onboardingBusy = false;
+  let onboardingError = null;
+  let onboardingIntent = null;
   let workspaceView = "summary";
   let workspaceDraft = null;
   let invitationResult = null;
@@ -450,6 +455,69 @@ export function createIdentityPageController({
         return handleWorkspaceActionError(error, "无法进入该空间。", ticket);
       }
     },
+    selectOnboardingStep(index) {
+      const step = onboarding?.steps?.[Number(index)];
+      if (!step) return false;
+      onboardingSelectedStepId = step.id;
+      renderSecurity();
+      focusOnboardingPanel();
+      return true;
+    },
+    async confirmOnboardingStep() {
+      return mutateOnboardingStep("confirm", "user_confirmed");
+    },
+    async deferOnboardingStep() {
+      return mutateOnboardingStep("defer", "do_later");
+    },
+    async reopenOnboardingStep() {
+      return mutateOnboardingStep("reopen", "configuration_changed");
+    },
+    async recheckOnboarding() {
+      if (!onboarding || onboardingBusy || typeof api.recheckOnboarding !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      const fingerprint = JSON.stringify({
+        workspace: workspaceContext?.workspace_id,
+        action: "recheck",
+        revision: onboarding.revision,
+      });
+      const idempotencyKey = onboardingIntent?.fingerprint === fingerprint
+        ? onboardingIntent.idempotencyKey
+        : newIdempotencyKey();
+      onboardingIntent = { fingerprint, idempotencyKey };
+      onboardingBusy = true;
+      onboardingError = null;
+      renderSecurity();
+      try {
+        const result = await queueWrite(() =>
+          api.recheckOnboarding({
+            revision: onboarding.revision,
+            idempotencyKey,
+            signal: ticket.signal,
+          }),
+        );
+        if (!isCurrent(ticket)) return false;
+        onboardingIntent = null;
+        onboardingBusy = false;
+        applyOnboardingProjection(result);
+        renderSecurity({ feedback: "初始化状态已重新检查。" });
+        focusOnboardingPanel();
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        onboardingBusy = false;
+        return handleOnboardingActionError(error, ticket);
+      }
+    },
+    async refreshOnboarding() {
+      if (!workspaceContext || typeof api.onboarding !== "function") return false;
+      const ticket = beginRequest();
+      onboardingBusy = true;
+      onboardingError = null;
+      renderSecurity();
+      return loadOnboarding(ticket, "初始化状态已刷新。");
+    },
     async updateMembership(index, { role, status }) {
       const target = memberships[Number(index)];
       if (!target?.can_manage || typeof api.updateMembership !== "function") return false;
@@ -592,6 +660,155 @@ export function createIdentityPageController({
   };
 
   return controller;
+
+  async function mutateOnboardingStep(action, reasonCode) {
+    const step = selectedOnboardingStep();
+    if (
+      !step ||
+      onboardingBusy ||
+      typeof api.updateOnboardingStep !== "function" ||
+      !canMutateOnboardingStep(step, action)
+    ) {
+      return false;
+    }
+    const ticket = beginRequest();
+    const fingerprint = JSON.stringify({
+      workspace: workspaceContext?.workspace_id,
+      step: step.id,
+      action,
+      reasonCode,
+      revision: onboarding.revision,
+    });
+    const idempotencyKey = onboardingIntent?.fingerprint === fingerprint
+      ? onboardingIntent.idempotencyKey
+      : newIdempotencyKey();
+    onboardingIntent = { fingerprint, idempotencyKey };
+    onboardingBusy = true;
+    onboardingError = null;
+    renderSecurity();
+    try {
+      const result = await queueWrite(() =>
+        api.updateOnboardingStep({
+          stepId: step.id,
+          action,
+          reasonCode,
+          revision: onboarding.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+      );
+      if (!isCurrent(ticket)) return false;
+      onboardingIntent = null;
+      onboardingBusy = false;
+      applyOnboardingProjection(result);
+      renderSecurity({
+        feedback: action === "confirm"
+          ? "步骤已确认。"
+          : action === "defer"
+            ? "已标记稍后处理。"
+            : "步骤已重新打开。",
+      });
+      focusOnboardingPanel();
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      onboardingBusy = false;
+      return handleOnboardingActionError(error, ticket);
+    }
+  }
+
+  function canMutateOnboardingStep(step, action) {
+    if (step.id === "workspace_profile") {
+      const allowed = onboarding?.workspace_kind === "personal"
+        ? workspaceContext?.role === "owner"
+        : new Set(["owner", "admin"]).has(workspaceContext?.role);
+      if (!allowed) return false;
+    } else if (!new Set(["owner", "admin", "developer"]).has(workspaceContext?.role)) {
+      return false;
+    }
+    if (action === "confirm") {
+      return new Set(["workspace_profile", "environment"]).has(step.id)
+        && new Set(["current", "deferred", "needs_attention"]).has(step.status);
+    }
+    if (action === "defer") return new Set(["current", "needs_attention"]).has(step.status);
+    return action === "reopen"
+      && new Set(["workspace_profile", "environment"]).has(step.id)
+      && step.status === "complete";
+  }
+
+  async function handleOnboardingActionError(error, ticket) {
+    if (isWorkspaceAuthorizationDrift(error)) {
+      onboardingIntent = null;
+      broadcastContextInvalidation();
+      await invalidateWorkspaceContext({
+        broadcast: false,
+        feedback: "空间权限已变化，正在重新校验。",
+        existingTicket: ticket,
+      });
+      return false;
+    }
+    if (isOnboardingRevisionDrift(error)) {
+      onboardingIntent = null;
+      await loadOnboarding(ticket, "初始化状态已变化，请重新操作。");
+      return false;
+    }
+    onboardingError = safePageError(error);
+    renderSecurity();
+    focusOnboardingPanel();
+    return false;
+  }
+
+  async function loadOnboarding(ticket, feedback = "") {
+    try {
+      const result = await api.onboarding({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      onboardingBusy = false;
+      onboardingIntent = null;
+      onboardingError = null;
+      applyOnboardingProjection(result);
+      renderSecurity({ feedback });
+      focusOnboardingPanel();
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      onboardingBusy = false;
+      if (isWorkspaceAuthorizationDrift(error)) {
+        onboardingIntent = null;
+        broadcastContextInvalidation();
+        return invalidateWorkspaceContext({
+          broadcast: false,
+          feedback: "空间权限已变化，正在重新校验。",
+          existingTicket: ticket,
+        });
+      }
+      onboarding = null;
+      onboardingError = safePageError(error);
+      renderSecurity();
+      return false;
+    }
+  }
+
+  function applyOnboardingProjection(result) {
+    onboarding = result;
+    const selectedStillExists = onboarding.steps.some(
+      (step) => step.id === onboardingSelectedStepId,
+    );
+    if (!selectedStillExists) {
+      onboardingSelectedStepId = (
+        onboarding.steps.find((step) => step.status === "current")
+        ?? onboarding.steps.find((step) => step.status !== "complete")
+        ?? onboarding.steps[0]
+      )?.id ?? null;
+    }
+  }
+
+  function selectedOnboardingStep() {
+    return onboarding?.steps?.find((step) => step.id === onboardingSelectedStepId) ?? null;
+  }
+
+  function focusOnboardingPanel() {
+    root.querySelector?.("[data-onboarding-step-panel]")?.focus?.({ preventScroll: true });
+  }
 
   async function loadProtectedState(feedback = "", existingTicket = null) {
     const ticket = existingTicket ?? beginRequest();
@@ -809,21 +1026,39 @@ export function createIdentityPageController({
     }
 
     try {
-      const [membershipResult, navigationResult] = await Promise.all([
+      const [membershipResult, navigationResult, onboardingOutcome] = await Promise.all([
         typeof api.memberships === "function"
           ? api.memberships({ signal: ticket.signal })
           : Promise.resolve({ memberships: [] }),
         typeof api.workspaceNavigation === "function"
           ? api.workspaceNavigation({ signal: ticket.signal })
           : Promise.resolve({ navigation_items: [] }),
+        typeof api.onboarding === "function"
+          ? api.onboarding({ signal: ticket.signal }).then(
+            (value) => ({ value, error: null }),
+            (error) => ({ value: null, error }),
+          )
+          : Promise.resolve({ value: null, error: null }),
       ]);
       if (!isCurrent(ticket)) return false;
+      if (onboardingOutcome.error && isWorkspaceAuthorizationDrift(onboardingOutcome.error)) {
+        throw onboardingOutcome.error;
+      }
       memberships = Array.isArray(membershipResult.memberships)
         ? membershipResult.memberships
         : [];
       navigationItems = Array.isArray(navigationResult.navigation_items)
         ? navigationResult.navigation_items
         : [];
+      onboardingBusy = false;
+      onboardingIntent = null;
+      if (onboardingOutcome.error) {
+        onboarding = null;
+        onboardingError = safePageError(onboardingOutcome.error);
+      } else if (onboardingOutcome.value) {
+        onboardingError = null;
+        applyOnboardingProjection(onboardingOutcome.value);
+      }
       renderSecurity({ feedback, error: previousError });
       return true;
     } catch (error) {
@@ -919,6 +1154,10 @@ export function createIdentityPageController({
       workspaceContext,
       memberships,
       navigationItems,
+      onboarding,
+      onboardingSelectedStepId,
+      onboardingBusy,
+      onboardingError,
       workspaceView,
       workspaceDraft,
       invitationResult,
@@ -954,6 +1193,11 @@ export function createIdentityPageController({
     workspaceContext = null;
     memberships = [];
     navigationItems = [];
+    onboarding = null;
+    onboardingSelectedStepId = null;
+    onboardingBusy = false;
+    onboardingError = null;
+    onboardingIntent = null;
   }
 
   function clearInvitationSecret() {
@@ -1128,6 +1372,18 @@ export function createIdentityPageController({
         await controller.switchWorkspace(button.dataset.workspaceIndex);
       } else if (button.dataset.identityAction === "refresh-workspace-context") {
         await controller.refreshWorkspaceContext();
+      } else if (button.dataset.identityAction === "select-onboarding-step") {
+        controller.selectOnboardingStep(button.dataset.onboardingStepIndex);
+      } else if (button.dataset.identityAction === "confirm-onboarding-step") {
+        await controller.confirmOnboardingStep();
+      } else if (button.dataset.identityAction === "defer-onboarding-step") {
+        await controller.deferOnboardingStep();
+      } else if (button.dataset.identityAction === "reopen-onboarding-step") {
+        await controller.reopenOnboardingStep();
+      } else if (button.dataset.identityAction === "recheck-onboarding") {
+        await controller.recheckOnboarding();
+      } else if (button.dataset.identityAction === "refresh-onboarding") {
+        await controller.refreshOnboarding();
       } else if (button.dataset.identityAction === "copy-invitation-link") {
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {
@@ -1178,6 +1434,13 @@ function isWorkspaceSessionMissing(error) {
 
 function isWorkspaceAuthorizationDrift(error) {
   return error instanceof IdentityApiError && new Set([401, 403]).has(error.status);
+}
+
+function isOnboardingRevisionDrift(error) {
+  return error instanceof IdentityApiError && (
+    error.status === 412 ||
+    new Set(["onboarding.revision_conflict", "onboarding.conflict"]).has(error.code)
+  );
 }
 
 function isAbort(error) {

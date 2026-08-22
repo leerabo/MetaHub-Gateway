@@ -9,9 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
-    require_local_endpoint_manager,
-    require_local_endpoint_reader,
-    require_local_endpoint_tester,
+    require_workspace_or_legacy_permissions,
 )
 
 from .models import (
@@ -29,7 +27,10 @@ router = APIRouter(prefix="/local-endpoints", tags=["local-endpoints"])
 @router.get("", response_model=LocalEndpointListResponse)
 async def get_local_endpoints(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_local_endpoint_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("local_endpoint.read")),
+    ],
 ) -> LocalEndpointListResponse:
     return list_local_endpoints(
         request.app.state.config,
@@ -48,7 +49,10 @@ async def post_local_endpoint(
     payload: CreateLocalEndpointRequest,
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_local_endpoint_manager)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("local_endpoint.manage")),
+    ],
 ) -> LocalEndpointCreateResponse:
     result = create_local_endpoint(
         request.app.state.config,
@@ -68,7 +72,10 @@ async def post_local_endpoint_test(
     local_endpoint_id: str,
     payload: TestLocalEndpointRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_local_endpoint_tester)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("local_endpoint.test")),
+    ],
 ) -> LocalEndpointTestResponse:
     del payload
     return test_local_endpoint(

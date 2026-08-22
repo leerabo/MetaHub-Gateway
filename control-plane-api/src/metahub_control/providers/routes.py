@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/providers/routes.py
 """
 
@@ -13,8 +14,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
-    require_provider_reader,
-    require_provider_writer,
+    require_workspace_or_legacy_permissions,
 )
 
 from .models import (
@@ -46,7 +46,10 @@ provider_keys_router = APIRouter(prefix="/provider-keys", tags=["provider-keys"]
 @router.get("", response_model=ProviderListResponse)
 async def get_providers(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     provider_type: str | None = None,
 ) -> ProviderListResponse:
@@ -69,7 +72,10 @@ async def get_providers(
 async def post_provider(
     payload: CreateProviderRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
 ) -> ProviderResponse:
     """处理 Provider 与 KeyPool 管理 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -92,7 +98,10 @@ async def patch_provider(
     provider_id: str,
     payload: UpdateProviderRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
 ) -> ProviderResponse:
     """更新当前租户 Provider 元数据或状态。"""
 
@@ -112,7 +121,10 @@ async def post_provider_test(
     provider_id: str,
     payload: TestProviderRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
 ) -> ProviderTestResponse:
     """处理 Provider 与 KeyPool 管理 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -134,7 +146,10 @@ async def post_provider_test(
 async def get_provider_keys(
     provider_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.read")),
+    ],
 ) -> ProviderKeyListResponse:
     """处理 Provider 与 KeyPool 管理 的查询型 HTTP 入口，把认证上下文中的 tenant_id 交给服务层。
     
@@ -152,12 +167,19 @@ async def get_provider_keys(
     )
 
 
-@router.post("/{provider_id}/keys", response_model=ProviderKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{provider_id}/keys",
+    response_model=ProviderKeyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def post_provider_key(
     provider_id: str,
     payload: CreateProviderKeyRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
 ) -> ProviderKeyResponse:
     """处理 Provider 与 KeyPool 管理 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -182,7 +204,10 @@ async def patch_provider_key(
     provider_key_id: str,
     payload: UpdateProviderKeyRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_provider_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("provider.write")),
+    ],
 ) -> ProviderKeyResponse:
     """处理 Provider 与 KeyPool 管理 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     

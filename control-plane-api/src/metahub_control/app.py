@@ -98,6 +98,7 @@ from .virtual_keys.routes import router as virtual_keys_router
 from .webhooks import install_webhook_replay_scheduler
 from .webhooks.routes import router as webhooks_router
 from .workspace_access.routes import router as workspace_access_router
+from .workspace_onboarding.routes import router as workspace_onboarding_router
 from .workspaces.routes import router as workspaces_router
 
 # 控制面承载低频管理 API，不直接处理模型调用热路径。PRD-001 只暴露健康和版本接口，
@@ -174,6 +175,25 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/support/")
         or request.url.path.startswith("/workspace/support-grants/")
         or request.url.path.startswith("/workspace/break-glass-sessions/")
+        or request.url.path == "/workspaces/current/onboarding"
+        or request.url.path.startswith("/workspaces/current/onboarding/")
+        or request.url.path == "/tenant/current"
+        or request.url.path == "/environments"
+        or request.url.path.startswith("/environments/")
+        or request.url.path == "/providers"
+        or request.url.path.startswith("/providers/")
+        or request.url.path.startswith("/provider-keys/")
+        or request.url.path == "/provider-health"
+        or request.url.path == "/models"
+        or request.url.path.startswith("/models/")
+        or request.url.path == "/model-aliases"
+        or request.url.path.startswith("/model-aliases/")
+        or request.url.path == "/projects"
+        or request.url.path.startswith("/projects/")
+        or request.url.path == "/applications"
+        or request.url.path.startswith("/applications/")
+        or request.url.path == "/virtual-keys"
+        or request.url.path.startswith("/virtual-keys/")
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         # Preserve endpoint-specific directives while covering error responses
@@ -189,6 +209,7 @@ app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
+app.include_router(workspace_onboarding_router)
 app.include_router(platform_access_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)

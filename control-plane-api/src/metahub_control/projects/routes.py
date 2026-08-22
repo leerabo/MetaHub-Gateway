@@ -1,6 +1,7 @@
 """模块职责：提供 Project/Application 管理 HTTP 入口。
 
-维护边界：路由层只负责认证依赖、request_id/trace_id 透传和参数收口，租户隔离与业务校验必须交给服务层重复执行。
+维护边界：路由层只负责认证依赖、request_id/trace_id 透传和参数收口，租户隔离与业务校验
+必须交给服务层重复执行。
 来源文件：control-plane-api/src/metahub_control/projects/routes.py
 """
 
@@ -11,7 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_project_admin, require_project_reader
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     ApplicationListResponse,
@@ -38,7 +39,10 @@ router = APIRouter(tags=["projects"])
 @router.get("/projects", response_model=ProjectListResponse)
 async def get_projects(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     search: str | None = None,
 ) -> ProjectListResponse:
@@ -58,7 +62,10 @@ async def get_projects(
 async def post_project(
     payload: CreateProjectRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.write")),
+    ],
 ) -> ProjectResponse:
     """创建当前租户内的项目，并透传 request_id 写入 project.created 审计事件。"""
 
@@ -76,7 +83,10 @@ async def patch_project(
     project_id: str,
     payload: UpdateProjectRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.write")),
+    ],
 ) -> ProjectResponse:
     """更新项目治理元数据，不允许修改 project_code。"""
 
@@ -93,7 +103,10 @@ async def patch_project(
 @router.get("/applications", response_model=ApplicationListResponse)
 async def get_applications(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.read")),
+    ],
     project_id: str | None = None,
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     search: str | None = None,
@@ -111,11 +124,18 @@ async def get_applications(
     )
 
 
-@router.post("/applications", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/applications",
+    response_model=ApplicationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def post_application(
     payload: CreateApplicationRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.write")),
+    ],
 ) -> ApplicationResponse:
     """在当前租户的项目下创建应用。"""
 
@@ -133,7 +153,10 @@ async def patch_application(
     application_id: str,
     payload: UpdateApplicationRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_project_admin)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("project.write")),
+    ],
 ) -> ApplicationResponse:
     """更新应用治理元数据，迁移项目时同步 Key 归属。"""
 

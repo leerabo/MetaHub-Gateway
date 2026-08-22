@@ -175,6 +175,7 @@ export function renderIdentitySecurityPage(container, state) {
         </section>
         ${renderFeedback(state.feedback)}
         ${renderError(state.error)}
+        ${renderOnboardingSection(state)}
         <section class="identity-summary" aria-labelledby="identity-summary-title">
           <div class="identity-section-heading">
             <div>
@@ -243,6 +244,157 @@ export function renderIdentitySecurityPage(container, state) {
       </div>
     </div>
   `;
+}
+
+function renderOnboardingSection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context) return "";
+  const onboarding = state.onboarding ?? null;
+  if (!onboarding) {
+    return `
+      <section class="identity-onboarding" aria-labelledby="identity-onboarding-title">
+        <div class="identity-section-heading">
+          <div><p>空间初始化</p><h2 id="identity-onboarding-title">初始化中心</h2></div>
+          <button class="identity-quiet-command" type="button" data-identity-action="refresh-onboarding">重试</button>
+        </div>
+        ${
+          state.onboardingError
+            ? renderError(state.onboardingError)
+            : '<p class="identity-empty">初始化状态暂时不可用。</p>'
+        }
+      </section>
+    `;
+  }
+  const selectedIndex = Math.max(
+    0,
+    onboarding.steps.findIndex((step) => step.id === state.onboardingSelectedStepId),
+  );
+  const selectedStep = onboarding.steps[selectedIndex] ?? onboarding.steps[0];
+  const busy = state.onboardingBusy === true;
+  const canOperate = new Set(["owner", "admin", "developer"]).has(context.role);
+  return `
+    <section
+      class="identity-onboarding"
+      aria-labelledby="identity-onboarding-title"
+      aria-busy="${busy}"
+    >
+      <div class="identity-onboarding-heading">
+        <div>
+          <p>空间初始化</p>
+          <h2 id="identity-onboarding-title">初始化中心</h2>
+          <span>${onboarding.workspace_kind === "personal" ? "个人空间" : "企业空间"} · ${onboarding.completed_steps}/${onboarding.total_steps}</span>
+        </div>
+        <button
+          class="identity-quiet-command"
+          type="button"
+          data-identity-action="recheck-onboarding"
+          ${busy || !canOperate ? "disabled" : ""}
+        >重新检查</button>
+      </div>
+      <progress
+        class="identity-onboarding-progress"
+        max="${onboarding.total_steps}"
+        value="${onboarding.completed_steps}"
+        aria-label="初始化进度"
+      ></progress>
+      <div class="identity-onboarding-layout">
+        <ol class="identity-onboarding-steps" aria-label="初始化步骤">
+          ${onboarding.steps.map((step, index) => renderOnboardingStepButton(step, index, selectedIndex, busy)).join("")}
+        </ol>
+        ${renderOnboardingStepPanel(selectedStep, context, busy, state.onboardingError)}
+      </div>
+    </section>
+  `;
+}
+
+function renderOnboardingStepButton(step, index, selectedIndex, busy) {
+  const selected = index === selectedIndex;
+  return `
+    <li>
+      <button
+        type="button"
+        data-identity-action="select-onboarding-step"
+        data-onboarding-step-index="${index}"
+        aria-current="${selected ? "step" : "false"}"
+        ${busy ? "disabled" : ""}
+      >
+        <span class="identity-onboarding-step-number" aria-hidden="true">${step.order}</span>
+        <span class="identity-onboarding-step-copy">
+          <strong>${escapeHtml(step.title)}</strong>
+          <small>${escapeHtml(onboardingStatusLabel(step.status))}</small>
+        </span>
+        <span class="identity-onboarding-step-mark" aria-hidden="true">${step.status === "complete" ? "✓" : "›"}</span>
+      </button>
+    </li>
+  `;
+}
+
+function renderOnboardingStepPanel(step, context, busy, error) {
+  const canOperate = new Set(["owner", "admin", "developer"]).has(context.role);
+  const canManageProfile = context.role === "owner" || (
+    context.kind === "organization" && context.role === "admin"
+  );
+  const canMutate = step.id === "workspace_profile" ? canManageProfile : canOperate;
+  const canConfirm = canMutate
+    && step.action === "confirm"
+    && new Set(["current", "deferred", "needs_attention"]).has(step.status);
+  const canDefer = canMutate && new Set(["current", "needs_attention"]).has(step.status);
+  const canReopen = canMutate
+    && step.status === "complete"
+    && step.source === "user_confirmed"
+    && new Set(["workspace_profile", "environment"]).has(step.id);
+  const showNavigation = new Set(["configure", "view", "recheck"]).has(step.action) || !canMutate;
+  return `
+    <div class="identity-onboarding-panel" tabindex="-1" data-onboarding-step-panel>
+      <div class="identity-onboarding-panel-heading">
+        <div>
+          <span>步骤 ${step.order}</span>
+          <h3>${escapeHtml(step.title)}</h3>
+        </div>
+        <span class="identity-onboarding-state is-${escapeAttribute(step.status)}">${escapeHtml(onboardingStatusLabel(step.status))}</span>
+      </div>
+      <dl class="identity-onboarding-facts">
+        <div><dt>来源</dt><dd>${escapeHtml(onboardingSourceLabel(step.source))}</dd></div>
+        <div><dt>检查时间</dt><dd>${escapeHtml(formatDateTime(step.last_checked_at))}</dd></div>
+        <div><dt>诊断</dt><dd>${escapeHtml(onboardingBlockingLabel(step.blocking_code))}</dd></div>
+      </dl>
+      ${error ? renderError(error) : ""}
+      <div class="identity-onboarding-actions">
+        ${canConfirm ? `<button class="identity-primary" type="button" data-identity-action="confirm-onboarding-step" ${busy ? "disabled" : ""}>确认完成</button>` : ""}
+        ${canDefer ? `<button class="identity-quiet-command" type="button" data-identity-action="defer-onboarding-step" ${busy ? "disabled" : ""}>稍后处理</button>` : ""}
+        ${canReopen ? `<button class="identity-quiet-command" type="button" data-identity-action="reopen-onboarding-step" ${busy ? "disabled" : ""}>重新配置</button>` : ""}
+        ${showNavigation ? `<a class="identity-quiet-command identity-onboarding-link" href="/${escapeAttribute(step.navigation_target)}">${step.status === "complete" ? "查看" : "打开配置"}</a>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function onboardingStatusLabel(status) {
+  return {
+    current: "当前步骤",
+    blocked: "等待上一步",
+    complete: "已完成",
+    deferred: "稍后处理",
+    needs_attention: "需要处理",
+  }[status] ?? "未知";
+}
+
+function onboardingSourceLabel(source) {
+  return {
+    system_created: "系统准备",
+    user_confirmed: "你已确认",
+    verified: "已验证",
+    legacy_seed: "历史配置",
+    none: "未配置",
+  }[source] ?? "未配置";
+}
+
+function onboardingBlockingLabel(code) {
+  if (String(code ?? "").startsWith("requires.")) return "请先完成上一步";
+  return {
+    evidence_changed: "已验证配置发生变化",
+    legacy_configuration: "历史配置需要重新验证",
+  }[code] ?? "无阻塞项";
 }
 
 function renderMfaSection(state) {

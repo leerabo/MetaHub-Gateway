@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/virtual_keys/routes.py
 """
 
@@ -11,7 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_virtual_key_reader, require_virtual_key_writer
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     CreateVirtualKeyRequest,
@@ -35,7 +36,10 @@ router = APIRouter(prefix="/virtual-keys", tags=["virtual-keys"])
 @router.get("", response_model=VirtualKeyListResponse)
 async def get_virtual_keys(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_virtual_key_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("virtual_key.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     environment_id: str | None = None,
     environment: str | None = None,
@@ -60,7 +64,10 @@ async def get_virtual_keys(
 async def post_virtual_key(
     payload: CreateVirtualKeyRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_virtual_key_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("virtual_key.write")),
+    ],
 ) -> CreateVirtualKeyResponse:
     """创建 Virtual Key 并只在本次响应返回一次明文。"""
 
@@ -79,7 +86,10 @@ async def patch_virtual_key(
     virtual_key_id: str,
     payload: UpdateVirtualKeyRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_virtual_key_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("virtual_key.write")),
+    ],
 ) -> VirtualKeyResponse:
     """更新当前租户 Virtual Key 元数据或状态。"""
 
@@ -99,7 +109,10 @@ async def patch_virtual_key_limits(
     virtual_key_id: str,
     payload: UpdateVirtualKeyLimitsRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_virtual_key_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("virtual_key.write")),
+    ],
 ) -> VirtualKeyResponse:
     """更新当前租户 Virtual Key 的基础限流设置。
 
@@ -121,7 +134,10 @@ async def patch_virtual_key_limits(
 async def delete_virtual_key(
     virtual_key_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_virtual_key_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("virtual_key.write")),
+    ],
 ) -> VirtualKeyResponse:
     """处理 Virtual Key 管理 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     

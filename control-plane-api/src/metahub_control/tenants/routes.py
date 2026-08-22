@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/tenants/routes.py
 """
 
@@ -10,7 +11,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from metahub_control.auth import AuthContext, require_current_admin, require_tenant_settings_reader
+from metahub_control.auth import (
+    AuthContext,
+    require_current_admin,
+    require_workspace_or_legacy_permissions,
+)
 
 from .models import TenantCurrentResponse, TenantUpdateRequest
 from .onboarding import TenantOnboardingSummaryResponse, get_onboarding_summary
@@ -37,7 +42,10 @@ async def onboarding_summary(
 @router.get("/current", response_model=TenantCurrentResponse)
 async def current_tenant(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_tenant_settings_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("tenant.settings.read")),
+    ],
 ) -> TenantCurrentResponse:
     """读取当前登录上下文的租户信息。"""
 
@@ -54,7 +62,10 @@ async def current_tenant(
 async def patch_current_tenant(
     payload: TenantUpdateRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_tenant_settings_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("tenant.settings.read")),
+    ],
 ) -> TenantCurrentResponse:
     """处理 控制面租户资料 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     

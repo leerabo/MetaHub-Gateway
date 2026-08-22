@@ -366,7 +366,24 @@ def get_workspace_session(
 def authenticate_workspace_session_as_auth_context(
     config: AppConfig,
     session_token: str,
+    *,
+    csrf_token: str | None = None,
 ) -> AuthContext:
+    return authenticate_workspace_session_context(
+        config,
+        session_token,
+        csrf_token=csrf_token,
+    ).as_auth_context()
+
+
+def authenticate_workspace_session_context(
+    config: AppConfig,
+    session_token: str,
+    *,
+    csrf_token: str | None = None,
+) -> WorkspaceSessionContext:
+    """Restore the full Workspace principal with optional CSRF verification."""
+
     connection = _connect(config)
     try:
         connection.execute("BEGIN")
@@ -374,11 +391,11 @@ def authenticate_workspace_session_as_auth_context(
             connection,
             config,
             session_token=session_token,
-            csrf_token=None,
+            csrf_token=csrf_token,
             touch=True,
         )
         connection.commit()
-        return context.as_auth_context()
+        return context
     except ApiError as exc:
         _finish_workspace_error(connection, exc)
         raise

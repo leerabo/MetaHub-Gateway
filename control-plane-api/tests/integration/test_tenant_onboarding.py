@@ -166,7 +166,7 @@ async def test_onboarding_summary_requires_backend_admin_permission(
 
 
 @pytest.mark.anyio
-async def test_onboarding_summary_completes_from_real_tenant_facts(
+async def test_onboarding_summary_rejects_partial_and_seed_tenant_facts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -278,7 +278,7 @@ async def test_onboarding_summary_completes_from_real_tenant_facts(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["completed_steps"] == body["total_steps"] == 8
-    assert body["is_complete"] is True
+    assert body["completed_steps"] < body["total_steps"] == 8
+    assert body["is_complete"] is False
     mandatory = body["steps"][:8]
-    assert all(step["status"] == "complete" for step in mandatory)
+    assert any(step["status"] != "complete" for step in mandatory)

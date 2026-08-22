@@ -407,6 +407,7 @@ a {
 
 .identity-summary,
 .identity-mfa,
+.identity-onboarding,
 .identity-workspaces,
 .identity-memberships,
 .identity-sessions,
@@ -503,6 +504,235 @@ a {
 .identity-section-heading > span {
   color: var(--identity-muted);
   font-size: 0.86rem;
+}
+
+.identity-onboarding-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.identity-onboarding-heading p,
+.identity-onboarding-heading h2 {
+  margin: 0;
+}
+
+.identity-onboarding-heading p,
+.identity-onboarding-panel-heading > div > span {
+  color: var(--identity-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.identity-onboarding-heading h2 {
+  margin-top: 4px;
+  font-size: 1.14rem;
+}
+
+.identity-onboarding-heading > div > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--identity-muted);
+  font-size: 0.82rem;
+}
+
+.identity-onboarding-progress {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 15px 0 18px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: #dfe5e8;
+  color: var(--identity-accent);
+  accent-color: var(--identity-accent);
+}
+
+.identity-onboarding-progress::-webkit-progress-bar {
+  background: #dfe5e8;
+}
+
+.identity-onboarding-progress::-webkit-progress-value {
+  background: var(--identity-accent);
+}
+
+.identity-onboarding-progress::-moz-progress-bar {
+  background: var(--identity-accent);
+}
+
+.identity-onboarding-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
+  min-width: 0;
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-onboarding-steps {
+  min-width: 0;
+  margin: 0;
+  border-right: 1px solid var(--identity-line);
+  padding: 0;
+  list-style: none;
+}
+
+.identity-onboarding-steps li + li {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-onboarding-steps button {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  grid-template-columns: 28px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: #fff;
+  color: var(--identity-text);
+  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.identity-onboarding-steps button[aria-current="step"] {
+  background: #edf8f6;
+  box-shadow: inset 3px 0 0 var(--identity-accent);
+}
+
+.identity-onboarding-steps button:hover:not(:disabled) {
+  background: var(--identity-soft);
+}
+
+.identity-onboarding-step-number {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #aebac5;
+  border-radius: 50%;
+  color: #425466;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.identity-onboarding-step-copy {
+  min-width: 0;
+}
+
+.identity-onboarding-step-copy strong,
+.identity-onboarding-step-copy small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-onboarding-step-copy strong {
+  font-size: 0.86rem;
+}
+
+.identity-onboarding-step-copy small {
+  margin-top: 3px;
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+}
+
+.identity-onboarding-step-mark {
+  color: var(--identity-accent-dark);
+  font-weight: 800;
+}
+
+.identity-onboarding-panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.identity-onboarding-panel:focus-visible,
+.identity-onboarding-steps button:focus-visible,
+.identity-onboarding-actions a:focus-visible,
+.identity-onboarding-actions button:focus-visible,
+.identity-onboarding-heading button:focus-visible {
+  outline: 3px solid rgba(8, 120, 111, 0.25);
+  outline-offset: 2px;
+}
+
+.identity-onboarding-panel-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.identity-onboarding-panel-heading h3 {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 1.04rem;
+}
+
+.identity-onboarding-state {
+  flex: 0 0 auto;
+  border: 1px solid #cbd3da;
+  border-radius: 4px;
+  background: var(--identity-soft);
+  color: #495665;
+  padding: 4px 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.identity-onboarding-state.is-complete {
+  border-color: #9dcbb8;
+  background: #edf8f2;
+  color: #146c4c;
+}
+
+.identity-onboarding-state.is-needs_attention {
+  border-color: #e2b5ad;
+  background: #fff3f1;
+  color: #8f1d14;
+}
+
+.identity-onboarding-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.identity-onboarding-facts div {
+  min-width: 0;
+}
+
+.identity-onboarding-facts dt {
+  color: var(--identity-muted);
+  font-size: 0.74rem;
+}
+
+.identity-onboarding-facts dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.identity-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.identity-onboarding-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.identity-onboarding button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .identity-summary-list {
@@ -982,6 +1212,29 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .identity-onboarding-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-onboarding-steps {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--identity-line);
+  }
+
+  .identity-onboarding-steps li:nth-child(even) {
+    border-left: 1px solid var(--identity-line);
+  }
+
+  .identity-onboarding-steps li + li {
+    border-top: 0;
+  }
+
+  .identity-onboarding-steps li:nth-child(n + 3) {
+    border-top: 1px solid var(--identity-line);
+  }
+
   .identity-mfa-start,
   .identity-mfa-enrollment {
     grid-template-columns: minmax(0, 1fr);
@@ -1028,6 +1281,44 @@ a {
 
   .identity-summary-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-onboarding-heading {
+    align-items: start;
+  }
+
+  .identity-onboarding-heading > button {
+    flex: 0 0 auto;
+  }
+
+  .identity-onboarding-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-onboarding-steps li:nth-child(even) {
+    border-left: 0;
+  }
+
+  .identity-onboarding-steps li + li,
+  .identity-onboarding-steps li:nth-child(n + 3) {
+    border-top: 1px solid var(--identity-line);
+  }
+
+  .identity-onboarding-panel {
+    padding-inline: 12px;
+  }
+
+  .identity-onboarding-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-onboarding-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-onboarding-actions > * {
+    width: 100%;
   }
 
   .identity-context-summary {

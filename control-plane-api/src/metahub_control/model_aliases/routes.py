@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/model_aliases/routes.py
 """
 
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_routing_reader, require_routing_writer
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .cache_affinity_service import update_cache_affinity
 from .models import (
@@ -52,7 +53,10 @@ class _DuplicateJsonKey(ValueError):
 @router.get("", response_model=ModelAliasListResponse)
 async def get_model_aliases(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     environment_id: str | None = None,
     environment: str | None = None,
@@ -77,7 +81,10 @@ async def get_model_aliases(
 async def post_model_alias(
     payload: CreateModelAliasRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.write")),
+    ],
 ) -> ModelAliasResponse:
     """处理 模型别名路由 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -99,7 +106,10 @@ async def patch_model_alias(
     model_alias_id: str,
     payload: UpdateModelAliasRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.write")),
+    ],
 ) -> ModelAliasResponse:
     """处理 模型别名路由 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -124,7 +134,10 @@ async def patch_model_alias(
 async def patch_cache_affinity(
     model_alias_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.write")),
+    ],
 ) -> CacheAffinityMutationResponse:
     """认证通过后严格更新当前租户 Alias 的 Prompt Cache 亲和配置。
 
@@ -150,7 +163,10 @@ async def patch_fallback_policy(
     model_alias_id: str,
     payload: UpdateFallbackPolicyRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.write")),
+    ],
 ) -> FallbackPolicyResponse:
     """修改当前租户模型别名的非流式 Fallback 策略。
 
@@ -176,7 +192,10 @@ async def patch_fallback_policy(
 async def patch_routing_mode(
     model_alias_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_routing_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("routing.write")),
+    ],
 ) -> RoutingPolicyMutationResponse:
     """认证通过后读取严格小 JSON，并按版本 CAS 修改当前租户 RoutingPolicy。
 

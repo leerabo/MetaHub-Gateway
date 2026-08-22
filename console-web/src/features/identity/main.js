@@ -19,12 +19,15 @@ import {
   createWorkspaceMembershipInvitation,
   getCurrentWorkspaceSession,
   getWorkspaceConsoleNavigation,
+  getWorkspaceOnboarding,
   listAccountWorkspaces,
   listIdentityWorkspaces,
   listWorkspaceMemberships,
+  recheckWorkspaceOnboarding,
   switchIdentityWorkspace,
   transferWorkspaceOwner,
   updateWorkspaceMembership,
+  updateWorkspaceOnboardingStep,
 } from "../../lib/workspaces.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -65,6 +68,10 @@ if (root) {
         createWorkspaceMembershipInvitation({ controlApiUrl, ...input }),
       transferOwner: (input) => transferWorkspaceOwner({ controlApiUrl, ...input }),
       workspaceNavigation: (input) => getWorkspaceConsoleNavigation({ controlApiUrl, ...input }),
+      onboarding: (input) => getWorkspaceOnboarding({ controlApiUrl, ...input }),
+      updateOnboardingStep: (input) =>
+        updateWorkspaceOnboardingStep({ controlApiUrl, ...input }),
+      recheckOnboarding: (input) => recheckWorkspaceOnboarding({ controlApiUrl, ...input }),
     },
   });
   controller.mount();

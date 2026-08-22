@@ -81,7 +81,7 @@ def _prepare(
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS", str(port))
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_PRIVATE_CIDRS", "10.0.0.0/8")
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK", "true")
-    assert apply_migrations(database_url).applied[-1] == "0077"
+    assert apply_migrations(database_url).applied[-1] == "0089"
     seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:

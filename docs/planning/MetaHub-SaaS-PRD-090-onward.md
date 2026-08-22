@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**PRD-090..096 已完成，当前下一项为 PRD-097**
+状态：**PRD-090..097 已完成，当前下一项为 PRD-098**
 
 基线日期：2026-08-20
 
@@ -126,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构基线至 PRD-096 Workspace 运营台已完成；PRD-096 的 0088 往返、五角色裁剪、游标绑定、health 坏源、并发生命周期、Console 全量和兼容门禁均通过，权威下一项为 PRD-097。
+1. PRD-090 架构基线至 PRD-097 Workspace 初始化向导已完成；PRD-097 的 0089 往返、八步事实求值、seed/placeholder 排除、WorkspaceSession allowlist、CAS/幂等、Console 全量和真实浏览器门禁均通过，权威下一项为 PRD-098。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。

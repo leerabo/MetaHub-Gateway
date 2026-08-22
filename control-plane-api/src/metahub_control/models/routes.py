@@ -1,6 +1,7 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：control-plane-api/src/metahub_control/models/routes.py
 """
 
@@ -12,8 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from metahub_control.auth import (
     AuthContext,
-    require_model_catalog_reader,
-    require_model_catalog_writer,
+    require_workspace_or_legacy_permissions,
 )
 
 from .models import CreateModelRequest, ModelListResponse, ModelResponse, UpdateModelRequest
@@ -25,7 +25,10 @@ router = APIRouter(prefix="/models", tags=["models"])
 @router.get("", response_model=ModelListResponse)
 async def get_models(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_model_catalog_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("model.read")),
+    ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     provider_id: str | None = None,
     capability: str | None = None,
@@ -50,7 +53,10 @@ async def get_models(
 async def post_model(
     payload: CreateModelRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_model_catalog_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("model.write")),
+    ],
 ) -> ModelResponse:
     """处理 模型目录 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     
@@ -71,7 +77,10 @@ async def patch_model(
     model_id: str,
     payload: UpdateModelRequest,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_model_catalog_writer)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions("model.write")),
+    ],
 ) -> ModelResponse:
     """处理 模型目录 的写入型 HTTP 入口，统一传递 request_id/trace_id 给服务层。
     

@@ -28,6 +28,22 @@ const WORKSPACE_ROLES = Object.freeze([
 const DELEGABLE_WORKSPACE_ROLES = Object.freeze(
   WORKSPACE_ROLES.filter((role) => !new Set(["owner", "service_account"]).has(role)),
 );
+const ONBOARDING_STEPS = Object.freeze([
+  ["workspace_profile", "confirm", "#workspace-profile"],
+  ["environment", "confirm", "#workspace-environments"],
+  ["provider", "configure", "#workspace-providers"],
+  ["model", "configure", "#workspace-models"],
+  ["model_alias", "configure", "#workspace-model-aliases"],
+  ["project_application", "configure", "#workspace-projects"],
+  ["virtual_key", "configure", "#workspace-virtual-keys"],
+  ["first_call", "recheck", "#workspace-first-call"],
+]);
+const ONBOARDING_STEP_IDS = Object.freeze(ONBOARDING_STEPS.map(([id]) => id));
+const ONBOARDING_MUTATIONS = Object.freeze({
+  confirm: "user_confirmed",
+  defer: "do_later",
+  reopen: null,
+});
 
 export async function listIdentityWorkspaces({ controlApiUrl, signal } = {}) {
   return workspaceAccessRequest(controlApiUrl, "/identity/workspaces", {
@@ -141,6 +157,69 @@ export async function getWorkspaceConsoleNavigation({ controlApiUrl, signal } = 
   });
 }
 
+export async function getWorkspaceOnboarding({ controlApiUrl, signal } = {}) {
+  return workspaceAccessRequest(controlApiUrl, "/workspaces/current/onboarding", {
+    responseType: "onboarding",
+    signal,
+  });
+}
+
+export async function updateWorkspaceOnboardingStep({
+  controlApiUrl,
+  stepId,
+  action,
+  reasonCode,
+  revision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  const normalizedStep = requireClientChoice(stepId, ONBOARDING_STEP_IDS, "onboarding_step");
+  const normalizedAction = requireClientChoice(
+    action,
+    Object.keys(ONBOARDING_MUTATIONS),
+    "onboarding_action",
+  );
+  const expectedReason = ONBOARDING_MUTATIONS[normalizedAction];
+  const normalizedReason = requireClientChoice(
+    reasonCode,
+    normalizedAction === "reopen"
+      ? ["configuration_changed", "retry_required"]
+      : [expectedReason],
+    "onboarding_reason",
+  );
+  if (!Number.isSafeInteger(revision) || revision < 1) invalidClient("onboarding_revision");
+  return workspaceAccessRequest(
+    controlApiUrl,
+    `/workspaces/current/onboarding/steps/${encodeURIComponent(normalizedStep)}`,
+    {
+      method: "PATCH",
+      body: { action: normalizedAction, reason_code: normalizedReason },
+      csrf: "workspace",
+      revision,
+      idempotencyKey: requireOnboardingIdempotencyKey(idempotencyKey),
+      responseType: "onboarding",
+      signal,
+    },
+  );
+}
+
+export async function recheckWorkspaceOnboarding({
+  controlApiUrl,
+  revision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  if (!Number.isSafeInteger(revision) || revision < 1) invalidClient("onboarding_revision");
+  return workspaceAccessRequest(controlApiUrl, "/workspaces/current/onboarding/recheck", {
+    method: "POST",
+    csrf: "workspace",
+    revision,
+    idempotencyKey: requireOnboardingIdempotencyKey(idempotencyKey),
+    responseType: "onboarding",
+    signal,
+  });
+}
+
 export function readWorkspaceCsrfCookie(cookieText = globalThis.document?.cookie ?? "") {
   return readExactCookie(cookieText, WORKSPACE_CSRF_COOKIE_NAME, "workspace_session.csrf_invalid");
 }
@@ -226,6 +305,7 @@ async function workspaceAccessRequest(controlApiUrl, path, options) {
   if (options.csrf === "global") headers["X-CSRF-Token"] = readIdentityCsrfCookie();
   if (options.csrf === "workspace") headers["X-CSRF-Token"] = readWorkspaceCsrfCookie();
   if (options.revision) headers["If-Match"] = `"${options.revision}"`;
+  if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
   let response;
   try {
     response = await fetch(workspaceUrl(controlApiUrl, path), {
@@ -350,7 +430,124 @@ function validateWorkspaceAccessResponse(payload, responseType) {
     };
   }
   if (responseType === "navigation") return validateWorkspaceNavigation(payload);
+  if (responseType === "onboarding") return validateWorkspaceOnboarding(payload);
   invalidAccessResponse("type");
+}
+
+function validateWorkspaceOnboarding(payload) {
+  requireExactKeys(
+    payload,
+    [
+      "activated_at",
+      "completed_steps",
+      "evaluated_at",
+      "generation",
+      "request_id",
+      "revision",
+      "status",
+      "steps",
+      "total_steps",
+      "trace_id",
+      "workspace_kind",
+    ],
+    "response",
+  );
+  if (!Array.isArray(payload.steps) || payload.steps.length !== ONBOARDING_STEPS.length) {
+    invalidAccessResponse("onboarding.steps");
+  }
+  const steps = payload.steps.map((step, index) => validateOnboardingStep(step, index));
+  const completedSteps = requireCount(payload.completed_steps, "completed_steps");
+  if (
+    completedSteps > ONBOARDING_STEPS.length ||
+    completedSteps !== steps.filter((step) => step.status === "complete").length ||
+    payload.total_steps !== ONBOARDING_STEPS.length
+  ) {
+    invalidAccessResponse("onboarding.progress");
+  }
+  const status = requireChoice(payload.status, ["incomplete", "active"], "onboarding.status");
+  if ((status === "active") !== (completedSteps === ONBOARDING_STEPS.length)) {
+    invalidAccessResponse("onboarding.status");
+  }
+  return {
+    workspace_kind: requireChoice(
+      payload.workspace_kind,
+      ["personal", "organization"],
+      "onboarding.workspace_kind",
+    ),
+    completed_steps: completedSteps,
+    total_steps: ONBOARDING_STEPS.length,
+    status,
+    generation: requireCount(payload.generation, "onboarding.generation"),
+    revision: requirePositiveInteger(payload.revision, "onboarding.revision"),
+    activated_at: payload.activated_at === null
+      ? null
+      : requireTimestamp(payload.activated_at, "onboarding.activated_at"),
+    evaluated_at: requireTimestamp(payload.evaluated_at, "onboarding.evaluated_at"),
+    steps,
+    ...validateRequestTrace(payload),
+  };
+}
+
+function validateOnboardingStep(step, index) {
+  requirePlainObject(step, "onboarding.step");
+  requireExactKeys(
+    step,
+    [
+      "action",
+      "blocking_code",
+      "id",
+      "last_checked_at",
+      "navigation_target",
+      "order",
+      "source",
+      "status",
+      "title",
+    ],
+    "onboarding.step",
+  );
+  const [expectedId, defaultAction, expectedTarget] = ONBOARDING_STEPS[index];
+  if (step.id !== expectedId || step.order !== index + 1 || step.navigation_target !== expectedTarget) {
+    invalidAccessResponse("onboarding.step_identity");
+  }
+  const status = requireChoice(
+    step.status,
+    ["current", "blocked", "complete", "deferred", "needs_attention"],
+    "onboarding.step_status",
+  );
+  const source = requireChoice(
+    step.source,
+    ["system_created", "user_confirmed", "verified", "legacy_seed", "none"],
+    "onboarding.step_source",
+  );
+  const action = requireChoice(
+    step.action,
+    ["confirm", "configure", "recheck", "view"],
+    "onboarding.step_action",
+  );
+  if (action !== (status === "complete" ? "view" : defaultAction)) {
+    invalidAccessResponse("onboarding.step_action");
+  }
+  const expectedBlockingCode = status === "blocked"
+    ? `requires.${ONBOARDING_STEPS[index - 1]?.[0] ?? ""}`
+    : status === "needs_attention"
+      ? "evidence_changed"
+      : source === "legacy_seed"
+        ? "legacy_configuration"
+        : null;
+  if (step.blocking_code !== expectedBlockingCode) {
+    invalidAccessResponse("onboarding.blocking_code");
+  }
+  return {
+    id: expectedId,
+    order: index + 1,
+    title: requireText(step.title, 160, "onboarding.step_title"),
+    status,
+    source,
+    action,
+    navigation_target: expectedTarget,
+    blocking_code: expectedBlockingCode,
+    last_checked_at: requireTimestamp(step.last_checked_at, "onboarding.last_checked_at"),
+  };
 }
 
 function validateIdentityWorkspace(workspace) {
@@ -633,6 +830,14 @@ function workspaceUrl(controlApiUrl, path) {
 function requireIdempotencyKey(value) {
   const text = requireClientText(value, 128, "idempotency_key");
   if (text.length < 16 || !/^[A-Za-z0-9._~-]+$/u.test(text)) invalidClient("idempotency_key");
+  return text;
+}
+
+function requireOnboardingIdempotencyKey(value) {
+  const text = requireClientText(value, 128, "onboarding_idempotency_key");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(text)) {
+    invalidClient("onboarding_idempotency_key");
+  }
   return text;
 }
 

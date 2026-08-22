@@ -114,6 +114,7 @@ from .dependencies import (
     require_virtual_key_reader,
     require_virtual_key_writer,
     require_webhook_manager,
+    require_workspace_or_legacy_permissions,
 )
 from .routes import router
 from .service import (
@@ -259,5 +260,6 @@ __all__ = [
     "require_virtual_key_reader",
     "require_virtual_key_writer",
     "require_webhook_manager",
+    "require_workspace_or_legacy_permissions",
     "router",
 ]
