@@ -6,6 +6,7 @@ import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPag
 const PLATFORM_NAVIGATION_IDS = new Set([
   "infrastructure",
   "gateway",
+  "job-runtime",
   "operators",
   "workspaces",
   "support",
@@ -74,6 +75,11 @@ export function createPlatformPageController({
     gatewayCells: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
+    jobQueues: null,
+    jobStatus: "",
+    selectedJob: null,
+    jobCommandIntent: null,
+    jobTypeIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -142,9 +148,125 @@ export function createPlatformPageController({
     },
     selectView(view) {
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
-      state.view = allowed.has(view) ? view : "overview";
+      const nextView = allowed.has(view) ? view : "overview";
+      if (state.view === "job-runtime" && nextView !== "job-runtime") {
+        generation += 1;
+        request?.abort();
+        request = null;
+        state.selectedJob = null;
+        state.jobCommandIntent = null;
+        state.jobTypeIntent = null;
+        state.loading = false;
+      }
+      state.view = nextView;
       state.pendingAction = null;
       render();
+      if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
+    },
+    async filterJobs(status) {
+      state.jobStatus = normalizeJobStatus(status);
+      state.selectedJob = null;
+      return loadJobRuntime();
+    },
+    async openJob(jobId) {
+      if (typeof api.job !== "function") return false;
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.selectedJob = await api.job({ jobId, signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.loading = false;
+        render();
+        return true;
+      } catch (error) {
+        return fail(ticket, error);
+      }
+    },
+    closeJob() {
+      state.selectedJob = null;
+      state.jobCommandIntent = null;
+      render();
+    },
+    async commandJob({ jobId, revision, action, reasonCode, confirmed }) {
+      if (confirmed !== true || !new Set(["retry", "cancel"]).has(action)) return false;
+      const operation = action === "retry" ? api.retryJob : api.cancelJob;
+      if (typeof operation !== "function") return false;
+      const fingerprint = JSON.stringify({ jobId, revision: Number(revision), action, reasonCode });
+      const idempotencyKey = state.jobCommandIntent?.fingerprint === fingerprint
+        ? state.jobCommandIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.jobCommandIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        await operation({
+          jobId,
+          revision: Number(revision),
+          reasonCode,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        const [queues, detail] = await Promise.all([
+          api.jobQueues({ status: state.jobStatus, signal: ticket.signal }),
+          api.job({ jobId, signal: ticket.signal }),
+        ]);
+        if (!current(ticket)) return false;
+        state.jobQueues = queues;
+        state.selectedJob = detail;
+        state.jobCommandIntent = null;
+        state.loading = false;
+        state.feedback = action === "retry" ? "任务已重新入队。" : "取消请求已提交。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.jobCommandIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async commandJobType({ typeCode, revision, action, reasonCode, confirmed }) {
+      if (confirmed !== true || typeof api.commandJobType !== "function") return false;
+      const fingerprint = JSON.stringify({ typeCode, revision: Number(revision), action, reasonCode });
+      const idempotencyKey = state.jobTypeIntent?.fingerprint === fingerprint
+        ? state.jobTypeIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.jobTypeIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        await api.commandJobType({
+          typeCode,
+          revision: Number(revision),
+          action,
+          reasonCode,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.jobQueues = await api.jobQueues({
+          status: state.jobStatus,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.jobTypeIntent = null;
+        state.loading = false;
+        state.feedback = action === "activate" ? "任务类型已启用。" : "任务类型已停用。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.jobTypeIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
@@ -709,6 +831,7 @@ export function createPlatformPageController({
         notificationTemplates: null,
         infrastructure: null,
         gatewayCells: null,
+        jobQueues: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -761,6 +884,12 @@ export function createPlatformPageController({
           next.gatewayCells = value;
         }));
       }
+      if (permissions.has("platform.job.read") && typeof api.jobQueues === "function") {
+        tasks.push(api.jobQueues({
+          status: state.jobStatus,
+          signal: ticket.signal,
+        }).then((value) => { next.jobQueues = value; }));
+      }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
@@ -812,6 +941,26 @@ export function createPlatformPageController({
       });
       if (!current(ticket)) return false;
       state.workspaces = workspaces;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadJobRuntime() {
+    if (typeof api.jobQueues !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.jobQueues = await api.jobQueues({
+        status: state.jobStatus,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
       state.loading = false;
       render();
       return true;
@@ -1123,6 +1272,27 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-job-filter-form]")) {
+        controller.filterJobs(data.get("status"));
+      }
+      if (form.matches("[data-platform-job-command-form]")) {
+        controller.commandJob({
+          jobId: data.get("jobId"),
+          revision: data.get("revision"),
+          action: data.get("action"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-job-type-form]")) {
+        controller.commandJobType({
+          typeCode: data.get("typeCode"),
+          revision: data.get("revision"),
+          action: data.get("action"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -1181,6 +1351,8 @@ export function createPlatformPageController({
         controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
       }
       if (action === "backup-refresh") controller.refreshBackup();
+      if (action === "open-job") controller.openJob(target.dataset.jobId);
+      if (action === "close-job") controller.closeJob();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
     });
@@ -1238,6 +1410,11 @@ export function createPlatformPageController({
     state.gatewayCells = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
+    state.jobQueues = null;
+    state.jobStatus = "";
+    state.selectedJob = null;
+    state.jobCommandIntent = null;
+    state.jobTypeIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;
@@ -1285,6 +1462,14 @@ function hasWorkspaceRead(permissions) {
 function normalizeBillingStatus(value) {
   const text = String(value ?? "");
   return new Set(["", "open", "closed", "reconciliation_required"]).has(text) ? text : "";
+}
+
+function normalizeJobStatus(value) {
+  const text = String(value ?? "");
+  return new Set([
+    "", "queued", "leased", "running", "cancel_requested", "succeeded", "failed",
+    "cancelled", "dead_lettered",
+  ]).has(text) ? text : "";
 }
 
 function normalizeRefundStatus(value) {

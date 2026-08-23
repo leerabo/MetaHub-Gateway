@@ -148,8 +148,8 @@ def test_notification_facts_and_communications_binding_block_down(
     _healthy(database_url)
 
 
-def test_fresh_schema_installs_0097(tmp_path: Path) -> None:
+def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0097"
+    assert result.applied[-1] == "0098"
     _healthy(database_url)

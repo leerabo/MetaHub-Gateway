@@ -69,6 +69,7 @@ function renderView(state, permissions) {
   if (state.view === "overview") return overviewView(state);
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
+  if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -78,6 +79,149 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function jobRuntimeView(state, permissions) {
+  const response = state.jobQueues ?? {};
+  const queues = Array.isArray(response.queues) ? response.queues : [];
+  const jobs = Array.isArray(response.recent_jobs) ? response.recent_jobs : [];
+  const types = Array.isArray(response.job_types) ? response.job_types : [];
+  const canManage = permissions.has("platform.job.manage");
+  const canManageTypes = permissions.has("platform.job.type_manage");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Scheduler / Worker</p><h1>任务运行时</h1></div>
+      <span>${number(jobs.length)} 个任务</span>
+    </header>
+    <section class="platform-band platform-job-queues" aria-label="队列状态">
+      <div class="platform-job-queue-grid">
+        ${queues.map(jobQueueSummary).join("") || '<p class="platform-empty">暂无队列状态</p>'}
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Durable jobs</p><h2>任务</h2></div>
+        <form class="platform-job-filter" data-platform-job-filter-form>
+          <label><span>状态</span><select name="status">${jobStatusOptions(state.jobStatus)}</select></label>
+          <button type="submit">筛选</button>
+        </form>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-job-table">
+          <thead><tr><th>任务</th><th>队列 / 优先级</th><th>状态</th><th>尝试</th><th>调度</th><th>操作</th></tr></thead>
+          <tbody>${jobs.map(jobRow).join("") || emptyRow("暂无任务", 6)}</tbody>
+        </table>
+      </div>
+    </section>
+    ${state.selectedJob ? jobDetailView(state.selectedJob, canManage, state.loading) : ""}
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Signed catalog</p><h2>任务类型</h2></div>
+        <span>${number(types.length)} 个类型</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-job-type-table">
+          <thead><tr><th>类型</th><th>队列</th><th>资源</th><th>执行门限</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>${types.map((item) => jobTypeRow(item, canManageTypes, state.loading)).join("") || emptyRow("暂无任务类型", 6)}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function jobQueueSummary(queue) {
+  return `<div>
+    <span>${escapeHtml(queueLabel(queue.queue_code))}</span>
+    <strong>${number(queue.queued_count)}</strong>
+    <small>运行 ${number(queue.active_lease_count)} · 死信 ${number(queue.dead_letter_count)}</small>
+    <small>最久 ${queue.oldest_wait_seconds === null ? "-" : `${number(queue.oldest_wait_seconds)}s`}</small>
+  </div>`;
+}
+
+function jobRow(job) {
+  return `<tr>
+    <td data-label="任务"><strong>${escapeHtml(job.type_code)}</strong><small>${escapeHtml(job.job_id)}</small></td>
+    <td data-label="队列 / 优先级"><strong>${escapeHtml(queueLabel(job.queue_code))}</strong><small>P${number(job.priority)}</small></td>
+    <td data-label="状态">${status(job.status)}<small>${escapeHtml(job.safe_outcome_code ?? "-")}</small></td>
+    <td data-label="尝试"><strong>${number(job.attempt_count)} / ${number(job.max_attempts)}</strong><small>generation ${number(job.generation)}</small></td>
+    <td data-label="调度"><strong>${formatTime(job.scheduled_at)}</strong><small>rev ${number(job.revision)}</small></td>
+    <td data-label="操作"><button type="button" data-platform-action="open-job" data-job-id="${escapeAttribute(job.job_id)}">查看</button></td>
+  </tr>`;
+}
+
+function jobDetailView(detail, canManage, loading) {
+  const job = detail.job;
+  const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
+  const checkpoints = Array.isArray(detail.checkpoints) ? detail.checkpoints : [];
+  const retryable = new Set(["failed", "dead_lettered"]).has(job.status);
+  const cancellable = new Set(["queued", "leased", "running"]).has(job.status);
+  return `<section class="platform-band platform-job-detail">
+    <div class="platform-section-heading">
+      <div><p>${escapeHtml(job.job_id)}</p><h2>${escapeHtml(job.type_code)}</h2></div>
+      <button class="platform-icon-button" type="button" data-platform-action="close-job" title="关闭" aria-label="关闭">×</button>
+    </div>
+    <div class="platform-job-detail-grid">
+      <div>
+        <h3>Attempt 时间线</h3>
+        <ol class="platform-job-timeline">${attempts.map(jobAttempt).join("") || "<li>暂无 Attempt</li>"}</ol>
+      </div>
+      <div>
+        <h3>Checkpoint</h3>
+        <ol class="platform-job-checkpoints">${checkpoints.map(jobCheckpoint).join("") || "<li>暂无 Checkpoint</li>"}</ol>
+      </div>
+    </div>
+    ${canManage && (retryable || cancellable) ? `<form class="platform-job-command" data-platform-job-command-form>
+      <input type="hidden" name="jobId" value="${escapeAttribute(job.job_id)}" />
+      <input type="hidden" name="revision" value="${number(job.revision)}" />
+      <input type="hidden" name="action" value="${retryable ? "retry" : "cancel"}" />
+      <label><span>原因</span><select name="reasonCode">${retryable
+        ? '<option value="operator_retry">操作员重试</option><option value="incident_recovery">事件恢复</option>'
+        : '<option value="operator_cancelled">操作员取消</option><option value="security_containment">安全处置</option>'}</select></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认操作</span></label>
+      <button class="${retryable ? "platform-primary" : "platform-danger"}" type="submit" ${loading ? "disabled" : ""}>${retryable ? "重试" : "取消任务"}</button>
+    </form>` : ""}
+  </section>`;
+}
+
+function jobAttempt(attempt) {
+  return `<li><div>${status(attempt.status)}<strong>#${number(attempt.attempt_number)}</strong></div>
+    <span>${formatTime(attempt.leased_at)}</span>
+    <small>${escapeHtml(attempt.safe_outcome_code ?? "-")} · generation ${number(attempt.generation)}</small></li>`;
+}
+
+function jobCheckpoint(checkpoint) {
+  return `<li><div><strong>#${number(checkpoint.sequence_number)}</strong><span>generation ${number(checkpoint.generation)}</span></div>
+    <small>${escapeHtml(checkpoint.checkpoint_sha256.slice(0, 12))} · ${formatTime(checkpoint.created_at)}</small></li>`;
+}
+
+function jobTypeRow(item, canManage, loading) {
+  const action = item.status === "active" ? "disable" : "activate";
+  return `<tr>
+    <td data-label="类型"><strong>${escapeHtml(item.type_code)}</strong><small>contract v${number(item.contract_version)}</small></td>
+    <td data-label="队列">${escapeHtml(queueLabel(item.queue_code))}</td>
+    <td data-label="资源">${escapeHtml(item.resource_class)}</td>
+    <td data-label="执行门限"><strong>${number(item.max_attempts)} 次</strong><small>${number(item.timeout_seconds)}s</small></td>
+    <td data-label="状态">${status(item.status)}<small>rev ${number(item.revision)}</small></td>
+    <td data-label="操作">${canManage ? `<form class="platform-job-type-command" data-platform-job-type-form>
+      <input type="hidden" name="typeCode" value="${escapeAttribute(item.type_code)}" />
+      <input type="hidden" name="revision" value="${number(item.revision)}" />
+      <input type="hidden" name="action" value="${action}" />
+      <input type="hidden" name="reasonCode" value="${action === "activate" ? "release_activation" : "operational_pause"}" />
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认</span></label>
+      <button type="submit" ${loading ? "disabled" : ""}>${action === "activate" ? "启用" : "停用"}</button>
+    </form>` : "-"}</td>
+  </tr>`;
+}
+
+function jobStatusOptions(selected) {
+  return [
+    ["", "全部"], ["queued", "排队"], ["leased", "已领取"], ["running", "运行中"],
+    ["cancel_requested", "取消中"], ["succeeded", "成功"], ["failed", "失败"],
+    ["cancelled", "已取消"], ["dead_lettered", "死信"],
+  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function queueLabel(value) {
+  return ({ critical: "Critical", standard: "Standard", bulk: "Bulk" })[value] ?? "Unknown";
 }
 
 function notificationTemplatesView(state, permissions) {

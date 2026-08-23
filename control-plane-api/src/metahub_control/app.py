@@ -79,6 +79,8 @@ from .platform_billing import router as platform_billing_router
 from .platform_gateway import install_gateway_snapshot_scheduler
 from .platform_gateway import router as platform_gateway_router
 from .platform_infrastructure import router as platform_infrastructure_router
+from .platform_jobs import install_platform_job_supervisor
+from .platform_jobs import router as platform_jobs_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -243,6 +245,7 @@ app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
 app.include_router(platform_gateway_router)
+app.include_router(platform_jobs_router)
 app.include_router(payment_commerce_router)
 app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
@@ -303,38 +306,41 @@ app.include_router(request_explanations_router)
 app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
-# 短期 placement 快照属于启用态数据面可用性的必要续租，不受可选治理 scheduler 总开关影响。
+# A single supervisor owns startup and reverse-order shutdown for every Control worker.
+_scheduler_installers = []
 if app.state.config.gateway_placement_enabled:
-    install_gateway_snapshot_scheduler(app)
-# PRD-077 runtime 必须先于其他 scheduler 预建 WAL/FULL 连接；后安装的 lifespan 会在
-# shutdown 时先停止各自 worker，再由本 runtime 最后关闭长期连接。单进程本地开发默认
-# 可关闭这组可选恢复 worker，避免大量空队列轮询争用 SQLite；生产默认保持开启。
+    _scheduler_installers.append(install_gateway_snapshot_scheduler)
 if app.state.config.control_background_schedulers_enabled:
-    install_admin_assistant_scheduler(app)
-    install_provider_health_scheduler(app)
-    install_usage_export_scheduler(app)
-    install_cost_anomaly_scheduler(app)
-    install_customer_health_scheduler(app)
-    install_request_explanation_scheduler(app)
-    install_request_log_query_event_scheduler(app)
-    install_provider_error_map_scheduler(app)
-    install_audit_export_scheduler(app)
-    install_webhook_replay_scheduler(app)
-    install_file_security_event_scheduler(app)
-    install_adapter_contract_event_scheduler(app)
-    install_experiment_scheduler(app)
-    install_response_cache_outbox_scheduler(app)
-    install_product_event_scheduler(app)
-    install_approval_scheduler(app)
-    install_plan_billing_scheduler(app)
-    install_saas_billing_scheduler(app)
-    install_platform_billing_scheduler(app)
-    install_payment_commerce_scheduler(app)
-    install_invoice_reconciliation_scheduler(app)
-    install_notification_scheduler(app)
-    install_partner_portal_scheduler(app)
-    install_branding_scheduler(app)
-    install_billing_dispute_scheduler(app)
-    install_security_event_scheduler(app)
-    install_mcp_scheduler(app)
-    install_tenant_data_scheduler(app)
+    _scheduler_installers.extend(
+        (
+            install_admin_assistant_scheduler,
+            install_provider_health_scheduler,
+            install_usage_export_scheduler,
+            install_cost_anomaly_scheduler,
+            install_customer_health_scheduler,
+            install_request_explanation_scheduler,
+            install_request_log_query_event_scheduler,
+            install_provider_error_map_scheduler,
+            install_audit_export_scheduler,
+            install_webhook_replay_scheduler,
+            install_file_security_event_scheduler,
+            install_adapter_contract_event_scheduler,
+            install_experiment_scheduler,
+            install_response_cache_outbox_scheduler,
+            install_product_event_scheduler,
+            install_approval_scheduler,
+            install_plan_billing_scheduler,
+            install_saas_billing_scheduler,
+            install_platform_billing_scheduler,
+            install_payment_commerce_scheduler,
+            install_invoice_reconciliation_scheduler,
+            install_notification_scheduler,
+            install_partner_portal_scheduler,
+            install_branding_scheduler,
+            install_billing_dispute_scheduler,
+            install_security_event_scheduler,
+            install_mcp_scheduler,
+            install_tenant_data_scheduler,
+        )
+    )
+install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)

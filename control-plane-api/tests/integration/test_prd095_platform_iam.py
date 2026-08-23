@@ -301,7 +301,9 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
         assert owner.cookies.get(WORKSPACE_SESSION_COOKIE) is None
         navigation = await owner.get("/platform/navigation")
         assert navigation.status_code == 200
-        assert len(navigation.json()["items"]) == 13
+        navigation_ids = {item["id"] for item in navigation.json()["items"]}
+        assert len(navigation_ids) == 17
+        assert "job-runtime" in navigation_ids
         rejected_reason = await owner.post(
             "/platform/support-grants",
             json={
@@ -380,19 +382,33 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
             assert platform_approval.status_code == 200, platform_approval.text
             assert platform_approval.json()["grant"]["missing_approvals"] == ["workspace"]
 
-        switched = await owner.post(
-            "/identity/workspace-switches",
-            json={"workspace_id": workspace_id},
-            headers=_csrf(owner, GLOBAL_CSRF_COOKIE),
-        )
-        assert switched.status_code == 200, switched.text
-        workspace_approval = await owner.post(
-            f"/workspace/support-grants/{grant_id}/approve",
-            json={},
-            headers=_csrf(owner, WORKSPACE_CSRF_COOKIE),
-        )
-        assert workspace_approval.status_code == 200, workspace_approval.text
-        assert workspace_approval.json()["grant"]["status"] == "active"
+        async with AsyncClient(
+            transport=transport, base_url="https://testserver"
+        ) as workspace_owner:
+            workspace_owner.cookies.set(
+                identity_service.SESSION_COOKIE,
+                owner.cookies.get(identity_service.SESSION_COOKIE),
+            )
+            workspace_owner.cookies.set(
+                GLOBAL_CSRF_COOKIE,
+                owner.cookies.get(GLOBAL_CSRF_COOKIE),
+            )
+            switched = await workspace_owner.post(
+                "/identity/workspace-switches",
+                json={"workspace_id": workspace_id},
+                headers=_csrf(workspace_owner, GLOBAL_CSRF_COOKIE),
+            )
+            assert switched.status_code == 200, switched.text
+            workspace_approval = await workspace_owner.post(
+                f"/workspace/support-grants/{grant_id}/approve",
+                json={},
+                headers=_csrf(workspace_owner, WORKSPACE_CSRF_COOKIE),
+            )
+            assert workspace_approval.status_code == 200, workspace_approval.text
+            assert workspace_approval.json()["grant"]["status"] == "active"
+            workspace_session_token = workspace_owner.cookies.get(WORKSPACE_SESSION_COOKIE)
+            workspace_csrf_token = workspace_owner.cookies.get(WORKSPACE_CSRF_COOKIE)
+            assert workspace_session_token and workspace_csrf_token
 
         support = await owner.post(
             f"/platform/support-grants/{grant_id}/sessions",
@@ -551,11 +567,16 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
         assert conflict.status_code == 400
         assert conflict.json()["code"] == "platform.credential_conflict"
 
-        revoked = await owner.post(
-            f"/workspace/support-grants/{grant_id}/revoke",
-            json={"reason_code": "diagnostics_complete"},
-            headers=_csrf(owner, WORKSPACE_CSRF_COOKIE),
-        )
+        async with AsyncClient(
+            transport=transport, base_url="https://testserver"
+        ) as workspace_owner:
+            workspace_owner.cookies.set(WORKSPACE_SESSION_COOKIE, workspace_session_token)
+            workspace_owner.cookies.set(WORKSPACE_CSRF_COOKIE, workspace_csrf_token)
+            revoked = await workspace_owner.post(
+                f"/workspace/support-grants/{grant_id}/revoke",
+                json={"reason_code": "diagnostics_complete"},
+                headers=_csrf(workspace_owner, WORKSPACE_CSRF_COOKIE),
+            )
         assert revoked.status_code == 200, revoked.text
         assert revoked.json()["grant"]["status"] == "revoked"
         revoked_session = await owner.get("/support/session")
@@ -598,11 +619,16 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
             assert platform_review.status_code == 200, platform_review.text
             assert platform_review.json()["missing_reviews"] == ["workspace"]
 
-        workspace_review = await owner.post(
-            f"/workspace/break-glass-sessions/{break_glass_id}/reviews",
-            json={},
-            headers=_csrf(owner, WORKSPACE_CSRF_COOKIE),
-        )
+        async with AsyncClient(
+            transport=transport, base_url="https://testserver"
+        ) as workspace_owner:
+            workspace_owner.cookies.set(WORKSPACE_SESSION_COOKIE, workspace_session_token)
+            workspace_owner.cookies.set(WORKSPACE_CSRF_COOKIE, workspace_csrf_token)
+            workspace_review = await workspace_owner.post(
+                f"/workspace/break-glass-sessions/{break_glass_id}/reviews",
+                json={},
+                headers=_csrf(workspace_owner, WORKSPACE_CSRF_COOKIE),
+            )
         assert workspace_review.status_code == 200, workspace_review.text
         assert workspace_review.json()["status"] == "reviewed"
         assert workspace_review.json()["missing_reviews"] == []
@@ -773,6 +799,16 @@ async def test_platform_concurrency_cursor_scope_and_warm_performance(
         )
         assert [response.status_code for response in workspace_approvals].count(200) == 1
         assert [response.status_code for response in workspace_approvals].count(409) == 99
+
+        # Workspace switching clears the Platform credential domain by contract.
+        # Exchange a fresh PlatformSession before measuring Platform endpoints.
+        owner_session = await owner.post(
+            "/platform/sessions",
+            json={"totp_code": _totp(owner_secret, clock[0])},
+            headers=_csrf(owner, GLOBAL_CSRF_COOKIE),
+        )
+        assert owner_session.status_code == 200
+        assert owner.cookies.get(WORKSPACE_SESSION_COOKIE) is None
 
         session_durations: list[float] = []
         operator_durations: list[float] = []

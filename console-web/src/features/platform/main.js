@@ -58,6 +58,13 @@ import {
   createPlatformNotificationTemplate,
   listPlatformNotificationTemplates,
 } from "../../lib/notifications.js";
+import {
+  cancelPlatformJob,
+  commandPlatformJobType,
+  getPlatformJob,
+  listPlatformJobQueues,
+  retryPlatformJob,
+} from "../../lib/platformJobs.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -148,6 +155,11 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      jobQueues: (input) => listPlatformJobQueues({ controlApiUrl, ...input }),
+      job: (input) => getPlatformJob({ controlApiUrl, ...input }),
+      retryJob: (input) => retryPlatformJob({ controlApiUrl, ...input }),
+      cancelJob: (input) => cancelPlatformJob({ controlApiUrl, ...input }),
+      commandJobType: (input) => commandPlatformJobType({ controlApiUrl, ...input }),
     },
   }).mount();
 }
