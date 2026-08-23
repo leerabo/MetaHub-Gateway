@@ -65,6 +65,14 @@ export function createIdentityPageController({
   let businessVerification = null;
   let businessVerificationBusy = false;
   let businessVerificationError = null;
+  let notificationCenterOpen = false;
+  let notificationInbox = null;
+  let notificationPreferences = null;
+  let notificationBusy = false;
+  let notificationError = null;
+  let notificationUnreadOnly = false;
+  let notificationCursor = null;
+  let notificationCursorHistory = [];
   let workspaceView = "summary";
   let workspaceDraft = null;
   let invitationResult = null;
@@ -1008,6 +1016,116 @@ export function createIdentityPageController({
         return handleWorkspaceActionError(error, "所有权转移失败。", ticket);
       }
     },
+    async openNotifications() {
+      if (!workspaceContext || typeof api.notifications !== "function") return false;
+      notificationCenterOpen = true;
+      renderSecurity();
+      if (notificationInbox && notificationPreferences) return true;
+      return controller.refreshNotifications();
+    },
+    closeNotifications() {
+      notificationCenterOpen = false;
+      notificationError = null;
+      renderSecurity();
+      return true;
+    },
+    async refreshNotifications() {
+      if (!workspaceContext || typeof api.notifications !== "function") return false;
+      const ticket = beginRequest();
+      notificationBusy = true;
+      notificationError = null;
+      renderSecurity();
+      return loadNotificationCenter(ticket);
+    },
+    async setNotificationFilter(unreadOnly) {
+      if (typeof unreadOnly !== "boolean" || notificationUnreadOnly === unreadOnly) return false;
+      notificationUnreadOnly = unreadOnly;
+      notificationCursor = null;
+      notificationCursorHistory = [];
+      return controller.refreshNotifications();
+    },
+    async nextNotificationPage() {
+      const cursor = notificationInbox?.next_cursor;
+      if (!cursor) return false;
+      notificationCursorHistory.push(notificationCursor);
+      notificationCursor = cursor;
+      return controller.refreshNotifications();
+    },
+    async previousNotificationPage() {
+      if (notificationCursorHistory.length === 0) return false;
+      notificationCursor = notificationCursorHistory.pop() ?? null;
+      return controller.refreshNotifications();
+    },
+    async markNotificationRead(index) {
+      const notification = notificationInbox?.notifications?.[Number(index)];
+      if (!notification || notification.read || typeof api.markNotificationRead !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      notificationBusy = true;
+      notificationError = null;
+      renderSecurity();
+      try {
+        const result = await queueWrite(() => api.markNotificationRead({
+          notificationId: notification.notification_id,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        const notifications = notificationInbox.notifications
+          .map((item) => item.notification_id === result.notification.notification_id
+            ? result.notification
+            : item)
+          .filter((item) => !notificationUnreadOnly || !item.read);
+        notificationInbox = {
+          ...notificationInbox,
+          notifications,
+          unread_count: Math.max(0, notificationInbox.unread_count - 1),
+        };
+        notificationBusy = false;
+        renderSecurity({ feedback: "通知已标记为已读。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        notificationBusy = false;
+        notificationError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async updateNotificationPreference(category, channel, enabled) {
+      const current = notificationPreferences?.preferences?.find(
+        (item) => item.category === category && item.channel === channel,
+      );
+      if (
+        !current
+        || current.mandatory
+        || !current.available
+        || current.enabled === enabled
+        || typeof enabled !== "boolean"
+        || typeof api.updateNotificationPreferences !== "function"
+      ) return false;
+      const ticket = beginRequest();
+      notificationBusy = true;
+      notificationError = null;
+      renderSecurity();
+      try {
+        notificationPreferences = await queueWrite(() => api.updateNotificationPreferences({
+          revision: notificationPreferences.revision,
+          changes: [{ category, channel, enabled }],
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        notificationBusy = false;
+        renderSecurity({ feedback: "通知偏好已更新。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        notificationBusy = false;
+        notificationError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
     async refreshWorkspaceContext() {
       return invalidateWorkspaceContext({ broadcast: false, feedback: "空间上下文已刷新。" });
     },
@@ -1599,6 +1717,35 @@ export function createIdentityPageController({
     );
   }
 
+  async function loadNotificationCenter(ticket, { render = true } = {}) {
+    if (!workspaceContext || typeof api.notifications !== "function") return false;
+    try {
+      const [inbox, preferences] = await Promise.all([
+        api.notifications({
+          unreadOnly: notificationUnreadOnly,
+          cursor: notificationCursor,
+          signal: ticket.signal,
+        }),
+        typeof api.notificationPreferences === "function"
+          ? api.notificationPreferences({ signal: ticket.signal })
+          : Promise.resolve(null),
+      ]);
+      if (!isCurrent(ticket)) return false;
+      notificationInbox = inbox;
+      if (preferences) notificationPreferences = preferences;
+      notificationBusy = false;
+      notificationError = null;
+      if (render) renderSecurity();
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      notificationBusy = false;
+      notificationError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
   async function loadWorkspaceAuthorization(
     ticket,
     sessionResult,
@@ -1659,6 +1806,7 @@ export function createIdentityPageController({
         loadPaymentCommerce(ticket, "", { render: false }),
         loadWorkspaceInvoices(ticket, "", { render: false }),
         loadBusinessVerification(ticket, "", { render: false }),
+        loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
       renderSecurity({ feedback, error: previousError });
@@ -1777,6 +1925,13 @@ export function createIdentityPageController({
       businessVerification,
       businessVerificationBusy,
       businessVerificationError,
+      notificationCenterOpen,
+      notificationInbox,
+      notificationPreferences,
+      notificationBusy,
+      notificationError,
+      notificationUnreadOnly,
+      notificationPage: notificationCursorHistory.length + 1,
       workspaceView,
       workspaceDraft,
       invitationResult,
@@ -1838,6 +1993,14 @@ export function createIdentityPageController({
     businessVerification = null;
     businessVerificationBusy = false;
     businessVerificationError = null;
+    notificationCenterOpen = false;
+    notificationInbox = null;
+    notificationPreferences = null;
+    notificationBusy = false;
+    notificationError = null;
+    notificationUnreadOnly = false;
+    notificationCursor = null;
+    notificationCursorHistory = [];
   }
 
   function clearInvitationSecret() {
@@ -2125,7 +2288,32 @@ export function createIdentityPageController({
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {
         await controller.copyInvitationSecret("mail");
+      } else if (button.dataset.identityAction === "open-notifications") {
+        await controller.openNotifications();
+      } else if (button.dataset.identityAction === "close-notifications") {
+        controller.closeNotifications();
+      } else if (button.dataset.identityAction === "refresh-notifications") {
+        await controller.refreshNotifications();
+      } else if (button.dataset.identityAction === "notification-filter-all") {
+        await controller.setNotificationFilter(false);
+      } else if (button.dataset.identityAction === "notification-filter-unread") {
+        await controller.setNotificationFilter(true);
+      } else if (button.dataset.identityAction === "notification-next") {
+        await controller.nextNotificationPage();
+      } else if (button.dataset.identityAction === "notification-previous") {
+        await controller.previousNotificationPage();
+      } else if (button.dataset.identityAction === "mark-notification-read") {
+        await controller.markNotificationRead(button.dataset.notificationIndex);
       }
+    });
+    root.addEventListener?.("change", async (event) => {
+      const toggle = event.target;
+      if (!toggle?.matches?.("[data-notification-preference]")) return;
+      await controller.updateNotificationPreference(
+        toggle.dataset.notificationCategory,
+        toggle.dataset.notificationChannel,
+        toggle.checked === true,
+      );
     });
     root.addEventListener?.("input", (event) => {
       if (event.target?.matches?.("[data-workspace-search]")) {

@@ -24,6 +24,7 @@ from metahub_shared.payment_commerce import (
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.notifications.service import enqueue_workspace_owners_in_transaction
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -768,6 +769,22 @@ def _apply_payment_event(
             intent["payment_intent_id"],
         ),
     )
+    notification_time = _db_time(_utcnow())
+    enqueue_workspace_owners_in_transaction(
+        connection,
+        config,
+        workspace_id=str(intent["workspace_id"]),
+        tenant_id=str(intent["tenant_id"]),
+        event_type="payment.status_changed",
+        source_owner_type="payment_receipt",
+        source_owner_id=str(receipt["receipt_id"]),
+        parameters={
+            "amount": _minor_text(int(intent["amount_minor"])),
+            "currency": str(intent["currency"]),
+            "status": next_status,
+            "updated_at": notification_time,
+        },
+    )
     if next_status == "succeeded":
         _capture_order(connection, receipt, intent)
     elif next_status == "failed":
@@ -1288,6 +1305,12 @@ def _event(body: bytes) -> dict[str, Any]:
     occurred = _parse_time(value["occurred_at"])
     value["occurred_at"] = _db_time(occurred)
     return value
+
+
+def _minor_text(value: int) -> str:
+    sign = "-" if value < 0 else ""
+    whole, fraction = divmod(abs(value), 100)
+    return f"{sign}{whole}.{fraction:02d}"
 
 
 def _event_matches_intent(

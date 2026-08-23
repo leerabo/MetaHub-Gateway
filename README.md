@@ -14,7 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-104 - 发票、税务产物与资金对账` 已完成；当前下一条未完成项是 `PRD-105 - 通知中心`。
+- 新 `PRD-090` 至 `PRD-105 - 通知中心` 已完成；当前下一条未完成项是
+  `PRD-106 - 分布式任务队列、Scheduler与Worker生产运行时`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -113,6 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-105 - 通知中心` 已完成：0097、加密通知 source/outbox、偏好 ETag CAS、不可变模板版本、异步投递 worker、
+  Workspace 通知收件箱与 Platform 受控模板编辑器均已交付。最终 Migration/API `3/3`、PRD-098/102/103/104
+  邻接回归 `4/4`、Console focused `3/3`、Console 全量 `1033/1033`、lint `333 files`；本次变更范围 Ruff、
+  compileall、敏感值扫描和差异检查均通过。真实浏览器在 `390x844`、`1280x900`、`1440x900` 三档验证
+  Identity 与 Platform 页面零页面级横向溢出、零控件重叠、零裁切和零控制台错误。详见
+  [PRD-105 设计](docs/prd/PRD-105-notification-center.md)、[通知中心 API](docs/api/notification-center.md) 和
+  [PRD-105 测试记录](docs/testing/PRD-105-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-104 - 发票、税务产物与资金对账` 已完成：0096、不可变结算单与税额快照、PDF/CSV 发票产物、
   Header-only 单次下载、订单/支付/Meter/结算单/发票五源冻结对账、账务与合规双域审批冲红、provider worker、
   Workspace 发票区和 Platform 合规复核视图均已交付。最终 PRD-104 Migration/API `4/4`、Console focused

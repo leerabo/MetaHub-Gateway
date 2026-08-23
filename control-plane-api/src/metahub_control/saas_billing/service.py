@@ -17,6 +17,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.notifications.service import enqueue_workspace_owners_in_transaction
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -543,6 +544,21 @@ def create_subscription(
             },
             now=now,
         )
+        enqueue_workspace_owners_in_transaction(
+            connection,
+            config,
+            workspace_id=actor.workspace_id,
+            tenant_id=actor.tenant_id,
+            event_type="subscription.status_changed",
+            source_owner_type="subscription_order",
+            source_owner_id=order_id,
+            parameters={
+                "effective_at": stamp,
+                "plan_name": str(plan["display_name"]),
+                "status": status,
+            },
+            now=now,
+        )
         response = _subscription_response(
             connection,
             actor.workspace_id,
@@ -690,6 +706,21 @@ def change_subscription_plan(
             },
             now=now,
         )
+        enqueue_workspace_owners_in_transaction(
+            connection,
+            config,
+            workspace_id=actor.workspace_id,
+            tenant_id=actor.tenant_id,
+            event_type="subscription.status_changed",
+            source_owner_type="subscription_order",
+            source_owner_id=order_id,
+            parameters={
+                "effective_at": _db_time(effective),
+                "plan_name": str(target["display_name"]),
+                "status": "scheduled_downgrade" if downgrade else "pending_upgrade",
+            },
+            now=now,
+        )
         response = _subscription_response(
             connection,
             actor.workspace_id,
@@ -801,6 +832,21 @@ def cancel_subscription(
                 actor.membership_id,
                 _db_time(now),
             ),
+        )
+        enqueue_workspace_owners_in_transaction(
+            connection,
+            config,
+            workspace_id=actor.workspace_id,
+            tenant_id=actor.tenant_id,
+            event_type="subscription.status_changed",
+            source_owner_type="subscription_cancel",
+            source_owner_id=subscription_id,
+            parameters={
+                "effective_at": _db_time(now),
+                "plan_name": str(plan["display_name"]),
+                "status": "canceled",
+            },
+            now=now,
         )
         response = _subscription_response(
             connection,
@@ -991,7 +1037,7 @@ def _expire_trial_if_due(
     )
     fallback = connection.execute(
         """
-        SELECT version.* FROM saas_plan_versions version
+        SELECT version.*,catalog.display_name FROM saas_plan_versions version
         JOIN saas_plan_catalogs catalog ON catalog.plan_catalog_id=version.plan_catalog_id
         WHERE catalog.status='active' AND version.status='published'
           AND version.unit_price_minor=0
@@ -1106,7 +1152,7 @@ def _expire_trial_if_due(
 def _published_plan(connection: sqlite3.Connection, plan_version_id: str) -> sqlite3.Row:
     row = connection.execute(
         """
-        SELECT version.* FROM saas_plan_versions version
+        SELECT version.*,catalog.display_name FROM saas_plan_versions version
         JOIN saas_plan_catalogs catalog ON catalog.plan_catalog_id=version.plan_catalog_id
         WHERE version.plan_version_id=? AND version.status='published'
           AND catalog.status='active'

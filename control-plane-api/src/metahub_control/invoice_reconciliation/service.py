@@ -26,6 +26,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.notifications.service import enqueue_workspace_owners_in_transaction
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -1249,6 +1250,31 @@ def _commit_provider_result(
             """,
             (_db_time(now), row["invoice_provider_outbox_id"], lease_token),
         )
+        notification_event = "invoice.reversed" if terminal == "reversed" else "invoice.issued"
+        notification_parameters = (
+            {
+                "invoice_number_masked": "****" + str(first["provider_invoice_id"])[-4:],
+                "reversed_at": _db_time(now),
+            }
+            if terminal == "reversed"
+            else {
+                "currency": str(row["currency"]),
+                "invoice_number_masked": "****" + str(first["provider_invoice_id"])[-4:],
+                "issued_at": _db_time(first["issued_at"]),
+                "total": _minor_text(int(row["total_minor"])),
+            }
+        )
+        enqueue_workspace_owners_in_transaction(
+            connection,
+            config,
+            workspace_id=str(row["workspace_id"]),
+            tenant_id=str(row["tenant_id"]),
+            event_type=notification_event,
+            source_owner_type="invoice_provider_receipt",
+            source_owner_id=receipt_id,
+            parameters=notification_parameters,
+            now=now,
+        )
         connection.commit()
     except Exception:
         _rollback(connection)
@@ -1896,6 +1922,12 @@ def _domain_hmac(config: AppConfig, domain: str, value: str) -> str:
         secret, f"metahub/invoice-reconciliation/v1/{domain}".encode(), hashlib.sha256
     ).digest()
     return hmac.new(key, value.encode(), hashlib.sha256).hexdigest()
+
+
+def _minor_text(value: int) -> str:
+    sign = "-" if value < 0 else ""
+    whole, fraction = divmod(abs(value), 100)
+    return f"{sign}{whole}.{fraction:02d}"
 
 
 def _tax_minor(subtotal_minor: int, rate_basis_points: int) -> int:

@@ -59,6 +59,12 @@ import {
   submitWorkspaceBusinessVerification,
   updateWorkspaceBusinessBillingProfile,
 } from "../../lib/businessVerification.js";
+import {
+  getWorkspaceNotificationPreferences,
+  listWorkspaceNotifications,
+  markWorkspaceNotificationRead,
+  updateWorkspaceNotificationPreferences,
+} from "../../lib/notifications.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -136,6 +142,19 @@ if (root) {
         saveWorkspaceBillingExport(result);
         return result;
       },
+      notifications: (input) => listWorkspaceNotifications({ controlApiUrl, ...input }),
+      markNotificationRead: (input) => markWorkspaceNotificationRead({
+        controlApiUrl,
+        ...input,
+      }),
+      notificationPreferences: (input) => getWorkspaceNotificationPreferences({
+        controlApiUrl,
+        ...input,
+      }),
+      updateNotificationPreferences: (input) => updateWorkspaceNotificationPreferences({
+        controlApiUrl,
+        ...input,
+      }),
     },
   });
   controller.mount();

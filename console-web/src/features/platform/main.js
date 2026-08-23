@@ -54,6 +54,10 @@ import {
   listPlatformBusinessVerifications,
   reviewPlatformBusinessVerification,
 } from "../../lib/businessVerification.js";
+import {
+  createPlatformNotificationTemplate,
+  listPlatformNotificationTemplates,
+} from "../../lib/notifications.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -133,6 +137,14 @@ if (root) {
         ...input,
       }),
       evidenceToken: (input) => issuePlatformEvidenceDownloadToken({
+        controlApiUrl,
+        ...input,
+      }),
+      notificationTemplates: (input) => listPlatformNotificationTemplates({
+        controlApiUrl,
+        ...input,
+      }),
+      createNotificationTemplate: (input) => createPlatformNotificationTemplate({
         controlApiUrl,
         ...input,
       }),

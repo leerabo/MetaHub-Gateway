@@ -1,5 +1,6 @@
 // 平台页面状态机负责取消过期请求、权限裁剪和幂等意图；敏感认证值只由 HttpOnly Cookie 承载。
 import { PlatformApiError } from "../../lib/platform.js";
+import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
@@ -18,6 +19,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "channels",
   "customer-success",
   "growth",
+  "notification-templates",
 ]);
 const WORKSPACE_READ_PERMISSIONS = new Set([
   "platform.workspace.directory.read",
@@ -66,6 +68,8 @@ export function createPlatformPageController({
     verification: null,
     verificationStatus: "",
     verificationOffset: 0,
+    notificationTemplates: null,
+    notificationTemplateIntent: null,
     infrastructure: null,
     gatewayCells: null,
     gatewayPlacement: null,
@@ -599,6 +603,42 @@ export function createPlatformPageController({
         return fail(ticket, error);
       }
     },
+    async createNotificationTemplate(template) {
+      if (
+        typeof api.createNotificationTemplate !== "function"
+        || !Number.isSafeInteger(state.notificationTemplates?.catalog_revision)
+      ) return false;
+      const fingerprint = JSON.stringify(template);
+      const idempotencyKey = state.notificationTemplateIntent?.fingerprint === fingerprint
+        ? state.notificationTemplateIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.notificationTemplateIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        await api.createNotificationTemplate({
+          revision: state.notificationTemplates.catalog_revision,
+          idempotencyKey,
+          template,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.notificationTemplateIntent = null;
+        state.notificationTemplates = await api.notificationTemplates({ signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.loading = false;
+        state.feedback = template.status === "published" ? "模板版本已发布。" : "模板草稿已创建。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.notificationTemplateIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
     async confirmWorkspaceLifecycle(reasonCode) {
       const pending = state.pendingAction;
       if (!pending || !/^workspace-(?:suspend|restore)$/u.test(pending.kind)) return false;
@@ -666,6 +706,7 @@ export function createPlatformPageController({
         billing: null,
         refunds: null,
         verification: null,
+        notificationTemplates: null,
         infrastructure: null,
         gatewayCells: null,
         grants: null,
@@ -702,6 +743,12 @@ export function createPlatformPageController({
           offset: state.verificationOffset,
           signal: ticket.signal,
         }).then((value) => { next.verification = value; }));
+      }
+      if (permissions.has("platform.notification_template.read")
+        && typeof api.notificationTemplates === "function") {
+        tasks.push(api.notificationTemplates({ signal: ticket.signal }).then((value) => {
+          next.notificationTemplates = value;
+        }));
       }
       if (permissions.has("platform.infrastructure.read")
         && typeof api.infrastructureStatus === "function") {
@@ -1031,6 +1078,19 @@ export function createPlatformPageController({
       if (form.matches("[data-platform-verification-filter-form]")) {
         controller.filterVerification(data.get("status"));
       }
+      if (form.matches("[data-platform-notification-template-form]")) {
+        const eventType = String(data.get("eventType") ?? "");
+        controller.createNotificationTemplate({
+          template_code: data.get("templateCode"),
+          event_type: eventType,
+          channel: data.get("channel"),
+          locale: data.get("locale"),
+          parameter_allowlist: [...(NOTIFICATION_EVENT_PARAMETERS[eventType] ?? [])],
+          subject_template: data.get("subjectTemplate"),
+          body_template: data.get("bodyTemplate"),
+          status: data.get("status"),
+        });
+      }
       if (form.matches("[data-platform-verification-reject-form]")) {
         controller.rejectVerification(
           data.get("intentId"),
@@ -1124,6 +1184,16 @@ export function createPlatformPageController({
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
       if (action === "remove-workspace-risk") controller.removeWorkspaceRiskTag(target.dataset.tagCode, target.dataset.reasonCode);
     });
+    root.addEventListener("change", (event) => {
+      const select = event.target;
+      if (!select?.matches?.('[data-platform-notification-template-form] select[name="eventType"]')) {
+        return;
+      }
+      const output = select.form?.querySelector?.("[data-template-parameters]");
+      if (output) {
+        output.textContent = (NOTIFICATION_EVENT_PARAMETERS[select.value] ?? []).join(", ");
+      }
+    });
   }
 
   function begin() {
@@ -1162,6 +1232,8 @@ export function createPlatformPageController({
     state.verification = null;
     state.verificationStatus = "";
     state.verificationOffset = 0;
+    state.notificationTemplates = null;
+    state.notificationTemplateIntent = null;
     state.infrastructure = null;
     state.gatewayCells = null;
     state.gatewayPlacement = null;

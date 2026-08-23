@@ -30,6 +30,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.notifications.service import enqueue_workspace_owners_in_transaction
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -815,6 +816,17 @@ def review_business_verification(
                 secret,
                 {"status": next_status, "review_id": review_id, "contract_id": contract_id},
             ),
+            now=now,
+        )
+        enqueue_workspace_owners_in_transaction(
+            connection,
+            config,
+            workspace_id=str(intent["workspace_id"]),
+            tenant_id=str(intent["tenant_id"]),
+            event_type="verification.status_changed",
+            source_owner_type="verification_review",
+            source_owner_id=review_id,
+            parameters={"status": next_status, "updated_at": stamp},
             now=now,
         )
         updated = connection.execute(

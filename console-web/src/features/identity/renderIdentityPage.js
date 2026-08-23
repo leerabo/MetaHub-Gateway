@@ -158,16 +158,21 @@ export function renderIdentitySecurityPage(container, state) {
     .filter(({ session }) => !session.is_current);
   const displayName = account.display_name || account.email;
 
+  if (state.notificationCenterOpen) {
+    container.innerHTML = `
+      <div class="identity-security-shell">
+        ${renderIdentityTopbar(state)}
+        <div class="identity-security-main">
+          ${renderNotificationCenter(state)}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
   container.innerHTML = `
     <div class="identity-security-shell">
-      <header class="identity-topbar">
-        <a class="identity-wordmark" href="/identity.html" aria-label="MetaHub 账号安全首页">
-          <span class="identity-brand-mark" aria-hidden="true">M</span>
-          <strong>MetaHub</strong>
-        </a>
-        ${renderWorkspaceSelector(state)}
-        <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
-      </header>
+      ${renderIdentityTopbar(state)}
       <div class="identity-security-main">
         <section class="identity-heading" aria-labelledby="identity-security-title">
           <p>账号安全</p>
@@ -250,6 +255,173 @@ export function renderIdentitySecurityPage(container, state) {
       </div>
     </div>
   `;
+}
+
+function renderIdentityTopbar(state) {
+  const unread = Math.max(0, Number(state.notificationInbox?.unread_count ?? 0));
+  const badge = unread > 99 ? "99+" : String(unread);
+  const available = Boolean(state.workspaceContext);
+  return `
+    <header class="identity-topbar">
+      <a class="identity-wordmark" href="/identity.html" aria-label="MetaHub 账号安全首页">
+        <span class="identity-brand-mark" aria-hidden="true">M</span>
+        <strong>MetaHub</strong>
+      </a>
+      ${renderWorkspaceSelector(state)}
+      <div class="identity-topbar-actions">
+        <button
+          class="identity-notification-button"
+          type="button"
+          data-identity-action="open-notifications"
+          title="通知中心"
+          aria-label="通知中心，${unread} 条未读"
+          ${available ? "" : "disabled"}
+        >
+          <span aria-hidden="true">&#128276;</span>
+          <b class="identity-notification-badge ${unread > 0 ? "is-active" : ""}">${escapeHtml(badge)}</b>
+        </button>
+        <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
+      </div>
+    </header>
+  `;
+}
+
+function renderNotificationCenter(state) {
+  const inbox = state.notificationInbox ?? { notifications: [], unread_count: 0, next_cursor: null };
+  const notifications = Array.isArray(inbox.notifications) ? inbox.notifications : [];
+  const page = Math.max(1, Number(state.notificationPage ?? 1));
+  return `
+    <section class="identity-notification-center" aria-labelledby="identity-notification-title" aria-busy="${state.notificationBusy === true}">
+      <header class="identity-notification-heading">
+        <button class="identity-icon-command" type="button" data-identity-action="close-notifications" title="返回账号安全" aria-label="返回账号安全">&#8592;</button>
+        <div>
+          <p>Workspace inbox</p>
+          <h1 id="identity-notification-title">通知中心</h1>
+          <span>${Number(inbox.unread_count ?? 0)} 条未读</span>
+        </div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-notifications" title="刷新通知" aria-label="刷新通知" ${state.notificationBusy ? "disabled" : ""}>&#8635;</button>
+      </header>
+      ${renderError(state.notificationError)}
+      <div class="identity-notification-toolbar">
+        <div class="identity-segmented" role="group" aria-label="通知筛选">
+          <button type="button" data-identity-action="notification-filter-all" aria-pressed="${!state.notificationUnreadOnly}">全部</button>
+          <button type="button" data-identity-action="notification-filter-unread" aria-pressed="${state.notificationUnreadOnly === true}">未读</button>
+        </div>
+        <span>第 ${page} 页</span>
+      </div>
+      <div class="identity-notification-list">
+        ${notifications.length > 0
+          ? notifications.map(renderNotificationItem).join("")
+          : '<p class="identity-empty">当前筛选下没有通知。</p>'}
+      </div>
+      <div class="identity-notification-pagination">
+        <button type="button" data-identity-action="notification-previous" ${page > 1 && !state.notificationBusy ? "" : "disabled"}>上一页</button>
+        <button type="button" data-identity-action="notification-next" ${inbox.next_cursor && !state.notificationBusy ? "" : "disabled"}>下一页</button>
+      </div>
+      ${renderNotificationPreferences(state)}
+    </section>
+  `;
+}
+
+function renderNotificationItem(notification, index) {
+  return `
+    <article class="identity-notification-item ${notification.read ? "" : "is-unread"}">
+      <span class="identity-notification-state" aria-hidden="true"></span>
+      <div>
+        <div class="identity-notification-meta">
+          <span>${escapeHtml(notificationCategoryLabel(notification.category))}</span>
+          <time datetime="${escapeAttribute(notification.created_at)}">${escapeHtml(formatDateTime(notification.created_at))}</time>
+        </div>
+        <h2>${escapeHtml(notification.subject)}</h2>
+        <p>${escapeHtml(notification.body)}</p>
+      </div>
+      <button
+        class="identity-icon-command"
+        type="button"
+        data-identity-action="mark-notification-read"
+        data-notification-index="${index}"
+        title="标记为已读"
+        aria-label="标记 ${escapeAttribute(notification.subject)} 为已读"
+        ${notification.read ? "disabled" : ""}
+      >&#10003;</button>
+    </article>
+  `;
+}
+
+function renderNotificationPreferences(state) {
+  const values = Array.isArray(state.notificationPreferences?.preferences)
+    ? state.notificationPreferences.preferences
+    : [];
+  const categories = ["security", "billing", "verification", "payments", "invoices", "operations"];
+  const channels = ["in_app", "email", "webhook", "sms", "web_push"];
+  return `
+    <section class="identity-notification-preferences" aria-labelledby="identity-notification-preferences-title">
+      <div class="identity-section-heading">
+        <div><p>Delivery policy</p><h2 id="identity-notification-preferences-title">通知偏好</h2></div>
+        <span>Revision ${Number(state.notificationPreferences?.revision ?? 0)}</span>
+      </div>
+      <div class="identity-notification-preference-wrap">
+        <table>
+          <thead><tr><th>类别</th>${channels.map((channel) => `<th>${escapeHtml(notificationChannelLabel(channel))}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${categories.map((category) => `
+              <tr>
+                <th scope="row">${escapeHtml(notificationCategoryLabel(category))}</th>
+                ${channels.map((channel) => renderNotificationPreferenceCell(
+                  values.find((item) => item.category === category && item.channel === channel),
+                  state.notificationBusy,
+                )).join("")}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderNotificationPreferenceCell(preference, busy) {
+  if (!preference) return '<td><span class="identity-policy-state">不可用</span></td>';
+  const disabled = busy || preference.mandatory || !preference.available;
+  const status = preference.mandatory
+    ? "系统强制"
+    : preference.available
+      ? ""
+      : "未配置";
+  const label = `${notificationCategoryLabel(preference.category)} ${notificationChannelLabel(preference.channel)}`;
+  return `
+    <td>
+      <label class="identity-preference-toggle">
+        <input
+          type="checkbox"
+          data-notification-preference
+          data-notification-category="${escapeAttribute(preference.category)}"
+          data-notification-channel="${escapeAttribute(preference.channel)}"
+          aria-label="${escapeAttribute(label)}"
+          ${preference.enabled ? "checked" : ""}
+          ${disabled ? "disabled" : ""}
+        />
+        <span aria-hidden="true"></span>
+      </label>
+      ${status ? `<small class="identity-policy-state">${escapeHtml(status)}</small>` : ""}
+    </td>
+  `;
+}
+
+function notificationCategoryLabel(value) {
+  return ({
+    security: "安全",
+    billing: "订阅",
+    verification: "认证",
+    payments: "支付",
+    invoices: "发票",
+    operations: "运维",
+  })[value] ?? "通知";
+}
+
+function notificationChannelLabel(value) {
+  return ({ in_app: "站内", email: "邮件", webhook: "Webhook", sms: "短信", web_push: "WebPush" })[value]
+    ?? "渠道";
 }
 
 function renderOnboardingSection(state) {

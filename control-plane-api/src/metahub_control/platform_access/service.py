@@ -87,6 +87,7 @@ _ROLE_CODES = frozenset(
         "platform_channel",
         "platform_customer_success",
         "platform_growth",
+        "platform_communications",
     }
 )
 _NAVIGATION = (
@@ -115,6 +116,12 @@ _NAVIGATION = (
         "/platform.html#customer-success",
     ),
     ("platform.growth.read", "growth", "Growth", "/platform.html#growth"),
+    (
+        "platform.notification_template.read",
+        "notification-templates",
+        "Notification templates",
+        "/platform.html#notification-templates",
+    ),
 )
 
 
@@ -2268,6 +2275,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_verification_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if _table_exists(connection, "platform_notification_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_notification_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

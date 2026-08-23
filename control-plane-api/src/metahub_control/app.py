@@ -64,6 +64,8 @@ from .model_aliases.routes import router as model_aliases_router
 from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
+from .notifications import install_notification_scheduler
+from .notifications import router as notifications_router
 from .partner_portal import install_partner_portal_scheduler
 from .partner_portal import router as partner_portal_router
 from .payment_commerce import install_payment_commerce_scheduler
@@ -164,6 +166,9 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         }
         or request.url.path == "/billing-disputes"
         or request.url.path.startswith("/billing-disputes/")
+        or request.url.path == "/notifications"
+        or request.url.path.startswith("/notifications/")
+        or request.url.path == "/notification-preferences"
         or request.url.path == "/local-endpoints"
         or request.url.path.startswith("/local-endpoints/")
         or request.url.path == "/partners"
@@ -233,6 +238,7 @@ app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(business_verification_router)
 app.include_router(invoice_reconciliation_router)
+app.include_router(notifications_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -325,6 +331,7 @@ if app.state.config.control_background_schedulers_enabled:
     install_platform_billing_scheduler(app)
     install_payment_commerce_scheduler(app)
     install_invoice_reconciliation_scheduler(app)
+    install_notification_scheduler(app)
     install_partner_portal_scheduler(app)
     install_branding_scheduler(app)
     install_billing_dispute_scheduler(app)

@@ -1,4 +1,6 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
+import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+
 const ROLE_OPTIONS = [
   "platform_owner",
   "platform_ops",
@@ -13,6 +15,7 @@ const ROLE_OPTIONS = [
   "platform_channel",
   "platform_customer_success",
   "platform_growth",
+  "platform_communications",
 ];
 
 export function renderPlatformGate(container, state = {}) {
@@ -73,7 +76,81 @@ function renderView(state, permissions) {
   if (state.view === "billing") return billingView(state, permissions);
   if (state.view === "compliance") return complianceView(state, permissions);
   if (state.view === "verification") return verificationView(state, permissions);
+  if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function notificationTemplatesView(state, permissions) {
+  const response = state.notificationTemplates ?? {};
+  const templates = Array.isArray(response.templates) ? response.templates : [];
+  const canWrite = permissions.has("platform.notification_template.write");
+  const defaultEvent = "invoice.issued";
+  return `
+    <header class="platform-page-heading">
+      <div><p>Delivery content</p><h1>通知模板</h1></div>
+      <span>Catalog revision ${number(response.catalog_revision ?? 0)}</span>
+    </header>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Immutable history</p><h2>模板版本</h2></div>
+        <span>${number(templates.length)} 个版本</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-notification-template-table">
+          <thead><tr><th>模板</th><th>事件</th><th>渠道 / 语言</th><th>版本</th><th>状态</th><th>正文摘要</th></tr></thead>
+          <tbody>${templates.map(notificationTemplateRow).join("") || emptyRow("暂无模板版本", 6)}</tbody>
+        </table>
+      </div>
+    </section>
+    ${canWrite ? `
+      <section class="platform-band platform-notification-editor">
+        <div class="platform-section-heading">
+          <div><p>Controlled editor</p><h2>创建新版本</h2></div>
+        </div>
+        <form data-platform-notification-template-form autocomplete="off">
+          <label><span>模板代码</span><input name="templateCode" pattern="[a-z0-9][a-z0-9_.-]{2,79}" maxlength="80" value="invoice_issued" required /></label>
+          <label><span>事件</span><select name="eventType">${notificationEventOptions(defaultEvent)}</select></label>
+          <label><span>渠道</span><select name="channel"><option value="in_app">站内</option><option value="email" selected>邮件</option><option value="webhook">Webhook</option></select></label>
+          <label><span>语言</span><select name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+          <label class="platform-notification-parameters"><span>允许参数</span><output data-template-parameters>${escapeHtml(NOTIFICATION_EVENT_PARAMETERS[defaultEvent].join(", "))}</output></label>
+          <label class="platform-notification-subject"><span>主题</span><input name="subjectTemplate" maxlength="200" value="Invoice {{invoice_number_masked}} issued" required /></label>
+          <label class="platform-notification-body"><span>正文</span><textarea name="bodyTemplate" maxlength="4000" rows="6" required>Invoice {{invoice_number_masked}} for {{total}} {{currency}} was issued at {{issued_at}}.</textarea></label>
+          <label><span>版本状态</span><select name="status"><option value="draft">草稿</option><option value="published">发布</option></select></label>
+          <button class="platform-primary" type="submit" ${state.loading ? "disabled" : ""}>创建版本</button>
+        </form>
+      </section>
+    ` : ""}
+  `;
+}
+
+function notificationTemplateRow(template) {
+  return `<tr>
+    <td data-label="模板"><strong>${escapeHtml(template.template_code)}</strong><small>${escapeHtml(template.notification_template_id)}</small></td>
+    <td data-label="事件"><strong>${escapeHtml(notificationEventLabel(template.event_type))}</strong><small>${escapeHtml(template.category)}</small></td>
+    <td data-label="渠道 / 语言"><strong>${escapeHtml(template.channel)}</strong><small>${escapeHtml(template.locale)}</small></td>
+    <td data-label="版本"><strong>v${number(template.version)}</strong><small>rev ${number(template.revision)}</small></td>
+    <td data-label="状态">${status(template.status)}<small>${formatTime(template.published_at ?? template.created_at)}</small></td>
+    <td data-label="正文摘要"><strong>${escapeHtml(template.subject_template)}</strong><small>${escapeHtml(template.content_sha256.slice(0, 12))}</small></td>
+  </tr>`;
+}
+
+function notificationEventOptions(selected) {
+  return Object.keys(NOTIFICATION_EVENT_PARAMETERS)
+    .map((eventType) => `<option value="${escapeAttribute(eventType)}" ${eventType === selected ? "selected" : ""}>${escapeHtml(notificationEventLabel(eventType))}</option>`)
+    .join("");
+}
+
+function notificationEventLabel(value) {
+  return ({
+    "security.sign_in_risk": "登录风险",
+    "subscription.status_changed": "订阅状态变更",
+    "verification.status_changed": "认证状态变更",
+    "payment.status_changed": "支付状态变更",
+    "invoice.issued": "发票开具",
+    "invoice.reversed": "发票冲红",
+    "infrastructure.backup_completed": "备份完成",
+    "gateway.health_changed": "Gateway 健康变更",
+  })[value] ?? "未知事件";
 }
 
 /** 渲染企业认证审核队列，案件投影不显示 Workspace、主体明文或对象引用。 */
