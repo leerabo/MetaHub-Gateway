@@ -158,5 +158,5 @@ def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
 
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0095"
+    assert result.applied[-1] == "0096"
     _healthy(database_url)

@@ -48,6 +48,13 @@ import {
   requestWorkspaceRefund,
 } from "../../lib/paymentCommerce.js";
 import {
+  createWorkspaceInvoice,
+  downloadWorkspaceInvoiceArtifact,
+  getWorkspaceInvoice,
+  listWorkspaceBillingStatements,
+  saveWorkspaceInvoiceArtifact,
+} from "../../lib/invoiceReconciliation.js";
+import {
   getWorkspaceBusinessVerification,
   submitWorkspaceBusinessVerification,
   updateWorkspaceBusinessBillingProfile,
@@ -104,6 +111,14 @@ if (root) {
       billingOrders: (input) => listWorkspaceBillingOrders({ controlApiUrl, ...input }),
       createPaymentIntent: (input) => createWorkspacePaymentIntent({ controlApiUrl, ...input }),
       requestRefund: (input) => requestWorkspaceRefund({ controlApiUrl, ...input }),
+      billingStatements: (input) => listWorkspaceBillingStatements({ controlApiUrl, ...input }),
+      createInvoice: (input) => createWorkspaceInvoice({ controlApiUrl, ...input }),
+      invoice: (input) => getWorkspaceInvoice({ controlApiUrl, ...input }),
+      invoiceDownload: async (input) => {
+        const result = await downloadWorkspaceInvoiceArtifact({ controlApiUrl, ...input });
+        saveWorkspaceInvoiceArtifact(result);
+        return result;
+      },
       businessVerification: (input) => getWorkspaceBusinessVerification({
         controlApiUrl,
         ...input,

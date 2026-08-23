@@ -143,10 +143,10 @@ def test_payment_receipt_fact_blocks_0095_down(
     _healthy(database_url)
 
 
-def test_fresh_schema_installs_0095(tmp_path: Path) -> None:
-    """验证空数据库完整迁移链最终安装 0095。"""
+def test_fresh_schema_installs_0096(tmp_path: Path) -> None:
+    """验证空数据库完整迁移链最终安装当前 0096。"""
 
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0095"
+    assert result.applied[-1] == "0096"
     _healthy(database_url)

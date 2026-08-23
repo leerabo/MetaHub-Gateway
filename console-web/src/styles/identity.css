@@ -410,6 +410,7 @@ a {
 .identity-onboarding,
 .identity-subscription,
 .identity-billing,
+.identity-invoices,
 .identity-business-verification,
 .identity-workspaces,
 .identity-memberships,
@@ -635,6 +636,12 @@ a {
   opacity: 0.55;
 }
 
+.identity-billing-table-wrap,
+.identity-invoice-table-wrap,
+.identity-payment-table-wrap {
+  contain: inline-size paint;
+}
+
 .identity-billing-table-wrap {
   width: 100%;
   max-width: 100%;
@@ -667,6 +674,106 @@ a {
 
 .identity-billing-table .is-overage {
   color: #a6382c;
+}
+
+.identity-invoice-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.identity-invoice-table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.identity-invoice-table th,
+.identity-invoice-table td {
+  border-bottom: 1px solid var(--identity-line);
+  padding: 11px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.identity-invoice-table td strong,
+.identity-invoice-table td > span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.identity-invoice-table td > span:not(.identity-commerce-status),
+.identity-current-invoice span,
+.identity-current-invoice small {
+  margin-top: 3px;
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+}
+
+.identity-invoice-request {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.identity-invoice-request select,
+.identity-invoice-request button,
+.identity-invoice-heading > button {
+  min-height: 34px;
+  border: 1px solid #bbc5d0;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 5px 8px;
+}
+
+.identity-invoice-request button,
+.identity-invoice-heading > button {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.identity-invoice-request button:disabled,
+.identity-invoice-heading > button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.identity-current-invoice {
+  margin-top: 18px;
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-invoice-heading,
+.identity-invoice-artifacts > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 4px;
+}
+
+.identity-invoice-heading > div,
+.identity-invoice-artifacts > div > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.identity-invoice-heading strong,
+.identity-invoice-artifacts strong,
+.identity-invoice-artifacts span {
+  overflow-wrap: anywhere;
+}
+
+.identity-invoice-artifacts {
+  border-top: 1px solid var(--identity-line);
+}
+
+.identity-invoice-artifacts > div + div {
+  border-top: 1px solid var(--identity-line);
 }
 
 .identity-subscription-actions {
@@ -2088,6 +2195,10 @@ a {
   .identity-billing-table {
     min-width: 680px;
   }
+
+  .identity-invoice-table {
+    min-width: 760px;
+  }
 }
 
 @media (max-width: 520px) {
@@ -2103,5 +2214,10 @@ a {
   .identity-billing-actions button {
     width: 100%;
     max-width: none;
+  }
+
+  .identity-invoice-heading,
+  .identity-invoice-artifacts > div {
+    align-items: flex-start;
   }
 }

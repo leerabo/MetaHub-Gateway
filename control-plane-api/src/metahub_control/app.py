@@ -55,6 +55,8 @@ from .finops.routes import router as finops_router
 from .identity.routes import router as identity_router
 from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
+from .invoice_reconciliation import install_invoice_reconciliation_scheduler
+from .invoice_reconciliation import router as invoice_reconciliation_router
 from .local_endpoints import router as local_endpoints_router
 from .mcp_governance import install_mcp_scheduler
 from .mcp_governance import router as mcp_governance_router
@@ -122,6 +124,7 @@ app = create_service_app(
         "If-Policy-Candidate-Match",
         "Idempotency-Key",
         "X-CSRF-Token",
+        "X-MetaHub-Invoice-Download-Token",
     ),
     cors_allow_credentials=True,
     extra_cors_expose_headers=(
@@ -144,11 +147,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
     # Control GETs commonly authenticate and then read through a separate service.
     # Reuse one handle for that request only; writes keep their existing ownership.
-    scope = (
-        database_request_scope()
-        if request.method in {"GET", "HEAD"}
-        else nullcontext()
-    )
+    scope = database_request_scope() if request.method in {"GET", "HEAD"} else nullcontext()
     with scope:
         response = await call_next(request)
     if (
@@ -171,7 +170,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/partners/")
         or request.url.path == "/branding"
         or request.url.path.startswith("/branding/")
-        or request.url.path in {
+        or request.url.path
+        in {
             "/identity/workspaces",
             "/identity/workspace-switches",
             "/workspace/session",
@@ -232,6 +232,7 @@ app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(business_verification_router)
+app.include_router(invoice_reconciliation_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -323,6 +324,7 @@ if app.state.config.control_background_schedulers_enabled:
     install_saas_billing_scheduler(app)
     install_platform_billing_scheduler(app)
     install_payment_commerce_scheduler(app)
+    install_invoice_reconciliation_scheduler(app)
     install_partner_portal_scheduler(app)
     install_branding_scheduler(app)
     install_billing_dispute_scheduler(app)

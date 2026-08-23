@@ -35,6 +35,12 @@ import {
   reviewPlatformRefund,
 } from "../../lib/paymentCommerce.js";
 import {
+  createPlatformInvoiceReversal,
+  createPlatformReconciliation,
+  listPlatformReconciliationDifferences,
+  reviewPlatformInvoiceReversal,
+} from "../../lib/invoiceReconciliation.js";
+import {
   createPlatformBackup,
   getPlatformBackup,
   getPlatformInfrastructureStatus,
@@ -91,6 +97,22 @@ if (root) {
       }),
       refunds: (input) => listPlatformRefunds({ controlApiUrl, ...input }),
       reviewRefund: (input) => reviewPlatformRefund({ controlApiUrl, ...input }),
+      createReconciliation: (input) => createPlatformReconciliation({
+        controlApiUrl,
+        ...input,
+      }),
+      reconciliationDifferences: (input) => listPlatformReconciliationDifferences({
+        controlApiUrl,
+        ...input,
+      }),
+      createInvoiceReversal: (input) => createPlatformInvoiceReversal({
+        controlApiUrl,
+        ...input,
+      }),
+      reviewInvoiceReversal: (input) => reviewPlatformInvoiceReversal({
+        controlApiUrl,
+        ...input,
+      }),
       infrastructureStatus: (input) => getPlatformInfrastructureStatus({
         controlApiUrl,
         ...input,

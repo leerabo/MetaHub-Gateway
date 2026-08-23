@@ -14,7 +14,7 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-097 - 个人与企业初始化向导重构` 已完成；当前下一条未完成项是 `PRD-098 - SaaS套餐、试用、订阅与Entitlement`。
+- 新 `PRD-090` 至 `PRD-104 - 发票、税务产物与资金对账` 已完成；当前下一条未完成项是 `PRD-105 - 通知中心`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -113,6 +113,14 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-104 - 发票、税务产物与资金对账` 已完成：0096、不可变结算单与税额快照、PDF/CSV 发票产物、
+  Header-only 单次下载、订单/支付/Meter/结算单/发票五源冻结对账、账务与合规双域审批冲红、provider worker、
+  Workspace 发票区和 Platform 合规复核视图均已交付。最终 PRD-104 Migration/API `4/4`、Console focused
+  `27/27`、Console 全量 `1030/1030`、lint `331 files`，Ruff 与 compileall 均通过；真实 Edge 在
+  `390x844`、`1280x900`、`1440x900` 三档验证 Identity 发票页与 Platform 合规页零页面级横向溢出、零控件
+  重叠和零裁切。详见 [PRD-104 设计](docs/prd/PRD-104-invoices-tax-reconciliation.md)、
+  [发票与对账 API](docs/api/invoice-reconciliation.md) 和
+  [PRD-104 测试记录](docs/testing/PRD-104-tests.md)。总体目标仍为 `all_108_prds_complete=false`。
 - `PRD-088 - 客户/渠道白标配置` 已完成：0081、RBAC revision 23、tenant-qualified BrandingConfig、
   安全 PNG Logo、域名预留、不可变 `branding.updated` 审计、EVT-100/source outbox、实时后端权限校验、
   Branding 受保护/公共 API、PAGE-120、登录页与认证后 Console shell 均已交付。公共投影对非法和不存在 tenant

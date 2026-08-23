@@ -180,6 +180,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderSaasSubscriptionSection(state)}
         ${renderPaymentCommerceSection(state)}
         ${renderWorkspaceBillingSection(state)}
+        ${renderInvoiceSection(state)}
         ${renderBusinessVerificationSection(state)}
         <section class="identity-summary" aria-labelledby="identity-summary-title">
           <div class="identity-section-heading">
@@ -367,6 +368,70 @@ function renderWorkspaceBillingSection(state) {
       ${state.billingError ? renderError(state.billingError) : ""}
       ${cycle ? renderBillingCycle(cycle, available, state.billingBusy) : renderNoBillingCycle()}
     </section>
+  `;
+}
+
+function renderInvoiceSection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
+  const statements = Array.isArray(state.billingStatements?.statements)
+    ? state.billingStatements.statements
+    : [];
+  const invoice = state.currentInvoice?.invoice ?? null;
+  return `
+    <section class="identity-invoices" aria-labelledby="identity-invoices-title" aria-busy="${state.invoiceBusy === true}">
+      <div class="identity-section-heading">
+        <div><p>税务产物</p><h2 id="identity-invoices-title">结算单与发票</h2></div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-invoices" aria-label="刷新结算单与发票" title="刷新结算单与发票" ${state.invoiceBusy ? "disabled" : ""}>↻</button>
+      </div>
+      ${state.invoiceError ? renderError(state.invoiceError) : ""}
+      ${statements.length ? renderStatementTable(statements, invoice, state.invoiceBusy) : '<p class="identity-empty">当前没有已发布结算单。</p>'}
+      ${invoice ? renderCurrentInvoice(invoice, state.invoiceBusy) : ""}
+    </section>
+  `;
+}
+
+function renderStatementTable(statements, invoice, busy) {
+  return `
+    <div class="identity-invoice-table-wrap">
+      <table class="identity-invoice-table">
+        <thead><tr><th>结算单</th><th>周期</th><th>税率</th><th>原币金额</th><th>发票申请</th></tr></thead>
+        <tbody>${statements.map((statement) => {
+          const current = invoice?.billing_statement_id === statement.billing_statement_id;
+          return `<tr>
+            <td data-label="结算单"><strong>${escapeHtml(statementKindLabel(statement.statement_kind))}</strong><span>v${formatIdentityNumber(statement.immutable_version)} · ${escapeHtml(formatIdentityDate(statement.issued_at))}</span></td>
+            <td data-label="周期">${escapeHtml(statement.billing_cycle_id)}</td>
+            <td data-label="税率">${formatTaxRate(statement.tax_rate_basis_points)}</td>
+            <td data-label="原币金额"><strong>${escapeHtml(formatMinorMoney(statement.total_minor, statement.currency))}</strong><span>未税 ${escapeHtml(formatMinorMoney(statement.subtotal_minor, statement.currency))} · 税 ${escapeHtml(formatMinorMoney(statement.tax_minor, statement.currency))}</span></td>
+            <td data-label="发票申请">${current
+              ? `<span class="identity-commerce-status is-${escapeAttribute(invoice.status)}">${escapeHtml(invoiceStatusLabel(invoice.status))}</span>`
+              : `<form class="identity-invoice-request" data-invoice-request-form>
+                  <input name="billingStatementId" type="hidden" value="${escapeAttribute(statement.billing_statement_id)}" />
+                  <label><span class="identity-visually-hidden">发票类型</span><select name="invoiceType" aria-label="发票类型"><option value="electronic_general">电子普票</option><option value="electronic_special">电子专票</option></select></label>
+                  <button type="submit" ${busy ? "disabled" : ""}>申请</button>
+                </form>`}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderCurrentInvoice(invoice, busy) {
+  const artifacts = Array.isArray(invoice.artifacts) ? invoice.artifacts : [];
+  return `
+    <div class="identity-current-invoice">
+      <div class="identity-invoice-heading">
+        <div><span>当前发票</span><strong>${escapeHtml(invoiceTypeLabel(invoice.invoice_type))} · ${escapeHtml(formatMinorMoney(invoice.total_minor, invoice.currency))}</strong><small>${escapeHtml(invoiceStatusLabel(invoice.status))} · 资料版本 ${formatIdentityNumber(invoice.billing_profile_revision)}</small></div>
+        <button type="button" data-identity-action="refresh-invoice" ${busy ? "disabled" : ""}>刷新状态</button>
+      </div>
+      <div class="identity-invoice-artifacts">
+        ${artifacts.map((artifact) => `<div>
+          <div><strong>${escapeHtml(artifactKindLabel(artifact.artifact_kind))}</strong><span>${escapeHtml(artifact.invoice_number_masked)} · ${formatIdentityNumber(artifact.size_bytes)} B · ${escapeHtml(formatIdentityDate(artifact.issued_at))}</span></div>
+          <button class="identity-icon-command" type="button" data-identity-action="download-invoice-artifact" data-artifact-id="${escapeAttribute(artifact.invoice_artifact_id)}" aria-label="下载${escapeAttribute(artifactKindLabel(artifact.artifact_kind))}" title="下载${escapeAttribute(artifactKindLabel(artifact.artifact_kind))}" ${busy ? "disabled" : ""}>↓</button>
+        </div>`).join("") || '<p class="identity-empty">Provider 正在生成发票产物。</p>'}
+      </div>
+    </div>
   `;
 }
 
@@ -721,6 +786,37 @@ function billingCycleStatusLabel(value) {
     closed: "已关账",
     reconciliation_required: "需要对账",
   })[value] ?? String(value ?? "-").replaceAll("_", " ");
+}
+
+function statementKindLabel(value) {
+  return ({ standard: "标准结算单", credit: "贷项结算单", replacement: "更正结算单" })[value]
+    ?? "结算单";
+}
+
+function invoiceTypeLabel(value) {
+  return ({ electronic_general: "电子普通发票", electronic_special: "电子专用发票" })[value]
+    ?? "电子发票";
+}
+
+function invoiceStatusLabel(value) {
+  return ({
+    requested: "已申请",
+    processing: "开票中",
+    issued: "已开具",
+    failed: "开票失败",
+    reversal_pending: "冲红审批中",
+    reversed: "已冲红",
+  })[value] ?? "状态不可用";
+}
+
+function artifactKindLabel(value) {
+  return ({ invoice_pdf: "发票 PDF", invoice_csv: "发票 CSV", red_letter_pdf: "红字 PDF" })[value]
+    ?? "发票产物";
+}
+
+function formatTaxRate(basisPoints) {
+  const value = Number(basisPoints);
+  return Number.isSafeInteger(value) ? `${(value / 100).toFixed(2)}%` : "-";
 }
 
 function meterLabel(value) {

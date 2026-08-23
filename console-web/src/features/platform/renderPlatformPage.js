@@ -71,6 +71,7 @@ function renderView(state, permissions) {
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
   if (state.view === "billing") return billingView(state, permissions);
+  if (state.view === "compliance") return complianceView(state, permissions);
   if (state.view === "verification") return verificationView(state, permissions);
   return domainPlaceholderView(state);
 }
@@ -429,7 +430,15 @@ function billingView(state, permissions) {
     <header class="platform-page-heading"><div><p>SaaS billing</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
     ${canReadBilling ? platformBillingCycles(state, permissions) : ""}
     ${canReadBilling ? platformRefundQueue(state, permissions) : ""}
+    ${canReadBilling ? platformInvoiceReconciliation(state, permissions) : ""}
     ${canReadCatalog ? platformCatalog(catalogs, versions, permissions) : ""}
+  `;
+}
+
+function complianceView(state, permissions) {
+  return `
+    <header class="platform-page-heading"><div><p>Tax governance</p><h1>合规复核</h1></div><span>账务与合规双域</span></header>
+    ${platformInvoiceReconciliation(state, permissions)}
   `;
 }
 
@@ -524,6 +533,78 @@ function platformRefundRow(refund, canReview) {
           </form>
         </div>` : '<span class="platform-restricted">只读</span>'}</td>
     </tr>
+  `;
+}
+
+function platformInvoiceReconciliation(state, permissions) {
+  const roles = new Set(state.session?.context?.operator?.roles ?? []);
+  const canOperate = (roles.has("platform_billing") && permissions.has("platform.billing.read"))
+    || (roles.has("platform_compliance") && permissions.has("platform.compliance.read"));
+  if (!canOperate) return "";
+  const response = state.reconciliation ?? {};
+  const run = response.reconciliation ?? null;
+  const differences = Array.isArray(response.differences) ? response.differences : [];
+  const reversal = state.reversal?.reversal ?? null;
+  return `
+    <section class="platform-band platform-reconciliation">
+      <div class="platform-section-heading"><div><p>Frozen watermarks</p><h2>订单、支付、Meter 与发票对账</h2></div>${run ? status(run.status) : ""}</div>
+      ${run ? renderReconciliationRun(run) : `<form class="platform-reconciliation-create" data-platform-reconciliation-form>
+        <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认冻结当前五类事实水位并启动对账</span></label>
+        <button class="platform-primary" type="submit">创建对账</button>
+      </form>`}
+      ${run ? renderReconciliationDifferences(state, differences) : ""}
+    </section>
+    <section class="platform-band platform-invoice-reversal">
+      <div class="platform-section-heading"><div><p>Dual-domain approval</p><h2>发票红字冲销</h2></div>${reversal ? status(reversal.status) : ""}</div>
+      <div class="platform-reversal-forms">
+        <form data-platform-reversal-form autocomplete="off">
+          <label><span>发票申请 ID</span><input name="invoiceId" pattern="ivr_[0-9a-f]{32}" maxlength="36" required /></label>
+          <label><span>冲红原因</span><select name="reasonCode"><option value="invoice_error">开票错误</option><option value="customer_correction">客户资料更正</option><option value="contract_canceled">合同取消</option></select></label>
+          <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认提交双域审批</span></label>
+          <button class="platform-danger" type="submit">创建冲红申请</button>
+        </form>
+        <form data-platform-reversal-review-form autocomplete="off">
+          <label><span>冲红申请 ID</span><input name="reversalId" pattern="irr_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(reversal?.invoice_reversal_request_id ?? "")}" required /></label>
+          <label><span>审批决定</span><select name="decision"><option value="approve">批准</option><option value="reject">拒绝</option></select></label>
+          <label><span>审批依据</span><select name="reasonCode"><option value="facts_confirmed">事实已核验</option><option value="policy_confirmed">政策已核验</option><option value="evidence_missing">证据不足</option><option value="policy_blocked">政策阻断</option></select></label>
+          <label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认以当前账务或合规身份审批</span></label>
+          <button class="platform-primary" type="submit">提交审批</button>
+        </form>
+      </div>
+      ${reversal ? `<div class="platform-reversal-summary"><strong>${escapeHtml(reversalStatusLabel(reversal.status))}</strong><span>${escapeHtml(reversalReasonLabel(reversal.reason_code))} · 已批准域 ${escapeHtml(reversal.approved_domains.map(approvalDomainLabel).join("、") || "无")}</span><small>状态版本 ${number(reversal.state_revision)} · ${formatTime(reversal.updated_at)}</small></div>` : ""}
+    </section>
+  `;
+}
+
+function renderReconciliationRun(run) {
+  return `
+    <div class="platform-reconciliation-summary">
+      <div><span>订单</span><strong>${number(run.order_watermark)}</strong></div>
+      <div><span>支付</span><strong>${number(run.payment_watermark)}</strong></div>
+      <div><span>Meter</span><strong>${number(run.meter_watermark)}</strong></div>
+      <div><span>结算单</span><strong>${number(run.statement_watermark)}</strong></div>
+      <div><span>发票</span><strong>${number(run.invoice_watermark)}</strong></div>
+      <button class="platform-icon-button" type="button" data-platform-action="reconciliation-refresh" title="刷新对账" aria-label="刷新对账">↻</button>
+    </div>
+  `;
+}
+
+function renderReconciliationDifferences(state, differences) {
+  return `
+    <div class="platform-table-wrap">
+      <table class="platform-reconciliation-table">
+        <thead><tr><th>差异类型</th><th>左侧事实</th><th>右侧事实</th><th>原币差额</th><th>状态</th><th>发现时间</th></tr></thead>
+        <tbody>${differences.map((item) => `<tr>
+          <td data-label="差异类型"><strong>${escapeHtml(differenceTypeLabel(item.difference_type))}</strong></td>
+          <td data-label="左侧事实"><strong>${escapeHtml(sourceTypeLabel(item.left_source_type))}</strong><small>${escapeHtml(shortReference(item.left_source_id))}</small></td>
+          <td data-label="右侧事实"><strong>${escapeHtml(sourceTypeLabel(item.right_source_type))}</strong><small>${escapeHtml(shortReference(item.right_source_id))}</small></td>
+          <td data-label="原币差额">${escapeHtml(formatMinorMoney(item.amount_difference_minor, item.currency))}</td>
+          <td data-label="状态">${status(item.status)}</td>
+          <td data-label="发现时间">${formatTime(item.detected_at)}</td>
+        </tr>`).join("") || emptyRow("当前水位未发现差异", 6)}</tbody>
+      </table>
+    </div>
+    <div class="platform-pagination"><span>第 ${number((state.reconciliationCursorHistory?.length ?? 0) + 1)} 页</span><div><button type="button" data-platform-action="reconciliation-previous" ${state.reconciliationCursorHistory?.length ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="reconciliation-next" ${state.reconciliation?.next_cursor ? "" : "disabled"}>下一页</button></div></div>
   `;
 }
 
@@ -632,6 +713,11 @@ function billingStatusOptions(current) { return [["open", "进行中"], ["closed
 function refundStatusLabel(value) { return ({ requested: "待审核", processing: "处理中", succeeded: "已退款", failed: "失败", rejected: "已拒绝" })[value] ?? statusLabel(value); }
 function refundStatusOptions(current) { return [["requested", "待审核"], ["processing", "处理中"], ["succeeded", "已退款"], ["failed", "失败"], ["rejected", "已拒绝"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
 function refundReasonLabel(value) { return ({ customer_request: "客户申请", service_failure: "服务故障", duplicate_charge: "重复扣款" })[value] ?? statusLabel(value); }
+function differenceTypeLabel(value) { return ({ order_payment_amount_mismatch: "订单与支付金额不一致", paid_order_missing_capture: "已支付订单缺少扣款", closed_cycle_missing_statement: "关账周期缺少结算单", meter_summary_watermark_mismatch: "Meter 摘要水位不一致", issued_invoice_missing_artifact: "已开票但缺少产物" })[value] ?? "未知差异"; }
+function sourceTypeLabel(value) { return ({ order: "订单", billing_cycle: "账单周期", meter_summary: "Meter 摘要", invoice_request: "发票申请", payment_intent: "支付意图", billing_statement: "结算单", meter_reading: "Meter 读数", invoice_artifact: "发票产物" })[value] ?? "无"; }
+function reversalStatusLabel(value) { return ({ pending_approvals: "等待账务与合规审批", queued: "已进入 Provider 队列", completed: "冲红完成", rejected: "已拒绝" })[value] ?? statusLabel(value); }
+function reversalReasonLabel(value) { return ({ invoice_error: "开票错误", customer_correction: "客户资料更正", contract_canceled: "合同取消" })[value] ?? statusLabel(value); }
+function approvalDomainLabel(value) { return value === "billing" ? "账务" : value === "compliance" ? "合规" : "未知"; }
 function formatMinorMoney(value, currency) { const amount = Number(value); return Number.isSafeInteger(amount) ? new Intl.NumberFormat("zh-CN", { style: "currency", currency: new Set(["CNY", "USD"]).has(currency) ? currency : "CNY", currencyDisplay: "code" }).format(amount / 100) : "-"; }
 /** 构造审核状态筛选选项，选择值只能来自后端固定枚举。 */
 function verificationStatusOptions(current) { return [["submitted", "待审核"], ["in_review", "审核中"], ["approved", "已通过"], ["rejected", "已拒绝"], ["expired", "已过期"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
@@ -659,6 +745,7 @@ function signedNumber(value) { const amount = Number(value); return `${amount > 
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
 function formatTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
 function shortWorkspace(value) { const text = String(value ?? ""); return text.length > 16 ? `${text.slice(0, 12)}…${text.slice(-4)}` : text; }
+function shortReference(value) { const text = String(value ?? ""); return text.length > 20 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text || "-"; }
 function fact(label, value) { return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`; }
 function filterOptions(current, options) { return options.map(([value, label]) => `<option value="${escapeAttribute(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`).join(""); }
 function riskTagList(tags) { return tags.length ? `<div class="platform-tag-list">${tags.map((tag) => `<span>${escapeHtml(statusLabel(tag))}</span>`).join("")}</div>` : '<span class="platform-restricted">无</span>'; }

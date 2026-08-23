@@ -57,6 +57,11 @@ export function createIdentityPageController({
   let paymentError = null;
   let paymentIntentIntent = null;
   let refundIntent = null;
+  let billingStatements = null;
+  let currentInvoice = null;
+  let invoiceBusy = false;
+  let invoiceError = null;
+  let invoiceIntent = null;
   let businessVerification = null;
   let businessVerificationBusy = false;
   let businessVerificationError = null;
@@ -601,6 +606,97 @@ export function createIdentityPageController({
           refundIntent = null;
         }
         paymentError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async refreshInvoices() {
+      if (!workspaceFinanceAllowed() || typeof api.billingStatements !== "function") return false;
+      const ticket = beginRequest();
+      invoiceBusy = true;
+      invoiceError = null;
+      renderSecurity();
+      return loadWorkspaceInvoices(ticket, "发票与结算单已刷新。");
+    },
+    async createInvoice({ billingStatementId, invoiceType }) {
+      const statement = billingStatements?.statements?.find(
+        (item) => item.billing_statement_id === billingStatementId,
+      );
+      if (!workspaceFinanceAllowed() || invoiceBusy || !statement
+        || typeof api.createInvoice !== "function") return false;
+      const fingerprint = JSON.stringify({ billingStatementId, invoiceType });
+      const idempotencyKey = invoiceIntent?.fingerprint === fingerprint
+        ? invoiceIntent.idempotencyKey
+        : newIdempotencyKey();
+      invoiceIntent = { fingerprint, idempotencyKey };
+      const ticket = beginRequest();
+      invoiceBusy = true;
+      invoiceError = null;
+      renderSecurity();
+      try {
+        currentInvoice = await queueWrite(() => api.createInvoice({
+          billingStatementId,
+          invoiceType,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        invoiceIntent = null;
+        invoiceBusy = false;
+        renderSecurity({ feedback: "发票申请已提交，开票状态可在此刷新。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        invoiceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          invoiceIntent = null;
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+          invoiceIntent = null;
+        }
+        invoiceError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async refreshInvoice() {
+      const invoiceId = currentInvoice?.invoice?.invoice_request_id;
+      if (!workspaceFinanceAllowed() || !invoiceId || typeof api.invoice !== "function") return false;
+      const ticket = beginRequest();
+      invoiceBusy = true;
+      invoiceError = null;
+      renderSecurity();
+      return loadWorkspaceInvoices(ticket, "发票状态已刷新。");
+    },
+    async downloadInvoiceArtifact(artifactId) {
+      const invoice = currentInvoice?.invoice;
+      const artifact = invoice?.artifacts?.find(
+        (item) => item.invoice_artifact_id === artifactId,
+      );
+      if (!workspaceFinanceAllowed() || invoiceBusy || !invoice || !artifact
+        || typeof api.invoiceDownload !== "function") return false;
+      const ticket = beginRequest();
+      invoiceBusy = true;
+      invoiceError = null;
+      renderSecurity();
+      try {
+        await api.invoiceDownload({
+          invoiceId: invoice.invoice_request_id,
+          artifact,
+          signal: ticket.signal,
+        });
+        if (!isCurrent(ticket)) return false;
+        invoiceBusy = false;
+        renderSecurity({ feedback: "发票产物已安全下载。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        invoiceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        invoiceError = safePageError(error);
         renderSecurity();
         return false;
       }
@@ -1272,6 +1368,42 @@ export function createIdentityPageController({
     }
   }
 
+  async function loadWorkspaceInvoices(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceFinanceAllowed() || typeof api.billingStatements !== "function") {
+      billingStatements = null;
+      currentInvoice = null;
+      invoiceBusy = false;
+      invoiceError = null;
+      invoiceIntent = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    invoiceBusy = true;
+    try {
+      const statements = await api.billingStatements({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      const invoiceId = currentInvoice?.invoice?.invoice_request_id;
+      const invoice = invoiceId && typeof api.invoice === "function"
+        ? await api.invoice({ invoiceId, signal: ticket.signal })
+        : currentInvoice;
+      if (!isCurrent(ticket)) return false;
+      billingStatements = statements;
+      currentInvoice = invoice;
+      invoiceBusy = false;
+      invoiceError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      billingStatements = null;
+      invoiceBusy = false;
+      invoiceError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
   /** 读取企业认证脱敏摘要，并在 Workspace 授权漂移时交由统一恢复链路处理。 */
   async function loadBusinessVerification(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceBusinessAllowed() || typeof api.businessVerification !== "function") {
@@ -1525,6 +1657,7 @@ export function createIdentityPageController({
         loadSaasBilling(ticket, "", { render: false }),
         loadWorkspaceBilling(ticket, null, "", { render: false }),
         loadPaymentCommerce(ticket, "", { render: false }),
+        loadWorkspaceInvoices(ticket, "", { render: false }),
         loadBusinessVerification(ticket, "", { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -1637,6 +1770,10 @@ export function createIdentityPageController({
       billingOrders,
       paymentBusy,
       paymentError,
+      billingStatements,
+      currentInvoice,
+      invoiceBusy,
+      invoiceError,
       businessVerification,
       businessVerificationBusy,
       businessVerificationError,
@@ -1693,6 +1830,11 @@ export function createIdentityPageController({
     paymentError = null;
     paymentIntentIntent = null;
     refundIntent = null;
+    billingStatements = null;
+    currentInvoice = null;
+    invoiceBusy = false;
+    invoiceError = null;
+    invoiceIntent = null;
     businessVerification = null;
     businessVerificationBusy = false;
     businessVerificationError = null;
@@ -1874,6 +2016,13 @@ export function createIdentityPageController({
           reasonCode: fields.get("reasonCode"),
           confirmed: fields.get("confirmed") === "on",
         });
+      } else if (form?.matches?.("[data-invoice-request-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createInvoice({
+          billingStatementId: fields.get("billingStatementId"),
+          invoiceType: fields.get("invoiceType"),
+        });
       } else if (form?.matches?.("[data-business-verification-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -1960,6 +2109,12 @@ export function createIdentityPageController({
         await controller.refreshBilling();
       } else if (button.dataset.identityAction === "refresh-payment-commerce") {
         await controller.refreshPaymentCommerce();
+      } else if (button.dataset.identityAction === "refresh-invoices") {
+        await controller.refreshInvoices();
+      } else if (button.dataset.identityAction === "refresh-invoice") {
+        await controller.refreshInvoice();
+      } else if (button.dataset.identityAction === "download-invoice-artifact") {
+        await controller.downloadInvoiceArtifact(button.dataset.artifactId);
       } else if (button.dataset.identityAction === "cancel-subscription") {
         await controller.cancelSubscription();
       } else if (button.dataset.identityAction === "download-billing-export") {

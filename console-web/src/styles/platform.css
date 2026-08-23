@@ -108,6 +108,33 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-refund-actions button { cursor: pointer; font-weight: 700; }
 .platform-refund-actions button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
 .platform-refund-actions .platform-check { white-space: nowrap; }
+.platform-reconciliation-create { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-block: 1px solid var(--line); padding: 14px 0; }
+.platform-reconciliation-create button { min-width: 128px; }
+.platform-reconciliation-summary { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)) auto; align-items: stretch; border-block: 1px solid var(--line); }
+.platform-reconciliation-summary > div { min-width: 0; display: grid; gap: 4px; padding: 13px 12px; border-right: 1px solid var(--line); }
+.platform-reconciliation-summary span,
+.platform-reversal-summary span,
+.platform-reversal-summary small { color: var(--muted); font-size: 11px; }
+.platform-reconciliation-summary strong { overflow-wrap: anywhere; }
+.platform-reconciliation-summary .platform-icon-button { align-self: center; margin-left: 12px; }
+.platform-reconciliation-table { min-width: 940px; table-layout: auto; }
+.platform-reconciliation-table th:first-child { width: 25%; }
+.platform-reconciliation-table th:nth-child(2),
+.platform-reconciliation-table th:nth-child(3) { width: 17%; }
+.platform-reversal-forms { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 30px; }
+.platform-reversal-forms form { min-width: 0; display: grid; align-content: start; gap: 12px; }
+.platform-reversal-forms form + form { border-left: 1px solid var(--line); padding-left: 30px; }
+.platform-reversal-forms label { min-width: 0; display: grid; gap: 6px; }
+.platform-reversal-forms label > span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.platform-reversal-forms input,
+.platform-reversal-forms select,
+.platform-reversal-forms button { width: 100%; min-width: 0; min-height: 38px; border: 1px solid #bdc7bf; border-radius: 4px; background: #fff; color: var(--ink); padding: 7px 9px; }
+.platform-reversal-forms .platform-check { display: flex; }
+.platform-reversal-forms .platform-check input { width: 16px; min-height: 16px; }
+.platform-reversal-forms button { cursor: pointer; font-weight: 700; }
+.platform-reversal-forms button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
+.platform-reversal-forms button.platform-danger { border-color: var(--red); background: var(--red); color: #fff; }
+.platform-reversal-summary { display: grid; gap: 4px; margin-top: 18px; border-block: 1px solid var(--line); padding: 13px 0; }
 .platform-backup-create form { display: grid; grid-template-columns: minmax(180px,.8fr) minmax(150px,.6fr) minmax(190px,1fr) auto; align-items: end; gap: 14px; }
 .platform-backup-create form > * { min-width: 0; }
 .platform-backup-create input, .platform-backup-create select { width: 100%; }
@@ -226,6 +253,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-inline-form, .platform-form-split { grid-template-columns: 1fr; }
   .platform-plan-publisher form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-billing-adjustment form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-reconciliation-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .platform-reconciliation-summary > div:nth-child(3) { border-right: 0; }
+  .platform-reconciliation-summary > div:nth-child(n + 4),
+  .platform-reconciliation-summary .platform-icon-button { border-top: 1px solid var(--line); }
+  .platform-reversal-forms { grid-template-columns: 1fr; gap: 22px; }
+  .platform-reversal-forms form + form { border-top: 1px solid var(--line); border-left: 0; padding-top: 22px; padding-left: 0; }
   .platform-backup-create form { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-gateway-placement form { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-billing-target { grid-column: 1 / -1; }
@@ -251,6 +284,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-billing-filter label,
   .platform-billing-filter button { width: 100%; min-width: 0; }
   .platform-billing-adjustment form { grid-template-columns: 1fr; }
+  .platform-reconciliation-create { align-items: stretch; flex-direction: column; }
+  .platform-reconciliation-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .platform-reconciliation-summary > div,
+  .platform-reconciliation-summary > div:nth-child(3) { border-right: 0; border-bottom: 1px solid var(--line); }
+  .platform-reconciliation-summary > div:nth-child(odd) { border-right: 1px solid var(--line); }
+  .platform-reconciliation-summary .platform-icon-button { margin: 10px 0; }
   .platform-refund-actions { align-items: stretch; flex-direction: column; }
   .platform-refund-actions form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
   .platform-backup-create form, .platform-backup-detail dl { grid-template-columns: 1fr; }

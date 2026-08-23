@@ -57,6 +57,12 @@ export function createPlatformPageController({
     billingAdjustmentIntent: null,
     refunds: null,
     refundStatus: "requested",
+    reconciliation: null,
+    reconciliationCursor: null,
+    reconciliationCursorHistory: [],
+    reversal: null,
+    reversalIntent: null,
+    reversalApprovalIntent: null,
     verification: null,
     verificationStatus: "",
     verificationOffset: 0,
@@ -287,6 +293,104 @@ export function createPlatformPageController({
         reasonCode,
         confirmed: true,
       });
+    },
+    async createReconciliation(confirmed) {
+      if (confirmed !== true || typeof api.createReconciliation !== "function") return false;
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const result = await api.createReconciliation({ confirmed: true, signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.reconciliation = { ...result, differences: [], next_cursor: null };
+        state.reconciliationCursor = null;
+        state.reconciliationCursorHistory = [];
+        state.loading = false;
+        state.feedback = "冻结水位对账已创建。";
+        render();
+        return true;
+      } catch (error) {
+        return fail(ticket, error);
+      }
+    },
+    async refreshReconciliation() {
+      if (!state.reconciliation?.reconciliation?.reconciliation_run_id) return false;
+      return loadReconciliationPage();
+    },
+    async nextReconciliationPage() {
+      const cursor = state.reconciliation?.next_cursor;
+      if (!cursor) return false;
+      state.reconciliationCursorHistory.push(state.reconciliationCursor);
+      state.reconciliationCursor = cursor;
+      return loadReconciliationPage();
+    },
+    async previousReconciliationPage() {
+      if (state.reconciliationCursorHistory.length === 0) return false;
+      state.reconciliationCursor = state.reconciliationCursorHistory.pop() ?? null;
+      return loadReconciliationPage();
+    },
+    async createInvoiceReversal({ invoiceId, reasonCode, confirmed }) {
+      if (confirmed !== true || typeof api.createInvoiceReversal !== "function") return false;
+      const input = { invoiceId, reasonCode, confirmed: true };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = state.reversalIntent?.fingerprint === fingerprint
+        ? state.reversalIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.reversalIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.reversal = await api.createInvoiceReversal({
+          ...input,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.reversalIntent = null;
+        state.loading = false;
+        state.feedback = "红字冲销申请已创建，需账务与合规分别审批。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.reversalIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async reviewInvoiceReversal({ reversalId, decision, reasonCode, confirmed }) {
+      if (confirmed !== true || typeof api.reviewInvoiceReversal !== "function") return false;
+      const input = { reversalId, decision, reasonCode, confirmed: true };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = state.reversalApprovalIntent?.fingerprint === fingerprint
+        ? state.reversalApprovalIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.reversalApprovalIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        state.reversal = await api.reviewInvoiceReversal({
+          ...input,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.reversalApprovalIntent = null;
+        state.loading = false;
+        state.feedback = decision === "approve" ? "冲红审批已记录。" : "冲红申请已拒绝。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.reversalApprovalIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async createBillingAdjustment({ targetKey, reasonCode, quantity, amount }) {
       const target = billingAdjustmentTarget(state.billing, targetKey);
@@ -711,6 +815,28 @@ export function createPlatformPageController({
     }
   }
 
+  async function loadReconciliationPage() {
+    const reconciliationId = state.reconciliation?.reconciliation?.reconciliation_run_id;
+    if (!reconciliationId || typeof api.reconciliationDifferences !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.reconciliation = await api.reconciliationDifferences({
+        reconciliationId,
+        cursor: state.reconciliationCursor,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
   async function reviewRefund({ refundId, revision, decision, reasonCode, confirmed }) {
     if (typeof api.reviewRefund !== "function") return false;
     const ticket = begin();
@@ -884,6 +1010,24 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-reconciliation-form]")) {
+        controller.createReconciliation(data.get("confirmed") === "on");
+      }
+      if (form.matches("[data-platform-reversal-form]")) {
+        controller.createInvoiceReversal({
+          invoiceId: data.get("invoiceId"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-reversal-review-form]")) {
+        controller.reviewInvoiceReversal({
+          reversalId: data.get("reversalId"),
+          decision: data.get("decision"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-verification-filter-form]")) {
         controller.filterVerification(data.get("status"));
       }
@@ -965,6 +1109,9 @@ export function createPlatformPageController({
       if (action === "refund-approve") {
         controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
       }
+      if (action === "reconciliation-refresh") controller.refreshReconciliation();
+      if (action === "reconciliation-next") controller.nextReconciliationPage();
+      if (action === "reconciliation-previous") controller.previousReconciliationPage();
       if (action === "verification-next") controller.nextVerificationPage();
       if (action === "verification-previous") controller.previousVerificationPage();
       if (action === "verification-approve") {
@@ -1006,6 +1153,12 @@ export function createPlatformPageController({
     state.billingAdjustmentIntent = null;
     state.refunds = null;
     state.refundStatus = "requested";
+    state.reconciliation = null;
+    state.reconciliationCursor = null;
+    state.reconciliationCursorHistory = [];
+    state.reversal = null;
+    state.reversalIntent = null;
+    state.reversalApprovalIntent = null;
     state.verification = null;
     state.verificationStatus = "";
     state.verificationOffset = 0;
