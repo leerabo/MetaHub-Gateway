@@ -164,5 +164,5 @@ def test_runtime_facts_and_catalog_changes_block_down(
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0099"
+    assert result.applied[-1] == "0100"
     _healthy(database_url)

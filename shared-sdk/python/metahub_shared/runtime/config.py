@@ -169,6 +169,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_KMS_PROVIDER": "disabled",
     "METAHUB_KMS_KEY_ID": "",
     "METAHUB_KMS_TEST_MASTER_KEY": "",
+    "METAHUB_CONFIG_DISTRIBUTION_SIGNING_KEY_ID": "",
     "METAHUB_BACKUP_WORKER_ENABLED": "false",
     "METAHUB_BACKUP_POLL_INTERVAL_SECONDS": "5",
     "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS": "30",
@@ -547,6 +548,9 @@ class AppConfig(BaseModel):
     kms_provider: Literal["disabled", "aws", "test"] = "disabled"
     kms_key_id: str | None = Field(default=None, exclude=True, repr=False)
     kms_test_master_key: str | None = Field(default=None, exclude=True, repr=False)
+    config_distribution_signing_key_id: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
     backup_worker_enabled: bool = False
     backup_poll_interval_seconds: int = 5
     backup_default_retention_days: int = 30
@@ -2185,6 +2189,9 @@ def load_app_config(service_name: str) -> AppConfig:
         kms_provider=kms_provider,
         kms_key_id=_optional_value(values, "METAHUB_KMS_KEY_ID"),
         kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
+        config_distribution_signing_key_id=_optional_value(
+            values, "METAHUB_CONFIG_DISTRIBUTION_SIGNING_KEY_ID"
+        ),
         backup_worker_enabled=backup_worker_enabled,
         backup_poll_interval_seconds=backup_poll_interval_seconds,
         backup_default_retention_days=backup_default_retention_days,

@@ -302,9 +302,10 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
         navigation = await owner.get("/platform/navigation")
         assert navigation.status_code == 200
         navigation_ids = {item["id"] for item in navigation.json()["items"]}
-        assert len(navigation_ids) == 18
+        assert len(navigation_ids) == 19
         assert "job-runtime" in navigation_ids
         assert "feature-rollouts" in navigation_ids
+        assert "config-distribution" in navigation_ids
         rejected_reason = await owner.post(
             "/platform/support-grants",
             json={

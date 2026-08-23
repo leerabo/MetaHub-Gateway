@@ -1,1 +1,5 @@
-"""数据面配置模块入口，集中承载运行参数、上游地址和安全开关读取。"""
+"""Gateway runtime configuration and signed distribution ownership."""
+
+from .distribution import ConfigSyncResult, GatewayConfigSynchronizer
+
+__all__ = ["ConfigSyncResult", "GatewayConfigSynchronizer"]

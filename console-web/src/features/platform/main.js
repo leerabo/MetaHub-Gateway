@@ -71,6 +71,10 @@ import {
   killFeatureFlag,
   listFeatureFlags,
 } from "../../lib/featureRollouts.js";
+import {
+  listConfigDistribution,
+  rebuildWorkspaceConfig,
+} from "../../lib/configDistribution.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -173,6 +177,11 @@ if (root) {
         ...input,
       }),
       killFeatureFlag: (input) => killFeatureFlag({ controlApiUrl, ...input }),
+      configDistribution: (input) => listConfigDistribution({ controlApiUrl, ...input }),
+      rebuildWorkspaceConfig: (input) => rebuildWorkspaceConfig({
+        controlApiUrl,
+        ...input,
+      }),
     },
   }).mount();
 }

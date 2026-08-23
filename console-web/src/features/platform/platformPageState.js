@@ -8,6 +8,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "gateway",
   "job-runtime",
   "feature-rollouts",
+  "config-distribution",
   "operators",
   "workspaces",
   "support",
@@ -85,6 +86,8 @@ export function createPlatformPageController({
     featureStatus: "",
     featureRiskLevel: "",
     featureCommandIntent: null,
+    configDistribution: null,
+    configRebuildIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -154,7 +157,7 @@ export function createPlatformPageController({
     selectView(view) {
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
-      if (new Set(["job-runtime", "feature-rollouts"]).has(state.view)
+      if (new Set(["job-runtime", "feature-rollouts", "config-distribution"]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
         request?.abort();
@@ -163,8 +166,10 @@ export function createPlatformPageController({
           state.selectedJob = null;
           state.jobCommandIntent = null;
           state.jobTypeIntent = null;
-        } else {
+        } else if (state.view === "feature-rollouts") {
           state.featureCommandIntent = null;
+        } else {
+          state.configRebuildIntent = null;
         }
         state.loading = false;
       }
@@ -174,6 +179,9 @@ export function createPlatformPageController({
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
       if (state.view === "feature-rollouts" && !state.featureFlags) {
         void loadFeatureRollouts();
+      }
+      if (state.view === "config-distribution" && !state.configDistribution) {
+        void loadConfigDistribution();
       }
     },
     async filterJobs(status) {
@@ -352,6 +360,45 @@ export function createPlatformPageController({
         }),
         "Kill fence 已同步生效。",
       );
+    },
+    async rebuildWorkspaceConfig(command) {
+      if (typeof api.rebuildWorkspaceConfig !== "function"
+        || typeof api.configDistribution !== "function"
+        || !currentPermissions().has("platform.config_distribution.rebuild")
+        || command?.confirmed !== true) return false;
+      const input = {
+        workspaceId: command.workspaceId,
+        reasonCode: command.reasonCode,
+      };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = state.configRebuildIntent?.fingerprint === fingerprint
+        ? state.configRebuildIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.configRebuildIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        await api.rebuildWorkspaceConfig({
+          ...input,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.configDistribution = await api.configDistribution({ signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.configRebuildIntent = null;
+        state.loading = false;
+        state.feedback = "配置重建任务已提交。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.configRebuildIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
@@ -918,6 +965,7 @@ export function createPlatformPageController({
         gatewayCells: null,
         jobQueues: null,
         featureFlags: null,
+        configDistribution: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -982,6 +1030,12 @@ export function createPlatformPageController({
           riskLevel: state.featureRiskLevel,
           signal: ticket.signal,
         }).then((value) => { next.featureFlags = value; }));
+      }
+      if (permissions.has("platform.config_distribution.read")
+        && typeof api.configDistribution === "function") {
+        tasks.push(api.configDistribution({ signal: ticket.signal }).then((value) => {
+          next.configDistribution = value;
+        }));
       }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
@@ -1078,6 +1132,24 @@ export function createPlatformPageController({
         riskLevel: state.featureRiskLevel,
         signal: ticket.signal,
       });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadConfigDistribution() {
+    if (typeof api.configDistribution !== "function"
+      || !currentPermissions().has("platform.config_distribution.read")) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.configDistribution = await api.configDistribution({ signal: ticket.signal });
       if (!current(ticket)) return false;
       state.loading = false;
       render();
@@ -1487,6 +1559,13 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-config-rebuild-form]")) {
+        controller.rebuildWorkspaceConfig({
+          workspaceId: data.get("workspaceId"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -1616,6 +1695,8 @@ export function createPlatformPageController({
     state.featureStatus = "";
     state.featureRiskLevel = "";
     state.featureCommandIntent = null;
+    state.configDistribution = null;
+    state.configRebuildIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;

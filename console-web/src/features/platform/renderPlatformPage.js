@@ -71,6 +71,7 @@ function renderView(state, permissions) {
   if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
+  if (state.view === "config-distribution") return configDistributionView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -258,6 +259,61 @@ function featureRolloutsView(state, permissions) {
       </div>
     </section>
     ${canWrite ? featureCreateForm() : ""}`;
+}
+
+function configDistributionView(state, permissions) {
+  const response = state.configDistribution ?? {};
+  const items = Array.isArray(response.items) ? response.items : [];
+  const canRebuild = permissions.has("platform.config_distribution.rebuild");
+  const gatewayCount = items.reduce((sum, item) => sum + item.gateway_count, 0);
+  const staleCount = items.reduce((sum, item) => sum + item.stale_gateway_count, 0);
+  const laggingCount = items.filter(
+    (item) => item.minimum_applied_generation < item.generation,
+  ).length;
+  return `
+    <header class="platform-page-heading">
+      <div><p>DB-authoritative snapshots</p><h1>配置分发</h1></div>
+      <span>${number(response.total ?? 0)} 个工作区</span>
+    </header>
+    <section class="platform-metrics" aria-label="配置分发概览">
+      ${metric("Workspaces", items.length, "已分配 Cell")}
+      ${metric("Gateways", gatewayCount, "已观测实例")}
+      ${metric("ACK lag", laggingCount, "落后工作区")}
+      ${metric("Stale", staleCount, "显式 stale / LKG")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Monotonic watermarks</p><h2>工作区水位</h2></div>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-config-table">
+          <thead><tr><th>工作区 / Cell</th><th>Head</th><th>ACK 水位</th><th>LKG / Stale</th><th>最近重建</th><th>操作</th></tr></thead>
+          <tbody>${items.map((item) => configDistributionRow(
+    item,
+    { canRebuild, loading: state.loading },
+  )).join("") || emptyRow("暂无配置分发水位", 6)}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function configDistributionRow(item, access) {
+  const rebuild = item.latest_rebuild;
+  const ackLag = Math.max(0, item.generation - item.minimum_applied_generation);
+  const stale = item.stale_gateway_count > 0;
+  return `<tr>
+    <td data-label="工作区 / Cell"><strong>${escapeHtml(item.workspace_id)}</strong><small>${escapeHtml(item.cell_code)}</small><small>${number(item.gateway_count)} 个 Gateway</small></td>
+    <td data-label="Head"><strong>generation ${number(item.generation)}</strong><small>revocation ${number(item.revocation_watermark)}</small></td>
+    <td data-label="ACK 水位"><strong>${number(item.minimum_applied_generation)}</strong><small>lag ${number(ackLag)} · ${formatTime(item.latest_ack_at)}</small></td>
+    <td data-label="LKG / Stale"><strong>LKG ${number(item.minimum_lkg_generation)}</strong>${status(stale ? "stale" : "current")}<small>${number(item.stale_gateway_count)} 个 stale</small></td>
+    <td data-label="最近重建">${rebuild ? `<strong>generation ${number(rebuild.target_generation)}</strong>${status(rebuild.status)}<small>rev ${number(rebuild.revision)} · ${formatTime(rebuild.created_at)}</small><small>result ${rebuild.result_manifest_sha256 ? escapeHtml(rebuild.result_manifest_sha256.slice(0, 12)) : "-"}</small>` : '<span class="platform-restricted">尚无重建</span>'}</td>
+    <td data-label="操作">${access.canRebuild ? `<form class="platform-config-rebuild" data-platform-config-rebuild-form>
+      <input type="hidden" name="workspaceId" value="${escapeAttribute(item.workspace_id)}" />
+      <label><span>原因</span><select name="reasonCode"><option value="operator_rebuild">运维重建</option><option value="consistency_repair">一致性修复</option></select></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认</span></label>
+      <button type="submit" ${access.loading ? "disabled" : ""}>重建</button>
+    </form>` : '<span class="platform-restricted">只读</span>'}</td>
+  </tr>`;
 }
 
 function featureFlagRow(flag, access) {

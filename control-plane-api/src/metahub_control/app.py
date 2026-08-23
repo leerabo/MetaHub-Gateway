@@ -31,6 +31,7 @@ from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
 from .business_verification import router as business_verification_router
 from .config.routes import router as config_router
+from .config_distribution import router as config_distribution_router
 from .config_transfer.routes import router as config_transfer_router
 from .console.routes import router as console_router
 from .cost_anomalies import install_cost_anomaly_scheduler
@@ -260,6 +261,7 @@ app.include_router(cost_anomalies_router)
 app.include_router(customer_health_router)
 app.include_router(dashboard_router)
 app.include_router(config_router)
+app.include_router(config_distribution_router)
 app.include_router(config_transfer_router)
 app.include_router(debug_console_router)
 app.include_router(developer_portal_router)
