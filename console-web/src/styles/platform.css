@@ -307,6 +307,36 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-job-type-command { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .platform-job-type-command .platform-check { grid-template-columns: auto auto; align-items: center; gap: 5px; }
 .platform-job-type-command .platform-check input { min-height: 16px; }
+.platform-feature-filter { display: flex; align-items: end; gap: 8px; }
+.platform-feature-filter label { min-width: 120px; }
+.platform-feature-filter button { min-height: 40px; }
+.platform-feature-table { min-width: 1160px; table-layout: auto; }
+.platform-feature-table th:first-child { width: 18%; }
+.platform-feature-table th:nth-child(2) { width: 23%; }
+.platform-feature-table th:last-child,
+.platform-feature-table td:last-child { width: 250px; text-align: left; }
+.platform-feature-versions { display: grid; gap: 9px; }
+.platform-feature-versions > div { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.platform-feature-version-editor { margin-top: 10px; }
+.platform-feature-version-editor summary { color: var(--green); cursor: pointer; font-size: 11px; font-weight: 700; }
+.platform-feature-version-editor form,
+.platform-feature-actions,
+.platform-feature-actions form { display: grid; gap: 8px; }
+.platform-feature-version-editor form { margin-top: 10px; }
+.platform-feature-actions form { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.platform-feature-actions form:last-child { padding-bottom: 0; border-bottom: 0; }
+.platform-feature-actions button { width: 100%; min-height: 34px; }
+.platform-feature-actions input,
+.platform-feature-actions select,
+.platform-feature-version-editor input,
+.platform-feature-version-editor select { width: 100%; min-width: 0; }
+.platform-feature-environments { min-width: 0; display: flex; flex-wrap: wrap; gap: 7px; padding: 9px; border: 1px solid var(--line); }
+.platform-feature-environments legend { color: var(--muted); font-size: 10px; }
+.platform-feature-create form { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: end; gap: 14px; }
+.platform-feature-create form > * { min-width: 0; }
+.platform-feature-create input,
+.platform-feature-create select { width: 100%; }
+.platform-feature-create .platform-feature-environments { grid-column: span 2; }
 .platform-visually-hidden { display: inline-block; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 @media (max-width: 900px) {
   .platform-topbar { grid-template-columns: auto minmax(0,1fr) auto; }
@@ -333,6 +363,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-operation-grid, .platform-detail-history { grid-template-columns: 1fr; gap: 24px; }
   .platform-notification-editor form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-job-detail-grid { grid-template-columns: 1fr; }
+  .platform-feature-create form { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 600px) {
   .platform-topbar { height: auto; min-height: 64px; grid-template-columns: auto 1fr; }
@@ -377,6 +408,20 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-job-command { grid-template-columns: 1fr; }
   .platform-job-command button { width: 100%; }
   .platform-job-type-command { justify-content: flex-start; }
+  .platform-feature-filter { width: 100%; align-items: stretch; flex-direction: column; }
+  .platform-feature-filter label,
+  .platform-feature-filter button { width: 100%; min-width: 0; }
+  .platform-feature-table { min-width: 0; }
+  .platform-feature-table thead { display: none; }
+  .platform-feature-table tbody,
+  .platform-feature-table tr,
+  .platform-feature-table td { display: block; width: 100%; }
+  .platform-feature-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-feature-table td,
+  .platform-feature-table td:last-child { display: grid; grid-template-columns: 108px minmax(0,1fr); gap: 10px; width: 100%; padding: 7px 0; border: 0; text-align: left; }
+  .platform-feature-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .platform-feature-create form { grid-template-columns: 1fr; }
+  .platform-feature-create .platform-feature-environments { grid-column: auto; }
   .platform-billing-target { grid-column: auto; }
   .platform-billing-adjustment button { width: 100%; }
   .platform-confirm { align-items: flex-start; flex-direction: column; }

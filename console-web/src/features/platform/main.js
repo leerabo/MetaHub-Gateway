@@ -65,6 +65,12 @@ import {
   listPlatformJobQueues,
   retryPlatformJob,
 } from "../../lib/platformJobs.js";
+import {
+  commandFeatureRollout,
+  createFeatureFlag,
+  killFeatureFlag,
+  listFeatureFlags,
+} from "../../lib/featureRollouts.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -160,6 +166,13 @@ if (root) {
       retryJob: (input) => retryPlatformJob({ controlApiUrl, ...input }),
       cancelJob: (input) => cancelPlatformJob({ controlApiUrl, ...input }),
       commandJobType: (input) => commandPlatformJobType({ controlApiUrl, ...input }),
+      featureFlags: (input) => listFeatureFlags({ controlApiUrl, ...input }),
+      createFeatureFlag: (input) => createFeatureFlag({ controlApiUrl, ...input }),
+      commandFeatureRollout: (input) => commandFeatureRollout({
+        controlApiUrl,
+        ...input,
+      }),
+      killFeatureFlag: (input) => killFeatureFlag({ controlApiUrl, ...input }),
     },
   }).mount();
 }

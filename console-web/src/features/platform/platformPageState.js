@@ -7,6 +7,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "infrastructure",
   "gateway",
   "job-runtime",
+  "feature-rollouts",
   "operators",
   "workspaces",
   "support",
@@ -80,6 +81,10 @@ export function createPlatformPageController({
     selectedJob: null,
     jobCommandIntent: null,
     jobTypeIntent: null,
+    featureFlags: null,
+    featureStatus: "",
+    featureRiskLevel: "",
+    featureCommandIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -149,24 +154,38 @@ export function createPlatformPageController({
     selectView(view) {
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
-      if (state.view === "job-runtime" && nextView !== "job-runtime") {
+      if (new Set(["job-runtime", "feature-rollouts"]).has(state.view)
+        && nextView !== state.view) {
         generation += 1;
         request?.abort();
         request = null;
-        state.selectedJob = null;
-        state.jobCommandIntent = null;
-        state.jobTypeIntent = null;
+        if (state.view === "job-runtime") {
+          state.selectedJob = null;
+          state.jobCommandIntent = null;
+          state.jobTypeIntent = null;
+        } else {
+          state.featureCommandIntent = null;
+        }
         state.loading = false;
       }
       state.view = nextView;
       state.pendingAction = null;
       render();
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
+      if (state.view === "feature-rollouts" && !state.featureFlags) {
+        void loadFeatureRollouts();
+      }
     },
     async filterJobs(status) {
       state.jobStatus = normalizeJobStatus(status);
       state.selectedJob = null;
       return loadJobRuntime();
+    },
+    async filterFeatureFlags(status, riskLevel) {
+      state.featureStatus = normalizeFeatureStatus(status);
+      state.featureRiskLevel = normalizeFeatureRisk(riskLevel);
+      state.featureCommandIntent = null;
+      return loadFeatureRollouts();
     },
     async openJob(jobId) {
       if (typeof api.job !== "function") return false;
@@ -267,6 +286,72 @@ export function createPlatformPageController({
         }
         return fail(ticket, error);
       }
+    },
+    async createFeatureFlag({ flag, revision = null } = {}) {
+      if (typeof api.createFeatureFlag !== "function"
+        || !currentPermissions().has("platform.feature.write")
+        || flag?.confirmed !== true) return false;
+      return featureWrite(
+        { action: flag.action, flag, revision },
+        (idempotencyKey, signal) => api.createFeatureFlag({
+          flag,
+          revision,
+          idempotencyKey,
+          signal,
+        }),
+        flag.action === "version" ? "候选版本已追加。" : "功能开关已创建。",
+      );
+    },
+    async commandFeatureRollout(command) {
+      const permission = command?.action === "approve"
+        ? "platform.feature.approve"
+        : "platform.feature.write";
+      if (typeof api.commandFeatureRollout !== "function"
+        || !currentPermissions().has(permission) || command?.confirmed !== true) return false;
+      const input = {
+        flagId: command.flagId,
+        rolloutId: command.action === "start" ? null : command.rolloutId,
+        action: command.action,
+        versionNumber: command.action === "start" ? Number(command.versionNumber) : null,
+        percentageBps: command.action === "start" ? Number(command.percentageBps) : null,
+        environmentCode: command.action === "start" ? command.environmentCode : null,
+        regionCode: command.action === "start" ? command.regionCode : null,
+        revision: Number(command.revision),
+      };
+      return featureWrite(
+        input,
+        (idempotencyKey, signal) => api.commandFeatureRollout({
+          ...input,
+          idempotencyKey,
+          signal,
+        }),
+        ({
+          start: "发布阶梯已提交。",
+          approve: "发布审批已记录。",
+          pause: "发布已暂停。",
+          resume: "发布恢复任务已提交。",
+          rollback: "回滚任务已提交。",
+        })[command.action] ?? "发布命令已提交。",
+      );
+    },
+    async killFeatureFlag(command) {
+      if (typeof api.killFeatureFlag !== "function"
+        || !currentPermissions().has("platform.feature.kill")
+        || command?.confirmed !== true) return false;
+      const input = {
+        flagId: command.flagId,
+        revision: Number(command.revision),
+        reasonCode: command.reasonCode,
+      };
+      return featureWrite(
+        { action: "kill", ...input },
+        (idempotencyKey, signal) => api.killFeatureFlag({
+          ...input,
+          idempotencyKey,
+          signal,
+        }),
+        "Kill fence 已同步生效。",
+      );
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
@@ -832,6 +917,7 @@ export function createPlatformPageController({
         infrastructure: null,
         gatewayCells: null,
         jobQueues: null,
+        featureFlags: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -890,6 +976,13 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.jobQueues = value; }));
       }
+      if (permissions.has("platform.feature.read") && typeof api.featureFlags === "function") {
+        tasks.push(api.featureFlags({
+          status: state.featureStatus,
+          riskLevel: state.featureRiskLevel,
+          signal: ticket.signal,
+        }).then((value) => { next.featureFlags = value; }));
+      }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
@@ -918,6 +1011,9 @@ export function createPlatformPageController({
       await Promise.all(tasks);
       if (!current(ticket)) return false;
       Object.assign(state, next);
+      if (!state.navigation.some((item) => item.id === "feature-rollouts")) {
+        state.featureCommandIntent = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -958,6 +1054,28 @@ export function createPlatformPageController({
     try {
       state.jobQueues = await api.jobQueues({
         status: state.jobStatus,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadFeatureRollouts() {
+    if (typeof api.featureFlags !== "function"
+      || !currentPermissions().has("platform.feature.read")) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.featureFlags = await api.featureFlags({
+        status: state.featureStatus,
+        riskLevel: state.featureRiskLevel,
         signal: ticket.signal,
       });
       if (!current(ticket)) return false;
@@ -1113,6 +1231,38 @@ export function createPlatformPageController({
       state.feedback = message;
       return reload(ticket);
     } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function featureWrite(intent, operation, message) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.featureCommandIntent?.fingerprint === fingerprint
+      ? state.featureCommandIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.featureCommandIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      state.featureFlags = await api.featureFlags({
+        status: state.featureStatus,
+        riskLevel: state.featureRiskLevel,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.featureCommandIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.featureCommandIntent = null;
+      }
       return fail(ticket, error);
     }
   }
@@ -1293,6 +1443,50 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-feature-filter-form]")) {
+        controller.filterFeatureFlags(data.get("status"), data.get("riskLevel"));
+      }
+      if (form.matches("[data-platform-feature-create-form]")) {
+        controller.createFeatureFlag({
+          revision: optionalNumber(data.get("revision")),
+          flag: {
+            action: data.get("action"),
+            flag_id: optionalText(data.get("flagId")),
+            flag_code: String(data.get("flagCode") ?? "").trim(),
+            display_name: String(data.get("displayName") ?? "").trim(),
+            risk_level: data.get("riskLevel"),
+            rules: {
+              environments: data.getAll("environments"),
+              regions: commaList(data.get("regions")),
+              cohort_code: optionalText(data.get("cohortCode")),
+              percentage_bps: Number(data.get("percentageBps")),
+              prerequisite_flag_code: optionalText(data.get("prerequisiteFlagCode")),
+            },
+            confirmed: data.get("confirmed") === "on",
+          },
+        });
+      }
+      if (form.matches("[data-platform-feature-command-form]")) {
+        controller.commandFeatureRollout({
+          flagId: data.get("flagId"),
+          rolloutId: optionalText(data.get("rolloutId")),
+          action: data.get("action"),
+          versionNumber: optionalNumber(data.get("versionNumber")),
+          percentageBps: optionalNumber(data.get("percentageBps")),
+          environmentCode: optionalText(data.get("environmentCode")),
+          regionCode: optionalText(data.get("regionCode")),
+          revision: Number(data.get("revision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-feature-kill-form]")) {
+        controller.killFeatureFlag({
+          flagId: data.get("flagId"),
+          revision: Number(data.get("revision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -1376,6 +1570,9 @@ export function createPlatformPageController({
   }
   function current(ticket) { return ticket.generation === generation && !ticket.signal.aborted; }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
+  function currentPermissions() {
+    return new Set(state.session?.context?.permissions ?? []);
+  }
   function scrubSensitive() { root.querySelectorAll('input[type="password"], input[name="totpCode"]').forEach((node) => { node.value = ""; }); }
   function currentWorkspace() { return state.workspaceDetail?.workspace ?? null; }
   function clearWorkspaceDetail() {
@@ -1415,6 +1612,10 @@ export function createPlatformPageController({
     state.selectedJob = null;
     state.jobCommandIntent = null;
     state.jobTypeIntent = null;
+    state.featureFlags = null;
+    state.featureStatus = "";
+    state.featureRiskLevel = "";
+    state.featureCommandIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;
@@ -1470,6 +1671,30 @@ function normalizeJobStatus(value) {
     "", "queued", "leased", "running", "cancel_requested", "succeeded", "failed",
     "cancelled", "dead_lettered",
   ]).has(text) ? text : "";
+}
+
+function normalizeFeatureStatus(value) {
+  const normalized = String(value ?? "");
+  return new Set(["", "active", "killed", "disabled"]).has(normalized) ? normalized : "";
+}
+
+function normalizeFeatureRisk(value) {
+  const normalized = String(value ?? "");
+  return new Set(["", "standard", "p0"]).has(normalized) ? normalized : "";
+}
+
+function optionalText(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
+}
+
+function optionalNumber(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized ? Number(normalized) : null;
+}
+
+function commaList(value) {
+  return [...new Set(String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
 }
 
 function normalizeRefundStatus(value) {

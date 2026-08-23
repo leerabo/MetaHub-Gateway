@@ -70,6 +70,7 @@ function renderView(state, permissions) {
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
+  if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -218,6 +219,185 @@ function jobStatusOptions(selected) {
     ["cancel_requested", "取消中"], ["succeeded", "成功"], ["failed", "失败"],
     ["cancelled", "已取消"], ["dead_lettered", "死信"],
   ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function featureRolloutsView(state, permissions) {
+  const response = state.featureFlags ?? {};
+  const flags = Array.isArray(response.flags) ? response.flags : [];
+  const canWrite = permissions.has("platform.feature.write");
+  const canApprove = permissions.has("platform.feature.approve");
+  const canKill = permissions.has("platform.feature.kill");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Server-authoritative delivery</p><h1>功能开关与渐进发布</h1></div>
+      <span>${number(response.total ?? 0)} 个 Flag</span>
+    </header>
+    <section class="platform-metrics" aria-label="发布概览">
+      ${metric("Active", flags.filter((item) => item.status === "active").length, "可发布")}
+      ${metric("P0", flags.filter((item) => item.risk_level === "p0").length, "双人审批")}
+      ${metric("Paused", flags.filter((item) => item.latest_rollout?.status === "paused").length, "健康门禁")}
+      ${metric("Exposures", flags.reduce((sum, item) => sum + item.exposure_count, 0), "不可变事实")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Immutable versions</p><h2>发布目录</h2></div>
+        <form class="platform-feature-filter" data-platform-feature-filter-form>
+          <label><span>状态</span><select name="status">${featureStatusOptions(state.featureStatus)}</select></label>
+          <label><span>风险</span><select name="riskLevel">${featureRiskOptions(state.featureRiskLevel)}</select></label>
+          <button type="submit">筛选</button>
+        </form>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-feature-table">
+          <thead><tr><th>Flag / Head</th><th>版本与规则</th><th>发布阶梯</th><th>审批 / 健康</th><th>曝光</th><th>操作</th></tr></thead>
+          <tbody>${flags.map((item) => featureFlagRow(
+    item,
+    { canWrite, canApprove, canKill, loading: state.loading },
+  )).join("") || emptyRow("暂无功能开关", 6)}</tbody>
+        </table>
+      </div>
+    </section>
+    ${canWrite ? featureCreateForm() : ""}`;
+}
+
+function featureFlagRow(flag, access) {
+  const rollout = flag.latest_rollout;
+  const versions = Array.isArray(flag.versions) ? flag.versions : [];
+  const latestVersion = versions[0] ?? {
+    version_number: flag.current_version,
+    rules: flag.rules,
+    exposure_count: 0,
+  };
+  return `<tr>
+    <td data-label="Flag / Head"><strong>${escapeHtml(flag.display_name)}</strong><small>${escapeHtml(flag.flag_code)}</small><small>head v${number(flag.current_version)} · rev ${number(flag.revision)}</small>${status(flag.status)}</td>
+    <td data-label="版本与规则">
+      <div class="platform-feature-versions">${versions.map((version) => featureVersion(flag, version)).join("")}</div>
+      ${access.canWrite && flag.status === "active" ? featureVersionForm(flag, latestVersion, access.loading) : ""}
+    </td>
+    <td data-label="发布阶梯">${rollout ? `<strong>${number(rollout.target_percentage_bps) / 100}%</strong><small>${escapeHtml(rollout.environment_code)} · ${escapeHtml(rollout.region_code)}</small><small>${escapeHtml(rollout.action)} · ${formatTime(rollout.updated_at)}</small>${status(rollout.status)}` : '<span class="platform-restricted">尚未发布</span>'}</td>
+    <td data-label="审批 / 健康">${rollout ? `<strong>${number(rollout.approval_count)} / ${flag.risk_level === "p0" ? "2" : "0"} 票</strong><small>${escapeHtml(rollout.health_status)} · watermark ${rollout.health_source_watermark === null ? "-" : number(rollout.health_source_watermark)}</small><small>rollout rev ${number(rollout.revision)}</small>` : "-"}</td>
+    <td data-label="曝光"><strong>${number(flag.exposure_count)}</strong><small>${versions.map((version) => `v${number(version.version_number)} ${number(version.exposure_count)}`).join(" · ") || "-"}</small></td>
+    <td data-label="操作"><div class="platform-feature-actions">${featureActions(flag, latestVersion, access)}</div></td>
+  </tr>`;
+}
+
+function featureVersion(flag, version) {
+  const rules = version.rules;
+  const label = version.version_number === flag.current_version ? "HEAD" : "CANDIDATE";
+  return `<div><strong>v${number(version.version_number)} · ${label}</strong><small>${number(rules.percentage_bps) / 100}% · ${escapeHtml(rules.environments.join(", "))}</small><small>${escapeHtml(rules.regions.join(", ") || "all regions")}${rules.cohort_code ? ` · ${escapeHtml(rules.cohort_code)}` : ""}</small></div>`;
+}
+
+function featureActions(flag, latestVersion, access) {
+  if (flag.status !== "active") return '<span class="platform-restricted">已关闭</span>';
+  const rollout = flag.latest_rollout;
+  const active = new Set(["pending_approval", "scheduled", "running"]).has(rollout?.status);
+  const forms = [];
+  if (access.canWrite && !active) {
+    forms.push(featureStartForm(flag, latestVersion, access.loading));
+  }
+  if (access.canApprove && rollout?.status === "pending_approval") {
+    forms.push(featureRolloutCommandForm(flag, rollout, "approve", "审批", access.loading));
+  }
+  if (access.canWrite && new Set(["scheduled", "running"]).has(rollout?.status)) {
+    forms.push(featureRolloutCommandForm(flag, rollout, "pause", "暂停", access.loading));
+  }
+  if (access.canWrite && rollout?.status === "paused") {
+    forms.push(featureRolloutCommandForm(flag, rollout, "resume", "恢复", access.loading));
+  }
+  if (access.canWrite && rollout?.status === "completed" && flag.current_version > 1) {
+    forms.push(featureRolloutCommandForm(flag, rollout, "rollback", "回滚", access.loading));
+  }
+  if (access.canKill) forms.push(featureKillForm(flag, access.loading));
+  return forms.join("") || '<span class="platform-restricted">只读</span>';
+}
+
+function featureStartForm(flag, version, loading) {
+  const rules = version.rules;
+  return `<form data-platform-feature-command-form>
+    ${featureCommandFields(flag, null, "start", flag.revision)}
+    <input type="hidden" name="versionNumber" value="${number(version.version_number)}" />
+    <label><span>阶梯 bps</span><input name="percentageBps" type="number" min="0" max="${number(rules.percentage_bps)}" step="100" value="${number(rules.percentage_bps)}" required /></label>
+    <label><span>环境</span><select name="environmentCode">${rules.environments.map((item) => `<option value="${escapeAttribute(item)}">${escapeHtml(item)}</option>`).join("")}</select></label>
+    <label><span>Region</span><input name="regionCode" value="${escapeAttribute(rules.regions[0] ?? "global")}" required /></label>
+    ${featureConfirm("开始", loading, "platform-primary")}
+  </form>`;
+}
+
+function featureRolloutCommandForm(flag, rollout, action, label, loading) {
+  return `<form data-platform-feature-command-form>
+    ${featureCommandFields(flag, rollout.rollout_id, action, rollout.revision)}
+    ${featureConfirm(label, loading, action === "rollback" ? "platform-danger" : "")}
+  </form>`;
+}
+
+function featureCommandFields(flag, rolloutId, action, revision) {
+  return `<input type="hidden" name="flagId" value="${escapeAttribute(flag.flag_id)}" />
+    <input type="hidden" name="rolloutId" value="${escapeAttribute(rolloutId ?? "")}" />
+    <input type="hidden" name="action" value="${escapeAttribute(action)}" />
+    <input type="hidden" name="revision" value="${number(revision)}" />`;
+}
+
+function featureConfirm(label, loading, className = "") {
+  return `<label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认</span></label><button class="${className}" type="submit" ${loading ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+function featureKillForm(flag, loading) {
+  return `<form data-platform-feature-kill-form>
+    <input type="hidden" name="flagId" value="${escapeAttribute(flag.flag_id)}" />
+    <input type="hidden" name="revision" value="${number(flag.revision)}" />
+    <label><span>Kill 原因</span><select name="reasonCode"><option value="incident_containment">事件处置</option><option value="security_containment">安全处置</option><option value="release_rollback">发布回滚</option></select></label>
+    ${featureConfirm("Kill", loading, "platform-danger")}
+  </form>`;
+}
+
+function featureVersionForm(flag, version, loading) {
+  const rules = version.rules;
+  return `<details class="platform-feature-version-editor"><summary>追加版本</summary>
+    <form data-platform-feature-create-form>
+      <input type="hidden" name="action" value="version" />
+      <input type="hidden" name="flagId" value="${escapeAttribute(flag.flag_id)}" />
+      <input type="hidden" name="revision" value="${number(flag.revision)}" />
+      <input type="hidden" name="flagCode" value="${escapeAttribute(flag.flag_code)}" />
+      <input type="hidden" name="displayName" value="${escapeAttribute(flag.display_name)}" />
+      <input type="hidden" name="riskLevel" value="${escapeAttribute(flag.risk_level)}" />
+      ${featureRuleFields(rules)}
+      ${featureConfirm("保存 v" + (version.version_number + 1), loading, "platform-primary")}
+    </form>
+  </details>`;
+}
+
+function featureCreateForm() {
+  return `<section class="platform-band platform-feature-create">
+    <div class="platform-section-heading"><div><p>Closed rule set</p><h2>创建功能开关</h2></div></div>
+    <form data-platform-feature-create-form autocomplete="off">
+      <input type="hidden" name="action" value="create" />
+      <input type="hidden" name="flagId" value="" />
+      <input type="hidden" name="revision" value="" />
+      <label><span>Flag code</span><input name="flagCode" pattern="[a-z0-9][a-z0-9_.-]{2,79}" required /></label>
+      <label><span>显示名称</span><input name="displayName" maxlength="120" required /></label>
+      <label><span>风险等级</span><select name="riskLevel"><option value="standard">Standard</option><option value="p0">P0</option></select></label>
+      ${featureRuleFields({ environments: ["production"], regions: [], cohort_code: null, percentage_bps: 10000, prerequisite_flag_code: null })}
+      ${featureConfirm("创建", false, "platform-primary")}
+    </form>
+  </section>`;
+}
+
+function featureRuleFields(rules) {
+  return `<fieldset class="platform-feature-environments"><legend>环境</legend>${["development", "staging", "production"].map((environment) => `<label class="platform-check"><input type="checkbox" name="environments" value="${environment}" ${rules.environments.includes(environment) ? "checked" : ""} /><span>${environment}</span></label>`).join("")}</fieldset>
+    <label><span>Regions（逗号分隔）</span><input name="regions" value="${escapeAttribute(rules.regions.join(","))}" /></label>
+    <label><span>最大比例 bps</span><input name="percentageBps" type="number" min="0" max="10000" step="100" value="${number(rules.percentage_bps)}" required /></label>
+    <label><span>Cohort code</span><input name="cohortCode" value="${escapeAttribute(rules.cohort_code ?? "")}" /></label>
+    <label><span>前置 Flag</span><input name="prerequisiteFlagCode" value="${escapeAttribute(rules.prerequisite_flag_code ?? "")}" /></label>`;
+}
+
+function featureStatusOptions(selected) {
+  return [["", "全部"], ["active", "Active"], ["killed", "Killed"], ["disabled", "Disabled"]]
+    .map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function featureRiskOptions(selected) {
+  return [["", "全部"], ["standard", "Standard"], ["p0", "P0"]]
+    .map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
 }
 
 function queueLabel(value) {
