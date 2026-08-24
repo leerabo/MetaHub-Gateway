@@ -42,7 +42,9 @@ export function renderPlatformWorkspace(container, state) {
   const context = state.session?.context;
   const operator = context?.operator ?? {};
   const permissions = new Set(context?.permissions ?? []);
-  const disasterRecoveryBusy = Boolean(state.loading && state.disasterRecoveryIntent);
+  const disasterRecoveryBusy = Boolean(
+    state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)
+  );
   container.innerHTML = `
     <div class="platform-shell">
       <header class="platform-topbar">
@@ -75,6 +77,7 @@ function renderView(state, permissions) {
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
   if (state.view === "observability") return observabilityView(state, permissions);
   if (state.view === "disaster-recovery") return disasterRecoveryView(state, permissions);
+  if (state.view === "status-incidents") return statusIncidentsView(state, permissions);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -85,6 +88,139 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function statusIncidentsView(state, permissions) {
+  const response = state.statusIncidents ?? {};
+  const components = Array.isArray(response.components) ? response.components : [];
+  const incidents = Array.isArray(response.incidents) ? response.incidents : [];
+  const maintenance = Array.isArray(response.maintenance_windows)
+    ? response.maintenance_windows : [];
+  const active = incidents.filter((item) => !new Set(["resolved", "postmortem_published"]).has(item.status));
+  const canWrite = permissions.has("platform.status.write");
+  const canApprove = permissions.has("platform.status.security_approve");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Public projection / Private scope</p><h1>Status and incidents</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="status-refresh"
+        title="Refresh status communications" aria-label="Refresh status communications"
+        ${state.loading ? "disabled" : ""}>↻</button>
+    </header>
+    <section class="platform-metrics" aria-label="Status communication summary">
+      ${metric("Components", components.length, "public catalog")}
+      ${metric("Active incidents", active.length, "authorized projection")}
+      ${metric("Maintenance", maintenance.filter((item) => item.status === "planned").length, "scheduled")}
+      ${metric("Bundle", response.bundle_generation ?? 0, response.bundle_generation ? "signed generation" : "not published")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Public component codes</p><h2>Current component state</h2></div></div>
+      <div class="platform-table-wrap"><table class="platform-status-component-table">
+        <thead><tr><th>Component</th><th>Group</th><th>Status</th><th>Revision</th></tr></thead>
+        <tbody>${components.map((item) => `<tr>
+          <td data-label="Component"><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.code)}</small></td>
+          <td data-label="Group">${escapeHtml(item.group)}</td>
+          <td data-label="Status">${status(item.status)}</td>
+          <td data-label="Revision">${number(item.revision)}</td>
+        </tr>`).join("") || '<tr><td colspan="4" class="platform-empty">No components available.</td></tr>'}</tbody>
+      </table></div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Immutable public updates</p><h2>Incident timeline</h2></div><span>${number(incidents.length)} incidents</span></div>
+      <div class="platform-status-incident-list">
+        ${incidents.map((item) => statusIncidentItem(item, { canWrite, canApprove, loading: state.loading })).join("")
+          || '<p class="platform-empty">No incidents in this projection.</p>'}
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Separate availability facts</p><h2>Maintenance windows</h2></div><span>${number(maintenance.length)} windows</span></div>
+      <div class="platform-status-maintenance-list">
+        ${maintenance.map((item) => `<article><header><strong>${escapeHtml(item.title)}</strong>${status(item.status)}</header>
+          <small>${escapeHtml(item.reference)} · ${formatTime(item.starts_at)} → ${formatTime(item.ends_at)}</small>
+          <p>${escapeHtml(item.message)}</p></article>`).join("") || '<p class="platform-empty">No maintenance windows.</p>'}
+      </div>
+    </section>
+    ${canWrite ? statusIncidentCreateForm(state.loading) : ""}
+    ${canWrite ? statusMaintenanceCreateForm(state.loading) : ""}`;
+}
+
+function statusIncidentItem(item, access) {
+  const latest = item.updates.at(-1);
+  const approval = access.canApprove && item.security_approval_available
+    ? statusIncidentMutationForm(item, "security-approval", "Approve disclosure", access.loading)
+    : "";
+  const update = access.canWrite && new Set(["published", "monitoring"]).has(item.status)
+    ? statusIncidentMutationForm(item, "update", "Publish update", access.loading)
+    : "";
+  const postmortem = access.canWrite && item.status === "resolved" && item.postmortem === null
+    ? statusPostmortemForm(item, access.loading) : "";
+  return `<article class="platform-status-incident">
+    <header><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reference)} · ${escapeHtml(item.classification)} · ${escapeHtml(item.visibility)}</small></div>${status(item.status)}</header>
+    <p>${latest ? escapeHtml(latest.message) : "Pending independent security review."}</p>
+    <small>Acknowledged ${formatTime(item.acknowledged_at)} · revision ${number(item.revision)}</small>
+    <details><summary>${number(item.updates.length)} timeline updates</summary>
+      <ol>${item.updates.map((entry) => `<li><time>${formatTime(entry.published_at)}</time><p>${escapeHtml(entry.message)}</p></li>`).join("")}</ol>
+    </details>${approval}${update}${postmortem}
+  </article>`;
+}
+
+function statusIncidentMutationForm(item, action, label, loading) {
+  return `<form data-platform-status-incident-form>
+    <input type="hidden" name="action" value="${escapeAttribute(action)}" />
+    <input type="hidden" name="incidentId" value="${escapeAttribute(item.incident_id)}" />
+    <input type="hidden" name="revision" value="${number(item.revision)}" />
+    ${action === "update" ? '<label><span>Next state</span><select name="status"><option value="monitoring">Monitoring</option><option value="resolved">Resolved</option></select></label>' : ""}
+    <label><span>Public update</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
+    <label><span>Component codes</span><input name="affectedComponents" placeholder="api-gateway" /></label>
+    <label><span>Public region codes</span><input name="affectedRegions" placeholder="cn-north-1" /></label>
+    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication</span></label>
+    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>${escapeHtml(label)}</button>
+  </form>`;
+}
+
+function statusPostmortemForm(item, loading) {
+  return `<details><summary>Publish postmortem</summary><form data-platform-status-postmortem-form>
+    <input type="hidden" name="incidentId" value="${escapeAttribute(item.incident_id)}" />
+    <input type="hidden" name="revision" value="${number(item.revision)}" />
+    <label><span>Public summary</span><textarea name="summary" minlength="20" maxlength="4000" required></textarea></label>
+    <label><span>Timeline entries</span><textarea name="timeline" required></textarea></label>
+    <label><span>Cause category</span><select name="causeCategory">${["capacity", "dependency", "deployment", "configuration", "software", "network", "other"].map((value) => `<option value="${value}">${value}</option>`).join("")}</select></label>
+    <label><span>Corrective actions</span><textarea name="correctiveActions" required></textarea></label>
+    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication</span></label>
+    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Publish postmortem</button>
+  </form></details>`;
+}
+
+function statusIncidentCreateForm(loading) {
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Manual structured disclosure</p><h2>Create incident</h2></div></div>
+    <form data-platform-status-create-form>
+      <label><span>Owner Workspace ID</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
+      <label><span>Title</span><input name="title" minlength="5" maxlength="160" required /></label>
+      <label><span>Classification</span><select name="classification"><option value="reliability">Reliability</option><option value="security">Security</option></select></label>
+      <label><span>Visibility</span><select name="visibility"><option value="public">Public</option><option value="workspace">Workspace private</option></select></label>
+      <label><span>Severity</span><select name="severity"><option value="minor">Minor</option><option value="major">Major</option><option value="critical">Critical</option></select></label>
+      <label><span>Acknowledged at</span><input name="acknowledgedAt" type="datetime-local" required /></label>
+      <label><span>Initial public update</span><textarea name="initialUpdate" maxlength="2000"></textarea></label>
+      <label><span>Component codes</span><input name="affectedComponents" /></label>
+      <label><span>Public region codes</span><input name="affectedRegions" /></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm publication scope</span></label>
+      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Create incident</button>
+    </form></section>`;
+}
+
+function statusMaintenanceCreateForm(loading) {
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Planned work</p><h2>Schedule maintenance</h2></div></div>
+    <form data-platform-maintenance-form>
+      <label><span>Owner Workspace ID</span><input name="ownerWorkspaceId" pattern="wsp_[0-9a-f]{32}" required /></label>
+      <label><span>Title</span><input name="title" minlength="5" maxlength="160" required /></label>
+      <label><span>Public message</span><textarea name="publicMessage" minlength="10" maxlength="2000" required></textarea></label>
+      <label><span>Visibility</span><select name="visibility"><option value="public">Public</option><option value="workspace">Workspace private</option></select></label>
+      <label><span>Starts</span><input name="startsAt" type="datetime-local" required /></label>
+      <label><span>Ends</span><input name="endsAt" type="datetime-local" required /></label>
+      <label><span>Component codes</span><input name="affectedComponents" /></label>
+      <label><span>Public region codes</span><input name="affectedRegions" /></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm maintenance window</span></label>
+      <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Schedule maintenance</button>
+    </form></section>`;
 }
 
 function disasterRecoveryView(state, permissions) {
@@ -1604,7 +1740,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

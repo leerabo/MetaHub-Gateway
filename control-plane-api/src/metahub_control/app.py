@@ -100,6 +100,8 @@ from .provider_health import router as provider_health_router
 from .provider_status import router as provider_status_router
 from .providers.routes import provider_keys_router
 from .providers.routes import router as providers_router
+from .public_status import install_status_publication_scheduler
+from .public_status import router as public_status_router
 from .request_explanations import install_request_explanation_scheduler
 from .request_explanations import router as request_explanations_router
 from .request_logs import install_request_log_query_event_scheduler
@@ -254,6 +256,7 @@ app.include_router(notifications_router)
 app.include_router(observability_router)
 app.include_router(risk_controls_router)
 app.include_router(disaster_recovery_router)
+app.include_router(public_status_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -322,7 +325,7 @@ app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
 # A single supervisor owns startup and reverse-order shutdown for every Control worker.
-_scheduler_installers = []
+_scheduler_installers = [install_status_publication_scheduler]
 if app.state.config.gateway_placement_enabled:
     _scheduler_installers.append(install_gateway_snapshot_scheduler)
 if app.state.config.control_background_schedulers_enabled:

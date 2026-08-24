@@ -11,6 +11,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "config-distribution",
   "observability",
   "disaster-recovery",
+  "status-incidents",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -98,6 +99,8 @@ export function createPlatformPageController({
     disasterRecoveryStatus: null,
     disasterRecoveryBackups: null,
     disasterRecoveryIntent: null,
+    statusIncidents: null,
+    statusIncidentIntent: null,
     riskCases: null,
     riskStatus: "",
     riskCursor: null,
@@ -163,20 +166,34 @@ export function createPlatformPageController({
       }
     },
     async refresh() {
-      if (state.loading && state.disasterRecoveryIntent) return false;
+      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
       render();
-      return reload(ticket);
+      try {
+        state.session = await api.session({ signal: ticket.signal });
+        if (!current(ticket)) return false;
+        clearProtectedFacts();
+        return reload(ticket);
+      } catch (error) {
+        if (!current(ticket)) return false;
+        if (isPlatformSessionFailure(error)) clearPlatformSession();
+        state.loading = false;
+        state.error = error instanceof PlatformApiError && [401, 403].includes(error.status)
+          ? null
+          : safeError(error);
+        renderPlatformGate(root, state);
+        return false;
+      }
     },
     selectView(view) {
-      if (state.loading && state.disasterRecoveryIntent) return false;
+      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
-        "disaster-recovery", "abuse-risk",
+        "disaster-recovery", "status-incidents", "abuse-risk",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -194,6 +211,8 @@ export function createPlatformPageController({
           state.observabilityIntent = null;
         } else if (state.view === "disaster-recovery") {
           state.disasterRecoveryIntent = null;
+        } else if (state.view === "status-incidents") {
+          state.statusIncidentIntent = null;
         } else {
           state.riskDecisionIntent = null;
         }
@@ -214,6 +233,9 @@ export function createPlatformPageController({
       }
       if (state.view === "disaster-recovery" && !state.disasterRecoveryStatus) {
         void loadDisasterRecovery();
+      }
+      if (state.view === "status-incidents" && !state.statusIncidents) {
+        void loadStatusIncidents();
       }
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
     },
@@ -497,6 +519,86 @@ export function createPlatformPageController({
           ? "安全复核票已记录；满足双人控制后执行将进入队列。"
           : "执行票已记录，等待独立安全复核。",
       );
+    },
+    async refreshStatusIncidents() {
+      if (state.loading && state.statusIncidentIntent) return false;
+      return loadStatusIncidents();
+    },
+    async createStatusIncident(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.status.write")
+        || typeof api.createStatusIncident !== "function") return false;
+      const input = {
+        ownerWorkspaceId: command.ownerWorkspaceId,
+        title: command.title,
+        classification: command.classification,
+        visibility: command.visibility,
+        severity: command.severity,
+        acknowledgedAt: command.acknowledgedAt,
+        initialUpdate: command.classification === "security" ? null : command.initialUpdate,
+        affectedComponents: command.affectedComponents,
+        affectedRegions: command.affectedRegions,
+      };
+      return statusIncidentWrite(input, (idempotencyKey, signal) => api.createStatusIncident({
+        ...input, idempotencyKey, signal,
+      }), "Incident created.");
+    },
+    async mutateStatusIncident(command) {
+      if (command?.confirmed !== true) return false;
+      const approval = command.action === "security-approval";
+      const operation = approval ? api.approveStatusIncident : api.updateStatusIncident;
+      if (typeof operation !== "function") return false;
+      if (approval) {
+        if (!currentPermissions().has("platform.status.security_approve")) return false;
+      } else if (command.action !== "update"
+        || !currentPermissions().has("platform.status.write")) return false;
+      const input = {
+        incidentId: command.incidentId,
+        revision: Number(command.revision),
+        publicMessage: command.publicMessage,
+        affectedComponents: command.affectedComponents,
+        affectedRegions: command.affectedRegions,
+        ...(approval ? {} : { status: command.status }),
+      };
+      return statusIncidentWrite(
+        { action: command.action, ...input },
+        (idempotencyKey, signal) => operation({ ...input, idempotencyKey, signal }),
+        approval ? "Security disclosure approved." : "Incident update published.",
+      );
+    },
+    async publishStatusPostmortem(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.status.write")
+        || typeof api.publishStatusPostmortem !== "function") return false;
+      const input = {
+        incidentId: command.incidentId,
+        revision: Number(command.revision),
+        summary: command.summary,
+        timeline: command.timeline,
+        causeCategory: command.causeCategory,
+        correctiveActions: command.correctiveActions,
+      };
+      return statusIncidentWrite(input, (idempotencyKey, signal) => api.publishStatusPostmortem({
+        ...input, idempotencyKey, signal,
+      }), "Postmortem published.");
+    },
+    async createStatusMaintenance(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.status.write")
+        || typeof api.createStatusMaintenance !== "function") return false;
+      const input = {
+        ownerWorkspaceId: command.ownerWorkspaceId,
+        title: command.title,
+        publicMessage: command.publicMessage,
+        visibility: command.visibility,
+        affectedComponents: command.affectedComponents,
+        affectedRegions: command.affectedRegions,
+        startsAt: command.startsAt,
+        endsAt: command.endsAt,
+      };
+      return statusIncidentWrite(input, (idempotencyKey, signal) => api.createStatusMaintenance({
+        ...input, idempotencyKey, signal,
+      }), "Maintenance window scheduled.");
     },
     async filterRiskCases(status) {
       state.riskStatus = normalizeRiskStatus(status);
@@ -1202,6 +1304,12 @@ export function createPlatformPageController({
           next.disasterRecoveryBackups = backups;
         }));
       }
+      if (permissions.has("platform.status.read")
+        && typeof api.statusIncidents === "function") {
+        tasks.push(api.statusIncidents({ signal: ticket.signal }).then((value) => {
+          next.statusIncidents = value;
+        }));
+      }
       if ((permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
@@ -1247,6 +1355,9 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "disaster-recovery")) {
         state.disasterRecoveryIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "status-incidents")) {
+        state.statusIncidentIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "abuse-risk")) {
         state.riskDecisionIntent = null;
@@ -1387,6 +1498,24 @@ export function createPlatformPageController({
       if (!current(ticket)) return false;
       state.disasterRecoveryStatus = status;
       state.disasterRecoveryBackups = backups;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadStatusIncidents() {
+    if (!currentPermissions().has("platform.status.read")
+      || typeof api.statusIncidents !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.statusIncidents = await api.statusIncidents({ signal: ticket.signal });
+      if (!current(ticket)) return false;
       state.loading = false;
       render();
       return true;
@@ -1662,6 +1791,34 @@ export function createPlatformPageController({
     } catch (error) {
       if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
         state.disasterRecoveryIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function statusIncidentWrite(intent, operation, message) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.statusIncidentIntent?.fingerprint === fingerprint
+      ? state.statusIncidentIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.statusIncidentIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      state.statusIncidents = await api.statusIncidents({ signal: ticket.signal });
+      if (!current(ticket)) return false;
+      state.statusIncidentIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.statusIncidentIntent = null;
       }
       return fail(ticket, error);
     }
@@ -1958,6 +2115,56 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-status-create-form]")) {
+        controller.createStatusIncident({
+          ownerWorkspaceId: data.get("ownerWorkspaceId"),
+          title: String(data.get("title") ?? "").trim(),
+          classification: data.get("classification"),
+          visibility: data.get("visibility"),
+          severity: data.get("severity"),
+          acknowledgedAt: localTimestamp(data.get("acknowledgedAt")),
+          initialUpdate: String(data.get("initialUpdate") ?? "").trim(),
+          affectedComponents: commaList(data.get("affectedComponents")),
+          affectedRegions: commaList(data.get("affectedRegions")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-status-incident-form]")) {
+        controller.mutateStatusIncident({
+          action: data.get("action"),
+          incidentId: data.get("incidentId"),
+          revision: Number(data.get("revision")),
+          status: data.get("status"),
+          publicMessage: String(data.get("publicMessage") ?? "").trim(),
+          affectedComponents: commaList(data.get("affectedComponents")),
+          affectedRegions: commaList(data.get("affectedRegions")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-status-postmortem-form]")) {
+        controller.publishStatusPostmortem({
+          incidentId: data.get("incidentId"),
+          revision: Number(data.get("revision")),
+          summary: String(data.get("summary") ?? "").trim(),
+          timeline: lineList(data.get("timeline")),
+          causeCategory: data.get("causeCategory"),
+          correctiveActions: lineList(data.get("correctiveActions")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-maintenance-form]")) {
+        controller.createStatusMaintenance({
+          ownerWorkspaceId: data.get("ownerWorkspaceId"),
+          title: String(data.get("title") ?? "").trim(),
+          publicMessage: String(data.get("publicMessage") ?? "").trim(),
+          visibility: data.get("visibility"),
+          affectedComponents: commaList(data.get("affectedComponents")),
+          affectedRegions: commaList(data.get("affectedRegions")),
+          startsAt: localTimestamp(data.get("startsAt")),
+          endsAt: localTimestamp(data.get("endsAt")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-dr-command-form]")) {
         controller.voteDisasterRecovery({
           runKind: data.get("runKind"),
@@ -2043,6 +2250,7 @@ export function createPlatformPageController({
       }
       if (action === "backup-refresh") controller.refreshBackup();
       if (action === "dr-refresh") controller.refreshDisasterRecovery();
+      if (action === "status-refresh") controller.refreshStatusIncidents();
       if (action === "risk-next") controller.nextRiskPage();
       if (action === "risk-previous") controller.previousRiskPage();
       if (action === "open-job") controller.openJob(target.dataset.jobId);
@@ -2125,6 +2333,8 @@ export function createPlatformPageController({
     state.disasterRecoveryStatus = null;
     state.disasterRecoveryBackups = null;
     state.disasterRecoveryIntent = null;
+    state.statusIncidents = null;
+    state.statusIncidentIntent = null;
     state.riskCases = null;
     state.riskStatus = "";
     state.riskCursor = null;
@@ -2215,6 +2425,15 @@ function optionalNumber(value) {
 
 function commaList(value) {
   return [...new Set(String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
+}
+
+function lineList(value) {
+  return [...new Set(String(value ?? "").split(/\r?\n/u).map((item) => item.trim()).filter(Boolean))];
+}
+
+function localTimestamp(value) {
+  const parsed = new Date(String(value ?? ""));
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : "";
 }
 
 function normalizeRefundStatus(value) {

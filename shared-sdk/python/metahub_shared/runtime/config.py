@@ -170,6 +170,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_KMS_KEY_ID": "",
     "METAHUB_KMS_TEST_MASTER_KEY": "",
     "METAHUB_CONFIG_DISTRIBUTION_SIGNING_KEY_ID": "",
+    "METAHUB_STATUS_BUNDLE_ROOT": ".data/status-page",
+    "METAHUB_STATUS_BUNDLE_TTL_SECONDS": "86400",
     "METAHUB_BACKUP_WORKER_ENABLED": "false",
     "METAHUB_BACKUP_POLL_INTERVAL_SECONDS": "5",
     "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS": "30",
@@ -551,6 +553,8 @@ class AppConfig(BaseModel):
     config_distribution_signing_key_id: str | None = Field(
         default=None, exclude=True, repr=False
     )
+    status_bundle_root: str = Field(default=".data/status-page", exclude=True, repr=False)
+    status_bundle_ttl_seconds: int = 86_400
     backup_worker_enabled: bool = False
     backup_poll_interval_seconds: int = 5
     backup_default_retention_days: int = 30
@@ -2191,6 +2195,10 @@ def load_app_config(service_name: str) -> AppConfig:
         kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
         config_distribution_signing_key_id=_optional_value(
             values, "METAHUB_CONFIG_DISTRIBUTION_SIGNING_KEY_ID"
+        ),
+        status_bundle_root=_value(values, "METAHUB_STATUS_BUNDLE_ROOT"),
+        status_bundle_ttl_seconds=_bounded_int(
+            values, "METAHUB_STATUS_BUNDLE_TTL_SECONDS", minimum=300, maximum=604800
         ),
         backup_worker_enabled=backup_worker_enabled,
         backup_poll_interval_seconds=backup_poll_interval_seconds,

@@ -52,7 +52,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd106-runtime-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0103"
+    assert apply_migrations(database_url).applied[-1] == "0104"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:

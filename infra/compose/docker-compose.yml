@@ -76,6 +76,7 @@ services:
     volumes:
       - metahub-sqlite:/app/.data/compose
       - metahub-logs:/app/.logs
+      - metahub-status:/app/.data/status-page
     healthcheck:
       test:
         [
@@ -83,6 +84,45 @@ services:
           "python",
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  status-page:
+    build:
+      context: ../..
+      dockerfile: infra/docker/python-service.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-api:${METAHUB_IMAGE_TAG:-local}
+    command: ["python", "-m", "metahub_status.main"]
+    environment:
+      PYTHONPATH: /app/shared-sdk/python:/app/control-plane-api/src
+      METAHUB_STATUS_BUNDLE_ROOT: /app/.data/status-page
+      # Local Compose uses the explicit test provider. Production injects only the
+      # versioned public key and leaves the test value empty.
+      METAHUB_KMS_TEST_MASTER_KEY: ${METAHUB_KMS_TEST_MASTER_KEY:-}
+      METAHUB_STATUS_SIGNING_KEY_VERSION: ${METAHUB_STATUS_SIGNING_KEY_VERSION:-}
+      METAHUB_STATUS_SIGNING_PUBLIC_KEY: ${METAHUB_STATUS_SIGNING_PUBLIC_KEY:-}
+    ports:
+      - "${METAHUB_STATUS_BIND:-127.0.0.1}:${METAHUB_STATUS_PORT:-8002}:8002"
+    volumes:
+      - metahub-status:/app/.data/status-page:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).read()",
         ]
       interval: 10s
       timeout: 5s
@@ -378,6 +418,7 @@ services:
 volumes:
   metahub-sqlite:
   metahub-logs:
+  metahub-status:
   metahub-postgres:
   metahub-minio:
 

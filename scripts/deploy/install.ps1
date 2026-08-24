@@ -34,6 +34,7 @@ try {
       ports = @{
         gateway = Get-MetaHubEnvValue $envValues "METAHUB_GATEWAY_PORT" "8000"
         control_api = Get-MetaHubEnvValue $envValues "METAHUB_CONTROL_PORT" "8001"
+        status_page = Get-MetaHubEnvValue $envValues "METAHUB_STATUS_PORT" "8002"
         console = Get-MetaHubEnvValue $envValues "METAHUB_CONSOLE_PORT" "5173"
       }
     }

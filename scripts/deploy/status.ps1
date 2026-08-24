@@ -23,6 +23,7 @@ $psOutput = (& docker @composeArgs ps --format json) -join "`n"
 $services = @{
   gateway = "http://localhost:$(Get-MetaHubEnvValue $envValues "METAHUB_GATEWAY_PORT" "8000")/health/live"
   control_api = "http://localhost:$(Get-MetaHubEnvValue $envValues "METAHUB_CONTROL_PORT" "8001")/health/live"
+  status_page = "http://localhost:$(Get-MetaHubEnvValue $envValues "METAHUB_STATUS_PORT" "8002")/health"
   console = "http://localhost:$(Get-MetaHubEnvValue $envValues "METAHUB_CONSOLE_PORT" "5173")/"
 }
 Write-MetaHubCliOk -RequestId $RequestId -Payload @{ profile_id = $Profile; project_name = $ProjectName; services = $services; compose_ps = $psOutput }

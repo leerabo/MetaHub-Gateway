@@ -6,6 +6,7 @@
   "services": {
     "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
     "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "status-page": { "enabled": true, "port": 8002, "health": "/health" },
     "mcp-scheduler-worker": { "enabled": true, "ports": [], "health": null },
     "mcp-sandbox": { "enabled": true, "ports": [], "health": "/health/ready", "network": "isolated-egress" },
     "batch-worker": { "enabled": true, "ports": [], "health": null },
@@ -16,6 +17,7 @@
   },
   "volumes": {
     "sqlite": "metahub-sqlite",
-    "logs": "metahub-logs"
+    "logs": "metahub-logs",
+    "status": "metahub-status"
   }
 }

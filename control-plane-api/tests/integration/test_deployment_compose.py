@@ -61,6 +61,7 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
 
     assert "gateway:" in compose
     assert "control-api:" in compose
+    assert "status-page:" in compose
     assert "mcp-scheduler-worker:" in compose
     assert "mcp-sandbox:" in compose
     assert "batch-worker:" in compose
@@ -85,6 +86,17 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     assert "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET" not in worker_section
     assert "ports:" not in worker_section
     assert "read_only: true" in worker_section
+    status_section = compose.split("  status-page:", 1)[1].split(
+        "  mcp-scheduler-worker:", 1
+    )[0]
+    assert "metahub_status.main" in status_section
+    assert "env_file:" not in status_section
+    assert "METAHUB_DATABASE_URL" not in status_section
+    assert "METAHUB_AUTH_TOKEN_SECRET" not in status_section
+    assert "METAHUB_STATUS_SIGNING_PUBLIC_KEY" in status_section
+    assert "metahub-status:/app/.data/status-page:ro" in status_section
+    assert "read_only: true" in status_section
+    assert "no-new-privileges:true" in status_section
     assert (
         "PYTHONPATH: /app/shared-sdk/python:/app/gateway-data-plane/src:"
         "/app/control-plane-api/src"
@@ -142,6 +154,8 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert local_profile["profile_id"] == "local-sqlite"
     assert local_profile["database_mode"] == "sqlite"
     assert local_profile["services"]["postgres"]["enabled"] is False
+    assert local_profile["services"]["status-page"]["health"] == "/health"
+    assert local_profile["volumes"]["status"] == "metahub-status"
     assert local_profile["services"]["batch-worker"]["enabled"] is True
     assert local_profile["services"]["mcp-scheduler-worker"]["ports"] == []
     assert local_profile["services"]["mcp-sandbox"]["ports"] == []
@@ -149,6 +163,7 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert full_profile["profile_id"] == "compose-full"
     assert full_profile["database_mode"] == "sqlite"
     assert full_profile["services"]["postgres"]["enabled"] is True
+    assert full_profile["services"]["status-page"]["port"] == 8002
     assert full_profile["services"]["minio"]["enabled"] is True
     assert full_profile["services"]["batch-worker"]["enabled"] is True
     assert full_profile["services"]["mcp-scheduler-worker"]["enabled"] is True
@@ -250,6 +265,7 @@ def test_install_dry_run_outputs_request_id_and_does_not_create_env(tmp_path: Pa
     assert payload["mode"] == "dry_run"
     assert payload["request_id"].startswith("deploy_")
     assert payload["ports"]["gateway"] == "8000"
+    assert payload["ports"]["status_page"] == "8002"
     assert not env_path.exists()
     assert "admin_password" not in completed.stdout
     assert "replace-with-generated" not in completed.stdout

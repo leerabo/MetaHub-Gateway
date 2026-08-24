@@ -238,6 +238,7 @@ function Assert-MetaHubPortsAvailable {
   $ports = @(
     @{ service = "gateway"; port = [int](Get-MetaHubEnvValue $EnvValues "METAHUB_GATEWAY_PORT" "8000") },
     @{ service = "control-api"; port = [int](Get-MetaHubEnvValue $EnvValues "METAHUB_CONTROL_PORT" "8001") },
+    @{ service = "status-page"; port = [int](Get-MetaHubEnvValue $EnvValues "METAHUB_STATUS_PORT" "8002") },
     @{ service = "console"; port = [int](Get-MetaHubEnvValue $EnvValues "METAHUB_CONSOLE_PORT" "5173") }
   )
   if ($Profile -eq "compose-full") {
@@ -480,7 +481,7 @@ function Test-MetaHubHttpOk {
   }
 }
 
-# 轮询 gateway、control-api、console，直到三者都可访问。
+# 轮询 gateway、control-api、status-page、console，直到全部可访问。
 function Invoke-MetaHubSmoke {
   param(
     [Parameter(Mandatory = $true)][hashtable]$EnvValues,
@@ -491,21 +492,28 @@ function Invoke-MetaHubSmoke {
 
   $gatewayUrl = "http://localhost:$(Get-MetaHubEnvValue $EnvValues "METAHUB_GATEWAY_PORT" "8000")/health/live"
   $controlUrl = "http://localhost:$(Get-MetaHubEnvValue $EnvValues "METAHUB_CONTROL_PORT" "8001")/health/live"
+  $statusUrl = "http://localhost:$(Get-MetaHubEnvValue $EnvValues "METAHUB_STATUS_PORT" "8002")/health"
   $consoleUrl = "http://localhost:$(Get-MetaHubEnvValue $EnvValues "METAHUB_CONSOLE_PORT" "5173")/"
 
   for ($attempt = 1; $attempt -le $Retries; $attempt++) {
     $gatewayOk = Test-MetaHubHttpOk -Url $gatewayUrl
     $controlOk = Test-MetaHubHttpOk -Url $controlUrl
+    $statusOk = Test-MetaHubHttpOk -Url $statusUrl
     $consoleOk = Test-MetaHubHttpOk -Url $consoleUrl
-    if ($gatewayOk -and $controlOk -and $consoleOk) {
-      return @{ gateway = $gatewayUrl; control_api = $controlUrl; console = $consoleUrl }
+    if ($gatewayOk -and $controlOk -and $statusOk -and $consoleOk) {
+      return @{
+        gateway = $gatewayUrl
+        control_api = $controlUrl
+        status_page = $statusUrl
+        console = $consoleUrl
+      }
     }
     Start-Sleep -Seconds $DelaySeconds
   }
 
   Write-MetaHubCliError `
     -Code "deployment.health_failed" `
-    -Message "Gateway, control API or console health check did not become ready." `
+    -Message "Gateway, control API, status page or console health check did not become ready." `
     -RequestId $RequestId `
     -Suggestion "Run scripts/deploy/status.ps1 and docker compose logs."
   exit 1

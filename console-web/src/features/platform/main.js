@@ -92,6 +92,14 @@ import {
   startDisasterRecoveryDrill,
   startRegionFailover,
 } from "../../lib/disasterRecovery.js";
+import {
+  approvePlatformSecurityIncident,
+  createPlatformIncident,
+  createPlatformMaintenanceWindow,
+  getPlatformStatusIncidents,
+  publishPlatformPostmortem,
+  updatePlatformIncident,
+} from "../../lib/statusIncidents.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -228,6 +236,21 @@ if (root) {
         ...input,
       }),
       startRegionFailover: (input) => startRegionFailover({ controlApiUrl, ...input }),
+      statusIncidents: (input) => getPlatformStatusIncidents({ controlApiUrl, ...input }),
+      createStatusIncident: (input) => createPlatformIncident({ controlApiUrl, ...input }),
+      approveStatusIncident: (input) => approvePlatformSecurityIncident({
+        controlApiUrl,
+        ...input,
+      }),
+      updateStatusIncident: (input) => updatePlatformIncident({ controlApiUrl, ...input }),
+      publishStatusPostmortem: (input) => publishPlatformPostmortem({
+        controlApiUrl,
+        ...input,
+      }),
+      createStatusMaintenance: (input) => createPlatformMaintenanceWindow({
+        controlApiUrl,
+        ...input,
+      }),
     },
   }).mount();
 }
