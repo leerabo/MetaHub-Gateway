@@ -32,6 +32,7 @@ from .branding import router as branding_router
 from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
 from .business_verification import router as business_verification_router
+from .capacity_management import router as capacity_management_router
 from .config.routes import router as config_router
 from .config_distribution import router as config_distribution_router
 from .config_transfer.routes import router as config_transfer_router
@@ -257,6 +258,7 @@ app.include_router(observability_router)
 app.include_router(risk_controls_router)
 app.include_router(disaster_recovery_router)
 app.include_router(public_status_router)
+app.include_router(capacity_management_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)

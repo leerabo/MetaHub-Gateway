@@ -60,6 +60,7 @@ ConfigStatus = Literal["configured", "missing", "masked", "defaulted"]
 ServiceMode = Literal["internal_only", "public_service"]
 McpExecutorMode = Literal["disabled", "test_loopback", "sandbox_http"]
 IdentityChallengeDeliveryMode = Literal["disabled", "test_capture"]
+CapacityRunnerMode = Literal["disabled", "test_loopback", "isolated_http"]
 
 # CacheAffinity 使用独立密钥域；默认值只保证本地可运行，生产 Gateway 必须显式替换。
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
@@ -176,6 +177,11 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_BACKUP_POLL_INTERVAL_SECONDS": "5",
     "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS": "30",
     "METAHUB_BACKUP_RESTORE_DATABASE_URL": "",
+    "METAHUB_CAPACITY_RUNNER_MODE": "disabled",
+    "METAHUB_CAPACITY_RUNNER_BASE_URL": "",
+    "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN": "",
+    "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET": "",
+    "METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS": "30",
     # Response Cache 是可选能力；旧部署升级后必须保持关闭，不能因默认密钥存在而读取缓存。
     "METAHUB_RESPONSE_CACHE_ENABLED": "false",
     "METAHUB_RESPONSE_CACHE_HMAC_VERSION": "1",
@@ -559,6 +565,11 @@ class AppConfig(BaseModel):
     backup_poll_interval_seconds: int = 5
     backup_default_retention_days: int = 30
     backup_restore_database_url: str | None = Field(default=None, exclude=True, repr=False)
+    capacity_runner_mode: CapacityRunnerMode = "disabled"
+    capacity_runner_base_url: str | None = Field(default=None, exclude=True, repr=False)
+    capacity_runner_internal_token: str | None = Field(default=None, exclude=True, repr=False)
+    capacity_runner_permit_secret: str | None = Field(default=None, exclude=True, repr=False)
+    capacity_runner_http_timeout_seconds: int = 30
     provider_api_keys: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     internal_config_token: str | None = Field(default=None, exclude=True, repr=False)
     # 内部 Chat Token 只供 Control 与 Gateway 之间的服务身份校验，不能复用用户 Session、
@@ -2053,6 +2064,124 @@ def load_app_config(service_name: str) -> AppConfig:
     backup_default_retention_days = _bounded_int(
         values, "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS", minimum=1, maximum=3650
     )
+    capacity_runner_mode = _value(values, "METAHUB_CAPACITY_RUNNER_MODE")
+    if capacity_runner_mode not in {"disabled", "test_loopback", "isolated_http"}:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_CAPACITY_RUNNER_MODE is invalid.",
+            suggestion="Use disabled, test_loopback, or isolated_http.",
+        )
+    capacity_runner_base_url = _optional_value(values, "METAHUB_CAPACITY_RUNNER_BASE_URL")
+    capacity_runner_internal_token = _raw_optional_value(
+        values, "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN"
+    )
+    capacity_runner_permit_secret = _raw_optional_value(
+        values, "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET"
+    )
+    if capacity_runner_mode == "test_loopback" and environment != "test":
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Capacity runner loopback is restricted to test environments.",
+            suggestion="Use isolated_http outside automated tests.",
+        )
+    if capacity_runner_mode == "isolated_http" and (
+        capacity_runner_base_url is None
+        or capacity_runner_internal_token is None
+        or capacity_runner_permit_secret is None
+        or len(capacity_runner_internal_token) < 32
+        or len(capacity_runner_permit_secret) < 32
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="The isolated capacity runner configuration is incomplete.",
+            suggestion="Configure its internal URL, token, and independent permit secret.",
+        )
+    if capacity_runner_mode == "isolated_http":
+        parsed_runner_url = urlsplit(capacity_runner_base_url or "")
+        if (
+            parsed_runner_url.scheme not in {"http", "https"}
+            or not parsed_runner_url.hostname
+            or parsed_runner_url.username
+            or parsed_runner_url.password
+            or parsed_runner_url.query
+            or parsed_runner_url.fragment
+            or parsed_runner_url.path not in {"", "/"}
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="METAHUB_CAPACITY_RUNNER_BASE_URL is invalid.",
+                suggestion="Use an HTTP(S) service origin without credentials, path, or query.",
+            )
+        runner_credentials = (
+            capacity_runner_internal_token or "",
+            capacity_runner_permit_secret or "",
+        )
+        try:
+            runner_credential_bytes = tuple(value.encode("ascii") for value in runner_credentials)
+        except UnicodeEncodeError:
+            runner_credential_bytes = ()
+        if len(runner_credential_bytes) != 2 or any(
+            not 32 <= len(value) <= 512
+            or any(character.isspace() or ord(character) < 32 for character in credential)
+            for credential, value in zip(runner_credentials, runner_credential_bytes, strict=True)
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Capacity runner credentials do not meet security requirements.",
+                suggestion="Use independent 32-512 byte printable ASCII values.",
+            )
+        other_security_domains = tuple(
+            value
+            for key in (
+                "METAHUB_INTERNAL_CONFIG_TOKEN",
+                "METAHUB_INTERNAL_CHAT_TOKEN",
+                "METAHUB_INTERNAL_BATCH_TOKEN",
+                "METAHUB_AUTH_TOKEN_SECRET",
+                "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET",
+                "METAHUB_PROMPT_TEMPLATE_ENCRYPTION_SECRET",
+                "METAHUB_FILE_ENCRYPTION_SECRET",
+                "METAHUB_BATCH_ENCRYPTION_SECRET",
+                "METAHUB_MCP_ENCRYPTION_SECRET",
+                "METAHUB_MCP_HMAC_SECRET",
+                "METAHUB_MCP_SANDBOX_INTERNAL_TOKEN",
+                "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET",
+                "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
+                "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
+                "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
+                "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
+                "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
+                "METAHUB_PAYMENT_WEBHOOK_SECRET",
+                "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET",
+                "METAHUB_SESSION_RISK_HMAC_SECRET",
+                "METAHUB_APPROVAL_HMAC_SECRET",
+                "METAHUB_RESPONSE_CACHE_HMAC_SECRET",
+                "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET",
+                "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET",
+                "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET",
+                "METAHUB_IDENTITY_SESSION_SECRET",
+                "METAHUB_IDENTITY_CHALLENGE_SECRET",
+                "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
+                "METAHUB_WORKSPACE_SESSION_SECRET",
+                "METAHUB_PLATFORM_SESSION_SECRET",
+                "METAHUB_SUPPORT_SESSION_SECRET",
+                "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET",
+                "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET",
+                "METAHUB_TENANT_DATA_ENCRYPTION_SECRET",
+                "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY",
+                "METAHUB_KMS_TEST_MASTER_KEY",
+            )
+            if (value := _raw_optional_value(values, key)) is not None
+        )
+        if hmac.compare_digest(*runner_credentials) or any(
+            hmac.compare_digest(credential, other)
+            for credential in runner_credentials
+            for other in other_security_domains
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Capacity runner credentials must use independent security domains.",
+                suggestion="Configure dedicated internal token and permit secret values.",
+            )
     _validate_production_infrastructure_config(
         environment=environment,
         database_url=_optional_value(values, "METAHUB_DATABASE_URL"),
@@ -2205,6 +2334,16 @@ def load_app_config(service_name: str) -> AppConfig:
         backup_default_retention_days=backup_default_retention_days,
         backup_restore_database_url=_optional_value(
             values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"
+        ),
+        capacity_runner_mode=capacity_runner_mode,
+        capacity_runner_base_url=capacity_runner_base_url,
+        capacity_runner_internal_token=capacity_runner_internal_token,
+        capacity_runner_permit_secret=capacity_runner_permit_secret,
+        capacity_runner_http_timeout_seconds=_bounded_int(
+            values,
+            "METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS",
+            minimum=1,
+            maximum=300,
         ),
         provider_api_keys=provider_api_keys,
         internal_config_token=internal_config_token,
@@ -3603,6 +3742,11 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_BACKUP_POLL_INTERVAL_SECONDS",
         "METAHUB_BACKUP_DEFAULT_RETENTION_DAYS",
         "METAHUB_BACKUP_RESTORE_DATABASE_URL",
+        "METAHUB_CAPACITY_RUNNER_MODE",
+        "METAHUB_CAPACITY_RUNNER_BASE_URL",
+        "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN",
+        "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET",
+        "METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS",
         "METAHUB_INTERNAL_CONFIG_TOKEN",
         "METAHUB_INTERNAL_CHAT_TOKEN",
         "METAHUB_INTERNAL_BATCH_TOKEN",

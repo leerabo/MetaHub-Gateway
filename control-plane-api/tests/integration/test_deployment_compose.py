@@ -61,6 +61,7 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
 
     assert "gateway:" in compose
     assert "control-api:" in compose
+    assert "capacity-runner:" in compose
     assert "status-page:" in compose
     assert "mcp-scheduler-worker:" in compose
     assert "mcp-sandbox:" in compose
@@ -136,6 +137,31 @@ def test_compose_file_defines_core_services_and_optional_infra() -> None:
     assert "mcp-sandbox-control" in sandbox_section
     assert "mcp-sandbox-egress" in sandbox_section
     assert "mcp-sandbox-control:\n    internal: true" in compose
+    control_section = compose.split("\n  control-api:", 1)[1].split(
+        "\n  capacity-runner:", 1
+    )[0]
+    runner_section = compose.split("\n  capacity-runner:", 1)[1].split(
+        "\n  status-page:", 1
+    )[0]
+    assert "METAHUB_CAPACITY_RUNNER_MODE: isolated_http" in control_section
+    assert "METAHUB_CAPACITY_RUNNER_BASE_URL: http://capacity-runner:8012" in control_section
+    assert "capacity-runner-control" in control_section
+    assert "condition: service_healthy" in control_section
+    assert "env_file:" not in runner_section
+    assert "ports:" not in runner_section
+    assert "volumes:" not in runner_section
+    assert "METAHUB_DATABASE_URL" not in runner_section
+    assert "METAHUB_AUTH_TOKEN_SECRET" not in runner_section
+    assert "METAHUB_KMS" not in runner_section
+    assert "METAHUB_PROVIDER" not in runner_section
+    assert "METAHUB_SEED" not in runner_section
+    assert "read_only: true" in runner_section
+    assert "no-new-privileges:true" in runner_section
+    assert "cpus:" in runner_section
+    assert "memory:" in runner_section
+    assert "capacity-runner-control" in runner_section
+    assert "mcp-sandbox" not in runner_section
+    assert "capacity-runner-control:\n    internal: true" in compose
 
 
 def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() -> None:
@@ -155,6 +181,8 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert local_profile["database_mode"] == "sqlite"
     assert local_profile["services"]["postgres"]["enabled"] is False
     assert local_profile["services"]["status-page"]["health"] == "/health"
+    assert local_profile["services"]["capacity-runner"]["ports"] == []
+    assert local_profile["services"]["capacity-runner"]["network"] == "internal-only"
     assert local_profile["volumes"]["status"] == "metahub-status"
     assert local_profile["services"]["batch-worker"]["enabled"] is True
     assert local_profile["services"]["mcp-scheduler-worker"]["ports"] == []
@@ -164,6 +192,7 @@ def test_deployment_profiles_keep_sqlite_default_and_mark_optional_services() ->
     assert full_profile["database_mode"] == "sqlite"
     assert full_profile["services"]["postgres"]["enabled"] is True
     assert full_profile["services"]["status-page"]["port"] == 8002
+    assert full_profile["services"]["capacity-runner"]["enabled"] is True
     assert full_profile["services"]["minio"]["enabled"] is True
     assert full_profile["services"]["batch-worker"]["enabled"] is True
     assert full_profile["services"]["mcp-scheduler-worker"]["enabled"] is True
@@ -188,6 +217,8 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
     assert "replace-with-generated-mcp-sandbox-envelope-secret" in env_template
     assert "replace-with-generated-mcp-sandbox-permit-secret" in env_template
     assert "replace-with-generated-mcp-sandbox-response-secret" in env_template
+    assert "replace-with-generated-capacity-runner-internal-token" in env_template
+    assert "replace-with-generated-capacity-runner-permit-secret" in env_template
     assert "replace-with-generated-response-cache-hmac-secret" in env_template
     assert "replace-with-generated-response-cache-encryption-secret" in env_template
     assert "replace-with-generated-response-cache-control-secret" in env_template
@@ -323,6 +354,17 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET=" in generated_env
     assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" in generated_env
     assert "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT=" in generated_env
+    assert "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN=" in generated_env
+    assert "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET=" in generated_env
+    generated_values = dict(
+        line.split("=", 1)
+        for line in generated_env.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    assert (
+        generated_values["METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN"]
+        != generated_values["METAHUB_CAPACITY_RUNNER_PERMIT_SECRET"]
+    )
     assert "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET=" in generated_env
     assert "METAHUB_PAYMENT_WEBHOOK_SECRET=" in generated_env
     assert "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET=" in generated_env
@@ -336,6 +378,8 @@ def test_env_generation_replaces_placeholders_without_printing_non_admin_secret(
     assert "METAHUB_MINIO_SECRET_KEY=" not in completed.stdout
     assert "METAHUB_RESPONSE_CACHE_HMAC_SECRET=" not in completed.stdout
     assert "METAHUB_MCP_SANDBOX_PERMIT_SECRET=" not in completed.stdout
+    assert "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN=" not in completed.stdout
+    assert "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET=" not in completed.stdout
     assert "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET=" not in completed.stdout
     assert "METAHUB_PAYMENT_WEBHOOK_SECRET=" not in completed.stdout
     assert "METAHUB_PAYMENT_RECEIPT_ENCRYPTION_SECRET=" not in completed.stdout
@@ -368,6 +412,12 @@ def test_dockerfiles_reference_existing_entrypoints_and_runtime_requirements() -
     sandbox_requirements = (
         ROOT / "infra/docker/requirements.mcp-sandbox.txt"
     ).read_text(encoding="utf-8")
+    runner_dockerfile = (ROOT / "infra/docker/capacity-runner.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    runner_requirements = (
+        ROOT / "infra/docker/requirements.capacity-runner.txt"
+    ).read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
     assert "metahub_gateway.main" in python_dockerfile
@@ -384,6 +434,16 @@ def test_dockerfiles_reference_existing_entrypoints_and_runtime_requirements() -
     assert "gateway-data-plane" not in sandbox_dockerfile
     assert "infra/migrations" not in sandbox_dockerfile
     assert "USER 65532:65532" in sandbox_dockerfile
+    assert "metahub_capacity_runner.main" in runner_dockerfile
+    assert "control-plane-api/src/metahub_capacity_runner" in runner_dockerfile
+    assert "shared-sdk/python" not in runner_dockerfile
+    assert "gateway-data-plane" not in runner_dockerfile
+    assert "infra/migrations" not in runner_dockerfile
+    assert "USER 65532:65532" in runner_dockerfile
+    assert "fastapi" in runner_requirements
+    assert "uvicorn" in runner_requirements
+    assert "psycopg" not in runner_requirements
+    assert "httpx" not in runner_requirements
     assert "fastapi" in sandbox_requirements
     assert "mcp>=" in sandbox_requirements
     assert "pypdf" not in sandbox_requirements

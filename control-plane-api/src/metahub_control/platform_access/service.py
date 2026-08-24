@@ -140,6 +140,12 @@ _NAVIGATION = (
         "Status and incidents",
         "/platform.html#status-incidents",
     ),
+    (
+        "platform.capacity.read",
+        "capacity",
+        "Capacity and resilience",
+        "/platform.html#capacity",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -731,6 +737,10 @@ def get_platform_navigation(
             or (
                 item_id == "observability"
                 and "platform.observability.security_read" in permission_set
+            )
+            or (
+                item_id == "capacity"
+                and "platform.unit_economics.read" in permission_set
             )
             or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
         )
@@ -2402,6 +2412,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_status_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if _table_exists(connection, "platform_capacity_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_capacity_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

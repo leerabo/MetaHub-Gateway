@@ -12,6 +12,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "observability",
   "disaster-recovery",
   "status-incidents",
+  "capacity",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -101,6 +102,9 @@ export function createPlatformPageController({
     disasterRecoveryIntent: null,
     statusIncidents: null,
     statusIncidentIntent: null,
+    capacity: null,
+    unitEconomics: null,
+    capacityIntent: null,
     riskCases: null,
     riskStatus: "",
     riskCursor: null,
@@ -166,7 +170,8 @@ export function createPlatformPageController({
       }
     },
     async refresh() {
-      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)) return false;
+      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
+        || state.capacityIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -188,12 +193,13 @@ export function createPlatformPageController({
       }
     },
     selectView(view) {
-      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)) return false;
+      if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
+        || state.capacityIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
-        "disaster-recovery", "status-incidents", "abuse-risk",
+        "disaster-recovery", "status-incidents", "capacity", "abuse-risk",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -213,6 +219,8 @@ export function createPlatformPageController({
           state.disasterRecoveryIntent = null;
         } else if (state.view === "status-incidents") {
           state.statusIncidentIntent = null;
+        } else if (state.view === "capacity") {
+          state.capacityIntent = null;
         } else {
           state.riskDecisionIntent = null;
         }
@@ -236,6 +244,9 @@ export function createPlatformPageController({
       }
       if (state.view === "status-incidents" && !state.statusIncidents) {
         void loadStatusIncidents();
+      }
+      if (state.view === "capacity" && !state.capacity && !state.unitEconomics) {
+        void loadCapacity();
       }
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
     },
@@ -599,6 +610,72 @@ export function createPlatformPageController({
       return statusIncidentWrite(input, (idempotencyKey, signal) => api.createStatusMaintenance({
         ...input, idempotencyKey, signal,
       }), "Maintenance window scheduled.");
+    },
+    async refreshCapacity() {
+      if (state.loading && state.capacityIntent) return false;
+      return loadCapacity();
+    },
+    async createCapacityForecast(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.capacity.test")
+        || typeof api.createCapacityForecast !== "function") return false;
+      const input = {
+        serviceCode: command.serviceCode,
+        regionCode: command.regionCode,
+        horizonDays: Number(command.horizonDays),
+        expectedRevision: Number(command.expectedRevision),
+        confirmed: true,
+      };
+      return capacityWrite(input, (idempotencyKey, signal) => api.createCapacityForecast({
+        ...input, idempotencyKey, signal,
+      }), "Capacity forecast queued.");
+    },
+    async createCapacityLoadTest(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.capacity.test")
+        || typeof api.createCapacityLoadTest !== "function") return false;
+      const input = {
+        scenarioCode: command.scenarioCode,
+        environmentClass: command.environmentClass,
+        regionCode: command.regionCode,
+        syntheticTenantCount: Number(command.syntheticTenantCount),
+        targetRps: Number(command.targetRps),
+        durationSeconds: Number(command.durationSeconds),
+        confirmed: true,
+      };
+      return capacityWrite(input, (idempotencyKey, signal) => api.createCapacityLoadTest({
+        ...input, idempotencyKey, signal,
+      }), "Load test queued in the isolated runner.");
+    },
+    async commandCapacityChaos(command) {
+      if (command?.confirmed !== true
+        || !currentPermissions().has("platform.capacity.chaos")
+        || typeof api.commandCapacityChaos !== "function") return false;
+      const input = command.action === "create" ? {
+        action: "create",
+        faultCode: command.faultCode,
+        serviceCode: command.serviceCode,
+        environmentClass: command.environmentClass,
+        regionCode: command.regionCode,
+        blastTenantCount: Number(command.blastTenantCount),
+        durationSeconds: Number(command.durationSeconds),
+        objectiveP95Ms: Number(command.objectiveP95Ms),
+        objectiveErrorRateBps: Number(command.objectiveErrorRateBps),
+        stopErrorRateBps: Number(command.stopErrorRateBps),
+        reasonCode: command.reasonCode,
+        confirmed: true,
+      } : {
+        action: command.action,
+        experimentId: command.experimentId,
+        revision: Number(command.revision),
+        reasonCode: command.reasonCode,
+        confirmed: true,
+      };
+      return capacityWrite(input, (idempotencyKey, signal) => api.commandCapacityChaos({
+        ...input, idempotencyKey, signal,
+      }), command.action === "kill"
+        ? "Chaos kill fence advanced."
+        : command.action === "approve" ? "Chaos approval recorded." : "Chaos experiment created.");
     },
     async filterRiskCases(status) {
       state.riskStatus = normalizeRiskStatus(status);
@@ -1207,6 +1284,8 @@ export function createPlatformPageController({
         configDistribution: null,
         disasterRecoveryStatus: null,
         disasterRecoveryBackups: null,
+        capacity: null,
+        unitEconomics: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -1310,6 +1389,17 @@ export function createPlatformPageController({
           next.statusIncidents = value;
         }));
       }
+      if (permissions.has("platform.capacity.read") && typeof api.capacity === "function") {
+        tasks.push(api.capacity({ signal: ticket.signal }).then((value) => {
+          next.capacity = value;
+        }));
+      }
+      if (permissions.has("platform.unit_economics.read")
+        && typeof api.unitEconomics === "function") {
+        tasks.push(api.unitEconomics({ signal: ticket.signal }).then((value) => {
+          next.unitEconomics = value;
+        }));
+      }
       if ((permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
@@ -1358,6 +1448,9 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "status-incidents")) {
         state.statusIncidentIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "capacity")) {
+        state.capacityIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "abuse-risk")) {
         state.riskDecisionIntent = null;
@@ -1516,6 +1609,33 @@ export function createPlatformPageController({
     try {
       state.statusIncidents = await api.statusIncidents({ signal: ticket.signal });
       if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadCapacity() {
+    const permissions = currentPermissions();
+    const canReadCapacity = permissions.has("platform.capacity.read")
+      && typeof api.capacity === "function";
+    const canReadEconomics = permissions.has("platform.unit_economics.read")
+      && typeof api.unitEconomics === "function";
+    if (!canReadCapacity && !canReadEconomics) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const [capacity, economics] = await Promise.all([
+        canReadCapacity ? api.capacity({ signal: ticket.signal }) : null,
+        canReadEconomics ? api.unitEconomics({ signal: ticket.signal }) : null,
+      ]);
+      if (!current(ticket)) return false;
+      state.capacity = capacity;
+      state.unitEconomics = economics;
       state.loading = false;
       render();
       return true;
@@ -1819,6 +1939,42 @@ export function createPlatformPageController({
     } catch (error) {
       if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
         state.statusIncidentIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function capacityWrite(intent, operation, message) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.capacityIntent?.fingerprint === fingerprint
+      ? state.capacityIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.capacityIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      const permissions = currentPermissions();
+      const [capacity, economics] = await Promise.all([
+        permissions.has("platform.capacity.read") && typeof api.capacity === "function"
+          ? api.capacity({ signal: ticket.signal }) : null,
+        permissions.has("platform.unit_economics.read") && typeof api.unitEconomics === "function"
+          ? api.unitEconomics({ signal: ticket.signal }) : null,
+      ]);
+      if (!current(ticket)) return false;
+      state.capacity = capacity;
+      state.unitEconomics = economics;
+      state.capacityIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.capacityIntent = null;
       }
       return fail(ticket, error);
     }
@@ -2165,6 +2321,46 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-capacity-forecast-form]")) {
+        const [serviceCode, regionCode, revision] = String(data.get("capacityTarget") ?? "")
+          .split("|");
+        controller.createCapacityForecast({
+          serviceCode,
+          regionCode,
+          horizonDays: Number(data.get("horizonDays")),
+          expectedRevision: Number(revision),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-capacity-load-form]")) {
+        controller.createCapacityLoadTest({
+          scenarioCode: data.get("scenarioCode"),
+          environmentClass: data.get("environmentClass"),
+          regionCode: data.get("regionCode"),
+          syntheticTenantCount: Number(data.get("syntheticTenantCount")),
+          targetRps: Number(data.get("targetRps")),
+          durationSeconds: Number(data.get("durationSeconds")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-capacity-chaos-form]")) {
+        controller.commandCapacityChaos({
+          action: data.get("action"),
+          experimentId: data.get("experimentId"),
+          revision: Number(data.get("revision")),
+          faultCode: data.get("faultCode"),
+          serviceCode: data.get("serviceCode"),
+          environmentClass: data.get("environmentClass"),
+          regionCode: data.get("regionCode"),
+          blastTenantCount: Number(data.get("blastTenantCount")),
+          durationSeconds: Number(data.get("durationSeconds")),
+          objectiveP95Ms: Number(data.get("objectiveP95Ms")),
+          objectiveErrorRateBps: Number(data.get("objectiveErrorRateBps")),
+          stopErrorRateBps: Number(data.get("stopErrorRateBps")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-dr-command-form]")) {
         controller.voteDisasterRecovery({
           runKind: data.get("runKind"),
@@ -2251,6 +2447,7 @@ export function createPlatformPageController({
       if (action === "backup-refresh") controller.refreshBackup();
       if (action === "dr-refresh") controller.refreshDisasterRecovery();
       if (action === "status-refresh") controller.refreshStatusIncidents();
+      if (action === "capacity-refresh") controller.refreshCapacity();
       if (action === "risk-next") controller.nextRiskPage();
       if (action === "risk-previous") controller.previousRiskPage();
       if (action === "open-job") controller.openJob(target.dataset.jobId);
@@ -2335,6 +2532,9 @@ export function createPlatformPageController({
     state.disasterRecoveryIntent = null;
     state.statusIncidents = null;
     state.statusIncidentIntent = null;
+    state.capacity = null;
+    state.unitEconomics = null;
+    state.capacityIntent = null;
     state.riskCases = null;
     state.riskStatus = "";
     state.riskCursor = null;

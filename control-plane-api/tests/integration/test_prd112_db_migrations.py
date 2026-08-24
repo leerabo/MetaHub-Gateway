@@ -238,5 +238,5 @@ def test_composite_owner_and_immutable_fact_guards(
 
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0104"
+    assert apply_migrations(database_url).applied[-1] == "0105"
     _healthy(database_url)

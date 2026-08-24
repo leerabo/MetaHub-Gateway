@@ -873,6 +873,7 @@ def _start_rollout(
     rules = FeatureRuleSet.model_validate(json.loads(version["rules_json"]))
     if int(payload.percentage_bps or 0) > rules.percentage_bps:
         raise ApiError("feature_flag.request_invalid")
+    _ensure_performance_gate(connection, str(payload.environment_code))
     status = "pending_approval" if flag["risk_level"] == "p0" else "scheduled"
     job_id = None
     health_watermark = None
@@ -985,6 +986,7 @@ def _approve_rollout(
     if approval_count >= 2:
         if prepared is None:
             raise ApiError("feature_flag.unavailable")
+        _ensure_performance_gate(connection, str(rollout["environment_code"]))
         health_watermark = _ensure_health_summary(
             connection, str(rollout["region_code"]), now, config
         )
@@ -1092,6 +1094,7 @@ def _resume_rollout(
         raise ApiError("feature_flag.revision_conflict")
     if rollout["status"] != "paused" or prepared is None:
         raise ApiError("feature_flag.conflict")
+    _ensure_performance_gate(connection, str(rollout["environment_code"]))
     health_watermark = _ensure_health_summary(
         connection, str(rollout["region_code"]), now, config
     )
@@ -1131,6 +1134,18 @@ def _resume_rollout(
         now=now,
     )
     return next_revision
+
+
+def _ensure_performance_gate(connection, environment_code: str) -> None:
+    environment_class = "dev" if environment_code == "development" else environment_code
+    blocked = connection.execute(
+        """SELECT 1 FROM performance_rollout_blocks
+             WHERE service_code='gateway' AND scenario_code='gateway-release'
+               AND environment_class=? AND status='active'""",
+        (environment_class,),
+    ).fetchone()
+    if blocked is not None:
+        raise ApiError("feature_flag.performance_regressed")
 
 
 def _rollback_rollout(

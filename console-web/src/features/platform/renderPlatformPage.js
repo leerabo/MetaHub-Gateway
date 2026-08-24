@@ -78,6 +78,7 @@ function renderView(state, permissions) {
   if (state.view === "observability") return observabilityView(state, permissions);
   if (state.view === "disaster-recovery") return disasterRecoveryView(state, permissions);
   if (state.view === "status-incidents") return statusIncidentsView(state, permissions);
+  if (state.view === "capacity") return capacityView(state, permissions);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -222,6 +223,154 @@ function statusMaintenanceCreateForm(loading) {
       <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Schedule maintenance</button>
     </form></section>`;
 }
+
+function capacityView(state, permissions) {
+  const response = state.capacity ?? {};
+  const economicsResponse = state.unitEconomics ?? {};
+  const services = Array.isArray(response.services) ? response.services : [];
+  const scenarios = Array.isArray(response.scenarios) ? response.scenarios : [];
+  const baselines = Array.isArray(response.baselines) ? response.baselines : [];
+  const forecasts = Array.isArray(response.forecasts) ? response.forecasts : [];
+  const loadTests = Array.isArray(response.load_tests) ? response.load_tests : [];
+  const faults = Array.isArray(response.chaos_faults) ? response.chaos_faults : [];
+  const experiments = Array.isArray(response.chaos_experiments)
+    ? response.chaos_experiments : [];
+  const blocks = Array.isArray(response.rollout_blocks) ? response.rollout_blocks : [];
+  const economics = Array.isArray(economicsResponse.items) ? economicsResponse.items : [];
+  const canRead = permissions.has("platform.capacity.read");
+  const canTest = permissions.has("platform.capacity.test");
+  const canChaos = permissions.has("platform.capacity.chaos");
+  const canReadEconomics = permissions.has("platform.unit_economics.read");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Headroom / Performance / Resilience</p><h1>Capacity and resilience</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="capacity-refresh"
+        title="Refresh capacity state" aria-label="Refresh capacity state"
+        ${state.loading ? "disabled" : ""}>↻</button>
+    </header>
+    ${canRead ? `<section class="platform-metrics" aria-label="Capacity summary">
+      ${metric("Regions", services.length, "service projections")}
+      ${metric("Thresholds", services.filter((item) => item.threshold_reached).length, "currently reached")}
+      ${metric("Active runs", loadTests.filter((item) => new Set(["queued", "running"]).has(item.status)).length, "isolated runner")}
+      ${metric("Release blocks", blocks.filter((item) => item.status === "active").length, "performance regressions")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Low-cardinality aggregates</p><h2>Service headroom</h2></div></div>
+      <div class="platform-table-wrap"><table class="platform-capacity-table">
+        <thead><tr><th>Service / region</th><th>Demand</th><th>Capacity</th><th>Headroom</th><th>Threshold / SLO</th><th>Recommendation</th></tr></thead>
+        <tbody>${services.map((item) => `<tr>
+          <td data-label="Service / region"><strong>${escapeHtml(item.service_code)}</strong><small>${escapeHtml(item.region_code)} · rev ${number(item.revision)}</small></td>
+          <td data-label="Demand"><strong>${number(item.demand_rps)} rps</strong><small>${basisPoints(item.utilization_bps)} utilized</small></td>
+          <td data-label="Capacity"><strong>${number(item.capacity_rps)} rps</strong></td>
+          <td data-label="Headroom"><strong>${number(item.headroom_rps)} rps</strong>${status(item.threshold_reached ? "threshold_reached" : "healthy")}</td>
+          <td data-label="Threshold / SLO"><strong>${basisPoints(item.threshold_bps)}</strong><small>p95 ≤ ${number(item.slo_p95_ms)} ms</small></td>
+          <td data-label="Recommendation">${status(item.recommendation_code)}</td>
+        </tr>`).join("") || emptyRow("No capacity projection available.", 6)}</tbody>
+      </table></div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Immutable comparison sets</p><h2>Baselines and forecasts</h2></div><span>${number(baselines.length)} baselines · ${number(forecasts.length)} forecasts</span></div>
+      <div class="platform-capacity-split">
+        <div class="platform-table-wrap"><table class="platform-baseline-table">
+          <thead><tr><th>Baseline</th><th>Latency</th><th>Throughput / error</th></tr></thead>
+          <tbody>${baselines.map((item) => `<tr><td data-label="Baseline"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(item.environment_class)} · v${number(item.version)} · ${number(item.sample_count)} samples</small></td><td data-label="Latency"><strong>${number(item.p95_ms)} ms p95</strong><small>${number(item.p50_ms)} / ${number(item.p99_ms)} ms</small></td><td data-label="Throughput / error"><strong>${decimalRps(item.throughput_rps_milli)} rps</strong><small>${basisPoints(item.error_rate_bps)} error</small></td></tr>`).join("") || emptyRow("No baselines.", 3)}</tbody>
+        </table></div>
+        <div class="platform-table-wrap"><table class="platform-forecast-table">
+          <thead><tr><th>Forecast</th><th>Demand / capacity</th><th>Confidence</th><th>Job</th></tr></thead>
+          <tbody>${forecasts.map((item) => `<tr><td data-label="Forecast"><strong>${escapeHtml(item.service_code)} · ${number(item.horizon_days)} d</strong><small>${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="Demand / capacity"><strong>${number(item.predicted_demand_rps ?? 0)} / ${number(item.predicted_capacity_rps ?? 0)} rps</strong></td><td data-label="Confidence"><strong>${item.confidence_bps === null ? "pending" : basisPoints(item.confidence_bps)}</strong><small>${escapeHtml(item.recommendation_code ?? "pending")}</small></td><td data-label="Job"><strong>${shortReference(item.job_id)}</strong><small>rev ${number(item.revision)}</small></td></tr>`).join("") || emptyRow("No forecasts.", 4)}</tbody>
+        </table></div>
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Aggregate-only runner evidence</p><h2>Load and soak runs</h2></div><span>${number(loadTests.length)} runs</span></div>
+      <div class="platform-table-wrap"><table class="platform-load-table">
+        <thead><tr><th>Scenario</th><th>Bounded load</th><th>Checkpoint</th><th>Performance</th><th>Leak / fairness</th></tr></thead>
+        <tbody>${loadTests.map((item) => `<tr><td data-label="Scenario"><strong>${escapeHtml(item.scenario_code)}</strong><small>${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)}</small>${status(item.status)}</td><td data-label="Bounded load"><strong>${number(item.synthetic_tenant_count)} synthetic · ${number(item.target_rps)} rps</strong><small>${number(item.duration_seconds)} s</small></td><td data-label="Checkpoint"><strong>${shortReference(item.job_id)}</strong><small>${escapeHtml(item.safe_outcome_code ?? "queued")}</small></td><td data-label="Performance"><strong>${item.p95_ms === null ? "pending" : `${number(item.p95_ms)} ms p95`}</strong><small>${escapeHtml(item.regression_status ?? "pending")}</small></td><td data-label="Leak / fairness"><strong>conn ${number(item.open_connection_delta ?? 0)} · handle ${number(item.handle_delta ?? 0)}</strong><small>Jain ${item.fairness_jain_millionths === null ? "pending" : basisPoints(Math.round(item.fairness_jain_millionths / 100))}</small></td></tr>`).join("") || emptyRow("No load or soak runs.", 5)}</tbody>
+      </table></div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading"><div><p>Dual approval / Kill generation</p><h2>Chaos experiments</h2></div><span>${number(experiments.length)} experiments</span></div>
+      <div class="platform-table-wrap"><table class="platform-chaos-table">
+        <thead><tr><th>Fault / scope</th><th>Objective</th><th>Approvals</th><th>Checkpoint</th><th>Controls</th></tr></thead>
+        <tbody>${experiments.map((item) => capacityChaosRow(item, { canChaos, loading: state.loading })).join("") || emptyRow("No chaos experiments.", 5)}</tbody>
+      </table></div>
+    </section>
+    ${canTest ? capacityTestForms(services, scenarios, state.loading) : ""}
+    ${canChaos ? capacityChaosCreateForm(faults, services, state.loading) : ""}` : ""}
+    ${canReadEconomics ? capacityEconomicsView(economics, economicsResponse.total) : ""}`;
+}
+
+function capacityChaosRow(item, access) {
+  const canApprove = access.canChaos && item.status === "pending_approval";
+  const canKill = access.canChaos && new Set(["pending_approval", "queued", "running"]).has(item.status);
+  const approvalForm = canApprove ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
+    <input type="hidden" name="action" value="approve" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><input type="hidden" name="reasonCode" value="release_validation" /><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm approval</span></label><button type="submit" ${access.loading ? "disabled" : ""}>Approve</button></form>` : "";
+  const killForm = canKill ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
+    <input type="hidden" name="action" value="kill" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><select name="reasonCode" aria-label="Kill reason"><option value="operator_containment">Operator containment</option><option value="slo_containment">SLO containment</option></select><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm kill</span></label><button class="platform-danger" type="submit" ${access.loading ? "disabled" : ""}>Kill</button></form>` : "";
+  return `<tr>
+    <td data-label="Fault / scope"><strong>${escapeHtml(item.fault_code)}</strong><small>${escapeHtml(item.service_code)} · ${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)} · ${number(item.blast_tenant_count)} synthetic</small>${status(item.status)}</td>
+    <td data-label="Objective"><strong>p95 ${number(item.objective_p95_ms)} ms</strong><small>error ${basisPoints(item.objective_error_rate_bps)} · stop ${basisPoints(item.stop_error_rate_bps)}</small></td>
+    <td data-label="Approvals"><strong>${number(item.approvals.length)} / ${item.environment_class === "production" ? 2 : 0}</strong><small>distinct current authority</small></td>
+    <td data-label="Checkpoint"><strong>generation ${number(item.kill_generation)}</strong><small>${escapeHtml(item.stop_reason_code ?? "pending")} · ${item.objective_met === null ? "pending" : item.objective_met ? "objective met" : "objective missed"}</small></td>
+    <td data-label="Controls">${approvalForm}${killForm || (!approvalForm ? '<span class="platform-restricted">Terminal</span>' : "")}</td>
+  </tr>`;
+}
+
+function capacityTestForms(services, scenarios, loading) {
+  const activeScenarios = scenarios.filter((item) => item.status === "active");
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Signed catalogs</p><h2>Forecast and performance test</h2></div></div>
+    <div class="platform-capacity-command-grid">
+      <form data-platform-capacity-forecast-form>
+        <h3>Capacity forecast</h3>
+        <label><span>Service / region</span><select name="capacityTarget">${services.map((item) => `<option value="${escapeAttribute(`${item.service_code}|${item.region_code}|${item.revision}`)}">${escapeHtml(item.service_code)} · ${escapeHtml(item.region_code)} · rev ${number(item.revision)}</option>`).join("")}</select></label>
+        <label><span>Horizon</span><select name="horizonDays"><option value="30">30 days</option><option value="90">90 days</option></select></label>
+        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm aggregate forecast</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Queue forecast</button>
+      </form>
+      <form data-platform-capacity-load-form>
+        <h3>Load or soak test</h3>
+        <label><span>Scenario</span><select name="scenarioCode">${activeScenarios.map((item) => `<option value="${escapeAttribute(item.scenario_code)}">${escapeHtml(item.scenario_code)} · ${escapeHtml(item.run_kind)}</option>`).join("")}</select></label>
+        <label><span>Environment</span><select name="environmentClass"><option value="dev">Development</option><option value="staging">Staging</option><option value="production">Production</option></select></label>
+        <label><span>Region</span><select name="regionCode">${[...new Set(services.map((item) => item.region_code))].map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
+        <label><span>Synthetic tenants</span><input name="syntheticTenantCount" type="number" min="1" max="500" value="100" required /></label>
+        <label><span>Target RPS</span><input name="targetRps" type="number" min="1" max="100000" value="1600" required /></label>
+        <label><span>Duration seconds</span><input name="durationSeconds" type="number" min="10" max="259200" value="60" required /></label>
+        <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm isolated execution</span></label><button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>Queue test</button>
+      </form>
+    </div>
+  </section>`;
+}
+
+function capacityChaosCreateForm(faults, services, loading) {
+  const regions = [...new Set(services.map((item) => item.region_code))];
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Bounded fault catalog</p><h2>Create chaos experiment</h2></div></div>
+    <form data-platform-capacity-chaos-form class="platform-capacity-chaos-create">
+      <input type="hidden" name="action" value="create" />
+      <label><span>Fault</span><select name="faultCode">${faults.filter((item) => item.status === "active").map((item) => `<option value="${escapeAttribute(item.fault_code)}">${escapeHtml(item.fault_code)}</option>`).join("")}</select></label>
+      <label><span>Service</span><select name="serviceCode"><option value="gateway">Gateway</option><option value="control">Control</option><option value="status">Status</option><option value="shared">Shared</option></select></label>
+      <label><span>Environment</span><select name="environmentClass"><option value="staging">Staging</option><option value="production">Production</option></select></label>
+      <label><span>Region</span><select name="regionCode">${regions.map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>
+      <label><span>Blast tenants</span><input name="blastTenantCount" type="number" min="1" max="100" value="10" required /></label>
+      <label><span>Duration seconds</span><input name="durationSeconds" type="number" min="10" max="3600" value="60" required /></label>
+      <label><span>Objective p95 ms</span><input name="objectiveP95Ms" type="number" min="1" max="60000" value="2000" required /></label>
+      <label><span>Objective error bps</span><input name="objectiveErrorRateBps" type="number" min="0" max="10000" value="100" required /></label>
+      <label><span>Hard stop error bps</span><input name="stopErrorRateBps" type="number" min="1" max="10000" value="500" required /></label>
+      <label><span>Reason</span><select name="reasonCode"><option value="resilience_validation">Resilience validation</option><option value="release_validation">Release validation</option></select></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm bounded scope and stop limits</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>Create experiment</button>
+    </form>
+  </section>`;
+}
+
+function capacityEconomicsView(items, total) {
+  return `<section class="platform-band"><div class="platform-section-heading"><div><p>Integer micros / Aggregate usage</p><h2>Unit economics</h2></div><span>${number(total ?? items.length)} snapshots</span></div>
+    <div class="platform-table-wrap"><table class="platform-economics-table">
+      <thead><tr><th>Period / service</th><th>Requests</th><th>Tokens</th><th>Allocated cost</th><th>Unit costs</th><th>Watermark</th></tr></thead>
+      <tbody>${items.map((item) => `<tr><td data-label="Period / service"><strong>${escapeHtml(item.billing_period)} · ${escapeHtml(item.service_code)}</strong><small>allocation v${number(item.allocation_version)}</small></td><td data-label="Requests"><strong>${number(item.request_count)}</strong></td><td data-label="Tokens"><strong>${number(item.total_tokens)}</strong><small>${number(item.input_tokens)} in · ${number(item.output_tokens)} out</small></td><td data-label="Allocated cost"><strong>${number(item.allocated_cost_micros)} micros</strong><small>${escapeHtml(item.currency)}</small></td><td data-label="Unit costs"><strong>${number(item.cost_per_request_micros ?? 0)} / request</strong><small>${number(item.cost_per_million_tokens_micros ?? 0)} / 1M tokens</small></td><td data-label="Watermark"><strong>${shortHash(item.usage_watermark)}</strong><small>${formatTime(item.created_at)}</small></td></tr>`).join("") || emptyRow("No unit economics snapshots.", 6)}</tbody>
+    </table></div>
+  </section>`;
+}
+
+function basisPoints(value) { return `${(Number(value ?? 0) / 100).toFixed(2)}%`; }
+function decimalRps(value) { return (Number(value ?? 0) / 1000).toFixed(3); }
 
 function disasterRecoveryView(state, permissions) {
   const response = state.disasterRecoveryStatus ?? {};
@@ -1740,7 +1889,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

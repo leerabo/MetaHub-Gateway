@@ -455,6 +455,50 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-status-incident li { padding: 0 0 12px 5px; }
 .platform-status-incident li time { color: var(--muted); font-size: 12px; }
 .platform-status-incident li p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.platform-capacity-table { min-width: 920px; }
+.platform-load-table,
+.platform-chaos-table,
+.platform-economics-table { min-width: 880px; }
+.platform-capacity-split { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 26px; }
+.platform-capacity-split > * { min-width: 0; }
+.platform-capacity-table td,
+.platform-baseline-table td,
+.platform-forecast-table td,
+.platform-load-table td,
+.platform-chaos-table td,
+.platform-economics-table td { min-width: 0; overflow-wrap: anywhere; }
+.platform-capacity-table td strong,
+.platform-baseline-table td strong,
+.platform-forecast-table td strong,
+.platform-load-table td strong,
+.platform-chaos-table td strong,
+.platform-economics-table td strong { display: block; }
+.platform-capacity-table td small,
+.platform-baseline-table td small,
+.platform-forecast-table td small,
+.platform-load-table td small,
+.platform-chaos-table td small,
+.platform-economics-table td small { display: block; margin-top: 3px; color: var(--muted); }
+.platform-capacity-command-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 28px; }
+.platform-capacity-command-grid form,
+.platform-capacity-chaos-create { min-width: 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-content: start; gap: 12px; }
+.platform-capacity-command-grid h3 { grid-column: 1 / -1; margin: 0 0 4px; font-size: 15px; }
+.platform-capacity-command-grid label,
+.platform-capacity-chaos-create label { min-width: 0; display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.platform-capacity-command-grid input,
+.platform-capacity-command-grid select,
+.platform-capacity-chaos-create input,
+.platform-capacity-chaos-create select { width: 100%; min-width: 0; }
+.platform-capacity-command-grid .platform-check,
+.platform-capacity-chaos-create .platform-check,
+.platform-capacity-inline-command .platform-check { grid-template-columns: auto minmax(0,1fr); align-items: center; }
+.platform-capacity-command-grid .platform-check input,
+.platform-capacity-chaos-create .platform-check input,
+.platform-capacity-inline-command .platform-check input { width: 16px; min-height: 16px; }
+.platform-capacity-inline-command { min-width: 170px; display: grid; gap: 7px; margin-bottom: 8px; }
+.platform-capacity-inline-command:last-child { margin-bottom: 0; }
+.platform-capacity-inline-command select,
+.platform-capacity-inline-command button { width: 100%; min-width: 0; }
 [data-platform-status-create-form],
 [data-platform-maintenance-form],
 [data-platform-status-incident-form],
@@ -520,6 +564,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .platform-dr-plan-table,
   .platform-dr-run-table { min-width: 900px; }
+  .platform-capacity-split { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .platform-topbar { height: auto; min-height: 64px; grid-template-columns: auto 1fr; }
@@ -597,6 +642,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-run-table,
   .platform-dr-backup-table { min-width: 0; }
   .platform-status-component-table { min-width: 0; }
+  .platform-capacity-table,
+  .platform-baseline-table,
+  .platform-forecast-table,
+  .platform-load-table,
+  .platform-chaos-table,
+  .platform-economics-table { min-width: 0; }
   .platform-observability-table thead,
   .platform-slo-table thead,
   .platform-budget-table thead { display: none; }
@@ -606,6 +657,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-run-table thead,
   .platform-dr-backup-table thead { display: none; }
   .platform-status-component-table thead { display: none; }
+  .platform-capacity-table thead,
+  .platform-baseline-table thead,
+  .platform-forecast-table thead,
+  .platform-load-table thead,
+  .platform-chaos-table thead,
+  .platform-economics-table thead { display: none; }
   .platform-observability-table tbody,
   .platform-observability-table tr,
   .platform-observability-table td,
@@ -633,6 +690,24 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-status-component-table tbody,
   .platform-status-component-table tr,
   .platform-status-component-table td { display: block; width: 100%; }
+  .platform-capacity-table tbody,
+  .platform-capacity-table tr,
+  .platform-capacity-table td,
+  .platform-baseline-table tbody,
+  .platform-baseline-table tr,
+  .platform-baseline-table td,
+  .platform-forecast-table tbody,
+  .platform-forecast-table tr,
+  .platform-forecast-table td,
+  .platform-load-table tbody,
+  .platform-load-table tr,
+  .platform-load-table td,
+  .platform-chaos-table tbody,
+  .platform-chaos-table tr,
+  .platform-chaos-table td,
+  .platform-economics-table tbody,
+  .platform-economics-table tr,
+  .platform-economics-table td { display: block; width: 100%; }
   .platform-observability-table tr,
   .platform-slo-table tr,
   .platform-budget-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -642,6 +717,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-run-table tr,
   .platform-dr-backup-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .platform-status-component-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-capacity-table tr,
+  .platform-baseline-table tr,
+  .platform-forecast-table tr,
+  .platform-load-table tr,
+  .platform-chaos-table tr,
+  .platform-economics-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .platform-observability-table td,
   .platform-slo-table td,
   .platform-slo-table td:last-child,
@@ -655,6 +736,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-backup-table td { display: grid; grid-template-columns: 108px minmax(0,1fr); gap: 10px; width: 100%; padding: 7px 0; border: 0; text-align: left; }
   .platform-status-component-table td,
   .platform-status-component-table td:first-child { display: grid; grid-template-columns: 108px minmax(0,1fr); gap: 10px; width: 100%; padding: 7px 0; border: 0; text-align: left; }
+  .platform-capacity-table td,
+  .platform-baseline-table td,
+  .platform-forecast-table td,
+  .platform-load-table td,
+  .platform-chaos-table td,
+  .platform-economics-table td { display: grid; grid-template-columns: 108px minmax(0,1fr); gap: 10px; width: 100%; padding: 7px 0; border: 0; text-align: left; }
   .platform-status-component-table td:first-child strong,
   .platform-status-component-table td:first-child small { grid-column: 2; }
   .platform-observability-table td::before,
@@ -666,12 +753,22 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-dr-run-table td::before,
   .platform-dr-backup-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-status-component-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .platform-capacity-table td::before,
+  .platform-baseline-table td::before,
+  .platform-forecast-table td::before,
+  .platform-load-table td::before,
+  .platform-chaos-table td::before,
+  .platform-economics-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-status-incident > header,
   .platform-status-maintenance-list article > header { flex-direction: column; gap: 8px; }
   [data-platform-status-create-form],
   [data-platform-maintenance-form],
   [data-platform-status-incident-form],
   [data-platform-status-postmortem-form] { grid-template-columns: 1fr; }
+  .platform-capacity-command-grid,
+  .platform-capacity-command-grid form,
+  .platform-capacity-chaos-create { grid-template-columns: 1fr; }
+  .platform-capacity-command-grid h3 { grid-column: auto; }
   .platform-risk-table td > * { min-width: 0; }
   .platform-risk-filter { width: 100%; align-items: stretch; flex-direction: column; }
   .platform-risk-filter label,

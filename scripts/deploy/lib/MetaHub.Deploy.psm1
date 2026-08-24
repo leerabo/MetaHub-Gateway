@@ -76,6 +76,12 @@ function Assert-MetaHubEnvFile {
     "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET",
     "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
     "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
+    "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN",
+    "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET",
+    "METAHUB_RESPONSE_CACHE_HMAC_SECRET",
+    "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
@@ -129,6 +135,12 @@ function Assert-MetaHubEnvFile {
     "METAHUB_MCP_SANDBOX_ENVELOPE_SECRET",
     "METAHUB_MCP_SANDBOX_PERMIT_SECRET",
     "METAHUB_MCP_SANDBOX_RESPONSE_SECRET_CURRENT",
+    "METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN",
+    "METAHUB_CAPACITY_RUNNER_PERMIT_SECRET",
+    "METAHUB_RESPONSE_CACHE_HMAC_SECRET",
+    "METAHUB_RESPONSE_CACHE_ENCRYPTION_SECRET",
+    "METAHUB_RESPONSE_CACHE_CONTROL_IDEMPOTENCY_SECRET",
+    "METAHUB_RESPONSE_CACHE_FAILURE_SPOOL_SECRET",
     "METAHUB_CACHE_AFFINITY_HMAC_SECRET",
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
     "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET",
@@ -369,6 +381,8 @@ function Initialize-MetaHubEnvFile {
     "replace-with-generated-mcp-sandbox-envelope-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-mcp-sandbox-permit-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-mcp-sandbox-response-secret" = (New-MetaHubLocalSecret)
+    "replace-with-generated-capacity-runner-internal-token" = (New-MetaHubLocalSecret)
+    "replace-with-generated-capacity-runner-permit-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-cache-affinity-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-gateway-placement-secret" = (New-MetaHubLocalSecret)
     "replace-with-generated-business-verification-secret" = (New-MetaHubLocalSecret)

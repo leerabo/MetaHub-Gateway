@@ -6,6 +6,7 @@
   "services": {
     "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
     "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "capacity-runner": { "enabled": true, "ports": [], "health": "/health", "network": "internal-only" },
     "status-page": { "enabled": true, "port": 8002, "health": "/health" },
     "mcp-scheduler-worker": { "enabled": true, "ports": [], "health": null },
     "mcp-sandbox": { "enabled": true, "ports": [], "health": "/health/ready", "network": "isolated-egress" },

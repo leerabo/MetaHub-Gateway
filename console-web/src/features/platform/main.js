@@ -100,6 +100,13 @@ import {
   publishPlatformPostmortem,
   updatePlatformIncident,
 } from "../../lib/statusIncidents.js";
+import {
+  commandCapacityChaos,
+  createCapacityForecast,
+  createCapacityLoadTest,
+  getPlatformCapacity,
+  getPlatformUnitEconomics,
+} from "../../lib/capacityManagement.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -251,6 +258,11 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      capacity: (input) => getPlatformCapacity({ controlApiUrl, ...input }),
+      unitEconomics: (input) => getPlatformUnitEconomics({ controlApiUrl, ...input }),
+      createCapacityForecast: (input) => createCapacityForecast({ controlApiUrl, ...input }),
+      createCapacityLoadTest: (input) => createCapacityLoadTest({ controlApiUrl, ...input }),
+      commandCapacityChaos: (input) => commandCapacityChaos({ controlApiUrl, ...input }),
     },
   }).mount();
 }

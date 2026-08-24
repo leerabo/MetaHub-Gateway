@@ -71,12 +71,23 @@ services:
       METAHUB_MCP_SANDBOX_DENY_CIDRS: ""
       METAHUB_MCP_SANDBOX_ALLOWED_PORTS: ""
       METAHUB_MCP_SANDBOX_DENY_PORTS: ""
+      METAHUB_CAPACITY_RUNNER_MODE: isolated_http
+      METAHUB_CAPACITY_RUNNER_BASE_URL: http://capacity-runner:8012
+      METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN: ${METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN:?set METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN in .env.compose}
+      METAHUB_CAPACITY_RUNNER_PERMIT_SECRET: ${METAHUB_CAPACITY_RUNNER_PERMIT_SECRET:?set METAHUB_CAPACITY_RUNNER_PERMIT_SECRET in .env.compose}
+      METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS: ${METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS:-30}
     ports:
       - "${METAHUB_CONTROL_BIND:-127.0.0.1}:${METAHUB_CONTROL_PORT:-8001}:8001"
     volumes:
       - metahub-sqlite:/app/.data/compose
       - metahub-logs:/app/.logs
       - metahub-status:/app/.data/status-page
+    networks:
+      - default
+      - capacity-runner-control
+    depends_on:
+      capacity-runner:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -89,6 +100,43 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    restart: unless-stopped
+
+  capacity-runner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/capacity-runner.Dockerfile
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/capacity-runner:${METAHUB_IMAGE_TAG:-local}
+    environment:
+      PYTHONPATH: /app/control-plane-api/src
+      METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN: ${METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN:?set METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN in .env.compose}
+      METAHUB_CAPACITY_RUNNER_PERMIT_SECRET: ${METAHUB_CAPACITY_RUNNER_PERMIT_SECRET:?set METAHUB_CAPACITY_RUNNER_PERMIT_SECRET in .env.compose}
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - capacity-runner-control
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health', timeout=3).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
     restart: unless-stopped
 
   status-page:
@@ -423,6 +471,8 @@ volumes:
   metahub-minio:
 
 networks:
+  capacity-runner-control:
+    internal: true
   mcp-sandbox-control:
     internal: true
   mcp-sandbox-egress:

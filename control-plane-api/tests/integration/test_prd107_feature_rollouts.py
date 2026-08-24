@@ -39,7 +39,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd107-feature-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0104"
+    assert apply_migrations(database_url).applied[-1] == "0105"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -190,6 +190,75 @@ def _platform_headers(**values: str) -> dict[str, str]:
         "X-CSRF-Token": PLATFORM_CSRF,
         **values,
     }
+
+
+def _insert_performance_block(
+    config: AppConfig, *, environment_class: str, marker: str
+) -> None:
+    job_id = "pjob_" + marker * 32
+    run_id = "ltr_" + marker * 32
+    baseline_id = "pbl_" + marker * 32
+    block_id = "prb_" + marker * 32
+    stamp = "2026-08-25T12:00:00Z"
+    connection = connect_database(config.database_url)
+    try:
+        connection.execute(
+            """INSERT INTO platform_jobs(
+                 platform_job_id,type_code,queue_code,priority,status,revision,generation,
+                 attempt_count,max_attempts,input_envelope,input_sha256,idempotency_sha256,
+                 source_code,request_id,trace_id,safe_outcome_code,scheduled_at,started_at,
+                 completed_at,created_at,updated_at)
+               VALUES(?,'capacity.run','bulk',50,'succeeded',1,0,0,3,?,?,?,
+                 'prd107-test','prd107-performance-gate','prd107-performance-gate',
+                 'capacity.load_succeeded',?,?,?,?,?)""",
+            (job_id, "x" * 40, marker * 64, marker * 64, stamp, stamp, stamp, stamp, stamp),
+        )
+        connection.execute(
+            """INSERT INTO load_test_runs(
+                 load_test_run_id,scenario_code,service_code,run_kind,environment_class,
+                 region_code,synthetic_tenant_count,target_rps,duration_seconds,
+                 scenario_manifest_sha256,status,platform_job_id,created_by_operator_id,
+                 sample_count,p50_ms,p95_ms,p99_ms,throughput_rps_milli,error_rate_bps,
+                 cpu_peak_bps,memory_peak_mib,open_connection_delta,handle_delta,
+                 fairness_jain_millionths,controlled_degradation,regression_status,
+                 result_sha256,safe_outcome_code,revision,started_at,completed_at,created_at,
+                 updated_at)
+               VALUES(?,'gateway-release','gateway','load',?,'cn-north-1',100,1600,60,
+                 ?,'succeeded',?,?,96000,40,80,100,1592000,25,3300,512,0,0,995000,1,
+                 'regressed',?,'runner.load_completed',1,?,?,?,?)""",
+            (
+                run_id,
+                environment_class,
+                "a" * 64,
+                job_id,
+                OPERATOR_IDS[0],
+                marker * 64,
+                stamp,
+                stamp,
+                stamp,
+                stamp,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO performance_baselines(
+                 performance_baseline_id,service_code,scenario_code,environment_class,
+                 version,sample_count,p50_ms,p95_ms,p99_ms,throughput_rps_milli,
+                 error_rate_bps,cpu_peak_bps,memory_peak_mib,sample_window_seconds,
+                 result_sha256,source_load_test_run_id,created_at)
+               VALUES(?,'gateway','gateway-release',?,1,96000,30,60,80,1592000,
+                 20,3000,512,60,?,?,?)""",
+            (baseline_id, environment_class, marker * 64, run_id, stamp),
+        )
+        connection.execute(
+            """INSERT INTO performance_rollout_blocks(
+                 performance_rollout_block_id,service_code,scenario_code,environment_class,
+                 load_test_run_id,performance_baseline_id,status,created_at,cleared_at)
+               VALUES(?,'gateway','gateway-release',?,?,?,'active',?,NULL)""",
+            (block_id, environment_class, run_id, baseline_id, stamp),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _workspace_context() -> WorkspaceSessionContext:
@@ -611,6 +680,133 @@ async def test_p0_rollout_requires_two_independent_approvers(
         assert second.status_code == 200, second.text
         assert second.json()["rollout"]["approval_count"] == 2
         assert second.json()["rollout"]["status"] == "scheduled"
+
+
+@pytest.mark.anyio
+async def test_performance_regression_blocks_matching_start_and_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: tuple[AppConfig, list[PlatformContext]],
+) -> None:
+    config, contexts = runtime
+    holder = {"context": contexts[0]}
+    app = _platform_app(monkeypatch, config, holder)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        dev_payload = _create_payload("gateway.dev_release")
+        dev_payload["rules"] = {
+            **dev_payload["rules"],
+            "environments": ["development"],
+        }
+        created = await client.post(
+            "/platform/feature-flags",
+            headers=_platform_headers(
+                **{"Idempotency-Key": "prd113-create-dev-gate-0001"}
+            ),
+            json=dev_payload,
+        )
+        assert created.status_code == 200, created.text
+        flag = created.json()["flag"]
+        _insert_performance_block(config, environment_class="dev", marker="d")
+        blocked_start = await client.post(
+            f"/platform/feature-flags/{flag['flag_id']}/rollouts",
+            headers=_platform_headers(
+                **{
+                    "If-Match": '"1"',
+                    "Idempotency-Key": "prd113-start-dev-gate-0001",
+                }
+            ),
+            json={
+                "action": "start",
+                "rollout_id": None,
+                "version_number": 1,
+                "percentage_bps": 2500,
+                "environment_code": "development",
+                "region_code": "cn-north-1",
+                "reason_code": "release_start",
+                "confirmed": True,
+            },
+        )
+        assert blocked_start.status_code == 409
+        assert blocked_start.json()["code"] == "feature_flag.performance_regressed"
+
+        staging_payload = _create_payload("gateway.staging_release")
+        staging_payload["rules"] = {
+            **staging_payload["rules"],
+            "environments": ["staging"],
+        }
+        created = await client.post(
+            "/platform/feature-flags",
+            headers=_platform_headers(
+                **{"Idempotency-Key": "prd113-create-resume-gate-01"}
+            ),
+            json=staging_payload,
+        )
+        assert created.status_code == 200, created.text
+        flag = created.json()["flag"]
+        started = await client.post(
+            f"/platform/feature-flags/{flag['flag_id']}/rollouts",
+            headers=_platform_headers(
+                **{
+                    "If-Match": '"1"',
+                    "Idempotency-Key": "prd113-start-resume-gate-01",
+                }
+            ),
+            json={
+                "action": "start",
+                "rollout_id": None,
+                "version_number": 1,
+                "percentage_bps": 2500,
+                "environment_code": "staging",
+                "region_code": "cn-north-1",
+                "reason_code": "release_start",
+                "confirmed": True,
+            },
+        )
+        assert started.status_code == 200, started.text
+        rollout = started.json()["rollout"]
+        paused = await client.post(
+            f"/platform/feature-flags/{flag['flag_id']}/rollouts",
+            headers=_platform_headers(
+                **{
+                    "If-Match": f'"{rollout["revision"]}"',
+                    "Idempotency-Key": "prd113-pause-resume-gate-01",
+                }
+            ),
+            json={
+                "action": "pause",
+                "rollout_id": rollout["rollout_id"],
+                "version_number": None,
+                "percentage_bps": None,
+                "environment_code": None,
+                "region_code": None,
+                "reason_code": "operator_pause",
+                "confirmed": True,
+            },
+        )
+        assert paused.status_code == 200, paused.text
+        _insert_performance_block(config, environment_class="staging", marker="e")
+        blocked_resume = await client.post(
+            f"/platform/feature-flags/{flag['flag_id']}/rollouts",
+            headers=_platform_headers(
+                **{
+                    "If-Match": f'"{paused.json()["rollout"]["revision"]}"',
+                    "Idempotency-Key": "prd113-resume-gate-block-01",
+                }
+            ),
+            json={
+                "action": "resume",
+                "rollout_id": rollout["rollout_id"],
+                "version_number": None,
+                "percentage_bps": None,
+                "environment_code": None,
+                "region_code": None,
+                "reason_code": "health_recovery",
+                "confirmed": True,
+            },
+        )
+        assert blocked_resume.status_code == 409
+        assert blocked_resume.json()["code"] == "feature_flag.performance_regressed"
 
 
 @pytest.mark.anyio
