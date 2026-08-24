@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 
+from metahub_shared.abuse_risk import install_risk_runtime, persistence_sink
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.observability import install_telemetry_runtime
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -104,6 +105,8 @@ from .request_logs import install_request_log_query_event_scheduler
 from .request_logs.routes import router as request_logs_router
 from .response_cache import install_response_cache_outbox_scheduler
 from .response_cache import router as response_cache_router
+from .risk_controls import install_risk_scheduler
+from .risk_controls import router as risk_controls_router
 from .saas_billing import install_saas_billing_scheduler
 from .saas_billing import router as saas_billing_router
 from .security_events import install_security_event_scheduler
@@ -194,6 +197,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/memberships/")
         or request.url.path == "/platform/bootstrap"
         or request.url.path.startswith("/platform/")
+        or request.url.path.startswith("/risk/")
         or request.url.path.startswith("/support/")
         or request.url.path.startswith("/workspace/support-grants/")
         or request.url.path.startswith("/workspace/break-glass-sessions/")
@@ -247,6 +251,7 @@ app.include_router(business_verification_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
+app.include_router(risk_controls_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -344,6 +349,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_invoice_reconciliation_scheduler,
             install_notification_scheduler,
             install_observability_scheduler,
+            install_risk_scheduler,
             install_partner_portal_scheduler,
             install_branding_scheduler,
             install_billing_dispute_scheduler,
@@ -353,5 +359,7 @@ if app.state.config.control_background_schedulers_enabled:
         )
     )
 install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)
+# Risk facts persist from a bounded background queue; request paths never wait on SQLite writes.
+install_risk_runtime(app, sink=persistence_sink(app.state.config))
 # Observability is installed last so its lifespan stops accepting facts before workers shut down.
 install_telemetry_runtime(app, service_code="control")

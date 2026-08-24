@@ -73,6 +73,7 @@ function renderView(state, permissions) {
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
   if (state.view === "observability") return observabilityView(state, permissions);
+  if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -82,6 +83,92 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function abuseRiskView(state, permissions) {
+  const response = state.riskCases ?? {};
+  const cases = Array.isArray(response.items) ? response.items : [];
+  const support = response.projection === "support";
+  const canDecide = !support && permissions.has("platform.risk.decide");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Abuse / Risk</p><h1>滥用与风险控制</h1></div>
+      <span>${support ? "支持投影" : "安全投影"}</span>
+    </header>
+    <section class="platform-metrics" aria-label="风险案件概览">
+      ${metric("Cases", response.total ?? cases.length, "当前筛选")}
+      ${metric("Open", cases.filter((item) => item.status === "open").length, "待分诊")}
+      ${metric("Restricted", cases.filter((item) => item.status === "restricted").length, "限制生效")}
+      ${metric("Appeals", cases.reduce((total, item) => total + item.appeals.length, 0), "申诉记录")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Case queue</p><h2>风险案件</h2></div>
+        <form class="platform-risk-filter" data-platform-risk-filter-form>
+          <label><span>状态</span><select name="status">${riskStatusOptions(state.riskStatus)}</select></label>
+          <button type="submit" ${state.loading ? "disabled" : ""}>筛选</button>
+        </form>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-risk-table">
+          <thead><tr><th>案件 / Workspace</th><th>状态 / 风险</th><th>信号</th><th>限制 / 申诉</th><th>决策</th></tr></thead>
+          <tbody>${cases.map((item) => riskCaseRow(item, { support, canDecide, loading: state.loading })).join("") || emptyRow("暂无风险案件", 5)}</tbody>
+        </table>
+      </div>
+      <div class="platform-pagination platform-risk-pagination">
+        <button type="button" data-platform-action="risk-previous" ${state.riskCursorHistory?.length ? "" : "disabled"}>上一页</button>
+        <span>${number(cases.length)} 条</span>
+        <button type="button" data-platform-action="risk-next" ${response.next_cursor ? "" : "disabled"}>下一页</button>
+      </div>
+    </section>
+  `;
+}
+
+function riskCaseRow(item, { support, canDecide, loading }) {
+  const score = support ? "已隐藏" : statusLabel(item.score_band ?? "unknown");
+  const signals = support
+    ? '<span class="platform-restricted">支持投影不显示</span>'
+    : item.signal_families.map((value) => `<span>${escapeHtml(statusLabel(value))}</span>`).join("")
+      || '<span class="platform-restricted">无</span>';
+  return `
+    <tr>
+      <td data-label="案件 / Workspace"><strong>${escapeHtml(shortReference(item.risk_case_id))}</strong><span>${escapeHtml(shortWorkspace(item.workspace_id))} · rev ${number(item.revision)}</span><small>${escapeHtml(formatTime(item.updated_at))}</small></td>
+      <td data-label="状态 / 风险">${status(item.status)}<span>${escapeHtml(score)}</span><small>${escapeHtml(statusLabel(item.safe_reason_family))}</small></td>
+      <td data-label="信号"><div class="platform-tag-list platform-risk-signals">${signals}</div></td>
+      <td data-label="限制 / 申诉">${riskRestriction(item.restriction)}${riskAppealTimeline(item.appeals)}</td>
+      <td data-label="决策">${canDecide ? riskDecisionControls(item, loading) : '<span class="platform-restricted">只读</span>'}</td>
+    </tr>
+  `;
+}
+
+function riskRestriction(restriction) {
+  if (!restriction) return '<div class="platform-risk-restriction"><strong>无限制</strong></div>';
+  return `<dl class="platform-risk-restriction">
+    <div><dt>类型</dt><dd>${escapeHtml(statusLabel(restriction.restriction_kind))}</dd></div>
+    <div><dt>状态</dt><dd>${status(restriction.status)}</dd></div>
+    <div><dt>截止</dt><dd>${escapeHtml(formatTime(restriction.expires_at))}</dd></div>
+  </dl>`;
+}
+
+function riskAppealTimeline(appeals) {
+  if (!appeals.length) return '<p class="platform-restricted">无申诉</p>';
+  return `<ol class="platform-risk-appeals" aria-label="申诉时间线">${appeals.map((appeal) => `
+    <li><div><strong>${escapeHtml(statusLabel(appeal.category))}</strong>${status(appeal.status)}</div><small>${escapeHtml(formatTime(appeal.created_at))}${appeal.resolution_reason ? ` · ${escapeHtml(statusLabel(appeal.resolution_reason))}` : ""}</small></li>
+  `).join("")}</ol>`;
+}
+
+function riskDecisionControls(item, loading) {
+  if (new Set(["cleared", "closed"]).has(item.status)) {
+    return '<span class="platform-restricted">已终结</span>';
+  }
+  const hidden = `<input type="hidden" name="caseId" value="${escapeAttribute(item.risk_case_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" />`;
+  const review = item.status === "open" ? `
+    <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="required_review" /><input type="hidden" name="reasonCode" value="manual_review" /><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认复核</span></label><button type="submit" ${loading ? "disabled" : ""}>进入复核</button></form>` : "";
+  const restrict = item.status !== "restricted" ? `
+    <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="restricted" /><input type="hidden" name="reasonCode" value="automation_confirmed" /><label><span>限制</span><select name="restrictionKind"><option value="api_calls">API 调用</option><option value="resource_creation">资源创建</option><option value="workspace_access">Workspace 访问</option></select></label><label><span>分钟</span><input name="restrictionMinutes" type="number" min="5" max="10080" value="30" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认限制</span></label><button class="platform-danger" type="submit" ${loading ? "disabled" : ""}>限制</button></form>` : "";
+  const clear = `
+    <form data-platform-risk-decision-form>${hidden}<input type="hidden" name="decision" value="cleared" /><label><span>清除原因</span><select name="reasonCode"><option value="false_positive">误报</option><option value="appeal_approved">申诉通过</option></select></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认清除</span></label><button type="submit" ${loading ? "disabled" : ""}>清除</button></form>`;
+  return `<div class="platform-risk-actions">${review}${restrict}${clear}</div>`;
 }
 
 function jobRuntimeView(state, permissions) {
@@ -1319,6 +1406,7 @@ function status(value) {
 function roleLabel(value) { return String(value ?? "").replace(/^platform_/u, "").replaceAll("_", " "); }
 function domainLabel(value) { return value === "workspace" ? "客户" : value === "platform" ? "平台" : value; }
 function statusLabel(value) { return String(value).replaceAll("_", " "); }
+function riskStatusOptions(current) { return [["", "全部"], ["open", "待处理"], ["under_review", "复核中"], ["restricted", "已限制"], ["cleared", "已清除"], ["closed", "已关闭"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
 function billingStatusLabel(value) { return ({ open: "进行中", closed: "已关账", reconciliation_required: "需要对账" })[value] ?? statusLabel(value); }
 function billingStatusOptions(current) { return [["open", "进行中"], ["closed", "已关账"], ["reconciliation_required", "需要对账"]].map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join(""); }
 function refundStatusLabel(value) { return ({ requested: "待审核", processing: "处理中", succeeded: "已退款", failed: "失败", rejected: "已拒绝" })[value] ?? statusLabel(value); }
@@ -1347,7 +1435,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

@@ -10,9 +10,15 @@ from typing import Any
 
 import anyio
 from fastapi import APIRouter, Request, Response, status
+from metahub_shared.abuse_risk import runtime_for
 from metahub_shared.runtime.errors import ApiError
 
-from metahub_control.identity.service import CSRF_COOKIE, SESSION_COOKIE, valid_opaque_value
+from metahub_control.identity.service import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    authenticate_global_session,
+    valid_opaque_value,
+)
 
 from .models import WorkspaceListResponse, WorkspaceResponse
 from .service import create_workspace, get_workspace, list_workspaces, update_workspace
@@ -37,10 +43,23 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
     )
     if set(payload) != required:
         raise ApiError("workspace.request_invalid")
+    session_token = _required_session_cookie(request)
+    identity = await _run(authenticate_global_session, _config(request), session_token)
+    subjects = {"account": identity.account_id}
+    if request.client and request.client.host:
+        subjects["ip_prefix"] = request.client.host
+    assessment = await runtime_for(request.app.state, _config(request)).assess(
+        "resource_creation",
+        subjects,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if assessment.outcome != "allow":
+        raise ApiError("risk.challenge_required")
     result = await _run(
         create_workspace,
         _config(request),
-        session_token=_required_session_cookie(request),
+        session_token=session_token,
         csrf_token=_required_csrf(request),
         idempotency_key=idempotency_key,
         kind=kind,
@@ -262,9 +281,10 @@ def _pagination(request: Request) -> tuple[int, int]:
     items = list(request.query_params.multi_items())
     if any(key not in {"limit", "offset"} for key, _value in items):
         raise ApiError("workspace.request_invalid")
-    if sum(key == "limit" for key, _value in items) > 1 or sum(
-        key == "offset" for key, _value in items
-    ) > 1:
+    if (
+        sum(key == "limit" for key, _value in items) > 1
+        or sum(key == "offset" for key, _value in items) > 1
+    ):
         raise ApiError("workspace.request_invalid")
     try:
         limit = int(request.query_params.get("limit", "20"))

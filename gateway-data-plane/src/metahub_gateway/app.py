@@ -6,6 +6,7 @@ Provider Key 的业务判断仍在各自模块完成，避免应用入口持有�
 
 from __future__ import annotations
 
+from metahub_shared.abuse_risk import install_risk_runtime, persistence_sink
 from metahub_shared.observability import install_telemetry_runtime
 from metahub_shared.runtime.fastapi_app import create_service_app
 
@@ -69,5 +70,7 @@ install_provider_error_map_cache(app)
 # Placement artifacts are verified into process-local memory; database or signature failures keep
 # the previous valid snapshot and new requests fail closed once its explicit expiry is reached.
 install_gateway_placement_sync(app)
+# Abuse-counter persistence is asynchronous and cannot backpressure model requests.
+install_risk_runtime(app, sink=persistence_sink(app.state.config))
 # Low-cardinality facts use a bounded put_nowait queue; persistence never backpressures requests.
 install_telemetry_runtime(app, service_code="gateway")

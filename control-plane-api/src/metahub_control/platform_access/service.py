@@ -122,6 +122,12 @@ _NAVIGATION = (
         "Observability",
         "/platform.html#observability",
     ),
+    (
+        "platform.risk.read",
+        "abuse-risk",
+        "Abuse risk",
+        "/platform.html#abuse-risk",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -714,6 +720,7 @@ def get_platform_navigation(
                 item_id == "observability"
                 and "platform.observability.security_read" in permission_set
             )
+            or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
         )
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
@@ -2357,10 +2364,18 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
+    if _table_exists(connection, "platform_risk_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_risk_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
     extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
-    parameters: tuple[object, ...] = tuple(
-        [operator_id, *([operator_id] * len(extension_queries))]
-    )
+    parameters: tuple[object, ...] = tuple([operator_id, *([operator_id] * len(extension_queries))])
     permissions = tuple(
         row[0]
         for row in connection.execute(

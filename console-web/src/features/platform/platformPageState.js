@@ -10,6 +10,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "feature-rollouts",
   "config-distribution",
   "observability",
+  "abuse-risk",
   "operators",
   "workspaces",
   "support",
@@ -93,6 +94,11 @@ export function createPlatformPageController({
     serviceLevelObjectives: null,
     errorBudgets: null,
     observabilityIntent: null,
+    riskCases: null,
+    riskStatus: "",
+    riskCursor: null,
+    riskCursorHistory: [],
+    riskDecisionIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -163,7 +169,7 @@ export function createPlatformPageController({
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
-        "job-runtime", "feature-rollouts", "config-distribution", "observability",
+        "job-runtime", "feature-rollouts", "config-distribution", "observability", "abuse-risk",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -177,8 +183,10 @@ export function createPlatformPageController({
           state.featureCommandIntent = null;
         } else if (state.view === "config-distribution") {
           state.configRebuildIntent = null;
-        } else {
+        } else if (state.view === "observability") {
           state.observabilityIntent = null;
+        } else {
+          state.riskDecisionIntent = null;
         }
         state.loading = false;
       }
@@ -195,6 +203,7 @@ export function createPlatformPageController({
       if (state.view === "observability" && !state.observabilityServices) {
         void loadObservability();
       }
+      if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
     },
     async filterJobs(status) {
       state.jobStatus = normalizeJobStatus(status);
@@ -444,6 +453,45 @@ export function createPlatformPageController({
         }),
         "告警确认已记录。",
       );
+    },
+    async filterRiskCases(status) {
+      state.riskStatus = normalizeRiskStatus(status);
+      state.riskCursor = null;
+      state.riskCursorHistory = [];
+      state.riskDecisionIntent = null;
+      return loadRiskCases();
+    },
+    async nextRiskPage() {
+      const next = state.riskCases?.next_cursor;
+      if (!next) return false;
+      state.riskCursorHistory.push(state.riskCursor);
+      state.riskCursor = next;
+      return loadRiskCases();
+    },
+    async previousRiskPage() {
+      if (!state.riskCursorHistory.length) return false;
+      state.riskCursor = state.riskCursorHistory.pop() ?? null;
+      return loadRiskCases();
+    },
+    async decideRiskCase(command) {
+      if (typeof api.decideRiskCase !== "function"
+        || !currentPermissions().has("platform.risk.decide")
+        || command?.confirmed !== true) return false;
+      const input = {
+        caseId: command.caseId,
+        revision: Number(command.revision),
+        decision: command.decision,
+        reasonCode: command.reasonCode,
+        restrictionKind: command.decision === "restricted"
+          ? command.restrictionKind : null,
+        restrictionMinutes: command.decision === "restricted"
+          ? Number(command.restrictionMinutes) : null,
+      };
+      return riskWrite(input, (idempotencyKey, signal) => api.decideRiskCase({
+        ...input,
+        idempotencyKey,
+        signal,
+      }));
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
@@ -1097,6 +1145,15 @@ export function createPlatformPageController({
           next.errorBudgets = budgets;
         }));
       }
+      if ((permissions.has("platform.risk.read")
+        || permissions.has("platform.risk.support_read"))
+        && typeof api.riskCases === "function") {
+        tasks.push(api.riskCases({
+          status: state.riskStatus,
+          cursor: state.riskCursor,
+          signal: ticket.signal,
+        }).then((value) => { next.riskCases = value; }));
+      }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
@@ -1130,6 +1187,9 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "observability")) {
         state.observabilityIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "abuse-risk")) {
+        state.riskDecisionIntent = null;
       }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
@@ -1243,6 +1303,30 @@ export function createPlatformPageController({
       state.observabilityServices = services;
       state.serviceLevelObjectives = slos;
       state.errorBudgets = budgets;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadRiskCases() {
+    const permissions = currentPermissions();
+    if ((!permissions.has("platform.risk.read")
+      && !permissions.has("platform.risk.support_read"))
+      || typeof api.riskCases !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.riskCases = await api.riskCases({
+        status: state.riskStatus,
+        cursor: state.riskCursor,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
       state.loading = false;
       render();
       return true;
@@ -1461,6 +1545,38 @@ export function createPlatformPageController({
     } catch (error) {
       if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
         state.observabilityIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function riskWrite(intent, operation) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.riskDecisionIntent?.fingerprint === fingerprint
+      ? state.riskDecisionIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.riskDecisionIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      state.riskCases = await api.riskCases({
+        status: state.riskStatus,
+        cursor: state.riskCursor,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
+      state.riskDecisionIntent = null;
+      state.loading = false;
+      state.feedback = "Risk case decision recorded.";
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.riskDecisionIntent = null;
       }
       return fail(ticket, error);
     }
@@ -1725,6 +1841,20 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-risk-filter-form]")) {
+        controller.filterRiskCases(data.get("status"));
+      }
+      if (form.matches("[data-platform-risk-decision-form]")) {
+        controller.decideRiskCase({
+          caseId: data.get("caseId"),
+          revision: Number(data.get("revision")),
+          decision: data.get("decision"),
+          reasonCode: data.get("reasonCode"),
+          restrictionKind: data.get("restrictionKind"),
+          restrictionMinutes: data.get("restrictionMinutes"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -1783,6 +1913,8 @@ export function createPlatformPageController({
         controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
       }
       if (action === "backup-refresh") controller.refreshBackup();
+      if (action === "risk-next") controller.nextRiskPage();
+      if (action === "risk-previous") controller.previousRiskPage();
       if (action === "open-job") controller.openJob(target.dataset.jobId);
       if (action === "close-job") controller.closeJob();
       if (action === "prepare-workspace-lifecycle") controller.prepareWorkspaceLifecycle(target.dataset.lifecycleAction);
@@ -1860,6 +1992,11 @@ export function createPlatformPageController({
     state.serviceLevelObjectives = null;
     state.errorBudgets = null;
     state.observabilityIntent = null;
+    state.riskCases = null;
+    state.riskStatus = "";
+    state.riskCursor = null;
+    state.riskCursorHistory = [];
+    state.riskDecisionIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;
@@ -1925,6 +2062,12 @@ function normalizeFeatureStatus(value) {
 function normalizeFeatureRisk(value) {
   const normalized = String(value ?? "");
   return new Set(["", "standard", "p0"]).has(normalized) ? normalized : "";
+}
+
+function normalizeRiskStatus(value) {
+  const normalized = String(value ?? "");
+  return new Set(["", "open", "under_review", "restricted", "cleared", "closed"])
+    .has(normalized) ? normalized : "";
 }
 
 function optionalText(value) {

@@ -242,6 +242,30 @@ a {
   background: #fff;
 }
 
+.identity-risk-reference {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  border-block: 1px solid var(--identity-line);
+  padding: 12px 0;
+}
+
+.identity-risk-reference span {
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.identity-risk-reference strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
 .identity-topbar {
   display: flex;
   min-height: 62px;

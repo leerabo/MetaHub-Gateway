@@ -1,5 +1,6 @@
 // 账号安全状态机统一管理 Workspace 授权、企业认证敏感值清理和过期请求取消。
 import { IdentityApiError } from "../../lib/identity.js";
+import { PlatformApiError } from "../../lib/platform.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import { consumePaymentClientToken } from "../../lib/paymentCommerce.js";
 import {
@@ -7,6 +8,7 @@ import {
   renderIdentityRegistrationPage,
   renderIdentityResetConfirmPage,
   renderIdentityResetRequestPage,
+  renderIdentityRiskChallengePage,
   renderIdentitySecurityPage,
   renderIdentityVerificationPage,
 } from "./renderIdentityPage.js";
@@ -79,6 +81,8 @@ export function createIdentityPageController({
   let invitationSecretLink = null;
   let invitationSecretMail = null;
   let pendingChallenge = null;
+  let riskChallenge = null;
+  let riskChallengeIntent = null;
   let mfaEnrollment = null;
   let platformAccess = false;
   let pendingWrite = Promise.resolve();
@@ -97,6 +101,8 @@ export function createIdentityPageController({
     async login({ email, password }) {
       const ticket = beginRequest();
       pendingChallenge = null;
+      riskChallenge = null;
+      riskChallengeIntent = null;
       renderIdentityLoginPage(root, { email });
       try {
         const result = await queueWrite(() => api.login({ email, password }));
@@ -113,6 +119,81 @@ export function createIdentityPageController({
         return false;
       }
     },
+    showRiskChallenge({ challengeId, challengeToken, revision, credential = "global" } = {}) {
+      if (!/^rch_[0-9a-f]{32}$/u.test(String(challengeId ?? ""))
+        || typeof challengeToken !== "string" || challengeToken.length < 32
+        || challengeToken.length > 256 || !Number.isSafeInteger(Number(revision))
+        || Number(revision) < 1 || !new Set(["global", "workspace"]).has(credential)) {
+        return false;
+      }
+      beginRequest();
+      scrubSensitiveInputs();
+      riskChallenge = {
+        challengeId,
+        challengeToken,
+        revision: Number(revision),
+        credential,
+      };
+      riskChallengeIntent = null;
+      renderIdentityRiskChallengePage(root, { challengeId });
+      return true;
+    },
+    async completeRiskChallenge({ answer } = {}) {
+      if (!riskChallenge || typeof api.completeRiskChallenge !== "function"
+        || typeof answer !== "string" || answer.length < 6 || answer.length > 128) {
+        scrubSensitiveInputs();
+        return false;
+      }
+      const challenge = riskChallenge;
+      const fingerprint = JSON.stringify({
+        challengeId: challenge.challengeId,
+        revision: challenge.revision,
+        answer,
+      });
+      const idempotencyKey = riskChallengeIntent?.fingerprint === fingerprint
+        ? riskChallengeIntent.idempotencyKey
+        : newIdempotencyKey();
+      riskChallengeIntent = { fingerprint, idempotencyKey };
+      const ticket = beginRequest();
+      scrubSensitiveInputs();
+      renderIdentityRiskChallengePage(root, { challengeId: challenge.challengeId, busy: true });
+      try {
+        await queueWrite(() => api.completeRiskChallenge({
+          ...challenge,
+          answer,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        riskChallenge = null;
+        riskChallengeIntent = null;
+        scrubSensitiveInputs();
+        return loadProtectedState("附加验证已完成。", ticket);
+      } catch (error) {
+        scrubSensitiveInputs();
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          riskChallengeIntent = null;
+        }
+        if (error instanceof PlatformApiError
+          && new Set(["risk.challenge_expired", "risk.challenge_replayed",
+            "risk.challenge_not_found"]).has(error.code)) {
+          riskChallenge = null;
+        }
+        renderIdentityRiskChallengePage(root, {
+          challengeId: challenge.challengeId,
+          error: safePageError(error),
+        });
+        return false;
+      }
+    },
+    async cancelRiskChallenge() {
+      beginRequest();
+      scrubSensitiveInputs();
+      riskChallenge = null;
+      riskChallengeIntent = null;
+      return loadProtectedState();
+    },
     showLogin() {
       clearToLogin();
       return true;
@@ -122,6 +203,8 @@ export function createIdentityPageController({
       scrubSensitiveInputs();
       scrubProtectedState();
       pendingChallenge = null;
+      riskChallenge = null;
+      riskChallengeIntent = null;
       renderIdentityRegistrationPage(root);
       return true;
     },
@@ -130,6 +213,8 @@ export function createIdentityPageController({
       scrubSensitiveInputs();
       scrubProtectedState();
       pendingChallenge = null;
+      riskChallenge = null;
+      riskChallengeIntent = null;
       renderIdentityResetRequestPage(root);
       return true;
     },
@@ -1138,6 +1223,8 @@ export function createIdentityPageController({
       contextChannel = null;
       scrubSensitiveInputs();
       pendingChallenge = null;
+      riskChallenge = null;
+      riskChallengeIntent = null;
       scrubProtectedState();
       root.innerHTML = "";
     },
@@ -1879,6 +1966,8 @@ export function createIdentityPageController({
     const ticket = beginRequest();
     scrubSensitiveInputs();
     pendingChallenge = null;
+    riskChallenge = null;
+    riskChallengeIntent = null;
     scrubProtectedState();
     renderIdentityLoginPage(root);
     return ticket;
@@ -2016,6 +2105,7 @@ export function createIdentityPageController({
     for (const selector of [
       'input[type="password"]',
       'input[name="code"]',
+      'input[name="answer"]',
       'input[autocomplete="one-time-code"]',
     ]) {
       for (const input of root.querySelectorAll?.(selector) ?? []) {
@@ -2073,6 +2163,14 @@ export function createIdentityPageController({
         event.preventDefault();
         const fields = new FormData(form);
         await controller.login({ email: fields.get("email"), password: fields.get("password") });
+      } else if (form?.matches?.("[data-identity-risk-challenge-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const answer = String(fields.get("answer") ?? "");
+        for (const input of form.querySelectorAll?.('input[name="answer"]') ?? []) {
+          input.value = "";
+        }
+        await controller.completeRiskChallenge({ answer });
       } else if (form?.matches?.("[data-identity-registration-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -2242,6 +2340,8 @@ export function createIdentityPageController({
         controller.showReset();
       } else if (button.dataset.identityAction === "show-login") {
         controller.showLogin();
+      } else if (button.dataset.identityAction === "cancel-risk-challenge") {
+        await controller.cancelRiskChallenge();
       } else if (button.dataset.identityAction === "resend-verification") {
         await controller.resendVerification();
       } else if (button.dataset.identityAction === "show-workspace-create") {
@@ -2369,7 +2469,7 @@ function normalizeSessions(list, currentSession) {
 }
 
 function safePageError(error) {
-  if (error instanceof IdentityApiError) {
+  if (error instanceof IdentityApiError || error instanceof PlatformApiError) {
     return { message: error.message, requestId: error.requestId };
   }
   return { message: "账号请求未完成，请稍后重试。", requestId: "-" };

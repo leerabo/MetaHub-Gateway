@@ -65,6 +65,7 @@ import {
   markWorkspaceNotificationRead,
   updateWorkspaceNotificationPreferences,
 } from "../../lib/notifications.js";
+import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -73,6 +74,7 @@ if (root) {
   const controlApiUrl = new Set(["localhost", "127.0.0.1", "::1"]).has(hostname)
     ? `${globalThis.window.location.protocol}//${hostname}:8001`
     : globalThis.window.location.origin;
+  const pendingRiskChallenge = consumeRiskChallengeLocation(globalThis.window);
   const controller = createIdentityPageController({
     root,
     recordWorkspaceSwitch: ({ durationMs }) => {
@@ -155,7 +157,31 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
-  controller.mount();
+  controller.mount().then(() => {
+    if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
+  });
+}
+
+function consumeRiskChallengeLocation(windowObject) {
+  if (!windowObject?.location) return null;
+  const url = new URL(windowObject.location.href);
+  const challengeId = url.searchParams.get("risk_challenge_id");
+  const challengeToken = url.searchParams.get("risk_challenge_token");
+  const revision = Number(url.searchParams.get("risk_challenge_revision"));
+  const credential = url.searchParams.get("risk_challenge_credential") || "global";
+  const valid = /^rch_[0-9a-f]{32}$/u.test(String(challengeId ?? ""))
+    && typeof challengeToken === "string" && challengeToken.length >= 32
+    && challengeToken.length <= 256 && Number.isSafeInteger(revision) && revision >= 1
+    && new Set(["global", "workspace"]).has(credential);
+  for (const key of [
+    "risk_challenge_id",
+    "risk_challenge_token",
+    "risk_challenge_revision",
+    "risk_challenge_credential",
+  ]) url.searchParams.delete(key);
+  windowObject.history?.replaceState?.(null, "", `${url.pathname}${url.search}${url.hash}`);
+  return valid ? { challengeId, challengeToken, revision, credential } : null;
 }

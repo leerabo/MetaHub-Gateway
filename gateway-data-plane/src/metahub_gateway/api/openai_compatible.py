@@ -20,6 +20,7 @@ from typing import Any
 import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from metahub_shared.abuse_risk import runtime_for
 from metahub_shared.gateway_fleet import GatewayAdmission, admit_gateway_request
 from metahub_shared.intent_security import (
     DETECTOR_VERSION,
@@ -448,6 +449,18 @@ async def _handle_gateway_request(
             if trusted_invocation is not None
             else authenticate_virtual_key(config, request.headers.get("Authorization"))
         )
+        if trusted_invocation is None:
+            abuse_assessment = await runtime_for(request.app.state, config).assess(
+                "gateway_api",
+                {
+                    "workspace": auth_context.workspace_id,
+                    "virtual_key": auth_context.virtual_key_id,
+                },
+                request_id=_request_id(request),
+                trace_id=_trace_id(request),
+            )
+            if abuse_assessment.outcome == "restricted":
+                raise ApiError("gateway.rate_limit_exceeded")
         # Batch already owns a dedicated slot. Other traffic is admitted to the realtime
         # gate only after its backend identity is trusted, so unauthenticated requests cannot
         # suppress scheduler work or extend the realtime cooldown.
@@ -643,10 +656,7 @@ async def _handle_gateway_request(
 
         # 命中实验时只使用不可变的单候选路由，禁止跨 variant Fallback 污染归因。
         if experiment_resolution is not None and experiment_resolution.matched:
-            if (
-                experiment_resolution.route_plan is None
-                or experiment_resolution.execution is None
-            ):
+            if experiment_resolution.route_plan is None or experiment_resolution.execution is None:
                 # 命中实验却缺少路由或 execution handle 表示原子 owner 图不完整，必须失败关闭。
                 raise ApiError("gateway.experiment_unavailable")
             route_plan = experiment_resolution.route_plan
@@ -845,9 +855,7 @@ async def _handle_gateway_request(
                 else "not_in_scope"
             ),
             policy_snapshot_id=(
-                policy_snapshot.policy_snapshot_id
-                if policy_snapshot is not None
-                else None
+                policy_snapshot.policy_snapshot_id if policy_snapshot is not None else None
             ),
             policy_snapshot_version=policy_lease.snapshot_version,
             policy_snapshot_status=policy_lease.status,
@@ -958,8 +966,7 @@ async def _handle_gateway_request(
                     if failed.ownership_unknown:
                         # 候选 owner 不确定时返回稳定错误，不能继续路由或覆盖并发终态。
                         raise ApiError(
-                            failed.error_code
-                            or "gateway.response_cache_settlement_unavailable"
+                            failed.error_code or "gateway.response_cache_settlement_unavailable"
                         ) from exc
                     raise
                 if quota_guard_result.reservation_id is not None:
@@ -1047,8 +1054,7 @@ async def _handle_gateway_request(
                     response_cache_terminal_owned = cache_result.settlement_owned
                     # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
                     raise ApiError(
-                        cache_result.error_code
-                        or "gateway.response_cache_settlement_unavailable"
+                        cache_result.error_code or "gateway.response_cache_settlement_unavailable"
                     )
                 if cache_result.status != "stale" or cache_result.settlement_owned:
                     # 网关关键分支必须维持租户、路由、成本和失败追踪一致，并保护上游凭据。
@@ -1270,9 +1276,7 @@ async def _handle_gateway_request(
             cleanup = (
                 _finalize_experiment_failure(
                     experiment_guard,
-                    error_code=(
-                        experiment_guard.interruption_error_code or cancellation_code
-                    ),
+                    error_code=(experiment_guard.interruption_error_code or cancellation_code),
                     latency_ms=_latency_ms(started),
                     cancelled=True,
                 )
@@ -1431,10 +1435,7 @@ async def _finalize_experiment_failure(
     """
 
     effective_code = guard.interruption_error_code or error_code
-    if not (
-        guard.facts.provider_response_received
-        or guard.facts.provider_error_received
-    ):
+    if not (guard.facts.provider_response_received or guard.facts.provider_error_received):
         guard.mark_local_failure()
     if effective_code == "gateway.experiment_execution_timeout":
         reason = "execution_timeout"
@@ -1576,9 +1577,7 @@ async def _non_stream_response_with_fallback(
             latency_ms=_latency_ms(first_started),
             error=first_error,
             usage_status=(
-                "unavailable"
-                if quality_eligible or usage_exposure_possible
-                else "not_applicable"
+                "unavailable" if quality_eligible or usage_exposure_possible else "not_applicable"
             ),
             usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=quality_eligible,
@@ -1820,9 +1819,7 @@ async def _execute_fallback_attempt(
             latency_ms=_latency_ms(attempt_started),
             error=attempt_error,
             usage_status=(
-                "unavailable"
-                if quality_eligible or usage_exposure_possible
-                else "not_applicable"
+                "unavailable" if quality_eligible or usage_exposure_possible else "not_applicable"
             ),
             usage_exposure_possible=usage_exposure_possible,
             quality_observation_eligible=quality_eligible,
@@ -2968,11 +2965,8 @@ async def _stream_response(
 
     local_attempt: RoutingAttempt | None = None
     local_attempt_finalized = False
-    local_route_requested = (
-        route is not None and route.provider_type == "local_endpoint"
-    ) or (
-        provider_request is not None
-        and provider_request.provider_type == "local_endpoint"
+    local_route_requested = (route is not None and route.provider_type == "local_endpoint") or (
+        provider_request is not None and provider_request.provider_type == "local_endpoint"
     )
     if local_route_requested:
         if route is None or route_plan is None:
@@ -3270,9 +3264,7 @@ async def _stream_response(
             )
             finish_local_attempt(
                 succeeded=False,
-                error=_local_interruption_attempt_error(
-                    "gateway.stream_session_unavailable"
-                ),
+                error=_local_interruption_attempt_error("gateway.stream_session_unavailable"),
             )
             terminal_context = _context_after_stream_output_safety(
                 session_context,
@@ -3311,9 +3303,7 @@ async def _stream_response(
         # 实验流即使没有输出安全规则，也要识别并暂存 `[DONE]`；只有全部持久化
         # 终态提交后才能把协议终止标记交给客户端。
         framer = (
-            BoundedSseEventFramer()
-            if safety_gate_enabled or experiment_guard is not None
-            else None
+            BoundedSseEventFramer() if safety_gate_enabled or experiment_guard is not None else None
         )
         raw_termination_observer = (
             _SseTerminationMarkerObserver(stream_termination_marker)
@@ -3831,10 +3821,9 @@ async def _stream_response(
                                 final_context,
                                 usage.as_ledger_payload(),
                             )
-                            if (
-                                not isinstance(usage_result, UsageLedgerWriteResult)
-                                or usage_result.durability not in {"committed", "spooled"}
-                            ):
+                            if not isinstance(
+                                usage_result, UsageLedgerWriteResult
+                            ) or usage_result.durability not in {"committed", "spooled"}:
                                 status = "failed"
                                 error_code = "finops.usage_record_unavailable"
                                 deferred_experiment_error = True
@@ -3947,8 +3936,7 @@ async def _stream_response(
                         if status == "success" and (
                             terminal_cancellation_observed.is_set()
                             or (
-                                stream_owner_task is not None
-                                and stream_owner_task.cancelling() > 0
+                                stream_owner_task is not None and stream_owner_task.cancelling() > 0
                             )
                         ):
                             # body owner 的取消计数由 Task.cancel 同步增加，因此 cleanup task
@@ -3994,9 +3982,7 @@ async def _stream_response(
                             await experiment_guard.stop()
                         else:
                             finalized = await experiment_guard.finalize(
-                                gateway_outcome=(
-                                    "success" if status == "success" else "failed"
-                                ),
+                                gateway_outcome=("success" if status == "success" else "failed"),
                                 outcome_reason=(
                                     "completed"
                                     if status == "success"
@@ -4066,9 +4052,7 @@ async def _stream_response(
             )
         # 实验流开始后仅发送一次不含上游正文的标准 SSE error；断连时只写数据库终态。
         elif (
-            deferred_experiment_error
-            and not stream_error_emitted
-            and not disconnect_event.is_set()
+            deferred_experiment_error and not stream_error_emitted and not disconnect_event.is_set()
         ):
             yield _stream_error_event(
                 error_code or "gateway.experiment_unavailable",

@@ -32,6 +32,30 @@ export function renderIdentityLoginPage(container, options = {}) {
   `;
 }
 
+export function renderIdentityRiskChallengePage(container, options = {}) {
+  if (!container) return;
+  const busy = options.busy === true;
+  container.innerHTML = `
+    <div class="identity-login-shell">
+      <section class="identity-login-panel" aria-labelledby="identity-risk-challenge-title">
+        ${renderAccessBrand("identity-risk-challenge-title", "附加验证")}
+        <form class="identity-login-form" data-identity-risk-challenge-form autocomplete="off" aria-busy="${busy}">
+          <div class="identity-risk-reference"><span>Challenge</span><strong>${escapeHtml(shortRiskReference(options.challengeId))}</strong></div>
+          <label>
+            <span>验证答案</span>
+            <input name="answer" type="password" autocomplete="one-time-code" minlength="6" maxlength="128" required autofocus ${busy ? "disabled" : ""} />
+          </label>
+          ${renderError(options.error)}
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>完成验证</button>
+          <div class="identity-access-actions is-single">
+            <button type="button" data-identity-action="cancel-risk-challenge" ${busy ? "disabled" : ""}>返回账号安全</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 export function renderIdentityRegistrationPage(container, options = {}) {
   if (!container) return;
   container.innerHTML = `
@@ -1634,6 +1658,11 @@ function formatDateTime(value) {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function shortRiskReference(value) {
+  const text = String(value ?? "");
+  return /^rch_[0-9a-f]{32}$/u.test(text) ? `${text.slice(0, 12)}...${text.slice(-6)}` : "-";
 }
 
 function escapeHtml(value) {

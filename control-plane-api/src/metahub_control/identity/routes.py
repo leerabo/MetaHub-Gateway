@@ -9,6 +9,7 @@ from typing import Any
 
 import anyio
 from fastapi import APIRouter, Request, Response
+from metahub_shared.abuse_risk import runtime_for
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
@@ -65,6 +66,7 @@ async def login(request: Request, response: Response) -> IdentitySessionResponse
     payload = await _strict_json(request, required_fields=("email", "password"))
     email = _required_string(payload, "email", minimum=3, maximum=320)
     password = _required_string(payload, "password", minimum=1, maximum=1024, byte_limit=True)
+    await _risk_preflight(request, "login", email)
     issued = await _run_identity_operation(
         login_global_account,
         _config(request),
@@ -98,10 +100,12 @@ async def register(
         optional_fields=("invitation_token",),
     )
     device_token = _identity_device_token(request)
+    email = _required_string(payload, "email", minimum=3, maximum=320)
+    await _risk_preflight(request, "registration", email, device_token=device_token)
     pending = await _run_identity_operation(
         begin_registration,
         _config(request),
-        email=_required_string(payload, "email", minimum=3, maximum=320),
+        email=email,
         display_name=_required_string(payload, "display_name", minimum=1, maximum=120),
         password=_required_string(
             payload,
@@ -194,10 +198,12 @@ async def request_password_reset(
     _reject_query(request, ())
     payload = await _strict_json(request, required_fields=("email",))
     device_token = _identity_device_token(request)
+    email = _required_string(payload, "email", minimum=3, maximum=320)
+    await _risk_preflight(request, "login_recovery", email, device_token=device_token)
     pending = await _run_identity_operation(
         begin_password_reset,
         _config(request),
-        email=_required_string(payload, "email", minimum=3, maximum=320),
+        email=email,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
         user_agent=request.headers.get("User-Agent"),
@@ -783,3 +789,26 @@ def _request_id(request: Request) -> str:
 
 def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", "")
+
+
+async def _risk_preflight(
+    request: Request,
+    action: str,
+    account_value: str,
+    *,
+    device_token: str | None = None,
+) -> None:
+    subjects = {"account": account_value}
+    if request.client and request.client.host:
+        subjects["ip_prefix"] = request.client.host
+    device = device_token or _single_cookie(request, _DEVICE_COOKIE, required=False)
+    if device:
+        subjects["device"] = device
+    assessment = await runtime_for(request.app.state, _config(request)).assess(
+        action,
+        subjects,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if assessment.outcome != "allow":
+        raise ApiError("risk.challenge_required")
