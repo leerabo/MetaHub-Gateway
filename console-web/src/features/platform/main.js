@@ -75,6 +75,13 @@ import {
   listConfigDistribution,
   rebuildWorkspaceConfig,
 } from "../../lib/configDistribution.js";
+import {
+  acknowledgePlatformAlert,
+  createServiceLevelObjective,
+  listErrorBudgets,
+  listObservableServices,
+  listServiceLevelObjectives,
+} from "../../lib/observability.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -179,6 +186,20 @@ if (root) {
       killFeatureFlag: (input) => killFeatureFlag({ controlApiUrl, ...input }),
       configDistribution: (input) => listConfigDistribution({ controlApiUrl, ...input }),
       rebuildWorkspaceConfig: (input) => rebuildWorkspaceConfig({
+        controlApiUrl,
+        ...input,
+      }),
+      observabilityServices: (input) => listObservableServices({ controlApiUrl, ...input }),
+      serviceLevelObjectives: (input) => listServiceLevelObjectives({
+        controlApiUrl,
+        ...input,
+      }),
+      errorBudgets: (input) => listErrorBudgets({ controlApiUrl, ...input }),
+      createServiceLevelObjective: (input) => createServiceLevelObjective({
+        controlApiUrl,
+        ...input,
+      }),
+      acknowledgePlatformAlert: (input) => acknowledgePlatformAlert({
         controlApiUrl,
         ...input,
       }),

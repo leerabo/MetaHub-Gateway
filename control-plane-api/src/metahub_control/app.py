@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 
 from metahub_shared.db.connection import database_request_scope
+from metahub_shared.observability import install_telemetry_runtime
 from metahub_shared.runtime.fastapi_app import create_service_app
 from starlette.requests import Request
 
@@ -68,6 +69,8 @@ from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
 from .notifications import install_notification_scheduler
 from .notifications import router as notifications_router
+from .observability import install_observability_scheduler
+from .observability import router as observability_router
 from .partner_portal import install_partner_portal_scheduler
 from .partner_portal import router as partner_portal_router
 from .payment_commerce import install_payment_commerce_scheduler
@@ -243,6 +246,7 @@ app.include_router(workspace_onboarding_router)
 app.include_router(business_verification_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
+app.include_router(observability_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -339,6 +343,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_payment_commerce_scheduler,
             install_invoice_reconciliation_scheduler,
             install_notification_scheduler,
+            install_observability_scheduler,
             install_partner_portal_scheduler,
             install_branding_scheduler,
             install_billing_dispute_scheduler,
@@ -348,3 +353,5 @@ if app.state.config.control_background_schedulers_enabled:
         )
     )
 install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)
+# Observability is installed last so its lifespan stops accepting facts before workers shut down.
+install_telemetry_runtime(app, service_code="control")

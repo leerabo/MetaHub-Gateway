@@ -9,6 +9,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "job-runtime",
   "feature-rollouts",
   "config-distribution",
+  "observability",
   "operators",
   "workspaces",
   "support",
@@ -88,6 +89,10 @@ export function createPlatformPageController({
     featureCommandIntent: null,
     configDistribution: null,
     configRebuildIntent: null,
+    observabilityServices: null,
+    serviceLevelObjectives: null,
+    errorBudgets: null,
+    observabilityIntent: null,
     backup: null,
     backupIntent: null,
     grants: null,
@@ -157,7 +162,9 @@ export function createPlatformPageController({
     selectView(view) {
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
-      if (new Set(["job-runtime", "feature-rollouts", "config-distribution"]).has(state.view)
+      if (new Set([
+        "job-runtime", "feature-rollouts", "config-distribution", "observability",
+      ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
         request?.abort();
@@ -168,8 +175,10 @@ export function createPlatformPageController({
           state.jobTypeIntent = null;
         } else if (state.view === "feature-rollouts") {
           state.featureCommandIntent = null;
-        } else {
+        } else if (state.view === "config-distribution") {
           state.configRebuildIntent = null;
+        } else {
+          state.observabilityIntent = null;
         }
         state.loading = false;
       }
@@ -182,6 +191,9 @@ export function createPlatformPageController({
       }
       if (state.view === "config-distribution" && !state.configDistribution) {
         void loadConfigDistribution();
+      }
+      if (state.view === "observability" && !state.observabilityServices) {
+        void loadObservability();
       }
     },
     async filterJobs(status) {
@@ -399,6 +411,39 @@ export function createPlatformPageController({
         }
         return fail(ticket, error);
       }
+    },
+    async createServiceLevelObjective({ slo } = {}) {
+      if (typeof api.createServiceLevelObjective !== "function"
+        || !currentPermissions().has("platform.observability.manage")
+        || slo?.confirmed !== true) return false;
+      return observabilityWrite(
+        { action: "slo.version", slo },
+        (idempotencyKey, signal) => api.createServiceLevelObjective({
+          slo,
+          idempotencyKey,
+          signal,
+        }),
+        slo.previous_version === 0 ? "SLO 已创建。" : "SLO 新版本已追加。",
+      );
+    },
+    async acknowledgePlatformAlert(command) {
+      if (typeof api.acknowledgePlatformAlert !== "function"
+        || !currentPermissions().has("platform.observability.alert_ack")
+        || command?.confirmed !== true) return false;
+      const input = {
+        alertId: command.alertId,
+        revision: Number(command.revision),
+        reasonCode: command.reasonCode,
+      };
+      return observabilityWrite(
+        { action: "alert.ack", ...input },
+        (idempotencyKey, signal) => api.acknowledgePlatformAlert({
+          ...input,
+          idempotencyKey,
+          signal,
+        }),
+        "告警确认已记录。",
+      );
     },
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
@@ -1037,6 +1082,21 @@ export function createPlatformPageController({
           next.configDistribution = value;
         }));
       }
+      if ((permissions.has("platform.observability.read")
+        || permissions.has("platform.observability.security_read"))
+        && typeof api.observabilityServices === "function"
+        && typeof api.serviceLevelObjectives === "function"
+        && typeof api.errorBudgets === "function") {
+        tasks.push(Promise.all([
+          api.observabilityServices({ signal: ticket.signal }),
+          api.serviceLevelObjectives({ signal: ticket.signal }),
+          api.errorBudgets({ signal: ticket.signal }),
+        ]).then(([services, slos, budgets]) => {
+          next.observabilityServices = services;
+          next.serviceLevelObjectives = slos;
+          next.errorBudgets = budgets;
+        }));
+      }
       if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
@@ -1067,6 +1127,9 @@ export function createPlatformPageController({
       Object.assign(state, next);
       if (!state.navigation.some((item) => item.id === "feature-rollouts")) {
         state.featureCommandIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "observability")) {
+        state.observabilityIntent = null;
       }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
@@ -1151,6 +1214,35 @@ export function createPlatformPageController({
     try {
       state.configDistribution = await api.configDistribution({ signal: ticket.signal });
       if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadObservability() {
+    const permissions = currentPermissions();
+    if ((!permissions.has("platform.observability.read")
+      && !permissions.has("platform.observability.security_read"))
+      || typeof api.observabilityServices !== "function"
+      || typeof api.serviceLevelObjectives !== "function"
+      || typeof api.errorBudgets !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const [services, slos, budgets] = await Promise.all([
+        api.observabilityServices({ signal: ticket.signal }),
+        api.serviceLevelObjectives({ signal: ticket.signal }),
+        api.errorBudgets({ signal: ticket.signal }),
+      ]);
+      if (!current(ticket)) return false;
+      state.observabilityServices = services;
+      state.serviceLevelObjectives = slos;
+      state.errorBudgets = budgets;
       state.loading = false;
       render();
       return true;
@@ -1334,6 +1426,41 @@ export function createPlatformPageController({
     } catch (error) {
       if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
         state.featureCommandIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function observabilityWrite(intent, operation, message) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.observabilityIntent?.fingerprint === fingerprint
+      ? state.observabilityIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.observabilityIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      const [services, slos, budgets] = await Promise.all([
+        api.observabilityServices({ signal: ticket.signal }),
+        api.serviceLevelObjectives({ signal: ticket.signal }),
+        api.errorBudgets({ signal: ticket.signal }),
+      ]);
+      if (!current(ticket)) return false;
+      state.observabilityServices = services;
+      state.serviceLevelObjectives = slos;
+      state.errorBudgets = budgets;
+      state.observabilityIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.observabilityIntent = null;
       }
       return fail(ticket, error);
     }
@@ -1566,6 +1693,38 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-slo-form]")) {
+        const sliKind = data.get("sliKind");
+        const previousVersion = Number(data.get("previousVersion"));
+        controller.createServiceLevelObjective({
+          slo: {
+            service_code: String(data.get("serviceCode") ?? "").trim(),
+            slo_code: String(data.get("sloCode") ?? "").trim(),
+            display_name: String(data.get("displayName") ?? "").trim(),
+            signal_class: data.get("signalClass"),
+            sli_kind: sliKind,
+            operation_code: String(data.get("operationCode") ?? "").trim(),
+            region_code: String(data.get("regionCode") ?? "").trim(),
+            window_minutes: Number(data.get("windowMinutes")),
+            target_bps: Number(data.get("targetBps")),
+            latency_threshold_ms: sliKind === "latency"
+              ? Number(data.get("latencyThresholdMs")) : null,
+            burn_warning_bps: Number(data.get("burnWarningBps")),
+            burn_critical_bps: Number(data.get("burnCriticalBps")),
+            previous_version: previousVersion,
+            reason_code: previousVersion === 0 ? "slo_create" : "slo_revision",
+            confirmed: data.get("confirmed") === "on",
+          },
+        });
+      }
+      if (form.matches("[data-platform-alert-ack-form]")) {
+        controller.acknowledgePlatformAlert({
+          alertId: data.get("alertId"),
+          revision: Number(data.get("revision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -1697,6 +1856,10 @@ export function createPlatformPageController({
     state.featureCommandIntent = null;
     state.configDistribution = null;
     state.configRebuildIntent = null;
+    state.observabilityServices = null;
+    state.serviceLevelObjectives = null;
+    state.errorBudgets = null;
+    state.observabilityIntent = null;
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;

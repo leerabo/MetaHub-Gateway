@@ -116,6 +116,12 @@ _NAVIGATION = (
         "Config distribution",
         "/platform.html#config-distribution",
     ),
+    (
+        "platform.observability.read",
+        "observability",
+        "Observability",
+        "/platform.html#observability",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -704,6 +710,10 @@ def get_platform_navigation(
             for permission, item_id, label, href in _NAVIGATION
             if permission in permission_set
             or (item_id == "billing" and "platform.catalog.read" in permission_set)
+            or (
+                item_id == "observability"
+                and "platform.observability.security_read" in permission_set
+            )
         )
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
@@ -2333,6 +2343,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_config_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if _table_exists(connection, "platform_observability_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_observability_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

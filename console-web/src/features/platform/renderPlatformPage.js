@@ -72,6 +72,7 @@ function renderView(state, permissions) {
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
+  if (state.view === "observability") return observabilityView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
   if (state.view === "support") return supportView(state, permissions);
@@ -314,6 +315,159 @@ function configDistributionRow(item, access) {
       <button type="submit" ${access.loading ? "disabled" : ""}>重建</button>
     </form>` : '<span class="platform-restricted">只读</span>'}</td>
   </tr>`;
+}
+
+function observabilityView(state, permissions) {
+  const serviceResponse = state.observabilityServices ?? {};
+  const sloResponse = state.serviceLevelObjectives ?? {};
+  const budgetResponse = state.errorBudgets ?? {};
+  const services = Array.isArray(serviceResponse.items) ? serviceResponse.items : [];
+  const slos = Array.isArray(sloResponse.items) ? sloResponse.items : [];
+  const budgets = Array.isArray(budgetResponse.items) ? budgetResponse.items : [];
+  const alerts = Array.isArray(budgetResponse.alerts) ? budgetResponse.alerts : [];
+  const canManage = permissions.has("platform.observability.manage");
+  const canAck = permissions.has("platform.observability.alert_ack");
+  const projection = serviceResponse.projection === "security" ? "安全投影" : "运维投影";
+  return `
+    <header class="platform-page-heading">
+      <div><p>Metrics / Logs / Traces</p><h1>服务可观测性</h1></div>
+      <span>${escapeHtml(projection)}</span>
+    </header>
+    <section class="platform-metrics" aria-label="可观测性概览">
+      ${metric("Services", services.length, "服务目录")}
+      ${metric("Healthy", services.filter((item) => item.health_status === "healthy").length, "黄金信号")}
+      ${metric("SLO", slos.length, "当前版本")}
+      ${metric("Alerts", alerts.filter((item) => item.state !== "resolved").length, "待处理")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Golden signals</p><h2>服务目录</h2></div>
+        <span>watermark ${number(Math.max(0, ...services.map((item) => item.source_watermark)))}</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-observability-table">
+          <thead><tr><th>服务</th><th>健康</th><th>流量</th><th>错误率</th><th>P95 延迟</th></tr></thead>
+          <tbody>${services.map(observableServiceRow).join("") || emptyRow("暂无服务遥测", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Immutable definitions</p><h2>SLO</h2></div>
+        <span>${number(sloResponse.total ?? 0)} 个定义</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-slo-table">
+          <thead><tr><th>SLO / 版本</th><th>SLI</th><th>窗口 / 目标</th><th>燃烧门限</th><th>操作</th></tr></thead>
+          <tbody>${slos.map((item) => sloRow(item, canManage, state.loading)).join("") || emptyRow("暂无 SLO", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    ${canManage ? sloEditor(null, services, state.loading) : ""}
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Integer error budgets</p><h2>错误预算</h2></div>
+        <span>${number(budgets.length)} 个窗口</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-budget-table">
+          <thead><tr><th>SLO / 窗口</th><th>请求</th><th>允许 / 已消耗</th><th>剩余</th><th>燃烧率</th></tr></thead>
+          <tbody>${budgets.map(errorBudgetRow).join("") || emptyRow("等待聚合作业", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="platform-band platform-alert-timeline">
+      <div class="platform-section-heading">
+        <div><p>Append-only timeline</p><h2>告警时间线</h2></div>
+        <span>${number(alerts.length)} 条</span>
+      </div>
+      <ol>${alerts.map((item) => alertTimelineItem(item, canAck, state.loading)).join("")
+        || "<li class=\"platform-empty\">暂无告警</li>"}</ol>
+    </section>`;
+}
+
+function observableServiceRow(item) {
+  return `<tr>
+    <td data-label="服务"><strong>${escapeHtml(item.display_name)}</strong><small>${escapeHtml(item.service_code)} · Tier ${number(item.service_tier)}</small><small>${escapeHtml(item.golden_signals.join(" · "))}</small></td>
+    <td data-label="健康">${status(item.health_status)}<small>${escapeHtml(item.owner_team_code)}</small></td>
+    <td data-label="流量"><strong>${number(item.total_count)}</strong><small>当前分钟聚合</small></td>
+    <td data-label="错误率"><strong>${bps(item.error_rate_bps)}</strong><small>${number(item.error_rate_bps)} bps</small></td>
+    <td data-label="P95 延迟"><strong>${number(item.latency_p95_ms)} ms</strong><small>watermark ${number(item.source_watermark)}</small></td>
+  </tr>`;
+}
+
+function sloRow(item, canManage, loading) {
+  return `<tr>
+    <td data-label="SLO / 版本"><strong>${escapeHtml(item.display_name)}</strong><small>${escapeHtml(item.slo_code)}</small><small>v${number(item.version_number)} · ${item.is_current ? "HEAD" : "历史"}</small></td>
+    <td data-label="SLI"><strong>${escapeHtml(item.sli_kind)}</strong><small>${escapeHtml(item.operation_code)} · ${escapeHtml(item.region_code)}</small><small>${escapeHtml(item.signal_class)}</small></td>
+    <td data-label="窗口 / 目标"><strong>${number(item.window_minutes)} min</strong><small>${bps(item.target_bps)} 目标${item.latency_threshold_ms === null ? "" : ` · ≤ ${number(item.latency_threshold_ms)} ms`}</small></td>
+    <td data-label="燃烧门限"><strong>${bps(item.burn_warning_bps)}</strong><small>critical ${bps(item.burn_critical_bps)}</small></td>
+    <td data-label="操作">${canManage && item.is_current
+    ? sloEditor(item, [], loading)
+    : '<span class="platform-restricted">只读</span>'}</td>
+  </tr>`;
+}
+
+function sloEditor(item, services, loading) {
+  const creating = item === null;
+  const serviceOptions = creating
+    ? services.map((service) => `<option value="${escapeAttribute(service.service_code)}">${escapeHtml(service.display_name)}</option>`).join("")
+    : `<option value="${escapeAttribute(item.service_code)}">${escapeHtml(item.service_code)}</option>`;
+  const content = `<form data-platform-slo-form>
+    <input type="hidden" name="previousVersion" value="${creating ? 0 : Number(item.version_number)}" />
+    <label><span>服务</span><select name="serviceCode" required>${serviceOptions}</select></label>
+    <label><span>SLO code</span><input name="sloCode" value="${escapeAttribute(item?.slo_code ?? "")}" required /></label>
+    <label><span>名称</span><input name="displayName" value="${escapeAttribute(item?.display_name ?? "")}" maxlength="120" required /></label>
+    <label><span>信号分类</span><select name="signalClass"><option value="reliability" ${item?.signal_class === "security" ? "" : "selected"}>可靠性</option><option value="security" ${item?.signal_class === "security" ? "selected" : ""}>安全</option></select></label>
+    <label><span>SLI</span><select name="sliKind"><option value="availability" ${item?.sli_kind === "latency" ? "" : "selected"}>可用性</option><option value="latency" ${item?.sli_kind === "latency" ? "selected" : ""}>延迟</option></select></label>
+    <label><span>Operation</span><input name="operationCode" value="${escapeAttribute(item?.operation_code ?? "chat.completions")}" required /></label>
+    <label><span>Region</span><input name="regionCode" value="${escapeAttribute(item?.region_code ?? "global")}" required /></label>
+    <label><span>窗口分钟</span><input name="windowMinutes" type="number" min="5" max="43200" value="${Number(item?.window_minutes ?? 5)}" required /></label>
+    <label><span>目标 bps</span><input name="targetBps" type="number" min="1" max="10000" value="${Number(item?.target_bps ?? 9990)}" required /></label>
+    <label><span>延迟门限 ms</span><select name="latencyThresholdMs">${[10, 50, 100, 250, 500, 1000, 2500, 5000].map((value) => `<option value="${value}" ${value === item?.latency_threshold_ms ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+    <label><span>Warning burn bps</span><input name="burnWarningBps" type="number" min="10000" value="${Number(item?.burn_warning_bps ?? 20000)}" required /></label>
+    <label><span>Critical burn bps</span><input name="burnCriticalBps" type="number" min="10001" value="${Number(item?.burn_critical_bps ?? 50000)}" required /></label>
+    <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认版本定义</span></label>
+    <button class="platform-primary" type="submit" ${loading ? "disabled" : ""}>${creating ? "创建 SLO" : "追加版本"}</button>
+  </form>`;
+  if (creating) {
+    return `<section class="platform-band platform-slo-editor"><div class="platform-section-heading"><div><p>CAS head</p><h2>创建 SLO</h2></div></div>${content}</section>`;
+  }
+  return `<details class="platform-slo-version-editor"><summary>追加版本</summary>${content}</details>`;
+}
+
+function errorBudgetRow(item) {
+  const max = Math.max(item.allowed_bad_count, 1);
+  const value = Math.min(item.consumed_bad_count, max);
+  return `<tr>
+    <td data-label="SLO / 窗口"><strong>${escapeHtml(item.slo_code)} · v${number(item.slo_version)}</strong><small>${formatTime(item.window_started_at)} → ${formatTime(item.window_ended_at)}</small>${status(item.health_status)}</td>
+    <td data-label="请求"><strong>${number(item.good_count)} / ${number(item.total_count)} good</strong><small>watermark ${number(item.source_watermark)}</small></td>
+    <td data-label="允许 / 已消耗"><progress max="${max}" value="${value}" aria-label="预算消耗 ${number(item.consumed_bad_count)} / ${number(item.allowed_bad_count)}"></progress><small>${number(item.consumed_bad_count)} / ${number(item.allowed_bad_count)}</small></td>
+    <td data-label="剩余"><strong>${number(item.remaining_bad_count)}</strong><small>错误请求额度</small></td>
+    <td data-label="燃烧率"><strong>${bps(item.burn_rate_bps)}</strong><small>computed ${formatTime(item.computed_at)}</small></td>
+  </tr>`;
+}
+
+function alertTimelineItem(item, canAck, loading) {
+  return `<li>
+    <div><span>${formatTime(item.last_seen_at)}</span>${status(item.state)}${status(item.severity)}</div>
+    <strong>${escapeHtml(item.slo_code)}</strong>
+    <small>${escapeHtml(item.safe_reason_code)} · ${escapeHtml(item.service_code)} / ${escapeHtml(item.region_code)} · rev ${number(item.revision)}</small>
+    <small>${item.latest_acknowledgement_at ? `ACK ${formatTime(item.latest_acknowledgement_at)}` : "尚未确认"}</small>
+    ${canAck && item.state !== "resolved" ? `<form data-platform-alert-ack-form>
+      <input type="hidden" name="alertId" value="${escapeAttribute(item.alert_id)}" />
+      <input type="hidden" name="revision" value="${number(item.revision)}" />
+      <label><span>原因</span><select name="reasonCode"><option value="investigating">调查中</option><option value="known_issue">已知问题</option><option value="mitigating">缓解中</option></select></label>
+      <label class="platform-check"><input type="checkbox" name="confirmed" required /><span>确认</span></label>
+      <button type="submit" ${loading ? "disabled" : ""}>记录 ACK</button>
+    </form>` : ""}
+  </li>`;
+}
+
+function bps(value) {
+  const numeric = Number(value);
+  const percent = Number.isFinite(numeric) ? numeric / 100 : 0;
+  return `${percent.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}%`;
 }
 
 function featureFlagRow(flag, access) {
@@ -1193,7 +1347,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
