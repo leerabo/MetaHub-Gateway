@@ -86,6 +86,12 @@ import {
   decideRiskCase,
   listRiskCases,
 } from "../../lib/riskControls.js";
+import {
+  getDisasterRecoveryStatus,
+  listDisasterRecoveryBackups,
+  startDisasterRecoveryDrill,
+  startRegionFailover,
+} from "../../lib/disasterRecovery.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -209,6 +215,19 @@ if (root) {
       }),
       riskCases: (input) => listRiskCases({ controlApiUrl, ...input }),
       decideRiskCase: (input) => decideRiskCase({ controlApiUrl, ...input }),
+      disasterRecoveryStatus: (input) => getDisasterRecoveryStatus({
+        controlApiUrl,
+        ...input,
+      }),
+      disasterRecoveryBackups: (input) => listDisasterRecoveryBackups({
+        controlApiUrl,
+        ...input,
+      }),
+      startDisasterRecoveryDrill: (input) => startDisasterRecoveryDrill({
+        controlApiUrl,
+        ...input,
+      }),
+      startRegionFailover: (input) => startRegionFailover({ controlApiUrl, ...input }),
     },
   }).mount();
 }

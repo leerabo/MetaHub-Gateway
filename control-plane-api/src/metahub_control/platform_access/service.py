@@ -128,6 +128,12 @@ _NAVIGATION = (
         "Abuse risk",
         "/platform.html#abuse-risk",
     ),
+    (
+        "platform.dr.read",
+        "disaster-recovery",
+        "Disaster recovery",
+        "/platform.html#disaster-recovery",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -2370,6 +2376,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_risk_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if _table_exists(connection, "platform_dr_role_permissions"):
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_dr_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

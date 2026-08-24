@@ -42,19 +42,20 @@ export function renderPlatformWorkspace(container, state) {
   const context = state.session?.context;
   const operator = context?.operator ?? {};
   const permissions = new Set(context?.permissions ?? []);
+  const disasterRecoveryBusy = Boolean(state.loading && state.disasterRecoveryIntent);
   container.innerHTML = `
     <div class="platform-shell">
       <header class="platform-topbar">
         <a class="platform-wordmark" href="/platform.html"><span class="platform-mark" aria-hidden="true">M</span><strong>MetaHub</strong></a>
         <div class="platform-operator-summary"><span>${escapeHtml(operator.display_name ?? "-")}</span><strong>${escapeHtml((operator.roles ?? []).map(roleLabel).join(" · "))}</strong></div>
         <div class="platform-topbar-actions">
-          <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新">↻</button>
+          <button class="platform-icon-button" type="button" data-platform-action="refresh" title="刷新" aria-label="刷新" ${disasterRecoveryBusy ? "disabled" : ""}>↻</button>
           <a href="/identity.html">账号安全</a>
         </div>
       </header>
       <div class="platform-body">
         <aside class="platform-sidebar" aria-label="平台导航">
-          ${(state.navigation ?? []).map((item) => navItem(item, state.view)).join("")}
+          ${(state.navigation ?? []).map((item) => navItem(item, state.view, disasterRecoveryBusy)).join("")}
         </aside>
         <section class="platform-content" aria-live="polite">
           ${feedback(state)}
@@ -73,6 +74,7 @@ function renderView(state, permissions) {
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
   if (state.view === "observability") return observabilityView(state, permissions);
+  if (state.view === "disaster-recovery") return disasterRecoveryView(state, permissions);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -83,6 +85,173 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function disasterRecoveryView(state, permissions) {
+  const response = state.disasterRecoveryStatus ?? {};
+  const backupResponse = state.disasterRecoveryBackups ?? {};
+  const regions = Array.isArray(response.regions) ? response.regions : [];
+  const plans = Array.isArray(response.plans) ? response.plans : [];
+  const runs = Array.isArray(response.recent_runs) ? response.recent_runs : [];
+  const recoveryPoints = Array.isArray(backupResponse.items) ? backupResponse.items : [];
+  const objectives = response.objectives ?? {};
+  const canExecute = permissions.has("platform.dr.execute");
+  const canReview = permissions.has("platform.dr.approve")
+    && permissions.has("platform.dr.security_review");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Regions / Backups / Fencing</p><h1>灾难恢复</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="dr-refresh"
+        title="刷新灾难恢复状态" aria-label="刷新灾难恢复状态" ${state.loading ? "disabled" : ""}>↻</button>
+    </header>
+    <section class="platform-metrics platform-dr-metrics" aria-label="灾难恢复目标">
+      ${metric("Control RPO", Math.round(Number(objectives.control_rpo_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("Control RTO", Math.round(Number(objectives.control_rto_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("Gateway RTO", Math.round(Number(objectives.gateway_rto_seconds ?? 0) / 60), "分钟上限")}
+      ${metric("Recovery age", objectives.latest_recovery_age_seconds ?? 0,
+        objectives.recovery_ready ? "秒 · 可恢复" : "秒 · 未就绪")}
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Writer authority</p><h2>Region 与 fencing</h2></div>
+        <span>${number(regions.filter((item) => item.health_status === "healthy").length)} / ${number(regions.length)} healthy</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-dr-region-table">
+          <thead><tr><th>Region</th><th>驻留组</th><th>健康</th><th>Writer</th><th>Epoch / Revision</th></tr></thead>
+          <tbody>${regions.map(drRegionRow).join("") || emptyRow("暂无 Region 状态", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Signed immutable plans</p><h2>切换计划与审批</h2></div>
+        <span>${canReview ? "安全复核权限" : canExecute ? "执行权限" : "只读"}</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-dr-plan-table">
+          <thead><tr><th>计划</th><th>路径 / 驻留</th><th>目标</th><th>停止条件</th><th>双人控制</th></tr></thead>
+          <tbody>${plans.map((plan) => drPlanRow(plan, regions, runs, {
+            canExecute,
+            canReview,
+            loading: state.loading,
+            operatorId: state.session?.context?.operator?.operator_id,
+          })).join("") || emptyRow("暂无灾难恢复计划", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Checkpoint handoff</p><h2>最近执行</h2></div>
+        <span>${number(runs.length)} 次</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-dr-run-table">
+          <thead><tr><th>执行</th><th>审批</th><th>Checkpoint</th><th>目标结果</th><th>恢复证据</th></tr></thead>
+          <tbody>${runs.map(drRunRow).join("") || emptyRow("暂无灾难恢复执行", 5)}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="platform-band">
+      <div class="platform-section-heading">
+        <div><p>Verified public projection</p><h2>恢复点</h2></div>
+        <span>${number(backupResponse.total ?? recoveryPoints.length)} 个</span>
+      </div>
+      <div class="platform-table-wrap">
+        <table class="platform-dr-backup-table">
+          <thead><tr><th>范围</th><th>Schema</th><th>完整性</th><th>Manifest</th><th>年龄</th></tr></thead>
+          <tbody>${recoveryPoints.map(drRecoveryPointRow).join("") || emptyRow("暂无已验证恢复点", 5)}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function drRegionRow(item) {
+  return `<tr>
+    <td data-label="Region"><strong>${escapeHtml(item.region_code)}</strong><small>${formatTime(item.updated_at)}</small></td>
+    <td data-label="驻留组"><strong>${escapeHtml(item.residency_group)}</strong></td>
+    <td data-label="健康">${status(item.health_status)}</td>
+    <td data-label="Writer">${status(item.writer_status)}</td>
+    <td data-label="Epoch / Revision"><strong>${number(item.failover_epoch)}</strong><small>rev ${number(item.revision)}</small></td>
+  </tr>`;
+}
+
+function drPlanRow(plan, regions, runs, access) {
+  const source = regions.find((item) => item.region_code === plan.source_region_code);
+  const pending = runs.find((item) => item.failover_plan_id === plan.failover_plan_id
+    && item.plan_version === plan.version && item.status === "planned");
+  const controls = [];
+  if (access.canReview && pending
+    && pending.approvals.some((item) => item.approval_kind === "execution")
+    && !pending.approvals.some((item) => item.approval_kind === "security_review")
+    && !pending.approvals.some((item) => item.operator_id === access.operatorId)) {
+    controls.push(drCommandForm(plan, source, pending.run_kind, "security_review", access.loading, pending));
+  }
+  if (access.canExecute && !pending && plan.status === "active") {
+    controls.push(drCommandForm(plan, source, "drill", "execution", access.loading));
+    controls.push(drCommandForm(plan, source, "failover", "execution", access.loading));
+  }
+  return `<tr>
+    <td data-label="计划"><strong>${escapeHtml(plan.plan_code)}</strong><small>v${number(plan.version)} · ${escapeHtml(plan.component_profile)}</small>${status(plan.status)}<small>${shortHash(plan.manifest_sha256)}</small></td>
+    <td data-label="路径 / 驻留"><strong>${escapeHtml(plan.source_region_code)} → ${escapeHtml(plan.target_region_code)}</strong><small>${escapeHtml(plan.residency_group)}</small></td>
+    <td data-label="目标"><strong>RPO ${number(plan.rpo_seconds / 60)} min</strong><small>Control ${number(plan.control_rto_seconds / 60)} min · Gateway ${number(plan.gateway_rto_seconds / 60)} min</small></td>
+    <td data-label="停止条件"><strong>Split brain / integrity</strong><small>${escapeHtml(plan.stop_condition_code)}</small></td>
+    <td data-label="双人控制"><div class="platform-dr-actions">${controls.join("") || '<span class="platform-restricted">只读或等待状态收敛</span>'}</div></td>
+  </tr>`;
+}
+
+function drCommandForm(plan, source, runKind, voteKind, loading, pending = null) {
+  const review = voteKind === "security_review";
+  const failover = runKind === "failover";
+  const expectedEpoch = pending?.expected_epoch ?? source?.failover_epoch ?? 0;
+  const reason = pending?.reason_code ?? (failover ? "regional_outage" : "quarterly_drill");
+  const label = review ? "安全复核" : failover ? "发起切换" : "发起演练";
+  const reasonOptions = failover
+    ? [["regional_outage", "区域故障"], ["control_recovery", "Control 恢复"], ["security_containment", "安全处置"]]
+    : [["quarterly_drill", "季度演练"], ["control_recovery", "Control 恢复"]];
+  return `<details class="platform-dr-command" ${loading ? "open data-busy=\"true\"" : ""}>
+    <summary>${escapeHtml(label)}</summary>
+    <dl>
+      ${fact("Source", plan.source_region_code)}
+      ${fact("Target", plan.target_region_code)}
+      ${fact("Residency", plan.residency_group)}
+      ${fact("Stop", "Split brain or integrity failure")}
+    </dl>
+    <form data-platform-dr-command-form autocomplete="off">
+      <input type="hidden" name="runKind" value="${escapeAttribute(runKind)}" />
+      <input type="hidden" name="voteKind" value="${escapeAttribute(voteKind)}" />
+      <input type="hidden" name="regionId" value="${escapeAttribute(source?.region_id ?? "")}" />
+      <input type="hidden" name="failoverPlanId" value="${escapeAttribute(plan.failover_plan_id)}" />
+      <input type="hidden" name="planVersion" value="${number(plan.version)}" />
+      <input type="hidden" name="expectedEpoch" value="${number(expectedEpoch)}" />
+      <label><span>原因</span><select name="reasonCode" ${review ? "disabled" : ""}>${filterOptions(reason, reasonOptions)}</select></label>
+      ${review ? `<input type="hidden" name="reasonCode" value="${escapeAttribute(reason)}" />` : ""}
+      <label class="platform-check"><input type="checkbox" name="confirmed" required ${loading ? "disabled" : ""} /><span>确认 v${number(plan.version)} / epoch ${number(expectedEpoch)}</span></label>
+      <button class="${failover ? "platform-danger" : "platform-primary"}" type="submit" ${loading ? "disabled" : ""}>${escapeHtml(label)}</button>
+    </form>
+  </details>`;
+}
+
+function drRunRow(item) {
+  const approvalLabels = item.approvals.map((approval) => `${approval.approval_kind} · ${shortReference(approval.operator_id)}`);
+  const evidence = item.restore_evidence;
+  return `<tr>
+    <td data-label="执行"><strong>${escapeHtml(item.run_kind)} · ${escapeHtml(item.source_region_code)} → ${escapeHtml(item.target_region_code)}</strong><small>${shortReference(item.disaster_recovery_run_id)} · rev ${number(item.revision)}</small>${status(item.status)}</td>
+    <td data-label="审批"><strong>${number(item.approvals.length)} / 2</strong><small>${escapeHtml(approvalLabels.join(" · ") || "等待执行票")}</small></td>
+    <td data-label="Checkpoint"><strong>${escapeHtml(item.checkpoint)}</strong><small>epoch ${number(item.expected_epoch)} → ${number(item.fencing_epoch)}</small></td>
+    <td data-label="目标结果"><strong>${escapeHtml(item.safe_outcome_code ?? "pending")}</strong><small>${item.completed_at ? formatTime(item.completed_at) : "执行中或待审批"}</small></td>
+    <td data-label="恢复证据">${evidence.length ? `<details class="platform-dr-evidence"><summary>${number(evidence.length)} 条已投影证据</summary><ul>${evidence.map((entry) => `<li><strong>${escapeHtml(entry.component_code)}</strong><span>${shortWorkspace(entry.workspace_id)} · ${escapeHtml(entry.integrity_status)} · RPO ${escapeHtml(entry.rpo_outcome)} · RTO ${escapeHtml(entry.rto_outcome)}</span><small>${number(entry.duration_seconds)} s · ${shortHash(entry.manifest_sha256)}</small></li>`).join("")}</ul></details>` : '<span class="platform-restricted">尚无证据</span>'}</td>
+  </tr>`;
+}
+
+function drRecoveryPointRow(item) {
+  return `<tr>
+    <td data-label="范围"><strong>${escapeHtml(item.scope_kind)}</strong><small>${item.workspace_id ? shortWorkspace(item.workspace_id) : "platform"}</small></td>
+    <td data-label="Schema"><strong>${escapeHtml(item.schema_head)}</strong></td>
+    <td data-label="完整性">${status(item.integrity_status)}<small>${formatTime(item.source_created_at)}</small></td>
+    <td data-label="Manifest"><strong>${shortHash(item.manifest_sha256)}</strong></td>
+    <td data-label="年龄"><strong>${number(item.age_seconds)} s</strong></td>
+  </tr>`;
 }
 
 function abuseRiskView(state, permissions) {
@@ -1382,9 +1551,9 @@ function feedback(state) {
   return "";
 }
 
-function navItem(item, current) {
+function navItem(item, current, disabled = false) {
   const view = item.id;
-  return `<button type="button" data-platform-view="${escapeAttribute(view)}" class="${view === current ? "is-active" : ""}"><span aria-hidden="true">${navSymbol(view)}</span>${escapeHtml(item.label)}</button>`;
+  return `<button type="button" data-platform-view="${escapeAttribute(view)}" class="${view === current ? "is-active" : ""}" ${disabled ? "disabled" : ""}><span aria-hidden="true">${navSymbol(view)}</span>${escapeHtml(item.label)}</button>`;
 }
 
 function metric(label, value, detail) {
@@ -1393,11 +1562,11 @@ function metric(label, value, detail) {
 
 function status(value) {
   const text = String(value ?? "unknown");
-  const kind = /active|healthy|ready|reviewed|fresh/u.test(text)
+  const kind = /active|healthy|ready|reviewed|fresh|verified/u.test(text)
     ? "is-ok"
     : /pending|watch|stale|at_risk|not_configured/u.test(text)
       ? "is-warn"
-      : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable/u.test(text)
+      : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|fenced/u.test(text)
         ? "is-danger"
         : "";
   return `<span class="platform-status ${kind}">${escapeHtml(statusLabel(text))}</span>`;
@@ -1435,7 +1604,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

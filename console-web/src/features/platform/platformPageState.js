@@ -10,6 +10,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "feature-rollouts",
   "config-distribution",
   "observability",
+  "disaster-recovery",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -94,6 +95,9 @@ export function createPlatformPageController({
     serviceLevelObjectives: null,
     errorBudgets: null,
     observabilityIntent: null,
+    disasterRecoveryStatus: null,
+    disasterRecoveryBackups: null,
+    disasterRecoveryIntent: null,
     riskCases: null,
     riskStatus: "",
     riskCursor: null,
@@ -159,6 +163,7 @@ export function createPlatformPageController({
       }
     },
     async refresh() {
+      if (state.loading && state.disasterRecoveryIntent) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -166,10 +171,12 @@ export function createPlatformPageController({
       return reload(ticket);
     },
     selectView(view) {
+      if (state.loading && state.disasterRecoveryIntent) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
-        "job-runtime", "feature-rollouts", "config-distribution", "observability", "abuse-risk",
+        "job-runtime", "feature-rollouts", "config-distribution", "observability",
+        "disaster-recovery", "abuse-risk",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -185,6 +192,8 @@ export function createPlatformPageController({
           state.configRebuildIntent = null;
         } else if (state.view === "observability") {
           state.observabilityIntent = null;
+        } else if (state.view === "disaster-recovery") {
+          state.disasterRecoveryIntent = null;
         } else {
           state.riskDecisionIntent = null;
         }
@@ -202,6 +211,9 @@ export function createPlatformPageController({
       }
       if (state.view === "observability" && !state.observabilityServices) {
         void loadObservability();
+      }
+      if (state.view === "disaster-recovery" && !state.disasterRecoveryStatus) {
+        void loadDisasterRecovery();
       }
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
     },
@@ -452,6 +464,38 @@ export function createPlatformPageController({
           signal,
         }),
         "告警确认已记录。",
+      );
+    },
+    async refreshDisasterRecovery() {
+      if (state.loading && state.disasterRecoveryIntent) return false;
+      return loadDisasterRecovery();
+    },
+    async voteDisasterRecovery(command) {
+      if (command?.confirmed !== true) return false;
+      const permissions = currentPermissions();
+      const review = command.voteKind === "security_review";
+      if (review) {
+        if (!permissions.has("platform.dr.approve")
+          || !permissions.has("platform.dr.security_review")) return false;
+      } else if (command.voteKind !== "execution"
+        || !permissions.has("platform.dr.execute")) return false;
+      const operation = command.runKind === "drill"
+        ? api.startDisasterRecoveryDrill
+        : command.runKind === "failover" ? api.startRegionFailover : null;
+      if (typeof operation !== "function") return false;
+      const input = {
+        failoverPlanId: command.failoverPlanId,
+        planVersion: Number(command.planVersion),
+        reasonCode: command.reasonCode,
+        expectedEpoch: Number(command.expectedEpoch),
+      };
+      if (command.runKind === "failover") input.regionId = command.regionId;
+      return disasterRecoveryWrite(
+        { runKind: command.runKind, voteKind: command.voteKind, ...input },
+        (idempotencyKey, signal) => operation({ ...input, idempotencyKey, signal }),
+        review
+          ? "安全复核票已记录；满足双人控制后执行将进入队列。"
+          : "执行票已记录，等待独立安全复核。",
       );
     },
     async filterRiskCases(status) {
@@ -1059,6 +1103,8 @@ export function createPlatformPageController({
         jobQueues: null,
         featureFlags: null,
         configDistribution: null,
+        disasterRecoveryStatus: null,
+        disasterRecoveryBackups: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -1145,6 +1191,17 @@ export function createPlatformPageController({
           next.errorBudgets = budgets;
         }));
       }
+      if (permissions.has("platform.dr.read")
+        && typeof api.disasterRecoveryStatus === "function"
+        && typeof api.disasterRecoveryBackups === "function") {
+        tasks.push(Promise.all([
+          api.disasterRecoveryStatus({ signal: ticket.signal }),
+          api.disasterRecoveryBackups({ signal: ticket.signal }),
+        ]).then(([status, backups]) => {
+          next.disasterRecoveryStatus = status;
+          next.disasterRecoveryBackups = backups;
+        }));
+      }
       if ((permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
@@ -1187,6 +1244,9 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "observability")) {
         state.observabilityIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "disaster-recovery")) {
+        state.disasterRecoveryIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "abuse-risk")) {
         state.riskDecisionIntent = null;
@@ -1303,6 +1363,30 @@ export function createPlatformPageController({
       state.observabilityServices = services;
       state.serviceLevelObjectives = slos;
       state.errorBudgets = budgets;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadDisasterRecovery() {
+    if (!currentPermissions().has("platform.dr.read")
+      || typeof api.disasterRecoveryStatus !== "function"
+      || typeof api.disasterRecoveryBackups !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const [status, backups] = await Promise.all([
+        api.disasterRecoveryStatus({ signal: ticket.signal }),
+        api.disasterRecoveryBackups({ signal: ticket.signal }),
+      ]);
+      if (!current(ticket)) return false;
+      state.disasterRecoveryStatus = status;
+      state.disasterRecoveryBackups = backups;
       state.loading = false;
       render();
       return true;
@@ -1545,6 +1629,39 @@ export function createPlatformPageController({
     } catch (error) {
       if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
         state.observabilityIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function disasterRecoveryWrite(intent, operation, message) {
+    const fingerprint = JSON.stringify(intent);
+    const idempotencyKey = state.disasterRecoveryIntent?.fingerprint === fingerprint
+      ? state.disasterRecoveryIntent.idempotencyKey
+      : newIdempotencyKey();
+    state.disasterRecoveryIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!current(ticket)) return false;
+      const [status, backups] = await Promise.all([
+        api.disasterRecoveryStatus({ signal: ticket.signal }),
+        api.disasterRecoveryBackups({ signal: ticket.signal }),
+      ]);
+      if (!current(ticket)) return false;
+      state.disasterRecoveryStatus = status;
+      state.disasterRecoveryBackups = backups;
+      state.disasterRecoveryIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.disasterRecoveryIntent = null;
       }
       return fail(ticket, error);
     }
@@ -1841,6 +1958,18 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-dr-command-form]")) {
+        controller.voteDisasterRecovery({
+          runKind: data.get("runKind"),
+          voteKind: data.get("voteKind"),
+          regionId: data.get("regionId"),
+          failoverPlanId: data.get("failoverPlanId"),
+          planVersion: Number(data.get("planVersion")),
+          reasonCode: data.get("reasonCode"),
+          expectedEpoch: Number(data.get("expectedEpoch")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-risk-filter-form]")) {
         controller.filterRiskCases(data.get("status"));
       }
@@ -1913,6 +2042,7 @@ export function createPlatformPageController({
         controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
       }
       if (action === "backup-refresh") controller.refreshBackup();
+      if (action === "dr-refresh") controller.refreshDisasterRecovery();
       if (action === "risk-next") controller.nextRiskPage();
       if (action === "risk-previous") controller.previousRiskPage();
       if (action === "open-job") controller.openJob(target.dataset.jobId);
@@ -1992,6 +2122,9 @@ export function createPlatformPageController({
     state.serviceLevelObjectives = null;
     state.errorBudgets = null;
     state.observabilityIntent = null;
+    state.disasterRecoveryStatus = null;
+    state.disasterRecoveryBackups = null;
+    state.disasterRecoveryIntent = null;
     state.riskCases = null;
     state.riskStatus = "";
     state.riskCursor = null;

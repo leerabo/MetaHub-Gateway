@@ -43,6 +43,7 @@ from .customer_health import router as customer_health_router
 from .dashboard.routes import router as dashboard_router
 from .debug_console.routes import router as debug_console_router
 from .developer_portal.routes import router as developer_portal_router
+from .disaster_recovery import router as disaster_recovery_router
 from .dlp.routes import router as dlp_router
 from .enterprise_chat.routes import router as enterprise_chat_router
 from .environments.routes import router as environments_router
@@ -252,6 +253,7 @@ app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
 app.include_router(risk_controls_router)
+app.include_router(disaster_recovery_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
