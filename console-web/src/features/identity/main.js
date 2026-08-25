@@ -73,6 +73,13 @@ import {
   updateEnterpriseSsoPolicy,
   verifyEnterpriseDomain,
 } from "../../lib/enterpriseIdentity.js";
+import {
+  createScimToken,
+  getScimDirectorySummary,
+  resolveScimConflict,
+  rotateScimToken,
+  upsertScimRoleMapping,
+} from "../../lib/scimDirectory.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -180,6 +187,11 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      scimDirectory: (input) => getScimDirectorySummary({ controlApiUrl, ...input }),
+      createScimToken: (input) => createScimToken({ controlApiUrl, ...input }),
+      rotateScimToken: (input) => rotateScimToken({ controlApiUrl, ...input }),
+      upsertScimRoleMapping: (input) => upsertScimRoleMapping({ controlApiUrl, ...input }),
+      resolveScimConflict: (input) => resolveScimConflict({ controlApiUrl, ...input }),
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });

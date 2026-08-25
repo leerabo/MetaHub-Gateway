@@ -67,7 +67,8 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PAGE-121 可见或角色名称而得到隐式授权。
 # PRD-114 将企业 SSO 安全摘要和管理动作拆成独立权限；Workspace 角色仍需在 API 边界叠加校验，
 # 不能仅凭租户角色或前端页面可见性管理域名、连接和强制登录策略。
-CATALOG_REVISION: Final[int] = 25
+# PRD-115 再把 SCIM 只读摘要与目录管理分离；机器 Bearer 仍由独立路由鉴权，不能获得浏览器权限。
+CATALOG_REVISION: Final[int] = 26
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -187,6 +188,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "identity",
         "管理企业 SSO",
         "创建、测试和维护当前 Workspace 的域名、身份连接与强制登录策略。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "scim.read",
+        "identity",
+        "读取 SCIM 目录",
+        "读取当前 Workspace 的 SCIM token 状态、同步计数、角色映射与冲突摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "scim.manage",
+        "identity",
+        "管理 SCIM 目录",
+        "创建和轮换 SCIM token、维护角色映射并处理目录冲突。",
         "critical",
     ),
     PermissionDefinition(
@@ -760,6 +775,7 @@ _VIEWER = {
     "partner_delivery.download",
     "branding.read",
     "enterprise_sso.read",
+    "scim.read",
 }
 _FINANCE = {
     "console.basic.read",
@@ -830,6 +846,8 @@ _SECURITY = {
     "tenant_data.read",
     "enterprise_sso.read",
     "enterprise_sso.manage",
+    "scim.read",
+    "scim.manage",
 }
 _OPS = {
     "console.basic.read",

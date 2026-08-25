@@ -73,6 +73,11 @@ export function createIdentityPageController({
   let enterpriseVerificationRecord = null;
   let enterpriseConnectionProtocol = "oidc";
   let enterpriseIntents = new Map();
+  let scimDirectory = null;
+  let scimDirectoryBusy = false;
+  let scimDirectoryError = null;
+  let scimBearerToken = null;
+  let scimIntents = new Map();
   let notificationCenterOpen = false;
   let notificationInbox = null;
   let notificationPreferences = null;
@@ -743,6 +748,126 @@ export function createIdentityPageController({
         null,
         normalizedMode === "enforced" ? "强制 SSO 已启用。" : "SSO 策略已设为可选。",
       );
+    },
+    async refreshScimDirectory() {
+      if (!workspaceScimReadAllowed() || typeof api.scimDirectory !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      scimDirectoryBusy = true;
+      scimDirectoryError = null;
+      renderSecurity();
+      return loadScimDirectory(ticket, "SCIM 目录状态已刷新。");
+    },
+    async createScimToken({ expiresInDays }) {
+      if (!workspaceScimManageAllowed() || typeof api.createScimToken !== "function") {
+        return false;
+      }
+      scimBearerToken = null;
+      return mutateScimDirectory(
+        "token.create",
+        { expiresInDays: Number(expiresInDays) },
+        (ticket, idempotencyKey) => api.createScimToken({
+          workspaceId: workspaceContext.workspace_id,
+          expiresInDays: Number(expiresInDays),
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        (result) => {
+          scimBearerToken = result.bearer_token;
+        },
+        "SCIM token 已创建。",
+      );
+    },
+    async rotateScimToken(index, expiresInDays = 90) {
+      const token = scimDirectory?.tokens?.[Number(index)];
+      if (!workspaceScimManageAllowed() || !token || token.status !== "active"
+        || typeof api.rotateScimToken !== "function") return false;
+      scimBearerToken = null;
+      return mutateScimDirectory(
+        "token.rotate",
+        {
+          tokenId: token.scim_token_id,
+          revision: token.revision,
+          expiresInDays: Number(expiresInDays),
+        },
+        (ticket, idempotencyKey) => api.rotateScimToken({
+          workspaceId: workspaceContext.workspace_id,
+          tokenId: token.scim_token_id,
+          revision: token.revision,
+          expiresInDays: Number(expiresInDays),
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        (result) => {
+          scimBearerToken = result.bearer_token;
+        },
+        "SCIM token 已轮换。",
+      );
+    },
+    async upsertScimRoleMapping({ groupIndex, roleCode }) {
+      const group = scimDirectory?.groups?.[Number(groupIndex)];
+      if (!workspaceScimManageAllowed() || !group
+        || typeof api.upsertScimRoleMapping !== "function") return false;
+      const mapping = scimDirectory.role_mappings.find(
+        (item) => item.scim_group_link_id === group.scim_group_link_id,
+      );
+      return mutateScimDirectory(
+        "mapping.upsert",
+        {
+          groupId: group.scim_group_link_id,
+          roleCode,
+          revision: mapping?.revision ?? 0,
+        },
+        (ticket, idempotencyKey) => api.upsertScimRoleMapping({
+          workspaceId: workspaceContext.workspace_id,
+          groupId: group.scim_group_link_id,
+          roleCode,
+          revision: mapping?.revision ?? 0,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        null,
+        "SCIM Group 角色映射已保存。",
+      );
+    },
+    async resolveScimConflict(index, resolutionCode) {
+      const conflict = scimDirectory?.conflicts?.[Number(index)];
+      if (!workspaceScimManageAllowed() || conflict?.status !== "open"
+        || typeof api.resolveScimConflict !== "function") return false;
+      return mutateScimDirectory(
+        "conflict.resolve",
+        {
+          conflictId: conflict.scim_conflict_id,
+          revision: conflict.revision,
+          resolutionCode,
+        },
+        (ticket, idempotencyKey) => api.resolveScimConflict({
+          workspaceId: workspaceContext.workspace_id,
+          conflictId: conflict.scim_conflict_id,
+          revision: conflict.revision,
+          resolutionCode,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        null,
+        "SCIM 冲突已处理。",
+      );
+    },
+    async copyScimBearerToken() {
+      if (typeof scimBearerToken !== "string" || !scimBearerToken) return false;
+      try {
+        await copyText(scimBearerToken);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    dismissScimBearerToken() {
+      if (scimBearerToken === null) return false;
+      scimBearerToken = null;
+      renderSecurity();
+      return true;
     },
     async refreshSubscription() {
       if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
@@ -1666,6 +1791,21 @@ export function createIdentityPageController({
     );
   }
 
+  function workspaceScimReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && new Set(["owner", "admin", "security_admin", "auditor", "viewer"])
+        .has(workspaceContext.role),
+    );
+  }
+
+  function workspaceScimManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && new Set(["owner", "admin", "security_admin"]).has(workspaceContext.role),
+    );
+  }
+
   async function loadEnterpriseIdentity(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceEnterpriseReadAllowed() || typeof api.enterpriseIdentity !== "function") {
       enterpriseIdentity = null;
@@ -1742,6 +1882,87 @@ export function createIdentityPageController({
         enterpriseIntents.delete(action);
       }
       enterpriseIdentityError = safePageError(error);
+      renderSecurity();
+      return false;
+    }
+  }
+
+  async function loadScimDirectory(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceScimReadAllowed() || typeof api.scimDirectory !== "function") {
+      scimDirectory = null;
+      scimDirectoryBusy = false;
+      scimDirectoryError = null;
+      scimBearerToken = null;
+      scimIntents = new Map();
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    scimDirectoryBusy = true;
+    try {
+      const result = await api.scimDirectory({
+        workspaceId: workspaceContext.workspace_id,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket)) return false;
+      scimDirectory = result;
+      scimDirectoryBusy = false;
+      scimDirectoryError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      scimDirectory = null;
+      scimDirectoryBusy = false;
+      scimDirectoryError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function mutateScimDirectory(action, input, operation, applyResult, feedback) {
+    if (scimDirectoryBusy) return false;
+    const ownerWorkspaceId = workspaceContext?.workspace_id;
+    scimDirectoryBusy = true;
+    scimDirectoryError = null;
+    renderSecurity();
+    let fingerprint;
+    try {
+      fingerprint = await secureEnterpriseFingerprint(input);
+    } catch {
+      scimDirectoryBusy = false;
+      scimDirectoryError = {
+        message: "无法安全准备 SCIM 目录请求，请刷新页面后重试。",
+        requestId: "-",
+      };
+      renderSecurity();
+      return false;
+    }
+    if (!scimDirectoryBusy || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+    const previous = scimIntents.get(action);
+    const idempotencyKey = previous?.fingerprint === fingerprint
+      ? previous.idempotencyKey
+      : newIdempotencyKey();
+    scimIntents.set(action, { fingerprint, idempotencyKey });
+    const ticket = beginRequest();
+    try {
+      const result = await queueWrite(() => operation(ticket, idempotencyKey));
+      if (!isCurrent(ticket)) return false;
+      applyResult?.(result);
+      scimIntents.delete(action);
+      scimDirectoryBusy = false;
+      return loadScimDirectory(ticket, feedback);
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      scimDirectoryBusy = false;
+      if (isWorkspaceAuthorizationDrift(error)) {
+        scimIntents.delete(action);
+        return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+      }
+      if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+        scimIntents.delete(action);
+      }
+      scimDirectoryError = safePageError(error);
       renderSecurity();
       return false;
     }
@@ -2161,6 +2382,7 @@ export function createIdentityPageController({
         loadWorkspaceInvoices(ticket, "", { render: false }),
         loadBusinessVerification(ticket, "", { render: false }),
         loadEnterpriseIdentity(ticket, "", { render: false }),
+        loadScimDirectory(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -2287,6 +2509,10 @@ export function createIdentityPageController({
       enterpriseIdentityError,
       enterpriseVerificationRecord,
       enterpriseConnectionProtocol,
+      scimDirectory,
+      scimDirectoryBusy,
+      scimDirectoryError,
+      scimBearerToken,
       notificationCenterOpen,
       notificationInbox,
       notificationPreferences,
@@ -2361,6 +2587,11 @@ export function createIdentityPageController({
     enterpriseVerificationRecord = null;
     enterpriseConnectionProtocol = "oidc";
     enterpriseIntents = new Map();
+    scimDirectory = null;
+    scimDirectoryBusy = false;
+    scimDirectoryError = null;
+    scimBearerToken = null;
+    scimIntents = new Map();
     notificationCenterOpen = false;
     notificationInbox = null;
     notificationPreferences = null;
@@ -2562,6 +2793,19 @@ export function createIdentityPageController({
           connectionIndex: fields.get("connectionIndex"),
           candidateIndex: fields.get("candidateIndex"),
         });
+      } else if (form?.matches?.("[data-scim-token-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createScimToken({
+          expiresInDays: Number(fields.get("expiresInDays")),
+        });
+      } else if (form?.matches?.("[data-scim-mapping-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.upsertScimRoleMapping({
+          groupIndex: fields.get("groupIndex"),
+          roleCode: fields.get("roleCode"),
+        });
       } else if (form?.matches?.("[data-saas-subscription-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -2702,6 +2946,19 @@ export function createIdentityPageController({
         await controller.refreshBusinessVerification();
       } else if (button.dataset.identityAction === "refresh-enterprise-identity") {
         await controller.refreshEnterpriseIdentity();
+      } else if (button.dataset.identityAction === "refresh-scim-directory") {
+        await controller.refreshScimDirectory();
+      } else if (button.dataset.identityAction === "rotate-scim-token") {
+        await controller.rotateScimToken(button.dataset.scimTokenIndex);
+      } else if (button.dataset.identityAction === "resolve-scim-conflict") {
+        await controller.resolveScimConflict(
+          button.dataset.scimConflictIndex,
+          button.dataset.scimResolution,
+        );
+      } else if (button.dataset.identityAction === "copy-scim-token") {
+        await controller.copyScimBearerToken();
+      } else if (button.dataset.identityAction === "dismiss-scim-token") {
+        controller.dismissScimBearerToken();
       } else if (button.dataset.identityAction === "set-enterprise-protocol") {
         controller.setEnterpriseConnectionProtocol(button.dataset.enterpriseProtocol);
       } else if (button.dataset.identityAction === "verify-enterprise-domain") {

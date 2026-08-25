@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-114 - 企业域名、OIDC/SAML SSO与登录发现` 已完成；当前下一条未完成项是
-  `PRD-115 - SCIM目录同步与成员生命周期`。
+- 新 `PRD-090` 至 `PRD-115 - SCIM目录同步与成员生命周期` 已完成；当前下一条未完成项是
+  `PRD-116 - MFA、条件访问、设备与会话安全`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,17 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-115 - SCIM目录同步与成员生命周期` 已完成：0107、Workspace 所有权绑定的 SCIM Bearer、
+  Users/Groups、受限 filter/PATCH、token 轮换、role mapping、Membership 投影、Owner 保护、冲突 CAS、
+  事件/outbox 与 Identity Console 均已交付。最终 Migration `5/5`、API `1/1`、Shared SDK `3/3`、
+  Gateway CORS 回归 `1/1`、Enterprise Identity Console `10/10`、Console 全量 `1082/1082`，lint、Ruff、
+  差异检查和敏感扫描均通过。
+  本地真实认证链路完成登录、Workspace 切换、token 轮换、weak ETag Group PATCH 和冲突生成；真实 Browser
+  完成 `keep_local` 恢复并确认 Membership 不变。`1440x900`、`1280x720`、`390x844` 三视口均为零横向
+  溢出、零越界、零重叠、零裁切和零 Console error。详见
+  [PRD-115 设计](docs/prd/PRD-115-scim-directory-membership-lifecycle.md) 和
+  [PRD-115 测试记录](docs/testing/PRD-115-tests.md)。S4 G4 保留到 PRD-119 独立提交后执行，
+  `saas_incremental_roadmap_complete=false`。
 - `PRD-114 - 企业域名、OIDC/SAML SSO与登录发现` 已完成：0106、全局唯一 VerifiedDomain、OIDC/SAML
   connection/certificate/policy、登录发现与回调、单次 state/nonce/replay、强制 SSO 与 break-glass 恢复、
   企业身份事件/outbox 和 Identity Console 均已交付。最终 Migration `4/4`、API `2/2`、协议 `6/6`、

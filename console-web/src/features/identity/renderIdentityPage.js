@@ -233,6 +233,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderWorkspaceSection(state)}
         ${renderMembershipSection(state)}
         ${renderEnterpriseIdentitySection(state)}
+        ${renderScimDirectorySection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
@@ -1339,6 +1340,248 @@ function enterpriseConnectionStatusLabel(value) {
 function enterpriseCertificateStatusLabel(value) {
   return ({ staged: "待启用", active: "活动", retired: "宽限期", expired: "已过期" })[value]
     ?? "未知";
+}
+
+function renderScimDirectorySection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context
+    || !new Set(["owner", "admin", "security_admin", "auditor", "viewer"])
+      .has(context.role)) return "";
+  const summary = state.scimDirectory ?? null;
+  const tokens = Array.isArray(summary?.tokens) ? summary.tokens : [];
+  const groups = Array.isArray(summary?.groups) ? summary.groups : [];
+  const mappings = Array.isArray(summary?.role_mappings) ? summary.role_mappings : [];
+  const syncs = Array.isArray(summary?.sync_runs) ? summary.sync_runs : [];
+  const conflicts = Array.isArray(summary?.conflicts) ? summary.conflicts : [];
+  const canManage = new Set(["owner", "admin", "security_admin"]).has(context.role);
+  const busy = state.scimDirectoryBusy === true;
+  const openConflicts = conflicts.filter((item) => item.status === "open");
+  const activeToken = tokens.find((item) => item.status === "active") ?? null;
+  return `
+    <section class="identity-enterprise identity-scim" aria-labelledby="identity-scim-title"
+      aria-busy="${busy}">
+      <div class="identity-section-heading identity-enterprise-heading">
+        <div><p>Directory provisioning</p><h2 id="identity-scim-title">SCIM 目录</h2></div>
+        <button class="identity-icon-command" type="button"
+          data-identity-action="refresh-scim-directory" title="刷新 SCIM 目录状态"
+          aria-label="刷新 SCIM 目录状态" ${busy ? "disabled" : ""}>&#8635;</button>
+      </div>
+      ${state.scimDirectoryError ? renderError(state.scimDirectoryError) : ""}
+      ${summary ? `
+        <dl class="identity-enterprise-summary">
+          <div><dt>已链接成员</dt><dd>${summary.linked_user_count}</dd></div>
+          <div><dt>活动 Group</dt><dd>${summary.linked_group_count}</dd></div>
+          <div><dt>待处理邀请</dt><dd>${summary.pending_invitation_count}</dd></div>
+          <div><dt>开放冲突</dt><dd>${openConflicts.length}</dd></div>
+        </dl>
+        ${renderScimTokens(tokens, canManage, busy)}
+        ${renderScimMappings(groups, mappings, canManage, busy)}
+        ${renderScimSyncs(syncs)}
+        ${renderScimConflicts(conflicts, canManage, busy)}
+        ${canManage ? renderScimManagement(groups, activeToken, busy) : ""}
+      ` : '<p class="identity-empty">SCIM 目录状态暂时不可用。</p>'}
+      ${state.scimBearerToken ? renderScimTokenDialog(state.scimBearerToken) : ""}
+    </section>
+  `;
+}
+
+function renderScimTokens(tokens, canManage, busy) {
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Bearer lifecycle</span><h3>访问 token</h3></div><span>${tokens.length} 个</span>
+      </div>
+      <div class="identity-enterprise-list">
+        ${tokens.length > 0 ? tokens.map((token, index) => `
+          <div class="identity-enterprise-row">
+            <div class="identity-enterprise-primary">
+              <strong>${escapeHtml(token.token_prefix)}...</strong>
+              <span>到期 ${escapeHtml(formatDateTime(token.expires_at))}${token.last_used_at
+                ? ` · 最近使用 ${escapeHtml(formatDateTime(token.last_used_at))}` : ""}</span>
+            </div>
+            <span class="identity-enterprise-state is-${escapeAttribute(token.status)}">
+              ${escapeHtml(scimTokenStatusLabel(token.status))}
+            </span>
+            ${canManage && token.status === "active" ? `
+              <button class="identity-quiet-command" type="button"
+                data-identity-action="rotate-scim-token" data-scim-token-index="${index}"
+                ${busy ? "disabled" : ""}>轮换</button>
+            ` : ""}
+          </div>
+        `).join("") : '<p class="identity-empty">尚未创建 SCIM token。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderScimMappings(groups, mappings, canManage, busy) {
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Least privilege</span><h3>Group 角色映射</h3></div>
+        <span>${mappings.length} / ${groups.length}</span>
+      </div>
+      <div class="identity-enterprise-list">
+        ${mappings.length > 0 ? mappings.map((mapping) => `
+          <div class="identity-enterprise-row">
+            <div class="identity-enterprise-primary">
+              <strong>${escapeHtml(mapping.group_display_name)}</strong>
+              <span>更新于 ${escapeHtml(formatDateTime(mapping.updated_at))}</span>
+            </div>
+            <span class="identity-enterprise-state is-${escapeAttribute(mapping.status)}">
+              ${escapeHtml(scimRoleLabel(mapping.role_code))}
+            </span>
+          </div>
+        `).join("") : '<p class="identity-empty">尚未配置 Group 角色映射。</p>'}
+      </div>
+      ${canManage && groups.length > 0 ? `
+        <form class="identity-scim-mapping-form" data-scim-mapping-form>
+          <label><span>Directory Group</span><select name="groupIndex" required>
+            ${groups.map((group, index) => `<option value="${index}">${escapeHtml(group.display_name)}</option>`).join("")}
+          </select></label>
+          <label><span>Workspace 角色</span><select name="roleCode" required>
+            ${["viewer", "auditor", "developer", "finance_admin", "legal_admin", "security_admin", "admin"]
+              .map((role) => `<option value="${role}">${escapeHtml(scimRoleLabel(role))}</option>`)
+              .join("")}
+          </select></label>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>保存映射</button>
+        </form>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderScimSyncs(syncs) {
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Sync activity</span><h3>最近同步</h3></div><span>${syncs.length} 次</span>
+      </div>
+      <div class="identity-scim-sync-list">
+        ${syncs.length > 0 ? syncs.slice(0, 10).map((sync) => `
+          <div class="identity-scim-sync-row">
+            <time datetime="${escapeAttribute(sync.started_at)}">${escapeHtml(formatDateTime(sync.started_at))}</time>
+            <strong>${escapeHtml(scimSyncStatusLabel(sync.status))}</strong>
+            <span>新增 ${sync.created_count}</span><span>更新 ${sync.updated_count}</span>
+            <span>停用 ${sync.disabled_count}</span><span>冲突 ${sync.conflict_count}</span>
+          </div>
+        `).join("") : '<p class="identity-empty">尚无同步记录。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderScimConflicts(conflicts, canManage, busy) {
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Manual recovery</span><h3>目录冲突</h3></div>
+        <span>${conflicts.filter((item) => item.status === "open").length} 个开放</span>
+      </div>
+      <div class="identity-enterprise-list">
+        ${conflicts.length > 0 ? conflicts.map((conflict, index) => `
+          <div class="identity-scim-conflict-row">
+            <div class="identity-enterprise-primary">
+              <strong>${escapeHtml(scimConflictReasonLabel(conflict.reason_code))}</strong>
+              <span>${escapeHtml(scimSubjectLabel(conflict.subject_type))} · ${escapeHtml(formatDateTime(conflict.created_at))}</span>
+            </div>
+            <span class="identity-enterprise-state is-${escapeAttribute(conflict.status)}">
+              ${escapeHtml(scimConflictStatusLabel(conflict.status))}
+            </span>
+            ${canManage && conflict.status === "open" ? `
+              <div class="identity-scim-conflict-actions">
+                <button type="button" data-identity-action="resolve-scim-conflict"
+                  data-scim-conflict-index="${index}" data-scim-resolution="keep_local"
+                  ${busy ? "disabled" : ""}>保留本地</button>
+                <button type="button" data-identity-action="resolve-scim-conflict"
+                  data-scim-conflict-index="${index}" data-scim-resolution="accept_directory"
+                  ${busy ? "disabled" : ""}>接受目录</button>
+                <button type="button" data-identity-action="resolve-scim-conflict"
+                  data-scim-conflict-index="${index}" data-scim-resolution="ignore_directory"
+                  ${busy ? "disabled" : ""}>忽略目录</button>
+              </div>
+            ` : ""}
+          </div>
+        `).join("") : '<p class="identity-empty">当前没有目录冲突。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderScimManagement(groups, activeToken, busy) {
+  return `
+    <div class="identity-enterprise-management identity-scim-management">
+      ${activeToken ? "" : `
+        <form class="identity-scim-token-form" data-scim-token-form>
+          <div><span>Provisioning credential</span><h3>创建 SCIM token</h3></div>
+          <label><span>有效期</span><select name="expiresInDays">
+            <option value="30">30 天</option><option value="90" selected>90 天</option>
+            <option value="180">180 天</option><option value="365">365 天</option>
+          </select></label>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>创建 token</button>
+        </form>
+      `}
+      ${groups.length === 0 ? '<p class="identity-empty">Directory Group 同步后可配置角色映射。</p>' : ""}
+    </div>
+  `;
+}
+
+function renderScimTokenDialog(token) {
+  return `
+    <dialog class="identity-scim-token-dialog" data-scim-token-dialog open
+      aria-labelledby="identity-scim-token-dialog-title">
+      <div class="identity-scim-token-dialog-heading">
+        <div><span>仅本次显示</span><h3 id="identity-scim-token-dialog-title">SCIM Bearer token</h3></div>
+        <button class="identity-icon-command" type="button" data-identity-action="dismiss-scim-token"
+          title="关闭" aria-label="关闭">&#215;</button>
+      </div>
+      <code>${escapeHtml(token)}</code>
+      <div class="identity-scim-token-dialog-actions">
+        <button class="identity-primary" type="button" data-identity-action="copy-scim-token">复制</button>
+        <button type="button" data-identity-action="dismiss-scim-token">关闭</button>
+      </div>
+    </dialog>
+  `;
+}
+
+function scimTokenStatusLabel(value) {
+  return ({ active: "活动", rotating: "轮换宽限", revoked: "已撤销" })[value] ?? "未知";
+}
+
+function scimRoleLabel(value) {
+  return ({
+    admin: "管理员",
+    developer: "开发者",
+    security_admin: "安全管理员",
+    finance_admin: "财务管理员",
+    legal_admin: "法务管理员",
+    auditor: "审计员",
+    viewer: "只读成员",
+  })[value] ?? "未知";
+}
+
+function scimSyncStatusLabel(value) {
+  return ({ running: "同步中", completed: "已完成", failed: "失败", interrupted: "已中断" })[value]
+    ?? "未知";
+}
+
+function scimConflictReasonLabel(value) {
+  return ({
+    owner_protected: "Owner 保护",
+    human_membership: "人工成员关系",
+    revision_stale: "目录版本过旧",
+    duplicate_external_id: "外部标识重复",
+    account_unverified: "账号未验证",
+    role_conflict: "角色冲突",
+  })[value] ?? "未知冲突";
+}
+
+function scimConflictStatusLabel(value) {
+  return ({ open: "待处理", resolved: "已解决", ignored: "已忽略" })[value] ?? "未知";
+}
+
+function scimSubjectLabel(value) {
+  return ({ user: "用户", group: "Group", membership: "成员关系" })[value] ?? "目录对象";
 }
 
 function renderMfaSection(state) {

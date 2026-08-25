@@ -13,12 +13,25 @@ import {
   verifyEnterpriseDomain,
 } from "../../src/lib/enterpriseIdentity.js";
 import { IdentityApiError } from "../../src/lib/identity.js";
+import {
+  createScimToken,
+  getScimDirectorySummary,
+  resolveScimConflict,
+  rotateScimToken,
+  upsertScimRoleMapping,
+} from "../../src/lib/scimDirectory.js";
 
 const CONTROL_URL = "http://control.local";
 const WSP = `wsp_${"1".repeat(32)}`;
 const VDM = `vdm_${"2".repeat(32)}`;
 const SSC = `ssc_${"3".repeat(32)}`;
 const GAC = `gac_${"4".repeat(32)}`;
+const SCT = `sct_${"7".repeat(32)}`;
+const SGL = `sgl_${"8".repeat(32)}`;
+const SRM = `srm_${"9".repeat(32)}`;
+const SSR = `ssr_${"a".repeat(32)}`;
+const SCF = `scf_${"b".repeat(32)}`;
+const SCIM_BEARER = `mhscim_${"C".repeat(48)}`;
 const CLIENT_SECRET = "not-a-real-client-secret-0001";
 const CERTIFICATE_PEM = `-----BEGIN CERTIFICATE-----\n${"A".repeat(96)}\n-----END CERTIFICATE-----`;
 
@@ -251,6 +264,115 @@ test("PRD-114 source keeps DNS and SSO secrets out of browser storage and define
   assert.match(css, /@media \(max-width: 520px\)[\s\S]*\.identity-enterprise-row/u);
 });
 
+test("PRD-115 SCIM clients use Workspace Cookie, CSRF, CAS, and idempotency contracts", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: "__Host-metahub-workspace-csrf=scim%2Dcsrf" };
+  const calls = installFetch((url) => scimResponseFor(new URL(url).pathname));
+  try {
+    await getScimDirectorySummary({ controlApiUrl: CONTROL_URL, workspaceId: WSP });
+    await createScimToken({
+      controlApiUrl: CONTROL_URL,
+      workspaceId: WSP,
+      expiresInDays: 90,
+      idempotencyKey: "scim-token-create-0001",
+    });
+    await rotateScimToken({
+      controlApiUrl: CONTROL_URL,
+      workspaceId: WSP,
+      tokenId: SCT,
+      revision: 1,
+      expiresInDays: 180,
+      idempotencyKey: "scim-token-rotate-0001",
+    });
+    await upsertScimRoleMapping({
+      controlApiUrl: CONTROL_URL,
+      workspaceId: WSP,
+      groupId: SGL,
+      roleCode: "developer",
+      revision: 0,
+      idempotencyKey: "scim-mapping-save-0001",
+    });
+    await resolveScimConflict({
+      controlApiUrl: CONTROL_URL,
+      workspaceId: WSP,
+      conflictId: SCF,
+      resolutionCode: "keep_local",
+      revision: 1,
+      idempotencyKey: "scim-conflict-fix-0001",
+    });
+  } finally {
+    globalThis.document = originalDocument;
+  }
+
+  assert.deepEqual(calls.map(({ url, options }) => [
+    new URL(url).pathname,
+    options.method,
+    options.credentials,
+    options.cache,
+  ]), [
+    [`/workspaces/${WSP}/scim-directory`, "GET", "include", "no-store"],
+    [`/workspaces/${WSP}/scim-tokens`, "POST", "include", "no-store"],
+    [`/workspaces/${WSP}/scim-tokens/${SCT}/rotate`, "POST", "include", "no-store"],
+    [`/workspaces/${WSP}/scim-role-mappings`, "PUT", "include", "no-store"],
+    [`/workspaces/${WSP}/scim-conflicts/${SCF}/resolve`, "POST", "include", "no-store"],
+  ]);
+  for (const call of calls.slice(1)) {
+    assert.equal(call.options.headers["X-CSRF-Token"], "scim-csrf");
+    assert.equal("Authorization" in call.options.headers, false);
+    assert.match(call.options.headers["Idempotency-Key"], /^scim-/u);
+  }
+  assert.equal(calls[2].options.headers["If-Match"], '"1"');
+  assert.equal(calls[3].options.headers["If-Match"], '"0"');
+  assert.equal(calls[4].options.headers["If-Match"], '"1"');
+});
+
+test("PRD-115 renderer projects roles and omits internal SCIM identifiers", () => {
+  const root = createRoot();
+  const state = securityState("owner");
+  Object.assign(state, {
+    scimDirectory: scimSummary(),
+    scimDirectoryBusy: false,
+    scimDirectoryError: null,
+    scimBearerToken: null,
+  });
+  renderIdentitySecurityPage(root, state);
+  assert.match(root.innerHTML, /SCIM 目录|Engineering Directory|Owner 保护/u);
+  assert.match(root.innerHTML, /data-scim-token-form|data-scim-mapping-form/u);
+  for (const identifier of [SCT, SGL, SRM, SSR, SCF]) {
+    assert.doesNotMatch(root.innerHTML, new RegExp(identifier, "u"));
+  }
+
+  renderIdentitySecurityPage(root, { ...state, workspaceContext: workspaceContextResponse("viewer").context });
+  assert.match(root.innerHTML, /SCIM 目录|Engineering Directory/u);
+  assert.doesNotMatch(root.innerHTML, /data-scim-token-form|data-scim-mapping-form|rotate-scim-token/u);
+
+  renderIdentitySecurityPage(root, { ...state, workspaceContext: workspaceContextResponse("developer").context });
+  assert.doesNotMatch(root.innerHTML, /identity-scim-title/u);
+});
+
+test("PRD-115 controller removes one-time Bearer from DOM and state on close", async () => {
+  const root = createRoot();
+  const copied = [];
+  const controller = createIdentityPageController({
+    root,
+    newIdempotencyKey: () => "scim-controller-key-0001",
+    copyText: async (value) => copied.push(value),
+    api: controllerApi({
+      scimDirectory: async () => scimSummary(),
+      createScimToken: async () => scimTokenResponse(),
+    }),
+  });
+  await controller.mount();
+  assert.equal(await controller.createScimToken({ expiresInDays: 90 }), true);
+  assert.match(root.innerHTML, new RegExp(escapeRegExp(SCIM_BEARER), "u"));
+  assert.equal(await controller.copyScimBearerToken(), true);
+  assert.deepEqual(copied, [SCIM_BEARER]);
+  assert.equal(controller.dismissScimBearerToken(), true);
+  assert.doesNotMatch(root.innerHTML, new RegExp(escapeRegExp(SCIM_BEARER), "u"));
+  assert.equal(JSON.stringify(controller).includes(SCIM_BEARER), false);
+  controller.destroy();
+});
+
 function controllerApi(overrides = {}) {
   return {
     me: async () => accountResponse(),
@@ -273,6 +395,15 @@ function responseFor(path) {
   if (path.endsWith("/sso/test")) return jsonResponse(testResponse());
   if (path.endsWith("/sso-policy")) return jsonResponse(policyResponse());
   throw new Error(`unexpected enterprise identity path: ${path}`);
+}
+
+function scimResponseFor(path) {
+  if (path.endsWith("/scim-directory")) return jsonResponse(scimSummary());
+  if (path.endsWith("/scim-tokens")) return jsonResponse(scimTokenResponse(), 201);
+  if (path.endsWith("/rotate")) return jsonResponse(scimTokenResponse(), 201);
+  if (path.endsWith("/scim-role-mappings")) return jsonResponse(scimMappingResponse());
+  if (path.endsWith("/resolve")) return jsonResponse(scimConflictResponse());
+  throw new Error(`unexpected SCIM directory path: ${path}`);
 }
 
 function summary() {
@@ -385,6 +516,102 @@ function policyResponse() {
     idempotent_replay: false,
     request_id: "req_policy",
     trace_id: "trc_policy",
+  };
+}
+
+function scimSummary() {
+  return {
+    workspace_id: WSP,
+    tokens: [scimToken()],
+    groups: [{
+      scim_group_link_id: SGL,
+      display_name: "Engineering Directory",
+      state: "active",
+      revision: 1,
+      updated_at: "2026-08-25T11:20:00Z",
+    }],
+    role_mappings: [scimMapping()],
+    sync_runs: [{
+      scim_sync_run_id: SSR,
+      status: "completed",
+      created_count: 3,
+      updated_count: 2,
+      disabled_count: 1,
+      conflict_count: 1,
+      safe_outcome_code: "sync.completed",
+      started_at: "2026-08-25T11:20:00Z",
+      completed_at: "2026-08-25T11:21:00Z",
+    }],
+    conflicts: [scimConflict()],
+    pending_invitation_count: 1,
+    linked_user_count: 12,
+    linked_group_count: 1,
+    request_id: "req_scim_summary",
+    trace_id: "trc_scim_summary",
+  };
+}
+
+function scimToken() {
+  return {
+    scim_token_id: SCT,
+    token_prefix: "mhscim_CCCCCCC",
+    status: "active",
+    revision: 1,
+    expires_at: "2026-11-25T11:20:00Z",
+    grace_expires_at: null,
+    last_used_at: "2026-08-25T11:21:00Z",
+  };
+}
+
+function scimMapping() {
+  return {
+    scim_role_mapping_id: SRM,
+    scim_group_link_id: SGL,
+    group_display_name: "Engineering Directory",
+    role_code: "developer",
+    status: "active",
+    revision: 1,
+    updated_at: "2026-08-25T11:22:00Z",
+  };
+}
+
+function scimConflict() {
+  return {
+    scim_conflict_id: SCF,
+    subject_type: "membership",
+    reason_code: "owner_protected",
+    status: "open",
+    revision: 1,
+    created_at: "2026-08-25T11:22:00Z",
+    resolved_at: null,
+  };
+}
+
+function scimTokenResponse() {
+  return {
+    token: scimToken(),
+    bearer_token: SCIM_BEARER,
+    idempotent_replay: false,
+    request_id: "req_scim_token",
+    trace_id: "trc_scim_token",
+  };
+}
+
+function scimMappingResponse() {
+  return {
+    mapping: scimMapping(),
+    idempotent_replay: false,
+    request_id: "req_scim_mapping",
+    trace_id: "trc_scim_mapping",
+  };
+}
+
+function scimConflictResponse() {
+  return {
+    conflict: scimConflict(),
+    idempotent_replay: false,
+    request_id: "req_scim_conflict",
+    trace_id: "trc_scim_conflict",
   };
 }
 

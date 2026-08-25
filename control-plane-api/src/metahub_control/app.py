@@ -135,6 +135,7 @@ from .workspaces.routes import router as workspaces_router
 app = create_service_app(
     service_name="control-plane-api",
     title="MetaHub Control Plane API",
+    extra_cors_allow_methods=("PUT",),
     # Policy 编辑器需要发送强 If-Match 并读取 ETag；该 CORS 能力只属于控制面。
     extra_cors_allow_headers=(
         "If-Match",
@@ -202,6 +203,10 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/identity/sso/callback",
         }
         or request.url.path.startswith("/memberships/")
+        or request.url.path == "/scim/v2/Users"
+        or request.url.path.startswith("/scim/v2/Users/")
+        or request.url.path == "/scim/v2/Groups"
+        or request.url.path.startswith("/scim/v2/Groups/")
         or request.url.path == "/platform/bootstrap"
         or request.url.path.startswith("/platform/")
         or request.url.path.startswith("/risk/")
@@ -220,6 +225,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             or request.url.path.endswith("/billing-profile")
             or "/domains" in request.url.path
             or "/sso" in request.url.path
+            or "/scim-" in request.url.path
             or request.url.path.endswith("/enterprise-identity")
         )
         or request.url.path == "/workspaces/current/onboarding"

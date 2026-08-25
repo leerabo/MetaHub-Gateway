@@ -55,6 +55,7 @@ def create_service_app(
     service_name: str,
     title: str,
     *,
+    extra_cors_allow_methods: tuple[str, ...] = (),
     extra_cors_allow_headers: tuple[str, ...] = (),
     extra_cors_expose_headers: tuple[str, ...] = (),
     cors_allow_credentials: bool = False,
@@ -113,7 +114,14 @@ def create_service_app(
         CORSMiddleware,
         allow_origins=config.allowed_origins,
         allow_credentials=cors_allow_credentials,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=[
+            "GET",
+            "POST",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+            *extra_cors_allow_methods,
+        ],
         allow_headers=[
             REQUEST_ID_HEADER,
             TRACE_ID_HEADER,

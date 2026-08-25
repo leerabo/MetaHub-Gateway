@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-114 - 企业域名、OIDC/SAML SSO与登录发现` 已完成；当前下一项是
-`PRD-115 - SCIM目录同步与成员生命周期`。
+`PRD-115 - SCIM目录同步与成员生命周期` 已完成；当前下一项是
+`PRD-116 - MFA、条件访问、设备与会话安全`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2281,7 +2281,21 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `console-web/src/lib/enterpriseIdentity.js`、`src/features/identity/` 与 `src/styles/identity.css`：Owner 管理、
   auditor 只读、developer 隐藏、OIDC/SAML 表单、一次性 DNS challenge 和提交后敏感输入清理。
 - `docs/prd/PRD-114-enterprise-domain-sso-login-discovery.md` 与 `docs/testing/PRD-114-tests.md`：冻结设计、
-  自动化、本地认证、三角色 Browser、九组响应式与敏感扫描记录。下一权威项为 PRD-115；S4 G4 保留到
+  自动化、本地认证、三角色 Browser、九组响应式与敏感扫描记录。其历史下一项已由下方 PRD-115 完成项关闭；
+  S4 G4 保留到 PRD-119 独立提交后统一执行。
+
+## PRD-115 SCIM 目录与成员生命周期（已完成）
+
+- `control-plane-api/src/metahub_control/enterprise_identity/scim_*.py`：Workspace 管理面、Bearer 恢复 owner 的
+  SCIM Users/Groups、受限 filter/PATCH、token 轮换、role mapping、Membership 投影和冲突 CAS。
+- `infra/migrations/0107_scim_directory_membership_lifecycle.sql/.down.sql`：SCIM token/link/group/mapping/run/
+  conflict/command/outbox 表、复合 owner、状态机、目录角色约束、权限矩阵和业务事实 down guard。
+- `shared-sdk/python/metahub_shared/scim_directory.py`、`rbac.py` 与 `runtime/errors.py`：SCIM 规范化、filter/
+  version parser、域分离 HMAC、保守角色合并、权限和固定错误合同。
+- `console-web/src/lib/scimDirectory.js`、`src/features/identity/` 与 `src/styles/identity.css`：Owner 管理、auditor
+  只读、developer 隐藏、一次性 Bearer 清理、目录摘要、角色映射和三动作冲突恢复。
+- `docs/prd/PRD-115-scim-directory-membership-lifecycle.md` 与 `docs/testing/PRD-115-tests.md`：冻结设计、
+  自动化、本地认证、冲突恢复、三视口 Browser 与敏感扫描记录。下一权威项为 PRD-116；S4 G4 保留到
   PRD-119 独立提交后统一执行。
 
 ## MVP 非目标
