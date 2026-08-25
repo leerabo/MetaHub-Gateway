@@ -16,6 +16,7 @@ from uuid import uuid4
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import hash_token, verify_password
+from metahub_shared.rbac import PERMISSION_BY_CODE
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
@@ -78,6 +79,34 @@ _WORKSPACE_ROLE_BY_LEGACY_ROLE = {
     "finance_admin": "finance_admin",
     "viewer": "viewer",
 }
+_GOVERNANCE_ROLE_PERMISSIONS = {
+    "owner": (
+        "data_governance.manage",
+        "data_governance.read",
+        "legal_hold.manage",
+        "legal_hold.read",
+    ),
+    "security_admin": (
+        "data_governance.manage",
+        "data_governance.read",
+        "legal_hold.read",
+    ),
+    "legal_admin": (
+        "data_governance.read",
+        "legal_hold.manage",
+        "legal_hold.read",
+    ),
+    "auditor": ("data_governance.read", "legal_hold.read"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkspacePermissionSnapshot:
+    permission_codes: tuple[str, ...]
+    permission_revision: int
+    matrix_sha256: str
+    authorization_fingerprint: str
+    legacy_authorization_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +129,15 @@ class WorkspaceSessionContext:
     authorization_fingerprint: str
     expires_at: datetime
     token: str
+    legacy_authorization_fingerprint: str | None = None
 
     def as_auth_context(self) -> AuthContext:
+        legacy_permissions = tuple(
+            code for code in self.permission_codes if code in PERMISSION_BY_CODE
+        )
+        extension_permissions = tuple(
+            code for code in self.permission_codes if code not in PERMISSION_BY_CODE
+        )
         return AuthContext(
             user=AuthUser(
                 user_id=self.legacy_user_id,
@@ -109,9 +145,12 @@ class WorkspaceSessionContext:
                 email=self.account_email,
                 display_name=self.display_name,
                 role=self.legacy_role,
-                permission_codes=self.permission_codes,
+                permission_codes=legacy_permissions,
                 permission_revision=self.permission_revision,
-                authorization_fingerprint=self.authorization_fingerprint,
+                authorization_fingerprint=(
+                    self.legacy_authorization_fingerprint
+                    or self.authorization_fingerprint
+                ),
             ),
             tenant=AuthTenant(
                 tenant_id=self.tenant_id,
@@ -124,6 +163,10 @@ class WorkspaceSessionContext:
             ),
             token=self.token,
             token_jti=self.workspace_session_id,
+            extension_permission_codes=extension_permissions,
+            extension_authorization_fingerprint=(
+                self.authorization_fingerprint if extension_permissions else None
+            ),
         )
 
 
@@ -395,7 +438,7 @@ def get_workspace_session(
 ) -> WorkspaceSessionResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         context, row = _authenticate_workspace(
             connection,
             config,
@@ -443,7 +486,7 @@ def authenticate_workspace_session_context(
 
     connection = _connect(config)
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         context, _row = _authenticate_workspace(
             connection,
             config,
@@ -1653,13 +1696,7 @@ def _authenticate_workspace(
         _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")
         raise ApiError("workspace_session.revoked")
     try:
-        snapshot = require_actor_runtime_permissions(
-            connection,
-            tenant_id=row["tenant_id"],
-            user_id=row["legacy_user_id"],
-            permission_codes=("console.basic.read",),
-            unavailable_error_code="workspace_session.unavailable",
-        )
+        snapshot = _permission_snapshot(connection, row)
     except ApiError:
         _revoke_workspace_session(
             connection, row["workspace_session_id"], now, "permission_changed"
@@ -1704,6 +1741,11 @@ def _authenticate_workspace(
         authorization_fingerprint=snapshot.authorization_fingerprint,
         expires_at=_parse_time(row["absolute_expires_at"]),
         token=session_token,
+        legacy_authorization_fingerprint=getattr(
+            snapshot,
+            "legacy_authorization_fingerprint",
+            snapshot.authorization_fingerprint,
+        ),
     )
     return context, row
 
@@ -1754,12 +1796,64 @@ def _switch_target(
 
 
 def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
-    return require_actor_runtime_permissions(
+    legacy = require_actor_runtime_permissions(
         connection,
         tenant_id=row["tenant_id"],
         user_id=row["legacy_user_id"],
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
+    )
+    has_extension = _table_exists(connection, "workspace_governance_role_permissions")
+    has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
+    if not has_extension and not has_catalog:
+        return legacy
+    if not has_extension or not has_catalog:
+        raise ApiError("workspace_session.unavailable")
+    expected = {
+        (role_code, permission_code)
+        for role_code, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
+    catalog = {
+        str(item[0])
+        for item in connection.execute(
+            "SELECT permission_code FROM workspace_governance_permission_extensions"
+        ).fetchall()
+    }
+    assignments = {
+        (str(item[0]), str(item[1]))
+        for item in connection.execute(
+            "SELECT role_code,permission_code FROM workspace_governance_role_permissions"
+        ).fetchall()
+    }
+    if catalog != {code for _, code in expected} or assignments != expected:
+        raise ApiError("workspace_session.unavailable")
+    governance = tuple(
+        str(item[0])
+        for item in connection.execute(
+            "SELECT permission_code FROM workspace_governance_role_permissions "
+            "WHERE role_code=? ORDER BY permission_code",
+            (row["role_code"],),
+        ).fetchall()
+    )
+    permissions = tuple(sorted({*legacy.permission_codes, *governance}))
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "legacy": legacy.authorization_fingerprint,
+                "membership_role": str(row["role_code"]),
+                "governance_permissions": governance,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+    return _WorkspacePermissionSnapshot(
+        permission_codes=permissions,
+        permission_revision=legacy.permission_revision,
+        matrix_sha256=legacy.matrix_sha256,
+        authorization_fingerprint=fingerprint,
+        legacy_authorization_fingerprint=legacy.authorization_fingerprint,
     )
 
 

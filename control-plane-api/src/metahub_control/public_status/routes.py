@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
-from metahub_control.identity.service import SESSION_COOKIE
 from metahub_control.notifications.routes import (
     _cookie_values,
     _raw_headers,
@@ -70,7 +69,6 @@ def require_workspace_status(request: Request) -> WorkspaceSessionContext:
         _raw_headers(request, b"authorization")
         or _cookie_values(request, PLATFORM_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
-        or _cookie_values(request, SESSION_COOKIE)
     ):
         raise ApiError("workspace_session.credential_conflict")
     return authenticate_workspace_session_context(
@@ -84,7 +82,6 @@ def require_platform_status(request: Request) -> PlatformContext:
         _raw_headers(request, b"authorization")
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
-        or _cookie_values(request, SESSION_COOKIE)
     ):
         raise ApiError("platform.credential_conflict")
     csrf = None

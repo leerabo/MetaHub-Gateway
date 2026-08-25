@@ -97,6 +97,12 @@ import {
   simulateWorkspaceConditionalAccess,
   updateWorkspaceConditionalAccess,
 } from "../../lib/conditionalAccess.js";
+import {
+  createWorkspaceLegalHold,
+  getWorkspaceDataGovernance,
+  releaseWorkspaceLegalHold,
+  updateWorkspaceDataGovernance,
+} from "../../lib/dataGovernance.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -233,6 +239,13 @@ if (root) {
         controlApiUrl,
         ...input,
       }),
+      dataGovernance: (input) => getWorkspaceDataGovernance({ controlApiUrl, ...input }),
+      updateDataGovernance: (input) => updateWorkspaceDataGovernance({
+        controlApiUrl,
+        ...input,
+      }),
+      createLegalHold: (input) => createWorkspaceLegalHold({ controlApiUrl, ...input }),
+      releaseLegalHold: (input) => releaseWorkspaceLegalHold({ controlApiUrl, ...input }),
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });

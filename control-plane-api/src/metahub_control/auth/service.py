@@ -136,6 +136,8 @@ class AuthContext:
     session: AuthSession
     token: str
     token_jti: str
+    extension_permission_codes: tuple[str, ...] = ()
+    extension_authorization_fingerprint: str | None = None
 
     @property
     def permission_codes(self) -> tuple[str, ...]:

@@ -33,9 +33,12 @@ _MANIFEST_KEYS = frozenset(
         "policy",
         "provider_key_refs",
         "feature_capabilities",
+        "data_governance",
         "source_sha256",
     }
 )
+_LEGACY_MANIFEST_KEYS = _MANIFEST_KEYS - {"data_governance"}
+_CLASSIFICATIONS = ("audit", "billing", "file", "identity", "prompt", "response")
 _FULL_KEYS = frozenset(
     {
         "wire_schema_version",
@@ -285,6 +288,9 @@ class ConfigSnapshotOwner:
             or normalized["placement"]["cell_code"] != self._cell_code  # type: ignore[index]
         ):
             raise ConfigDistributionError("config.owner_invalid")
+        governance = normalized.get("data_governance")
+        if governance is not None and _time(governance["valid_until"]) <= self._now():  # type: ignore[index]
+            raise ConfigDistributionError("config.policy_expired")
         canonical = canonical_json_bytes(normalized)
         digest = hashlib.sha256(canonical).hexdigest()
         if digest != wire["manifest_sha256"]:
@@ -322,7 +328,13 @@ def create_manifest_delta(
 
     old = _manifest(before)
     new = _manifest(after)
-    changes = {key: new[key] for key in sorted(_MANIFEST_KEYS) if old[key] != new[key]}
+    if set(old) - set(new):
+        raise ConfigDistributionError("config.delta_invalid")
+    changes = {
+        key: new[key]
+        for key in sorted(new)
+        if key not in old or old[key] != new[key]
+    }
     return {"changes": changes, "removed": []}
 
 
@@ -424,7 +436,10 @@ def _delta_manifest(
 
 
 def _manifest(value: object) -> dict[str, object]:
-    if type(value) is not dict or set(value) != _MANIFEST_KEYS:
+    if type(value) is not dict:
+        raise ConfigDistributionError("config.manifest_invalid")
+    manifest_keys = frozenset(value)
+    if manifest_keys not in {_MANIFEST_KEYS, _LEGACY_MANIFEST_KEYS}:
         raise ConfigDistributionError("config.manifest_invalid")
     if (
         value.get("schema_version") != 1
@@ -492,9 +507,73 @@ def _manifest(value: object) -> dict[str, object]:
             or item["kill_generation"] < 0
         ):
             raise ConfigDistributionError("config.manifest_invalid")
+    if "data_governance" in value:
+        _validate_data_governance(value["data_governance"])
     _reject_forbidden_names(value)
     canonical_json_bytes(value)
     return dict(value)
+
+
+def _validate_data_governance(value: object) -> None:
+    keys = {
+        "schema_version",
+        "policy_id",
+        "generation",
+        "sha256",
+        "allowed_residency_groups",
+        "primary_residency_group",
+        "cross_region_mode",
+        "valid_until",
+        "retention",
+    }
+    if type(value) is not dict or set(value) != keys:
+        raise ConfigDistributionError("config.manifest_invalid")
+    groups = value.get("allowed_residency_groups")
+    retention = value.get("retention")
+    if (
+        value.get("schema_version") != 1
+        or re.fullmatch(r"rgp_[0-9a-f]{32}", str(value.get("policy_id") or "")) is None
+        or type(value.get("generation")) is not int
+        or value["generation"] < 1
+        or _HASH.fullmatch(str(value.get("sha256") or "")) is None
+        or type(groups) is not list
+        or not 1 <= len(groups) <= 16
+        or any(type(group) is not str for group in groups)
+        or groups != sorted(set(groups))
+        or any(_CODE.fullmatch(str(group)) is None for group in groups)
+        or value.get("primary_residency_group") not in groups
+        or value.get("cross_region_mode") not in {"deny", "same_group"}
+        or type(retention) is not list
+        or len(retention) != 6
+    ):
+        raise ConfigDistributionError("config.manifest_invalid")
+    _time(value.get("valid_until"))
+    codes: list[str] = []
+    for item in retention:
+        if (
+            type(item) is not dict
+            or set(item)
+            != {
+                "classification_code",
+                "retention_days",
+                "deletion_mode",
+                "backup_grace_days",
+                "revision",
+            }
+            or item.get("classification_code") not in _CLASSIFICATIONS
+            or type(item.get("retention_days")) is not int
+            or not 1 <= item["retention_days"] <= 3650
+            or item.get("deletion_mode")
+            not in {"hard_delete", "archive_then_delete", "anonymize"}
+            or type(item.get("backup_grace_days")) is not int
+            or not 0 <= item["backup_grace_days"] <= 365
+            or type(item.get("revision")) is not int
+            or item["revision"] < 1
+        ):
+            raise ConfigDistributionError("config.manifest_invalid")
+        codes.append(str(item["classification_code"]))
+    if tuple(codes) != _CLASSIFICATIONS:
+        raise ConfigDistributionError("config.manifest_invalid")
 
 
 def _optional_projection(value: object) -> bool:

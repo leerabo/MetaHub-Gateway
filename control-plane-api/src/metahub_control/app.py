@@ -42,6 +42,8 @@ from .cost_anomalies import router as cost_anomalies_router
 from .customer_health import install_customer_health_scheduler
 from .customer_health import router as customer_health_router
 from .dashboard.routes import router as dashboard_router
+from .data_governance import install_data_governance_scheduler
+from .data_governance import router as data_governance_router
 from .debug_console.routes import router as debug_console_router
 from .developer_portal.routes import router as developer_portal_router
 from .disaster_recovery import router as disaster_recovery_router
@@ -290,6 +292,7 @@ app.include_router(console_router)
 app.include_router(cost_anomalies_router)
 app.include_router(customer_health_router)
 app.include_router(dashboard_router)
+app.include_router(data_governance_router)
 app.include_router(config_router)
 app.include_router(config_distribution_router)
 app.include_router(config_transfer_router)
@@ -377,6 +380,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_security_event_scheduler,
             install_mcp_scheduler,
             install_tenant_data_scheduler,
+            install_data_governance_scheduler,
         )
     )
 install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)

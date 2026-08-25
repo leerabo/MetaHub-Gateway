@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from metahub_control.identity.service import SESSION_COOKIE
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
     PLATFORM_SESSION_COOKIE,
@@ -38,6 +39,7 @@ ORIGIN = "http://localhost:5173"
 PLATFORM_TOKEN = "s" * 43
 PLATFORM_CSRF = "c" * 43
 WORKSPACE_TOKEN = "w" * 43
+GLOBAL_TOKEN = "g" * 43
 OPS_ID = "pto_" + "d112" * 8
 SECURITY_ID = "pto_" + "e112" * 8
 OPS_ACCOUNT_ID = "gac_" + "d112" * 8
@@ -147,7 +149,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd112-status-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0105"
+    assert apply_migrations(database_url).applied[-1] == "0109"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -291,6 +293,7 @@ def _holder() -> dict[str, object]:
 def _platform_headers(*, key: str | None = None, revision: int | None = None):
     headers = {
         "Cookie": (
+            f"{SESSION_COOKIE}={GLOBAL_TOKEN}; "
             f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; "
             f"{PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
         ),
@@ -306,7 +309,12 @@ def _platform_headers(*, key: str | None = None, revision: int | None = None):
 
 
 def _workspace_headers() -> dict[str, str]:
-    return {"Cookie": f"{WORKSPACE_SESSION_COOKIE}={WORKSPACE_TOKEN}"}
+    return {
+        "Cookie": (
+            f"{SESSION_COOKIE}={GLOBAL_TOKEN}; "
+            f"{WORKSPACE_SESSION_COOKIE}={WORKSPACE_TOKEN}"
+        )
+    }
 
 
 def _incident_payload(*, visibility: str = "public", classification: str = "reliability"):

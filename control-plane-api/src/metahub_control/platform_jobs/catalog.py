@@ -41,6 +41,7 @@ ARTIFACTS = {
         "dr.run",
         "status.publish",
         "capacity.run",
+        "data.retention.delete",
     )
 }
 _HANDLERS: dict[str, JobHandlerDefinition] = {}

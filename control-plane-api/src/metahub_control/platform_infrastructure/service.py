@@ -20,6 +20,11 @@ from metahub_shared.infrastructure.probes import InfrastructureProbe
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.data_governance.service import (
+    active_governance_policy_in_transaction,
+    residency_group_for_region_in_transaction,
+    write_residency_evidence_in_transaction,
+)
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -36,7 +41,10 @@ from .models import (
 
 _BACKUP_ID_RE = re.compile(r"^bkp_[0-9a-f]{32}$")
 _WORKSPACE_ID_RE = re.compile(r"^wsp_[0-9a-f]{32}$")
-_TENANT_ID_RE = re.compile(r"^ten_[0-9a-f]{32}$")
+_TENANT_ID_RE = re.compile(
+    r"^(?:ten_[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _SCHEMA_HEAD_RE = re.compile(r"^[0-9]{4}$")
 _RESOURCE_ORDER = (
@@ -170,18 +178,60 @@ def create_backup(
             connection.commit()
             return response
 
+        governance = None
+        residency_group = None
         if payload.scope_kind == "workspace":
             owner = connection.execute(
                 """
-                SELECT 1 FROM workspace_tenant_bindings
-                WHERE workspace_id=? AND tenant_id=? AND status='active'
+                SELECT region.region_code FROM workspace_tenant_bindings binding
+                JOIN workspace_regions region ON region.workspace_id=binding.workspace_id
+                  AND region.tenant_id=binding.tenant_id AND region.status='active'
+                WHERE binding.workspace_id=? AND binding.tenant_id=?
+                  AND binding.status='active'
                 """,
                 (payload.workspace_id, payload.tenant_id),
             ).fetchone()
             if owner is None:
                 raise ApiError("infrastructure.backup_owner_not_found")
+            governance = active_governance_policy_in_transaction(
+                connection,
+                workspace_id=str(payload.workspace_id),
+                tenant_id=str(payload.tenant_id),
+            )
+            residency_group = residency_group_for_region_in_transaction(
+                connection, str(owner["region_code"])
+            )
+            if residency_group not in governance.allowed_groups:
+                now = _utcnow()
+                write_residency_evidence_in_transaction(
+                    connection,
+                    workspace_id=str(payload.workspace_id),
+                    tenant_id=str(payload.tenant_id),
+                    policy=governance,
+                    component_code="backup",
+                    region_code=str(owner["region_code"]),
+                    storage_class="backup",
+                    outcome="blocked",
+                    violation_code="region_not_allowed",
+                    observed_watermark=governance.generation,
+                    manifest_sha256=governance.sha256,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    now=now,
+                )
+                connection.commit()
+                raise ApiError("infrastructure.residency_conflict")
         now = _utcnow()
         retention_days = payload.retention_days or config.backup_default_retention_days
+        if governance is not None:
+            governed_retention = int(
+                connection.execute(
+                    "SELECT MAX(retention_days+backup_grace_days) FROM retention_policies "
+                    "WHERE workspace_id=? AND tenant_id=? AND generation=? AND status='active'",
+                    (payload.workspace_id, payload.tenant_id, governance.generation),
+                ).fetchone()[0]
+            )
+            retention_days = max(retention_days, governed_retention)
         backup_id = _id("bkp_")
         source_backend = database_backend(config.database_url)
         if source_backend not in {"sqlite", "postgresql"}:
@@ -191,8 +241,9 @@ def create_backup(
             INSERT INTO backup_sets(
               backup_id,backup_type,scope_kind,workspace_id,tenant_id,status,
               source_backend,requested_by_operator_id,idempotency_sha256,request_sha256,
-              request_id,trace_id,retention_until,created_at,updated_at)
-            VALUES(?,?,?,?,?,'requested',?,?,?,?,?,?,?,?,?)
+              request_id,trace_id,retention_until,created_at,updated_at,
+              governance_generation,residency_group)
+            VALUES(?,?,?,?,?,'requested',?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 backup_id,
@@ -209,6 +260,8 @@ def create_backup(
                 _db_time(now + timedelta(days=retention_days)),
                 _db_time(now),
                 _db_time(now),
+                governance.generation if governance is not None else None,
+                residency_group,
             ),
         )
         connection.execute(
@@ -228,6 +281,23 @@ def create_backup(
             payload=canonical,
             now=now,
         )
+        if governance is not None:
+            write_residency_evidence_in_transaction(
+                connection,
+                workspace_id=str(payload.workspace_id),
+                tenant_id=str(payload.tenant_id),
+                policy=governance,
+                component_code="backup",
+                region_code=str(owner["region_code"]),
+                storage_class="backup",
+                outcome="compliant",
+                violation_code=None,
+                observed_watermark=governance.generation,
+                manifest_sha256=governance.sha256,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=now,
+            )
         response = _backup_response(
             connection,
             backup_id,
@@ -293,13 +363,67 @@ def claim_backup(config: AppConfig, *, worker_id: str) -> BackupClaim | None:
         _fail_expired_claims(connection, now=now)
         row = connection.execute(
             """
-            SELECT backup_id,backup_type,source_backend FROM backup_sets
+            SELECT * FROM backup_sets
             WHERE status='requested' ORDER BY created_at,backup_id LIMIT 1
             """
         ).fetchone()
         if row is None:
             connection.commit()
             return None
+        if row["scope_kind"] == "workspace":
+            policy = active_governance_policy_in_transaction(
+                connection,
+                workspace_id=str(row["workspace_id"]),
+                tenant_id=str(row["tenant_id"]),
+            )
+            owner = connection.execute(
+                "SELECT region_code FROM workspace_regions WHERE workspace_id=? "
+                "AND tenant_id=? AND status='active'",
+                (row["workspace_id"], row["tenant_id"]),
+            ).fetchone()
+            group = (
+                residency_group_for_region_in_transaction(
+                    connection, str(owner["region_code"])
+                )
+                if owner is not None
+                else None
+            )
+            if (
+                row["governance_generation"] is None
+                or int(row["governance_generation"]) != policy.generation
+                or row["residency_group"] != group
+                or group not in policy.allowed_groups
+            ):
+                now = _utcnow()
+                connection.execute(
+                    "UPDATE backup_sets SET status='failed',"
+                    "error_code='infrastructure.residency_conflict',completed_at=?,updated_at=? "
+                    "WHERE backup_id=? AND status='requested'",
+                    (_db_time(now), _db_time(now), row["backup_id"]),
+                )
+                write_residency_evidence_in_transaction(
+                    connection,
+                    workspace_id=str(row["workspace_id"]),
+                    tenant_id=str(row["tenant_id"]),
+                    policy=policy,
+                    component_code="backup",
+                    region_code=str(owner["region_code"]) if owner is not None else "unknown",
+                    storage_class="backup",
+                    outcome="blocked",
+                    violation_code=(
+                        "generation_stale"
+                        if row["governance_generation"] is None
+                        or int(row["governance_generation"]) != policy.generation
+                        else "region_not_allowed"
+                    ),
+                    observed_watermark=int(row["governance_generation"] or 0),
+                    manifest_sha256=policy.sha256,
+                    request_id=str(row["request_id"]),
+                    trace_id=str(row["trace_id"]),
+                    now=now,
+                )
+                connection.commit()
+                return None
         token = secrets.token_urlsafe(32)
         claimed = connection.execute(
             """

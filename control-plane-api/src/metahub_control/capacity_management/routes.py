@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 
-from metahub_control.identity.service import SESSION_COOKIE
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
     PLATFORM_SESSION_COOKIE,
@@ -56,7 +55,6 @@ _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 def require_platform_capacity(request: Request) -> PlatformContext:
     if (
         _raw_headers(request, b"authorization")
-        or _cookie_values(request, SESSION_COOKIE)
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):

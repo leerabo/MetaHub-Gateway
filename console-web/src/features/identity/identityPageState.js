@@ -104,6 +104,12 @@ export function createIdentityPageController({
   let conditionalAccess = null;
   let conditionalAccessBusy = false;
   let conditionalAccessError = null;
+  let dataGovernance = null;
+  let dataGovernanceBusy = false;
+  let dataGovernanceError = null;
+  let dataGovernanceDraft = null;
+  let dataGovernanceSimulationFingerprint = null;
+  let dataGovernanceIntent = null;
   let platformAccess = false;
   let pendingWrite = Promise.resolve();
   let contextGeneration = 0;
@@ -1287,6 +1293,220 @@ export function createIdentityPageController({
         scrubSensitiveInputs();
       }
     },
+    async refreshDataGovernance() {
+      if (!workspaceGovernanceReadAllowed() || typeof api.dataGovernance !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      dataGovernanceBusy = true;
+      dataGovernanceError = null;
+      dataGovernanceDraft = null;
+      dataGovernanceSimulationFingerprint = null;
+      dataGovernanceIntent = null;
+      renderSecurity();
+      return loadDataGovernance(ticket, "数据治理状态已刷新。");
+    },
+    async simulateDataGovernance(input = {}) {
+      if (!workspaceGovernanceManageAllowed() || !dataGovernance?.policy || dataGovernanceBusy
+        || typeof api.updateDataGovernance !== "function") return false;
+      const draft = normalizeGovernanceDraft(input);
+      if (!draft) {
+        dataGovernanceError = { message: "请提供完整、有效的数据治理策略。", requestId: "-" };
+        renderSecurity();
+        return false;
+      }
+      const fingerprint = JSON.stringify(draft);
+      const idempotencyKey = dataGovernanceIntent?.action === "simulate"
+        && dataGovernanceIntent.fingerprint === fingerprint
+        ? dataGovernanceIntent.idempotencyKey : newIdempotencyKey();
+      dataGovernanceIntent = { action: "simulate", fingerprint, idempotencyKey };
+      dataGovernanceDraft = draft;
+      dataGovernanceBusy = true;
+      dataGovernanceError = null;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      renderSecurity({ feedback: "正在模拟驻留与保留策略…" });
+      try {
+        const result = await queueWrite(() => api.updateDataGovernance({
+          workspaceId: ownerWorkspaceId,
+          expectedRevision: dataGovernance.policy.revision,
+          idempotencyKey,
+          ...draft,
+          confirmed: false,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        dataGovernance = result;
+        dataGovernanceBusy = false;
+        dataGovernanceError = null;
+        dataGovernanceSimulationFingerprint = fingerprint;
+        renderSecurity({
+          feedback: result.simulation?.placement_compliant
+            ? "策略模拟已完成，当前 placement 满足候选策略。"
+            : "策略模拟已完成，需要先处理列出的迁移组件。",
+        });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        dataGovernanceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        dataGovernanceError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async applyDataGovernance(input = {}) {
+      if (!workspaceGovernanceManageAllowed() || !dataGovernance?.policy || dataGovernanceBusy
+        || input.confirmed !== true || typeof api.updateDataGovernance !== "function") {
+        return false;
+      }
+      const draft = normalizeGovernanceDraft(input);
+      const fingerprint = draft ? JSON.stringify(draft) : null;
+      if (!draft || !dataGovernance?.simulation
+        || fingerprint !== dataGovernanceSimulationFingerprint) {
+        dataGovernanceError = {
+          message: "配置已变化，请先重新模拟当前策略，再确认应用。",
+          requestId: "-",
+        };
+        renderSecurity();
+        return false;
+      }
+      const idempotencyKey = dataGovernanceIntent?.action === "apply"
+        && dataGovernanceIntent.fingerprint === fingerprint
+        ? dataGovernanceIntent.idempotencyKey : newIdempotencyKey();
+      dataGovernanceIntent = { action: "apply", fingerprint, idempotencyKey };
+      dataGovernanceBusy = true;
+      dataGovernanceError = null;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      renderSecurity({ feedback: "正在原子应用并发布数据治理策略…" });
+      try {
+        const result = await queueWrite(() => api.updateDataGovernance({
+          workspaceId: ownerWorkspaceId,
+          expectedRevision: dataGovernance.policy.revision,
+          idempotencyKey,
+          ...draft,
+          confirmed: true,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        dataGovernance = result;
+        dataGovernanceBusy = false;
+        dataGovernanceError = null;
+        dataGovernanceDraft = null;
+        dataGovernanceSimulationFingerprint = null;
+        dataGovernanceIntent = null;
+        renderSecurity({ feedback: "数据治理策略已应用并发布。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        dataGovernanceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        dataGovernanceError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async createLegalHold(input = {}) {
+      if (!workspaceLegalHoldManageAllowed() || dataGovernanceBusy
+        || input.confirmed !== true || typeof api.createLegalHold !== "function") return false;
+      let fingerprint;
+      try {
+        fingerprint = await secureEnterpriseFingerprint({
+          classificationCode: input.classificationCode,
+          scopeKind: input.scopeKind,
+          selectorSha256: input.selectorSha256 || null,
+          reasonCode: input.reasonCode,
+          expiresAt: input.expiresAt || null,
+        });
+      } catch {
+        input.selectorSha256 = "";
+        dataGovernanceError = {
+          message: "无法安全准备法律保全请求，请刷新页面后重试。",
+          requestId: "-",
+        };
+        renderSecurity();
+        return false;
+      }
+      const idempotencyKey = dataGovernanceIntent?.action === "create-hold"
+        && dataGovernanceIntent.fingerprint === fingerprint
+        ? dataGovernanceIntent.idempotencyKey : newIdempotencyKey();
+      dataGovernanceIntent = { action: "create-hold", fingerprint, idempotencyKey };
+      dataGovernanceBusy = true;
+      dataGovernanceError = null;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      renderSecurity({ feedback: "正在创建法律保全…" });
+      try {
+        await queueWrite(() => api.createLegalHold({
+          workspaceId: ownerWorkspaceId,
+          idempotencyKey,
+          classificationCode: input.classificationCode,
+          scopeKind: input.scopeKind,
+          selectorSha256: input.selectorSha256 || null,
+          reasonCode: input.reasonCode,
+          expiresAt: input.expiresAt || null,
+          confirmed: true,
+          signal: ticket.signal,
+        }));
+        input.selectorSha256 = "";
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        dataGovernanceIntent = null;
+        return loadDataGovernance(ticket, "法律保全已创建。");
+      } catch (error) {
+        input.selectorSha256 = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        dataGovernanceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        dataGovernanceError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async releaseLegalHold(index, reasonCode, confirmed) {
+      const hold = dataGovernance?.legal_holds?.[Number(index)];
+      if (!workspaceLegalHoldManageAllowed() || dataGovernanceBusy || confirmed !== true
+        || hold?.status !== "active" || typeof api.releaseLegalHold !== "function") return false;
+      const fingerprint = JSON.stringify({ holdId: hold.legal_hold_id, reasonCode });
+      const idempotencyKey = dataGovernanceIntent?.action === "release-hold"
+        && dataGovernanceIntent.fingerprint === fingerprint
+        ? dataGovernanceIntent.idempotencyKey : newIdempotencyKey();
+      dataGovernanceIntent = { action: "release-hold", fingerprint, idempotencyKey };
+      dataGovernanceBusy = true;
+      dataGovernanceError = null;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      renderSecurity({ feedback: "正在释放法律保全…" });
+      try {
+        await queueWrite(() => api.releaseLegalHold({
+          workspaceId: ownerWorkspaceId,
+          holdId: hold.legal_hold_id,
+          expectedRevision: hold.revision,
+          idempotencyKey,
+          reasonCode,
+          confirmed: true,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        dataGovernanceIntent = null;
+        return loadDataGovernance(ticket, "法律保全已释放，删除调度将重新校验 fence。");
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        dataGovernanceBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        dataGovernanceError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
     async refreshSubscription() {
       if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
         || typeof api.subscription !== "function") return false;
@@ -2280,6 +2500,38 @@ export function createIdentityPageController({
     );
   }
 
+  function workspaceGovernanceReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("data_governance.read"),
+    );
+  }
+
+  function workspaceGovernanceManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("data_governance.manage"),
+    );
+  }
+
+  function workspaceLegalHoldReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("legal_hold.read"),
+    );
+  }
+
+  function workspaceLegalHoldManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("legal_hold.manage"),
+    );
+  }
+
   async function loadEnterpriseIdentity(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceEnterpriseReadAllowed() || typeof api.enterpriseIdentity !== "function") {
       enterpriseIdentity = null;
@@ -2420,6 +2672,40 @@ export function createIdentityPageController({
       conditionalAccess = null;
       conditionalAccessBusy = false;
       conditionalAccessError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function loadDataGovernance(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceGovernanceReadAllowed() || typeof api.dataGovernance !== "function") {
+      dataGovernance = null;
+      dataGovernanceBusy = false;
+      dataGovernanceError = null;
+      dataGovernanceDraft = null;
+      dataGovernanceSimulationFingerprint = null;
+      dataGovernanceIntent = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    dataGovernanceBusy = true;
+    try {
+      const result = await api.dataGovernance({
+        workspaceId: workspaceContext.workspace_id,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket)) return false;
+      dataGovernance = result;
+      dataGovernanceBusy = false;
+      dataGovernanceError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      dataGovernance = null;
+      dataGovernanceBusy = false;
+      dataGovernanceError = safePageError(error);
       if (render) renderSecurity();
       return false;
     }
@@ -2898,6 +3184,7 @@ export function createIdentityPageController({
         loadEnterpriseIdentity(ticket, "", { render: false }),
         loadScimDirectory(ticket, "", { render: false }),
         loadConditionalAccess(ticket, "", { render: false }),
+        loadDataGovernance(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -3033,6 +3320,14 @@ export function createIdentityPageController({
       conditionalAccessError,
       conditionalAccessVisible: workspaceConditionalReadAllowed(),
       conditionalAccessCanManage: workspaceConditionalManageAllowed(),
+      dataGovernance,
+      dataGovernanceBusy,
+      dataGovernanceError,
+      dataGovernanceDraft,
+      dataGovernanceVisible: workspaceGovernanceReadAllowed(),
+      dataGovernanceCanManage: workspaceGovernanceManageAllowed(),
+      legalHoldVisible: workspaceLegalHoldReadAllowed(),
+      legalHoldCanManage: workspaceLegalHoldManageAllowed(),
       notificationCenterOpen,
       notificationInbox,
       notificationPreferences,
@@ -3127,6 +3422,12 @@ export function createIdentityPageController({
     conditionalAccess = null;
     conditionalAccessBusy = false;
     conditionalAccessError = null;
+    dataGovernance = null;
+    dataGovernanceBusy = false;
+    dataGovernanceError = null;
+    dataGovernanceDraft = null;
+    dataGovernanceSimulationFingerprint = null;
+    dataGovernanceIntent = null;
     notificationCenterOpen = false;
     notificationInbox = null;
     notificationPreferences = null;
@@ -3325,6 +3626,47 @@ export function createIdentityPageController({
         scrubFormSecrets(form);
         await controller.saveConditionalAccess(input);
         input.code = "";
+      } else if (form?.matches?.("[data-data-governance-policy-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const retentionPolicies = ["audit", "billing", "file", "identity", "prompt", "response"]
+          .map((classificationCode) => ({
+            classificationCode,
+            retentionDays: Number(fields.get(`retentionDays:${classificationCode}`)),
+            deletionMode: fields.get(`deletionMode:${classificationCode}`),
+            backupGraceDays: Number(fields.get(`backupGraceDays:${classificationCode}`)),
+          }));
+        const input = {
+          allowedResidencyGroups: fields.get("allowedResidencyGroups"),
+          primaryResidencyGroup: fields.get("primaryResidencyGroup"),
+          crossRegionMode: fields.get("crossRegionMode"),
+          retentionPolicies,
+          reasonCode: fields.get("reasonCode"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        if (event.submitter?.value === "apply") await controller.applyDataGovernance(input);
+        else await controller.simulateDataGovernance(input);
+      } else if (form?.matches?.("[data-legal-hold-create-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          classificationCode: fields.get("classificationCode"),
+          scopeKind: fields.get("scopeKind"),
+          selectorSha256: fields.get("selectorSha256"),
+          reasonCode: fields.get("reasonCode"),
+          expiresAt: fields.get("expiresAt"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        await controller.createLegalHold(input);
+        input.selectorSha256 = "";
+      } else if (form?.matches?.("[data-legal-hold-release-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.releaseLegalHold(
+          form.dataset.legalHoldIndex,
+          fields.get("reasonCode"),
+          fields.get("confirmed") === "on",
+        );
       } else if (form?.matches?.("[data-workspace-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -3510,6 +3852,8 @@ export function createIdentityPageController({
         await controller.refreshConditionalAccess();
       } else if (button.dataset.identityAction === "simulate-conditional-access") {
         await controller.simulateConditionalAccess();
+      } else if (button.dataset.identityAction === "refresh-data-governance") {
+        await controller.refreshDataGovernance();
       } else if (button.dataset.identityAction === "show-register") {
         controller.showRegistration();
       } else if (button.dataset.identityAction === "show-reset") {
@@ -3688,6 +4032,52 @@ function parsePolicyLines(value) {
     .map((item) => item.trim())
     .filter(Boolean);
   return [...new Set(entries)];
+}
+
+function normalizeGovernanceDraft(input) {
+  const classifications = ["audit", "billing", "file", "identity", "prompt", "response"];
+  const groups = (Array.isArray(input?.allowedResidencyGroups)
+    ? input.allowedResidencyGroups
+    : parsePolicyLines(input?.allowedResidencyGroups))
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .sort();
+  const primaryResidencyGroup = String(input?.primaryResidencyGroup ?? "").trim();
+  const crossRegionMode = String(input?.crossRegionMode ?? "");
+  const reasonCode = String(input?.reasonCode ?? "");
+  if (groups.length < 1 || groups.length > 16 || new Set(groups).size !== groups.length
+    || groups.some((value) => !/^[a-z0-9][a-z0-9-]{2,39}$/u.test(value))
+    || !groups.includes(primaryResidencyGroup)
+    || !new Set(["deny", "same_group"]).has(crossRegionMode)
+    || !new Set([
+      "compliance_update", "regional_expansion", "regional_restriction", "retention_update",
+    ]).has(reasonCode)
+    || !Array.isArray(input?.retentionPolicies) || input.retentionPolicies.length !== 6) {
+    return null;
+  }
+  const retentionPolicies = [...input.retentionPolicies]
+    .map((item) => ({
+      classificationCode: String(item?.classificationCode ?? ""),
+      retentionDays: Number(item?.retentionDays),
+      deletionMode: String(item?.deletionMode ?? ""),
+      backupGraceDays: Number(item?.backupGraceDays),
+    }))
+    .sort((left, right) => left.classificationCode.localeCompare(right.classificationCode));
+  if (retentionPolicies.map((item) => item.classificationCode).join("|")
+      !== classifications.join("|")
+    || retentionPolicies.some((item) => !Number.isSafeInteger(item.retentionDays)
+      || item.retentionDays < 1 || item.retentionDays > 3650
+      || !new Set(["hard_delete", "archive_then_delete", "anonymize"])
+        .has(item.deletionMode)
+      || !Number.isSafeInteger(item.backupGraceDays)
+      || item.backupGraceDays < 0 || item.backupGraceDays > 365)) return null;
+  return {
+    allowedResidencyGroups: groups,
+    primaryResidencyGroup,
+    crossRegionMode,
+    retentionPolicies,
+    reasonCode,
+  };
 }
 
 function normalizeSessions(list, currentSession) {

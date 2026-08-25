@@ -13,6 +13,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "disaster-recovery",
   "status-incidents",
   "capacity",
+  "data-residency",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -105,6 +106,10 @@ export function createPlatformPageController({
     capacity: null,
     unitEconomics: null,
     capacityIntent: null,
+    residencyEvidence: null,
+    residencyEvidenceFilters: { workspaceId: "", component: "", outcome: "" },
+    residencyEvidenceCursor: null,
+    residencyEvidenceCursorHistory: [],
     riskCases: null,
     riskStatus: "",
     riskCursor: null,
@@ -201,7 +206,7 @@ export function createPlatformPageController({
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
-        "disaster-recovery", "status-incidents", "capacity", "abuse-risk",
+        "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -223,7 +228,7 @@ export function createPlatformPageController({
           state.statusIncidentIntent = null;
         } else if (state.view === "capacity") {
           state.capacityIntent = null;
-        } else {
+        } else if (state.view === "abuse-risk") {
           state.riskDecisionIntent = null;
         }
         state.loading = false;
@@ -249,6 +254,9 @@ export function createPlatformPageController({
       }
       if (state.view === "capacity" && !state.capacity && !state.unitEconomics) {
         void loadCapacity();
+      }
+      if (state.view === "data-residency" && !state.residencyEvidence) {
+        void loadResidencyEvidence();
       }
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
     },
@@ -678,6 +686,28 @@ export function createPlatformPageController({
       }), command.action === "kill"
         ? "Chaos kill fence advanced."
         : command.action === "approve" ? "Chaos approval recorded." : "Chaos experiment created.");
+    },
+    async filterResidencyEvidence({ workspaceId, component, outcome } = {}) {
+      state.residencyEvidenceFilters = {
+        workspaceId: String(workspaceId ?? "").trim(),
+        component: String(component ?? ""),
+        outcome: String(outcome ?? ""),
+      };
+      state.residencyEvidenceCursor = null;
+      state.residencyEvidenceCursorHistory = [];
+      return loadResidencyEvidence();
+    },
+    async nextResidencyEvidencePage() {
+      const next = state.residencyEvidence?.next_cursor;
+      if (!next) return false;
+      state.residencyEvidenceCursorHistory.push(state.residencyEvidenceCursor);
+      state.residencyEvidenceCursor = next;
+      return loadResidencyEvidence();
+    },
+    async previousResidencyEvidencePage() {
+      if (!state.residencyEvidenceCursorHistory.length) return false;
+      state.residencyEvidenceCursor = state.residencyEvidenceCursorHistory.pop() ?? null;
+      return loadResidencyEvidence();
     },
     async filterRiskCases(status) {
       state.riskStatus = normalizeRiskStatus(status);
@@ -1288,6 +1318,7 @@ export function createPlatformPageController({
         disasterRecoveryBackups: null,
         capacity: null,
         unitEconomics: null,
+        residencyEvidence: null,
         grants: null,
         audit: null,
         workspaces: null,
@@ -1402,6 +1433,15 @@ export function createPlatformPageController({
           next.unitEconomics = value;
         }));
       }
+      if (permissions.has("platform.data_residency.read")
+        && typeof api.residencyEvidence === "function") {
+        tasks.push(api.residencyEvidence({
+          ...state.residencyEvidenceFilters,
+          cursor: state.residencyEvidenceCursor,
+          limit: 50,
+          signal: ticket.signal,
+        }).then((value) => { next.residencyEvidence = value; }));
+      }
       if ((permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
@@ -1453,6 +1493,11 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "capacity")) {
         state.capacityIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "data-residency")) {
+        state.residencyEvidence = null;
+        state.residencyEvidenceCursor = null;
+        state.residencyEvidenceCursorHistory = [];
       }
       if (!state.navigation.some((item) => item.id === "abuse-risk")) {
         state.riskDecisionIntent = null;
@@ -1638,6 +1683,29 @@ export function createPlatformPageController({
       if (!current(ticket)) return false;
       state.capacity = capacity;
       state.unitEconomics = economics;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadResidencyEvidence() {
+    if (!currentPermissions().has("platform.data_residency.read")
+      || typeof api.residencyEvidence !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.residencyEvidence = await api.residencyEvidence({
+        ...state.residencyEvidenceFilters,
+        cursor: state.residencyEvidenceCursor,
+        limit: 50,
+        signal: ticket.signal,
+      });
+      if (!current(ticket)) return false;
       state.loading = false;
       render();
       return true;
@@ -2378,6 +2446,13 @@ export function createPlatformPageController({
       if (form.matches("[data-platform-risk-filter-form]")) {
         controller.filterRiskCases(data.get("status"));
       }
+      if (form.matches("[data-platform-residency-filter-form]")) {
+        controller.filterResidencyEvidence({
+          workspaceId: data.get("workspaceId"),
+          component: data.get("component"),
+          outcome: data.get("outcome"),
+        });
+      }
       if (form.matches("[data-platform-risk-decision-form]")) {
         controller.decideRiskCase({
           caseId: data.get("caseId"),
@@ -2450,6 +2525,8 @@ export function createPlatformPageController({
       if (action === "dr-refresh") controller.refreshDisasterRecovery();
       if (action === "status-refresh") controller.refreshStatusIncidents();
       if (action === "capacity-refresh") controller.refreshCapacity();
+      if (action === "residency-evidence-next") controller.nextResidencyEvidencePage();
+      if (action === "residency-evidence-previous") controller.previousResidencyEvidencePage();
       if (action === "risk-next") controller.nextRiskPage();
       if (action === "risk-previous") controller.previousRiskPage();
       if (action === "open-job") controller.openJob(target.dataset.jobId);
@@ -2537,6 +2614,10 @@ export function createPlatformPageController({
     state.capacity = null;
     state.unitEconomics = null;
     state.capacityIntent = null;
+    state.residencyEvidence = null;
+    state.residencyEvidenceFilters = { workspaceId: "", component: "", outcome: "" };
+    state.residencyEvidenceCursor = null;
+    state.residencyEvidenceCursorHistory = [];
     state.riskCases = null;
     state.riskStatus = "";
     state.riskCursor = null;

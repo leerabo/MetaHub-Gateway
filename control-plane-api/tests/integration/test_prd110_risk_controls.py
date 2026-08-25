@@ -115,7 +115,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd110-risk-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0105"
+    assert apply_migrations(database_url).applied[-1] == "0109"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -199,7 +199,9 @@ def _app(monkeypatch: pytest.MonkeyPatch, config: AppConfig, holder: dict[str, o
 def _platform_headers(*, key: str | None = None, revision: int | None = None):
     headers = {
         "Cookie": (
-            f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; {PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
+            f"{SESSION_COOKIE}={GLOBAL_TOKEN}; "
+            f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; "
+            f"{PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
         ),
         "Origin": ORIGIN,
         "Sec-Fetch-Site": "same-site",

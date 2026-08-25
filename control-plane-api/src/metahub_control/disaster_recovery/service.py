@@ -15,6 +15,11 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.data_governance.service import (
+    active_governance_policy_in_transaction,
+    residency_group_for_region_in_transaction,
+    write_residency_evidence_in_transaction,
+)
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -449,6 +454,32 @@ def route_run_in_transaction(connection, config: AppConfig, *, run_id: str) -> N
     ):
         raise ApiError("dr.epoch_conflict")
     now = _database_now(connection)
+    placements = connection.execute(
+        """SELECT placement.*,primary_cell.region_code primary_cell_region,
+                  failover_cell.region_code failover_cell_region
+           FROM workspace_gateway_placements placement
+           JOIN gateway_cells primary_cell
+             ON primary_cell.gateway_cell_id=placement.primary_gateway_cell_id
+           LEFT JOIN gateway_cells failover_cell
+             ON failover_cell.gateway_cell_id=placement.failover_gateway_cell_id
+           WHERE placement.primary_region_code=? AND placement.failover_policy='explicit'
+             AND failover_cell.region_code=?""",
+        (source["region_code"], target["region_code"]),
+    ).fetchall()
+    target_group = residency_group_for_region_in_transaction(
+        connection, str(target["region_code"])
+    )
+    for placement in placements:
+        policy = active_governance_policy_in_transaction(
+            connection,
+            workspace_id=str(placement["workspace_id"]),
+            tenant_id=str(placement["tenant_id"]),
+        )
+        if (
+            int(placement["governance_generation"]) != policy.generation
+            or target_group not in policy.allowed_groups
+        ):
+            raise ApiError("dr.residency_violation")
     connection.execute(
         """UPDATE region_writer_leases SET status='fenced',released_at=?
            WHERE status='active'""",
@@ -471,25 +502,14 @@ def route_run_in_transaction(connection, config: AppConfig, *, run_id: str) -> N
             _db_time(now),
         ),
     )
-    placements = connection.execute(
-        """SELECT placement.*,primary_cell.region_code primary_cell_region,
-                  failover_cell.region_code failover_cell_region
-           FROM workspace_gateway_placements placement
-           JOIN gateway_cells primary_cell
-             ON primary_cell.gateway_cell_id=placement.primary_gateway_cell_id
-           LEFT JOIN gateway_cells failover_cell
-             ON failover_cell.gateway_cell_id=placement.failover_gateway_cell_id
-           WHERE placement.primary_region_code=? AND placement.failover_policy='explicit'
-             AND failover_cell.region_code=?""",
-        (source["region_code"], target["region_code"]),
-    ).fetchall()
     for placement in placements:
         changed = _changed_time(now, placement["updated_at"])
         updated = connection.execute(
             """UPDATE workspace_gateway_placements
                SET primary_region_code=?,primary_gateway_cell_id=?,failover_gateway_cell_id=?,
                    updated_by_operator_id=?,idempotency_sha256=?,request_sha256=?,
-                   revision=revision+1,snapshot_generation=snapshot_generation+1,updated_at=?
+                   revision=revision+1,snapshot_generation=snapshot_generation+1,
+                   governance_generation=?,updated_at=?
                WHERE workspace_gateway_placement_id=? AND revision=?""",
             (
                 target["region_code"],
@@ -500,6 +520,7 @@ def route_run_in_transaction(connection, config: AppConfig, *, run_id: str) -> N
                     config, "placement-command", f"{run_id}:{placement['workspace_id']}"
                 ),
                 _digest({"run_id": run_id, "fencing_epoch": expected + 1}),
+                int(placement["governance_generation"]),
                 _db_time(changed),
                 placement["workspace_gateway_placement_id"],
                 int(placement["revision"]),
@@ -630,6 +651,37 @@ def fail_run_in_transaction(connection, *, run_id: str, outcome_code: str) -> No
         completed_at=now,
         safe_outcome_code=outcome_code,
     )
+    if outcome_code == "dr.residency_violation":
+        target_region = str(row["target_region_code"])
+        target_group = residency_group_for_region_in_transaction(connection, target_region)
+        placements = connection.execute(
+            "SELECT * FROM workspace_gateway_placements WHERE primary_region_code=?",
+            (row["source_region_code"],),
+        ).fetchall()
+        for placement in placements:
+            policy = active_governance_policy_in_transaction(
+                connection,
+                workspace_id=str(placement["workspace_id"]),
+                tenant_id=str(placement["tenant_id"]),
+            )
+            stale = int(placement["governance_generation"]) != policy.generation
+            if stale or target_group not in policy.allowed_groups:
+                write_residency_evidence_in_transaction(
+                    connection,
+                    workspace_id=str(placement["workspace_id"]),
+                    tenant_id=str(placement["tenant_id"]),
+                    policy=policy,
+                    component_code="disaster_recovery",
+                    region_code=target_region,
+                    storage_class="restore",
+                    outcome="violation",
+                    violation_code="generation_stale" if stale else "region_not_allowed",
+                    observed_watermark=int(placement["revision"]),
+                    manifest_sha256=policy.sha256,
+                    request_id=str(row["request_id"]),
+                    trace_id=str(row["trace_id"]),
+                    now=now,
+                )
 
 
 def _persist_latest_recovery_point(connection, plan, now: datetime):

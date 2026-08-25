@@ -54,6 +54,7 @@ def _wire(
     generation: int = 1,
     revocation_watermark: int = 0,
     source_sha256: str | None = None,
+    data_governance: dict[str, object] | None = None,
 ) -> dict[str, object]:
     manifest: dict[str, object] = {
         "schema_version": 1,
@@ -72,6 +73,8 @@ def _wire(
         "provider_key_refs": [],
         "feature_capabilities": [],
     }
+    if data_governance is not None:
+        manifest["data_governance"] = data_governance
     safe = dict(manifest)
     manifest["source_sha256"] = source_sha256 or hashlib.sha256(
         canonical_json_bytes(safe)
@@ -97,6 +100,29 @@ def _wire(
         "stale_policy": {"lkg_max_seconds": 30, "revocation_max_seconds": 2},
         "request_id": "request-prd108-gateway",
         "trace_id": "trace-prd108-gateway",
+    }
+
+
+def _governance(*, valid_until: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "policy_id": "rgp_" + "1" * 32,
+        "generation": 1,
+        "sha256": "2" * 64,
+        "allowed_residency_groups": ["cn-main"],
+        "primary_residency_group": "cn-main",
+        "cross_region_mode": "same_group",
+        "valid_until": valid_until,
+        "retention": [
+            {
+                "classification_code": code,
+                "retention_days": 30,
+                "deletion_mode": "hard_delete",
+                "backup_grace_days": 7,
+                "revision": 1,
+            }
+            for code in ("audit", "billing", "file", "identity", "prompt", "response")
+        ],
     }
 
 
@@ -261,3 +287,48 @@ def test_revocation_and_source_hash_contradictions_fail_closed() -> None:
         invalid_source_owner.apply(_wire(source_sha256="f" * 64))
     assert invalid_source.value.code == "config.hash_invalid"
     assert invalid_source_owner.decision().allowed is False
+
+
+def test_governance_manifest_is_strict_and_expiry_fails_closed() -> None:
+    now = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    owner = ConfigSnapshotOwner(
+        workspace_id=WORKSPACE_ID,
+        tenant_id=TENANT_ID,
+        cell_code="cn-north-1-a",
+        verifier=_test_kms_verifier(MASTER_KEY),
+        now=lambda: now,
+    )
+    assert owner.apply(
+        _wire(data_governance=_governance(valid_until="2026-08-27T00:00:00Z"))
+    )
+    snapshot = owner.snapshot()
+    assert snapshot is not None
+    assert snapshot.manifest["data_governance"]["generation"] == 1
+
+    malformed = _governance(valid_until="2026-08-27T00:00:00Z")
+    malformed["retention"] = list(reversed(malformed["retention"]))
+    invalid_owner = ConfigSnapshotOwner(
+        workspace_id=WORKSPACE_ID,
+        tenant_id=TENANT_ID,
+        cell_code="cn-north-1-a",
+        verifier=_test_kms_verifier(MASTER_KEY),
+        now=lambda: now,
+    )
+    with pytest.raises(ConfigDistributionError) as invalid:
+        invalid_owner.apply(_wire(data_governance=malformed))
+    assert invalid.value.code == "config.manifest_invalid"
+    assert invalid_owner.decision().allowed is False
+
+    expired_owner = ConfigSnapshotOwner(
+        workspace_id=WORKSPACE_ID,
+        tenant_id=TENANT_ID,
+        cell_code="cn-north-1-a",
+        verifier=_test_kms_verifier(MASTER_KEY),
+        now=lambda: now,
+    )
+    with pytest.raises(ConfigDistributionError) as expired:
+        expired_owner.apply(
+            _wire(data_governance=_governance(valid_until="2026-08-26T12:00:00Z"))
+        )
+    assert expired.value.code == "config.policy_expired"
+    assert expired_owner.decision().allowed is False

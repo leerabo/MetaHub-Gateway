@@ -53,7 +53,6 @@ _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 def require_platform_risk(request: Request) -> PlatformContext:
     if (
         _raw_headers(request, b"authorization")
-        or _cookie_values(request, SESSION_COOKIE)
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):

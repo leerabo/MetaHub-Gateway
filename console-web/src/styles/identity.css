@@ -490,6 +490,7 @@ a {
 .identity-workspaces,
 .identity-memberships,
 .identity-conditional-access,
+.identity-data-governance,
 .identity-sessions,
 .identity-password {
   border-top: 1px solid var(--identity-line);
@@ -514,6 +515,360 @@ a {
 .identity-subscription-command button:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+.identity-data-governance {
+  min-width: 0;
+}
+
+.identity-governance-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-governance-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 14px 16px;
+}
+
+.identity-governance-summary > div + div {
+  border-left: 1px solid var(--identity-line);
+}
+
+.identity-governance-summary span,
+.identity-governance-summary small,
+.identity-governance-meta,
+.identity-legal-hold-row span {
+  color: var(--identity-muted);
+  font-size: 0.76rem;
+}
+
+.identity-governance-summary strong,
+.identity-legal-hold-row strong {
+  overflow-wrap: anywhere;
+}
+
+.identity-governance-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 10px 0;
+}
+
+.identity-governance-block {
+  margin-top: 22px;
+  border-top: 1px solid var(--identity-line);
+  padding-top: 18px;
+}
+
+.identity-governance-policy-grid,
+.identity-legal-hold-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  background: var(--identity-soft);
+  padding: 16px;
+}
+
+.identity-governance-policy-grid label,
+.identity-legal-hold-form label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #3e4955;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.identity-governance-policy-grid .is-wide,
+.identity-legal-hold-form .is-wide {
+  grid-column: span 2;
+}
+
+.identity-data-governance input,
+.identity-data-governance select,
+.identity-data-governance textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid #bbc5d0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--identity-text);
+  padding: 7px 9px;
+}
+
+.identity-data-governance textarea {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  line-height: 1.45;
+}
+
+.identity-data-governance input:disabled,
+.identity-data-governance select:disabled,
+.identity-data-governance textarea:disabled {
+  background: #eef1f3;
+  color: #596674;
+}
+
+.identity-governance-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-governance-table-wrap table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+}
+
+.identity-governance-table-wrap th,
+.identity-governance-table-wrap td {
+  border-top: 1px solid var(--identity-line);
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.identity-governance-table-wrap thead th {
+  color: var(--identity-muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.identity-governance-table-wrap tbody th strong,
+.identity-governance-table-wrap tbody th small {
+  display: block;
+}
+
+.identity-governance-table-wrap tbody th small {
+  margin-top: 3px;
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+}
+
+.identity-governance-table-wrap input,
+.identity-governance-table-wrap select {
+  min-width: 116px;
+}
+
+.identity-governance-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.identity-governance-actions .identity-confirm,
+.identity-legal-hold-form .identity-confirm,
+.identity-legal-hold-row .identity-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.identity-governance-actions .identity-confirm input,
+.identity-legal-hold-form .identity-confirm input,
+.identity-legal-hold-row .identity-confirm input {
+  width: 18px;
+  min-height: 18px;
+  flex: 0 0 18px;
+  accent-color: var(--identity-accent);
+}
+
+.identity-governance-simulation {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+  border-left: 3px solid var(--identity-accent);
+  background: #edf8f5;
+}
+
+.identity-governance-simulation.is-blocked {
+  border-left-color: #a15c00;
+  background: #fff7e8;
+}
+
+.identity-governance-simulation > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 12px;
+}
+
+.identity-governance-simulation span {
+  color: var(--identity-muted);
+  font-size: 0.72rem;
+}
+
+.identity-governance-simulation strong {
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+}
+
+.identity-legal-hold-form > button {
+  justify-self: end;
+}
+
+.identity-legal-hold-list {
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-legal-hold-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(180px, 1fr) minmax(230px, auto);
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--identity-line);
+  padding: 12px 0;
+}
+
+.identity-legal-hold-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.identity-legal-hold-row form {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 820px) {
+  .identity-governance-summary,
+  .identity-governance-simulation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .identity-governance-summary > div:nth-child(3),
+  .identity-governance-simulation > div:nth-child(3) {
+    border-left: 0;
+  }
+
+  .identity-governance-summary > div:nth-child(n + 3),
+  .identity-governance-simulation > div:nth-child(n + 3) {
+    border-top: 1px solid var(--identity-line);
+  }
+
+  .identity-legal-hold-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .identity-legal-hold-row form,
+  .identity-legal-hold-row > .identity-policy-state {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 620px) {
+  .identity-governance-policy-grid,
+  .identity-legal-hold-form,
+  .identity-legal-hold-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-governance-policy-grid .is-wide,
+  .identity-legal-hold-form .is-wide,
+  .identity-legal-hold-row form,
+  .identity-legal-hold-row > .identity-policy-state {
+    grid-column: auto;
+  }
+
+  .identity-governance-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .identity-governance-actions button,
+  .identity-legal-hold-form > button {
+    width: 100%;
+  }
+
+  .identity-legal-hold-form > button {
+    justify-self: stretch;
+  }
+
+  .identity-legal-hold-row form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-governance-table-wrap {
+    overflow-x: visible;
+  }
+
+  .identity-governance-table-wrap table,
+  .identity-governance-table-wrap tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .identity-governance-table-wrap thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .identity-governance-table-wrap tr {
+    display: grid;
+    min-width: 0;
+    gap: 9px;
+    border-top: 1px solid var(--identity-line);
+    padding: 13px 0;
+  }
+
+  .identity-governance-table-wrap th,
+  .identity-governance-table-wrap td {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(88px, 0.38fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    border-top: 0;
+    padding: 0;
+  }
+
+  .identity-governance-table-wrap th {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-governance-table-wrap td::before {
+    content: attr(data-label);
+    color: var(--identity-muted);
+    font-size: 0.74rem;
+    font-weight: 650;
+  }
+
+  .identity-governance-table-wrap input,
+  .identity-governance-table-wrap select {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .identity-governance-summary,
+  .identity-governance-simulation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .identity-governance-summary > div + div,
+  .identity-governance-simulation > div:nth-child(n + 2) {
+    border-top: 1px solid var(--identity-line);
+    border-left: 0;
+  }
 }
 
 .identity-security-controls,

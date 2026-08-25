@@ -34,6 +34,10 @@ from metahub_shared.tenant_data.crypto import (
 
 from metahub_control.audit import AuditRequestMeta, record_audit_log
 from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.data_governance.service import (
+    active_hold_blocks_deletion_in_transaction,
+    claim_deletion_fence_in_transaction,
+)
 
 from .models import (
     DeletionRequestInfo,
@@ -761,6 +765,20 @@ def _process_deletion(
         )
         connection.commit()
         return 1
+    governance_owner = _governance_owner(connection, tenant_id)
+    if governance_owner is not None:
+        if active_hold_blocks_deletion_in_transaction(
+            connection,
+            workspace_id=str(governance_owner["workspace_id"]),
+            tenant_id=tenant_id,
+        ):
+            connection.rollback()
+            return 0
+        claim_deletion_fence_in_transaction(
+            connection,
+            workspace_id=str(governance_owner["workspace_id"]),
+            tenant_id=tenant_id,
+        )
     connection.execute(
         "UPDATE deletion_requests SET status='deleting',generation=generation+1,lease_owner_id=?,lease_token=?,lease_expires_at=?,updated_at=? WHERE tenant_id=? AND deletion_request_id=? AND generation=?",
         (
@@ -775,7 +793,17 @@ def _process_deletion(
     )
     connection.commit()
     try:
-        archived, deleted = _erase_tenant(connection, tenant_id, deletion_id, config)
+        archived, deleted = _erase_tenant(
+            connection,
+            tenant_id,
+            deletion_id,
+            config,
+            governance_workspace_id=(
+                str(governance_owner["workspace_id"])
+                if governance_owner is not None
+                else None
+            ),
+        )
         connection.execute("BEGIN EXCLUSIVE")
         latest = connection.execute(
             "SELECT * FROM deletion_requests WHERE tenant_id=? AND deletion_request_id=?",
@@ -814,19 +842,54 @@ def _process_deletion(
 
 
 def _erase_tenant(
-    connection: sqlite3.Connection, tenant_id: str, deletion_id: str, config: AppConfig
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    deletion_id: str,
+    config: AppConfig,
+    *,
+    governance_workspace_id: str | None = None,
 ) -> tuple[int, int]:
     connection.execute("BEGIN EXCLUSIVE")
+    if governance_workspace_id is not None and active_hold_blocks_deletion_in_transaction(
+        connection,
+        workspace_id=governance_workspace_id,
+        tenant_id=tenant_id,
+    ):
+        raise ApiError("data_governance.hold_active")
     connection.execute("PRAGMA defer_foreign_keys=ON")
     _verify_manifest(connection)
-    manifests = connection.execute(
-        "SELECT source_table,disposition,retention_class FROM tenant_deletion_table_manifest WHERE disposition IN ('delete','archive_then_delete') ORDER BY source_table"
-    ).fetchall()
+    if _table_exists(connection, "tenant_deletion_manifest_extensions"):
+        manifests = connection.execute(
+            """SELECT manifest.source_table,manifest.disposition,manifest.retention_class,
+                      COALESCE(extension.tenant_key_column,'tenant_id') AS tenant_key_column
+                 FROM tenant_deletion_table_manifest manifest
+                 LEFT JOIN tenant_deletion_manifest_extensions extension
+                   ON extension.source_table=manifest.source_table
+                WHERE manifest.disposition IN ('delete','archive_then_delete')
+                ORDER BY manifest.source_table"""
+        ).fetchall()
+    else:
+        manifests = connection.execute(
+            """SELECT source_table,disposition,retention_class,
+                      'tenant_id' AS tenant_key_column
+                 FROM tenant_deletion_table_manifest
+                WHERE disposition IN ('delete','archive_then_delete')
+                ORDER BY source_table"""
+        ).fetchall()
     archived = deleted = 0
     dropped_triggers: list[str] = []
     for item in manifests:
         table = item["source_table"]
-        if not _safe_identifier(table) or not _table_exists(connection, table):
+        tenant_key_column = item["tenant_key_column"]
+        if (
+            not _safe_identifier(table)
+            or not _safe_identifier(tenant_key_column)
+            or not _table_exists(connection, table)
+            or not any(
+                column["name"] == tenant_key_column
+                for column in connection.execute(f'PRAGMA table_info("{table}")')
+            )
+        ):
             raise ApiError("tenant_data.schema_changed")
         triggers = connection.execute(
             "SELECT trigger_name,trigger_sql FROM tenant_deletion_trigger_manifest WHERE source_table=?",
@@ -838,7 +901,8 @@ def _erase_tenant(
                 connection.execute(f'DROP TRIGGER "{trigger["trigger_name"]}"')
         count = int(
             connection.execute(
-                f'SELECT COUNT(*) FROM "{table}" WHERE tenant_id=?', (tenant_id,)
+                f'SELECT COUNT(*) FROM "{table}" WHERE "{tenant_key_column}"=?',
+                (tenant_id,),
             ).fetchone()[0]
         )
         if count and item["disposition"] == "archive_then_delete":
@@ -875,7 +939,14 @@ def _erase_tenant(
                 ),
             )
             archived += count
-        connection.execute(f'DELETE FROM "{table}" WHERE tenant_id=?', (tenant_id,))
+        connection.execute(
+            f'DELETE FROM "{table}" WHERE "{tenant_key_column}"=?', (tenant_id,)
+        )
+        if connection.execute(
+            f'SELECT 1 FROM "{table}" WHERE "{tenant_key_column}"=? LIMIT 1',
+            (tenant_id,),
+        ).fetchone():
+            raise ApiError("tenant_data.retention_failed")
         deleted += count
     # Restore every trigger from the immutable migration manifest before committing.
     for trigger_sql in dropped_triggers:
@@ -886,6 +957,16 @@ def _erase_tenant(
         raise ApiError("tenant_data.retention_failed")
     connection.commit()
     return archived, deleted
+
+
+def _governance_owner(
+    connection: sqlite3.Connection, tenant_id: str
+) -> sqlite3.Row | None:
+    if not _table_exists(connection, "data_governance_fences"):
+        return None
+    return connection.execute(
+        "SELECT workspace_id FROM data_governance_fences WHERE tenant_id=?", (tenant_id,)
+    ).fetchone()
 
 
 def _write_lifecycle_event(
@@ -948,9 +1029,24 @@ def _write_lifecycle_event(
 
 
 def _manifest_hash(connection: sqlite3.Connection) -> str:
-    rows = connection.execute(
-        "SELECT source_table,disposition,retention_class,table_sql_sha256,column_signature_sha256,trigger_set_sha256 FROM tenant_deletion_table_manifest ORDER BY source_table"
-    ).fetchall()
+    if _table_exists(connection, "tenant_deletion_manifest_extensions"):
+        rows = connection.execute(
+            """SELECT manifest.source_table,manifest.disposition,manifest.retention_class,
+                      manifest.table_sql_sha256,manifest.column_signature_sha256,
+                      manifest.trigger_set_sha256,
+                      COALESCE(extension.tenant_key_column,'tenant_id') AS tenant_key_column
+                 FROM tenant_deletion_table_manifest manifest
+                 LEFT JOIN tenant_deletion_manifest_extensions extension
+                   ON extension.source_table=manifest.source_table
+                ORDER BY manifest.source_table"""
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """SELECT source_table,disposition,retention_class,table_sql_sha256,
+                      column_signature_sha256,trigger_set_sha256,
+                      'tenant_id' AS tenant_key_column
+                 FROM tenant_deletion_table_manifest ORDER BY source_table"""
+        ).fetchall()
     return hashlib.sha256(
         json.dumps([tuple(row) for row in rows], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -958,13 +1054,38 @@ def _manifest_hash(connection: sqlite3.Connection) -> str:
 
 def _verify_manifest(connection: sqlite3.Connection) -> None:
     """Refuse destructive DDL when a later migration changed a tenant table or trigger."""
-    rows = connection.execute(
-        "SELECT source_table,table_sql_sha256,column_signature_sha256,trigger_set_sha256 "
-        "FROM tenant_deletion_table_manifest ORDER BY source_table"
-    ).fetchall()
+    if _table_exists(connection, "tenant_deletion_manifest_extensions"):
+        rows = connection.execute(
+            """SELECT manifest.source_table,manifest.table_sql_sha256,
+                      manifest.column_signature_sha256,manifest.trigger_set_sha256,
+                      COALESCE(extension.tenant_key_column,'tenant_id') AS tenant_key_column
+                 FROM tenant_deletion_table_manifest manifest
+                 LEFT JOIN tenant_deletion_manifest_extensions extension
+                   ON extension.source_table=manifest.source_table
+                ORDER BY manifest.source_table"""
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """SELECT source_table,table_sql_sha256,column_signature_sha256,
+                      trigger_set_sha256,'tenant_id' AS tenant_key_column
+                 FROM tenant_deletion_table_manifest ORDER BY source_table"""
+        ).fetchall()
+    registered_tables = {row["source_table"] for row in rows}
+    for schema_row in connection.execute(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ):
+        table = schema_row["name"]
+        if not _safe_identifier(table):
+            raise ApiError("tenant_data.schema_changed")
+        if table not in registered_tables and any(
+            column["name"] == "tenant_id"
+            for column in connection.execute(f'PRAGMA table_info("{table}")')
+        ):
+            raise ApiError("tenant_data.schema_changed")
     for row in rows:
         table = row["source_table"]
-        if not _safe_identifier(table):
+        tenant_key_column = row["tenant_key_column"]
+        if not _safe_identifier(table) or not _safe_identifier(tenant_key_column):
             raise ApiError("tenant_data.schema_changed")
         schema = connection.execute(
             "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?", (table,)
@@ -973,6 +1094,8 @@ def _verify_manifest(connection: sqlite3.Connection) -> None:
             raise ApiError("tenant_data.schema_changed")
         table_hash = hashlib.sha256((schema["sql"] or "").encode()).hexdigest()
         columns = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+        if not any(column["name"] == tenant_key_column for column in columns):
+            raise ApiError("tenant_data.schema_changed")
         column_text = "\x1e".join(
             "\x1f".join(
                 "" if value is None else str(value)

@@ -146,6 +146,12 @@ _NAVIGATION = (
         "Capacity and resilience",
         "/platform.html#capacity",
     ),
+    (
+        "platform.data_residency.read",
+        "data-residency",
+        "Data residency",
+        "/platform.html#data-residency",
+    ),
     ("platform.operator.manage", "operators", "Operators", "/platform.html#operators"),
     ("platform.workspace.directory.read", "workspaces", "Workspaces", "/platform.html#workspaces"),
     ("platform.support.request", "support", "Support", "/platform.html#support"),
@@ -186,6 +192,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_dr_role_permissions",
     "platform_status_role_permissions",
     "platform_capacity_role_permissions",
+    "platform_data_governance_role_permissions",
 )
 
 
@@ -2446,6 +2453,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_capacity_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if "platform_data_governance_role_permissions" in extension_tables:
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_data_governance_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from metahub_control.disaster_recovery import routes as dr_routes
 from metahub_control.disaster_recovery import service as dr_service
 from metahub_control.disaster_recovery.routes import router
+from metahub_control.identity.service import SESSION_COOKIE
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
     PLATFORM_SESSION_COOKIE,
@@ -26,6 +27,7 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 ORIGIN = "http://localhost:5173"
 PLATFORM_TOKEN = "s" * 43
 PLATFORM_CSRF = "c" * 43
+GLOBAL_TOKEN = "g" * 43
 OPS_ID = "pto_" + "d111" * 8
 SECURITY_ID = "pto_" + "e111" * 8
 OPS_ACCOUNT_ID = "gac_" + "d111" * 8
@@ -94,7 +96,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd111-dr-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0105"
+    assert apply_migrations(database_url).applied[-1] == "0109"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -231,7 +233,9 @@ def _app(monkeypatch: pytest.MonkeyPatch, config: AppConfig, holder: dict[str, o
 def _headers(*, key: str | None = None) -> dict[str, str]:
     headers = {
         "Cookie": (
-            f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; {PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
+            f"{SESSION_COOKIE}={GLOBAL_TOKEN}; "
+            f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; "
+            f"{PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
         ),
         "Origin": ORIGIN,
         "Sec-Fetch-Site": "same-site",
@@ -446,6 +450,86 @@ async def test_failover_advances_writer_epoch_and_gateway_placement(
         )
         assert stale.status_code == 412
         assert stale.json()["code"] == "dr.epoch_conflict"
+
+
+@pytest.mark.anyio
+async def test_failover_checks_governance_before_writer_fencing(
+    monkeypatch: pytest.MonkeyPatch, runtime: AppConfig
+) -> None:
+    holder: dict[str, object] = {"platform": OPS}
+    app = _app(monkeypatch, runtime, holder)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        run = await _approve(
+            client,
+            holder,
+            f"/platform/regions/{NORTH_REGION_ID}/failovers",
+            _payload(reason="regional_outage"),
+            "governance-fence",
+        )
+
+    connection = connect_database(runtime.database_url)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        runtime_row = connection.execute(
+            "SELECT expected_epoch,plan_manifest_sha256 FROM disaster_recovery_runs "
+            "WHERE disaster_recovery_run_id=?",
+            (run["disaster_recovery_run_id"],),
+        ).fetchone()
+        dr_service.precheck_run_in_transaction(
+            connection,
+            run_id=run["disaster_recovery_run_id"],
+            expected_epoch=int(runtime_row["expected_epoch"]),
+            plan_manifest_sha256=str(runtime_row["plan_manifest_sha256"]),
+        )
+        dr_service.quiesce_run_in_transaction(
+            connection, run_id=run["disaster_recovery_run_id"]
+        )
+        before_regions = [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT region_code,writer_status,failover_epoch FROM platform_regions "
+                "ORDER BY region_code"
+            )
+        ]
+        before_leases = [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT region_id,fencing_epoch,status FROM region_writer_leases "
+                "ORDER BY region_writer_lease_id"
+            )
+        ]
+        connection.execute(
+            """UPDATE workspace_gateway_placements
+                  SET governance_generation=governance_generation+1,
+                      revision=revision+1,snapshot_generation=snapshot_generation+1,
+                      updated_at=datetime(updated_at,'+1 second')"""
+        )
+        with pytest.raises(ApiError) as stale_governance:
+            dr_service.route_run_in_transaction(
+                connection,
+                runtime,
+                run_id=run["disaster_recovery_run_id"],
+            )
+        assert stale_governance.value.code == "dr.residency_violation"
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT region_code,writer_status,failover_epoch FROM platform_regions "
+                "ORDER BY region_code"
+            )
+        ] == before_regions
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT region_id,fencing_epoch,status FROM region_writer_leases "
+                "ORDER BY region_writer_lease_id"
+            )
+        ] == before_leases
+        connection.rollback()
+    finally:
+        connection.close()
 
 
 @pytest.mark.anyio

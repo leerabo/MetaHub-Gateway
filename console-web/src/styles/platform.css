@@ -195,6 +195,23 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-filter-form input,
 .platform-filter-form select { min-width: 0; width: 100%; }
 .platform-filter-search { grid-column: span 2; }
+
+.platform-residency-evidence .platform-filter-form {
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 18px;
+}
+
+.platform-residency-table {
+  min-width: 980px;
+}
+
+.platform-residency-table code {
+  color: #30504b;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
 .platform-workspace-table { table-layout: auto; }
 .platform-workspace-table th:nth-child(1) { width: 25%; }
 .platform-workspace-table th:nth-child(2) { width: 12%; }

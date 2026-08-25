@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from metahub_control.capacity_management import routes as capacity_routes
 from metahub_control.capacity_management import service as capacity_service
 from metahub_control.capacity_management.routes import router
+from metahub_control.identity.service import SESSION_COOKIE
 from metahub_control.platform_access import service as platform_access_service
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
@@ -26,6 +27,7 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 ORIGIN = "http://localhost:5173"
 PLATFORM_TOKEN = "s" * 43
 PLATFORM_CSRF = "c" * 43
+GLOBAL_TOKEN = "g" * 43
 OPS_ID = "pto_" + "a113" * 8
 SECURITY_ID = "pto_" + "b113" * 8
 BILLING_ID = "pto_" + "c113" * 8
@@ -107,7 +109,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd113-capacity-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0105"
+    assert apply_migrations(database_url).applied[-1] == "0109"
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -191,6 +193,7 @@ def _app(monkeypatch: pytest.MonkeyPatch, config: AppConfig, holder: dict[str, o
 def _headers(*, key: str | None = None, revision: int | None = None) -> dict[str, str]:
     headers = {
         "Cookie": (
+            f"{SESSION_COOKIE}={GLOBAL_TOKEN}; "
             f"{PLATFORM_SESSION_COOKIE}={PLATFORM_TOKEN}; "
             f"{PLATFORM_CSRF_COOKIE}={PLATFORM_CSRF}"
         ),

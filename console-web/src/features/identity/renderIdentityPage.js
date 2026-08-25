@@ -233,6 +233,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderWorkspaceSection(state)}
         ${renderMembershipSection(state)}
         ${renderConditionalAccessSection(state)}
+        ${renderDataGovernanceSection(state)}
         ${renderEnterpriseIdentitySection(state)}
         ${renderScimDirectorySection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
@@ -1197,6 +1198,257 @@ function conditionalModeLabel(value) {
 
 function conditionalSimulationLabel(value) {
   return value.outcome_code === "simulation.ready" ? "可启用" : "Owner 未就绪";
+}
+
+function renderDataGovernanceSection(state) {
+  if (!state.workspaceContext || state.dataGovernanceVisible !== true) return "";
+  const governance = state.dataGovernance;
+  const busy = state.dataGovernanceBusy === true;
+  if (!governance) {
+    return `
+      <section class="identity-data-governance" aria-labelledby="identity-data-governance-title" aria-busy="${busy}">
+        <div class="identity-section-heading">
+          <div><p>Data governance</p><h2 id="identity-data-governance-title">驻留与保留</h2></div>
+          <button class="identity-quiet-command" type="button" data-identity-action="refresh-data-governance" ${busy ? "disabled" : ""}>重试</button>
+        </div>
+        ${renderError(state.dataGovernanceError)}
+        <p class="identity-empty">数据治理状态暂时不可用。</p>
+      </section>
+    `;
+  }
+  const policy = governance.policy;
+  const fence = governance.fence;
+  const draft = state.dataGovernanceDraft ?? governanceDraftFromProjection(governance);
+  const classifications = new Map(
+    (governance.classifications ?? []).map((item) => [item.code, item]),
+  );
+  const activeHolds = (governance.legal_holds ?? []).filter((hold) => hold.status === "active");
+  const terminalSchedules = (governance.deletion_schedules ?? [])
+    .filter((item) => new Set(["blocked", "completed", "failed"]).has(item.status))
+    .slice(0, 12);
+  return `
+    <section class="identity-data-governance" aria-labelledby="identity-data-governance-title" aria-busy="${busy}">
+      <div class="identity-section-heading">
+        <div><p>Data governance</p><h2 id="identity-data-governance-title">驻留与保留</h2></div>
+        <button class="identity-icon-command" type="button" data-identity-action="refresh-data-governance" title="刷新数据治理" aria-label="刷新数据治理" ${busy ? "disabled" : ""}>&#8635;</button>
+      </div>
+      ${renderError(state.dataGovernanceError)}
+      <div class="identity-governance-summary">
+        <div><span>Primary group</span><strong>${escapeHtml(policy.primary_residency_group)}</strong><small>${escapeHtml(policy.cross_region_mode === "deny" ? "禁止跨组" : "仅允许同组")}</small></div>
+        <div><span>Policy generation</span><strong>${policy.generation}</strong><small>Revision ${policy.revision}</small></div>
+        <div><span>Hold fence</span><strong>${fence.hold_generation}</strong><small>${activeHolds.length} 个 active hold</small></div>
+        <div><span>Deletion fence</span><strong>${fence.deletion_generation}</strong><small>Fence rev ${fence.revision}</small></div>
+      </div>
+      <div class="identity-governance-meta">
+        <span>允许组：${policy.allowed_residency_groups.map((item) => escapeHtml(item)).join(" · ")}</span>
+        <span>有效至 ${escapeHtml(formatDateTime(policy.valid_until))}</span>
+        <span>Policy ${escapeHtml(shortDigest(policy.policy_sha256))}</span>
+      </div>
+      ${renderGovernancePolicyForm(state, draft, classifications)}
+      ${state.legalHoldVisible === true ? renderLegalHoldPanel(state, activeHolds) : ""}
+      ${renderDeletionSchedulePanel(terminalSchedules)}
+    </section>
+  `;
+}
+
+function renderGovernancePolicyForm(state, draft, classifications) {
+  const governance = state.dataGovernance;
+  const canManage = state.dataGovernanceCanManage === true;
+  const busy = state.dataGovernanceBusy === true;
+  const simulation = governance.simulation;
+  const policies = new Map(
+    draft.retentionPolicies.map((item) => [item.classificationCode, item]),
+  );
+  const rows = ["audit", "billing", "file", "identity", "prompt", "response"]
+    .map((code) => {
+      const item = policies.get(code);
+      const classification = classifications.get(code);
+      return `
+        <tr>
+          <th scope="row"><strong>${escapeHtml(classificationLabel(code))}</strong><small>${escapeHtml(sensitivityLabel(classification?.sensitivity_level))}</small></th>
+          <td data-label="保留天数"><input name="retentionDays:${code}" type="number" min="1" max="3650" value="${item.retentionDays}" aria-label="${escapeAttribute(`${classificationLabel(code)}保留天数`)}" ${canManage ? "" : "disabled"} required /></td>
+          <td data-label="到期动作"><select name="deletionMode:${code}" aria-label="${escapeAttribute(`${classificationLabel(code)}删除方式`)}" ${canManage ? "" : "disabled"}>${deletionModeOptions(item.deletionMode)}</select></td>
+          <td data-label="备份宽限"><input name="backupGraceDays:${code}" type="number" min="0" max="365" value="${item.backupGraceDays}" aria-label="${escapeAttribute(`${classificationLabel(code)}备份宽限天数`)}" ${canManage ? "" : "disabled"} required /></td>
+        </tr>`;
+    }).join("");
+  return `
+    <div class="identity-governance-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Policy projection</span><h3>分类保留策略</h3></div>
+        <span>6 类完整策略</span>
+      </div>
+      ${simulation ? `
+        <div class="identity-governance-simulation ${simulation.placement_compliant ? "is-ready" : "is-blocked"}">
+          <div><span>候选 generation</span><strong>${simulation.next_generation}</strong></div>
+          <div><span>Placement</span><strong>${simulation.placement_compliant ? "合规" : "需要迁移"}</strong></div>
+          <div><span>候选摘要</span><strong>${escapeHtml(shortDigest(simulation.candidate_sha256))}</strong></div>
+          <div><span>迁移组件</span><strong>${simulation.migration_required_components.length ? simulation.migration_required_components.map(componentLabel).map(escapeHtml).join(" · ") : "无"}</strong></div>
+        </div>
+      ` : ""}
+      <form data-data-governance-policy-form autocomplete="off">
+        <div class="identity-governance-policy-grid">
+          <label class="is-wide"><span>允许驻留组</span><textarea name="allowedResidencyGroups" rows="2" spellcheck="false" ${canManage ? "" : "disabled"} required>${escapeHtml(draft.allowedResidencyGroups.join("\n"))}</textarea></label>
+          <label><span>Primary group</span><input name="primaryResidencyGroup" value="${escapeAttribute(draft.primaryResidencyGroup)}" pattern="[a-z0-9][a-z0-9-]{2,39}" maxlength="40" ${canManage ? "" : "disabled"} required /></label>
+          <label><span>跨区模式</span><select name="crossRegionMode" ${canManage ? "" : "disabled"}>${renderOption("deny", "禁止跨组", draft.crossRegionMode)}${renderOption("same_group", "仅允许同组", draft.crossRegionMode)}</select></label>
+          <label><span>变更原因</span><select name="reasonCode" ${canManage ? "" : "disabled"}>${governanceReasonOptions(draft.reasonCode)}</select></label>
+        </div>
+        <div class="identity-governance-table-wrap">
+          <table><thead><tr><th>数据分类</th><th>保留天数</th><th>到期动作</th><th>备份宽限</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>
+        ${canManage ? `
+          <div class="identity-governance-actions">
+            <button class="identity-quiet-command" name="governanceAction" value="simulate" type="submit" ${busy ? "disabled" : ""}>模拟策略</button>
+            <label class="identity-confirm"><input name="confirmed" type="checkbox" required ${simulation ? "" : "disabled"} /><span>确认应用已模拟的候选策略</span></label>
+            <button class="identity-primary" name="governanceAction" value="apply" type="submit" ${busy || !simulation ? "disabled" : ""}>应用并发布</button>
+          </div>
+        ` : '<p class="identity-empty">当前职责仅可查看驻留与保留策略。</p>'}
+      </form>
+    </div>
+  `;
+}
+
+function renderLegalHoldPanel(state, activeHolds) {
+  const holds = state.dataGovernance.legal_holds ?? [];
+  const canManage = state.legalHoldCanManage === true;
+  const busy = state.dataGovernanceBusy === true;
+  return `
+    <div class="identity-governance-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Deletion preservation</span><h3>法律保全</h3></div>
+        <span>${activeHolds.length} active · ${holds.filter((item) => item.status !== "active").length} 历史</span>
+      </div>
+      ${canManage ? `
+        <form class="identity-legal-hold-form" data-legal-hold-create-form autocomplete="off">
+          <label><span>数据分类</span><select name="classificationCode">${classificationOptions("prompt")}</select></label>
+          <label><span>保全范围</span><select name="scopeKind"><option value="classification">完整分类</option><option value="object_digest">对象摘要</option></select></label>
+          <label class="is-wide"><span>对象 SHA-256（仅对象范围）</span><input name="selectorSha256" type="password" autocomplete="off" pattern="[0-9a-f]{64}" maxlength="64" /></label>
+          <label><span>保全原因</span><select name="reasonCode">${holdReasonOptions("litigation")}</select></label>
+          <label><span>可选到期时间</span><input name="expiresAt" type="datetime-local" /></label>
+          <label class="identity-confirm is-wide"><input name="confirmed" type="checkbox" required /><span>确认冻结该范围的删除，不扩大读取权限</span></label>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>创建保全</button>
+        </form>
+      ` : ""}
+      <div class="identity-legal-hold-list">
+        ${holds.length ? holds.map((hold, index) => renderLegalHoldRow(hold, index, canManage, busy)).join("") : '<p class="identity-empty">尚无法律保全记录。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderLegalHoldRow(hold, index, canManage, busy) {
+  return `
+    <article class="identity-legal-hold-row">
+      <div><strong>${escapeHtml(classificationLabel(hold.classification_code))}</strong><span>${escapeHtml(hold.scope_kind === "classification" ? "完整分类" : "对象摘要已配置")}</span></div>
+      <div><strong>${escapeHtml(holdStatusLabel(hold.status))}</strong><span>${escapeHtml(holdReasonLabel(hold.reason_code))}</span></div>
+      <div><strong>Generation ${hold.created_hold_generation}</strong><span>${hold.expires_at ? `到期 ${escapeHtml(formatDateTime(hold.expires_at))}` : "长期有效"}</span></div>
+      ${canManage && hold.status === "active" ? `
+        <form data-legal-hold-release-form data-legal-hold-index="${index}">
+          <select name="reasonCode" aria-label="释放原因"><option value="matter_closed">事项已结束</option><option value="legal_instruction">法务指令</option></select>
+          <label class="identity-confirm"><input name="confirmed" type="checkbox" required /><span>确认释放</span></label>
+          <button class="identity-danger-command" type="submit" ${busy ? "disabled" : ""}>释放</button>
+        </form>
+      ` : '<span class="identity-policy-state">只读</span>'}
+    </article>
+  `;
+}
+
+function renderDeletionSchedulePanel(schedules) {
+  return `
+    <div class="identity-governance-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Terminal evidence</span><h3>最近删除终态</h3></div>
+        <span>${schedules.length} 条</span>
+      </div>
+      <div class="identity-governance-table-wrap">
+        <table>
+          <thead><tr><th>数据分类</th><th>终态</th><th>处理计数</th><th>Checkpoint</th><th>完成时间</th></tr></thead>
+          <tbody>${schedules.length ? schedules.map((item) => `
+            <tr>
+              <th scope="row">${escapeHtml(classificationLabel(item.classification_code))}</th>
+              <td>${escapeHtml(deletionStatusLabel(item.status))}</td>
+              <td>删除 ${item.deleted_count} · 保留 ${item.retained_count}</td>
+              <td>${escapeHtml(item.safe_outcome_code ?? item.checkpoint_code)}</td>
+              <td>${escapeHtml(formatDateTime(item.completed_at ?? item.updated_at))}</td>
+            </tr>`).join("") : '<tr><td colspan="5" class="identity-empty">尚无删除终态。</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function governanceDraftFromProjection(governance) {
+  return {
+    allowedResidencyGroups: [...governance.policy.allowed_residency_groups],
+    primaryResidencyGroup: governance.policy.primary_residency_group,
+    crossRegionMode: governance.policy.cross_region_mode,
+    reasonCode: "compliance_update",
+    retentionPolicies: governance.retention_policies.map((item) => ({
+      classificationCode: item.classification_code,
+      retentionDays: item.retention_days,
+      deletionMode: item.deletion_mode,
+      backupGraceDays: item.backup_grace_days,
+    })),
+  };
+}
+
+function classificationLabel(value) {
+  return ({ prompt: "Prompt", response: "Response", file: "文件", audit: "审计", identity: "身份", billing: "账务" })[value] ?? "未知";
+}
+
+function sensitivityLabel(value) {
+  return ({ restricted: "受限", confidential: "机密", internal: "内部" })[value] ?? "未知";
+}
+
+function componentLabel(value) {
+  return ({ gateway: "Gateway", backup: "Backup", disaster_recovery: "DR" })[value] ?? value;
+}
+
+function deletionModeOptions(selected) {
+  return [
+    ["hard_delete", "硬删除"],
+    ["archive_then_delete", "归档后删除"],
+    ["anonymize", "匿名化"],
+  ].map(([value, label]) => renderOption(value, label, selected)).join("");
+}
+
+function governanceReasonOptions(selected) {
+  return [
+    ["compliance_update", "合规更新"],
+    ["regional_expansion", "区域扩展"],
+    ["regional_restriction", "区域收紧"],
+    ["retention_update", "保留期更新"],
+  ].map(([value, label]) => renderOption(value, label, selected)).join("");
+}
+
+function classificationOptions(selected) {
+  return ["audit", "billing", "file", "identity", "prompt", "response"]
+    .map((value) => renderOption(value, classificationLabel(value), selected)).join("");
+}
+
+function holdReasonOptions(selected) {
+  return [
+    ["litigation", "诉讼"],
+    ["regulatory_inquiry", "监管问询"],
+    ["internal_investigation", "内部调查"],
+    ["preservation_notice", "保全通知"],
+  ].map(([value, label]) => renderOption(value, label, selected)).join("");
+}
+
+function holdReasonLabel(value) {
+  return ({ litigation: "诉讼", regulatory_inquiry: "监管问询", internal_investigation: "内部调查", preservation_notice: "保全通知" })[value] ?? "未知";
+}
+
+function holdStatusLabel(value) {
+  return ({ active: "生效中", released: "已释放", expired: "已到期" })[value] ?? "未知";
+}
+
+function deletionStatusLabel(value) {
+  return ({ blocked: "已阻断", completed: "已完成", failed: "失败" })[value] ?? value;
+}
+
+function shortDigest(value) {
+  const text = String(value ?? "");
+  return text.length === 64 ? `${text.slice(0, 10)}…${text.slice(-6)}` : "-";
 }
 
 function renderEnterpriseIdentitySection(state) {

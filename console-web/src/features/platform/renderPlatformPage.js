@@ -79,6 +79,7 @@ function renderView(state, permissions) {
   if (state.view === "disaster-recovery") return disasterRecoveryView(state, permissions);
   if (state.view === "status-incidents") return statusIncidentsView(state, permissions);
   if (state.view === "capacity") return capacityView(state, permissions);
+  if (state.view === "data-residency") return dataResidencyView(state);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -89,6 +90,96 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function dataResidencyView(state) {
+  const response = state.residencyEvidence ?? { items: [], next_cursor: null };
+  const items = Array.isArray(response.items) ? response.items : [];
+  const filters = state.residencyEvidenceFilters ?? {};
+  const compliant = items.filter((item) => item.outcome === "compliant").length;
+  const blocked = items.filter((item) => item.outcome === "blocked").length;
+  const violations = items.filter((item) => item.outcome === "violation").length;
+  const page = state.residencyEvidenceCursorHistory.length + 1;
+  return `
+    <header class="platform-page-heading">
+      <div><p>Low-sensitivity evidence</p><h1>数据驻留</h1></div>
+      <span>Policy-bound observations</span>
+    </header>
+    <section class="platform-metrics" aria-label="当前页驻留证据摘要">
+      ${metric("合规", compliant, "当前页")}
+      ${metric("阻断", blocked, "失败关闭")}
+      ${metric("违规", violations, "需要处置")}
+    </section>
+    <section class="platform-band platform-residency-evidence">
+      <div class="platform-section-heading">
+        <div><p>Bounded evidence projection</p><h2>驻留观测</h2></div>
+        <span>第 ${page} 页 · ${number(items.length)} 条</span>
+      </div>
+      <form class="platform-filter-form" data-platform-residency-filter-form autocomplete="off">
+        <label class="platform-filter-search"><span>Workspace ID</span><input name="workspaceId" value="${escapeAttribute(filters.workspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" maxlength="36" placeholder="留空查看全部" /></label>
+        <label><span>组件</span><select name="component">${filterOptions(filters.component ?? "", [
+          ["", "全部组件"], ["gateway", "Gateway"], ["database", "Database"],
+          ["object_storage", "Object storage"], ["backup", "Backup"],
+          ["job_runtime", "Job runtime"], ["disaster_recovery", "Disaster recovery"],
+          ["tenant_data", "Tenant data"],
+        ])}</select></label>
+        <label><span>结论</span><select name="outcome">${filterOptions(filters.outcome ?? "", [
+          ["", "全部结论"], ["compliant", "合规"], ["migration_required", "需要迁移"],
+          ["blocked", "已阻断"], ["violation", "违规"],
+        ])}</select></label>
+        <button class="platform-primary" type="submit" ${state.loading ? "disabled" : ""}>筛选</button>
+      </form>
+      <div class="platform-table-wrap">
+        <table class="platform-residency-table">
+          <thead><tr><th>Workspace</th><th>组件</th><th>Region</th><th>策略</th><th>结论</th><th>观测水位</th><th>Manifest</th><th>时间</th></tr></thead>
+          <tbody>${items.map(residencyEvidenceRow).join("") || emptyRow("当前筛选下没有驻留证据", 8)}</tbody>
+        </table>
+      </div>
+      <div class="platform-pagination">
+        <span>只显示组件、区域、策略 generation、固定结论与证明摘要</span>
+        <div>
+          <button type="button" data-platform-action="residency-evidence-previous" ${page > 1 && !state.loading ? "" : "disabled"}>上一页</button>
+          <button type="button" data-platform-action="residency-evidence-next" ${response.next_cursor && !state.loading ? "" : "disabled"}>下一页</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function residencyEvidenceRow(item) {
+  const violation = item.violation_code ? residencyViolationLabel(item.violation_code) : "无";
+  return `<tr>
+    <td data-label="Workspace"><strong>${escapeHtml(shortWorkspace(item.workspace_id))}</strong></td>
+    <td data-label="组件"><strong>${escapeHtml(residencyComponentLabel(item.component_code))}</strong><small>${escapeHtml(statusLabel(item.storage_class))}</small></td>
+    <td data-label="Region">${escapeHtml(item.region_code)}</td>
+    <td data-label="策略">Generation ${number(item.policy_generation)}</td>
+    <td data-label="结论">${status(item.outcome)}<small>${escapeHtml(violation)}</small></td>
+    <td data-label="观测水位">${number(item.observed_watermark)}</td>
+    <td data-label="Manifest"><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></td>
+    <td data-label="时间">${formatTime(item.observed_at)}</td>
+  </tr>`;
+}
+
+function residencyComponentLabel(value) {
+  return ({
+    gateway: "Gateway",
+    database: "Database",
+    object_storage: "Object storage",
+    backup: "Backup",
+    job_runtime: "Job runtime",
+    disaster_recovery: "Disaster recovery",
+    tenant_data: "Tenant data",
+  })[value] ?? "Unknown";
+}
+
+function residencyViolationLabel(value) {
+  return ({
+    region_not_allowed: "Region 不在允许组",
+    generation_stale: "Generation 过期",
+    policy_expired: "策略已过期",
+    policy_unavailable: "策略不可用",
+    hold_active: "法律保全生效",
+  })[value] ?? "未知结论";
 }
 
 function statusIncidentsView(state, permissions) {
@@ -1847,11 +1938,11 @@ function metric(label, value, detail) {
 
 function status(value) {
   const text = String(value ?? "unknown");
-  const kind = /active|healthy|ready|reviewed|fresh|verified/u.test(text)
+  const kind = /active|healthy|ready|reviewed|fresh|verified|compliant/u.test(text)
     ? "is-ok"
-    : /pending|watch|stale|at_risk|not_configured/u.test(text)
+    : /pending|watch|stale|at_risk|not_configured|migration_required/u.test(text)
       ? "is-warn"
-      : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|fenced/u.test(text)
+      : /revoked|expired|disabled|critical|suspended|deleted|conflict|unavailable|fenced|blocked|violation/u.test(text)
         ? "is-danger"
         : "";
   return `<span class="platform-status ${kind}">${escapeHtml(statusLabel(text))}</span>`;
@@ -1889,7 +1980,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

@@ -15,6 +15,11 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.data_governance.service import (
+    active_governance_policy_in_transaction,
+    residency_group_for_region_in_transaction,
+    write_residency_evidence_in_transaction,
+)
 from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
@@ -170,11 +175,65 @@ def update_workspace_placement(
         ):
             # Cell、Workspace 或策略版本不一致时统一失败，禁止旧事实绕过驻留约束。
             raise ApiError("platform_gateway.residency_conflict")
+        governance = active_governance_policy_in_transaction(
+            connection,
+            workspace_id=workspace_id,
+            tenant_id=str(owner["tenant_id"]),
+        )
+        primary_group = residency_group_for_region_in_transaction(
+            connection, str(primary["region_code"])
+        )
+        if primary_group not in governance.allowed_groups:
+            now = _utcnow()
+            write_residency_evidence_in_transaction(
+                connection,
+                workspace_id=workspace_id,
+                tenant_id=str(owner["tenant_id"]),
+                policy=governance,
+                component_code="gateway",
+                region_code=str(primary["region_code"]),
+                storage_class="routing",
+                outcome="blocked",
+                violation_code="region_not_allowed",
+                observed_watermark=current_revision + 1,
+                manifest_sha256=governance.sha256,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=now,
+            )
+            connection.commit()
+            raise ApiError("platform_gateway.residency_conflict")
         failover_id = None
         if payload.failover_policy == "explicit":
             failover = _active_cell(connection, payload.failover_cell_code or "")
             # 显式灾备也只能落入部署允许区域，不能因主区故障放宽驻留边界。
             if str(failover["region_code"]) not in set(config.workspace_allowed_regions):
+                raise ApiError("platform_gateway.residency_conflict")
+            failover_group = residency_group_for_region_in_transaction(
+                connection, str(failover["region_code"])
+            )
+            if (
+                failover_group not in governance.allowed_groups
+                or failover_group != primary_group
+            ):
+                now = _utcnow()
+                write_residency_evidence_in_transaction(
+                    connection,
+                    workspace_id=workspace_id,
+                    tenant_id=str(owner["tenant_id"]),
+                    policy=governance,
+                    component_code="gateway",
+                    region_code=str(failover["region_code"]),
+                    storage_class="routing",
+                    outcome="blocked",
+                    violation_code="region_not_allowed",
+                    observed_watermark=current_revision + 1,
+                    manifest_sha256=governance.sha256,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    now=now,
+                )
+                connection.commit()
                 raise ApiError("platform_gateway.residency_conflict")
             failover_id = str(failover["gateway_cell_id"])
         now = _utcnow()
@@ -187,8 +246,8 @@ def update_workspace_placement(
                   primary_region_code,primary_gateway_cell_id,failover_policy,
                   failover_gateway_cell_id,residency_policy_version,revision,
                   snapshot_generation,updated_by_operator_id,idempotency_sha256,
-                  request_sha256,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  request_sha256,created_at,updated_at,governance_generation)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     _id("wgp_"), workspace_id, owner["tenant_id"],
@@ -196,7 +255,7 @@ def update_workspace_placement(
                     payload.failover_policy, failover_id,
                     payload.residency_policy_version, revision, revision,
                     actor.operator_id, idempotency_sha256, request_sha256,
-                    _db_time(now), _db_time(now),
+                    _db_time(now), _db_time(now), governance.generation,
                 ),
             )
         else:
@@ -206,7 +265,7 @@ def update_workspace_placement(
                 SET primary_region_code=?,primary_gateway_cell_id=?,failover_policy=?,
                   failover_gateway_cell_id=?,residency_policy_version=?,revision=?,
                   snapshot_generation=?,updated_by_operator_id=?,idempotency_sha256=?,
-                  request_sha256=?,updated_at=?
+                  request_sha256=?,updated_at=?,governance_generation=?
                 WHERE workspace_id=? AND revision=?
                 """,
                 (
@@ -214,7 +273,7 @@ def update_workspace_placement(
                     payload.failover_policy, failover_id,
                     payload.residency_policy_version, revision, revision,
                     actor.operator_id, idempotency_sha256, request_sha256,
-                    _db_time(now), workspace_id, current_revision,
+                    _db_time(now), governance.generation, workspace_id, current_revision,
                 ),
             ).rowcount
             # CAS UPDATE 未命中表示并发写入已获胜，本事务必须失败关闭并整体回滚。
@@ -251,6 +310,22 @@ def update_workspace_placement(
             connection,
             config,
             gateway_cell_event_id=event_id,
+            now=now,
+        )
+        write_residency_evidence_in_transaction(
+            connection,
+            workspace_id=workspace_id,
+            tenant_id=str(owner["tenant_id"]),
+            policy=governance,
+            component_code="gateway",
+            region_code=str(primary["region_code"]),
+            storage_class="routing",
+            outcome="compliant",
+            violation_code=None,
+            observed_watermark=revision,
+            manifest_sha256=governance.sha256,
+            request_id=request_id,
+            trace_id=trace_id,
             now=now,
         )
         connection.execute(

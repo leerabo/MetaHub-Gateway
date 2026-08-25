@@ -535,6 +535,36 @@ def publish_rebuild_in_transaction(
     return manifest_sha256
 
 
+def publish_workspace_snapshot_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+    request_id: str,
+    trace_id: str,
+) -> str:
+    """Publish the next signed workspace snapshot inside the caller transaction."""
+
+    if not connection.in_transaction:
+        raise ApiError("config_distribution.unavailable")
+    head = connection.execute(
+        "SELECT generation FROM config_snapshot_heads WHERE workspace_id=? AND tenant_id=?",
+        (workspace_id, tenant_id),
+    ).fetchone()
+    generation = 1 if head is None else int(head["generation"]) + 1
+    return _publish_snapshot(
+        connection,
+        config,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+        generation=generation,
+        request_id=request_id,
+        trace_id=trace_id,
+        now=_database_now(connection),
+    )
+
+
 def _publish_snapshot(
     connection,
     config: AppConfig,
@@ -773,6 +803,11 @@ def _build_manifest(
             """
         ).fetchall()
     ]
+    data_governance = _data_governance_projection(
+        connection,
+        workspace_id=workspace_id,
+        tenant_id=tenant_id,
+    )
     safe = {
         "schema_version": 1,
         "workspace_id": workspace_id,
@@ -804,6 +839,8 @@ def _build_manifest(
         "provider_key_refs": refs,
         "feature_capabilities": features,
     }
+    if data_governance is not None:
+        safe["data_governance"] = data_governance
     return {**safe, "source_sha256": _digest(safe)}
 
 
@@ -817,11 +854,22 @@ def _next_revocation_watermark(
         state = connection.execute(
             "SELECT status FROM workspace_operational_states WHERE workspace_id=?", (workspace_id,)
         ).fetchone()
-        return 0 if state is not None and state["status"] == "active" else 1
+        baseline = 0 if state is not None and state["status"] == "active" else 1
+        governance_table = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='residency_policies'"
+        ).fetchone()
+        if governance_table is None:
+            return baseline
+        governance = connection.execute(
+            "SELECT generation FROM residency_policies WHERE workspace_id=? AND status='active'",
+            (workspace_id,),
+        ).fetchone()
+        return baseline + max(0, int(governance["generation"]) - 1) if governance else baseline
     current_security = {
         "workspace": previous["workspace"],
         "provider_key_refs": previous["provider_key_refs"],
         "feature_capabilities": previous["feature_capabilities"],
+        "data_governance": previous.get("data_governance"),
     }
     tenant_id = str(previous["tenant_id"])
     state = connection.execute(
@@ -862,8 +910,73 @@ def _next_revocation_watermark(
         "workspace": {"status": str(state["status"]), "revision": int(state["revision"])},
         "provider_key_refs": refs,
         "feature_capabilities": features,
+        "data_governance": _data_governance_projection(
+            connection,
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+        ),
     }
     return current_watermark + (1 if _digest(current_security) != _digest(updated_security) else 0)
+
+
+def _data_governance_projection(
+    connection: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    tenant_id: str,
+) -> dict[str, object] | None:
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='residency_policies'"
+    ).fetchone()
+    if table is None:
+        return None
+    policy = connection.execute(
+        "SELECT * FROM residency_policies WHERE workspace_id=? AND tenant_id=? "
+        "AND status='active'",
+        (workspace_id, tenant_id),
+    ).fetchone()
+    if policy is None:
+        raise ApiError("config_distribution.workspace_unavailable")
+    retention_rows = connection.execute(
+        "SELECT classification_code,retention_days,deletion_mode,backup_grace_days,revision "
+        "FROM retention_policies WHERE workspace_id=? AND tenant_id=? AND status='active' "
+        "AND generation=? ORDER BY classification_code",
+        (workspace_id, tenant_id, policy["generation"]),
+    ).fetchall()
+    if len(retention_rows) != 6:
+        raise ApiError("config_distribution.workspace_unavailable")
+    try:
+        allowed_groups = json.loads(str(policy["allowed_residency_groups_json"]))
+    except json.JSONDecodeError:
+        raise ApiError("config_distribution.workspace_unavailable") from None
+    if (
+        type(allowed_groups) is not list
+        or not allowed_groups
+        or any(type(group) is not str or not group for group in allowed_groups)
+        or len(allowed_groups) != len(set(allowed_groups))
+        or str(policy["primary_residency_group"]) not in allowed_groups
+    ):
+        raise ApiError("config_distribution.workspace_unavailable")
+    return {
+        "schema_version": 1,
+        "policy_id": str(policy["residency_policy_id"]),
+        "generation": int(policy["generation"]),
+        "sha256": str(policy["policy_sha256"]),
+        "allowed_residency_groups": sorted(allowed_groups),
+        "primary_residency_group": str(policy["primary_residency_group"]),
+        "cross_region_mode": str(policy["cross_region_mode"]),
+        "valid_until": str(policy["valid_until"]),
+        "retention": [
+            {
+                "classification_code": str(row["classification_code"]),
+                "retention_days": int(row["retention_days"]),
+                "deletion_mode": str(row["deletion_mode"]),
+                "backup_grace_days": int(row["backup_grace_days"]),
+                "revision": int(row["revision"]),
+            }
+            for row in retention_rows
+        ],
+    }
 
 
 def _head_manifest(connection, config: AppConfig, head) -> dict[str, object]:

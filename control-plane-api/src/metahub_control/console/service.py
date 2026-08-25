@@ -837,14 +837,24 @@ def get_console_navigation(
             items,
         )
         gateway_base_url, gateway_status = _trusted_gateway_base_url(config)
+        response_permissions = context.permission_codes
+        response_fingerprint = context.authorization_fingerprint
+        if workspace_scoped and context.extension_permission_codes:
+            response_permissions = tuple(
+                sorted({*response_permissions, *context.extension_permission_codes})
+            )
+            response_fingerprint = (
+                context.extension_authorization_fingerprint
+                or context.authorization_fingerprint
+            )
         return ConsoleNavigationResponse(
             navigation_items=items,
             active_navigation_item_id=active_item_id,
             gateway_base_url=gateway_base_url,
             gateway_base_url_status=gateway_status,
-            permission_codes=list(context.permission_codes),
+            permission_codes=list(response_permissions),
             permission_revision=context.permission_revision,
-            authorization_fingerprint=context.authorization_fingerprint,
+            authorization_fingerprint=response_fingerprint,
             request_id=request_id,
             trace_id=trace_id,
         )
