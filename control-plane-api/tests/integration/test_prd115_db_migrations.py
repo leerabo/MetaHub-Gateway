@@ -278,5 +278,5 @@ def test_scim_conflicts_accept_only_directory_roles(
 
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0107"
+    assert apply_migrations(database_url).applied[-1] == "0108"
     _healthy(database_url)

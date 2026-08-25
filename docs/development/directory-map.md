@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-115 - SCIM目录同步与成员生命周期` 已完成；当前下一项是
-`PRD-116 - MFA、条件访问、设备与会话安全`。
+`PRD-116 - MFA、条件访问、设备与会话安全` 已完成；当前下一项是
+`PRD-117 - 数据驻留、保留策略与法律保全`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2297,6 +2297,19 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `docs/prd/PRD-115-scim-directory-membership-lifecycle.md` 与 `docs/testing/PRD-115-tests.md`：冻结设计、
   自动化、本地认证、冲突恢复、三视口 Browser 与敏感扫描记录。下一权威项为 PRD-116；S4 G4 保留到
   PRD-119 独立提交后统一执行。
+
+## PRD-116 MFA、条件访问、设备与会话安全（已完成）
+
+- `infra/migrations/0108_mfa_conditional_access_device_session_security.sql/.down.sql`：多因子、WebAuthn、
+  恢复挑战与恢复码、受信设备、条件访问、step-up、Session assurance/revoke generation 和 down guard。
+- `control-plane-api/src/metahub_control/identity/` 与 `workspace_access/conditional_access.py`：统一 enrollment、
+  WebAuthn、受控延迟恢复、设备/Session 撤销、条件访问 simulation/CAS 和一次性 grant 消费。
+- `shared-sdk/python/metahub_shared/`：PRD-116 权限、稳定错误码和身份安全公共合同。
+- `console-web/src/lib/{identity,conditionalAccess}.js`、`src/features/identity/` 与 `src/styles/identity.css`：
+  身份安全、条件访问、一次性证明清理、恢复后 Workspace 显式重入和三档响应式布局。
+- `docs/prd/PRD-116-mfa-conditional-access-device-session-security.md` 与 `docs/testing/PRD-116-tests.md`：
+  冻结设计、两轮自审、专项/必要回归、本地认证、受控恢复、三视口 Browser 与敏感扫描记录。下一权威项为
+  PRD-117；S4 G4 保留到 PRD-119 独立提交后统一执行。
 
 ## MVP 非目标
 

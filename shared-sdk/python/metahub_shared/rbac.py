@@ -68,7 +68,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-114 将企业 SSO 安全摘要和管理动作拆成独立权限；Workspace 角色仍需在 API 边界叠加校验，
 # 不能仅凭租户角色或前端页面可见性管理域名、连接和强制登录策略。
 # PRD-115 再把 SCIM 只读摘要与目录管理分离；机器 Bearer 仍由独立路由鉴权，不能获得浏览器权限。
-CATALOG_REVISION: Final[int] = 26
+# PRD-116 将条件访问摘要和策略管理拆成独立权限；security_admin 只能读取固定安全投影，
+# 不能读取认证器公钥、设备 HMAC、恢复码或原始网络标识。
+CATALOG_REVISION: Final[int] = 27
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -202,6 +204,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "identity",
         "管理 SCIM 目录",
         "创建和轮换 SCIM token、维护角色映射并处理目录冲突。",
+        "critical",
+    ),
+    PermissionDefinition(
+        "conditional_access.read",
+        "identity",
+        "读取条件访问",
+        "读取当前 Workspace 的条件访问规则、模拟结果和固定影响摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "conditional_access.manage",
+        "identity",
+        "管理条件访问",
+        "模拟、修改并在安全前置条件满足后启用当前 Workspace 的条件访问策略。",
         "critical",
     ),
     PermissionDefinition(
@@ -776,6 +792,7 @@ _VIEWER = {
     "branding.read",
     "enterprise_sso.read",
     "scim.read",
+    "conditional_access.read",
 }
 _FINANCE = {
     "console.basic.read",
@@ -848,6 +865,8 @@ _SECURITY = {
     "enterprise_sso.manage",
     "scim.read",
     "scim.manage",
+    "conditional_access.read",
+    "conditional_access.manage",
 }
 _OPS = {
     "console.basic.read",

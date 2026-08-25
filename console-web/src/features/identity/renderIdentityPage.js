@@ -232,6 +232,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderMfaSection(state)}
         ${renderWorkspaceSection(state)}
         ${renderMembershipSection(state)}
+        ${renderConditionalAccessSection(state)}
         ${renderEnterpriseIdentitySection(state)}
         ${renderScimDirectorySection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
@@ -1116,6 +1117,88 @@ function onboardingBlockingLabel(code) {
   }[code] ?? "无阻塞项";
 }
 
+function renderConditionalAccessSection(state) {
+  if (!state.workspaceContext || state.conditionalAccessVisible !== true) return "";
+  const policy = state.conditionalAccess?.policy ?? null;
+  const simulation = state.conditionalAccess?.latest_simulation ?? null;
+  const canManage = state.conditionalAccessCanManage === true;
+  const busy = state.conditionalAccessBusy === true;
+  const selectedExceptions = new Set(policy?.exception_membership_ids ?? []);
+  return `
+    <section class="identity-conditional-access" aria-labelledby="identity-conditional-access-title" aria-busy="${busy}">
+      <div class="identity-section-heading">
+        <div><p>Workspace Security</p><h2 id="identity-conditional-access-title">条件访问</h2></div>
+        <button class="identity-quiet-command" type="button" data-identity-action="refresh-conditional-access" ${busy ? "disabled" : ""}>刷新</button>
+      </div>
+      ${renderError(state.conditionalAccessError)}
+      <div class="identity-security-summary">
+        <div><span>执行模式</span><strong>${escapeHtml(conditionalModeLabel(policy?.mode))}</strong></div>
+        <div><span>策略版本</span><strong>${policy?.revision ?? 0}</strong></div>
+        <div><span>最近评估</span><strong>${simulation ? escapeHtml(conditionalSimulationLabel(simulation)) : "尚未评估"}</strong></div>
+      </div>
+      ${simulation ? `
+        <div class="identity-impact-summary">
+          <div><span>受影响会话</span><strong>${simulation.affected_session_count}</strong></div>
+          <div><span>Owner 恢复</span><strong>${simulation.owner_ready ? "已就绪" : "未就绪"}</strong></div>
+          <div><span>评估时间</span><strong>${escapeHtml(formatDateTime(simulation.simulated_at))}</strong></div>
+        </div>
+      ` : ""}
+      ${canManage ? `
+        <div class="identity-conditional-toolbar">
+          <button class="identity-quiet-command" type="button" data-identity-action="simulate-conditional-access" ${busy ? "disabled" : ""}>运行影响评估</button>
+        </div>
+        <form class="identity-conditional-form" data-conditional-access-form autocomplete="off">
+          <div class="identity-conditional-grid">
+            <label><span>执行模式</span><select name="mode">${renderOption("audit", "审计", policy?.mode ?? "audit")}${renderOption("enforced", "强制", policy?.mode ?? "audit")}</select></label>
+            <label><span>区域规则</span><select name="regionRule">${renderOption("any", "不限区域", policy?.region_rule ?? "any")}${renderOption("domestic_only", "仅境内", policy?.region_rule ?? "any")}</select></label>
+            <label><span>网络规则</span><select name="networkRule">${renderOption("any", "不限网络", policy?.network_rule ?? "any")}${renderOption("trusted_only", "仅受信网络", policy?.network_rule ?? "any")}</select></label>
+            <label class="is-wide"><span>受信 CIDR</span><textarea name="allowedCidrs" rows="3" spellcheck="false">${escapeHtml((policy?.allowed_cidrs ?? []).join("\n"))}</textarea></label>
+          </div>
+          <div class="identity-conditional-toggles">
+            ${renderPolicyToggle("requireMfa", "要求 MFA", policy?.require_mfa ?? true)}
+            ${renderPolicyToggle("requireStepUpForHighRisk", "高风险操作要求 step-up", policy?.require_step_up_for_high_risk ?? true)}
+            ${renderPolicyToggle("allowTrustedDevices", "允许受信设备满足 MFA", policy?.allow_trusted_devices ?? false)}
+          </div>
+          ${renderConditionalExceptions(state.memberships, selectedExceptions)}
+          <div class="identity-step-up-fields">
+            <label><span>验证方式</span><select name="stepUpMethod">${renderOption("totp", "动态验证码", "totp")}${renderOption("webauthn", "安全密钥", "totp")}${renderOption("recovery_code", "恢复码", "totp")}</select></label>
+            <label><span>验证码或恢复码</span><input name="stepUpCode" type="password" autocomplete="one-time-code" maxlength="20" /></label>
+          </div>
+          <label class="identity-confirm"><input name="confirmed" type="checkbox" /><span>确认强制模式影响与 Owner 恢复条件</span></label>
+          <div class="identity-conditional-actions"><button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>保存策略</button></div>
+        </form>
+      ` : '<p class="identity-empty">当前职责仅可查看条件访问策略。</p>'}
+    </section>
+  `;
+}
+
+function renderPolicyToggle(name, label, checked) {
+  return `<label><input name="${name}" type="checkbox" ${checked ? "checked" : ""} /><span>${escapeHtml(label)}</span></label>`;
+}
+
+function renderConditionalExceptions(memberships, selected) {
+  const members = Array.isArray(memberships)
+    ? memberships.filter((member) => member.status === "active" && member.role !== "service_account")
+    : [];
+  if (members.length === 0) return "";
+  return `
+    <fieldset class="identity-conditional-exceptions">
+      <legend>例外成员</legend>
+      ${members.map((member) => `
+        <label><input name="exceptionMembershipIds" type="checkbox" value="${escapeAttribute(member.membership_id)}" ${selected.has(member.membership_id) ? "checked" : ""} /><span>${escapeHtml(member.display_name)} · ${escapeHtml(roleLabel(member.role))}</span></label>
+      `).join("")}
+    </fieldset>
+  `;
+}
+
+function conditionalModeLabel(value) {
+  return ({ audit: "审计", enforced: "强制" })[value] ?? "未配置";
+}
+
+function conditionalSimulationLabel(value) {
+  return value.outcome_code === "simulation.ready" ? "可启用" : "Owner 未就绪";
+}
+
 function renderEnterpriseIdentitySection(state) {
   const context = state.workspaceContext ?? null;
   if (!context || !new Set(["owner", "security_admin", "auditor"]).has(context.role)) return "";
@@ -1585,60 +1668,205 @@ function scimSubjectLabel(value) {
 }
 
 function renderMfaSection(state) {
-  if (state.account.mfa_configured) {
-    return `
-      <section class="identity-mfa" aria-labelledby="identity-mfa-title">
-        <div class="identity-section-heading">
-          <div>
-            <p>多重验证</p>
-            <h2 id="identity-mfa-title">动态验证已启用</h2>
-          </div>
-          ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="/platform.html">进入平台工作台</a>' : ""}
-        </div>
-      </section>`;
-  }
+  const overview = state.identitySecurity;
+  const factors = Array.isArray(overview?.factors) ? overview.factors : [];
+  const activeFactors = factors.filter((factor) => factor.status === "active");
+  const devices = Array.isArray(overview?.trusted_devices) ? overview.trusted_devices : [];
+  const method = new Set(["totp", "webauthn", "recovery_codes"])
+    .has(state.mfaEnrollmentMethod)
+    ? state.mfaEnrollmentMethod
+    : "totp";
   const enrollment = state.mfaEnrollment;
-  if (enrollment) {
-    return `
-      <section class="identity-mfa" aria-labelledby="identity-mfa-title">
-        <div class="identity-section-heading">
-          <div>
-            <p>多重验证</p>
-            <h2 id="identity-mfa-title">激活动态验证</h2>
-          </div>
-        </div>
-        <div class="identity-mfa-enrollment">
-          <div>
-            <span>认证器密钥</span>
-            <code>${escapeHtml(enrollment.secret)}</code>
-            <a href="${escapeAttribute(enrollment.provisioning_uri)}">在认证器中打开</a>
-          </div>
-          <form data-identity-mfa-verification-form autocomplete="off">
-            <label>
-              <span>动态验证码</span>
-              <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
-            </label>
-            <button class="identity-primary" type="submit">验证并启用</button>
-          </form>
-        </div>
-      </section>`;
-  }
   return `
-    <section class="identity-mfa" aria-labelledby="identity-mfa-title">
+    <section class="identity-mfa identity-security-controls" aria-labelledby="identity-mfa-title" aria-busy="${state.identitySecurityBusy === true}">
       <div class="identity-section-heading">
         <div>
-          <p>多重验证</p>
-          <h2 id="identity-mfa-title">启用动态验证</h2>
+          <p>身份保护</p>
+          <h2 id="identity-mfa-title">验证因子与恢复</h2>
+        </div>
+        ${state.platformAccess ? '<a class="identity-primary identity-platform-link" href="/platform.html">进入平台工作台</a>' : ""}
+      </div>
+      ${renderError(state.identitySecurityError)}
+      ${overview ? `
+        <div class="identity-security-summary">
+          <div><span>活跃因子</span><strong>${activeFactors.length}</strong></div>
+          <div><span>恢复码</span><strong>${escapeHtml(recoveryCodeStateLabel(overview.recovery_code_set))}</strong></div>
+          <div><span>受信设备</span><strong>${devices.filter((device) => device.status === "active").length}</strong></div>
+        </div>
+        <div class="identity-factor-list">
+          ${factors.length > 0
+            ? factors.map((factor, index) => renderMfaFactor(
+              factor,
+              index,
+              activeFactors.length,
+              state,
+            )).join("")
+            : '<p class="identity-empty">尚未配置验证因子。</p>'}
+        </div>
+      ` : ""}
+      <div class="identity-security-subheading">
+        <div><span>添加保护方式</span><h3>新验证因子</h3></div>
+        <div class="identity-method-segmented" role="group" aria-label="验证方式">
+          ${renderMfaMethodButton("totp", "认证器", method, state.identitySecurityBusy)}
+          ${renderMfaMethodButton("webauthn", "安全密钥", method, state.identitySecurityBusy)}
+          ${renderMfaMethodButton("recovery_codes", "恢复码", method, state.identitySecurityBusy)}
         </div>
       </div>
-      <form class="identity-mfa-start" data-identity-mfa-enrollment-form autocomplete="off">
-        <label>
-          <span>当前密码</span>
-          <input name="currentPassword" type="password" autocomplete="current-password" required />
-        </label>
-        <button class="identity-primary" type="submit">创建认证器密钥</button>
-      </form>
+      ${enrollment ? renderTotpEnrollment(enrollment, state.identitySecurityBusy) : `
+        <form class="identity-mfa-start" data-identity-mfa-enrollment-form autocomplete="off">
+          <input type="hidden" name="method" value="${escapeAttribute(method)}" />
+          <label>
+            <span>当前密码</span>
+            <input name="currentPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="identity-primary" type="submit" ${state.identitySecurityBusy ? "disabled" : ""}>${escapeHtml(mfaActionLabel(method, overview?.recovery_code_set))}</button>
+        </form>
+      `}
+      ${renderControlledRecovery(
+        overview?.recovery_challenge ?? null,
+        activeFactors.length > 0
+          && overview?.recovery_code_set?.status === "active"
+          && overview.recovery_code_set.remaining_count > 0,
+        state.identitySecurityBusy,
+      )}
+      ${renderTrustedDevices(devices, activeFactors, state.identitySecurityBusy)}
+      ${renderRecoveryCodesDialog(state.recoveryCodes)}
     </section>`;
+}
+
+function renderControlledRecovery(challenge, available, busy) {
+  if (challenge) {
+    return `
+      <div class="identity-controlled-recovery" aria-labelledby="identity-controlled-recovery-title">
+        <div class="identity-security-subheading">
+          <div><span>24 小时安全延迟</span><h3 id="identity-controlled-recovery-title">受控账号恢复</h3></div>
+        </div>
+        <div class="identity-recovery-window">
+          <div><span>可完成时间</span><strong>${escapeHtml(formatDateTime(challenge.ready_at))}</strong></div>
+          <div><span>失效时间</span><strong>${escapeHtml(formatDateTime(challenge.expires_at))}</strong></div>
+        </div>
+        <form class="identity-controlled-recovery-form" data-identity-recovery-complete-form autocomplete="off">
+          <label><span>账号通知码</span><input name="notificationCode" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
+          <label><span>未使用恢复码</span><input name="recoveryCode" type="password" autocomplete="one-time-code" pattern="MHRC-[2-9A-HJ-NP-Z]{5}-[2-9A-HJ-NP-Z]{5}" maxlength="16" required /></label>
+          <label class="identity-confirm"><input name="confirmed" type="checkbox" required /><span>撤销现有验证状态</span></label>
+          <button class="identity-danger-command" type="submit" ${busy ? "disabled" : ""}>完成恢复</button>
+        </form>
+      </div>`;
+  }
+  return `
+    <div class="identity-controlled-recovery" aria-labelledby="identity-controlled-recovery-title">
+      <div class="identity-security-subheading">
+        <div><span>24 小时安全延迟</span><h3 id="identity-controlled-recovery-title">受控账号恢复</h3></div>
+      </div>
+      <form class="identity-controlled-recovery-form is-begin" data-identity-recovery-begin-form autocomplete="off">
+        <label><span>当前密码</span><input name="currentPassword" type="password" autocomplete="current-password" required /></label>
+        <label class="identity-confirm"><input name="confirmed" type="checkbox" required /><span>撤销现有会话与验证因子</span></label>
+        <button class="identity-danger-command" type="submit" ${available && !busy ? "" : "disabled"}>开始恢复</button>
+      </form>
+    </div>`;
+}
+
+function renderMfaFactor(factor, index, activeCount, state) {
+  const canDisable = factor.status === "active" && activeCount > 1;
+  const selected = state.factorDisableIndex !== null
+    && state.factorDisableIndex !== undefined
+    && Number(state.factorDisableIndex) === index;
+  return `
+    <div class="identity-factor-row">
+      <div>
+        <strong>${escapeHtml(mfaFactorLabel(factor.factor_type))}</strong>
+        <span>${escapeHtml(mfaFactorStatusLabel(factor.status))} · ${escapeHtml(formatDateTime(factor.verified_at ?? factor.created_at))}</span>
+      </div>
+      <button class="identity-danger-command" type="button" data-identity-action="select-factor-disable" data-factor-index="${index}" ${canDisable && !state.identitySecurityBusy ? "" : "disabled"}>停用</button>
+      ${selected ? `
+        <form class="identity-factor-disable-form" data-identity-factor-disable-form autocomplete="off">
+          <label><span>当前密码</span><input name="currentPassword" type="password" autocomplete="current-password" required /></label>
+          <div>
+            <button class="identity-quiet-command" type="button" data-identity-action="cancel-factor-disable">取消</button>
+            <button class="identity-danger-command" type="submit">确认停用</button>
+          </div>
+        </form>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderMfaMethodButton(value, label, selected, busy) {
+  return `<button type="button" data-identity-action="set-mfa-method" data-mfa-method="${value}" aria-pressed="${selected === value}" ${busy ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+function renderTotpEnrollment(enrollment, busy) {
+  return `
+    <div class="identity-mfa-enrollment">
+      <div>
+        <span>认证器密钥</span>
+        <code>${escapeHtml(enrollment.secret)}</code>
+        <a href="${escapeAttribute(enrollment.provisioning_uri)}">在认证器中打开</a>
+      </div>
+      <form data-identity-mfa-verification-form autocomplete="off">
+        <label>
+          <span>动态验证码</span>
+          <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required />
+        </label>
+        <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>验证并启用</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderTrustedDevices(devices, activeFactors, busy) {
+  const activeTotp = activeFactors.some((factor) => factor.factor_type === "totp");
+  return `
+    <div class="identity-security-subheading"><div><span>设备信任</span><h3>受信设备</h3></div></div>
+    <div class="identity-trusted-device-list">
+      ${devices.length > 0 ? devices.map((device, index) => `
+        <div class="identity-trusted-device-row">
+          <div><strong>${escapeHtml(device.label)}</strong><span>${escapeHtml(deviceLabel(device.device_family))} · ${escapeHtml(trustedDeviceStatusLabel(device.status))}</span><small>有效至 ${escapeHtml(formatDateTime(device.expires_at))}</small></div>
+          <button class="identity-danger-command" type="button" data-identity-action="revoke-trusted-device" data-trusted-device-index="${index}" ${device.status === "active" && !busy ? "" : "disabled"}>撤销</button>
+        </div>
+      `).join("") : '<p class="identity-empty">尚无受信设备。</p>'}
+    </div>
+    <form class="identity-trusted-device-form" data-identity-trusted-device-form autocomplete="off">
+      <label><span>设备名称</span><input name="label" maxlength="80" autocomplete="off" required /></label>
+      <label><span>动态验证码</span><input name="totpCode" type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label>
+      <button class="identity-primary" type="submit" ${activeTotp && !busy ? "" : "disabled"}>信任当前设备</button>
+    </form>
+  `;
+}
+
+function renderRecoveryCodesDialog(codes) {
+  if (!Array.isArray(codes) || codes.length === 0) return "";
+  return `
+    <dialog class="identity-recovery-dialog" data-identity-recovery-dialog open aria-labelledby="identity-recovery-dialog-title">
+      <div class="identity-recovery-heading"><span>一次性凭据</span><h3 id="identity-recovery-dialog-title">恢复码</h3></div>
+      <ol>${codes.map((code) => `<li><code>${escapeHtml(code)}</code></li>`).join("")}</ol>
+      <button class="identity-primary" type="button" data-identity-action="close-recovery-codes">完成</button>
+    </dialog>
+  `;
+}
+
+function mfaActionLabel(method, recoverySet) {
+  if (method === "webauthn") return "注册安全密钥";
+  if (method === "recovery_codes") return recoverySet ? "重新生成恢复码" : "生成恢复码";
+  return "创建认证器密钥";
+}
+
+function mfaFactorLabel(value) {
+  return value === "webauthn" ? "安全密钥" : "认证器应用";
+}
+
+function mfaFactorStatusLabel(value) {
+  return ({ active: "已启用", pending: "待验证", disabled: "已停用" })[value] ?? "不可用";
+}
+
+function recoveryCodeStateLabel(value) {
+  if (!value) return "未生成";
+  if (value.status === "active") return `${value.remaining_count} 个可用`;
+  return ({ exhausted: "已用尽", superseded: "已更新", revoked: "已撤销" })[value.status] ?? "不可用";
+}
+
+function trustedDeviceStatusLabel(value) {
+  return ({ active: "受信", revoked: "已撤销", expired: "已过期" })[value] ?? "不可用";
 }
 
 function renderWorkspaceSelector(state) {
@@ -2010,7 +2238,7 @@ function renderCurrentSession(session, index) {
       <div class="identity-device-mark" aria-hidden="true"></div>
       <div>
         <strong>${escapeHtml(deviceLabel(session.device_family))}</strong>
-        <span>本机 · 最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
+        <span>本机 · ${escapeHtml(sessionAssuranceLabel(session))} · 最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
         <small>登录于 ${escapeHtml(formatDateTime(session.created_at))}，有效至 ${escapeHtml(formatDateTime(session.expires_at))}</small>
       </div>
       <button class="identity-danger-command" type="button" data-identity-action="revoke-session" data-session-index="${index}">退出此设备</button>
@@ -2024,12 +2252,19 @@ function renderOtherSession(session, index) {
       <div class="identity-device-mark" aria-hidden="true"></div>
       <div>
         <strong>${escapeHtml(deviceLabel(session.device_family))}</strong>
-        <span>最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
+        <span>${escapeHtml(sessionAssuranceLabel(session))} · 最近使用 ${escapeHtml(formatDateTime(session.last_seen_at))}</span>
         <small>有效至 ${escapeHtml(formatDateTime(session.expires_at))}</small>
       </div>
       <button class="identity-danger-command" type="button" data-identity-action="revoke-session" data-session-index="${index}">撤销</button>
     </article>
   `;
+}
+
+function sessionAssuranceLabel(session) {
+  const assurance = ({ password: "密码保证", mfa: "MFA 保证", recovery: "恢复保证" })[
+    session.assurance_level
+  ] ?? "密码保证";
+  return session.trusted_device_id ? `${assurance} · 受信设备` : assurance;
 }
 
 function renderFeedback(feedback) {

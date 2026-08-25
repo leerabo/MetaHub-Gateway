@@ -250,7 +250,8 @@ async def test_user_management_rejects_invalid_duplicate_and_cross_tenant_reques
     connection.execute(
         """
         INSERT INTO users(user_id, tenant_id, email, display_name, password_hash, role, status, created_at, updated_at)
-        VALUES('other-user', 'other-tenant', 'other@example.com', 'Other User', 'hash', 'viewer', 'active',
+        VALUES('other-user', 'other-tenant', 'other@example.com', 'Other User', lower(hex(randomblob(32))),
+               'viewer', 'active',
                datetime('now'), datetime('now'))
         """
     )

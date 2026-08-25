@@ -29,6 +29,7 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
     cookie: "__Host-metahub-global-csrf=global-csrf; __Host-metahub-workspace-csrf=workspace-csrf",
   };
   const calls = installFetch((url) => responseFor(url));
+  let navigation;
   try {
     await listIdentityWorkspaces({ controlApiUrl: CONTROL_URL });
     await switchIdentityWorkspace({ controlApiUrl: CONTROL_URL, workspaceId: WSP_ONE });
@@ -52,7 +53,7 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
       targetMembershipId: MEMBER_ADMIN,
       currentPassword: "PrivateOwnerPassword",
     });
-    await getWorkspaceConsoleNavigation({ controlApiUrl: CONTROL_URL });
+    navigation = await getWorkspaceConsoleNavigation({ controlApiUrl: CONTROL_URL });
   } finally {
     globalThis.document = originalDocument;
   }
@@ -74,6 +75,9 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
   assert.equal(calls[1].options.headers["X-CSRF-Token"], "global-csrf");
   assert.equal(calls[4].options.headers["X-CSRF-Token"], "workspace-csrf");
   assert.equal(calls[4].options.headers["If-Match"], '"4"');
+  assert.deepEqual(navigation.permission_codes, ["dashboard.read"]);
+  assert.equal(navigation.permission_revision, 1);
+  assert.equal(navigation.authorization_fingerprint, "f".repeat(64));
   assert.deepEqual(JSON.parse(calls[1].options.body), { workspace_id: WSP_ONE });
   assert.deepEqual(JSON.parse(calls[4].options.body), { role: "auditor", status: "active" });
   assert.deepEqual(JSON.parse(calls[5].options.body), {

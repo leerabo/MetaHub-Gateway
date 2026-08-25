@@ -630,9 +630,16 @@ function validateWorkspaceNavigation(payload) {
   if (!Array.isArray(payload.navigation_items) || payload.navigation_items.length > 200) {
     invalidAccessResponse("navigation_items");
   }
-  validateTextArray(payload.permission_codes, 300, "permission_codes");
-  requirePositiveInteger(payload.permission_revision, "permission_revision");
-  requireText(payload.authorization_fingerprint, 256, "authorization_fingerprint");
+  const permissionCodes = validateTextArray(payload.permission_codes, 300, "permission_codes");
+  const permissionRevision = requirePositiveInteger(
+    payload.permission_revision,
+    "permission_revision",
+  );
+  const authorizationFingerprint = requireText(
+    payload.authorization_fingerprint,
+    256,
+    "authorization_fingerprint",
+  );
   if (payload.gateway_base_url !== null) requireText(payload.gateway_base_url, 2048, "gateway_base_url");
   requireChoice(
     payload.gateway_base_url_status,
@@ -646,6 +653,9 @@ function validateWorkspaceNavigation(payload) {
       80,
       "active_navigation_item_id",
     ),
+    permission_codes: permissionCodes,
+    permission_revision: permissionRevision,
+    authorization_fingerprint: authorizationFingerprint,
     ...validateRequestTrace(payload),
   };
 }

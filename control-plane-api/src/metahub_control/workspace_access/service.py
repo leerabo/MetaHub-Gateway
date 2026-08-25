@@ -220,6 +220,7 @@ def switch_workspace(
     workspace_id: str,
     request_id: str,
     trace_id: str,
+    client_host: str | None = None,
 ) -> tuple[WorkspaceSwitchResponse, str, str]:
     if not _WORKSPACE_ID_RE.fullmatch(workspace_id):
         raise ApiError("workspace.not_found")
@@ -236,6 +237,19 @@ def switch_workspace(
         row = _switch_target(connection, identity.account_id, workspace_id)
         if row is None:
             raise ApiError("workspace.not_found")
+        from .conditional_access import enforce_conditional_access_in_transaction
+
+        conditional_access_revision = enforce_conditional_access_in_transaction(
+            connection,
+            account_id=identity.account_id,
+            global_session_id=identity.session_id,
+            workspace_id=row["workspace_id"],
+            membership_id=row["workspace_membership_id"],
+            client_host=client_host,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
         snapshot = _permission_snapshot(connection, row)
         session_id = _id("wss")
         enterprise_grant = _recovery_grant_for_switch(
@@ -294,6 +308,18 @@ def switch_workspace(
                 _db_time(absolute_expires),
                 _db_time(absolute_expires),
                 stamp,
+            ),
+        )
+        connection.execute(
+            """UPDATE workspace_sessions SET conditional_access_revision=?,
+                 assurance_level=?,trusted_device_id=?,updated_at=?
+               WHERE workspace_session_id=?""",
+            (
+                conditional_access_revision,
+                identity.current_session.assurance_level,
+                identity.current_session.trusted_device_id,
+                stamp,
+                session_id,
             ),
         )
         if enterprise_grant is not None:
@@ -1596,6 +1622,11 @@ def _authenticate_workspace(
         raise ApiError("workspace_session.expired")
     expected_legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"])
     enterprise_authorized = _enterprise_workspace_session_authorized(connection, row, now)
+    from .conditional_access import session_satisfies_conditional_access_in_transaction
+
+    conditional_access_authorized = session_satisfies_conditional_access_in_transaction(
+        connection, row, now
+    )
     stale = (
         row["membership_status"] != "active"
         or row["role_code"] == "service_account"
@@ -1616,6 +1647,7 @@ def _authenticate_workspace(
         or row["workspace_revision"] != row["current_workspace_revision"]
         or row["account_session_revision"] != row["current_account_session_revision"]
         or not enterprise_authorized
+        or not conditional_access_authorized
     )
     if stale:
         _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")

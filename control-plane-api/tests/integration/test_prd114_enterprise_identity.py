@@ -44,7 +44,7 @@ NOW = datetime.now(UTC).replace(microsecond=0)
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd114-api-migrated") / "enterprise-current.sqlite3"
-    assert apply_migrations(f"sqlite:///{database.as_posix()}").applied[-1] == "0107"
+    assert apply_migrations(f"sqlite:///{database.as_posix()}").applied[-1] == "0108"
     return database
 
 

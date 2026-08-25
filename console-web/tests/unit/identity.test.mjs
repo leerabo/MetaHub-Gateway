@@ -852,6 +852,10 @@ function session(overrides = {}) {
     last_seen_at: "2026-08-20T02:00:00Z",
     expires_at: "2026-08-21T01:00:00Z",
     is_current: false,
+    assurance_level: "password",
+    auth_method: "password",
+    trusted_device_id: null,
+    revoke_generation: 1,
     ...overrides,
   };
 }

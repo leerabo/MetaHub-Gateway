@@ -27,10 +27,31 @@ from .models import (
     IdentityPlatformAccessResponse,
     IdentityRevokeResponse,
     IdentityRotateResponse,
+    IdentitySecurityOverviewResponse,
     IdentitySessionResponse,
     IdentitySessionsResponse,
+    MfaChallengeCompletionResponse,
+    MfaChallengeResponse,
     MfaEnrollmentResponse,
     MfaVerificationResponse,
+    RecoveryChallengeResponse,
+    RecoveryCompletionResponse,
+    StepUpGrantResponse,
+    TrustedDeviceResponse,
+    UnifiedMfaEnrollmentResponse,
+)
+from .security_service import (
+    begin_account_recovery,
+    begin_webauthn_registration,
+    begin_webauthn_step_up,
+    complete_account_recovery,
+    complete_webauthn_registration,
+    disable_mfa_factor,
+    generate_recovery_codes,
+    get_identity_security_overview,
+    issue_step_up_grant,
+    revoke_trusted_device,
+    trust_current_device,
 )
 from .self_service import (
     PendingIdentityChallenge,
@@ -53,10 +74,11 @@ from .service import (
 )
 
 router = APIRouter(prefix="/identity", tags=["identity"])
-_MAX_IDENTITY_BODY_BYTES = 4096
+_MAX_IDENTITY_BODY_BYTES = 16_384
 _IDENTITY_WORK_LIMITER = anyio.CapacityLimiter(4)
 _DEVICE_COOKIE = "__Host-metahub-identity-device"
 _DEVICE_COOKIE_MAX_AGE = 31_536_000
+_RECOVERY_COOKIE_MAX_AGE = 172_800
 
 
 @router.post("/login", response_model=IdentitySessionResponse)
@@ -333,6 +355,407 @@ async def activate_totp_factor(
     )
 
 
+@router.post("/mfa/enrollments", response_model=UnifiedMfaEnrollmentResponse)
+async def create_mfa_enrollment(
+    request: Request,
+    response: Response,
+) -> UnifiedMfaEnrollmentResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(
+        request,
+        required_fields=("method", "current_password"),
+    )
+    method = _required_string(payload, "method", minimum=4, maximum=32)
+    current_password = _required_string(
+        payload, "current_password", minimum=1, maximum=1024, byte_limit=True
+    )
+    session_token = _required_session_cookie(request)
+    csrf_token = _required_csrf(request)
+    response.headers["Cache-Control"] = "no-store, private"
+    if method == "totp":
+        pending = await _run_identity_operation(
+            begin_totp_enrollment,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            current_password=current_password,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        return UnifiedMfaEnrollmentResponse(
+            method="totp",
+            factor_id=pending.factor_id,
+            secret=pending.secret,
+            provisioning_uri=pending.uri,
+            expires_at=pending.expires_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    if method == "webauthn":
+        browser_binding = _identity_device_token(request)
+        pending = await _run_identity_operation(
+            begin_webauthn_registration,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            current_password=current_password,
+            origin=_request_origin(request),
+            browser_binding=browser_binding,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        _set_identity_device_cookie(response, browser_binding)
+        return UnifiedMfaEnrollmentResponse(
+            method="webauthn",
+            factor_id=pending.factor_id,
+            challenge_id=pending.challenge_id,
+            public_key_options=pending.public_key_options,
+            expires_at=pending.expires_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    if method == "recovery_codes":
+        generated = await _run_identity_operation(
+            generate_recovery_codes,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            current_password=current_password,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        return UnifiedMfaEnrollmentResponse(
+            method="recovery_codes",
+            recovery_codes=generated.codes,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    raise ApiError("identity.request_invalid")
+
+
+@router.post(
+    "/mfa/challenges",
+    response_model=(
+        MfaChallengeResponse
+        | MfaChallengeCompletionResponse
+        | RecoveryChallengeResponse
+        | RecoveryCompletionResponse
+    ),
+)
+async def webauthn_challenge(
+    request: Request,
+    response: Response,
+) -> (
+    MfaChallengeResponse
+    | MfaChallengeCompletionResponse
+    | RecoveryChallengeResponse
+    | RecoveryCompletionResponse
+):
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(
+        request,
+        required_fields=("operation",),
+        optional_fields=(
+            "challenge_id",
+            "credential",
+            "current_password",
+            "notification_code",
+            "recovery_code",
+        ),
+    )
+    operation = _required_string(payload, "operation", minimum=5, maximum=64)
+    browser_binding = _identity_device_token(request)
+    response.headers["Cache-Control"] = "no-store, private"
+    _set_identity_device_cookie(response, browser_binding)
+    if operation == "begin_step_up":
+        if set(payload) != {"operation"}:
+            raise ApiError("identity.request_invalid")
+        pending = await _run_identity_operation(
+            begin_webauthn_step_up,
+            _config(request),
+            session_token=_required_session_cookie(request),
+            csrf_token=_required_csrf(request),
+            origin=_request_origin(request),
+            browser_binding=browser_binding,
+        )
+        return MfaChallengeResponse(
+            challenge_id=pending.challenge_id,
+            purpose="step_up",
+            public_key_options=pending.public_key_options,
+            expires_at=pending.expires_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    if operation == "complete_registration":
+        if set(payload) != {"operation", "challenge_id", "credential"}:
+            raise ApiError("identity.request_invalid")
+        completed = await _run_identity_operation(
+            complete_webauthn_registration,
+            _config(request),
+            session_token=_required_session_cookie(request),
+            csrf_token=_required_csrf(request),
+            challenge_id=_required_string(
+                payload, "challenge_id", minimum=36, maximum=36
+            ),
+            credential=_required_object(payload, "credential"),
+            browser_binding=browser_binding,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        return MfaChallengeCompletionResponse(
+            factor_id=completed.factor_id,
+            revision=completed.revision,
+            verified_at=completed.verified_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    if operation == "begin_recovery":
+        if set(payload) != {"operation", "current_password"}:
+            raise ApiError("identity.request_invalid")
+        session_token = _required_session_cookie(request)
+        csrf_token = _required_csrf(request)
+        pending = await _run_identity_operation(
+            begin_account_recovery,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            current_password=_required_string(
+                payload, "current_password", minimum=1, maximum=1024, byte_limit=True
+            ),
+            browser_binding=browser_binding,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        _set_identity_cookies(
+            response,
+            _config(request),
+            session_token,
+            csrf_token,
+            max_age=_RECOVERY_COOKIE_MAX_AGE,
+        )
+        return RecoveryChallengeResponse(
+            challenge_id=pending.challenge_id,
+            ready_at=pending.ready_at,
+            expires_at=pending.expires_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    if operation == "complete_recovery":
+        if set(payload) != {
+            "operation",
+            "challenge_id",
+            "notification_code",
+            "recovery_code",
+        }:
+            raise ApiError("identity.request_invalid")
+        completed = await _run_identity_operation(
+            complete_account_recovery,
+            _config(request),
+            session_token=_required_session_cookie(request),
+            csrf_token=_required_csrf(request),
+            challenge_id=_required_string(
+                payload, "challenge_id", minimum=36, maximum=36
+            ),
+            notification_code=_required_string(
+                payload, "notification_code", minimum=6, maximum=6
+            ),
+            recovery_code=_required_string(
+                payload, "recovery_code", minimum=12, maximum=32
+            ),
+            browser_binding=browser_binding,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+            user_agent=request.headers.get("User-Agent"),
+            client_host=request.client.host if request.client else None,
+        )
+        _clear_identity_cookies(response)
+        _set_identity_cookies(
+            response,
+            _config(request),
+            completed.session_token,
+            completed.csrf_token,
+        )
+        return RecoveryCompletionResponse(
+            completed_at=completed.completed_at,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    raise ApiError("identity.request_invalid")
+
+
+@router.delete("/mfa/enrollments/{factor_id}", response_model=IdentityRevokeResponse)
+async def delete_mfa_enrollment(
+    factor_id: str,
+    request: Request,
+    response: Response,
+) -> IdentityRevokeResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("current_password",))
+    await _run_identity_operation(
+        disable_mfa_factor,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        factor_id=factor_id,
+        current_password=_required_string(
+            payload, "current_password", minimum=1, maximum=1024, byte_limit=True
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return IdentityRevokeResponse(
+        revoked=True,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.get("/security", response_model=IdentitySecurityOverviewResponse)
+async def identity_security(
+    request: Request, response: Response
+) -> IdentitySecurityOverviewResponse:
+    _reject_legacy_authorization(request)
+    _reject_query(request, ())
+    overview = await _run_identity_operation(
+        get_identity_security_overview,
+        _config(request),
+        session_token=_required_session_cookie(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return IdentitySecurityOverviewResponse(
+        factors=overview.factors,
+        recovery_code_set=overview.recovery_code_set,
+        recovery_challenge=overview.recovery_challenge,
+        trusted_devices=overview.trusted_devices,
+        sessions=overview.sessions,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/trusted-devices", response_model=TrustedDeviceResponse)
+async def create_trusted_device(
+    request: Request,
+    response: Response,
+) -> TrustedDeviceResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(request, required_fields=("label", "totp_code"))
+    browser_binding = _identity_device_token(request)
+    trusted = await _run_identity_operation(
+        trust_current_device,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        code=_required_string(payload, "totp_code", minimum=6, maximum=6),
+        browser_binding=browser_binding,
+        label=_required_string(payload, "label", minimum=1, maximum=80),
+        device_family=_device_family(request.headers.get("User-Agent")),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _set_identity_device_cookie(response, browser_binding)
+    response.headers["Cache-Control"] = "no-store, private"
+    return TrustedDeviceResponse(
+        trusted_device=trusted,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.delete("/trusted-devices/{trusted_device_id}", response_model=IdentityRevokeResponse)
+async def delete_trusted_device(
+    trusted_device_id: str,
+    request: Request,
+    response: Response,
+) -> IdentityRevokeResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    await _run_identity_operation(
+        revoke_trusted_device,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        trusted_device_id=trusted_device_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return IdentityRevokeResponse(
+        revoked=True,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/step-up", response_model=StepUpGrantResponse)
+async def step_up(request: Request, response: Response) -> StepUpGrantResponse:
+    _reject_legacy_authorization(request)
+    _require_write_origin(request)
+    _reject_query(request, ())
+    payload = await _strict_json(
+        request,
+        required_fields=("method", "action_code", "resource_type", "resource_id"),
+        optional_fields=("workspace_id", "code", "challenge_id", "credential"),
+    )
+    method = _required_string(payload, "method", minimum=4, maximum=32)
+    proof: str | dict[str, object]
+    challenge_id = _optional_string(payload, "challenge_id", minimum=36, maximum=36)
+    if method in {"totp", "recovery_code"}:
+        proof = _required_string(payload, "code", minimum=6, maximum=64)
+        if "credential" in payload or challenge_id is not None:
+            raise ApiError("identity.request_invalid")
+    elif method == "webauthn":
+        proof = _required_object(payload, "credential")
+        if "code" in payload or challenge_id is None:
+            raise ApiError("identity.request_invalid")
+    else:
+        raise ApiError("identity.request_invalid")
+    browser_binding = _identity_device_token(request)
+    issued = await _run_identity_operation(
+        issue_step_up_grant,
+        _config(request),
+        session_token=_required_session_cookie(request),
+        csrf_token=_required_csrf(request),
+        workspace_session_token=_single_cookie(
+            request, WORKSPACE_SESSION_COOKIE, required=False
+        ),
+        workspace_id=_optional_string(payload, "workspace_id", minimum=36, maximum=36),
+        action_code=_required_string(payload, "action_code", minimum=3, maximum=80),
+        resource_type=_required_string(payload, "resource_type", minimum=2, maximum=60),
+        resource_id=_required_string(payload, "resource_id", minimum=1, maximum=120),
+        method=method,
+        proof=proof,
+        challenge_id=challenge_id,
+        browser_binding=browser_binding,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _set_identity_device_cookie(response, browser_binding)
+    response.headers["Cache-Control"] = "no-store, private"
+    return StepUpGrantResponse(
+        grant=issued.grant,
+        grant_id=issued.grant_id,
+        action_code=issued.action_code,
+        resource_type=issued.resource_type,
+        resource_id=issued.resource_id,
+        auth_method=issued.auth_method,
+        assurance_level=issued.assurance_level,
+        expires_at=issued.expires_at,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
 @router.get("/me", response_model=IdentitySessionResponse)
 async def me(request: Request) -> IdentitySessionResponse:
     _reject_legacy_authorization(request)
@@ -599,6 +1022,35 @@ def _optional_string(
     )
 
 
+def _required_object(payload: dict[str, Any], field: str) -> dict[str, object]:
+    value = payload.get(field)
+    if type(value) is not dict:
+        raise ApiError("identity.request_invalid")
+    return value
+
+
+def _request_origin(request: Request) -> str:
+    values = _raw_header_values(request, b"origin")
+    if len(values) != 1:
+        raise ApiError("identity.origin_invalid")
+    return values[0]
+
+
+def _device_family(user_agent: str | None) -> str:
+    normalized = (user_agent or "").lower()
+    if any(marker in normalized for marker in ("android", "iphone", "ipad", "mobile")):
+        return "mobile"
+    if "edg/" in normalized:
+        return "edge"
+    if "firefox/" in normalized:
+        return "firefox"
+    if "chrome/" in normalized or "chromium/" in normalized:
+        return "chrome"
+    if "safari/" in normalized:
+        return "safari"
+    return "unknown"
+
+
 def _reject_legacy_authorization(request: Request) -> None:
     if _raw_header_values(request, b"authorization"):
         raise ApiError("identity.credential_invalid")
@@ -688,11 +1140,14 @@ def _set_identity_cookies(
     config: AppConfig,
     session_token: str,
     csrf_token: str,
+    *,
+    max_age: int | None = None,
 ) -> None:
+    cookie_max_age = max_age or config.session_ttl_seconds
     response.set_cookie(
         SESSION_COOKIE,
         session_token,
-        max_age=config.session_ttl_seconds,
+        max_age=cookie_max_age,
         path="/",
         secure=True,
         httponly=True,
@@ -701,7 +1156,7 @@ def _set_identity_cookies(
     response.set_cookie(
         CSRF_COOKIE,
         csrf_token,
-        max_age=config.session_ttl_seconds,
+        max_age=cookie_max_age,
         path="/",
         secure=True,
         httponly=False,

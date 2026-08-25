@@ -25,8 +25,15 @@ from metahub_control.platform_access.constants import (
     SUPPORT_SESSION_COOKIE,
 )
 
+from .conditional_access import (
+    get_conditional_access,
+    simulate_conditional_access,
+    update_conditional_access,
+)
 from .constants import WORKSPACE_CSRF_COOKIE, WORKSPACE_SESSION_COOKIE
 from .models import (
+    ConditionalAccessResponse,
+    ConditionalAccessSimulationResponse,
     IdentityWorkspaceListResponse,
     MembershipInvitationResponse,
     MembershipListResponse,
@@ -96,6 +103,7 @@ async def post_workspace_switch(request: Request, response: Response) -> Workspa
         workspace_id=workspace_id,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
+        client_host=request.client.host if request.client else None,
     )
     _set_workspace_cookies(response, _config(request), session_token, csrf_token)
     _clear_platform_and_support_cookies(response)
@@ -231,6 +239,143 @@ async def post_owner_transfer(request: Request) -> OwnerTransferResponse:
     )
 
 
+@router.get(
+    "/workspaces/{workspace_id}/conditional-access",
+    response_model=ConditionalAccessResponse,
+)
+async def get_workspace_conditional_access(
+    workspace_id: str,
+    request: Request,
+    response: Response,
+) -> ConditionalAccessResponse:
+    _prepare_workspace_request(request)
+    _reject_query(request, "conditional_access.request_invalid")
+    state = await _run(
+        get_conditional_access,
+        _config(request),
+        session_token=_required_workspace_cookie(request),
+        workspace_id=workspace_id,
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return ConditionalAccessResponse(
+        policy=state.policy,
+        latest_simulation=state.latest_simulation,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/conditional-access/simulations",
+    response_model=ConditionalAccessSimulationResponse,
+)
+async def post_workspace_conditional_access_simulation(
+    workspace_id: str,
+    request: Request,
+    response: Response,
+) -> ConditionalAccessSimulationResponse:
+    _prepare_workspace_request(request)
+    _require_write_origin(request)
+    _reject_query(request, "conditional_access.request_invalid")
+    payload = await _strict_json(request, "conditional_access.request_invalid")
+    if payload:
+        raise ApiError("conditional_access.request_invalid")
+    policy, simulation = await _run(
+        simulate_conditional_access,
+        _config(request),
+        session_token=_required_workspace_cookie(request),
+        csrf_token=_required_csrf(
+            request,
+            WORKSPACE_CSRF_COOKIE,
+            "workspace_session.csrf_invalid",
+        ),
+        workspace_id=workspace_id,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return ConditionalAccessSimulationResponse(
+        policy=policy,
+        simulation=simulation,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/conditional-access",
+    response_model=ConditionalAccessResponse,
+)
+async def patch_workspace_conditional_access(
+    workspace_id: str,
+    request: Request,
+    response: Response,
+) -> ConditionalAccessResponse:
+    _prepare_workspace_request(request)
+    _require_write_origin(request)
+    _reject_query(request, "conditional_access.request_invalid")
+    payload = await _strict_json(request, "conditional_access.request_invalid")
+    expected = {
+        "expected_revision",
+        "mode",
+        "require_mfa",
+        "require_step_up_for_high_risk",
+        "allow_trusted_devices",
+        "region_rule",
+        "network_rule",
+        "allowed_cidrs",
+        "exception_membership_ids",
+    }
+    if set(payload) != expected:
+        raise ApiError("conditional_access.request_invalid")
+    expected_revision = payload["expected_revision"]
+    booleans = (
+        payload["require_mfa"],
+        payload["require_step_up_for_high_risk"],
+        payload["allow_trusted_devices"],
+    )
+    if type(expected_revision) is not int or expected_revision < 0 or any(
+        type(value) is not bool for value in booleans
+    ):
+        raise ApiError("conditional_access.request_invalid")
+    allowed_cidrs = _string_tuple(payload, "allowed_cidrs", 64)
+    exception_ids = _string_tuple(payload, "exception_membership_ids", 36)
+    policy = await _run(
+        update_conditional_access,
+        _config(request),
+        session_token=_required_workspace_cookie(request),
+        csrf_token=_required_csrf(
+            request,
+            WORKSPACE_CSRF_COOKIE,
+            "workspace_session.csrf_invalid",
+        ),
+        workspace_id=workspace_id,
+        expected_revision=expected_revision,
+        mode=_required_string(payload, "mode", 16, "conditional_access.request_invalid"),
+        require_mfa=booleans[0],
+        require_step_up_for_high_risk=booleans[1],
+        allow_trusted_devices=booleans[2],
+        region_rule=_required_string(
+            payload, "region_rule", 32, "conditional_access.request_invalid"
+        ),
+        network_rule=_required_string(
+            payload, "network_rule", 32, "conditional_access.request_invalid"
+        ),
+        allowed_cidrs=allowed_cidrs,
+        exception_membership_ids=exception_ids,
+        step_up_grant=_required_step_up_grant(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return ConditionalAccessResponse(
+        policy=policy,
+        latest_simulation=None,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
 def _prepare_workspace_request(request: Request) -> None:
     clear_workspace_cookies_on_error(request)
 
@@ -308,6 +453,25 @@ def _optional_string(
     if field not in payload:
         return None
     return _required_string(payload, field, maximum, error_code)
+
+
+def _string_tuple(payload: dict[str, Any], field: str, maximum: int) -> tuple[str, ...]:
+    value = payload.get(field)
+    if type(value) is not list or len(value) > 32:
+        raise ApiError("conditional_access.request_invalid")
+    result: list[str] = []
+    for item in value:
+        if type(item) is not str or not item or len(item) > maximum or "\x00" in item:
+            raise ApiError("conditional_access.request_invalid")
+        result.append(item)
+    return tuple(result)
+
+
+def _required_step_up_grant(request: Request) -> str:
+    values = _raw_header_values(request, b"x-step-up-grant")
+    if len(values) != 1 or not valid_opaque_value(values[0]):
+        raise ApiError("step_up.required")
+    return values[0]
 
 
 def _reject_authorization(request: Request) -> None:

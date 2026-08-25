@@ -1,6 +1,6 @@
 # S4 企业身份与治理批次设计
 
-状态：设计冻结；PRD-114..115 已完成，当前下一项为 PRD-116。权威范围来自
+状态：设计冻结；PRD-114..116 已完成，当前下一项为 PRD-117。权威范围来自
 `企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx` 的 S4 与 G4。
 
 ## 1. 批次目标与顺序
@@ -13,8 +13,9 @@ Provider 目录。实现顺序固定为 `114 -> 115 -> 116 -> 117 -> 118 -> 119`
 PRD-119 独立提交后统一执行 G4 数据库、集成、流程、真实浏览器、性能、安全和必要回归。
 
 当前进度：PRD-114 已交付 `0106`、企业域名、OIDC/SAML、登录发现和强制 SSO 恢复；PRD-115 已交付
-`0107`、SCIM Users/Groups、Bearer 轮换、角色映射、Membership 生命周期、冲突恢复与 Identity Console。
-两项均通过各自自动化、本地认证和 Browser 终态验收。PRD-116..119 尚未实现，G4 尚未执行。
+`0107`、SCIM Users/Groups、Bearer 轮换、角色映射、Membership 生命周期、冲突恢复与 Identity Console；
+PRD-116 已交付 `0108`、MFA/WebAuthn、恢复码、受信设备、Session 撤销、条件访问、step-up 与受控恢复。
+三项均通过各自自动化、本地认证和 Browser 终态验收。PRD-117..119 尚未实现，G4 尚未执行。
 
 ## 2. 共享权威边界
 

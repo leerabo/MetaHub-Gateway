@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 WorkspaceRole = Literal[
     "owner",
@@ -97,5 +97,48 @@ class OwnerTransferResponse(BaseModel):
     transferred: Literal[True] = True
     source: MembershipSummary
     target: MembershipSummary
+    request_id: str
+    trace_id: str
+
+
+class ConditionalAccessModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ConditionalAccessPolicySummary(ConditionalAccessModel):
+    policy_id: str
+    workspace_id: str
+    mode: Literal["audit", "enforced"]
+    require_mfa: bool
+    require_step_up_for_high_risk: bool
+    allow_trusted_devices: bool
+    region_rule: Literal["any", "domestic_only"]
+    network_rule: Literal["any", "trusted_only"]
+    allowed_cidrs: tuple[str, ...]
+    exception_membership_ids: tuple[str, ...]
+    revision: int = Field(ge=1)
+    simulation_watermark_at: datetime | None
+    updated_at: datetime
+
+
+class ConditionalAccessSimulationSummary(ConditionalAccessModel):
+    simulation_id: str
+    policy_revision: int = Field(ge=1)
+    outcome_code: Literal["simulation.ready", "simulation.owner_blocked"]
+    affected_session_count: int = Field(ge=0)
+    owner_ready: bool
+    simulated_at: datetime
+
+
+class ConditionalAccessResponse(ConditionalAccessModel):
+    policy: ConditionalAccessPolicySummary | None
+    latest_simulation: ConditionalAccessSimulationSummary | None
+    request_id: str
+    trace_id: str
+
+
+class ConditionalAccessSimulationResponse(ConditionalAccessModel):
+    policy: ConditionalAccessPolicySummary
+    simulation: ConditionalAccessSimulationSummary
     request_id: str
     trace_id: str

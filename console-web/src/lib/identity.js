@@ -1,12 +1,16 @@
 const CSRF_COOKIE_NAME = "__Host-metahub-global-csrf";
 const ACCOUNT_KEYS = Object.freeze(["display_name", "email", "mfa_configured", "status"]);
 const SESSION_KEYS = Object.freeze([
+  "assurance_level",
+  "auth_method",
   "created_at",
   "device_family",
   "expires_at",
   "is_current",
   "last_seen_at",
+  "revoke_generation",
   "session_id",
+  "trusted_device_id",
 ]);
 
 export class IdentityApiError extends Error {
@@ -124,6 +128,256 @@ export async function verifyIdentityTotpEnrollment({
     csrf: true,
     signal,
   });
+}
+
+export async function createIdentityMfaEnrollment({
+  controlApiUrl,
+  method,
+  currentPassword,
+  signal,
+} = {}) {
+  const normalizedMethod = requireRequestChoice(
+    method,
+    ["totp", "webauthn", "recovery_codes"],
+    "method",
+  );
+  return identityRequest(controlApiUrl, "/identity/mfa/enrollments", {
+    method: "POST",
+    body: {
+      method: normalizedMethod,
+      current_password: requireBoundedString(
+        currentPassword,
+        "identity.request_invalid",
+        1024,
+      ),
+    },
+    responseType: "unifiedMfaEnrollment",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function completeIdentityWebAuthnRegistration({
+  controlApiUrl,
+  challengeId,
+  credential,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/mfa/challenges", {
+    method: "POST",
+    body: {
+      operation: "complete_registration",
+      challenge_id: requireOpaqueId(challengeId, "mfc_", "identity.request_invalid"),
+      credential: requireCredentialObject(credential),
+    },
+    responseType: "webauthnCompletion",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function beginIdentityWebAuthnStepUp({ controlApiUrl, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/mfa/challenges", {
+    method: "POST",
+    body: { operation: "begin_step_up" },
+    responseType: "webauthnChallenge",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function beginIdentityAccountRecovery({
+  controlApiUrl,
+  currentPassword,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/mfa/challenges", {
+    method: "POST",
+    body: {
+      operation: "begin_recovery",
+      current_password: requireBoundedString(
+        currentPassword,
+        "identity.request_invalid",
+        1024,
+      ),
+    },
+    responseType: "recoveryChallenge",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function completeIdentityAccountRecovery({
+  controlApiUrl,
+  challengeId,
+  notificationCode,
+  recoveryCode,
+  signal,
+} = {}) {
+  const normalizedNotificationCode = requireBoundedString(
+    notificationCode,
+    "identity.request_invalid",
+    6,
+  );
+  if (!/^[0-9]{6}$/u.test(normalizedNotificationCode)) {
+    throw new IdentityApiError({ code: "identity.request_invalid" });
+  }
+  return identityRequest(controlApiUrl, "/identity/mfa/challenges", {
+    method: "POST",
+    body: {
+      operation: "complete_recovery",
+      challenge_id: requireOpaqueId(challengeId, "mfc_", "identity.request_invalid"),
+      notification_code: normalizedNotificationCode,
+      recovery_code: requireRecoveryCode(recoveryCode, "identity.request_invalid"),
+    },
+    responseType: "recoveryCompletion",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function disableIdentityMfaEnrollment({
+  controlApiUrl,
+  factorId,
+  currentPassword,
+  signal,
+} = {}) {
+  return identityRequest(
+    controlApiUrl,
+    `/identity/mfa/enrollments/${encodeURIComponent(
+      requireOpaqueId(factorId, "mfa_", "identity.request_invalid"),
+    )}`,
+    {
+      method: "DELETE",
+      body: {
+        current_password: requireBoundedString(
+          currentPassword,
+          "identity.request_invalid",
+          1024,
+        ),
+      },
+      responseType: "revoke",
+      csrf: true,
+      signal,
+    },
+  );
+}
+
+export async function getIdentitySecurity({ controlApiUrl, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/security", {
+    responseType: "identitySecurity",
+    signal,
+  });
+}
+
+export async function trustIdentityDevice({
+  controlApiUrl,
+  label,
+  totpCode,
+  signal,
+} = {}) {
+  return identityRequest(controlApiUrl, "/identity/trusted-devices", {
+    method: "POST",
+    body: {
+      label: requireBoundedString(label, "identity.request_invalid", 80),
+      totp_code: requireTotpCode(totpCode),
+    },
+    responseType: "trustedDevice",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function revokeIdentityTrustedDevice({
+  controlApiUrl,
+  trustedDeviceId,
+  signal,
+} = {}) {
+  return identityRequest(
+    controlApiUrl,
+    `/identity/trusted-devices/${encodeURIComponent(
+      requireOpaqueId(trustedDeviceId, "trd_", "identity.request_invalid"),
+    )}`,
+    {
+      method: "DELETE",
+      responseType: "revoke",
+      csrf: true,
+      signal,
+    },
+  );
+}
+
+export async function createIdentityStepUpGrant({
+  controlApiUrl,
+  method,
+  workspaceId,
+  actionCode,
+  resourceType,
+  resourceId,
+  code,
+  challengeId,
+  credential,
+  signal,
+} = {}) {
+  const normalizedMethod = requireRequestChoice(
+    method,
+    ["totp", "webauthn", "recovery_code"],
+    "method",
+  );
+  const body = {
+    method: normalizedMethod,
+    action_code: requireBoundedString(actionCode, "identity.request_invalid", 80),
+    resource_type: requireBoundedString(resourceType, "identity.request_invalid", 60),
+    resource_id: requireBoundedString(resourceId, "identity.request_invalid", 120),
+  };
+  if (workspaceId !== undefined && workspaceId !== null) {
+    body.workspace_id = requireOpaqueId(workspaceId, "wsp_", "identity.request_invalid");
+  }
+  if (normalizedMethod === "webauthn") {
+    body.challenge_id = requireOpaqueId(challengeId, "mfc_", "identity.request_invalid");
+    body.credential = requireCredentialObject(credential);
+  } else {
+    body.code = normalizedMethod === "totp"
+      ? requireTotpCode(code)
+      : requireRecoveryCode(code);
+  }
+  return identityRequest(controlApiUrl, "/identity/step-up", {
+    method: "POST",
+    body,
+    responseType: "stepUpGrant",
+    csrf: true,
+    signal,
+  });
+}
+
+export async function createWebAuthnCredential(
+  publicKeyOptions,
+  credentialsApi = globalThis.navigator?.credentials,
+) {
+  if (!credentialsApi?.create) {
+    throw new IdentityApiError({
+      code: "identity.webauthn_unavailable",
+      message: "当前浏览器无法使用安全密钥。",
+    });
+  }
+  const publicKey = decodeCreationOptions(publicKeyOptions);
+  const credential = await credentialsApi.create({ publicKey });
+  return serializeWebAuthnCredential(credential, "registration");
+}
+
+export async function getWebAuthnAssertion(
+  publicKeyOptions,
+  credentialsApi = globalThis.navigator?.credentials,
+) {
+  if (!credentialsApi?.get) {
+    throw new IdentityApiError({
+      code: "identity.webauthn_unavailable",
+      message: "当前浏览器无法使用安全密钥。",
+    });
+  }
+  const publicKey = decodeRequestOptions(publicKeyOptions);
+  const credential = await credentialsApi.get({ publicKey });
+  return serializeWebAuthnCredential(credential, "authentication");
 }
 
 export async function getIdentityMe({ controlApiUrl, signal } = {}) {
@@ -378,6 +632,296 @@ function validateResponse(payload, responseType) {
       trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
     };
   }
+  if (responseType === "unifiedMfaEnrollment") {
+    requireExactKeys(
+      payload,
+      [
+        "challenge_id",
+        "expires_at",
+        "factor_id",
+        "method",
+        "provisioning_uri",
+        "public_key_options",
+        "recovery_codes",
+        "request_id",
+        "secret",
+        "trace_id",
+      ],
+      "response",
+    );
+    const method = requireChoice(
+      payload.method,
+      ["totp", "webauthn", "recovery_codes"],
+      "method",
+    );
+    const base = {
+      method,
+      factor_id: null,
+      challenge_id: null,
+      public_key_options: null,
+      secret: null,
+      provisioning_uri: null,
+      recovery_codes: null,
+      expires_at: null,
+      ...validateRequestTrace(payload),
+    };
+    if (method === "totp") {
+      const factorId = requireOpaqueId(payload.factor_id, "mfa_");
+      const secret = requireBoundedString(payload.secret, "identity.response_invalid", 128);
+      const provisioningUri = requireBoundedString(
+        payload.provisioning_uri,
+        "identity.response_invalid",
+        1024,
+      );
+      if (!/^[A-Z2-7]{16,128}$/u.test(secret)) invalidResponse("mfa_enrollment.secret");
+      let uri;
+      try {
+        uri = new URL(provisioningUri);
+      } catch {
+        invalidResponse("mfa_enrollment.provisioning_uri");
+      }
+      if (uri.protocol !== "otpauth:" || uri.hostname !== "totp") {
+        invalidResponse("mfa_enrollment.provisioning_uri");
+      }
+      return {
+        ...base,
+        factor_id: factorId,
+        secret,
+        provisioning_uri: provisioningUri,
+        expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      };
+    }
+    if (method === "webauthn") {
+      return {
+        ...base,
+        factor_id: requireOpaqueId(payload.factor_id, "mfa_"),
+        challenge_id: requireOpaqueId(payload.challenge_id, "mfc_"),
+        public_key_options: requirePublicKeyOptions(payload.public_key_options),
+        expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      };
+    }
+    if (
+      payload.factor_id !== null
+      || payload.challenge_id !== null
+      || payload.public_key_options !== null
+      || payload.secret !== null
+      || payload.provisioning_uri !== null
+      || payload.expires_at !== null
+      || !Array.isArray(payload.recovery_codes)
+      || payload.recovery_codes.length !== 10
+    ) {
+      invalidResponse("recovery_codes");
+    }
+    return {
+      ...base,
+      recovery_codes: payload.recovery_codes.map(
+        (code) => requireRecoveryCode(code, "identity.response_invalid"),
+      ),
+    };
+  }
+  if (responseType === "webauthnChallenge") {
+    requireExactKeys(
+      payload,
+      [
+        "challenge_id",
+        "expires_at",
+        "method",
+        "public_key_options",
+        "purpose",
+        "request_id",
+        "trace_id",
+      ],
+      "response",
+    );
+    if (payload.method !== "webauthn" || payload.purpose !== "step_up") {
+      invalidResponse("webauthn_challenge");
+    }
+    return {
+      challenge_id: requireOpaqueId(payload.challenge_id, "mfc_"),
+      purpose: "step_up",
+      method: "webauthn",
+      public_key_options: requirePublicKeyOptions(payload.public_key_options),
+      expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "recoveryChallenge") {
+    requireExactKeys(
+      payload,
+      [
+        "challenge_id",
+        "expires_at",
+        "purpose",
+        "ready_at",
+        "request_id",
+        "status",
+        "trace_id",
+      ],
+      "response",
+    );
+    if (payload.purpose !== "recovery" || payload.status !== "pending") {
+      invalidResponse("recovery_challenge");
+    }
+    return {
+      challenge_id: requireOpaqueId(payload.challenge_id, "mfc_"),
+      status: "pending",
+      ready_at: requireTimestamp(payload.ready_at, "ready_at"),
+      expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "recoveryCompletion") {
+    requireExactKeys(
+      payload,
+      [
+        "assurance_level",
+        "completed_at",
+        "recovered",
+        "request_id",
+        "trace_id",
+      ],
+      "response",
+    );
+    if (payload.recovered !== true || payload.assurance_level !== "recovery") {
+      invalidResponse("recovery_completion");
+    }
+    return {
+      recovered: true,
+      assurance_level: "recovery",
+      completed_at: requireTimestamp(payload.completed_at, "completed_at"),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "webauthnCompletion") {
+    requireExactKeys(
+      payload,
+      [
+        "factor_id",
+        "factor_type",
+        "request_id",
+        "revision",
+        "status",
+        "trace_id",
+        "verified_at",
+      ],
+      "response",
+    );
+    if (
+      payload.factor_type !== "webauthn"
+      || payload.status !== "active"
+      || !Number.isSafeInteger(payload.revision)
+      || payload.revision < 2
+    ) {
+      invalidResponse("webauthn_completion");
+    }
+    return {
+      factor_id: requireOpaqueId(payload.factor_id, "mfa_"),
+      factor_type: "webauthn",
+      status: "active",
+      revision: payload.revision,
+      verified_at: requireTimestamp(payload.verified_at, "verified_at"),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "identitySecurity") {
+    requireExactKeys(
+      payload,
+      [
+        "factors",
+        "recovery_challenge",
+        "recovery_code_set",
+        "request_id",
+        "sessions",
+        "trace_id",
+        "trusted_devices",
+      ],
+      "response",
+    );
+    if (
+      !Array.isArray(payload.factors)
+      || payload.factors.length > 20
+      || !Array.isArray(payload.trusted_devices)
+      || payload.trusted_devices.length > 50
+      || !Array.isArray(payload.sessions)
+      || payload.sessions.length > 100
+    ) {
+      invalidResponse("identity_security");
+    }
+    return {
+      factors: payload.factors.map(validateMfaFactor),
+      recovery_challenge: payload.recovery_challenge === null
+        ? null
+        : validateRecoveryChallenge(payload.recovery_challenge),
+      recovery_code_set: payload.recovery_code_set === null
+        ? null
+        : validateRecoveryCodeSet(payload.recovery_code_set),
+      trusted_devices: payload.trusted_devices.map(validateTrustedDevice),
+      sessions: payload.sessions.map(validateSession),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "trustedDevice") {
+    requireExactKeys(
+      payload,
+      ["request_id", "trace_id", "trusted_device"],
+      "response",
+    );
+    return {
+      trusted_device: validateTrustedDevice(payload.trusted_device),
+      ...validateRequestTrace(payload),
+    };
+  }
+  if (responseType === "stepUpGrant") {
+    requireExactKeys(
+      payload,
+      [
+        "action_code",
+        "assurance_level",
+        "auth_method",
+        "expires_at",
+        "grant",
+        "grant_id",
+        "request_id",
+        "resource_id",
+        "resource_type",
+        "trace_id",
+      ],
+      "response",
+    );
+    const grant = requireBoundedString(payload.grant, "identity.response_invalid", 128);
+    if (!/^[A-Za-z0-9_-]{32,128}$/u.test(grant)) invalidResponse("step_up.grant");
+    return {
+      grant,
+      grant_id: requireOpaqueId(payload.grant_id, "sug_"),
+      action_code: requireBoundedString(
+        payload.action_code,
+        "identity.response_invalid",
+        80,
+      ),
+      resource_type: requireBoundedString(
+        payload.resource_type,
+        "identity.response_invalid",
+        60,
+      ),
+      resource_id: requireBoundedString(
+        payload.resource_id,
+        "identity.response_invalid",
+        120,
+      ),
+      auth_method: requireChoice(
+        payload.auth_method,
+        ["totp", "webauthn", "recovery_code"],
+        "auth_method",
+      ),
+      assurance_level: requireChoice(
+        payload.assurance_level,
+        ["mfa", "recovery"],
+        "assurance_level",
+      ),
+      expires_at: requireTimestamp(payload.expires_at, "expires_at"),
+      ...validateRequestTrace(payload),
+    };
+  }
   if (responseType === "platformAccess") {
     requireExactKeys(payload, ["available", "request_id", "trace_id"], "response");
     if (typeof payload.available !== "boolean") invalidResponse("platform_access.available");
@@ -435,7 +979,314 @@ function validateSession(session) {
     last_seen_at: requireTimestamp(session.last_seen_at, "last_seen_at"),
     expires_at: requireTimestamp(session.expires_at, "expires_at"),
     is_current: session.is_current,
+    assurance_level: requireChoice(
+      session.assurance_level,
+      ["password", "mfa", "recovery"],
+      "session.assurance_level",
+    ),
+    auth_method: requireChoice(
+      session.auth_method,
+      ["password", "totp", "webauthn", "recovery_code"],
+      "session.auth_method",
+    ),
+    trusted_device_id: session.trusted_device_id === null
+      ? null
+      : requireOpaqueId(session.trusted_device_id, "trd_"),
+    revoke_generation: requirePositiveInteger(
+      session.revoke_generation,
+      "session.revoke_generation",
+    ),
   };
+}
+
+function validateMfaFactor(value) {
+  requirePlainObject(value, "factor");
+  requireExactKeys(
+    value,
+    ["created_at", "factor_id", "factor_type", "revision", "status", "verified_at"],
+    "factor",
+  );
+  return {
+    factor_id: requireOpaqueId(value.factor_id, "mfa_"),
+    factor_type: requireChoice(value.factor_type, ["totp", "webauthn"], "factor_type"),
+    status: requireChoice(value.status, ["pending", "active", "disabled"], "factor.status"),
+    revision: requirePositiveInteger(value.revision, "factor.revision"),
+    verified_at: value.verified_at === null
+      ? null
+      : requireTimestamp(value.verified_at, "factor.verified_at"),
+    created_at: requireTimestamp(value.created_at, "factor.created_at"),
+  };
+}
+
+function validateRecoveryCodeSet(value) {
+  requirePlainObject(value, "recovery_code_set");
+  requireExactKeys(
+    value,
+    ["generated_at", "recovery_code_set_id", "remaining_count", "revision", "status"],
+    "recovery_code_set",
+  );
+  return {
+    recovery_code_set_id: requireOpaqueId(value.recovery_code_set_id, "rcs_"),
+    status: requireChoice(
+      value.status,
+      ["active", "superseded", "exhausted", "revoked"],
+      "recovery_code_set.status",
+    ),
+    revision: requirePositiveInteger(value.revision, "recovery_code_set.revision"),
+    remaining_count: requireNonnegativeInteger(
+      value.remaining_count,
+      "recovery_code_set.remaining_count",
+    ),
+    generated_at: requireTimestamp(value.generated_at, "recovery_code_set.generated_at"),
+  };
+}
+
+function validateRecoveryChallenge(value) {
+  requirePlainObject(value, "recovery_challenge");
+  requireExactKeys(
+    value,
+    ["challenge_id", "expires_at", "ready_at", "status"],
+    "recovery_challenge",
+  );
+  if (value.status !== "pending") invalidResponse("recovery_challenge.status");
+  return {
+    challenge_id: requireOpaqueId(value.challenge_id, "mfc_"),
+    status: "pending",
+    ready_at: requireTimestamp(value.ready_at, "recovery_challenge.ready_at"),
+    expires_at: requireTimestamp(value.expires_at, "recovery_challenge.expires_at"),
+  };
+}
+
+function validateTrustedDevice(value) {
+  requirePlainObject(value, "trusted_device");
+  requireExactKeys(
+    value,
+    [
+      "created_at",
+      "device_family",
+      "expires_at",
+      "label",
+      "last_used_at",
+      "revision",
+      "status",
+      "trust_level",
+      "trusted_device_id",
+    ],
+    "trusted_device",
+  );
+  return {
+    trusted_device_id: requireOpaqueId(value.trusted_device_id, "trd_"),
+    label: requireBoundedString(value.label, "identity.response_invalid", 80),
+    device_family: requireChoice(
+      value.device_family,
+      ["chrome", "edge", "firefox", "safari", "mobile", "unknown"],
+      "trusted_device.device_family",
+    ),
+    trust_level: requireChoice(
+      value.trust_level,
+      ["mfa_verified"],
+      "trusted_device.trust_level",
+    ),
+    status: requireChoice(
+      value.status,
+      ["active", "revoked", "expired"],
+      "trusted_device.status",
+    ),
+    revision: requirePositiveInteger(value.revision, "trusted_device.revision"),
+    expires_at: requireTimestamp(value.expires_at, "trusted_device.expires_at"),
+    last_used_at: value.last_used_at === null
+      ? null
+      : requireTimestamp(value.last_used_at, "trusted_device.last_used_at"),
+    created_at: requireTimestamp(value.created_at, "trusted_device.created_at"),
+  };
+}
+
+function validateRequestTrace(payload) {
+  return {
+    request_id: requireBoundedString(payload.request_id, "identity.response_invalid", 160),
+    trace_id: requireBoundedString(payload.trace_id, "identity.response_invalid", 160),
+  };
+}
+
+function requirePublicKeyOptions(value) {
+  requirePlainObject(value, "public_key_options");
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    invalidResponse("public_key_options");
+  }
+  if (!serialized || serialized.length > 32_768 || !boundedJsonValue(value, 0)) {
+    invalidResponse("public_key_options");
+  }
+  return structuredCloneJson(value);
+}
+
+function boundedJsonValue(value, depth) {
+  if (depth > 8) return false;
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(value);
+  if (Array.isArray(value)) {
+    return value.length <= 64 && value.every((item) => boundedJsonValue(item, depth + 1));
+  }
+  if (!value || typeof value !== "object") return false;
+  const entries = Object.entries(value);
+  return entries.length <= 64
+    && entries.every(([key, item]) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(key)
+      && boundedJsonValue(item, depth + 1));
+}
+
+function structuredCloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function decodeCreationOptions(value) {
+  const options = requirePublicKeyOptions(value);
+  if (!options.user || typeof options.user !== "object") invalidResponse("webauthn.user");
+  return {
+    ...options,
+    challenge: decodeBase64Url(options.challenge, "webauthn.challenge"),
+    user: {
+      ...options.user,
+      id: decodeBase64Url(options.user.id, "webauthn.user.id"),
+    },
+    excludeCredentials: decodeCredentialDescriptors(options.excludeCredentials),
+  };
+}
+
+function decodeRequestOptions(value) {
+  const options = requirePublicKeyOptions(value);
+  return {
+    ...options,
+    challenge: decodeBase64Url(options.challenge, "webauthn.challenge"),
+    allowCredentials: decodeCredentialDescriptors(options.allowCredentials),
+  };
+}
+
+function decodeCredentialDescriptors(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 64) invalidResponse("webauthn.credentials");
+  return value.map((descriptor) => {
+    if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) {
+      invalidResponse("webauthn.credential");
+    }
+    return {
+      ...descriptor,
+      id: decodeBase64Url(descriptor.id, "webauthn.credential.id"),
+    };
+  });
+}
+
+function decodeBase64Url(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,4096}$/u.test(value)) {
+    invalidResponse(label);
+  }
+  try {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const binary = globalThis.atob(padded);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    invalidResponse(label);
+  }
+}
+
+function serializeWebAuthnCredential(credential, purpose) {
+  if (!credential || typeof credential !== "object" || !credential.response) {
+    throw new IdentityApiError({
+      code: "identity.webauthn_cancelled",
+      message: "安全密钥验证未完成。",
+    });
+  }
+  const response = purpose === "registration"
+    ? {
+        clientDataJSON: encodeBuffer(credential.response.clientDataJSON),
+        attestationObject: encodeBuffer(credential.response.attestationObject),
+        transports: typeof credential.response.getTransports === "function"
+          ? credential.response.getTransports()
+          : [],
+      }
+    : {
+        authenticatorData: encodeBuffer(credential.response.authenticatorData),
+        clientDataJSON: encodeBuffer(credential.response.clientDataJSON),
+        signature: encodeBuffer(credential.response.signature),
+        userHandle: credential.response.userHandle === null
+          ? null
+          : encodeBuffer(credential.response.userHandle),
+      };
+  return requireCredentialObject({
+    id: requireBoundedString(credential.id, "identity.request_invalid", 4096),
+    rawId: encodeBuffer(credential.rawId),
+    response,
+    type: "public-key",
+    authenticatorAttachment: credential.authenticatorAttachment ?? null,
+    clientExtensionResults: typeof credential.getClientExtensionResults === "function"
+      ? credential.getClientExtensionResults()
+      : {},
+  });
+}
+
+function encodeBuffer(value) {
+  if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value)) {
+    throw new IdentityApiError({ code: "identity.webauthn_invalid" });
+  }
+  const bytes = value instanceof ArrayBuffer
+    ? new Uint8Array(value)
+    : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function requireCredentialObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !boundedJsonValue(value, 0)) {
+    throw new IdentityApiError({ code: "identity.request_invalid" });
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 65_536) {
+    throw new IdentityApiError({ code: "identity.request_invalid" });
+  }
+  return structuredCloneJson(value);
+}
+
+function requireOpaqueId(value, prefix, code = "identity.response_invalid") {
+  const text = requireBoundedString(value, code, 36);
+  if (text.length !== 36 || !text.startsWith(prefix) || !/^[a-z]{3}_[0-9a-f]{32}$/u.test(text)) {
+    throw new IdentityApiError({ code });
+  }
+  return text;
+}
+
+function requireRequestChoice(value, choices) {
+  if (!choices.includes(value)) {
+    throw new IdentityApiError({ code: "identity.request_invalid" });
+  }
+  return value;
+}
+
+function requireChoice(value, choices, label) {
+  if (!choices.includes(value)) invalidResponse(label);
+  return value;
+}
+
+function requirePositiveInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 1) invalidResponse(label);
+  return value;
+}
+
+function requireTotpCode(value) {
+  const code = requireBoundedString(value, "identity.request_invalid", 6);
+  if (!/^[0-9]{6}$/u.test(code)) throw new IdentityApiError({ code: "identity.request_invalid" });
+  return code;
+}
+
+function requireRecoveryCode(value, errorCode = "identity.request_invalid") {
+  const code = requireBoundedString(value, errorCode, 20);
+  if (!/^MHRC-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}$/u.test(code)) {
+    throw new IdentityApiError({ code: errorCode });
+  }
+  return code;
 }
 
 function requireExactKeys(value, allowed, label) {

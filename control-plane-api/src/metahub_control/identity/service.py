@@ -300,8 +300,7 @@ def list_global_sessions(
         )
         rows = connection.execute(
             """
-            SELECT session_id,device_family,created_at,
-                   COALESCE(last_seen_at,created_at) last_seen_at,expires_at
+            SELECT *
             FROM global_sessions
             WHERE account_id=? AND status='active' AND expires_at>? AND idle_expires_at>?
             ORDER BY CASE WHEN session_id=? THEN 0 ELSE 1 END,created_at DESC,session_id
@@ -361,20 +360,32 @@ def revoke_global_session(
         if target is None or target["account_id"] != identity.account_id:
             raise ApiError("identity.session_not_found")
         if target["status"] == "active":
-            connection.execute(
-                """
-                UPDATE global_sessions
-                SET status='revoked',revoked_at=?,revoked_reason=?,updated_at=?
-                WHERE session_id=? AND account_id=? AND status='active'
-                """,
-                (
-                    _db_time(now),
-                    reason,
-                    _db_time(now),
-                    target_session_id,
-                    identity.account_id,
-                ),
-            )
+            if _column_exists(connection, "global_sessions", "revoke_generation"):
+                connection.execute(
+                    """UPDATE global_sessions SET status='revoked',revoked_at=?,
+                         revoked_reason=?,revoke_generation=revoke_generation+1,updated_at=?
+                       WHERE session_id=? AND account_id=? AND status='active'""",
+                    (
+                        _db_time(now),
+                        reason,
+                        _db_time(now),
+                        target_session_id,
+                        identity.account_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """UPDATE global_sessions
+                          SET status='revoked',revoked_at=?,revoked_reason=?,updated_at=?
+                        WHERE session_id=? AND account_id=? AND status='active'""",
+                    (
+                        _db_time(now),
+                        reason,
+                        _db_time(now),
+                        target_session_id,
+                        identity.account_id,
+                    ),
+                )
             _write_event(
                 connection,
                 account_id=identity.account_id,
@@ -386,6 +397,22 @@ def revoke_global_session(
                 payload={"schema_version": 1, "reason_code": reason},
                 now=now,
             )
+            if _table_exists(connection, "identity_security_events"):
+                from .security_service import _write_security_event
+
+                _write_security_event(
+                    connection,
+                    account_id=identity.account_id,
+                    actor_account_id=identity.account_id,
+                    event_type="identity.session_revoked",
+                    subject_type="session",
+                    subject_id=target_session_id,
+                    reason_code=reason,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    payload={"schema_version": 1, "reason_code": reason},
+                    now=now,
+                )
         connection.commit()
         return identity, target_session_id == identity.session_id
     except ApiError as exc:
@@ -1034,7 +1061,20 @@ def _mfa_configured(
     ).fetchone() is not None
 
 
+def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM pragma_table_info(?) WHERE name=?", (table, column)
+    ).fetchone() is not None
+
+
 def _session_summary(row: sqlite3.Row, *, current_session_id: str) -> GlobalSessionSummary:
+    columns = set(row.keys())
     return GlobalSessionSummary(
         session_id=row["session_id"],
         device_family=row["device_family"],
@@ -1042,6 +1082,10 @@ def _session_summary(row: sqlite3.Row, *, current_session_id: str) -> GlobalSess
         last_seen_at=_parse_time(row["last_seen_at"] or row["created_at"]),
         expires_at=_parse_time(row["expires_at"]),
         is_current=row["session_id"] == current_session_id,
+        assurance_level=(row["assurance_level"] if "assurance_level" in columns else "password"),
+        auth_method=(row["auth_method"] if "auth_method" in columns else "password"),
+        trusted_device_id=(row["trusted_device_id"] if "trusted_device_id" in columns else None),
+        revoke_generation=(row["revoke_generation"] if "revoke_generation" in columns else 1),
     )
 
 

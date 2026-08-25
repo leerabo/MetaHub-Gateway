@@ -69,6 +69,17 @@ def begin_totp_enrollment(
         ).fetchone()
         if credential is None or not verify_password(current_password, credential["secret_hash"]):
             raise ApiError("identity.reauthentication_failed")
+        if (
+            _column_exists(connection, "global_sessions", "assurance_level")
+            and identity.current_session.assurance_level != "mfa"
+            and connection.execute(
+                """SELECT 1 FROM account_mfa_factors
+                     WHERE account_id=? AND status='active' LIMIT 1""",
+                (identity.account_id,),
+            ).fetchone()
+            is not None
+        ):
+            raise ApiError("identity.mfa_required")
         connection.execute(
             """
             UPDATE account_mfa_factors
@@ -101,6 +112,16 @@ def begin_totp_enrollment(
             object_type="mfa_factor",
             object_id=factor_id,
             reason="user_requested",
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
+        _write_prd116_event_if_available(
+            connection,
+            account_id=identity.account_id,
+            factor_id=factor_id,
+            reason="totp_enrollment_started",
+            status="pending",
             request_id=request_id,
             trace_id=trace_id,
             now=now,
@@ -185,6 +206,13 @@ def verify_totp_enrollment(
             """,
             (counter, _db_time(now), _db_time(now), factor_id, identity.account_id),
         )
+        if _column_exists(connection, "global_sessions", "assurance_level"):
+            connection.execute(
+                """UPDATE global_sessions
+                      SET assurance_level='mfa',auth_method='totp',updated_at=?
+                    WHERE session_id=? AND account_id=? AND status='active'""",
+                (_db_time(now), identity.session_id, identity.account_id),
+            )
         _clear_failures(connection, identity.account_id, factor_id)
         _audit(
             connection,
@@ -194,6 +222,16 @@ def verify_totp_enrollment(
             object_type="mfa_factor",
             object_id=factor_id,
             reason="totp_verified",
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
+        _write_prd116_event_if_available(
+            connection,
+            account_id=identity.account_id,
+            factor_id=factor_id,
+            reason="totp_activated",
+            status="active",
             request_id=request_id,
             trace_id=trace_id,
             now=now,
@@ -226,7 +264,8 @@ def consume_active_totp_in_transaction(
 
     _require_capability(connection)
     row = connection.execute(
-        "SELECT * FROM account_mfa_factors WHERE account_id=? AND status='active'",
+        """SELECT * FROM account_mfa_factors
+             WHERE account_id=? AND factor_type='totp' AND status='active'""",
         (account_id,),
     ).fetchone()
     if row is None:
@@ -320,6 +359,45 @@ def _require_capability(connection: sqlite3.Connection) -> None:
         is None
     ):
         raise ApiError("identity.mfa_unavailable")
+
+
+def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM pragma_table_info(?) WHERE name=?",
+        (table, column),
+    ).fetchone() is not None
+
+
+def _write_prd116_event_if_available(
+    connection: sqlite3.Connection,
+    *,
+    account_id: str,
+    factor_id: str,
+    reason: str,
+    status: str,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> None:
+    if connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='identity_security_events'"
+    ).fetchone() is None:
+        return
+    from .security_service import _write_security_event
+
+    _write_security_event(
+        connection,
+        account_id=account_id,
+        actor_account_id=account_id,
+        event_type="identity.mfa_changed",
+        subject_type="factor",
+        subject_id=factor_id,
+        reason_code=reason,
+        request_id=request_id,
+        trace_id=trace_id,
+        payload={"schema_version": 1, "factor_type": "totp", "status": status},
+        now=now,
+    )
 
 
 def _audit(

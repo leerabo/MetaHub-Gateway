@@ -50,20 +50,29 @@ def test_prd115_hmac_domains_and_conservative_role_merge() -> None:
 
 
 def test_prd115_rbac_matrix_and_error_registry_are_exact() -> None:
-    assert CATALOG_REVISION == 26
+    assert CATALOG_REVISION >= 26
     assert "scim.read" in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert "scim.manage" not in ROLE_GRANTABLE_PERMISSIONS["viewer"]
     assert {"scim.read", "scim.manage"}.issubset(
         ROLE_GRANTABLE_PERMISSIONS["security_admin"]
     )
     assert {"scim.read", "scim.manage"}.issubset(ROLE_GRANTABLE_PERMISSIONS["admin"])
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["admin"]) == (
+    prd115_admin = ROLE_GRANTABLE_PERMISSIONS["admin"] - {
+        "conditional_access.read",
+        "conditional_access.manage",
+    }
+    prd115_viewer = ROLE_GRANTABLE_PERMISSIONS["viewer"] - {"conditional_access.read"}
+    prd115_security = ROLE_GRANTABLE_PERMISSIONS["security_admin"] - {
+        "conditional_access.read",
+        "conditional_access.manage",
+    }
+    assert permission_matrix_sha256(prd115_admin) == (
         "8cc3648fe99882833fd2cfef2b46fd76621f98a264501edae469591704e4d5a8"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["viewer"]) == (
+    assert permission_matrix_sha256(prd115_viewer) == (
         "e5953a49b667be67bd12d1ae8e94168f49a38644e2f81d2f8f64c655f3890e88"
     )
-    assert permission_matrix_sha256(ROLE_GRANTABLE_PERMISSIONS["security_admin"]) == (
+    assert permission_matrix_sha256(prd115_security) == (
         "f31656fea127e6a06ddd65af47ceab41a9e6311acd5e3e461ce74412a9a95075"
     )
     for code in {

@@ -143,6 +143,7 @@ app = create_service_app(
         "Idempotency-Key",
         "X-CSRF-Token",
         "X-MetaHub-Invoice-Download-Token",
+        "X-Step-Up-Grant",
     ),
     cors_allow_credentials=True,
     extra_cors_expose_headers=(

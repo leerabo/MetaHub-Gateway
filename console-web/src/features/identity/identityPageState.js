@@ -95,6 +95,15 @@ export function createIdentityPageController({
   let riskChallenge = null;
   let riskChallengeIntent = null;
   let mfaEnrollment = null;
+  let mfaEnrollmentMethod = "totp";
+  let identitySecurity = null;
+  let identitySecurityBusy = false;
+  let identitySecurityError = null;
+  let recoveryCodes = null;
+  let factorDisableIndex = null;
+  let conditionalAccess = null;
+  let conditionalAccessBusy = false;
+  let conditionalAccessError = null;
   let platformAccess = false;
   let pendingWrite = Promise.resolve();
   let contextGeneration = 0;
@@ -437,22 +446,79 @@ export function createIdentityPageController({
         return false;
       }
     },
-    async beginMfaEnrollment({ currentPassword }) {
-      if (typeof api.beginMfa !== "function" || account?.mfa_configured) return false;
+    setMfaEnrollmentMethod(method) {
+      if (!new Set(["totp", "webauthn", "recovery_codes"]).has(method)) return false;
+      mfaEnrollmentMethod = method;
+      mfaEnrollment = null;
+      factorDisableIndex = null;
+      scrubSensitiveInputs();
+      renderSecurity();
+      return true;
+    },
+    async beginMfaEnrollment({ currentPassword, method = mfaEnrollmentMethod }) {
+      const unified = typeof api.createMfa === "function";
+      if ((!unified && typeof api.beginMfa !== "function")
+        || !new Set(["totp", "webauthn", "recovery_codes"]).has(method)
+        || (!unified && method !== "totp")) {
+        return false;
+      }
       const ticket = beginRequest();
       mfaEnrollment = null;
+      recoveryCodes = null;
+      factorDisableIndex = null;
+      identitySecurityBusy = true;
+      identitySecurityError = null;
       scrubSensitiveInputs();
-      renderSecurity({ feedback: "正在创建多重验证密钥…" });
+      renderSecurity({ feedback: method === "recovery_codes" ? "正在生成恢复码…" : "正在准备验证因子…" });
+      let credential = null;
       try {
         const result = await queueWrite(() =>
-          api.beginMfa({ currentPassword, signal: ticket.signal }),
+          unified
+            ? api.createMfa({ method, currentPassword, signal: ticket.signal })
+            : api.beginMfa({ currentPassword, signal: ticket.signal }),
         );
         if (!isCurrent(ticket)) return false;
+        if (method === "webauthn") {
+          if (typeof api.createWebAuthnCredential !== "function"
+            || typeof api.completeWebAuthn !== "function") {
+            throw new IdentityApiError({
+              code: "identity.webauthn_unavailable",
+              message: "当前浏览器无法使用安全密钥。",
+            });
+          }
+          credential = await api.createWebAuthnCredential({
+            publicKeyOptions: result.public_key_options,
+          });
+          if (!isCurrent(ticket)) return false;
+          await queueWrite(() => api.completeWebAuthn({
+            challengeId: result.challenge_id,
+            credential,
+            signal: ticket.signal,
+          }));
+          credential = null;
+          if (!isCurrent(ticket)) return false;
+          identitySecurityBusy = false;
+          return loadProtectedState("安全密钥已启用。", ticket);
+        }
+        if (method === "recovery_codes") {
+          recoveryCodes = Array.isArray(result.recovery_codes)
+            ? [...result.recovery_codes]
+            : null;
+          identitySecurityBusy = false;
+          await loadIdentitySecurity(ticket, "", null, { continueLoad: false });
+          if (!isCurrent(ticket)) return false;
+          renderSecurity({ feedback: "恢复码已重新生成。" });
+          return Boolean(recoveryCodes);
+        }
         mfaEnrollment = result;
-        renderSecurity({ feedback: "多重验证密钥已创建。" });
+        identitySecurityBusy = false;
+        renderSecurity({ feedback: "动态验证密钥已创建。" });
         return true;
       } catch (error) {
+        credential = null;
         if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
         renderSecurity({ error: safePageError(error) });
         return false;
       }
@@ -472,6 +538,193 @@ export function createIdentityPageController({
       } catch (error) {
         if (!isCurrent(ticket) || isAbort(error)) return false;
         renderSecurity({ error: safePageError(error) });
+        return false;
+      }
+    },
+    closeRecoveryCodes() {
+      recoveryCodes = null;
+      scrubSensitiveInputs();
+      renderSecurity();
+      return true;
+    },
+    async beginAccountRecovery({ currentPassword, confirmed }) {
+      const hasActiveFactor = identitySecurity?.factors?.some(
+        (factor) => factor.status === "active",
+      );
+      const hasRecoveryCodes = identitySecurity?.recovery_code_set?.status === "active"
+        && identitySecurity.recovery_code_set.remaining_count > 0;
+      if (typeof api.beginRecovery !== "function" || !hasActiveFactor || !hasRecoveryCodes) {
+        scrubSensitiveInputs();
+        return false;
+      }
+      if (confirmed !== true) {
+        scrubSensitiveInputs();
+        renderSecurity({
+          error: { message: "开始受控恢复前必须确认会话与验证因子将被撤销。", requestId: "-" },
+        });
+        return false;
+      }
+      const ticket = beginRequest();
+      identitySecurityBusy = true;
+      identitySecurityError = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在创建受控恢复挑战…" });
+      try {
+        await queueWrite(() => api.beginRecovery({
+          currentPassword,
+          signal: ticket.signal,
+        }));
+        currentPassword = "";
+        if (!isCurrent(ticket)) return false;
+        identitySecurityBusy = false;
+        await loadIdentitySecurity(ticket, "", null, { continueLoad: false });
+        if (!isCurrent(ticket)) return false;
+        renderSecurity({ feedback: "恢复挑战已创建。" });
+        return true;
+      } catch (error) {
+        currentPassword = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
+        renderSecurity({ error: identitySecurityError });
+        return false;
+      }
+    },
+    async completeAccountRecovery(input = {}) {
+      const challenge = identitySecurity?.recovery_challenge;
+      if (typeof api.completeRecovery !== "function" || !challenge) {
+        scrubSensitiveInputs();
+        input.notificationCode = "";
+        input.recoveryCode = "";
+        return false;
+      }
+      if (input.confirmed !== true) {
+        scrubSensitiveInputs();
+        input.notificationCode = "";
+        input.recoveryCode = "";
+        renderSecurity({
+          error: { message: "完成恢复前必须确认撤销现有身份安全状态。", requestId: "-" },
+        });
+        return false;
+      }
+      const ticket = beginRequest();
+      identitySecurityBusy = true;
+      identitySecurityError = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在验证受控恢复证明…" });
+      try {
+        await queueWrite(() => api.completeRecovery({
+          challengeId: challenge.challenge_id,
+          notificationCode: input.notificationCode,
+          recoveryCode: input.recoveryCode,
+          signal: ticket.signal,
+        }));
+        input.notificationCode = "";
+        input.recoveryCode = "";
+        if (!isCurrent(ticket)) return false;
+        identitySecurityBusy = false;
+        mfaEnrollment = null;
+        recoveryCodes = null;
+        factorDisableIndex = null;
+        scrubWorkspaceScope();
+        broadcastContextInvalidation();
+        return loadProtectedState("账号已进入受控恢复状态，请重新登记验证因子。", ticket);
+      } catch (error) {
+        input.notificationCode = "";
+        input.recoveryCode = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
+        renderSecurity({ error: identitySecurityError });
+        return false;
+      }
+    },
+    selectFactorDisable(index) {
+      const factor = identitySecurity?.factors?.[Number(index)];
+      if (!factor || factor.status !== "active") return false;
+      factorDisableIndex = Number(index);
+      scrubSensitiveInputs();
+      renderSecurity();
+      return true;
+    },
+    cancelFactorDisable() {
+      factorDisableIndex = null;
+      scrubSensitiveInputs();
+      renderSecurity();
+      return true;
+    },
+    async disableMfaFactor({ currentPassword }) {
+      const factor = identitySecurity?.factors?.[Number(factorDisableIndex)];
+      if (!factor || factor.status !== "active" || typeof api.disableMfa !== "function") {
+        scrubSensitiveInputs();
+        return false;
+      }
+      const ticket = beginRequest();
+      const factorId = factor.factor_id;
+      factorDisableIndex = null;
+      identitySecurityBusy = true;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在停用验证因子…" });
+      try {
+        await queueWrite(() => api.disableMfa({
+          factorId,
+          currentPassword,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        identitySecurityBusy = false;
+        broadcastContextInvalidation();
+        return loadProtectedState("验证因子已停用，现有会话保证级别已重新校验。", ticket);
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
+        renderSecurity({ error: identitySecurityError });
+        return false;
+      }
+    },
+    async trustCurrentDevice({ label, totpCode }) {
+      if (typeof api.trustDevice !== "function") return false;
+      const ticket = beginRequest();
+      identitySecurityBusy = true;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在验证当前设备…" });
+      try {
+        await queueWrite(() => api.trustDevice({ label, totpCode, signal: ticket.signal }));
+        if (!isCurrent(ticket)) return false;
+        identitySecurityBusy = false;
+        return loadProtectedState("当前设备已设为受信设备。", ticket);
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
+        renderSecurity({ error: identitySecurityError });
+        return false;
+      }
+    },
+    async revokeTrustedDevice(index) {
+      const device = identitySecurity?.trusted_devices?.[Number(index)];
+      if (!device || device.status !== "active" || typeof api.revokeTrustedDevice !== "function") {
+        return false;
+      }
+      if (!confirmAction("确认撤销这台设备的信任状态？")) return false;
+      const ticket = beginRequest();
+      identitySecurityBusy = true;
+      renderSecurity({ feedback: "正在撤销设备信任…" });
+      try {
+        await queueWrite(() => api.revokeTrustedDevice({
+          trustedDeviceId: device.trusted_device_id,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        identitySecurityBusy = false;
+        broadcastContextInvalidation();
+        return loadProtectedState("设备信任已撤销。", ticket);
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        identitySecurityBusy = false;
+        identitySecurityError = safePageError(error);
+        renderSecurity({ error: identitySecurityError });
         return false;
       }
     },
@@ -868,6 +1121,171 @@ export function createIdentityPageController({
       scimBearerToken = null;
       renderSecurity();
       return true;
+    },
+    async refreshConditionalAccess() {
+      if (!workspaceConditionalReadAllowed() || typeof api.conditionalAccess !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      conditionalAccessBusy = true;
+      conditionalAccessError = null;
+      renderSecurity();
+      return loadConditionalAccess(ticket, "条件访问策略已刷新。");
+    },
+    async simulateConditionalAccess() {
+      if (!workspaceConditionalManageAllowed()
+        || conditionalAccessBusy
+        || typeof api.simulateConditionalAccess !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      conditionalAccessBusy = true;
+      conditionalAccessError = null;
+      renderSecurity({ feedback: "正在评估当前策略影响…" });
+      try {
+        const result = await queueWrite(() => api.simulateConditionalAccess({
+          workspaceId: ownerWorkspaceId,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        conditionalAccess = {
+          policy: result.policy,
+          latest_simulation: result.simulation,
+        };
+        conditionalAccessBusy = false;
+        conditionalAccessError = null;
+        renderSecurity({
+          feedback: result.simulation.owner_ready
+            ? "策略影响评估已完成。"
+            : "策略影响评估完成，但 Owner 恢复路径尚未就绪。",
+        });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        conditionalAccessBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        conditionalAccessError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async saveConditionalAccess(input = {}) {
+      if (!workspaceConditionalManageAllowed()
+        || conditionalAccessBusy
+        || typeof api.stepUp !== "function"
+        || typeof api.switchWorkspace !== "function"
+        || typeof api.updateConditionalAccess !== "function") {
+        scrubSensitiveInputs();
+        return false;
+      }
+      const mode = String(input.mode ?? "");
+      if (!new Set(["audit", "enforced"]).has(mode)
+        || (mode === "enforced" && input.confirmed !== true)) {
+        scrubSensitiveInputs();
+        renderSecurity({
+          error: { message: "启用强制模式前必须确认影响与恢复条件。", requestId: "-" },
+        });
+        return false;
+      }
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      const method = String(input.method ?? "totp");
+      const policy = {
+        expectedRevision: conditionalAccess?.policy?.revision ?? 0,
+        mode,
+        requireMfa: input.requireMfa === true,
+        requireStepUpForHighRisk: input.requireStepUpForHighRisk === true,
+        allowTrustedDevices: input.allowTrustedDevices === true,
+        regionRule: input.regionRule,
+        networkRule: input.networkRule,
+        allowedCidrs: parsePolicyLines(input.allowedCidrs),
+        exceptionMembershipIds: Array.isArray(input.exceptionMembershipIds)
+          ? [...input.exceptionMembershipIds]
+          : [],
+      };
+      const ticket = beginRequest();
+      conditionalAccessBusy = true;
+      conditionalAccessError = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在完成一次性验证并保存策略…" });
+      let credential = null;
+      let grant = "";
+      try {
+        let challengeId;
+        if (method === "webauthn") {
+          if (typeof api.beginWebAuthnStepUp !== "function"
+            || typeof api.getWebAuthnAssertion !== "function") {
+            throw new IdentityApiError({
+              code: "identity.webauthn_unavailable",
+              message: "当前浏览器无法使用安全密钥。",
+            });
+          }
+          const challenge = await api.beginWebAuthnStepUp({ signal: ticket.signal });
+          if (!isCurrent(ticket)) return false;
+          challengeId = challenge.challenge_id;
+          credential = await api.getWebAuthnAssertion({
+            publicKeyOptions: challenge.public_key_options,
+          });
+          if (!isCurrent(ticket)) return false;
+        }
+        const issued = await queueWrite(() => api.stepUp({
+          method,
+          workspaceId: ownerWorkspaceId,
+          actionCode: "conditional_access.manage",
+          resourceType: "conditional_access_policy",
+          resourceId: ownerWorkspaceId,
+          code: input.code,
+          challengeId,
+          credential,
+          signal: ticket.signal,
+        }));
+        credential = null;
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        grant = issued.grant;
+        await queueWrite(() => api.updateConditionalAccess({
+          workspaceId: ownerWorkspaceId,
+          policy,
+          stepUpGrant: grant,
+          signal: ticket.signal,
+        }));
+        grant = "";
+        input.code = "";
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        broadcastContextInvalidation();
+        scrubWorkspaceAuthorization();
+        renderSecurity({ feedback: "策略已保存，正在重新建立空间上下文…" });
+        const sessionResult = await queueWrite(() => api.switchWorkspace({
+          workspaceId: ownerWorkspaceId,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket)) return false;
+        autoSwitchAttempted = true;
+        return loadWorkspaceAuthorization(
+          ticket,
+          sessionResult,
+          mode === "enforced" ? "条件访问强制模式已启用。" : "条件访问审计策略已保存。",
+          null,
+        );
+      } catch (error) {
+        credential = null;
+        grant = "";
+        input.code = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        conditionalAccessBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        conditionalAccessError = safePageError(error);
+        renderSecurity();
+        return false;
+      } finally {
+        credential = null;
+        grant = "";
+        input.code = "";
+        scrubSensitiveInputs();
+      }
     },
     async refreshSubscription() {
       if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
@@ -1707,7 +2125,7 @@ export function createIdentityPageController({
       const list = await api.sessions({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       sessions = normalizeSessions(list.sessions, currentSession);
-      return loadPlatformAccess(ticket, feedback, previousError);
+      return loadIdentitySecurity(ticket, feedback, previousError);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
@@ -1715,7 +2133,47 @@ export function createIdentityPageController({
         return false;
       }
       sessions = currentSession ? [currentSession] : [];
-      return loadPlatformAccess(ticket, feedback, safePageError(error));
+      return loadIdentitySecurity(ticket, feedback, safePageError(error));
+    }
+  }
+
+  async function loadIdentitySecurity(
+    ticket,
+    feedback,
+    previousError,
+    { continueLoad = true } = {},
+  ) {
+    identitySecurityBusy = false;
+    if (typeof api.security !== "function") {
+      identitySecurity = null;
+      identitySecurityError = null;
+      return continueLoad ? loadPlatformAccess(ticket, feedback, previousError) : true;
+    }
+    identitySecurityBusy = true;
+    try {
+      const result = await api.security({ signal: ticket.signal });
+      if (!isCurrent(ticket)) return false;
+      identitySecurity = result;
+      identitySecurityBusy = false;
+      identitySecurityError = null;
+      sessions = normalizeSessions(result.sessions, currentSession);
+      account = {
+        ...account,
+        mfa_configured: result.factors.some((factor) => factor.status === "active"),
+      };
+      return continueLoad ? loadPlatformAccess(ticket, feedback, previousError) : true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      identitySecurity = null;
+      identitySecurityBusy = false;
+      identitySecurityError = safePageError(error);
+      if (isExpired(error)) {
+        clearToLogin();
+        return false;
+      }
+      return continueLoad
+        ? loadPlatformAccess(ticket, feedback, previousError ?? identitySecurityError)
+        : false;
     }
   }
 
@@ -1803,6 +2261,22 @@ export function createIdentityPageController({
     return Boolean(
       workspaceContext
       && new Set(["owner", "admin", "security_admin"]).has(workspaceContext.role),
+    );
+  }
+
+  function workspaceConditionalReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("conditional_access.read"),
+    );
+  }
+
+  function workspaceConditionalManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("conditional_access.manage"),
     );
   }
 
@@ -1915,6 +2389,37 @@ export function createIdentityPageController({
       scimDirectory = null;
       scimDirectoryBusy = false;
       scimDirectoryError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function loadConditionalAccess(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceConditionalReadAllowed() || typeof api.conditionalAccess !== "function") {
+      conditionalAccess = null;
+      conditionalAccessBusy = false;
+      conditionalAccessError = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    conditionalAccessBusy = true;
+    try {
+      const result = await api.conditionalAccess({
+        workspaceId: workspaceContext.workspace_id,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket)) return false;
+      conditionalAccess = result;
+      conditionalAccessBusy = false;
+      conditionalAccessError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      conditionalAccess = null;
+      conditionalAccessBusy = false;
+      conditionalAccessError = safePageError(error);
       if (render) renderSecurity();
       return false;
     }
@@ -2250,6 +2755,7 @@ export function createIdentityPageController({
       sessionResult === null &&
       workspaceChoices.length === 1 &&
       workspaceChoices[0].role !== "service_account" &&
+      currentSession?.assurance_level !== "recovery" &&
       !autoSwitchAttempted &&
       typeof api.switchWorkspace === "function"
     ) {
@@ -2366,6 +2872,14 @@ export function createIdentityPageController({
       navigationItems = Array.isArray(navigationResult.navigation_items)
         ? navigationResult.navigation_items
         : [];
+      workspaceContext = {
+        ...workspaceContext,
+        permission_codes: Array.isArray(navigationResult.permission_codes)
+          ? [...navigationResult.permission_codes]
+          : [],
+        permission_revision: navigationResult.permission_revision,
+        authorization_fingerprint: navigationResult.authorization_fingerprint,
+      };
       onboardingBusy = false;
       onboardingIntent = null;
       if (onboardingOutcome.error) {
@@ -2383,6 +2897,7 @@ export function createIdentityPageController({
         loadBusinessVerification(ticket, "", { render: false }),
         loadEnterpriseIdentity(ticket, "", { render: false }),
         loadScimDirectory(ticket, "", { render: false }),
+        loadConditionalAccess(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -2513,6 +3028,11 @@ export function createIdentityPageController({
       scimDirectoryBusy,
       scimDirectoryError,
       scimBearerToken,
+      conditionalAccess,
+      conditionalAccessBusy,
+      conditionalAccessError,
+      conditionalAccessVisible: workspaceConditionalReadAllowed(),
+      conditionalAccessCanManage: workspaceConditionalManageAllowed(),
       notificationCenterOpen,
       notificationInbox,
       notificationPreferences,
@@ -2525,6 +3045,12 @@ export function createIdentityPageController({
       invitationResult,
       hasInvitationSecret: Boolean(invitationSecretLink),
       mfaEnrollment,
+      mfaEnrollmentMethod,
+      identitySecurity,
+      identitySecurityBusy,
+      identitySecurityError,
+      recoveryCodes,
+      factorDisableIndex,
       platformAccess,
       feedback: extra.feedback,
       error: extra.error,
@@ -2536,6 +3062,12 @@ export function createIdentityPageController({
     currentSession = null;
     sessions = [];
     mfaEnrollment = null;
+    mfaEnrollmentMethod = "totp";
+    identitySecurity = null;
+    identitySecurityBusy = false;
+    identitySecurityError = null;
+    recoveryCodes = null;
+    factorDisableIndex = null;
     platformAccess = false;
     autoSwitchAttempted = false;
     scrubWorkspaceScope({ clearChoices: true, clearRichWorkspaces: true });
@@ -2592,6 +3124,9 @@ export function createIdentityPageController({
     scimDirectoryError = null;
     scimBearerToken = null;
     scimIntents = new Map();
+    conditionalAccess = null;
+    conditionalAccessBusy = false;
+    conditionalAccessError = null;
     notificationCenterOpen = false;
     notificationInbox = null;
     notificationPreferences = null;
@@ -2718,11 +3253,78 @@ export function createIdentityPageController({
       } else if (form?.matches?.("[data-identity-mfa-enrollment-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
-        await controller.beginMfaEnrollment({ currentPassword: fields.get("currentPassword") });
+        const input = {
+          currentPassword: fields.get("currentPassword"),
+          method: fields.get("method") || mfaEnrollmentMethod,
+        };
+        scrubFormSecrets(form);
+        await controller.beginMfaEnrollment(input);
+        input.currentPassword = "";
       } else if (form?.matches?.("[data-identity-mfa-verification-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
-        await controller.verifyMfaEnrollment({ code: fields.get("code") });
+        const input = { code: fields.get("code") };
+        scrubFormSecrets(form);
+        await controller.verifyMfaEnrollment(input);
+        input.code = "";
+      } else if (form?.matches?.("[data-identity-factor-disable-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = { currentPassword: fields.get("currentPassword") };
+        scrubFormSecrets(form);
+        await controller.disableMfaFactor(input);
+        input.currentPassword = "";
+      } else if (form?.matches?.("[data-identity-recovery-begin-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          currentPassword: fields.get("currentPassword"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubFormSecrets(form);
+        await controller.beginAccountRecovery(input);
+        input.currentPassword = "";
+      } else if (form?.matches?.("[data-identity-recovery-complete-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          notificationCode: fields.get("notificationCode"),
+          recoveryCode: fields.get("recoveryCode"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubFormSecrets(form);
+        await controller.completeAccountRecovery(input);
+        input.notificationCode = "";
+        input.recoveryCode = "";
+      } else if (form?.matches?.("[data-identity-trusted-device-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          label: fields.get("label"),
+          totpCode: fields.get("totpCode"),
+        };
+        scrubFormSecrets(form);
+        await controller.trustCurrentDevice(input);
+        input.totpCode = "";
+      } else if (form?.matches?.("[data-conditional-access-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          mode: fields.get("mode"),
+          requireMfa: fields.get("requireMfa") === "on",
+          requireStepUpForHighRisk: fields.get("requireStepUpForHighRisk") === "on",
+          allowTrustedDevices: fields.get("allowTrustedDevices") === "on",
+          regionRule: fields.get("regionRule"),
+          networkRule: fields.get("networkRule"),
+          allowedCidrs: fields.get("allowedCidrs"),
+          exceptionMembershipIds: fields.getAll("exceptionMembershipIds"),
+          method: fields.get("stepUpMethod"),
+          code: fields.get("stepUpCode"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubFormSecrets(form);
+        await controller.saveConditionalAccess(input);
+        input.code = "";
       } else if (form?.matches?.("[data-workspace-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -2894,6 +3496,20 @@ export function createIdentityPageController({
         await controller.logout();
       } else if (button.dataset.identityAction === "revoke-session") {
         await controller.revokeSession(button.dataset.sessionIndex);
+      } else if (button.dataset.identityAction === "set-mfa-method") {
+        controller.setMfaEnrollmentMethod(button.dataset.mfaMethod);
+      } else if (button.dataset.identityAction === "close-recovery-codes") {
+        controller.closeRecoveryCodes();
+      } else if (button.dataset.identityAction === "select-factor-disable") {
+        controller.selectFactorDisable(button.dataset.factorIndex);
+      } else if (button.dataset.identityAction === "cancel-factor-disable") {
+        controller.cancelFactorDisable();
+      } else if (button.dataset.identityAction === "revoke-trusted-device") {
+        await controller.revokeTrustedDevice(button.dataset.trustedDeviceIndex);
+      } else if (button.dataset.identityAction === "refresh-conditional-access") {
+        await controller.refreshConditionalAccess();
+      } else if (button.dataset.identityAction === "simulate-conditional-access") {
+        await controller.simulateConditionalAccess();
       } else if (button.dataset.identityAction === "show-register") {
         controller.showRegistration();
       } else if (button.dataset.identityAction === "show-reset") {
@@ -3023,6 +3639,14 @@ function scrubBusinessForm(form) {
   }
 }
 
+function scrubFormSecrets(form) {
+  for (const input of form?.querySelectorAll?.(
+    'input[type="password"], input[autocomplete="one-time-code"]',
+  ) ?? []) {
+    input.value = "";
+  }
+}
+
 function scrubEnterpriseConnectionForm(form) {
   for (const name of ["clientSecret", "certificatePem", "jwks"]) {
     for (const input of form?.querySelectorAll?.(`[name="${name}"]`) ?? []) {
@@ -3056,6 +3680,14 @@ function scrubBusinessInput(input) {
       "invoice_title", "tax_number", "address", "phone", "bank_name", "bank_account",
     ]) input.billingProfile[key] = null;
   }
+}
+
+function parsePolicyLines(value) {
+  const entries = String(value ?? "")
+    .split(/[\r\n,]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...new Set(entries)];
 }
 
 function normalizeSessions(list, currentSession) {

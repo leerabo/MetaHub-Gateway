@@ -1,17 +1,29 @@
 // 账号安全入口只装配分域 Cookie API；企业资料和一次性证明不得进入全局或浏览器存储。
 import {
+  beginIdentityAccountRecovery,
   beginIdentityTotpEnrollment,
+  beginIdentityWebAuthnStepUp,
+  completeIdentityAccountRecovery,
+  completeIdentityWebAuthnRegistration,
   confirmIdentityPasswordReset,
+  createIdentityMfaEnrollment,
+  createIdentityStepUpGrant,
+  createWebAuthnCredential,
+  disableIdentityMfaEnrollment,
   getIdentityMe,
   getIdentityPlatformAccess,
+  getIdentitySecurity,
+  getWebAuthnAssertion,
   listIdentitySessions,
   loginIdentity,
   logoutIdentity,
   registerIdentity,
   requestIdentityPasswordReset,
   resendIdentityVerification,
+  revokeIdentityTrustedDevice,
   revokeIdentitySession,
   rotateIdentityPassword,
+  trustIdentityDevice,
   verifyIdentityTotpEnrollment,
   verifyIdentityRegistration,
 } from "../../lib/identity.js";
@@ -80,6 +92,11 @@ import {
   rotateScimToken,
   upsertScimRoleMapping,
 } from "../../lib/scimDirectory.js";
+import {
+  getWorkspaceConditionalAccess,
+  simulateWorkspaceConditionalAccess,
+  updateWorkspaceConditionalAccess,
+} from "../../lib/conditionalAccess.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -103,7 +120,22 @@ if (root) {
       requestReset: (input) => requestIdentityPasswordReset({ controlApiUrl, ...input }),
       confirmReset: (input) => confirmIdentityPasswordReset({ controlApiUrl, ...input }),
       beginMfa: (input) => beginIdentityTotpEnrollment({ controlApiUrl, ...input }),
+      createMfa: (input) => createIdentityMfaEnrollment({ controlApiUrl, ...input }),
       verifyMfa: (input) => verifyIdentityTotpEnrollment({ controlApiUrl, ...input }),
+      completeWebAuthn: (input) => completeIdentityWebAuthnRegistration({
+        controlApiUrl,
+        ...input,
+      }),
+      beginRecovery: (input) => beginIdentityAccountRecovery({ controlApiUrl, ...input }),
+      completeRecovery: (input) => completeIdentityAccountRecovery({ controlApiUrl, ...input }),
+      createWebAuthnCredential: (input) => createWebAuthnCredential(input.publicKeyOptions),
+      beginWebAuthnStepUp: (input) => beginIdentityWebAuthnStepUp({ controlApiUrl, ...input }),
+      getWebAuthnAssertion: (input) => getWebAuthnAssertion(input.publicKeyOptions),
+      disableMfa: (input) => disableIdentityMfaEnrollment({ controlApiUrl, ...input }),
+      security: (input) => getIdentitySecurity({ controlApiUrl, ...input }),
+      trustDevice: (input) => trustIdentityDevice({ controlApiUrl, ...input }),
+      revokeTrustedDevice: (input) => revokeIdentityTrustedDevice({ controlApiUrl, ...input }),
+      stepUp: (input) => createIdentityStepUpGrant({ controlApiUrl, ...input }),
       me: (input) => getIdentityMe({ controlApiUrl, ...input }),
       platformAccess: (input) => getIdentityPlatformAccess({ controlApiUrl, ...input }),
       sessions: (input) => listIdentitySessions({ controlApiUrl, ...input }),
@@ -192,12 +224,22 @@ if (root) {
       rotateScimToken: (input) => rotateScimToken({ controlApiUrl, ...input }),
       upsertScimRoleMapping: (input) => upsertScimRoleMapping({ controlApiUrl, ...input }),
       resolveScimConflict: (input) => resolveScimConflict({ controlApiUrl, ...input }),
+      conditionalAccess: (input) => getWorkspaceConditionalAccess({ controlApiUrl, ...input }),
+      simulateConditionalAccess: (input) => simulateWorkspaceConditionalAccess({
+        controlApiUrl,
+        ...input,
+      }),
+      updateConditionalAccess: (input) => updateWorkspaceConditionalAccess({
+        controlApiUrl,
+        ...input,
+      }),
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
   controller.mount().then(() => {
     if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
   });
+  globalThis.window.addEventListener("pagehide", () => controller.destroy(), { once: true });
 }
 
 function consumeRiskChallengeLocation(windowObject) {

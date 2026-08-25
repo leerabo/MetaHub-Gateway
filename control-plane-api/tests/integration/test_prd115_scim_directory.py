@@ -24,7 +24,6 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 ORIGIN = "http://localhost:5173"
 GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 SCIM_CONTENT = "application/scim+json"
-NOW = datetime.now(UTC).replace(microsecond=0)
 VERIFIED_MEMBER_EMAIL = "verified.directory.member@example.com"
 SEED_PATH = Path(__file__).resolve().parents[3] / "infra" / "seeds" / "default_seed.json"
 
@@ -38,7 +37,7 @@ def _local_seed_admin() -> tuple[str, str]:
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd115-api-migrated") / "scim-current.sqlite3"
-    assert apply_migrations(f"sqlite:///{database.as_posix()}").applied[-1] == "0107"
+    assert apply_migrations(f"sqlite:///{database.as_posix()}").applied[-1] == "0108"
     return database
 
 
@@ -47,6 +46,7 @@ def _prepare(
     tmp_path: Path,
     migrated_database: Path,
 ):
+    now = datetime.now(UTC).replace(microsecond=0)
     _, admin_password = _local_seed_admin()
     owner_email = f"owner-{secrets.token_hex(8)}@example.com"
     database = tmp_path / "scim.sqlite3"
@@ -82,7 +82,7 @@ def _prepare(
             (owner_email,),
         )
         connection.commit()
-    monkeypatch.setattr(scim_service, "_utcnow", lambda: NOW)
+    monkeypatch.setattr(scim_service, "_utcnow", lambda: now)
     app = create_service_app(
         "control-plane-api",
         "PRD-115 SCIM Directory Test",
@@ -164,7 +164,7 @@ def _install_verified_domain(database_url: str, workspace_id: str) -> None:
             (workspace_id,),
         ).fetchone()
         assert owner is not None
-        stamp = NOW.isoformat().replace("+00:00", "Z")
+        stamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         connection.execute(
             """INSERT INTO verified_domains(
                  verified_domain_id,workspace_id,tenant_id,domain_normalized,domain_hmac,
