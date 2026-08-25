@@ -47,6 +47,7 @@ from .developer_portal.routes import router as developer_portal_router
 from .disaster_recovery import router as disaster_recovery_router
 from .dlp.routes import router as dlp_router
 from .enterprise_chat.routes import router as enterprise_chat_router
+from .enterprise_identity import router as enterprise_identity_router
 from .environments.routes import router as environments_router
 from .error_maps import install_provider_error_map_scheduler
 from .error_maps import router as error_maps_router
@@ -197,6 +198,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/memberships",
             "/membership-invitations",
             "/workspace-owner-transfers",
+            "/identity/login-discovery",
+            "/identity/sso/callback",
         }
         or request.url.path.startswith("/memberships/")
         or request.url.path == "/platform/bootstrap"
@@ -215,6 +218,9 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             request.url.path.endswith("/business-verification")
             or request.url.path.endswith("/business-verifications")
             or request.url.path.endswith("/billing-profile")
+            or "/domains" in request.url.path
+            or "/sso" in request.url.path
+            or request.url.path.endswith("/enterprise-identity")
         )
         or request.url.path == "/workspaces/current/onboarding"
         or request.url.path.startswith("/workspaces/current/onboarding/")
@@ -248,6 +254,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(identity_router)
+app.include_router(enterprise_identity_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)

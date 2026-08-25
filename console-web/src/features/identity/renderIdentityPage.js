@@ -232,6 +232,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderMfaSection(state)}
         ${renderWorkspaceSection(state)}
         ${renderMembershipSection(state)}
+        ${renderEnterpriseIdentitySection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
@@ -1112,6 +1113,232 @@ function onboardingBlockingLabel(code) {
     evidence_changed: "已验证配置发生变化",
     legacy_configuration: "历史配置需要重新验证",
   }[code] ?? "无阻塞项";
+}
+
+function renderEnterpriseIdentitySection(state) {
+  const context = state.workspaceContext ?? null;
+  if (!context || !new Set(["owner", "security_admin", "auditor"]).has(context.role)) return "";
+  const summary = state.enterpriseIdentity ?? null;
+  const domains = Array.isArray(summary?.domains) ? summary.domains : [];
+  const connections = Array.isArray(summary?.connections) ? summary.connections : [];
+  const candidates = Array.isArray(summary?.break_glass_candidates)
+    ? summary.break_glass_candidates
+    : [];
+  const policy = summary?.policy ?? null;
+  const canManage = new Set(["owner", "security_admin"]).has(context.role);
+  const busy = state.enterpriseIdentityBusy === true;
+  const verifiedDomains = domains.filter((domain) => domain.status === "verified");
+  const activeConnections = connections.filter((connection) => connection.status === "active");
+  const readyCandidates = candidates.filter(
+    (candidate) => candidate.password_configured && candidate.mfa_configured,
+  );
+  return `
+    <section
+      class="identity-enterprise"
+      aria-labelledby="identity-enterprise-title"
+      aria-busy="${busy}"
+    >
+      <div class="identity-section-heading identity-enterprise-heading">
+        <div>
+          <p>Enterprise SSO</p>
+          <h2 id="identity-enterprise-title">企业身份</h2>
+        </div>
+        <button
+          class="identity-icon-command"
+          type="button"
+          data-identity-action="refresh-enterprise-identity"
+          title="刷新企业身份状态"
+          aria-label="刷新企业身份状态"
+          ${busy ? "disabled" : ""}
+        >&#8635;</button>
+      </div>
+      ${state.enterpriseIdentityError ? renderError(state.enterpriseIdentityError) : ""}
+      ${summary ? `
+        <dl class="identity-enterprise-summary">
+          <div><dt>已验证域名</dt><dd>${verifiedDomains.length}</dd></div>
+          <div><dt>活动连接</dt><dd>${activeConnections.length}</dd></div>
+          <div><dt>访问策略</dt><dd>${policy?.mode === "enforced" ? "强制 SSO" : "可选"}</dd></div>
+          <div><dt>恢复入口</dt><dd>${policy?.break_glass_configured ? "已配置" : "未配置"}</dd></div>
+        </dl>
+        ${renderEnterpriseDomains(domains, state, canManage, busy)}
+        ${renderEnterpriseConnections(connections, canManage, busy)}
+        ${canManage ? renderEnterpriseManagement(
+          state,
+          verifiedDomains,
+          activeConnections,
+          candidates,
+          readyCandidates,
+          busy,
+        ) : ""}
+      ` : '<p class="identity-empty">企业身份状态暂时不可用。</p>'}
+    </section>
+  `;
+}
+
+function renderEnterpriseDomains(domains, state, canManage, busy) {
+  const verification = state.enterpriseVerificationRecord ?? null;
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Domain control</span><h3>企业域名</h3></div>
+        <span>${domains.length} 个</span>
+      </div>
+      ${verification ? `
+        <div class="identity-dns-record" role="status">
+          <div><span>DNS TXT</span><strong>${escapeHtml(verification.domain)}</strong></div>
+          <code>${escapeHtml(verification.value)}</code>
+        </div>
+      ` : ""}
+      <div class="identity-enterprise-list">
+        ${domains.length > 0 ? domains.map((domain, index) => `
+          <div class="identity-enterprise-row">
+            <div class="identity-enterprise-primary">
+              <strong>${escapeHtml(domain.domain)}</strong>
+              <span>${domain.status === "verified"
+                ? `验证于 ${escapeHtml(formatDateTime(domain.verified_at))}`
+                : `验证记录有效至 ${escapeHtml(formatDateTime(domain.challenge_expires_at))}`}</span>
+            </div>
+            <span class="identity-enterprise-state is-${escapeAttribute(domain.status)}">
+              ${escapeHtml(enterpriseDomainStatusLabel(domain.status))}
+            </span>
+            ${canManage && domain.status === "pending" ? `
+              <button
+                class="identity-quiet-command"
+                type="button"
+                data-identity-action="verify-enterprise-domain"
+                data-enterprise-domain-index="${index}"
+                ${busy ? "disabled" : ""}
+              >检查 DNS</button>
+            ` : ""}
+          </div>
+        `).join("") : '<p class="identity-empty">尚未添加企业域名。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderEnterpriseConnections(connections, canManage, busy) {
+  return `
+    <div class="identity-enterprise-block">
+      <div class="identity-enterprise-subheading">
+        <div><span>Federation</span><h3>SSO 连接与证书窗口</h3></div>
+        <span>${connections.length} 个</span>
+      </div>
+      <div class="identity-enterprise-list">
+        ${connections.length > 0 ? connections.map((connection, index) => `
+          <div class="identity-enterprise-connection">
+            <div class="identity-enterprise-connection-heading">
+              <div class="identity-enterprise-primary">
+                <strong>${escapeHtml(connection.display_name)}</strong>
+                <span>${escapeHtml(connection.connection_code)} · ${connection.protocol.toUpperCase()}</span>
+              </div>
+              <span class="identity-enterprise-state is-${escapeAttribute(connection.status)}">
+                ${escapeHtml(enterpriseConnectionStatusLabel(connection.status))}
+              </span>
+              ${canManage && connection.status !== "active" ? `
+                <button
+                  class="identity-quiet-command"
+                  type="button"
+                  data-identity-action="test-enterprise-connection"
+                  data-enterprise-connection-index="${index}"
+                  ${busy ? "disabled" : ""}
+                >运行测试</button>
+              ` : ""}
+            </div>
+            <div class="identity-certificate-list">
+              ${connection.certificates.map((certificate) => `
+                <div>
+                  <span>${certificate.purpose === "oidc_jwk" ? "OIDC signing key" : "SAML certificate"}</span>
+                  <strong>${escapeHtml(enterpriseCertificateStatusLabel(certificate.status))}</strong>
+                  <time datetime="${escapeAttribute(certificate.not_after)}">
+                    至 ${escapeHtml(formatDateTime(certificate.not_after))}
+                  </time>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        `).join("") : '<p class="identity-empty">尚未创建 SSO 连接。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderEnterpriseManagement(
+  state,
+  verifiedDomains,
+  activeConnections,
+  candidates,
+  readyCandidates,
+  busy,
+) {
+  const protocol = state.enterpriseConnectionProtocol === "saml" ? "saml" : "oidc";
+  const policy = state.enterpriseIdentity?.policy ?? null;
+  return `
+    <div class="identity-enterprise-management">
+      <form class="identity-enterprise-domain-form" data-enterprise-domain-form>
+        <div><span>Domain setup</span><h3>添加域名</h3></div>
+        <label><span>域名</span><input name="domain" type="text" maxlength="253" autocomplete="off" required /></label>
+        <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>生成验证记录</button>
+      </form>
+      <div class="identity-enterprise-command">
+        <div class="identity-enterprise-command-heading">
+          <div><span>Connection setup</span><h3>新建 SSO 连接</h3></div>
+          <div class="identity-segmented" role="group" aria-label="SSO 协议">
+            <button type="button" data-identity-action="set-enterprise-protocol" data-enterprise-protocol="oidc" aria-pressed="${protocol === "oidc"}">OIDC</button>
+            <button type="button" data-identity-action="set-enterprise-protocol" data-enterprise-protocol="saml" aria-pressed="${protocol === "saml"}">SAML</button>
+          </div>
+        </div>
+        ${verifiedDomains.length > 0 ? `
+          <form class="identity-enterprise-connection-form" data-enterprise-connection-form>
+            <label><span>已验证域名</span><select name="domainIndex" required>${verifiedDomains.map((domain) => {
+              const index = state.enterpriseIdentity.domains.indexOf(domain);
+              return `<option value="${index}">${escapeHtml(domain.domain)}</option>`;
+            }).join("")}</select></label>
+            <label><span>连接代码</span><input name="connectionCode" type="text" maxlength="64" autocomplete="off" required /></label>
+            <label><span>显示名称</span><input name="displayName" type="text" maxlength="120" autocomplete="off" required /></label>
+            <label class="is-wide"><span>Issuer / Entity ID</span><input name="issuer" type="url" maxlength="512" autocomplete="off" required /></label>
+            ${protocol === "oidc" ? `
+              <label class="is-wide"><span>Authorization endpoint</span><input name="authorizationEndpoint" type="url" maxlength="1024" autocomplete="off" required /></label>
+              <label class="is-wide"><span>Token endpoint</span><input name="tokenEndpoint" type="url" maxlength="1024" autocomplete="off" required /></label>
+              <label><span>Client ID</span><input name="clientId" type="text" maxlength="256" autocomplete="off" required /></label>
+              <label><span>Client secret</span><input name="clientSecret" type="password" minlength="16" maxlength="2048" autocomplete="new-password" required /></label>
+              <label class="is-wide"><span>静态 JWKS</span><textarea name="jwks" maxlength="65536" rows="5" spellcheck="false" required></textarea></label>
+            ` : `
+              <label class="is-wide"><span>SSO URL</span><input name="ssoUrl" type="url" maxlength="1024" autocomplete="off" required /></label>
+              <label class="is-wide"><span>签名证书 PEM</span><textarea name="certificatePem" maxlength="32768" rows="7" spellcheck="false" required></textarea></label>
+            `}
+            <div class="identity-enterprise-form-actions">
+              <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>创建连接</button>
+            </div>
+          </form>
+        ` : '<p class="identity-empty">验证企业域名后可创建连接。</p>'}
+      </div>
+      <form class="identity-enterprise-policy-form" data-enterprise-policy-form>
+        <div><span>Access policy</span><h3>强制策略与恢复</h3></div>
+        <label><span>模式</span><select name="mode"><option value="optional" ${policy?.mode !== "enforced" ? "selected" : ""}>可选</option><option value="enforced" ${policy?.mode === "enforced" ? "selected" : ""}>强制 SSO</option></select></label>
+        <label><span>活动连接</span><select name="connectionIndex"><option value="">未选择</option>${activeConnections.map((connection) => {
+          const index = state.enterpriseIdentity.connections.indexOf(connection);
+          return `<option value="${index}" ${policy?.active_connection_id === connection.sso_connection_id ? "selected" : ""}>${escapeHtml(connection.display_name)}</option>`;
+        }).join("")}</select></label>
+        <label><span>Break-glass Owner</span><select name="candidateIndex"><option value="">未选择</option>${candidates.map((candidate, index) => `<option value="${index}" ${candidate.password_configured && candidate.mfa_configured ? "" : "disabled"}>${escapeHtml(candidate.display_name)} · ${candidate.password_configured && candidate.mfa_configured ? "就绪" : "需密码与 MFA"}</option>`).join("")}</select></label>
+        <button class="identity-primary" type="submit" ${busy || (policy?.mode === "enforced" && readyCandidates.length === 0) ? "disabled" : ""}>保存策略</button>
+      </form>
+    </div>
+  `;
+}
+
+function enterpriseDomainStatusLabel(value) {
+  return ({ pending: "待验证", verified: "已验证", suspended: "已暂停" })[value] ?? "未知";
+}
+
+function enterpriseConnectionStatusLabel(value) {
+  return ({ draft: "草稿", testing: "测试中", active: "活动", disabled: "已停用" })[value]
+    ?? "未知";
+}
+
+function enterpriseCertificateStatusLabel(value) {
+  return ({ staged: "待启用", active: "活动", retired: "宽限期", expired: "已过期" })[value]
+    ?? "未知";
 }
 
 function renderMfaSection(state) {

@@ -237,6 +237,15 @@ def switch_workspace(
         if row is None:
             raise ApiError("workspace.not_found")
         snapshot = _permission_snapshot(connection, row)
+        session_id = _id("wss")
+        enterprise_grant = _recovery_grant_for_switch(
+            connection,
+            global_session_id=identity.session_id,
+            account_id=identity.account_id,
+            workspace_id=row["workspace_id"],
+            tenant_id=row["tenant_id"],
+            now=now,
+        )
         stamp = _db_time(now)
         connection.execute(
             """
@@ -248,11 +257,14 @@ def switch_workspace(
         )
         raw_token = secrets.token_urlsafe(32)
         raw_csrf = secrets.token_urlsafe(32)
-        session_id = _id("wss")
         absolute_expires = min(
             now + timedelta(seconds=config.workspace_session_ttl_seconds),
             identity.current_session.expires_at,
         )
+        if enterprise_grant is not None:
+            absolute_expires = min(
+                absolute_expires, _parse_time(enterprise_grant["expires_at"])
+            )
         connection.execute(
             """
             INSERT INTO workspace_sessions(
@@ -284,6 +296,25 @@ def switch_workspace(
                 stamp,
             ),
         )
+        if enterprise_grant is not None:
+            grant_stamp = _db_time(
+                max(now, _parse_time(enterprise_grant["updated_at"]) + timedelta(seconds=1))
+            )
+            consumed = connection.execute(
+                """UPDATE enterprise_identity_session_grants
+                     SET workspace_session_id=?,status='consumed',revision=2,
+                         consumed_at=?,updated_at=?
+                     WHERE enterprise_identity_session_grant_id=?
+                       AND status='active' AND revision=1""",
+                (
+                    session_id,
+                    grant_stamp,
+                    grant_stamp,
+                    enterprise_grant["enterprise_identity_session_grant_id"],
+                ),
+            ).rowcount
+            if consumed != 1:
+                raise ApiError("sso.login_required")
         _write_event(
             connection,
             workspace_id=row["workspace_id"],
@@ -425,6 +456,96 @@ def authenticate_workspace_session_in_transaction(
         touch=touch,
     )
     return context
+
+
+def issue_federated_workspace_session_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    global_session_id: str,
+    global_expires_at: datetime,
+    account_id: str,
+    workspace_id: str,
+    sso_connection_id: str,
+    now: datetime,
+    request_id: str,
+    trace_id: str,
+) -> tuple[str, str, str]:
+    """Issue a WorkspaceSession after a verified federation callback in the caller transaction."""
+
+    if not connection.in_transaction:
+        raise ApiError("workspace_session.unavailable")
+    row = _switch_target(connection, account_id, workspace_id)
+    if row is None:
+        raise ApiError("sso.login_failed")
+    policy = connection.execute(
+        "SELECT mode,active_connection_id FROM sso_policies WHERE workspace_id=? AND tenant_id=?",
+        (row["workspace_id"], row["tenant_id"]),
+    ).fetchone()
+    if (
+        policy is not None
+        and policy["mode"] == "enforced"
+        and policy["active_connection_id"] != sso_connection_id
+    ):
+        raise ApiError("sso.login_failed")
+    snapshot = _permission_snapshot(connection, row)
+    raw_token = secrets.token_urlsafe(32)
+    raw_csrf = secrets.token_urlsafe(32)
+    session_id = _id("wss")
+    absolute_expires = min(
+        now + timedelta(seconds=config.workspace_session_ttl_seconds),
+        global_expires_at,
+    )
+    stamp = _db_time(now)
+    connection.execute(
+        """
+        INSERT INTO workspace_sessions(
+          workspace_session_id,global_session_id,account_id,workspace_id,tenant_id,
+          membership_id,token_hmac,csrf_hmac,status,membership_revision,
+          workspace_revision,account_session_revision,legacy_permission_revision,
+          matrix_fingerprint,created_at,last_seen_at,absolute_expires_at,
+          idle_expires_at,revoked_at,revoked_reason,updated_at)
+        VALUES(?,?,?,?,?,?,?,?, 'active',?,?,?,?,?,?,?,?,?,NULL,NULL,?)
+        """,
+        (
+            session_id,
+            global_session_id,
+            account_id,
+            row["workspace_id"],
+            row["tenant_id"],
+            row["workspace_membership_id"],
+            _session_hmac(config, "token", raw_token),
+            _session_hmac(config, "csrf", raw_csrf),
+            row["membership_revision"],
+            row["workspace_revision"],
+            row["account_session_revision"],
+            snapshot.permission_revision,
+            snapshot.authorization_fingerprint,
+            stamp,
+            stamp,
+            _db_time(absolute_expires),
+            _db_time(absolute_expires),
+            stamp,
+        ),
+    )
+    _write_event(
+        connection,
+        workspace_id=row["workspace_id"],
+        tenant_id=row["tenant_id"],
+        actor_account_id=account_id,
+        subject_membership_id=row["workspace_membership_id"],
+        event_type="workspace.switched",
+        reason_code="federated_identity",
+        request_id=request_id,
+        trace_id=trace_id,
+        payload={
+            "schema_version": 1,
+            "role_code": row["role_code"],
+            "membership_revision": row["membership_revision"],
+        },
+        now=now,
+    )
+    return raw_token, raw_csrf, session_id
 
 
 def list_memberships(
@@ -1324,6 +1445,75 @@ def _consume_invitation(
     return True
 
 
+def _recovery_grant_for_switch(
+    connection: sqlite3.Connection,
+    *,
+    global_session_id: str,
+    account_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    now: datetime,
+) -> sqlite3.Row | None:
+    if not _table_exists(connection, "enterprise_identity_session_grants"):
+        return None
+    policy = connection.execute(
+        "SELECT * FROM sso_policies WHERE workspace_id=? AND tenant_id=?",
+        (workspace_id, tenant_id),
+    ).fetchone()
+    if policy is None or policy["mode"] != "enforced":
+        return None
+    grant = connection.execute(
+        """SELECT * FROM enterprise_identity_session_grants
+             WHERE global_session_id=? AND workspace_id=? AND tenant_id=? AND account_id=?
+               AND grant_type='recovery' AND status='active'
+               AND reason_code IN('idp_unavailable','identity_recovery')""",
+        (global_session_id, workspace_id, tenant_id, account_id),
+    ).fetchone()
+    if (
+        grant is None
+        or policy["break_glass_account_id"] != account_id
+        or _parse_time(grant["expires_at"]) <= now
+    ):
+        raise ApiError("sso.login_required")
+    return grant
+
+
+def _enterprise_workspace_session_authorized(
+    connection: sqlite3.Connection, row: sqlite3.Row, now: datetime
+) -> bool:
+    if not _table_exists(connection, "enterprise_identity_session_grants"):
+        return True
+    policy = connection.execute(
+        "SELECT * FROM sso_policies WHERE workspace_id=? AND tenant_id=?",
+        (row["workspace_id"], row["tenant_id"]),
+    ).fetchone()
+    if policy is None or policy["mode"] != "enforced":
+        return True
+    grant = connection.execute(
+        """SELECT 1 FROM enterprise_identity_session_grants grant_record
+             WHERE grant_record.workspace_session_id=?
+               AND grant_record.global_session_id=?
+               AND grant_record.workspace_id=? AND grant_record.tenant_id=?
+               AND grant_record.account_id=? AND grant_record.status='consumed'
+               AND grant_record.expires_at>?
+               AND ((grant_record.grant_type='federated'
+                     AND grant_record.sso_connection_id=?)
+                 OR (grant_record.grant_type='recovery'
+                     AND grant_record.account_id=?))""",
+        (
+            row["workspace_session_id"],
+            row["global_session_id"],
+            row["workspace_id"],
+            row["tenant_id"],
+            row["account_id"],
+            _db_time(now),
+            policy["active_connection_id"],
+            policy["break_glass_account_id"],
+        ),
+    ).fetchone()
+    return grant is not None
+
+
 def _authenticate_workspace(
     connection: sqlite3.Connection,
     config: AppConfig,
@@ -1405,6 +1595,7 @@ def _authenticate_workspace(
         )
         raise ApiError("workspace_session.expired")
     expected_legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"])
+    enterprise_authorized = _enterprise_workspace_session_authorized(connection, row, now)
     stale = (
         row["membership_status"] != "active"
         or row["role_code"] == "service_account"
@@ -1424,6 +1615,7 @@ def _authenticate_workspace(
         or row["membership_revision"] != row["current_membership_revision"]
         or row["workspace_revision"] != row["current_workspace_revision"]
         or row["account_session_revision"] != row["current_account_session_revision"]
+        or not enterprise_authorized
     )
     if stale:
         _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")

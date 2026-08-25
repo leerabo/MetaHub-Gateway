@@ -65,7 +65,9 @@ ROLE_CODES: Final[tuple[RoleCode, ...]] = (
 # PRD-088 把全局控制台/登录页白标和伙伴门户白标分开，读写权限不能复用后者。
 # PRD-089 再把租户数据生命周期拆成只读、创建导出、下载和注销四个后端权限；危险命令不能因
 # PAGE-121 可见或角色名称而得到隐式授权。
-CATALOG_REVISION: Final[int] = 24
+# PRD-114 将企业 SSO 安全摘要和管理动作拆成独立权限；Workspace 角色仍需在 API 边界叠加校验，
+# 不能仅凭租户角色或前端页面可见性管理域名、连接和强制登录策略。
+CATALOG_REVISION: Final[int] = 25
 _PERMISSION_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 
 
@@ -172,6 +174,20 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
     ),
     PermissionDefinition(
         "tenant.settings.read", "tenant", "读取租户设置", "读取当前租户的脱敏基础配置。", "read"
+    ),
+    PermissionDefinition(
+        "enterprise_sso.read",
+        "identity",
+        "读取企业 SSO",
+        "读取当前 Workspace 的域名、连接、证书窗口和强制登录安全摘要。",
+        "read",
+    ),
+    PermissionDefinition(
+        "enterprise_sso.manage",
+        "identity",
+        "管理企业 SSO",
+        "创建、测试和维护当前 Workspace 的域名、身份连接与强制登录策略。",
+        "critical",
     ),
     PermissionDefinition(
         "tenant_data.read",
@@ -743,6 +759,7 @@ _VIEWER = {
     "partner_commission.export",
     "partner_delivery.download",
     "branding.read",
+    "enterprise_sso.read",
 }
 _FINANCE = {
     "console.basic.read",
@@ -811,6 +828,8 @@ _SECURITY = {
     "mcp.approve",
     "branding.read",
     "tenant_data.read",
+    "enterprise_sso.read",
+    "enterprise_sso.manage",
 }
 _OPS = {
     "console.basic.read",

@@ -65,6 +65,14 @@ import {
   markWorkspaceNotificationRead,
   updateWorkspaceNotificationPreferences,
 } from "../../lib/notifications.js";
+import {
+  createEnterpriseDomain,
+  createEnterpriseSsoConnection,
+  getEnterpriseIdentitySummary,
+  testEnterpriseSsoConnection,
+  updateEnterpriseSsoPolicy,
+  verifyEnterpriseDomain,
+} from "../../lib/enterpriseIdentity.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -154,6 +162,21 @@ if (root) {
         ...input,
       }),
       updateNotificationPreferences: (input) => updateWorkspaceNotificationPreferences({
+        controlApiUrl,
+        ...input,
+      }),
+      enterpriseIdentity: (input) => getEnterpriseIdentitySummary({ controlApiUrl, ...input }),
+      createEnterpriseDomain: (input) => createEnterpriseDomain({ controlApiUrl, ...input }),
+      verifyEnterpriseDomain: (input) => verifyEnterpriseDomain({ controlApiUrl, ...input }),
+      createEnterpriseSsoConnection: (input) => createEnterpriseSsoConnection({
+        controlApiUrl,
+        ...input,
+      }),
+      testEnterpriseSsoConnection: (input) => testEnterpriseSsoConnection({
+        controlApiUrl,
+        ...input,
+      }),
+      updateEnterpriseSsoPolicy: (input) => updateEnterpriseSsoPolicy({
         controlApiUrl,
         ...input,
       }),

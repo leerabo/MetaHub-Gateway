@@ -57,6 +57,9 @@ def login_global_account(
     *,
     email: str,
     password: str,
+    recovery_workspace_id: str | None = None,
+    totp_code: str | None = None,
+    recovery_reason: str | None = None,
     request_id: str,
     trace_id: str,
     user_agent: str | None,
@@ -96,6 +99,38 @@ def login_global_account(
             _pad_failed_login(started)
             raise ApiError("identity.login_invalid")
 
+        recovery_requested = any(
+            value is not None
+            for value in (recovery_workspace_id, totp_code, recovery_reason)
+        )
+        recovery_target = None
+        if recovery_requested:
+            if (
+                recovery_workspace_id is None
+                or totp_code is None
+                or recovery_reason not in {"idp_unavailable", "identity_recovery"}
+                or re.fullmatch(r"wsp_[0-9a-f]{32}", recovery_workspace_id) is None
+                or re.fullmatch(r"[0-9]{6}", totp_code) is None
+            ):
+                raise ApiError("sso.request_invalid")
+            recovery_target = _recovery_target(
+                connection,
+                account_id=account["account_id"],
+                workspace_id=recovery_workspace_id,
+            )
+            if recovery_target is None:
+                raise ApiError("sso.login_failed")
+            from .mfa_service import consume_active_totp_in_transaction
+
+            consume_active_totp_in_transaction(
+                connection,
+                config,
+                account_id=account["account_id"],
+                code=totp_code,
+                device_fingerprint=f"{user_agent or ''}\x1f{client_host or ''}",
+                now=now,
+            )
+
         if account["algorithm"] == "pbkdf2_sha256_legacy":
             upgraded_hash = hash_password_argon2id(password)
             _replace_credential_hash(connection, account["account_id"], upgraded_hash, now)
@@ -116,7 +151,41 @@ def login_global_account(
             now=now,
             user_agent=user_agent,
             client_host=client_host,
+            ttl_seconds=900 if recovery_target is not None else None,
         )
+        if recovery_target is not None:
+            grant_id = f"esg_{uuid4().hex}"
+            expires_at = min(issued.current_session.expires_at, now + timedelta(minutes=15))
+            connection.execute(
+                """INSERT INTO enterprise_identity_session_grants(
+                     enterprise_identity_session_grant_id,global_session_id,
+                     workspace_session_id,workspace_id,tenant_id,account_id,grant_type,
+                     sso_connection_id,reason_code,status,revision,expires_at,consumed_at,
+                     created_at,updated_at)
+                   VALUES(?,?,NULL,?,?,?,'recovery',NULL,?,'active',1,?,NULL,?,?)""",
+                (
+                    grant_id,
+                    issued.current_session.session_id,
+                    recovery_target["workspace_id"],
+                    recovery_target["tenant_id"],
+                    account["account_id"],
+                    recovery_reason,
+                    _db_time(expires_at),
+                    _db_time(now),
+                    _db_time(now),
+                ),
+            )
+            _write_enterprise_recovery_event(
+                connection,
+                grant_id=grant_id,
+                workspace_id=recovery_target["workspace_id"],
+                tenant_id=recovery_target["tenant_id"],
+                account_id=account["account_id"],
+                reason_code=recovery_reason,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=now,
+            )
         _write_event(
             connection,
             account_id=account["account_id"],
@@ -522,6 +591,84 @@ def _account_by_id(connection: sqlite3.Connection, account_id: str) -> sqlite3.R
     return row
 
 
+def _recovery_target(
+    connection: sqlite3.Connection, *, account_id: str, workspace_id: str
+) -> sqlite3.Row | None:
+    if (
+        connection.execute(
+            """SELECT 1 FROM sqlite_schema
+                 WHERE type='table' AND name='enterprise_identity_session_grants'"""
+        ).fetchone()
+        is None
+    ):
+        return None
+    return connection.execute(
+        """SELECT policy.workspace_id,policy.tenant_id
+             FROM sso_policies policy
+             JOIN sso_connections connection
+               ON connection.sso_connection_id=policy.active_connection_id
+              AND connection.workspace_id=policy.workspace_id
+              AND connection.tenant_id=policy.tenant_id
+             JOIN workspace_memberships member
+               ON member.workspace_id=policy.workspace_id
+              AND member.tenant_id=policy.tenant_id
+              AND member.account_id=policy.break_glass_account_id
+            WHERE policy.workspace_id=? AND policy.mode='enforced'
+              AND policy.break_glass_account_id=?
+              AND connection.status='active' AND connection.tested_at IS NOT NULL
+              AND member.role_code='owner' AND member.status='active'""",
+        (workspace_id, account_id),
+    ).fetchone()
+
+
+def _write_enterprise_recovery_event(
+    connection: sqlite3.Connection,
+    *,
+    grant_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    account_id: str,
+    reason_code: str,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> None:
+    payload_json = json.dumps(
+        {
+            "outcome": "recovery_authenticated",
+            "reason_code": reason_code,
+            "schema_version": 1,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    stamp = _db_time(now)
+    connection.execute(
+        """INSERT INTO enterprise_identity_event_outbox(
+             enterprise_identity_event_id,workspace_id,tenant_id,actor_account_id,
+             event_type,subject_type,subject_id,subject_revision,request_id,trace_id,
+             payload_json,payload_sha256,delivery_status,attempt_count,next_attempt_at,
+             delivered_at,occurred_at,updated_at)
+           VALUES(?,?,?,?,'sso.recovery_used','session_grant',?,1,?,?,?,?,'pending',0,
+             ?,NULL,?,?)""",
+        (
+            f"eie_{uuid4().hex}",
+            workspace_id,
+            tenant_id,
+            account_id,
+            grant_id,
+            request_id,
+            trace_id,
+            payload_json,
+            hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+            stamp,
+            stamp,
+            stamp,
+        ),
+    )
+
+
 def _account_accepts_login(account: sqlite3.Row | None, now: datetime) -> bool:
     if account is None or account["login_enabled"] != 1:
         return False
@@ -623,11 +770,12 @@ def _create_session(
     now: datetime,
     user_agent: str | None,
     client_host: str | None,
+    ttl_seconds: int | None = None,
 ) -> IssuedIdentitySession:
     session_id = f"gss_{uuid4().hex}"
     session_token = secrets.token_urlsafe(32)
     csrf_token = secrets.token_urlsafe(32)
-    expires_at = now + timedelta(seconds=config.session_ttl_seconds)
+    expires_at = now + timedelta(seconds=ttl_seconds or config.session_ttl_seconds)
     device_family = _device_family(user_agent)
     connection.execute(
         """

@@ -179,7 +179,9 @@ export function createPlatformPageController({
       try {
         state.session = await api.session({ signal: ticket.signal });
         if (!current(ticket)) return false;
+        const activeView = state.view;
         clearProtectedFacts();
+        state.view = activeView;
         return reload(ticket);
       } catch (error) {
         if (!current(ticket)) return false;

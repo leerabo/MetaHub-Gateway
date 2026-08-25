@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-096 - 平台租户目录与生命周期运营台` 已完成；当前下一项是
-`PRD-097 - 个人与企业初始化向导重构`。
+`PRD-114 - 企业域名、OIDC/SAML SSO与登录发现` 已完成；当前下一项是
+`PRD-115 - SCIM目录同步与成员生命周期`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2269,6 +2269,20 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `docs/prd/PRD-096-platform-workspace-directory-operations.md`、`docs/api/platform-access.md` 与
   `docs/testing/PRD-096-tests.md`：保存冻结设计、两轮自审、公开合同、完整门禁和敏感审计。下一权威项
   为 PRD-097。
+
+## PRD-114 企业域名与 SSO 目录（已完成）
+
+- `control-plane-api/src/metahub_control/enterprise_identity/`：企业域名、OIDC/SAML connection、证书、
+  登录发现与回调、协议测试、强制策略和 break-glass recovery；逐请求恢复 WorkspaceSession 与权限。
+- `infra/migrations/0106_enterprise_domain_sso.sql/.down.sql`：十张企业身份表、复合 owner、全局域名唯一、
+  state/replay、事件/outbox、不变式触发器和业务事实 down guard。
+- `shared-sdk/python/metahub_shared/enterprise_identity.py` 与 `metahub_shared/rbac.py`：企业身份严格合同、
+  权限矩阵和配置错误边界。
+- `console-web/src/lib/enterpriseIdentity.js`、`src/features/identity/` 与 `src/styles/identity.css`：Owner 管理、
+  auditor 只读、developer 隐藏、OIDC/SAML 表单、一次性 DNS challenge 和提交后敏感输入清理。
+- `docs/prd/PRD-114-enterprise-domain-sso-login-discovery.md` 与 `docs/testing/PRD-114-tests.md`：冻结设计、
+  自动化、本地认证、三角色 Browser、九组响应式与敏感扫描记录。下一权威项为 PRD-115；S4 G4 保留到
+  PRD-119 独立提交后统一执行。
 
 ## MVP 非目标
 

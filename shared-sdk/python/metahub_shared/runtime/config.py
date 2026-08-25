@@ -66,6 +66,12 @@ CapacityRunnerMode = Literal["disabled", "test_loopback", "isolated_http"]
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
 DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
 DEFAULT_IDENTITY_CHALLENGE_SECRET = "dev-only-change-me-metahub-identity-challenge-secret-2026"
+DEFAULT_ENTERPRISE_SSO_HMAC_SECRET = (
+    "dev-only-change-me-metahub-enterprise-sso-hmac-secret-2026"
+)
+DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET = (
+    "dev-only-change-me-metahub-enterprise-sso-encryption-secret-2026"
+)
 DEFAULT_WORKSPACE_SESSION_SECRET = "dev-only-change-me-metahub-workspace-session-secret-2026"
 DEFAULT_PLATFORM_SESSION_SECRET = "dev-only-change-me-metahub-platform-session-secret-2026"
 DEFAULT_SUPPORT_SESSION_SECRET = "dev-only-change-me-metahub-support-session-secret-2026"
@@ -116,6 +122,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_AUTH_TOKEN_SECRET": "dev-only-change-me-metahub-auth-secret",
     "METAHUB_IDENTITY_SESSION_SECRET": DEFAULT_IDENTITY_SESSION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_SECRET": DEFAULT_IDENTITY_CHALLENGE_SECRET,
+    "METAHUB_ENTERPRISE_SSO_HMAC_SECRET": DEFAULT_ENTERPRISE_SSO_HMAC_SECRET,
+    "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET": DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET": DEFAULT_IDENTITY_PII_ENCRYPTION_SECRET,
     "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "disabled",
     "METAHUB_WORKSPACE_SESSION_SECRET": DEFAULT_WORKSPACE_SESSION_SECRET,
@@ -653,6 +661,16 @@ class AppConfig(BaseModel):
         exclude=True,
         repr=False,
     )
+    enterprise_sso_hmac_secret: str = Field(
+        default=DEFAULT_ENTERPRISE_SSO_HMAC_SECRET,
+        exclude=True,
+        repr=False,
+    )
+    enterprise_sso_encryption_secret: str = Field(
+        default=DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET,
+        exclude=True,
+        repr=False,
+    )
     workspace_session_secret: str = Field(
         default=DEFAULT_WORKSPACE_SESSION_SECRET,
         exclude=True,
@@ -1031,6 +1049,10 @@ def load_app_config(service_name: str) -> AppConfig:
     auth_token_secret = _value(values, "METAHUB_AUTH_TOKEN_SECRET")
     identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
     identity_challenge_secret = _value(values, "METAHUB_IDENTITY_CHALLENGE_SECRET")
+    enterprise_sso_hmac_secret = _value(values, "METAHUB_ENTERPRISE_SSO_HMAC_SECRET")
+    enterprise_sso_encryption_secret = _value(
+        values, "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET"
+    )
     workspace_session_secret = _value(values, "METAHUB_WORKSPACE_SESSION_SECRET")
     platform_session_secret = _value(values, "METAHUB_PLATFORM_SESSION_SECRET")
     support_session_secret = _value(values, "METAHUB_SUPPORT_SESSION_SECRET")
@@ -1258,6 +1280,37 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Use disabled until a production delivery adapter is configured.",
         )
 
+    enterprise_sso_keys = {
+        "METAHUB_ENTERPRISE_SSO_HMAC_SECRET",
+        "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET",
+    }
+    enterprise_sso_forbidden_secrets = tuple(
+        item.value
+        for key, item in values.items()
+        if key not in enterprise_sso_keys and is_sensitive_key(key)
+    )
+    invalid_enterprise_sso_secret = (
+        not 32 <= len(enterprise_sso_hmac_secret.encode("utf-8")) <= 512
+        or not 32 <= len(enterprise_sso_encryption_secret.encode("utf-8")) <= 512
+        or _secret_reused(enterprise_sso_hmac_secret, enterprise_sso_forbidden_secrets)
+        or _secret_reused(enterprise_sso_encryption_secret, enterprise_sso_forbidden_secrets)
+        or hmac.compare_digest(
+            enterprise_sso_hmac_secret, enterprise_sso_encryption_secret
+        )
+    )
+    invalid_enterprise_sso_secret = invalid_enterprise_sso_secret or (
+        service_name == "control-plane-api"
+        and environment == "prod"
+        and (
+            hmac.compare_digest(
+                enterprise_sso_hmac_secret, DEFAULT_ENTERPRISE_SSO_HMAC_SECRET
+            )
+            or hmac.compare_digest(
+                enterprise_sso_encryption_secret,
+                DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET,
+            )
+        )
+    )
     identity_pii_forbidden_secrets = (
         auth_token_secret,
         identity_session_secret,
@@ -1358,6 +1411,16 @@ def load_app_config(service_name: str) -> AppConfig:
             code="infra.config_invalid",
             message="Platform IAM secrets are not independent production secrets.",
             suggestion="Configure four unique Platform IAM secrets of at least 32 characters.",
+        )
+
+    if invalid_enterprise_sso_secret:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Enterprise SSO requires two independent secret domains.",
+            suggestion=(
+                "Configure distinct METAHUB_ENTERPRISE_SSO_HMAC_SECRET and "
+                "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET values."
+            ),
         )
 
     environment_info = EnvironmentInfo(
@@ -2443,6 +2506,8 @@ def load_app_config(service_name: str) -> AppConfig:
         auth_token_secret=auth_token_secret,
         identity_session_secret=identity_session_secret,
         identity_challenge_secret=identity_challenge_secret,
+        enterprise_sso_hmac_secret=enterprise_sso_hmac_secret,
+        enterprise_sso_encryption_secret=enterprise_sso_encryption_secret,
         workspace_session_secret=workspace_session_secret,
         platform_session_secret=platform_session_secret,
         platform_session_ttl_seconds=_bounded_int(
@@ -3803,6 +3868,8 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_IDENTITY_CHALLENGE_SECRET",
         "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET",
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE",
+        "METAHUB_ENTERPRISE_SSO_HMAC_SECRET",
+        "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET",
         "METAHUB_WORKSPACE_SESSION_SECRET",
         "METAHUB_PLATFORM_SESSION_SECRET",
         "METAHUB_PLATFORM_SESSION_TTL_SECONDS",

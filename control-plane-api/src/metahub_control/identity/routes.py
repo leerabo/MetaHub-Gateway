@@ -63,15 +63,31 @@ _DEVICE_COOKIE_MAX_AGE = 31_536_000
 async def login(request: Request, response: Response) -> IdentitySessionResponse:
     _reject_legacy_authorization(request)
     _require_write_origin(request)
-    payload = await _strict_json(request, required_fields=("email", "password"))
+    payload = await _strict_json(
+        request,
+        required_fields=("email", "password"),
+        optional_fields=("workspace_id", "totp_code", "recovery_reason"),
+    )
     email = _required_string(payload, "email", minimum=3, maximum=320)
     password = _required_string(payload, "password", minimum=1, maximum=1024, byte_limit=True)
+    recovery_values = (
+        _optional_string(payload, "workspace_id", minimum=36, maximum=36),
+        _optional_string(payload, "totp_code", minimum=6, maximum=6),
+        _optional_string(payload, "recovery_reason", minimum=3, maximum=64),
+    )
+    if any(value is not None for value in recovery_values) and not all(
+        value is not None for value in recovery_values
+    ):
+        raise ApiError("sso.request_invalid")
     await _risk_preflight(request, "login", email)
     issued = await _run_identity_operation(
         login_global_account,
         _config(request),
         email=email,
         password=password,
+        recovery_workspace_id=recovery_values[0],
+        totp_code=recovery_values[1],
+        recovery_reason=recovery_values[2],
         request_id=_request_id(request),
         trace_id=_trace_id(request),
         user_agent=request.headers.get("User-Agent"),

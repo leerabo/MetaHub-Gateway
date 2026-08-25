@@ -67,6 +67,12 @@ export function createIdentityPageController({
   let businessVerification = null;
   let businessVerificationBusy = false;
   let businessVerificationError = null;
+  let enterpriseIdentity = null;
+  let enterpriseIdentityBusy = false;
+  let enterpriseIdentityError = null;
+  let enterpriseVerificationRecord = null;
+  let enterpriseConnectionProtocol = "oidc";
+  let enterpriseIntents = new Map();
   let notificationCenterOpen = false;
   let notificationInbox = null;
   let notificationPreferences = null;
@@ -571,6 +577,172 @@ export function createIdentityPageController({
         if (!isCurrent(ticket) || isAbort(error)) return false;
         return handleWorkspaceActionError(error, "无法进入该空间。", ticket);
       }
+    },
+    setEnterpriseConnectionProtocol(protocol) {
+      if (!new Set(["oidc", "saml"]).has(protocol) || !workspaceEnterpriseManageAllowed()) {
+        return false;
+      }
+      enterpriseConnectionProtocol = protocol;
+      renderSecurity();
+      return true;
+    },
+    async refreshEnterpriseIdentity() {
+      if (!workspaceEnterpriseReadAllowed() || typeof api.enterpriseIdentity !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      enterpriseIdentityBusy = true;
+      enterpriseIdentityError = null;
+      renderSecurity();
+      return loadEnterpriseIdentity(ticket, "企业身份状态已刷新。");
+    },
+    async createEnterpriseDomain({ domain }) {
+      if (!workspaceEnterpriseManageAllowed()
+        || typeof api.createEnterpriseDomain !== "function") return false;
+      const input = { domain: String(domain ?? "").trim().toLowerCase() };
+      return mutateEnterpriseIdentity(
+        "domain.create",
+        input,
+        (ticket, idempotencyKey) => api.createEnterpriseDomain({
+          workspaceId: workspaceContext.workspace_id,
+          domain: input.domain,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        (result) => {
+          enterpriseVerificationRecord = {
+            domain: result.domain.domain,
+            value: result.verification_record,
+          };
+        },
+        "域名验证记录已创建。",
+      );
+    },
+    async verifyEnterpriseDomain(index) {
+      const domain = enterpriseIdentity?.domains?.[Number(index)];
+      if (!workspaceEnterpriseManageAllowed() || !domain || domain.status !== "pending"
+        || typeof api.verifyEnterpriseDomain !== "function") return false;
+      return mutateEnterpriseIdentity(
+        "domain.verify",
+        { domainId: domain.verified_domain_id, revision: domain.revision },
+        (ticket, idempotencyKey) => api.verifyEnterpriseDomain({
+          workspaceId: workspaceContext.workspace_id,
+          domainId: domain.verified_domain_id,
+          revision: domain.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        () => {
+          enterpriseVerificationRecord = null;
+        },
+        "域名验证已完成。",
+      );
+    },
+    async createEnterpriseSsoConnection(input) {
+      if (!workspaceEnterpriseManageAllowed()
+        || typeof api.createEnterpriseSsoConnection !== "function") return false;
+      const domain = enterpriseIdentity?.domains?.[Number(input.domainIndex)];
+      if (!domain || domain.status !== "verified") return false;
+      let jwks = input.jwks;
+      if (enterpriseConnectionProtocol === "oidc" && typeof input.jwksText === "string") {
+        try {
+          jwks = JSON.parse(input.jwksText);
+        } catch {
+          scrubSensitiveInputs();
+          renderSecurity({
+            error: { message: "JWKS 必须是有效的 JSON 对象。", requestId: "-" },
+          });
+          return false;
+        }
+      }
+      const request = {
+        verifiedDomainId: domain.verified_domain_id,
+        connectionCode: String(input.connectionCode ?? "").trim(),
+        displayName: String(input.displayName ?? "").trim(),
+        protocol: enterpriseConnectionProtocol,
+        issuer: String(input.issuer ?? "").trim(),
+        authorizationEndpoint: input.authorizationEndpoint,
+        tokenEndpoint: input.tokenEndpoint,
+        clientId: input.clientId,
+        clientSecret: input.clientSecret,
+        jwks,
+        ssoUrl: input.ssoUrl,
+        certificatePem: input.certificatePem,
+      };
+      try {
+        return await mutateEnterpriseIdentity(
+          "connection.create",
+          request,
+          (ticket, idempotencyKey) => api.createEnterpriseSsoConnection({
+            workspaceId: workspaceContext.workspace_id,
+            input: request,
+            idempotencyKey,
+            signal: ticket.signal,
+          }),
+          null,
+          "SSO 连接已创建，可执行协议测试。",
+        );
+      } finally {
+        request.clientSecret = "";
+        request.certificatePem = "";
+        request.jwks = null;
+        input.clientSecret = "";
+        input.certificatePem = "";
+        input.jwksText = "";
+        input.jwks = null;
+      }
+    },
+    async testEnterpriseSsoConnection(index) {
+      const connection = enterpriseIdentity?.connections?.[Number(index)];
+      if (!workspaceEnterpriseManageAllowed() || !connection
+        || typeof api.testEnterpriseSsoConnection !== "function") return false;
+      return mutateEnterpriseIdentity(
+        "connection.test",
+        { connectionId: connection.sso_connection_id, revision: connection.revision },
+        (ticket, idempotencyKey) => api.testEnterpriseSsoConnection({
+          workspaceId: workspaceContext.workspace_id,
+          connectionId: connection.sso_connection_id,
+          revision: connection.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        null,
+        "SSO 协议测试已通过。",
+      );
+    },
+    async updateEnterpriseSsoPolicy({ mode, connectionIndex, candidateIndex }) {
+      if (!workspaceEnterpriseManageAllowed()
+        || typeof api.updateEnterpriseSsoPolicy !== "function") return false;
+      const normalizedMode = new Set(["optional", "enforced"]).has(mode) ? mode : null;
+      const connection = String(connectionIndex ?? "") === ""
+        ? null
+        : enterpriseIdentity?.connections?.[Number(connectionIndex)] ?? null;
+      const candidate = String(candidateIndex ?? "") === ""
+        ? null
+        : enterpriseIdentity?.break_glass_candidates?.[Number(candidateIndex)] ?? null;
+      if (!normalizedMode || (normalizedMode === "enforced" && (
+        connection?.status !== "active"
+        || !candidate?.password_configured
+        || !candidate?.mfa_configured
+      ))) return false;
+      const request = {
+        mode: normalizedMode,
+        connectionId: connection?.sso_connection_id ?? null,
+        breakGlassAccountId: normalizedMode === "enforced" ? candidate.account_id : null,
+        revision: enterpriseIdentity?.policy?.revision ?? 0,
+      };
+      return mutateEnterpriseIdentity(
+        "policy.update",
+        request,
+        (ticket, idempotencyKey) => api.updateEnterpriseSsoPolicy({
+          workspaceId: workspaceContext.workspace_id,
+          ...request,
+          idempotencyKey,
+          signal: ticket.signal,
+        }),
+        null,
+        normalizedMode === "enforced" ? "强制 SSO 已启用。" : "SSO 策略已设为可选。",
+      );
     },
     async refreshSubscription() {
       if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
@@ -1480,6 +1652,101 @@ export function createIdentityPageController({
     return workspaceFinanceAllowed() && workspaceContext?.kind === "organization";
   }
 
+  function workspaceEnterpriseReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && new Set(["owner", "security_admin", "auditor"]).has(workspaceContext.role),
+    );
+  }
+
+  function workspaceEnterpriseManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && new Set(["owner", "security_admin"]).has(workspaceContext.role),
+    );
+  }
+
+  async function loadEnterpriseIdentity(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceEnterpriseReadAllowed() || typeof api.enterpriseIdentity !== "function") {
+      enterpriseIdentity = null;
+      enterpriseIdentityBusy = false;
+      enterpriseIdentityError = null;
+      enterpriseVerificationRecord = null;
+      enterpriseIntents = new Map();
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    enterpriseIdentityBusy = true;
+    try {
+      const result = await api.enterpriseIdentity({
+        workspaceId: workspaceContext.workspace_id,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket)) return false;
+      enterpriseIdentity = result;
+      enterpriseIdentityBusy = false;
+      enterpriseIdentityError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      enterpriseIdentity = null;
+      enterpriseIdentityBusy = false;
+      enterpriseIdentityError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function mutateEnterpriseIdentity(action, input, operation, applyResult, feedback) {
+    if (enterpriseIdentityBusy) return false;
+    const ownerWorkspaceId = workspaceContext?.workspace_id;
+    enterpriseIdentityBusy = true;
+    enterpriseIdentityError = null;
+    renderSecurity();
+    let fingerprint;
+    try {
+      fingerprint = await secureEnterpriseFingerprint(input);
+    } catch {
+      enterpriseIdentityBusy = false;
+      enterpriseIdentityError = {
+        message: "无法安全准备企业身份请求，请刷新页面后重试。",
+        requestId: "-",
+      };
+      renderSecurity();
+      return false;
+    }
+    if (!enterpriseIdentityBusy || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+    const previous = enterpriseIntents.get(action);
+    const idempotencyKey = previous?.fingerprint === fingerprint
+      ? previous.idempotencyKey
+      : newIdempotencyKey();
+    enterpriseIntents.set(action, { fingerprint, idempotencyKey });
+    const ticket = beginRequest();
+    try {
+      const result = await queueWrite(() => operation(ticket, idempotencyKey));
+      if (!isCurrent(ticket)) return false;
+      applyResult?.(result);
+      enterpriseIntents.delete(action);
+      enterpriseIdentityBusy = false;
+      return loadEnterpriseIdentity(ticket, feedback);
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      enterpriseIdentityBusy = false;
+      if (isWorkspaceAuthorizationDrift(error)) {
+        enterpriseIntents.delete(action);
+        return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+      }
+      if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+        enterpriseIntents.delete(action);
+      }
+      enterpriseIdentityError = safePageError(error);
+      renderSecurity();
+      return false;
+    }
+  }
+
   async function loadSaasBilling(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceFinanceAllowed() || typeof api.saasCatalog !== "function"
       || typeof api.subscription !== "function") {
@@ -1893,6 +2160,7 @@ export function createIdentityPageController({
         loadPaymentCommerce(ticket, "", { render: false }),
         loadWorkspaceInvoices(ticket, "", { render: false }),
         loadBusinessVerification(ticket, "", { render: false }),
+        loadEnterpriseIdentity(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -2014,6 +2282,11 @@ export function createIdentityPageController({
       businessVerification,
       businessVerificationBusy,
       businessVerificationError,
+      enterpriseIdentity,
+      enterpriseIdentityBusy,
+      enterpriseIdentityError,
+      enterpriseVerificationRecord,
+      enterpriseConnectionProtocol,
       notificationCenterOpen,
       notificationInbox,
       notificationPreferences,
@@ -2082,6 +2355,12 @@ export function createIdentityPageController({
     businessVerification = null;
     businessVerificationBusy = false;
     businessVerificationError = null;
+    enterpriseIdentity = null;
+    enterpriseIdentityBusy = false;
+    enterpriseIdentityError = null;
+    enterpriseVerificationRecord = null;
+    enterpriseConnectionProtocol = "oidc";
+    enterpriseIntents = new Map();
     notificationCenterOpen = false;
     notificationInbox = null;
     notificationPreferences = null;
@@ -2246,6 +2525,43 @@ export function createIdentityPageController({
           currentPassword: fields.get("currentPassword"),
           confirmed: fields.get("confirmTransfer") === "on",
         });
+      } else if (form?.matches?.("[data-enterprise-domain-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.createEnterpriseDomain({ domain: fields.get("domain") });
+      } else if (form?.matches?.("[data-enterprise-connection-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          domainIndex: fields.get("domainIndex"),
+          connectionCode: fields.get("connectionCode"),
+          displayName: fields.get("displayName"),
+          issuer: fields.get("issuer"),
+          authorizationEndpoint: fields.get("authorizationEndpoint"),
+          tokenEndpoint: fields.get("tokenEndpoint"),
+          clientId: fields.get("clientId"),
+          clientSecret: fields.get("clientSecret"),
+          jwksText: fields.get("jwks"),
+          ssoUrl: fields.get("ssoUrl"),
+          certificatePem: fields.get("certificatePem"),
+        };
+        scrubEnterpriseConnectionForm(form);
+        try {
+          await controller.createEnterpriseSsoConnection(input);
+        } finally {
+          input.clientSecret = "";
+          input.certificatePem = "";
+          input.jwksText = "";
+          input.jwks = null;
+        }
+      } else if (form?.matches?.("[data-enterprise-policy-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.updateEnterpriseSsoPolicy({
+          mode: fields.get("mode"),
+          connectionIndex: fields.get("connectionIndex"),
+          candidateIndex: fields.get("candidateIndex"),
+        });
       } else if (form?.matches?.("[data-saas-subscription-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -2384,6 +2700,16 @@ export function createIdentityPageController({
         await controller.downloadBillingExport();
       } else if (button.dataset.identityAction === "refresh-business-verification") {
         await controller.refreshBusinessVerification();
+      } else if (button.dataset.identityAction === "refresh-enterprise-identity") {
+        await controller.refreshEnterpriseIdentity();
+      } else if (button.dataset.identityAction === "set-enterprise-protocol") {
+        controller.setEnterpriseConnectionProtocol(button.dataset.enterpriseProtocol);
+      } else if (button.dataset.identityAction === "verify-enterprise-domain") {
+        await controller.verifyEnterpriseDomain(button.dataset.enterpriseDomainIndex);
+      } else if (button.dataset.identityAction === "test-enterprise-connection") {
+        await controller.testEnterpriseSsoConnection(
+          button.dataset.enterpriseConnectionIndex,
+        );
       } else if (button.dataset.identityAction === "copy-invitation-link") {
         await controller.copyInvitationSecret("link");
       } else if (button.dataset.identityAction === "copy-invitation-mail") {
@@ -2438,6 +2764,24 @@ function scrubBusinessForm(form) {
     if (input.type === "checkbox" || input.type === "radio") input.checked = false;
     else input.value = "";
   }
+}
+
+function scrubEnterpriseConnectionForm(form) {
+  for (const name of ["clientSecret", "certificatePem", "jwks"]) {
+    for (const input of form?.querySelectorAll?.(`[name="${name}"]`) ?? []) {
+      input.value = "";
+    }
+  }
+}
+
+async function secureEnterpriseFingerprint(input) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || typeof globalThis.TextEncoder !== "function") {
+    throw new TypeError("secure enterprise request fingerprinting is unavailable");
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(input));
+  const digest = await subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 /** 擦除控制器调用栈中的主体、证据和开票明文，避免异步状态长期持有。 */

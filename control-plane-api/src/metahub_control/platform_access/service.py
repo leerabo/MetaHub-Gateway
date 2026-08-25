@@ -171,6 +171,22 @@ _NAVIGATION = (
         "/platform.html#notification-templates",
     ),
 )
+_PERMISSION_EXTENSION_TABLES = (
+    "platform_role_permission_extensions",
+    "platform_billing_role_permissions",
+    "platform_infrastructure_role_permissions",
+    "platform_gateway_role_permissions",
+    "platform_verification_role_permissions",
+    "platform_notification_role_permissions",
+    "platform_job_role_permissions",
+    "platform_feature_role_permissions",
+    "platform_config_role_permissions",
+    "platform_observability_role_permissions",
+    "platform_risk_role_permissions",
+    "platform_dr_role_permissions",
+    "platform_status_role_permissions",
+    "platform_capacity_role_permissions",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2285,8 +2301,16 @@ def _authority(
             (operator_id,),
         ).fetchall()
     )
+    placeholders = ",".join("?" for _ in _PERMISSION_EXTENSION_TABLES)
+    extension_tables = {
+        row[0]
+        for row in connection.execute(
+            f"SELECT name FROM sqlite_schema WHERE type='table' AND name IN ({placeholders})",
+            _PERMISSION_EXTENSION_TABLES,
+        ).fetchall()
+    }
     extension_queries: list[str] = []
-    if _table_exists(connection, "platform_role_permission_extensions"):
+    if "platform_role_permission_extensions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2296,7 +2320,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_billing_role_permissions"):
+    if "platform_billing_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2306,7 +2330,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_infrastructure_role_permissions"):
+    if "platform_infrastructure_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2316,7 +2340,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_gateway_role_permissions"):
+    if "platform_gateway_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2326,7 +2350,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_verification_role_permissions"):
+    if "platform_verification_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2336,7 +2360,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_notification_role_permissions"):
+    if "platform_notification_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2346,7 +2370,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_job_role_permissions"):
+    if "platform_job_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2356,7 +2380,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_feature_role_permissions"):
+    if "platform_feature_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2366,7 +2390,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_config_role_permissions"):
+    if "platform_config_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2376,7 +2400,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_observability_role_permissions"):
+    if "platform_observability_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2386,7 +2410,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_risk_role_permissions"):
+    if "platform_risk_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2396,7 +2420,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_dr_role_permissions"):
+    if "platform_dr_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2406,7 +2430,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_status_role_permissions"):
+    if "platform_status_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
@@ -2416,7 +2440,7 @@ def _authority(
             WHERE binding.operator_id=? AND binding.status='active'
             """
         )
-    if _table_exists(connection, "platform_capacity_role_permissions"):
+    if "platform_capacity_role_permissions" in extension_tables:
         extension_queries.append(
             """
             SELECT extension.permission_code
