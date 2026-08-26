@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**PRD-090..119 已完成，当前下一项为 PRD-120**
+状态：**PRD-090..120 已完成，当前下一项为 PRD-121**
 
 基线日期：2026-08-20
 
@@ -40,7 +40,7 @@ MetaHub 的目标形态包括个人 SaaS、企业 SaaS和云管私有 Gateway。
 
 底层队列、通知、健康探测、品牌历史表或账务对账可以复用受审运行时，但“复用运行时”不等于共享工作台、API、Session、数据owner或角色。平台任务与企业批任务、平台品牌与本地Deployment外观、官方Provider工程与企业BYOK配置必须保持独立导航和后端授权。
 
-现有tenant Console的63项导航已在Excel `11_现有导航处置`逐项分类，并绑定当前API/表/Scheduler证据、目标角色、承接PRD和切换门禁。归属计数固定为：44项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI。任何后续实现不得只删除菜单，必须同时处理DOM、预取、直达API、数据owner、事件、Scheduler、审计、兼容和回滚。
+现有tenant Console的64项导航已在Excel `11_现有导航处置`逐项分类，并绑定当前API/表/Scheduler证据、目标角色、承接PRD和切换门禁。归属计数固定为：45项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI。任何后续实现不得只删除菜单，必须同时处理DOM、预取、直达API、数据owner、事件、Scheduler、审计、兼容和回滚。
 
 完全迁入SaaS平台的是`growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`和`adapter-contract-runs`。`competitor-comparison`不属于平台运营工作台，必须退出登录后产品UI；`language-settings`属于账号本人而不是任何企业或平台角色。`overview`、`admin-assistant`、`approvals`、`branding`、`provider-health`、`error-maps`、`model-prices`、`plans`、`billing-disputes`、`policy-templates`、`system-status`和`config-summary`必须拆成独立主体、API、缓存、DTO和数据投影，不能继续共用tenant页面。
 
@@ -57,7 +57,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 | S4 | PRD-114..119 | 企业身份、数据治理、机器身份和 Provider 目录 | SSO/SCIM/MFA 生命周期闭环；驻留与机器权限后端生效 |
 | S5 | PRD-120..130 | 云管私有 Gateway 完整生命周期 | mTLS、LKG、本地 Secret、安装、升级、授权、恢复和断网包通过 |
 | S6 | PRD-131..138 | 迁移、客户运营、隐私合规、安全和发布候选 | 四波试点；11 类 QA；72 小时长稳；生成RC但不公开GA |
-| S7 | PRD-139..147 | 平台运营分域与企业Gateway重组 | 63项导航唯一处置；平台运营迁出；企业AI治理保留；历史事实保真 |
+| S7 | PRD-139..147 | 平台运营分域与企业Gateway重组 | 64项导航唯一处置；平台运营迁出；企业AI治理保留；历史事实保真 |
 | S8 | PRD-148 | SaaS正式发布 | 全域迁移终验；72小时长稳；最终Go/No-Go会签通过 |
 
 ## 4. PRD 总表
@@ -126,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构基线至 PRD-119 官方 Provider 连接目录与区域合规接入已完成；S4 的 0106..0111、企业身份、数据治理、机器身份和签名目录均已分别交付，G4 在 PRD-119 独立提交后统一复核，权威下一项为 PRD-120。
+1. PRD-090 架构基线至 PRD-120 Edge Agent 注册、设备身份与 mTLS 已完成；S5 已建立 0112、设备证书信任、Workspace 私有 Gateway 和 Platform Fleet 最小投影，权威下一项为 PRD-121；G5 在 PRD-130 独立提交后统一复核。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。
@@ -136,4 +136,4 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 6. Excel 内容
 
-工作簿包含变更说明、PRD 总表、阶段路线、核心数据对象、API 与事件、角色权限矩阵、11 类测试与验收、旧计划废弃映射、里程碑门禁、风险与决策、角色页面矩阵和63项现有导航处置，共12个Sheet。每条 PRD 在总表中列出范围、边界、页面、API、数据对象、事件、权限、验收、依赖、迁移/回滚、安全、测试、SLO、工作量、团队和交付证据。
+工作簿包含变更说明、PRD 总表、阶段路线、核心数据对象、API 与事件、角色权限矩阵、11 类测试与验收、旧计划废弃映射、里程碑门禁、风险与决策、角色页面矩阵和64项现有导航处置，共12个Sheet。每条 PRD 在总表中列出范围、边界、页面、API、数据对象、事件、权限、验收、依赖、迁移/回滚、安全、测试、SLO、工作量、团队和交付证据。

@@ -216,6 +216,8 @@ def create_service_app(
             or request.url.path.startswith("/identity/")
             or request.url.path == "/workspaces"
             or request.url.path.startswith("/workspaces/")
+            or request.url.path == "/edge"
+            or request.url.path.startswith("/edge/")
             or request.url.path == "/mcp"
             or request.url.path.startswith("/mcp/")
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
@@ -626,6 +628,16 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Endpoint 配置、投递快照与死信均属于租户私有安全状态。认证、RBAC、exact wire
         # 校验和未捕获异常会在业务路由设置响应头之前返回，因此所有状态码统一禁止缓存。
         response.headers["Cache-Control"] = "no-store"
+    elif path == "/edge" or path.startswith("/edge/"):
+        # Registration and session responses may contain one-time credentials. Apply the
+        # same boundary to authentication, validation, and unhandled failures.
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    elif path == "/platform/fleet/edge-deployments" or path.startswith(
+        "/platform/fleet/edge-deployments/"
+    ):
+        response.headers["Cache-Control"] = "no-store, private"
     elif path == "/config" or path.startswith("/config/"):
         # 配置迁移响应可能包含租户拓扑、校验明细或仅本次可见的 Virtual Key。
         # 业务路由抛出 ApiError 后 FastAPI 会重建响应，因此必须由最外层中间件按路径

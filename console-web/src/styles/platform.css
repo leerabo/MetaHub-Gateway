@@ -900,3 +900,19 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-detail-status { align-items: flex-start; }
   .platform-gate-panel { padding: 28px 22px; }
 }
+
+.platform-edge-fleet-table td > strong,
+.platform-edge-fleet-table td > small { display: block; overflow-wrap: anywhere; }
+.platform-edge-fleet-table td > small { margin-top: 4px; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .platform-edge-fleet-table { min-width: 0; }
+  .platform-edge-fleet-table thead { display: none; }
+  .platform-edge-fleet-table tbody,
+  .platform-edge-fleet-table tr,
+  .platform-edge-fleet-table td { display: block; width: 100%; }
+  .platform-edge-fleet-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-edge-fleet-table td,
+  .platform-edge-fleet-table td:last-child { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; text-align: left; }
+  .platform-edge-fleet-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+}

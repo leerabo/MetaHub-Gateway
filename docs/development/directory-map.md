@@ -2153,21 +2153,21 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `企业级AI_Gateway_PRD开发总清单_给CodexClaude.xlsx`：保留 PRD-001..089 完成事实和旧 PRD-090..108
   历史内容；旧 090..108 已废弃、禁止开发。
 - `企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx`：PRD-090 起的唯一详细计划，当前基线至
-  PRD-148；这是当前已细化范围，不设置需求总数或最终编号上限。角色页面矩阵明确平台员工与企业职能用户的页面、动作、禁止范围和分配主体；`11_现有导航处置`把源码63项tenant Console导航逐项绑定到API/表/Scheduler、目标域、角色、承接PRD和切换门禁。
+  PRD-148；这是当前已细化范围，不设置需求总数或最终编号上限。角色页面矩阵明确平台员工与企业职能用户的页面、动作、禁止范围和分配主体；`11_现有导航处置`把源码64项tenant Console导航逐项绑定到API/表/Scheduler、目标域、角色、承接PRD和切换门禁。
 - `docs/planning/MetaHub-SaaS-PRD-090-onward.md`：保存权威性、产品/云边/权限边界、阶段路线、当前详细总表和
   执行纪律。
 - `scripts/planning/generate_saas_prd_plan.py`：可重复生成并校验工作簿，检查从 PRD-090 起的开放式连续编号、
-  完成状态前缀、旧计划废弃映射、12个Sheet、63项导航处置和两个总体未完成状态标记。
+  完成状态前缀、旧计划废弃映射、12个Sheet、64项导航处置和两个总体未完成状态标记。
 - `scripts/planning/validate_saas_roadmap.py`：失败关闭验证开放式编号、依赖DAG、精确角色、对象域、旧计划退役、
-  源码63项导航一一处置、两轮自审、安全合同、Excel安全性、0085边界和下一未完成项。
+  源码64项导航一一处置、两轮自审、安全合同、Excel安全性、0085边界和下一未完成项。
 - `scripts/planning/retire_legacy_prd090_onward.py`：仅修改旧总清单的两个活动状态指针，保留旧090..108明细供审计。
 - `docs/architecture/saas-target-architecture.md`、`docs/security/saas-threat-model.md`、
   `docs/prd/PRD-090-saas-architecture-migration-baseline.md`、`docs/testing/PRD-090-tests.md`：PRD-090冻结架构、
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-119 - 官方Provider连接目录与区域合规接入` 已完成；当前下一项是
-`PRD-120 - Edge Agent注册、设备身份与mTLS`。
+`PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成；当前下一项是
+`PRD-121 - 云边期望状态、签名快照与离线LKG`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2342,6 +2342,19 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `docs/prd/PRD-119-official-provider-catalog-regional-compliance.md` 与 `docs/testing/PRD-119-tests.md`：
   保存两轮自审、专项/必要回归、真实 API/Browser、性能和敏感审计；下一权威项为 PRD-120，S4 G4 在
   PRD-119 独立提交后统一执行。
+
+## PRD-120 Edge Agent 设备身份与 mTLS（已完成）
+
+- `control-plane-api/src/metahub_control/edge_management/`：Workspace Deployment 注册意图、Agent CSR
+  注册、设备证书轮换、短时 EdgeSession、吊销和 Platform Fleet 脱敏投影；三个凭据域失败关闭。
+- `shared-sdk/python/metahub_shared/private_gateway/`：严格 Ed25519 CSR、registration proof、nonce、Deployment
+  owner 和证书摘要合同，Secret-aware 对象禁止 `repr`。
+- `infra/migrations/0112_edge_agent_device_identity_mtls.sql/.down.sql`：Edge Deployment、注册意图、设备
+  identity/certificate/session、事件/outbox、不可变权限扩展和业务事实 down guard。
+- `console-web/src/features/private-gateways/`、`console-web/src/lib/edgeManagement.js` 与 Platform Fleet：
+  Workspace 一次性注册材料只驻留内存，Platform 只读取安全 Fleet 字段，直达 hash 与离页清理已验证。
+- `docs/prd/PRD-120-edge-agent-device-identity-mtls.md` 与 `docs/testing/PRD-120-tests.md`：保存迁移、API、
+  mTLS、Browser、SLO 和敏感审计事实；下一权威项为 PRD-121，G5 在 PRD-130 后统一执行。
 
 ## MVP 非目标
 

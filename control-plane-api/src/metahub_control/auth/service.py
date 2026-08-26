@@ -41,6 +41,9 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
 
+from metahub_control.workspace_access.edge_permissions import (
+    load_verified_workspace_edge_permissions,
+)
 from metahub_control.workspace_access.provider_catalog_permissions import (
     PROVIDER_CATALOG_PERMISSION_CODE,
     load_verified_provider_catalog_permissions,
@@ -120,10 +123,10 @@ def _extension_authorization_fingerprint(
     base_fingerprint: str,
     extension_permissions: tuple[str, ...],
 ) -> str:
-    """Bind response change detection to the verified PRD-119 permission projection."""
+    """Bind response change detection to every verified permission extension."""
 
     material = "\0".join(
-        ("provider-catalog-extension-v1", base_fingerprint, *extension_permissions)
+        ("workspace-permission-extensions-v2", base_fingerprint, *extension_permissions)
     )
     return hashlib.sha256(material.encode("ascii")).hexdigest()
 
@@ -264,10 +267,18 @@ def login_admin(
             role_code=user["role"],
             unavailable_error_code="rbac.unavailable",
         )
-        extension_permissions = load_verified_provider_catalog_permissions(
+        provider_catalog_permissions = load_verified_provider_catalog_permissions(
             connection,
             role_code=user["role"],
             unavailable_error_code="rbac.unavailable",
+        )
+        edge_permissions = load_verified_workspace_edge_permissions(
+            connection,
+            role_code=user["role"],
+            unavailable_error_code="rbac.unavailable",
+        )
+        extension_permissions = tuple(
+            sorted({*provider_catalog_permissions, *edge_permissions})
         )
     except Exception:
         # 登录失败路径同样释放 SQLite 句柄，避免 Windows 验收后数据库无法重命名。
@@ -559,13 +570,21 @@ def _authenticate_bearer_context(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),
     )
-    extension_permissions = load_verified_provider_catalog_permissions(
+    provider_catalog_permissions = load_verified_provider_catalog_permissions(
         connection,
         role_code=row["role"],
         unavailable_error_code=(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),
     )
+    edge_permissions = load_verified_workspace_edge_permissions(
+        connection,
+        role_code=row["role"],
+        unavailable_error_code=(
+            deadline_error_code if deadline is not None else "rbac.unavailable"
+        ),
+    )
+    extension_permissions = tuple(sorted({*provider_catalog_permissions, *edge_permissions}))
 
     if update_last_seen:
         # 普通 API 仍在认证成功后立即刷新；PAGE-107 会把该写入并入最终不可变审计事务。

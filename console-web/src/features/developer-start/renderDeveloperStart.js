@@ -23,6 +23,7 @@ import { renderFileSecurity } from "../file-security/renderFileSecurity.js";
 import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderMcpTools } from "../mcp-tools/renderMcpTools.js";
 import { renderLocalEndpoints } from "../local-models/renderLocalEndpoints.js";
+import { renderPrivateGateways } from "../private-gateways/renderPrivateGateways.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import {
@@ -507,6 +508,12 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-116 only consumes the dedicated safe aggregate; Provider and KeyPool pages are never loaded here.
       return renderLocalEndpointsSection(
         options.localEndpointsState,
+        options.authContext,
+        options.consoleShellState,
+      );
+    case "private-gateways":
+      return renderPrivateGatewaysSection(
+        options.privateGatewaysState,
         options.authContext,
         options.consoleShellState,
       );
@@ -1004,6 +1011,14 @@ function renderLocalEndpointsSection(state, authContext, consoleShellState) {
         ${html}
       </section>
     `
+    : "";
+}
+
+/** Render PRD-120 only for the exact Edge read navigation owner. */
+function renderPrivateGatewaysSection(state, authContext, consoleShellState) {
+  const html = renderPrivateGateways(state, authContext, consoleShellState);
+  return html
+    ? `<section class="panel private-gateways-panel" aria-labelledby="private-gateways-title">${html}</section>`
     : "";
 }
 

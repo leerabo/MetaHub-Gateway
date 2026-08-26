@@ -1,6 +1,7 @@
 # PRD-120 Edge Agent 注册、设备身份与 mTLS
 
-状态：设计冻结，尚未编码；计划迁移 0112。依赖 PRD-090/094/106/116，范围以 Excel PRD-120 为准。
+状态：已完成。0112、设备注册/轮换/session/吊销、Workspace 与 Platform Console、专项测试、真实
+mTLS/Browser 和敏感审计均已交付。依赖 PRD-090/094/106/116，范围以 Excel PRD-120 为准。
 
 ## Excel 权威合同
 
@@ -53,6 +54,21 @@ Platform Fleet 只看 deployment ID、region、版本、证书到期区间和固
 
 两轮均为修正后通过，无未关闭 P0/P1。
 
-## 7. 专项验证计划
+## 7. 实现结果
 
-0112 fresh/current/down/重复失败回滚；token 过期/重放/并发、克隆 CSR、公钥唯一性、CSR 注入、证书轮换/吊销、peer 伪造、动态撤权、跨 Deployment 同形 404；真实 CA/CSR/mTLS handshake 和网络抓包；Workspace Console 三浏览器状态/一次性值清理；握手/吊销/注册 SLO；seed/日志/DB/事件/截图敏感扫描与静止终态。
+- `edge_management` 按 Workspace Cookie、Platform Cookie 和 Agent mTLS 三个凭据域拆分路由；任何 Cookie、
+  Bearer 或调用方自报证书头进入 Agent 路由都失败关闭。
+- 注册令牌和 challenge 只在首次 Workspace 响应出现，数据库只保存分域 HMAC；真实 Ed25519 CSR 经过空
+  subject、零扩展和签名验证后，由服务端重建 subject/SPIFFE SAN 并签发七天短证书。
+- 轮换以当前证书 mTLS、generation 和新 CSR 为边界，旧证书进入五分钟 drain；45 秒 EdgeSession、单调
+  revocation generation 和逐请求状态恢复保证吊销不依赖长时缓存。
+- Workspace Console 完成创建、一次性注册材料、列表、时间线和吊销确认；Platform Fleet 使用独立 DTO，
+  只显示 deployment ID、region/mode、状态、Agent 版本、证书到期、最近连接和 revision。
+- 真实本地验收创建四条待注册 Deployment；注册材料在复制、关闭、刷新和离页后均从 DOM/内存清除。
+  Platform 直达 hash、无关子系统故障隔离、离页清理和返回重载均已验证。
+
+## 8. 专项验证结果
+
+迁移、API、共享合同、Console 导航与前端专项共 `19/19` 通过；真实 TLS 1.3 双向证书握手 40 次 p95
+`31.67ms`，45 秒 Session 上限和同事务吊销满足 `<60s` 边界；536px Browser 无页面级横向溢出。
+详细证据见 `docs/testing/PRD-120-tests.md`。PRD-121 为下一权威项，G5 保留到 PRD-130 独立提交后统一执行。

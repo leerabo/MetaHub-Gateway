@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-22"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 119
+COMPLETED_THROUGH_PRD = 120
 
 
 def prd(
@@ -1136,18 +1136,18 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
     planned(
         146, "S7-平台运营分域", "P1", "信息架构层", "企业工作区重组", "企业Gateway角色导航、任务首页与高级入口重组",
         "Workspace owner/admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer",
-        "以现有63项导航处置矩阵重组企业Gateway：默认折叠并保持单组展开；首页按角色显示下一步任务；保留BYOK、Provider/模型/路由/评测、Project/Application、Virtual Key、额度预算、用量成本、企业内部财务、员工权限、安全策略、日志审计、Prompt、文件与文件安全、企业异步批处理、MCP、数据生命周期和私有部署；competitor-comparison移出产品UI；debug、intent测试、Webhook死信、环境诊断等仅高级角色按需进入。",
+        "以现有64项导航处置矩阵重组企业Gateway：默认折叠并保持单组展开；首页按角色显示下一步任务；保留BYOK、Provider/模型/路由/评测、Project/Application、Virtual Key、额度预算、用量成本、企业内部财务、员工权限、安全策略、日志审计、Prompt、文件与文件安全、企业异步批处理、MCP、数据生命周期和私有部署；competitor-comparison移出产品UI；debug、intent测试、Webhook死信、环境诊断等仅高级角色按需进入。",
         "GET /workspace/navigation；GET /workspace/getting-started；PATCH /identity/preferences/navigation；GET /workspace/advanced-tools",
         "WorkspaceNavigationProjection；RoleTaskHome；NavigationPreference；AdvancedToolEntitlement；NavigationContractSnapshot",
         "workspace_navigation.changed；role_task.completed；advanced_tool.opened",
         "后端按Membership revision和permission返回页面；owner/admin添加职能用户但不能授予platform_*；service_account无浏览器导航；隐藏菜单不能替代API鉴权。",
-        "63项现状导航每项有唯一处置且源码清单无遗漏；所有企业角色只看职责相关页；默认折叠、单组展开、直达URL负测试、真人鼠标主流程、390/1280/1440布局和无研发术语通过；每页只加载当前数据。",
+        "64项现状导航每项有唯一处置且源码清单无遗漏；所有企业角色只看职责相关页；默认折叠、单组展开、直达URL负测试、真人鼠标主流程、390/1280/1440布局和无研发术语通过；每页只加载当前数据。",
         "PRD-094/097/119/120/139..145", "导航投影p95<200ms；路由切换p75<1.5秒；首屏关键任务p75<1.5秒", "8-10人周",
     ),
     planned(
         147, "S7-平台运营分域", "P0", "迁移治理层", "控制台分域切换", "存量控制台全面分域迁移与旧入口归零",
         "platform_owner/platform_ops/platform_security/迁移负责人",
-        "按63项导航处置矩阵对代码、API、权限、表、事件、Scheduler、导航、DOM、文案、遥测和审计执行expand/dual-read/backfill/cutover/contract。盘点control_background_schedulers_enabled当前统一开关下安装的23个后台循环，逐个迁移执行身份、queue owner、lease和水位；Web副本不重复承担无界Worker。平台接管运营、品牌、Provider工程和商业目录；企业保留AI治理；拆分页使用独立主体；退役页面设置固定tombstone，不直接删除历史tenant_id事实。",
+        "按64项导航处置矩阵对代码、API、权限、表、事件、Scheduler、导航、DOM、文案、遥测和审计执行expand/dual-read/backfill/cutover/contract。盘点control_background_schedulers_enabled当前统一开关下安装的23个后台循环，逐个迁移执行身份、queue owner、lease和水位；Web副本不重复承担无界Worker。平台接管运营、品牌、Provider工程和商业目录；企业保留AI治理；拆分页使用独立主体；退役页面设置固定tombstone，不直接删除历史tenant_id事实。",
         "GET /platform/console-migration/status；POST /platform/console-migration/backfills；POST /platform/console-migration/cutovers；POST /platform/console-migration/rollbacks",
         "ConsoleDomainMigration；ConsoleBackfillCursor；LegacyRouteTombstone；NavigationContractSnapshot；DomainReconciliation",
         "console_domain.backfilled；console_domain.cutover；console_domain.rolled_back；legacy_route.retired",
@@ -1163,7 +1163,7 @@ PRDS = INITIAL_DRAFT_PRDS[:12] + [
         "GaGate；GaEvidence；GaDecision；GaLaunch；GaRollback；PostGaReview",
         "ga.gate_failed；ga.approved；ga.launched；ga.rolled_back",
         "产品/SRE/安全/测试/财务/法务独立会签；platform_owner只执行已批准决策；任何单一角色都不能跳过迁移、安全、财务或隐私门禁。",
-        "PRD-090..147全部完成；63项导航处置落地；平台/企业/伙伴/支持/设备五域负测试通过；WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW全组通过；72小时无P0/P1；README/Excel/docs/HEAD/origin一致。",
+        "PRD-090..147全部完成；64项导航处置落地；平台/企业/伙伴/支持/设备五域负测试通过；WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW全组通过；72小时无P0/P1；README/Excel/docs/HEAD/origin一致。",
         "PRD-138/139..147", "Control 99.9%、Gateway 99.95%；关键页面p75<1.5s；连续72小时无P0/P1", "12-15人周",
     ),
 ]
@@ -1205,7 +1205,7 @@ PHASES = (
     ("S4", "PRD-114..119", "企业身份与数据治理", "SSO、SCIM、MFA、驻留、机器身份和官方Provider目录", "G4通过；企业身份生命周期和区域治理闭环", "114先行；115/116并行；117-119可并行集成", "44-56人周"),
     ("S5", "PRD-120..130", "云管私有Gateway", "Edge信任、配置、遥测、Secret、安装、Fleet、升级、授权、灾备和断网异步管理", "G5通过；在线/断网/升级/恢复均可验收", "120先行；121-123并行；124-126后接；127-130收口", "88-108人周"),
     ("S6", "PRD-131..138", "迁移、客户运营与发布候选", "迁移、客服、API生命周期、隐私、合规、供应链、隔离验证和RC", "G6通过；四波试点和发布候选门禁闭环，不对外GA", "131/132/133并行；134-137门禁化；138生成发布候选", "70-84人周"),
-    ("S7", "PRD-139..147", "平台运营分域与企业Gateway重组", "把平台运营、品牌、Provider工程与商业目录迁出企业Gateway，企业保留角色化AI治理", "G7通过；63项导航唯一处置、历史保真、企业旧平台入口归零", "139/140可并行；141-145按域迁移；146重组；147统一切换", "80-98人周"),
+    ("S7", "PRD-139..147", "平台运营分域与企业Gateway重组", "把平台运营、品牌、Provider工程与商业目录迁出企业Gateway，企业保留角色化AI治理", "G7通过；64项导航唯一处置、历史保真、企业旧平台入口归零", "139/140可并行；141-145按域迁移；146重组；147统一切换", "80-98人周"),
     ("S8", "PRD-148", "SaaS正式发布", "全域迁移终验、公开发布和发布后观察", "G8通过；全部PRD完成、72小时长稳和最终Go/No-Go", "只能在G0..G7全部通过后执行", "12-15人周"),
 )
 
@@ -1270,7 +1270,7 @@ GATES = (
     ("G4", "PRD-114..119", "企业身份与治理", "域名/SSO/SCIM/MFA全生命周期；驻留/保留生效；机器身份最小授权；Provider目录边界准确"),
     ("G5", "PRD-120..130", "云管私有Gateway", "mTLS设备身份；签名快照/LKG；敏感遥测0；本地Secret不上云；安装、升级、授权、恢复和断网包通过"),
     ("G6", "PRD-131..138", "迁移与发布候选", "全11类核心产品QA；四波试点；72小时长稳；灾备/支付/Edge演练；合规/供应链/隔离门禁；只生成RC，不标记公开GA"),
-    ("G7", "PRD-139..147", "平台运营分域与企业Gateway重组", "源码63项导航处置100%；平台运营/品牌/Provider工程/商业账务分域；历史行数/hash/outbox/Scheduler/审计水位保真；企业旧平台入口、DOM、预取/API归零"),
+    ("G7", "PRD-139..147", "平台运营分域与企业Gateway重组", "源码64项导航处置100%；平台运营/品牌/Provider工程/商业账务分域；历史行数/hash/outbox/Scheduler/审计水位保真；企业旧平台入口、DOM、预取/API归零"),
     ("G8", "PRD-148", "SaaS正式上线", "PRD-090..147全部完成；全域11类QA；72小时长稳；最终迁移/安全/财务/隐私会签；HEAD与origin一致"),
 )
 
@@ -1312,6 +1312,7 @@ NAVIGATION_DISPOSITION_ROWS = (
     ("配置", "environments", "环境设置", "企业保留并归组", "Gateway环境与发布边界", "owner/admin/developer；auditor只读", "platform_ops仅看运行摘要", "现有environment.read及dev/test/prod owner关系", "PRD-101/108/146", "环境、Key、路由、预算均绑定本Workspace；普通viewer不见写入口"),
     ("配置", "providers", "Provider 与 KeyPool", "企业保留", "BYOK与上游接入", "owner/admin/developer按权限", "platform_support默认无；仅目录角色看非Secret元数据", "现有provider.read及Provider/KeyPool；Secret继续独立托管", "PRD-100/119/123/146", "Key不进入日志、平台支持或验收证据；默认官方上游边界不变"),
     ("配置", "local-models", "本地模型", "企业保留并归组", "本地OpenAI-compatible Endpoint", "owner/admin/developer按权限", "platform_ops只看脱敏Deployment健康", "现有local_endpoint.read、local_endpoints模块", "PRD-119/120/123/146", "Endpoint和本地Secret属于Workspace/Deployment；平台不得任意读取"),
+    ("配置", "private-gateways", "私有 Gateway", "企业保留并归组", "客户自有Edge Deployment", "owner/admin管理；developer/security_admin按权限只读", "platform_ops只看独立Fleet脱敏投影", "GET/POST /edge/deployments、/edge/registrations、/edge/deployments/{id}/revoke；edge_deployments及设备身份表", "PRD-120..130/146", "Workspace与Platform使用独立Session/API/DTO；注册材料、设备私钥、本地Secret和业务正文不得进入平台投影"),
     ("配置", "adapter-specs", "Adapter 规范", "迁出企业", "平台Provider工程台；企业Provider详情另建兼容摘要", "无", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-specs；POST /internal/adapter-specs/{tenant_id}/activate；provider_adapter_catalog_activations", "PRD-143/147", "企业旧规范导航、DOM、预取和API归零；兼容摘要由Provider详情独立鉴权，不暴露内部schema、构建信息或发布权限"),
     ("配置", "adapter-contract-runs", "CI 测试报告", "迁出企业", "平台Provider工程台", "无", "platform_provider_engineer/platform_security/release_manager", "GET /adapter-contract-runs及/{id}；POST /internal/tenants/{tenant_id}/adapter-contract-runs；runs/cases/outbox", "PRD-143/147", "Runner、case详情和构建路径不进入企业DTO；企业兼容结论改在Provider详情提供；旧run/outbox水位保真"),
     ("配置", "provider-health", "Provider 状态", "平台/企业拆分", "本企业Provider健康；平台全局Provider/Cell健康", "owner/admin/developer/security_admin/viewer按授权", "platform_ops/platform_security/platform_support只读脱敏", "GET /provider-health、POST /providers/{id}/probe；真实调用与探测事实", "PRD-109/112/119/143/145", "企业只见自身Endpoint/调用；平台聚合不得泄漏业务正文或Secret"),
@@ -1411,7 +1412,7 @@ def add_readme_sheet(wb: Workbook) -> None:
         ("身份原则", "全局账号不绑定单租户；Workspace承载个人/企业；Membership恢复租户角色；登录不填写租户标识。"),
         ("权限原则", "平台角色与租户角色完全分域；平台支持默认看不到Provider Key、Token、Prompt、Response或客户正文。"),
         ("页面原则", "平台员工由平台IAM分配角色；企业owner/admin添加职能用户；导航由后端按角色/权限计算，直达URL和API仍逐请求鉴权；渠道、客户、增长、平台品牌、Provider工程、套餐目录、商业账务裁决和平台SRE不进入企业Workspace。"),
-        ("现有导航归属", "源码63项：44项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI；不得只隐藏菜单，DOM、预取、API和数据owner必须同步切换。"),
+        ("现有导航归属", "源码64项：45项企业Gateway保留，12项拆为独立平台/企业投影，5项完全迁入SaaS平台，1项迁到GlobalAccount壳层，1项退出登录后产品UI；不得只隐藏菜单，DOM、预取、API和数据owner必须同步切换。"),
         ("数据原则", "所有业务数据继续携带tenant_id/workspace_id；后端授权权威；统一错误码和request_id；用量、成本和失败可追踪。"),
         ("云边原则", "本地Gateway仅出站mTLS；云端下发签名期望状态；本地使用LKG；Provider Key默认只保存在本地。"),
         ("默认上游", "智谱、通义、月之暗面、文心、火山、混元、DeepSeek官方/云服务及客户本地OpenAI-compatible Endpoint。"),
@@ -1641,8 +1642,8 @@ def verify_workbook(path: Path) -> None:
     assert [row[0] for row in rows] == expected_ids
     assert [row[1] for row in rows] == [item["status"] for item in PRDS]
     navigation_rows = list(workbook["11_现有导航处置"].iter_rows(min_row=2, values_only=True))
-    assert len(navigation_rows) == 63
-    assert len({row[1] for row in navigation_rows}) == 63
+    assert len(navigation_rows) == 64
+    assert len({row[1] for row in navigation_rows}) == 64
     legacy = list(workbook["07_旧计划废弃映射"].iter_rows(min_row=2, values_only=True))
     assert len(legacy) == 19 and all(row[2] == "已废弃-禁止开发" for row in legacy)
     assert "all_108_prds_complete=false" in workbook["00_变更说明"]["B5"].value

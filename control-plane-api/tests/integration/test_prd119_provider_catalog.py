@@ -83,7 +83,7 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd119-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0111"
+    assert apply_migrations(database_url).applied[-1] == "0112"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _LEGACY_TEST_PASSWORD)
         apply_seed_data(database_url)

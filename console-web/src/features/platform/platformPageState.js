@@ -6,6 +6,7 @@ import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPag
 const PLATFORM_NAVIGATION_IDS = new Set([
   "infrastructure",
   "gateway",
+  "edge-fleet",
   "job-runtime",
   "feature-rollouts",
   "config-distribution",
@@ -84,6 +85,7 @@ export function createPlatformPageController({
     notificationTemplateIntent: null,
     infrastructure: null,
     gatewayCells: null,
+    edgeFleet: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
     jobQueues: null,
@@ -131,7 +133,7 @@ export function createPlatformPageController({
     workspaceDetail: null,
     workspaceHealth: null,
     workspaceEvents: null,
-    view: "overview",
+    view: initialPlatformView(),
     error: null,
     feedback: null,
     pendingAction: null,
@@ -210,7 +212,7 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "provider-catalog",
+        "provider-catalog", "edge-fleet",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -236,10 +238,13 @@ export function createPlatformPageController({
           state.riskDecisionIntent = null;
         } else if (state.view === "provider-catalog") {
           state.providerCatalogPublishIntent = null;
+        } else if (state.view === "edge-fleet") {
+          state.edgeFleet = null;
         }
         state.loading = false;
       }
       state.view = nextView;
+      replacePlatformHash(nextView);
       state.pendingAction = null;
       render();
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
@@ -268,6 +273,7 @@ export function createPlatformPageController({
       if (state.view === "provider-catalog" && !state.providerCatalog) {
         void loadProviderCatalog();
       }
+      if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
     },
     async filterJobs(status) {
       state.jobStatus = normalizeJobStatus(status);
@@ -1384,6 +1390,7 @@ export function createPlatformPageController({
         notificationTemplates: null,
         infrastructure: null,
         gatewayCells: null,
+        edgeFleet: null,
         jobQueues: null,
         featureFlags: null,
         configDistribution: null,
@@ -1400,33 +1407,36 @@ export function createPlatformPageController({
         workspaceEvents: null,
       };
       const tasks = [];
-      if (permissions.has("platform.operator.manage")) {
+      const fleetOnly = state.view === "edge-fleet";
+      if (!fleetOnly && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
       }
-      if (permissions.has("platform.catalog.read") && typeof api.plans === "function") {
+      if (!fleetOnly && permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
       }
-      if ((permissions.has("platform.provider_catalog.manage")
+      if (!fleetOnly && (permissions.has("platform.provider_catalog.manage")
         || permissions.has("platform.provider_catalog.security_read"))
         && typeof api.providerCatalog === "function") {
         tasks.push(api.providerCatalog({ signal: ticket.signal }).then((value) => {
           next.providerCatalog = value;
         }));
       }
-      if (permissions.has("platform.billing.read") && typeof api.billingSummary === "function") {
+      if (!fleetOnly && permissions.has("platform.billing.read")
+        && typeof api.billingSummary === "function") {
         tasks.push(api.billingSummary({
           status: state.billingStatus,
           cursor: state.billingCursor,
           signal: ticket.signal,
         }).then((value) => { next.billing = value; }));
       }
-      if (permissions.has("platform.billing.read") && typeof api.refunds === "function") {
+      if (!fleetOnly && permissions.has("platform.billing.read")
+        && typeof api.refunds === "function") {
         tasks.push(api.refunds({
           status: state.refundStatus,
           signal: ticket.signal,
         }).then((value) => { next.refunds = value; }));
       }
-      if (permissions.has("platform.verification.read")
+      if (!fleetOnly && permissions.has("platform.verification.read")
         && typeof api.businessVerifications === "function") {
         tasks.push(api.businessVerifications({
           status: state.verificationStatus,
@@ -1434,43 +1444,53 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.verification = value; }));
       }
-      if (permissions.has("platform.notification_template.read")
+      if (!fleetOnly && permissions.has("platform.notification_template.read")
         && typeof api.notificationTemplates === "function") {
         tasks.push(api.notificationTemplates({ signal: ticket.signal }).then((value) => {
           next.notificationTemplates = value;
         }));
       }
-      if (permissions.has("platform.infrastructure.read")
+      if (!fleetOnly && permissions.has("platform.infrastructure.read")
         && typeof api.infrastructureStatus === "function") {
         tasks.push(api.infrastructureStatus({ signal: ticket.signal }).then((value) => {
           next.infrastructure = value;
         }));
       }
-      if (permissions.has("platform.gateway.read") && typeof api.gatewayCells === "function") {
+      if (!fleetOnly && permissions.has("platform.gateway.read")
+        && typeof api.gatewayCells === "function") {
         tasks.push(api.gatewayCells({ signal: ticket.signal }).then((value) => {
           next.gatewayCells = value;
         }));
       }
-      if (permissions.has("platform.job.read") && typeof api.jobQueues === "function") {
+      if (state.view === "edge-fleet"
+        && permissions.has("platform.edge_fleet.read")
+        && typeof api.edgeFleet === "function") {
+        tasks.push(api.edgeFleet({ signal: ticket.signal }).then((value) => {
+          next.edgeFleet = value;
+        }));
+      }
+      if (!fleetOnly && permissions.has("platform.job.read")
+        && typeof api.jobQueues === "function") {
         tasks.push(api.jobQueues({
           status: state.jobStatus,
           signal: ticket.signal,
         }).then((value) => { next.jobQueues = value; }));
       }
-      if (permissions.has("platform.feature.read") && typeof api.featureFlags === "function") {
+      if (!fleetOnly && permissions.has("platform.feature.read")
+        && typeof api.featureFlags === "function") {
         tasks.push(api.featureFlags({
           status: state.featureStatus,
           riskLevel: state.featureRiskLevel,
           signal: ticket.signal,
         }).then((value) => { next.featureFlags = value; }));
       }
-      if (permissions.has("platform.config_distribution.read")
+      if (!fleetOnly && permissions.has("platform.config_distribution.read")
         && typeof api.configDistribution === "function") {
         tasks.push(api.configDistribution({ signal: ticket.signal }).then((value) => {
           next.configDistribution = value;
         }));
       }
-      if ((permissions.has("platform.observability.read")
+      if (!fleetOnly && (permissions.has("platform.observability.read")
         || permissions.has("platform.observability.security_read"))
         && typeof api.observabilityServices === "function"
         && typeof api.serviceLevelObjectives === "function"
@@ -1485,7 +1505,7 @@ export function createPlatformPageController({
           next.errorBudgets = budgets;
         }));
       }
-      if (permissions.has("platform.dr.read")
+      if (!fleetOnly && permissions.has("platform.dr.read")
         && typeof api.disasterRecoveryStatus === "function"
         && typeof api.disasterRecoveryBackups === "function") {
         tasks.push(Promise.all([
@@ -1496,24 +1516,26 @@ export function createPlatformPageController({
           next.disasterRecoveryBackups = backups;
         }));
       }
-      if (permissions.has("platform.status.read")
+      if (!fleetOnly && new Set(["overview", "status-incidents"]).has(state.view)
+        && permissions.has("platform.status.read")
         && typeof api.statusIncidents === "function") {
         tasks.push(api.statusIncidents({ signal: ticket.signal }).then((value) => {
           next.statusIncidents = value;
         }));
       }
-      if (permissions.has("platform.capacity.read") && typeof api.capacity === "function") {
+      if (!fleetOnly && permissions.has("platform.capacity.read")
+        && typeof api.capacity === "function") {
         tasks.push(api.capacity({ signal: ticket.signal }).then((value) => {
           next.capacity = value;
         }));
       }
-      if (permissions.has("platform.unit_economics.read")
+      if (!fleetOnly && permissions.has("platform.unit_economics.read")
         && typeof api.unitEconomics === "function") {
         tasks.push(api.unitEconomics({ signal: ticket.signal }).then((value) => {
           next.unitEconomics = value;
         }));
       }
-      if (permissions.has("platform.data_residency.read")
+      if (!fleetOnly && permissions.has("platform.data_residency.read")
         && typeof api.residencyEvidence === "function") {
         tasks.push(api.residencyEvidence({
           ...state.residencyEvidenceFilters,
@@ -1522,7 +1544,7 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.residencyEvidence = value; }));
       }
-      if ((permissions.has("platform.risk.read")
+      if (!fleetOnly && (permissions.has("platform.risk.read")
         || permissions.has("platform.risk.support_read"))
         && typeof api.riskCases === "function") {
         tasks.push(api.riskCases({
@@ -1531,13 +1553,15 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.riskCases = value; }));
       }
-      if (permissions.has("platform.support.request") || permissions.has("platform.support.approve")) {
+      if (!fleetOnly
+        && (permissions.has("platform.support.request")
+          || permissions.has("platform.support.approve"))) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
-      if (permissions.has("platform.audit.read")) {
+      if (!fleetOnly && permissions.has("platform.audit.read")) {
         tasks.push(api.audit({ signal: ticket.signal }).then((value) => { next.audit = value; }));
       }
-      if (hasWorkspaceRead(permissions)) {
+      if (!fleetOnly && hasWorkspaceRead(permissions)) {
         tasks.push(api.workspaces({
           filters: state.workspaceFilters,
           cursor: state.workspaceCursor,
@@ -1586,6 +1610,7 @@ export function createPlatformPageController({
         state.providerCatalog = null;
         state.providerCatalogPublishIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "edge-fleet")) state.edgeFleet = null;
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -1609,6 +1634,26 @@ export function createPlatformPageController({
       });
       if (!current(ticket)) return false;
       state.workspaces = workspaces;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadEdgeFleet() {
+    if (typeof api.edgeFleet !== "function"
+      || !currentPermissions().has("platform.edge_fleet.read")
+      || state.view !== "edge-fleet") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const fleet = await api.edgeFleet({ signal: ticket.signal });
+      if (!current(ticket) || state.view !== "edge-fleet") return false;
+      state.edgeFleet = fleet;
       state.loading = false;
       render();
       return true;
@@ -2704,6 +2749,7 @@ export function createPlatformPageController({
     state.notificationTemplateIntent = null;
     state.infrastructure = null;
     state.gatewayCells = null;
+    state.edgeFleet = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
     state.jobQueues = null;
@@ -2749,7 +2795,6 @@ export function createPlatformPageController({
     state.workspaceCursorHistory = [];
     clearWorkspaceDetail();
     state.pendingAction = null;
-    state.view = "overview";
   }
   function clearPlatformSession() {
     state.session = null;
@@ -2865,6 +2910,19 @@ function defaultIdempotencyKey() {
 
 function defaultConfirm(message) {
   return typeof globalThis.confirm === "function" ? globalThis.confirm(message) : false;
+}
+
+function initialPlatformView() {
+  const value = String(globalThis.window?.location?.hash ?? "").replace(/^#/u, "");
+  return PLATFORM_NAVIGATION_IDS.has(value) ? value : "overview";
+}
+
+function replacePlatformHash(view) {
+  const location = globalThis.window?.location;
+  const history = globalThis.window?.history;
+  if (!location || typeof history?.replaceState !== "function") return;
+  const hash = `#${view}`;
+  if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
 function isPlatformSessionFailure(error) {

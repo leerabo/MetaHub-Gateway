@@ -29,7 +29,7 @@ REQUIRED_DOCS = {
         "ADR-090-01",
         "现状证据",
         "迁移矩阵",
-        "63项导航处置",
+        "64项导航处置",
         "迁移波次",
         "故障、回滚与兼容",
         "两轮编码前自审",
@@ -152,6 +152,18 @@ REQUIRED_DOCS = {
         "敏感",
         "PRD-120",
         "0111",
+    ),
+    ROOT / "docs/prd/PRD-120-edge-agent-device-identity-mtls.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0112",
+    ),
+    ROOT / "docs/testing/PRD-120-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-121",
+        "0112",
     ),
 }
 
@@ -659,11 +671,11 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     source_navigation_ids = _source_navigation_ids()
     disposition_ids = [str(row.get("navigation_id")) for row in navigation_rows]
     report.check(
-        len(source_navigation_ids) == 63
-        and len(disposition_ids) == 63
-        and len(set(disposition_ids)) == 63
+        len(source_navigation_ids) == 64
+        and len(disposition_ids) == 64
+        and len(set(disposition_ids)) == 64
         and set(disposition_ids) == set(source_navigation_ids),
-        "all 63 source navigation items have exactly one disposition",
+        "all 64 source navigation items have exactly one disposition",
     )
     report.check(
         all(all(str(row.get(field) or "").strip() for field in required_navigation_fields) for row in navigation_rows),
@@ -697,12 +709,12 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         saas_only_ids | split_domain_ids | global_shell_ids | retired_product_ui_ids
     )
     report.check(
-        len(enterprise_only_ids) == 44
+        len(enterprise_only_ids) == 45
         and len(split_domain_ids) == 12
         and len(saas_only_ids) == 5
         and len(global_shell_ids) == 1
         and len(retired_product_ui_ids) == 1,
-        "navigation ownership closes as 44 enterprise, 12 split, 5 SaaS, 1 global and 1 retired",
+        "navigation ownership closes as 45 enterprise, 12 split, 5 SaaS, 1 global and 1 retired",
     )
     report.check(
         all(
@@ -728,7 +740,7 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             and str(disposition_by_id[item].get("企业可见角色")) != "无"
             for item in enterprise_only_ids
         ),
-        "all forty-four enterprise Gateway pages remain enterprise-owned",
+        "all forty-five enterprise Gateway pages remain enterprise-owned",
     )
     report.check(
         disposition_by_id["language-settings"].get("处置") == "迁到全局账号壳层"
@@ -816,10 +828,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 111
+        and migration_versions[-1] == 112
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0111 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0112 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -870,6 +882,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0111_official_provider_catalog_regional_compliance.down.sql"
         ).is_file(),
         "PRD-119 owns reversible migration 0111 with guarded catalog-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0112_edge_agent_device_identity_mtls.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0112_edge_agent_device_identity_mtls.down.sql"
+        ).is_file(),
+        "PRD-120 owns reversible migration 0112 with guarded Edge-identity rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

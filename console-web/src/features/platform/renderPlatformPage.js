@@ -73,6 +73,7 @@ function renderView(state, permissions) {
   if (state.view === "overview") return overviewView(state);
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
+  if (state.view === "edge-fleet") return edgeFleetView(state);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1460,6 +1461,31 @@ function gatewayView(state, permissions) {
     ${placement ? gatewayPlacementResult(placement) : ""}`;
 }
 
+function edgeFleetView(state) {
+  const items = state.edgeFleet?.deployments ?? [];
+  return `
+    <header class="platform-page-heading"><div><p>Customer-owned runtime</p><h1>Private Gateway fleet</h1></div><span>${number(items.length)} 个 Deployment</span></header>
+    <section class="platform-band">
+      ${state.loading && !state.edgeFleet ? '<div class="platform-empty" role="status">正在读取 Fleet 摘要</div>' : `
+        <div class="platform-table-wrap"><table class="platform-edge-fleet-table">
+          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>Revision</th></tr></thead>
+          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 7)}</tbody>
+        </table></div>`}
+    </section>`;
+}
+
+function edgeFleetRow(item) {
+  return `<tr>
+    <td data-label="Deployment"><strong>${escapeHtml(shortReference(item.deployment_id))}</strong><small>${formatTime(item.updated_at)}</small></td>
+    <td data-label="区域 / 模式"><strong>${escapeHtml(item.region_code)}</strong><small>${escapeHtml(item.mode)}</small></td>
+    <td data-label="状态">${status(item.status)}<small>${escapeHtml(statusLabel(item.health_code))}</small></td>
+    <td data-label="Agent"><strong>${escapeHtml(item.agent_version ?? "-")}</strong></td>
+    <td data-label="证书"><strong>${formatOptionalTime(item.certificate_expires_at)}</strong><small>revocation ${number(item.revocation_generation)}</small></td>
+    <td data-label="最近连接"><strong>${formatOptionalTime(item.last_connected_at)}</strong></td>
+    <td data-label="Revision"><strong>${number(item.revision)}</strong></td>
+  </tr>`;
+}
+
 // Cell 行保持固定枚举列，避免把拓扑地址或客户信息扩展进运维表格。
 function gatewayCellRow(cell) {
   return `<tr>
@@ -2039,7 +2065,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
@@ -2047,6 +2073,7 @@ function number(value) { return Number.isFinite(Number(value)) ? new Intl.Number
 function signedNumber(value) { const amount = Number(value); return `${amount > 0 ? "+" : ""}${number(amount)}`; }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
 function formatTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date); }
+function formatOptionalTime(value) { return value ? formatTime(value) : "-"; }
 function shortWorkspace(value) { const text = String(value ?? ""); return text.length > 16 ? `${text.slice(0, 12)}…${text.slice(-4)}` : text; }
 function shortReference(value) { const text = String(value ?? ""); return text.length > 20 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text || "-"; }
 function fact(label, value) { return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`; }

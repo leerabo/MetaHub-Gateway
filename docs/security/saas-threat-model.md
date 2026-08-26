@@ -40,7 +40,7 @@
 | TM-18 | T/E | Workspace与tenant重绑或授权只检查tenants.status绕过注销状态 | P0 | 一一不可变绑定；同时复核Account、Membership、tenant_data_states和撤销tombstone；不接受客户端owner | PRD-091/093/094 |
 | TM-19 | T/E | 签名root在离线节点撤销不生效或云端DB直接换根 | P0 | trust-manifest TTL；current root签名更新；双人批准离线recovery bundle；设备显式导入；暴露窗可见 | PRD-121/130 |
 | TM-20 | I/E | Secret密文跨执行平面、owner、版本或用途移植 | P0 | 每secret/version独立DEK；AAD绑定execution_plane/workspace/deployment/secret/version/purpose；key domain隔离 | PRD-100/123 |
-| TM-21 | E/I | 前端隐藏菜单被当作授权，或平台运营/品牌/Provider工程/商业账务页面泄漏到企业Workspace | P0 | 后端返回角色页面投影但API逐请求鉴权；直达URL/DOM/预取/迟到响应负测试；源码63项导航逐项处置；平台页面仅接受PlatformSession | PRD-094/095/139..147 |
+| TM-21 | E/I | 前端隐藏菜单被当作授权，或平台运营/品牌/Provider工程/商业账务页面泄漏到企业Workspace | P0 | 后端返回角色页面投影但API逐请求鉴权；直达URL/DOM/预取/迟到响应负测试；源码64项导航逐项处置；平台页面仅接受PlatformSession | PRD-094/095/120/139..147 |
 | TM-22 | T/E/R | 平台套餐/商业账与企业BYOK内部成本账混用权限、价格或调整事实 | P0 | 独立账务域与角色；价格版本；企业只提交争议、平台独立裁决；双边对账但禁止互写；金额调整不可变审计 | PRD-098/099/104/144/147 |
 
 ## 3. 统一失败策略

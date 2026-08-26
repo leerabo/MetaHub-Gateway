@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-119 - 官方Provider连接目录与区域合规接入` 已完成；当前下一条未完成项是
-  `PRD-120 - Edge Agent注册、设备身份与mTLS`。
+- 新 `PRD-090` 至 `PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成；当前下一条未完成项是
+  `PRD-121 - 云边期望状态、签名快照与离线LKG`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,13 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
-- `PRD-119 - 官方Provider连接目录与区域合规接入` 已完成：0111、Ed25519 签名不可变目录、官方/
-  云服务区域与能力模板、Workspace Provider 实例化/预检、迁移兼容说明、Platform 发布以及企业/平台
-  双 Console 均已交付。最终 Migration/API `10/10`、必要后端回归 `30/30`、PRD-118 全量 `6/6`、
-  Console 专项 `6/6`、Console 全量 `1108/1108` 和 lint `365 files` 均通过；真实目录查询 40 次
-  p95 `68.87ms`，四维筛选只返回 DeepSeek，Browser 零横向溢出和零 warning/error。详见
-  [PRD-119 设计](docs/prd/PRD-119-official-provider-catalog-regional-compliance.md) 和
-  [PRD-119 测试记录](docs/testing/PRD-119-tests.md)。下一权威项为 PRD-120；S4 G4 在本条独立提交后统一执行。
+- `PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成：0112、一次性注册、Ed25519 CSR/设备证书、mTLS
+  transport 证明、证书轮换、45 秒 EdgeSession、吊销、Workspace 私有 Gateway 和 Platform Fleet 均已
+  交付。Migration/API/共享合同/导航/Console 专项 `19/19` 通过，Console lint `370 files` 通过；真实
+  TLS 1.3 双向证书握手 40 次 p95 `31.67ms`，实际 Browser 验证四条 Deployment、一次性值清理、平台
+  DTO 脱敏、离页清理和 536px 无页面级横向溢出。详见
+  [PRD-120 设计](docs/prd/PRD-120-edge-agent-device-identity-mtls.md) 和
+  [PRD-120 测试记录](docs/testing/PRD-120-tests.md)。下一权威项为 PRD-121；G5 在 PRD-130 独立提交后统一执行。
 - `PRD-116 - MFA、条件访问、设备与会话安全` 已完成：0108、多因子 TOTP/WebAuthn、恢复码、受信设备、
   Global/Workspace Session 撤销、条件访问与一次性 step-up 均已交付。最终 Migration `4/4`、Identity/API
   `2/2`、Shared SDK `1/1`、Console 专项 `11/11`、Console 全量 `1093/1093` 和 lint `358 files` 均通过。
@@ -750,7 +750,7 @@ release, Provider engineering, channel, customer-success and growth roles. Enter
 own functional members, but channel management, customer management and growth analytics remain
 platform-only and never appear in enterprise navigation, DOM prefetch or APIs.
 
-PRD-090 also freezes a source-checked disposition for all 63 current tenant Console navigation
+PRD-090 also freezes a source-checked disposition for all current tenant Console navigation
 items. Platform branding, Provider Adapter engineering/CI, plan catalog, commercial billing
 decisions and platform SRE join channel/customer/growth in the SaaS operator domain. The enterprise
 Gateway keeps role-scoped BYOK, models/routing, projects/keys, quotas/budgets, usage/internal finance,
@@ -1039,7 +1039,7 @@ PostgreSQL-native bundle，标准迁移 CLI 会以 `db.migration_backend_unsuppo
 $env:METAHUB_DATABASE_URL="sqlite:///./.data/metahub.db"
 $env:METAHUB_SEED_ADMIN_PASSWORD="change-me-locally"
 $env:METAHUB_SEED_PROVIDER_API_KEY="replace-with-provider-key"
-$env:METAHUB_SEED_VIRTUAL_KEY="mhv_dev_seed_virtual_key"
+$env:METAHUB_SEED_VIRTUAL_KEY="<set-local-test-virtual-key>"
 
 .\scripts\db\migrate.ps1
 .\scripts\db\seed.ps1
@@ -1610,12 +1610,12 @@ M0 数据面提供基础 OpenAI-compatible 入口。开发者可以把 OpenAI SD
 
 本地 seed Virtual Key 默认来自 `METAHUB_SEED_VIRTUAL_KEY`，未设置时为：
 
-- `mhv_dev_seed_virtual_key`
+- `<set-local-test-virtual-key>`
 
 本地运行示例前，把一次性明文 Key 放入环境变量：
 
 ```powershell
-$env:METAHUB_VIRTUAL_KEY="mhv_dev_seed_virtual_key"
+$env:METAHUB_VIRTUAL_KEY="<set-local-test-virtual-key>"
 ```
 
 Provider Endpoint 来自 seed provider 或环境变量：

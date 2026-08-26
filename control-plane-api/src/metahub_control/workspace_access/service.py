@@ -29,6 +29,7 @@ from metahub_control.identity.service import (
     valid_opaque_value,
 )
 
+from .edge_permissions import load_verified_workspace_edge_permissions
 from .models import (
     IdentityWorkspaceListResponse,
     IdentityWorkspaceSummary,
@@ -641,7 +642,7 @@ def workspace_actor_authorization_probe_in_transaction(
     granted = {str(item["granted_permission_code"]) for item in role_rows}
     if granted != set(permission_codes):
         raise ApiError("workspace_session.permission_denied")
-    governance, machine_identity, provider_catalog = _workspace_extension_permissions(
+    governance, machine_identity, provider_catalog, edge = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
         require_catalogs=True,
@@ -666,6 +667,7 @@ def workspace_actor_authorization_probe_in_transaction(
             governance_permissions=governance,
             machine_identity_permissions=machine_identity,
             provider_catalog_permissions=provider_catalog,
+            edge_permissions=edge,
         ),
     )
 
@@ -1949,14 +1951,16 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
     )
-    governance, machine_identity, provider_catalog = _workspace_extension_permissions(
+    governance, machine_identity, provider_catalog, edge = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
     )
-    if not governance and not machine_identity and not provider_catalog:
+    if not governance and not machine_identity and not provider_catalog and not edge:
         return legacy
     permissions = tuple(
-        sorted({*legacy.permission_codes, *governance, *machine_identity, *provider_catalog})
+        sorted(
+            {*legacy.permission_codes, *governance, *machine_identity, *provider_catalog, *edge}
+        )
     )
     fingerprint = _workspace_authorization_fingerprint(
         legacy_fingerprint=legacy.authorization_fingerprint,
@@ -1964,6 +1968,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         governance_permissions=governance,
         machine_identity_permissions=machine_identity,
         provider_catalog_permissions=provider_catalog,
+        edge_permissions=edge,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -1979,7 +1984,7 @@ def _workspace_extension_permissions(
     *,
     role_code: str,
     require_catalogs: bool = False,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     if require_catalogs:
         governance, machine_identity, provider_catalog = (
             _required_workspace_extension_permissions(
@@ -1987,7 +1992,12 @@ def _workspace_extension_permissions(
                 role_code=role_code,
             )
         )
-        return governance, machine_identity, provider_catalog
+        edge = load_verified_workspace_edge_permissions(
+            connection,
+            role_code=role_code,
+            unavailable_error_code="workspace_session.unavailable",
+        )
+        return governance, machine_identity, provider_catalog, edge
     has_extension = _table_exists(connection, "workspace_governance_role_permissions")
     has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
     if has_extension != has_catalog:
@@ -2031,7 +2041,12 @@ def _workspace_extension_permissions(
         role_code=role_code,
         unavailable_error_code="workspace_session.unavailable",
     )
-    return governance, machine_identity, provider_catalog
+    edge = load_verified_workspace_edge_permissions(
+        connection,
+        role_code=role_code,
+        unavailable_error_code="workspace_session.unavailable",
+    )
+    return governance, machine_identity, provider_catalog, edge
 
 
 def _required_workspace_extension_permissions(
@@ -2129,6 +2144,7 @@ def _workspace_authorization_fingerprint(
     governance_permissions: tuple[str, ...],
     machine_identity_permissions: tuple[str, ...],
     provider_catalog_permissions: tuple[str, ...],
+    edge_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2138,6 +2154,7 @@ def _workspace_authorization_fingerprint(
                 "governance_permissions": governance_permissions,
                 "machine_identity_permissions": machine_identity_permissions,
                 "provider_catalog_permissions": provider_catalog_permissions,
+                "edge_permissions": edge_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

@@ -102,6 +102,9 @@ export const PERMISSIONS = Object.freeze({
   LOCAL_ENDPOINT_READ: "local_endpoint.read",
   LOCAL_ENDPOINT_MANAGE: "local_endpoint.manage",
   LOCAL_ENDPOINT_TEST: "local_endpoint.test",
+  // PRD-120 Workspace Gateway 读取和管理独立授权；Platform Fleet 使用另一凭据域。
+  EDGE_DEPLOYMENT_READ: "edge.deployment.read",
+  EDGE_DEPLOYMENT_MANAGE: "edge.deployment.manage",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。

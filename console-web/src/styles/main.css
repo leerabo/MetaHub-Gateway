@@ -15,6 +15,109 @@
     Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
 }
 
+/* PRD-120 private Gateway device identity workspace. */
+.private-gateway-workspace { display: grid; gap: 18px; min-width: 0; }
+.private-gateway-toolbar,
+.private-gateway-commands,
+.private-gateway-deployment > header,
+.private-gateway-dialog > header,
+.private-gateway-dialog-actions,
+.private-gateway-actions,
+.private-gateway-feedback,
+.private-gateway-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.private-gateway-toolbar h3,
+.private-gateway-deployment h4,
+.private-gateway-dialog h3 { margin: 0; letter-spacing: 0; }
+.private-gateway-toolbar p:last-child,
+.private-gateway-dialog header span,
+.private-gateway-deployment code,
+.private-gateway-timeline small,
+.private-gateway-timeline time { color: var(--muted); }
+.private-gateway-icon { width: 38px; height: 38px; padding: 0; font-size: 1.15rem; }
+.private-gateway-list { display: grid; gap: 14px; }
+.private-gateway-deployment { display: grid; gap: 14px; padding: 16px 0; border-top: 1px solid var(--line); }
+.private-gateway-deployment > header > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; min-width: 0; align-items: center; }
+.private-gateway-deployment > header code { grid-column: 2; overflow-wrap: anywhere; }
+.private-gateway-deployment > header dl,
+.private-gateway-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.private-gateway-deployment > header dl > div,
+.private-gateway-facts > div { min-width: 0; padding: 8px 12px; border-left: 1px solid var(--line); }
+.private-gateway-deployment dt,
+.private-gateway-facts dt { color: var(--muted); font-size: 0.74rem; }
+.private-gateway-deployment dd,
+.private-gateway-facts dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.private-gateway-status { display: inline-flex; align-items: center; width: max-content; min-height: 24px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px; font-size: 0.76rem; font-weight: 700; }
+.private-gateway-status.tone-healthy { color: var(--ok); border-color: #9bd3ae; background: #effaf2; }
+.private-gateway-status.tone-revoked,
+.private-gateway-status.tone-offline { color: var(--danger); border-color: #f0aaa4; background: #fff4f2; }
+.private-gateway-status.tone-certificate_expiring { color: var(--warning); border-color: #e6bf8c; background: #fff8ed; }
+.private-gateway-timeline { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.private-gateway-timeline li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.private-gateway-timeline li > span { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--ok); }
+.private-gateway-timeline li > span.tone-rejected { background: var(--danger); }
+.private-gateway-timeline li div { display: grid; gap: 2px; min-width: 0; }
+.private-gateway-timeline small { overflow-wrap: anywhere; }
+.private-gateway-actions { justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--line); }
+.private-gateway-actions label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.private-gateway-actions select,
+.private-gateway-form-grid input,
+.private-gateway-ttl select { min-height: 38px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
+.private-gateway-actions .danger { border-color: #e4a19b; color: var(--danger); background: #fff8f7; }
+.private-gateway-empty { min-height: 160px; display: grid; place-items: center; color: var(--muted); border-top: 1px solid var(--line); }
+.private-gateway-feedback,
+.private-gateway-error { padding: 10px 12px; border-left: 3px solid var(--ok); background: #f0faf3; }
+.private-gateway-error { align-items: flex-start; flex-direction: column; border-left-color: var(--danger); background: #fff5f4; color: var(--danger); }
+.private-gateway-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
+.private-gateway-dialog::backdrop { background: rgb(24 33 47 / 45%); }
+.private-gateway-dialog > header { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.private-gateway-dialog > header > div { display: grid; gap: 3px; }
+.private-gateway-dialog form,
+.private-gateway-registration { display: grid; gap: 18px; padding: 18px; }
+.private-gateway-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.private-gateway-form-grid label,
+.private-gateway-ttl { display: grid; gap: 6px; min-width: 0; color: var(--muted); }
+.private-gateway-form-grid input,
+.private-gateway-ttl select { width: 100%; padding: 7px 9px; }
+.private-gateway-segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0; border: 0; }
+.private-gateway-segmented legend { margin-bottom: 7px; color: var(--muted); }
+.private-gateway-segmented label { position: relative; }
+.private-gateway-segmented input { position: absolute; opacity: 0; }
+.private-gateway-segmented span { display: grid; min-height: 38px; place-items: center; border: 1px solid var(--line); }
+.private-gateway-segmented label:first-of-type span { border-radius: 5px 0 0 5px; }
+.private-gateway-segmented label:last-of-type span { border-radius: 0 5px 5px 0; border-left: 0; }
+.private-gateway-segmented input:checked + span { border-color: var(--accent); background: #edf9f7; color: var(--accent-dark); font-weight: 700; }
+.private-gateway-segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.private-gateway-registration dl { display: grid; gap: 12px; margin: 0; }
+.private-gateway-registration dl > div { display: grid; gap: 5px; min-width: 0; }
+.private-gateway-registration dt { color: var(--muted); font-size: 0.78rem; }
+.private-gateway-registration dd { margin: 0; padding: 10px; border: 1px solid var(--line); background: #f8fafc; overflow-wrap: anywhere; }
+.private-gateway-form-error { min-height: 20px; margin: 0; color: var(--danger); }
+
+@media (max-width: 720px) {
+  .private-gateway-toolbar,
+  .private-gateway-deployment > header { align-items: flex-start; flex-direction: column; }
+  .private-gateway-commands { width: 100%; }
+  .private-gateway-commands .primary { flex: 1; }
+  .private-gateway-deployment > header dl,
+  .private-gateway-facts { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-deployment > header dl > div,
+  .private-gateway-facts > div { border-left: 0; border-top: 1px solid var(--line); }
+}
+
+@media (max-width: 390px) {
+  .private-gateway-form-grid,
+  .private-gateway-deployment > header dl,
+  .private-gateway-facts { grid-template-columns: 1fr; }
+  .private-gateway-actions,
+  .private-gateway-dialog-actions { align-items: stretch; flex-direction: column; }
+  .private-gateway-actions label { display: grid; }
+  .private-gateway-actions select,
+  .private-gateway-actions button,
+  .private-gateway-dialog-actions button { width: 100%; }
+  .private-gateway-timeline li { grid-template-columns: 8px minmax(0, 1fr); }
+  .private-gateway-timeline time { grid-column: 2; }
+}
+
 /* PAGE-121 tenant data lifecycle workspace. */
 .tenant-data-lifecycle {
   display: grid;

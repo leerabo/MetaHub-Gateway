@@ -149,6 +149,17 @@ import {
 } from "../features/local-models/localEndpointPageState.js";
 import { renderLocalEndpoints } from "../features/local-models/renderLocalEndpoints.js";
 import {
+  bindPrivateGatewayInteractions,
+  clearPrivateGatewayDom,
+} from "../features/private-gateways/bindPrivateGateways.js";
+import {
+  createPrivateGatewayPageState,
+  isPrivateGatewayAbortError,
+  privateGatewayPageOwner,
+  privateGatewayReadIdentitySnapshot,
+} from "../features/private-gateways/privateGatewayPageState.js";
+import { renderPrivateGateways } from "../features/private-gateways/renderPrivateGateways.js";
+import {
   createProductAnalyticsPageState,
   isProductAnalyticsAbortError,
   productAnalyticsPageOwner,
@@ -521,6 +532,13 @@ import {
   listLocalEndpoints,
   testLocalEndpoint,
 } from "../lib/localEndpoints.js";
+import {
+  createEdgeIdempotencyKey,
+  createEdgeRegistration,
+  listEdgeDeployments,
+  revokeEdgeDeployment,
+  workspaceCookieApiOrigin,
+} from "../lib/edgeManagement.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
@@ -755,6 +773,9 @@ const app = globalThis.document?.querySelector("#app") ?? null;
 const localLoopback = globalThis.window?.location?.hostname === "localhost";
 const gatewayUrl = localLoopback ? "http://127.0.0.1:8000" : "http://localhost:8000";
 const controlApiUrl = localLoopback ? "http://127.0.0.1:8001" : "http://localhost:8001";
+// Workspace cookies are Host-only; loopback Cookie APIs must use the page host
+// even while legacy Bearer traffic keeps the IPv4-only development origin.
+const workspaceControlApiUrl = workspaceCookieApiOrigin(controlApiUrl);
 const consoleUrl = globalThis.window?.location?.origin ?? "";
 // 公开邀请 fragment 必须先于认证 Storage 读取同步截获并清除，避免既有 Session 污染 accept 请求。
 const publicInvitationRoute = globalThis.window
@@ -916,6 +937,8 @@ const tenantDataLifecyclePageState = createTenantDataLifecyclePageState();
 const mcpToolPageState = createMcpToolPageState({ clearDom: clearMcpToolDom });
 // PAGE-116 的 URL/Token 只存在当前授权 Dialog；列表、创建和测试 ticket 均绑定独立 owner/generation。
 const localEndpointPageState = createLocalEndpointPageState({ clearDom: clearLocalEndpointDom });
+// PRD-120 registration token/challenge live only inside this owner and its transient Dialog DOM.
+const privateGatewayPageState = createPrivateGatewayPageState({ clearDom: clearPrivateGatewayDom });
 // PAGE-117 只持有当前授权 tenant 的七阶段聚合；DOM 清理先于 Abort 回调发生。
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
@@ -1095,6 +1118,9 @@ if (app && globalThis.window) {
         // PAGE-116 的 URL/Token DOM 和全部异步 owner 在 hash 离页时立即销毁。
         localEndpointPageState.clear();
       }
+      if (nextItemId !== "private-gateways") {
+        privateGatewayPageState.clear();
+      }
       if (nextItemId !== "growth-analytics") {
         // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
         productAnalyticsPageState.clear();
@@ -1170,6 +1196,7 @@ if (app && globalThis.window) {
       tenantDataLifecyclePageState.clear();
       mcpToolPageState.clear();
       localEndpointPageState.clear();
+      privateGatewayPageState.clear();
       productAnalyticsPageState.clear();
       customerHealthPageState.clear();
       partnerPortalPageState.clear();
@@ -1300,6 +1327,7 @@ async function start() {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
+    clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1402,6 +1430,7 @@ async function performRefresh(options = {}) {
     clearBatchJobStateOnIdentityChange(authSession.context, context);
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
+    clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1668,6 +1697,15 @@ async function performRefresh(options = {}) {
     isBackgroundRefresh
     && localEndpointPageState.blocksShellDomReplacement()
     && localEndpointPageState.enter(currentLocalEndpointOwner(consoleShellState))
+  ) {
+    return;
+  }
+  if (consoleShellState?.activeNavigationItemId !== "private-gateways") {
+    privateGatewayPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && privateGatewayPageState.blocksShellDomReplacement()
+    && privateGatewayPageState.enter(currentPrivateGatewayOwner(consoleShellState))
   ) {
     return;
   }
@@ -2498,6 +2536,9 @@ async function loadAndRenderActiveNavigation({
     case "local-models":
       await load("localEndpointsState", () => loadLocalEndpointsState(consoleShellState, refreshId));
       break;
+    case "private-gateways":
+      await load("privateGatewaysState", () => loadPrivateGatewaysState(consoleShellState, refreshId));
+      break;
     case "output-safety":
     case "request-logs":
       await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
@@ -2668,6 +2709,7 @@ function renderLogin(error, requestId) {
   tenantDataLifecyclePageState.clear();
   mcpToolPageState.clear();
   localEndpointPageState.clear();
+  privateGatewayPageState.clear();
   productAnalyticsPageState.clear();
   customerHealthPageState.clear();
   partnerPortalPageState.clear();
@@ -3063,6 +3105,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     batchJobPageState.clear();
     mcpToolPageState.clear();
     localEndpointPageState.clear();
+    privateGatewayPageState.clear();
     productAnalyticsPageState.clear();
     customerHealthPageState.clear();
     partnerPortalPageState.clear();
@@ -5438,6 +5481,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindTenantDataLifecyclePageInteractions(consoleShellState);
   bindMcpToolsPageInteractions(consoleShellState);
   bindLocalEndpointsPageInteractions(consoleShellState);
+  bindPrivateGatewayPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
@@ -6929,6 +6973,155 @@ function handleLocalEndpointAuthenticationFailure(error) {
     return true;
   }
   return false;
+}
+
+/** Construct the PRD-120 owner from live auth, backend navigation, and current hash. */
+function currentPrivateGatewayOwner(consoleShellState) {
+  const owner = privateGatewayPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "private-gateways" ? owner : null;
+}
+
+function renderCurrentPrivateGatewayPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".private-gateways-panel");
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  if (!panel || !owner || !privateGatewayPageState.enter(owner)) return false;
+  panel.innerHTML = renderPrivateGateways(
+    privateGatewayPageState.snapshot(), authSession.context, consoleShellState,
+  );
+  bindPrivateGatewayPageInteractions(consoleShellState);
+  return true;
+}
+
+function bindPrivateGatewayPageInteractions(consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  if (!owner || !privateGatewayPageState.enter(owner)) return false;
+  return bindPrivateGatewayInteractions({
+    async onRefresh() {
+      const generation = ++refreshSequence;
+      const state = await loadPrivateGatewaysState(consoleShellState, generation);
+      if (state) renderCurrentPrivateGatewayPanel(consoleShellState);
+    },
+    async onOpen() {
+      if (!privateGatewayPageState.openCreate(currentPrivateGatewayOwner(consoleShellState))) return false;
+      refreshSequence += 1;
+      renderCurrentPrivateGatewayPanel(consoleShellState);
+      return true;
+    },
+    async onClose() {
+      const closed = privateGatewayPageState.closeCreate(currentPrivateGatewayOwner(consoleShellState));
+      if (closed) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return closed;
+    },
+    async onCreate(input) { return submitPrivateGatewayCreate(input, consoleShellState); },
+    async onCopy() { return copyPrivateGatewayRegistration(consoleShellState); },
+    async onRevoke(deploymentId, reasonCode) {
+      const confirmed = globalThis.confirm?.("吊销会立即终止该 Deployment 的活跃 Edge Session。确认继续？") === true;
+      return confirmed ? submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) : false;
+    },
+  });
+}
+
+async function submitPrivateGatewayCreate(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginCreate(owner);
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await createEdgeRegistration({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+      idempotencyKey: createEdgeIdempotencyKey("registration"),
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptCreate(
+      operation, result, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectCreate(
+        operation, error, currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishCreate(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function copyPrivateGatewayRegistration(consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginCopy(owner);
+  if (!operation) return false;
+  let copyText = operation.text;
+  try {
+    const pending = writePrivateGatewayClipboard(copyText);
+    copyText = "";
+    await pending;
+    privateGatewayPageState.acceptCopy(
+      operation, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch {
+    copyText = "";
+    privateGatewayPageState.rejectCopy(
+      operation, currentPrivateGatewayOwner(consoleShellState),
+    );
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function writePrivateGatewayClipboard(value) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    await globalThis.navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = globalThis.document?.createElement?.("textarea");
+  if (!textarea || typeof globalThis.document?.execCommand !== "function") throw new Error("clipboard unavailable");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  globalThis.document.body.append(textarea);
+  try {
+    textarea.select();
+    if (globalThis.document.execCommand("copy") !== true) throw new Error("copy rejected");
+  } finally {
+    textarea.value = "";
+    textarea.remove();
+  }
+}
+
+async function submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginRevoke(owner, deploymentId);
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await revokeEdgeDeployment({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      revision: operation.revision,
+      reasonCode,
+      idempotencyKey: createEdgeIdempotencyKey("revoke"),
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptRevoke(
+      operation, result, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectRevoke(
+        operation, error, currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishRevoke(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
 }
 
 /** 由实时 capability、授权 fingerprint、后端导航和当前 hash 共同构造 PAGE-117 owner。 */
@@ -11102,6 +11295,9 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "local-models") {
     // 导航偏好请求前清除 PAGE-116 URL/Token DOM，并淘汰列表、创建和测试 ticket。
     localEndpointPageState.clear();
+  }
+  if (itemId !== "private-gateways") {
+    privateGatewayPageState.clear();
   }
   if (itemId !== "growth-analytics") {
     // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
@@ -16379,6 +16575,34 @@ async function loadLocalEndpointsState(consoleShellState, refreshId) {
   }
 }
 
+/** Read only the active Workspace's PRD-120 projection with Cookie credentials. */
+async function loadPrivateGatewaysState(consoleShellState, refreshId) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !privateGatewayPageState.enter(owner)) return null;
+  const operation = privateGatewayPageState.beginLoad(owner, refreshId);
+  if (!operation) return null;
+  try {
+    const result = await listEdgeDeployments({
+      controlApiUrl: workspaceControlApiUrl,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    privateGatewayPageState.acceptLoad(
+      operation, result, currentPrivateGatewayOwner(consoleShellState), refreshId,
+    );
+    return privateGatewayPageState.snapshot();
+  } catch (error) {
+    const currentOwner = currentPrivateGatewayOwner(consoleShellState);
+    if (refreshId !== refreshSequence
+      || !privateGatewayPageState.isLoadCurrent(operation, currentOwner, refreshId)
+      || isPrivateGatewayAbortError(error)) return null;
+    privateGatewayPageState.rejectLoad(operation, error, currentOwner, refreshId);
+    return privateGatewayPageState.snapshot();
+  } finally {
+    privateGatewayPageState.finishLoad(operation);
+  }
+}
+
 /** 读取 PAGE-117 精确聚合，并丢弃租户、导航、权限或刷新代际已过期的异步结果。 */
 async function loadProductAnalyticsState(consoleShellState, refreshId) {
   const owner = currentProductAnalyticsOwner(consoleShellState);
@@ -18185,6 +18409,13 @@ function clearMcpToolStateOnIdentityChange(previous, current) {
 function clearLocalEndpointStateOnIdentityChange(previous, current) {
   if (localEndpointReadIdentitySnapshot(previous) !== localEndpointReadIdentitySnapshot(current)) {
     localEndpointPageState.clear();
+  }
+}
+
+/** Destroy PRD-120 facts and one-use values on any Edge read owner drift. */
+function clearPrivateGatewayStateOnIdentityChange(previous, current) {
+  if (privateGatewayReadIdentitySnapshot(previous) !== privateGatewayReadIdentitySnapshot(current)) {
+    privateGatewayPageState.clear();
   }
 }
 

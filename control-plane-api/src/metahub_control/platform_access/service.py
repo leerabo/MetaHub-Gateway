@@ -24,6 +24,9 @@ from metahub_control.identity.service import (
     authenticate_global_session_in_transaction,
     valid_opaque_value,
 )
+from metahub_control.workspace_access.edge_permissions import (
+    load_verified_platform_edge_permissions,
+)
 from metahub_control.workspace_access.service import (
     authenticate_workspace_session_in_transaction,
 )
@@ -98,6 +101,12 @@ _NAVIGATION = (
         "/platform.html#infrastructure",
     ),
     ("platform.gateway.read", "gateway", "Gateway", "/platform.html#gateway"),
+    (
+        "platform.edge_fleet.read",
+        "edge-fleet",
+        "Private Gateway fleet",
+        "/platform.html#edge-fleet",
+    ),
     (
         "platform.job.read",
         "job-runtime",
@@ -2486,7 +2495,7 @@ def _authority(
         )
     extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
     parameters: tuple[object, ...] = tuple([operator_id, *([operator_id] * len(extension_queries))])
-    permissions = tuple(
+    base_permissions = tuple(
         row[0]
         for row in connection.execute(
             f"""
@@ -2500,6 +2509,12 @@ def _authority(
             parameters,
         ).fetchall()
     )
+    edge_permissions = load_verified_platform_edge_permissions(
+        connection,
+        roles=roles,
+        unavailable_error_code="platform.unavailable",
+    )
+    permissions = tuple(sorted({*base_permissions, *edge_permissions}))
     fingerprint = hashlib.sha256(
         json.dumps([roles, permissions], separators=(",", ":")).encode("ascii")
     ).hexdigest()

@@ -110,6 +110,7 @@ import {
   getPlatformUnitEconomics,
 } from "../../lib/capacityManagement.js";
 import { listPlatformResidencyEvidence } from "../../lib/dataGovernance.js";
+import { listPlatformEdgeFleet } from "../../lib/edgeManagement.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -272,6 +273,7 @@ if (root) {
       createCapacityLoadTest: (input) => createCapacityLoadTest({ controlApiUrl, ...input }),
       commandCapacityChaos: (input) => commandCapacityChaos({ controlApiUrl, ...input }),
       residencyEvidence: (input) => listPlatformResidencyEvidence({ controlApiUrl, ...input }),
+      edgeFleet: (input) => listPlatformEdgeFleet({ controlApiUrl, ...input }),
     },
   }).mount();
 }

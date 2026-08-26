@@ -98,7 +98,7 @@ SaaS平台内置`platform_owner/platform_ops/platform_security/platform_billing/
 
 企业Gateway保留的是企业AI治理工作区，而不是平台运营后台：BYOK与本地Endpoint、Provider健康、模型目录/别名/路由/评测、Project/Application、Virtual Key、用量和内部FinOps、BYOK成本价、额度预算、策略/DLP/会话与输出安全、Webhook、调用与审计日志、Prompt/文件/批处理/MCP开发工具、成员/角色、数据生命周期和私有Deployment。`owner/admin/developer/security_admin/finance_admin/legal_admin/auditor/viewer`各自只收到职责页面；`service_account`没有浏览器导航。
 
-当前tenant Console的63项导航处置以SaaS路线图Excel `11_现有导航处置`为机器可验收合同。目标企业信息架构默认折叠导航组且同一时刻只展开一组；角色任务首页给出可执行下一步；调试台、意图测试、Webhook死信和环境诊断只作为获授权高级入口。请求解释并入调用日志详情，文件安全并入文件详情/安全中心，Response Cache并入模型/路由高级配置，SDK示例/API文档/迁移指南/MCP归入开发者中心。`competitor-comparison`退出登录后产品UI，迁移兼容说明继续留在开发者文档。
+当前tenant Console的64项导航处置以SaaS路线图Excel `11_现有导航处置`为机器可验收合同。目标企业信息架构默认折叠导航组且同一时刻只展开一组；角色任务首页给出可执行下一步；调试台、意图测试、Webhook死信和环境诊断只作为获授权高级入口。请求解释并入调用日志详情，文件安全并入文件详情/安全中心，Response Cache并入模型/路由高级配置，SDK示例/API文档/迁移指南/MCP归入开发者中心。`competitor-comparison`退出登录后产品UI，迁移兼容说明继续留在开发者文档。
 
 ## 4. 服务边界
 

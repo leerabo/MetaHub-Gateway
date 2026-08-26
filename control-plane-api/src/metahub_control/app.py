@@ -48,6 +48,7 @@ from .debug_console.routes import router as debug_console_router
 from .developer_portal.routes import router as developer_portal_router
 from .disaster_recovery import router as disaster_recovery_router
 from .dlp.routes import router as dlp_router
+from .edge_management import router as edge_management_router
 from .enterprise_chat.routes import router as enterprise_chat_router
 from .enterprise_identity import router as enterprise_identity_router
 from .environments.routes import router as environments_router
@@ -286,6 +287,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(enterprise_identity_router)
+app.include_router(edge_management_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)

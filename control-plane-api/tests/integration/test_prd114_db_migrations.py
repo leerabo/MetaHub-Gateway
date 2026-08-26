@@ -347,5 +347,5 @@ def test_down_refuses_durable_enterprise_identity_facts(
 
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0111"
+    assert apply_migrations(database_url).applied[-1] == "0112"
     _healthy(database_url)

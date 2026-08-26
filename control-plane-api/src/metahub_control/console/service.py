@@ -52,6 +52,8 @@ ROLE_DASHBOARD_PAYLOAD_ALLOWED_KEYS = {
 EVENT_TYPE_BY_NAVIGATION = {
     "overview": "dashboard.viewed",
     "local-models": "console.page_viewed",
+    # PRD-120 页面事件只记录 shell 元数据，注册令牌、challenge、设备证书和 Fleet 事实不得进入事件。
+    "private-gateways": "console.page_viewed",
     # PAGE-107 页面事件只保存 shell 元数据；问题、回答与来源值仅存在浏览器活动内存，
     # 专用助手审计图也只保存枚举、计数和链路 owner，不能借 page_viewed 复制正文。
     "admin-assistant": "console.page_viewed",
@@ -279,6 +281,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "管理当前租户可访问的本地 OpenAI-compatible Endpoint。",
         "尚未注册本地模型 Endpoint。",
         41,
+    ),
+    NavigationDefinition(
+        "private-gateways",
+        "私有 Gateway",
+        "配置",
+        "private-gateways",
+        ("edge.deployment.read",),
+        "管理当前 Workspace 的私有 Gateway 注册、设备证书与吊销状态。",
+        "创建 Deployment 后复制一次性注册材料，并在客户环境完成设备注册。",
+        42,
     ),
     NavigationDefinition(
         "adapter-specs",
@@ -826,7 +838,9 @@ def get_console_navigation(
             connection, context.user.tenant_id
         )
         items = _visible_navigation_items(
-            context.permission_codes, role_permissions_by_role=role_permissions
+            context.permission_codes,
+            role_permissions_by_role=role_permissions,
+            extension_permission_codes=context.extension_permission_codes,
         )
         if workspace_scoped:
             items = [item for item in items if item.id not in WORKSPACE_NAVIGATION_EXCLUDED_IDS]
@@ -873,7 +887,10 @@ def get_user_preferences(
 
     connection = _connect(config)
     try:
-        items = _visible_navigation_items(context.permission_codes)
+        items = _visible_navigation_items(
+            context.permission_codes,
+            extension_permission_codes=context.extension_permission_codes,
+        )
         preference = _ensure_preference(connection, context, items)
         return UserPreferenceResponse(
             preference=preference, request_id=request_id, trace_id=trace_id
@@ -900,7 +917,10 @@ def update_user_preferences(
         raise ApiError("console.preference_invalid")
     connection = _connect(config)
     try:
-        items = _visible_navigation_items(context.permission_codes)
+        items = _visible_navigation_items(
+            context.permission_codes,
+            extension_permission_codes=context.extension_permission_codes,
+        )
         current = _ensure_preference(connection, context, items)
         active_navigation_item_id = (
             _validate_navigation_item(payload.active_navigation_item_id, items)
@@ -955,7 +975,10 @@ def record_console_event(
     事件 payload 会先经过字段白名单校验，确保密钥、Token、Prompt、Response 不会通过控制台事件入库。
     """
 
-    items = _visible_navigation_items(context.permission_codes)
+    items = _visible_navigation_items(
+        context.permission_codes,
+        extension_permission_codes=context.extension_permission_codes,
+    )
     item = _navigation_definition(payload.navigation_item_id, items)
     is_role_dashboard_event = payload.event_type == "dashboard.role_viewed"
     allowed_payload_keys = (
@@ -1090,6 +1113,7 @@ def _visible_navigation_items(
     permission_codes: tuple[str, ...],
     *,
     role_permissions_by_role: dict[str, frozenset[str]] | None = None,
+    extension_permission_codes: tuple[str, ...] = (),
 ) -> list[NavigationItem]:
     """按当前数据库权限快照生成导航，不根据角色名推导当前用户入口。
 
@@ -1107,6 +1131,26 @@ def _visible_navigation_items(
     if normalized != tuple(permission_codes):
         # 导航只信任本次数据库权限快照；异常时必须失败关闭并拒绝恢复受限页面。
         raise ApiError("rbac.matrix_integrity_failed")
+    # Workspace sessions carry every verified extension family in one canonical
+    # tuple.  Accept the complete known set before projecting the subset used by
+    # Console navigation; an older extension must not make a newer one unusable.
+    allowed_extensions = {
+        "data_governance.manage",
+        "data_governance.read",
+        "provider_catalog.read",
+        "legal_hold.manage",
+        "legal_hold.read",
+        "machine_identity.manage",
+        "machine_identity.read",
+        "edge.deployment.read",
+        "edge.deployment.manage",
+    }
+    normalized_extensions = tuple(sorted(set(extension_permission_codes)))
+    if (
+        normalized_extensions != tuple(extension_permission_codes)
+        or not set(normalized_extensions) <= allowed_extensions
+    ):
+        raise ApiError("rbac.matrix_integrity_failed")
     role_matrix = (
         ROLE_GRANTABLE_PERMISSIONS
         if role_permissions_by_role is None
@@ -1116,7 +1160,7 @@ def _visible_navigation_items(
     if set(role_matrix) != set(ROLE_CODES):
         # 导航只信任本次数据库权限快照；异常时必须失败关闭并拒绝恢复受限页面。
         raise ApiError("rbac.matrix_integrity_failed")
-    granted = set(normalized)
+    granted = {*normalized, *normalized_extensions}
     return [
         NavigationItem(
             id=item.id,
