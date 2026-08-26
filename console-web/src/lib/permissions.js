@@ -105,6 +105,10 @@ export const PERMISSIONS = Object.freeze({
   // PRD-120 Workspace Gateway 读取和管理独立授权；Platform Fleet 使用另一凭据域。
   EDGE_DEPLOYMENT_READ: "edge.deployment.read",
   EDGE_DEPLOYMENT_MANAGE: "edge.deployment.manage",
+  // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
+  EDGE_TELEMETRY_READ: "edge.telemetry.read",
+  EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",
+  EDGE_USAGE_READ: "edge.usage.read",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。

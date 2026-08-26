@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from metahub_shared.private_gateway import TelemetryLevel, TelemetryStream
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -254,6 +255,83 @@ class EdgeAckResponse(_StrictModel):
     trace_id: str
 
 
+class EdgeTelemetryPolicyPatchRequest(_StrictModel):
+    telemetry_level: TelemetryLevel
+
+
+class EdgeTelemetryPolicySummary(_StrictModel):
+    policy_id: str = Field(pattern=r"^etp_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    telemetry_level: TelemetryLevel
+    revision: int = Field(ge=1)
+    updated_at: datetime
+
+
+class EdgeTelemetryCursorSummary(_StrictModel):
+    cursor_id: str = Field(pattern=r"^euc_[0-9a-f]{32}$")
+    stream: TelemetryStream
+    epoch_id: str = Field(pattern=r"^ete_[0-9a-f]{32}$")
+    contiguous_sequence: int = Field(ge=0)
+    highest_seen_sequence: int = Field(ge=0)
+    expected_sequence: int = Field(ge=1)
+    updated_at: datetime
+
+
+class EdgeUsageTotals(_StrictModel):
+    request_count: int = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cache_tokens: int = Field(ge=0)
+    cost_cny_micros: int = Field(ge=0)
+    cost_usd_micros: int = Field(ge=0)
+
+
+class EdgeFailureCountSummary(_StrictModel):
+    component_code: Literal[
+        "gateway", "config_sync", "provider_pool", "usage_spool", "telemetry_sync"
+    ]
+    failure_code: Literal[
+        "capacity_exhausted",
+        "config_unavailable",
+        "internal_error",
+        "network_unreachable",
+        "policy_denied",
+        "provider_5xx",
+        "provider_rate_limited",
+        "provider_timeout",
+        "request_cancelled",
+    ]
+    count: int = Field(ge=1)
+
+
+class EdgeTelemetryWatermarkResponse(_StrictModel):
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    policy: EdgeTelemetryPolicySummary | None = None
+    cursors: tuple[EdgeTelemetryCursorSummary, ...] = ()
+    usage: EdgeUsageTotals | None = None
+    failures: tuple[EdgeFailureCountSummary, ...] = ()
+    last_receipt_at: datetime | None = None
+    lag_seconds: int | None = Field(default=None, ge=0)
+    backlog_seconds: int | None = Field(default=None, ge=0)
+    request_id: str
+    trace_id: str
+
+
+class EdgeAgentTelemetryWatermarkResponse(_StrictModel):
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    policy: EdgeTelemetryPolicySummary
+    cursors: tuple[EdgeTelemetryCursorSummary, ...]
+    request_id: str
+    trace_id: str
+
+
+class EdgeTelemetryPolicyResponse(_StrictModel):
+    policy: EdgeTelemetryPolicySummary
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
 class PlatformEdgeFleetSummary(_StrictModel):
     deployment_id: str
     region_code: str
@@ -280,6 +358,28 @@ class PlatformEdgeFleetSummary(_StrictModel):
         "storage_failed",
     ] = "not_published"
     desired_state_drifted: bool = False
+    telemetry_last_receipt_at: datetime | None = None
+    telemetry_lag_seconds: int | None = Field(default=None, ge=0)
+    telemetry_backlog_seconds: int | None = Field(default=None, ge=0)
+    telemetry_cpu_bucket: Literal["unknown", "low", "medium", "high", "critical"] = (
+        "unknown"
+    )
+    telemetry_memory_bucket: Literal[
+        "unknown", "low", "medium", "high", "critical"
+    ] = "unknown"
+    telemetry_error_rate_basis_points: int = Field(default=0, ge=0, le=10_000)
+    telemetry_failure_code: Literal[
+        "none",
+        "capacity_exhausted",
+        "config_unavailable",
+        "internal_error",
+        "network_unreachable",
+        "policy_denied",
+        "provider_5xx",
+        "provider_rate_limited",
+        "provider_timeout",
+        "request_cancelled",
+    ] = "none"
     updated_at: datetime
 
 

@@ -33,7 +33,7 @@ def test_cycle_detector_accepts_backward_dag_and_rejects_cycle() -> None:
     assert not VALIDATOR._is_acyclic({90: {91}, 91: {90}})
 
 
-def test_repository_roadmap_baseline_passes_after_prd121_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-122")
+def test_repository_roadmap_baseline_passes_after_prd122_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-123")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-122"
+    assert report.next_prd == "PRD-123"

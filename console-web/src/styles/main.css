@@ -87,6 +87,31 @@
 .private-gateway-state-actions .danger { border-color: #e4a19b; background: #fff8f7; color: var(--danger); }
 .private-gateway-state-empty,
 .private-gateway-rollback-reference { margin: 0; color: var(--muted); }
+.private-gateway-telemetry { display: grid; gap: 12px; padding: 14px; border-bottom: 1px solid var(--line); }
+.private-gateway-telemetry > header { align-items: flex-start; }
+.private-gateway-telemetry > header > div { display: grid; gap: 6px; }
+.private-gateway-policy-revision { color: var(--muted); font-size: 0.78rem; font-weight: 700; }
+.private-gateway-policy { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(440px, 100%); }
+.private-gateway-policy button { min-height: 36px; border-radius: 0; }
+.private-gateway-policy button:first-child { border-radius: 5px 0 0 5px; }
+.private-gateway-policy button:last-child { border-radius: 0 5px 5px 0; }
+.private-gateway-policy button + button { border-left: 0; }
+.private-gateway-policy button[aria-pressed="true"] { border-color: var(--accent); background: #edf9f7; color: var(--accent-dark); font-weight: 700; }
+.private-gateway-cursors { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); }
+.private-gateway-cursors > div { display: grid; gap: 3px; min-width: 0; padding: 9px 10px; }
+.private-gateway-cursors > div + div { border-left: 1px solid var(--line); }
+.private-gateway-cursors span,
+.private-gateway-cursors small { overflow-wrap: anywhere; }
+.private-gateway-cursors small { color: var(--muted); }
+.private-gateway-usage { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); border: 1px solid var(--line); }
+.private-gateway-usage > div { min-width: 0; padding: 9px 10px; background: var(--panel); }
+.private-gateway-usage dt { color: var(--muted); font-size: 0.72rem; }
+.private-gateway-usage dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.private-gateway-failures { overflow-x: auto; }
+.private-gateway-failures table { width: 100%; min-width: 420px; border-collapse: collapse; }
+.private-gateway-failures th,
+.private-gateway-failures td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.private-gateway-failure-empty { color: var(--muted); }
 .private-gateway-state-form { display: grid; gap: 16px; padding: 18px; }
 .private-gateway-state-form > label:not(.private-gateway-confirm) { display: grid; gap: 6px; color: var(--muted); }
 .private-gateway-state-form input,
@@ -127,11 +152,17 @@
   .private-gateway-toolbar,
   .private-gateway-deployment > header { align-items: flex-start; flex-direction: column; }
   .private-gateway-state > header { align-items: stretch; flex-direction: column; }
+  .private-gateway-telemetry > header { align-items: stretch; flex-direction: column; }
   .private-gateway-commands { width: 100%; }
   .private-gateway-commands .primary { flex: 1; }
   .private-gateway-deployment > header dl,
   .private-gateway-facts { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-state-diff { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-telemetry .private-gateway-state-diff > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .private-gateway-cursors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-cursors > div:nth-child(odd) { border-left: 0; }
+  .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .private-gateway-usage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-deployment > header dl > div,
   .private-gateway-facts > div { border-left: 0; border-top: 1px solid var(--line); }
 }
@@ -141,6 +172,17 @@
   .private-gateway-deployment > header dl,
   .private-gateway-facts { grid-template-columns: 1fr; }
   .private-gateway-state-diff { grid-template-columns: 1fr; }
+  .private-gateway-policy,
+  .private-gateway-cursors,
+  .private-gateway-usage { grid-template-columns: 1fr; }
+  .private-gateway-cursors > div + div,
+  .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); border-left: 0; }
+  .private-gateway-policy button,
+  .private-gateway-policy button:first-child,
+  .private-gateway-policy button:last-child { border-radius: 0; }
+  .private-gateway-policy button:first-child { border-radius: 5px 5px 0 0; }
+  .private-gateway-policy button:last-child { border-radius: 0 0 5px 5px; }
+  .private-gateway-policy button + button { border-top: 0; border-left: 1px solid var(--line); }
   .private-gateway-actions,
   .private-gateway-dialog-actions { align-items: stretch; flex-direction: column; }
   .private-gateway-state-actions { align-items: stretch; flex-direction: column; }

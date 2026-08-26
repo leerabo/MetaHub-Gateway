@@ -170,6 +170,12 @@ def create_workspace_registration(
                 now_db,
             ),
         )
+        _insert_default_telemetry_policy_if_available(
+            connection,
+            context,
+            deployment_id=deployment_id,
+            now=now_db,
+        )
         connection.execute(
             """
             INSERT INTO edge_registration_intents(
@@ -1030,8 +1036,36 @@ def list_platform_edge_fleet(
         raise ApiError("platform.permission_denied")
     connection = _connect(config)
     try:
+        telemetry_available = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' "
+                "AND name='edge_fleet_telemetry_projections'"
+            ).fetchone()
+            is not None
+        )
+        telemetry_columns = (
+            "telemetry.last_receipt_at telemetry_last_receipt_at,"
+            "telemetry.lag_seconds telemetry_lag_seconds,"
+            "telemetry.backlog_seconds telemetry_backlog_seconds,"
+            "coalesce(telemetry.cpu_bucket,'unknown') telemetry_cpu_bucket,"
+            "coalesce(telemetry.memory_bucket,'unknown') telemetry_memory_bucket,"
+            "coalesce(telemetry.error_rate_basis_points,0) "
+            "telemetry_error_rate_basis_points,"
+            "coalesce(telemetry.last_failure_code,'none') telemetry_failure_code"
+            if telemetry_available
+            else "NULL telemetry_last_receipt_at,NULL telemetry_lag_seconds,"
+            "NULL telemetry_backlog_seconds,'unknown' telemetry_cpu_bucket,"
+            "'unknown' telemetry_memory_bucket,0 telemetry_error_rate_basis_points,"
+            "'none' telemetry_failure_code"
+        )
+        telemetry_join = (
+            "LEFT JOIN edge_fleet_telemetry_projections telemetry "
+            "ON telemetry.edge_deployment_id=deployment.edge_deployment_id"
+            if telemetry_available
+            else ""
+        )
         rows = connection.execute(
-            """
+            f"""
             SELECT deployment.edge_deployment_id,deployment.region_code,deployment.mode,
               deployment.status,deployment.revision,deployment.revocation_generation,
               deployment.agent_version,deployment.health_code,
@@ -1040,10 +1074,12 @@ def list_platform_edge_fleet(
               coalesce(head.applied_generation,0) applied_generation,
               coalesce(head.lkg_generation,0) lkg_generation,
               coalesce(head.last_ack_status,'not_published') desired_state_status,
-              coalesce(head.last_reason_code,'not_published') desired_state_reason_code
+              coalesce(head.last_reason_code,'not_published') desired_state_reason_code,
+              {telemetry_columns}
             FROM edge_deployments deployment
             LEFT JOIN edge_desired_state_heads head
               ON head.edge_deployment_id=deployment.edge_deployment_id
+            {telemetry_join}
             ORDER BY deployment.updated_at DESC,deployment.edge_deployment_id DESC
             """
         ).fetchall()
@@ -1068,6 +1104,25 @@ def list_platform_edge_fleet(
                     desired_state_drifted=(
                         int(row["desired_generation"]) != int(row["applied_generation"])
                     ),
+                    telemetry_last_receipt_at=_optional_datetime(
+                        row["telemetry_last_receipt_at"]
+                    ),
+                    telemetry_lag_seconds=(
+                        int(row["telemetry_lag_seconds"])
+                        if row["telemetry_lag_seconds"] is not None
+                        else None
+                    ),
+                    telemetry_backlog_seconds=(
+                        int(row["telemetry_backlog_seconds"])
+                        if row["telemetry_backlog_seconds"] is not None
+                        else None
+                    ),
+                    telemetry_cpu_bucket=str(row["telemetry_cpu_bucket"]),
+                    telemetry_memory_bucket=str(row["telemetry_memory_bucket"]),
+                    telemetry_error_rate_basis_points=int(
+                        row["telemetry_error_rate_basis_points"]
+                    ),
+                    telemetry_failure_code=str(row["telemetry_failure_code"]),
                     updated_at=_datetime(row["updated_at"]),
                 )
                 for row in rows
@@ -1579,6 +1634,60 @@ def _workspace_idempotency(
         ).encode(),
         hashlib.sha256,
     ).hexdigest()
+
+
+def _insert_default_telemetry_policy_if_available(
+    connection: sqlite3.Connection,
+    context: WorkspaceSessionContext,
+    *,
+    deployment_id: str,
+    now: str,
+) -> None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' "
+            "AND name='edge_telemetry_policies'"
+        ).fetchone()
+        is None
+    ):
+        return
+    policy_id = _id("etp_")
+    request_sha256 = _digest(
+        {"deployment_id": deployment_id, "source": "system_default", "level": "minimal"}
+    )
+    connection.execute(
+        """
+        INSERT INTO edge_telemetry_policies(
+          edge_telemetry_policy_id,workspace_id,tenant_id,edge_deployment_id,revision,
+          telemetry_level,source_code,actor_account_id,idempotency_sha256,
+          request_sha256,created_at)
+        VALUES(?,?,?,?,1,'minimal','system_default',?,NULL,?,?)
+        """,
+        (
+            policy_id,
+            context.workspace_id,
+            context.tenant_id,
+            deployment_id,
+            context.account_id,
+            request_sha256,
+            now,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO edge_telemetry_policy_heads(
+          edge_deployment_id,workspace_id,tenant_id,edge_telemetry_policy_id,
+          revision,telemetry_level,updated_at)
+        VALUES(?,?,?,?,1,'minimal',?)
+        """,
+        (
+            deployment_id,
+            context.workspace_id,
+            context.tenant_id,
+            policy_id,
+            now,
+        ),
+    )
 
 
 def _secret_hmac(config: AppConfig, purpose: str, value: str) -> str:

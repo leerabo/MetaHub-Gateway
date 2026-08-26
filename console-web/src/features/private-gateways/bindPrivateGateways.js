@@ -1,4 +1,4 @@
-/** PRD-120/121 registration and desired-state dialog binding. */
+/** PRD-120..122 registration, desired-state, and telemetry-policy binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -23,6 +23,12 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
     button.addEventListener("click", () => void callbacks.onStateOpen?.(
       button.dataset.deploymentId ?? "",
       button.dataset.privateGatewayStateOpen ?? "",
+    ));
+  });
+  root.querySelectorAll("[data-private-gateway-policy]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onTelemetryPolicy?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.level ?? "",
     ));
   });
   bindDialog(root, callbacks);

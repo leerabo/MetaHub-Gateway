@@ -1197,7 +1197,8 @@ def _authenticated_agent(
         """
         SELECT session.*,deployment.status deployment_status,
           deployment.revocation_generation current_revocation_generation,
-          identity.status identity_status,certificate.status certificate_status,
+          identity.status identity_status,identity.capability_codes_json,
+          certificate.status certificate_status,
           certificate.not_after
         FROM edge_sessions session
         JOIN edge_deployments deployment

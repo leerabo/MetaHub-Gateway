@@ -1,4 +1,4 @@
-/** PRD-120/121 safe identity, desired/actual/LKG, and one-use registration views. */
+/** PRD-120..122 safe identity, desired state, telemetry, and registration views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 
@@ -8,7 +8,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
   return `
     <div class="private-gateway-workspace" data-private-gateway-root>
       <header class="private-gateway-toolbar">
-        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、期望状态与本地恢复水位</p></div>
+        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、期望状态与遥测水位</p></div>
         <div class="private-gateway-commands">
           <button type="button" class="private-gateway-icon" data-private-gateway-refresh title="刷新" aria-label="刷新私有 Gateway"${state.busy ? " disabled" : ""}>&#8635;</button>
           ${owner.canManage ? `<button type="button" class="primary" data-private-gateway-open${state.busy ? " disabled" : ""}>创建 Deployment</button>` : ""}
@@ -46,6 +46,7 @@ function renderDeployment(item, state, owner) {
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
+      ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderTimeline(item.recent_events)}
       ${owner.canManage && active ? `
         <div class="private-gateway-actions">
@@ -55,6 +56,56 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderTelemetry(deployment, entry, pageState, owner) {
+  if (!owner.canReadTelemetry && !owner.canReadUsage) return "";
+  if (!entry) {
+    return '<section class="private-gateway-telemetry" aria-label="遥测同步"><div class="private-gateway-state-empty">遥测水位尚未读取</div></section>';
+  }
+  const policy = entry.policy;
+  const cursors = entry.cursors ?? [];
+  const usage = entry.usage;
+  const failures = entry.failures ?? [];
+  return `<section class="private-gateway-telemetry" aria-label="遥测同步">
+    <header>
+      <div><h5>遥测同步</h5><span class="private-gateway-state-status tone-${telemetryTone(entry)}">${telemetryStatus(entry)}</span></div>
+      ${policy ? `<span class="private-gateway-policy-revision">Policy r${integer(policy.revision)}</span>` : ""}
+    </header>
+    ${owner.canManageTelemetry && policy ? renderPolicyControl(
+      deployment.deployment_id,
+      policy.telemetry_level,
+      pageState.busy,
+    ) : ""}
+    ${owner.canReadTelemetry ? `<dl class="private-gateway-state-diff">
+      ${fact("最近 receipt", formatTime(entry.last_receipt_at))}
+      ${fact("在线延迟", seconds(entry.lag_seconds))}
+      ${fact("积压时长", seconds(entry.backlog_seconds))}
+    </dl>
+    <div class="private-gateway-cursors" aria-label="同步水位">
+      ${cursors.map((cursor) => `<div><strong>${escapeHtml(streamLabel(cursor.stream))}</strong><span>ACK ${integer(cursor.contiguous_sequence)}</span><small>next ${integer(cursor.expected_sequence)} · seen ${integer(cursor.highest_seen_sequence)}</small></div>`).join("") || '<span class="private-gateway-state-empty">尚无同步水位</span>'}
+    </div>
+    ${renderFailures(failures)}` : ""}
+    ${usage ? `<dl class="private-gateway-usage">
+      ${fact("请求", integer(usage.request_count))}
+      ${fact("Input tokens", integer(usage.input_tokens))}
+      ${fact("Output tokens", integer(usage.output_tokens))}
+      ${fact("Cache tokens", integer(usage.cache_tokens))}
+      ${fact("CNY", micros(usage.cost_cny_micros, "CNY"))}
+      ${fact("USD", micros(usage.cost_usd_micros, "USD"))}
+    </dl>` : ""}
+  </section>`;
+}
+
+function renderPolicyControl(deploymentId, current, busy) {
+  return `<div class="private-gateway-policy" role="group" aria-label="遥测策略">
+    ${["minimal", "operational", "billing"].map((level) => `<button type="button" data-private-gateway-policy data-deployment-id="${escapeAttribute(deploymentId)}" data-level="${level}" aria-pressed="${current === level}"${busy || current === level ? " disabled" : ""}>${policyLabel(level)}</button>`).join("")}
+  </div>`;
+}
+
+function renderFailures(failures) {
+  if (!failures.length) return '<div class="private-gateway-failure-empty">无失败事实</div>';
+  return `<div class="private-gateway-failures"><table><thead><tr><th>组件</th><th>失败码</th><th>计数</th></tr></thead><tbody>${failures.map((item) => `<tr><td>${escapeHtml(item.component_code)}</td><td><code>${escapeHtml(item.failure_code)}</code></td><td>${integer(item.count)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function renderDesiredState(deployment, entry, pageState, owner) {
@@ -195,6 +246,8 @@ function renderFeedback(feedback) {
     "edge.desired_state_approved": "高风险变更已批准并发布",
     "edge.desired_state_rejected": "高风险变更已拒绝",
     "edge.desired_state_rolled_back": "已从 LKG 创建新的回滚 generation",
+    "edge.telemetry_policy_updated": "遥测策略已更新",
+    "edge.telemetry_policy_replayed": "已恢复遥测策略结果",
   };
   if (feedback.kind === "error") return renderError(feedback);
   return `<div class="private-gateway-feedback" role="status"><strong>${escapeHtml(labels[feedback.code] ?? feedback.code)}</strong><span>request_id: ${escapeHtml(feedback.requestId ?? "-")}</span></div>`;
@@ -211,6 +264,12 @@ function certificateStatusLabel(value) { return ({ active: "有效", draining: "
 function desiredTone(value) { if (value.status === "approval_pending") return "pending"; if (value.last_ack_status === "failed") return "failed"; return value.drifted ? "drifted" : "applied"; }
 function desiredStatusLabel(value) { if (value.status === "approval_pending") return "等待审批"; if (value.last_ack_status === "failed") return "应用失败"; if (value.drifted) return "等待收敛"; return "已收敛"; }
 function ackLabel(value) { return ({ not_observed: "未观测", applied: "已应用", failed: "失败" })[value] ?? "未知"; }
+function telemetryTone(value) { if (value.lag_seconds === null) return "not_observed"; if (value.lag_seconds > 60) return "drifted"; return "applied"; }
+function telemetryStatus(value) { if (value.last_receipt_at === null) return "未接收"; return value.lag_seconds > 60 ? "延迟" : "已同步"; }
+function policyLabel(value) { return ({ minimal: "Minimal", operational: "Operational", billing: "Billing" })[value] ?? "-"; }
+function streamLabel(value) { return ({ health: "Health", operational: "Operational", usage: "Usage", failure: "Failure" })[value] ?? value; }
+function seconds(value) { return Number.isSafeInteger(value) ? `${value}s` : "-"; }
+function micros(value, currency) { return Number.isSafeInteger(value) ? `${currency} ${(value / 1_000_000).toFixed(6)}` : "-"; }
 function stateActionLabel(value) { return ({ publish: "发布", approve: "批准", reject: "拒绝", rollback: "回滚" })[value] ?? "提交"; }
 function eventLabel(value) { return ({ "edge.registered": "设备注册", "edge.certificate_rotated": "证书轮换", "edge.revoked": "Deployment 吊销", "edge.authentication_failed": "认证失败" })[value] ?? value; }
 function formatTime(value) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }

@@ -537,7 +537,9 @@ import {
   createEdgeRegistration,
   decideEdgeDesiredState,
   getEdgeDesiredState,
+  getEdgeTelemetryWatermark,
   listEdgeDeployments,
+  patchEdgeTelemetryPolicy,
   publishEdgeDesiredState,
   rollbackEdgeDesiredState,
   revokeEdgeDeployment,
@@ -7038,11 +7040,60 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
     async onStateCommand(input) {
       return submitPrivateGatewayStateCommand(input, consoleShellState);
     },
+    async onTelemetryPolicy(deploymentId, telemetryLevel) {
+      return submitPrivateGatewayTelemetryPolicy(
+        deploymentId,
+        telemetryLevel,
+        consoleShellState,
+      );
+    },
     async onRevoke(deploymentId, reasonCode) {
       const confirmed = globalThis.confirm?.("吊销会立即终止该 Deployment 的活跃 Edge Session。确认继续？") === true;
       return confirmed ? submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) : false;
     },
   });
+}
+
+async function submitPrivateGatewayTelemetryPolicy(
+  deploymentId,
+  telemetryLevel,
+  consoleShellState,
+) {
+  const operation = privateGatewayPageState.beginTelemetryPolicy(
+    currentPrivateGatewayOwner(consoleShellState),
+    deploymentId,
+    telemetryLevel,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await patchEdgeTelemetryPolicy({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      telemetryLevel: operation.telemetryLevel,
+      expectedRevision: operation.expectedRevision,
+      idempotencyKey: createEdgeIdempotencyKey("telemetry-policy"),
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptTelemetryPolicy(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectTelemetryPolicy(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishTelemetryPolicy(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
 }
 
 async function submitPrivateGatewayStateCommand(input, consoleShellState) {
@@ -16656,10 +16707,12 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       controlApiUrl: workspaceControlApiUrl,
       signal: operation.controller.signal,
     });
-    const desiredStates = await loadPrivateGatewayDesiredStates(
-      result.deployments,
-      operation.controller.signal,
-    );
+    const [desiredStates, telemetryStates] = await Promise.all([
+      loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
+      owner.canReadTelemetry || owner.canReadUsage
+        ? loadPrivateGatewayTelemetryStates(result.deployments, operation.controller.signal)
+        : Promise.resolve([]),
+    ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
       operation,
@@ -16667,6 +16720,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       currentPrivateGatewayOwner(consoleShellState),
       refreshId,
       desiredStates,
+      telemetryStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -16679,6 +16733,29 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayTelemetryStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getEdgeTelemetryWatermark({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = Object.freeze({ deploymentId, response });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 async function loadPrivateGatewayDesiredStates(deployments, signal) {

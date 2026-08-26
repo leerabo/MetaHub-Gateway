@@ -1468,8 +1468,8 @@ function edgeFleetView(state) {
     <section class="platform-band">
       ${state.loading && !state.edgeFleet ? '<div class="platform-empty" role="status">正在读取 Fleet 摘要</div>' : `
         <div class="platform-table-wrap"><table class="platform-edge-fleet-table">
-          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>期望 / 实际 / LKG</th><th>配置状态</th><th>Revision</th></tr></thead>
-          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 9)}</tbody>
+          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>期望 / 实际 / LKG</th><th>配置状态</th><th>遥测</th><th>资源</th><th>错误</th><th>Revision</th></tr></thead>
+          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 12)}</tbody>
         </table></div>`}
     </section>`;
 }
@@ -1484,9 +1484,14 @@ function edgeFleetRow(item) {
     <td data-label="最近连接"><strong>${formatOptionalTime(item.last_connected_at)}</strong></td>
     <td data-label="期望 / 实际 / LKG"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong><small>${item.desired_state_drifted ? `lag ${number(Math.max(0, item.desired_generation - item.applied_generation))}` : "converged"}</small></td>
     <td data-label="配置状态">${status(item.desired_state_status)}<small>${escapeHtml(statusLabel(item.desired_state_reason_code))}</small></td>
+    <td data-label="遥测"><strong>${formatOptionalTime(item.telemetry_last_receipt_at)}</strong><small>lag ${optionalNumber(item.telemetry_lag_seconds)}s · backlog ${optionalNumber(item.telemetry_backlog_seconds)}s</small></td>
+    <td data-label="资源"><strong>CPU ${escapeHtml(item.telemetry_cpu_bucket)}</strong><small>Memory ${escapeHtml(item.telemetry_memory_bucket)}</small></td>
+    <td data-label="错误"><strong>${number(item.telemetry_error_rate_basis_points)} bp</strong><small>${escapeHtml(item.telemetry_failure_code)}</small></td>
     <td data-label="Revision"><strong>${number(item.revision)}</strong></td>
   </tr>`;
 }
+
+function optionalNumber(value) { return Number.isSafeInteger(value) ? number(value) : "-"; }
 
 // Cell 行保持固定枚举列，避免把拓扑地址或客户信息扩展进运维表格。
 function gatewayCellRow(cell) {

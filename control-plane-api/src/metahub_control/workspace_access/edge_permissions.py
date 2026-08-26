@@ -12,6 +12,12 @@ EDGE_WORKSPACE_ROLE_PERMISSIONS = {
     "developer": ("edge.deployment.read",),
     "security_admin": ("edge.deployment.read",),
 }
+EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": ("edge.telemetry.manage", "edge.telemetry.read", "edge.usage.read"),
+    "admin": ("edge.telemetry.manage", "edge.telemetry.read", "edge.usage.read"),
+    "security_admin": ("edge.telemetry.manage", "edge.telemetry.read"),
+    "finance_admin": ("edge.usage.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -25,15 +31,29 @@ def load_verified_workspace_edge_permissions(
     role_code: str,
     unavailable_error_code: str,
 ) -> tuple[str, ...]:
-    return _load_verified_permissions(
-        connection,
-        role_code=role_code,
-        expected_by_role=EDGE_WORKSPACE_ROLE_PERMISSIONS,
-        catalog_table="workspace_edge_permission_extensions",
-        assignments_table="workspace_edge_role_permissions",
-        introduced_migration="0112",
-        unavailable_error_code=unavailable_error_code,
+    permissions = set(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_permission_extensions",
+            assignments_table="workspace_edge_role_permissions",
+            introduced_migration="0112",
+            unavailable_error_code=unavailable_error_code,
+        )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_telemetry_permission_extensions",
+            assignments_table="workspace_edge_telemetry_role_permissions",
+            introduced_migration="0114",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
+    return tuple(sorted(permissions))
 
 
 def load_verified_platform_edge_permissions(
@@ -133,6 +153,7 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 __all__ = (
     "EDGE_PLATFORM_ROLE_PERMISSIONS",
+    "EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_WORKSPACE_ROLE_PERMISSIONS",
     "load_verified_platform_edge_permissions",
     "load_verified_workspace_edge_permissions",

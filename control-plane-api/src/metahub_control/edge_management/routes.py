@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
+import zlib
 from functools import partial
 from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
-from metahub_shared.private_gateway import canonical_edge_json_bytes
+from metahub_shared.private_gateway import (
+    EdgeTelemetryBatch,
+    EdgeTelemetryError,
+    EdgeTelemetryReceiptWire,
+    canonical_edge_json_bytes,
+    reject_forbidden_telemetry_fields,
+)
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
@@ -48,6 +56,7 @@ from .models import (
     EdgeAckCreateRequest,
     EdgeAckResponse,
     EdgeAgentRegistrationRequest,
+    EdgeAgentTelemetryWatermarkResponse,
     EdgeCertificateResponse,
     EdgeCertificateRotationRequest,
     EdgeDeploymentListResponse,
@@ -60,6 +69,9 @@ from .models import (
     EdgeDesiredStateRollbackRequest,
     EdgeSessionCreateRequest,
     EdgeSessionResponse,
+    EdgeTelemetryPolicyPatchRequest,
+    EdgeTelemetryPolicyResponse,
+    EdgeTelemetryWatermarkResponse,
     PlatformEdgeFleetResponse,
     WorkspaceRegistrationCreateRequest,
     WorkspaceRegistrationResponse,
@@ -73,10 +85,18 @@ from .service import (
     revoke_edge_deployment,
     rotate_edge_certificate,
 )
+from .telemetry_service import (
+    get_agent_telemetry_watermark,
+    get_workspace_telemetry_watermark,
+    patch_workspace_telemetry_policy,
+    receive_agent_telemetry,
+)
 
 router = APIRouter(tags=["edge-management"])
 _WORK_LIMITER = anyio.CapacityLimiter(4)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
+_MAX_TELEMETRY_COMPRESSED_BYTES = 262_144
+_MAX_TELEMETRY_BYTES = 1_048_576
 _UNTRUSTED_CERT_HEADERS = frozenset(
     {
         b"ssl-client-cert",
@@ -340,6 +360,92 @@ async def post_edge_rollback(
     return result
 
 
+@router.post(
+    "/edge/telemetry/batches",
+    response_model=EdgeTelemetryReceiptWire,
+)
+async def post_edge_telemetry_batch(
+    request: Request, response: Response
+) -> EdgeTelemetryReceiptWire:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(await _strict_telemetry_json(request), EdgeTelemetryBatch)
+    result = await _run(
+        receive_agent_telemetry,
+        request.app.state.config,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/telemetry-watermark",
+    response_model=EdgeTelemetryWatermarkResponse | EdgeAgentTelemetryWatermarkResponse,
+)
+async def get_edge_telemetry_watermark(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeTelemetryWatermarkResponse | EdgeAgentTelemetryWatermarkResponse:
+    _reject_query(request)
+    if _cookie_values(request, WORKSPACE_SESSION_COOKIE):
+        _prepare_workspace(request, write=False)
+        result = await _run(
+            get_workspace_telemetry_watermark,
+            request.app.state.config,
+            deployment_id,
+            session_token=_workspace_cookie(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    else:
+        fingerprint = _prepare_agent(request, require_mtls=True)
+        result = await _run(
+            get_agent_telemetry_watermark,
+            request.app.state.config,
+            deployment_id,
+            verified_fingerprint=fingerprint,
+            edge_session_token=_edge_session(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    response.headers["ETag"] = f'"{result.policy.revision if result.policy else 0}"'
+    _edge_private(response)
+    return result
+
+
+@router.patch(
+    "/edge/deployments/{deployment_id}/telemetry-policy",
+    response_model=EdgeTelemetryPolicyResponse,
+)
+async def patch_edge_telemetry_policy(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeTelemetryPolicyResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeTelemetryPolicyPatchRequest
+    )
+    result = await _run(
+        patch_workspace_telemetry_policy,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        expected_revision=_if_match(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.policy.revision}"'
+    _edge_private(response)
+    return result
+
+
 def require_platform_edge_fleet(request: Request) -> PlatformContext:
     if (
         _raw_headers(request, b"authorization")
@@ -462,6 +568,75 @@ def _model(payload: dict[str, Any], model_type):
         return model_type.model_validate(payload)
     except ValueError:
         raise ApiError("edge.request_invalid") from None
+
+
+async def _strict_telemetry_json(request: Request) -> dict[str, Any]:
+    content_types = _raw_headers(request, b"content-type")
+    if len(content_types) != 1 or re.fullmatch(
+        r"application/json(?:;\s*charset=utf-8)?", content_types[0], re.IGNORECASE
+    ) is None:
+        raise ApiError("edge.request_invalid")
+    encodings = _raw_headers(request, b"content-encoding")
+    if len(encodings) > 1:
+        raise ApiError("edge.request_invalid")
+    encoding = encodings[0].lower() if encodings else "identity"
+    if encoding not in {"gzip", "identity"}:
+        raise ApiError("edge.request_invalid")
+    maximum_body = (
+        _MAX_TELEMETRY_COMPRESSED_BYTES if encoding == "gzip" else _MAX_TELEMETRY_BYTES
+    )
+    body = await _bounded_body(request, maximum_body)
+    try:
+        if encoding == "gzip":
+            if not body:
+                raise ApiError("edge.request_invalid")
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            decoded = decoder.decompress(body, _MAX_TELEMETRY_BYTES + 1)
+            if (
+                len(decoded) > _MAX_TELEMETRY_BYTES
+                or decoder.unconsumed_tail
+                or decoder.unused_data
+                or not decoder.eof
+                or (len(decoded) > 65_536 and len(decoded) > len(body) * 64)
+            ):
+                raise ApiError("edge.request_invalid")
+        elif encoding == "identity":
+            if not body:
+                raise ApiError("edge.request_invalid")
+            decoded = body
+        def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("duplicate")
+                result[key] = value
+            return result
+
+        def invalid_constant(_value: str) -> object:
+            raise ValueError("constant")
+
+        parsed = json.loads(
+            decoded.decode("utf-8"),
+            object_pairs_hook=pairs,
+            parse_constant=invalid_constant,
+        )
+        if type(parsed) is not dict:
+            raise ValueError("object")
+        reject_forbidden_telemetry_fields(parsed)
+        return parsed
+    except ApiError:
+        raise
+    except (EdgeTelemetryError, RecursionError, UnicodeError, ValueError, zlib.error):
+        raise ApiError("edge.request_invalid") from None
+
+
+async def _bounded_body(request: Request, maximum: int) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > maximum:
+            raise ApiError("edge.request_invalid")
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _reject_query(request: Request) -> None:

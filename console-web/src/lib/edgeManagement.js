@@ -1,4 +1,4 @@
-/** PRD-120/121 Workspace Edge identity, desired state, and Platform Fleet clients. */
+/** PRD-120..122 Workspace Edge identity, desired state, telemetry, and Fleet clients. */
 
 import { AuthApiError } from "./auth.js";
 import { PlatformApiError } from "./platform.js";
@@ -11,6 +11,9 @@ const IDENTITY_ID = /^edi_[0-9a-f]{32}$/u;
 const EVENT_ID = /^ege_[0-9a-f]{32}$/u;
 const DESIRED_STATE_ID = /^edst_[0-9a-f]{32}$/u;
 const CONFIG_SNAPSHOT_ID = /^csn_[0-9a-f]{32}$/u;
+const TELEMETRY_POLICY_ID = /^etp_[0-9a-f]{32}$/u;
+const TELEMETRY_CURSOR_ID = /^euc_[0-9a-f]{32}$/u;
+const TELEMETRY_EPOCH_ID = /^ete_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
@@ -38,6 +41,9 @@ const FLEET_KEYS = Object.freeze([
   "last_connected_at", "mode", "region_code", "revision", "revocation_generation",
   "status", "updated_at", "desired_generation", "applied_generation", "lkg_generation",
   "desired_state_status", "desired_state_reason_code", "desired_state_drifted",
+  "telemetry_last_receipt_at", "telemetry_lag_seconds", "telemetry_backlog_seconds",
+  "telemetry_cpu_bucket", "telemetry_memory_bucket",
+  "telemetry_error_rate_basis_points", "telemetry_failure_code",
 ]);
 const DESIRED_STATE_KEYS = Object.freeze([
   "desired_state_id", "deployment_id", "generation", "base_generation",
@@ -248,6 +254,72 @@ export async function rollbackEdgeDesiredState({
   });
 }
 
+export async function getEdgeTelemetryWatermark({
+  controlApiUrl,
+  deploymentId,
+  signal,
+} = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/telemetry-watermark`,
+    { signal },
+    "workspace",
+  );
+  const watermark = validateTelemetryWatermark(result.payload);
+  if (watermark.deployment_id !== id) invalidWorkspaceResponse("telemetry_owner");
+  const revision = responseRevision(result.response);
+  if (revision !== (watermark.policy?.revision ?? 0)) {
+    invalidWorkspaceResponse("telemetry_etag");
+  }
+  return Object.freeze({ ...watermark, revision });
+}
+
+export async function patchEdgeTelemetryPolicy({
+  controlApiUrl,
+  deploymentId,
+  telemetryLevel,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/telemetry-policy`,
+    {
+      method: "PATCH",
+      body: {
+        telemetry_level: clientChoice(
+          telemetryLevel,
+          ["minimal", "operational", "billing"],
+          "telemetry_level",
+        ),
+      },
+      csrf: true,
+      headers: {
+        "Idempotency-Key": clientIdempotencyKey(idempotencyKey),
+        "If-Match": `"${clientInteger(expectedRevision, 1, Number.MAX_SAFE_INTEGER, "revision")}"`,
+      },
+      signal,
+    },
+    "workspace",
+  );
+  exact(result.payload, [
+    "policy", "idempotent_replay", "request_id", "trace_id",
+  ], "telemetry_policy_response");
+  const policy = validateTelemetryPolicy(result.payload.policy);
+  if (policy.deployment_id !== id) invalidWorkspaceResponse("telemetry_policy_owner");
+  const revision = responseRevision(result.response);
+  if (revision !== policy.revision) invalidWorkspaceResponse("telemetry_policy_etag");
+  return Object.freeze({
+    policy,
+    revision,
+    idempotent_replay: boolean(result.payload.idempotent_replay, "idempotent_replay"),
+    ...trace(result.payload),
+  });
+}
+
 export async function listPlatformEdgeFleet({ controlApiUrl, signal } = {}) {
   const result = await request(
     controlApiUrl,
@@ -374,6 +446,12 @@ function validateFleetDeployment(value) {
   if (drifted !== (desiredGeneration !== appliedGeneration)) {
     invalidPlatformResponse("desired_state_drifted");
   }
+  const lagSeconds = value.telemetry_lag_seconds === null
+    ? null
+    : integer(value.telemetry_lag_seconds, 0, Number.MAX_SAFE_INTEGER, "telemetry_lag_seconds", true);
+  const backlogSeconds = value.telemetry_backlog_seconds === null
+    ? null
+    : integer(value.telemetry_backlog_seconds, 0, Number.MAX_SAFE_INTEGER, "telemetry_backlog_seconds", true);
   return Object.freeze({
     deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id", false, true),
     region_code: responseRegion(value.region_code, true),
@@ -396,7 +474,157 @@ function validateFleetDeployment(value) {
       "storage_failed",
     ], "desired_state_reason_code", true),
     desired_state_drifted: drifted,
+    telemetry_last_receipt_at: nullableTimestamp(
+      value.telemetry_last_receipt_at,
+      "telemetry_last_receipt_at",
+      true,
+    ),
+    telemetry_lag_seconds: lagSeconds,
+    telemetry_backlog_seconds: backlogSeconds,
+    telemetry_cpu_bucket: responseChoice(
+      value.telemetry_cpu_bucket,
+      ["unknown", "low", "medium", "high", "critical"],
+      "telemetry_cpu_bucket",
+      true,
+    ),
+    telemetry_memory_bucket: responseChoice(
+      value.telemetry_memory_bucket,
+      ["unknown", "low", "medium", "high", "critical"],
+      "telemetry_memory_bucket",
+      true,
+    ),
+    telemetry_error_rate_basis_points: integer(
+      value.telemetry_error_rate_basis_points,
+      0,
+      10_000,
+      "telemetry_error_rate_basis_points",
+      true,
+    ),
+    telemetry_failure_code: responseChoice(value.telemetry_failure_code, [
+      "none", "capacity_exhausted", "config_unavailable", "internal_error",
+      "network_unreachable", "policy_denied", "provider_5xx",
+      "provider_rate_limited", "provider_timeout", "request_cancelled",
+    ], "telemetry_failure_code", true),
     updated_at: timestamp(value.updated_at, "updated_at", true),
+  });
+}
+
+function validateTelemetryWatermark(value) {
+  plain(value, "telemetry_watermark");
+  exact(value, [
+    "deployment_id", "policy", "cursors", "usage", "failures", "last_receipt_at",
+    "lag_seconds", "backlog_seconds", "request_id", "trace_id",
+  ], "telemetry_watermark");
+  boundedArray(value.cursors, 4, "telemetry_cursors");
+  boundedArray(value.failures, 32, "telemetry_failures");
+  const cursors = value.cursors.map(validateTelemetryCursor);
+  unique(cursors.map((item) => item.stream), "telemetry_streams");
+  return Object.freeze({
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    policy: value.policy === null ? null : validateTelemetryPolicy(value.policy),
+    cursors: Object.freeze(cursors),
+    usage: value.usage === null ? null : validateTelemetryUsage(value.usage),
+    failures: Object.freeze(value.failures.map(validateTelemetryFailure)),
+    last_receipt_at: nullableTimestamp(value.last_receipt_at, "last_receipt_at"),
+    lag_seconds: nullableInteger(
+      value.lag_seconds,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "lag_seconds",
+    ),
+    backlog_seconds: nullableInteger(
+      value.backlog_seconds,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "backlog_seconds",
+    ),
+    ...trace(value),
+  });
+}
+
+function validateTelemetryPolicy(value) {
+  plain(value, "telemetry_policy");
+  exact(value, [
+    "policy_id", "deployment_id", "telemetry_level", "revision", "updated_at",
+  ], "telemetry_policy");
+  return Object.freeze({
+    policy_id: responseId(value.policy_id, TELEMETRY_POLICY_ID, "policy_id"),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    telemetry_level: responseChoice(
+      value.telemetry_level,
+      ["minimal", "operational", "billing"],
+      "telemetry_level",
+    ),
+    revision: integer(value.revision, 1, Number.MAX_SAFE_INTEGER, "policy_revision"),
+    updated_at: timestamp(value.updated_at, "policy_updated_at"),
+  });
+}
+
+function validateTelemetryCursor(value) {
+  plain(value, "telemetry_cursor");
+  exact(value, [
+    "cursor_id", "stream", "epoch_id", "contiguous_sequence",
+    "highest_seen_sequence", "expected_sequence", "updated_at",
+  ], "telemetry_cursor");
+  const contiguous = integer(
+    value.contiguous_sequence,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "contiguous_sequence",
+  );
+  const highest = integer(
+    value.highest_seen_sequence,
+    contiguous,
+    Number.MAX_SAFE_INTEGER,
+    "highest_seen_sequence",
+  );
+  const expected = integer(
+    value.expected_sequence,
+    1,
+    Number.MAX_SAFE_INTEGER,
+    "expected_sequence",
+  );
+  if (expected !== contiguous + 1) invalidWorkspaceResponse("expected_sequence");
+  return Object.freeze({
+    cursor_id: responseId(value.cursor_id, TELEMETRY_CURSOR_ID, "cursor_id"),
+    stream: responseChoice(
+      value.stream,
+      ["health", "operational", "usage", "failure"],
+      "telemetry_stream",
+    ),
+    epoch_id: responseId(value.epoch_id, TELEMETRY_EPOCH_ID, "epoch_id"),
+    contiguous_sequence: contiguous,
+    highest_seen_sequence: highest,
+    expected_sequence: expected,
+    updated_at: timestamp(value.updated_at, "cursor_updated_at"),
+  });
+}
+
+function validateTelemetryUsage(value) {
+  plain(value, "telemetry_usage");
+  exact(value, [
+    "request_count", "input_tokens", "output_tokens", "cache_tokens",
+    "cost_cny_micros", "cost_usd_micros",
+  ], "telemetry_usage");
+  return Object.freeze(Object.fromEntries(Object.keys(value).map((key) => [
+    key,
+    integer(value[key], 0, Number.MAX_SAFE_INTEGER, key),
+  ])));
+}
+
+function validateTelemetryFailure(value) {
+  plain(value, "telemetry_failure");
+  exact(value, ["component_code", "failure_code", "count"], "telemetry_failure");
+  return Object.freeze({
+    component_code: responseChoice(value.component_code, [
+      "gateway", "config_sync", "provider_pool", "usage_spool", "telemetry_sync",
+    ], "component_code"),
+    failure_code: responseChoice(value.failure_code, [
+      "capacity_exhausted", "config_unavailable", "internal_error",
+      "network_unreachable", "policy_denied", "provider_5xx",
+      "provider_rate_limited", "provider_timeout", "request_cancelled",
+    ], "failure_code"),
+    count: integer(value.count, 1, Number.MAX_SAFE_INTEGER, "failure_count"),
   });
 }
 

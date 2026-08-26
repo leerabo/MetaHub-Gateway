@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-121 - 云边期望状态、签名快照与离线LKG` 已完成；当前下一项是
-`PRD-122 - 私有网关遥测、用量与失败事实同步`。
+`PRD-122 - 私有网关遥测、用量与失败事实同步` 已完成；当前下一项是
+`PRD-123 - 私有网关本地Secret托管与轮换`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2373,6 +2373,22 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/development/edge-desired-state-sync.md` 与 `docs/testing/PRD-121-tests.md`：保存协议、原子恢复、
   两轮自审、专项/必要回归、真实非自批审批与 Agent ACK、双视口 Browser 和敏感审计；下一权威项为
   PRD-122，G5 在 PRD-130 后统一执行。
+
+## PRD-122 私有网关遥测、用量与失败事实同步（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/telemetry.py`：严格四流判别联合、三档 policy、RFC 8785
+  canonical payload、递归禁止字段扫描、连续 cursor/receipt 和固定失败合同。
+- `gateway-data-plane/src/metahub_gateway/telemetry/edge_spool.py`：本地 SQLite append-only batch/receipt、
+  原子 sequence、受控 epoch 旋转、gzip EdgeSession 上传、禁止重定向和 no-store receipt 校验。
+- `control-plane-api/src/metahub_control/edge_management/telemetry_service.py` 与同域 models/routes/service：
+  policy CAS、设备能力恢复、批次去重/冲突、无缺口 ACK、Usage/失败事务归集、事件/outbox 和 Fleet 安全投影。
+- `infra/migrations/0114_edge_telemetry_usage_failure_sync.sql/.down.sql`：policy/head、batch/receipt、cursor、
+  Usage/失败、Fleet 投影、命令、事件/outbox、复合 owner、不可变事实和业务事实 down guard。
+- Workspace/Platform Console：遥测策略、水位、积压、Usage/成本、固定失败和资源桶；两个 Session/DTO
+  独立，移动网格、空投影和敏感字段裁剪已验证。
+- `docs/prd/PRD-122-private-gateway-telemetry-usage-failure-sync.md` 与
+  `docs/testing/PRD-122-tests.md`：保存两轮自审、专项/必要回归、真实上传链路、双视口 Browser 和独立
+  敏感审计；下一权威项为 PRD-123，G5 在 PRD-130 后统一执行。
 
 ## MVP 非目标
 

@@ -1,4 +1,4 @@
-/** PRD-120/121 owner-bound identity, desired-state, and one-use registration lifecycle. */
+/** PRD-120..122 owner-bound identity, desired-state, telemetry, and registration lifecycle. */
 
 import {
   authorizationFingerprint,
@@ -42,6 +42,15 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
   const manageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
     : "";
+  const telemetryReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_TELEMETRY_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_TELEMETRY_READ)
+    : "";
+  const telemetryManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_TELEMETRY_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_TELEMETRY_MANAGE)
+    : "";
+  const usageReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_USAGE_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_USAGE_READ)
+    : "";
   const tenantId = mirroredTenantId(authContext);
   const permissions = permissionCodesFromAuthContext(authContext);
   const navigation = consoleShellState?.navigation;
@@ -71,10 +80,16 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     tenantId,
     readIdentity,
     manageIdentity,
+    telemetryReadIdentity,
+    telemetryManageIdentity,
+    usageReadIdentity,
     navigationOwner: JSON.stringify([
       item.id, item.target_section, required, permissions, revision, fingerprint,
     ]),
     canManage: Boolean(manageIdentity),
+    canReadTelemetry: Boolean(telemetryReadIdentity),
+    canManageTelemetry: Boolean(telemetryManageIdentity),
+    canReadUsage: Boolean(usageReadIdentity),
   });
 }
 
@@ -85,13 +100,21 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
   let listError = null;
   let deployments = Object.freeze([]);
   let desiredStates = Object.freeze({});
+  let telemetryStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
   let registration = null;
   let feedback = null;
-  let generations = { load: 0, create: 0, revoke: 0, copy: 0, command: 0 };
-  let operations = { load: null, create: null, revoke: null, copy: null, command: null };
+  let canReadTelemetry = false;
+  let canManageTelemetry = false;
+  let canReadUsage = false;
+  let generations = {
+    load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
+  };
+  let operations = {
+    load: null, create: null, revoke: null, copy: null, command: null, policy: null,
+  };
 
   function enter(owner) {
     const key = ownerKeyFor(owner);
@@ -102,6 +125,9 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     if (ownerKey && ownerKey !== key) clear();
     ownerKey = key;
     canManage = owner.canManage === true;
+    canReadTelemetry = owner.canReadTelemetry === true;
+    canManageTelemetry = owner.canManageTelemetry === true;
+    canReadUsage = owner.canReadUsage === true;
     if (!canManage && dialog.open) closeDialogInternal();
     return true;
   }
@@ -114,12 +140,18 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     listError = null;
     deployments = Object.freeze([]);
     desiredStates = Object.freeze({});
+    telemetryStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
     registration = null;
     feedback = null;
-    operations = { load: null, create: null, revoke: null, copy: null, command: null };
+    canReadTelemetry = false;
+    canManageTelemetry = false;
+    canReadUsage = false;
+    operations = {
+      load: null, create: null, revoke: null, copy: null, command: null, policy: null,
+    };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
     );
@@ -146,14 +178,27 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     return current("load", operation, owner) && operation.refreshGeneration === refreshGeneration;
   }
 
-  function acceptLoad(operation, response, owner, refreshGeneration, stateResponses = []) {
+  function acceptLoad(
+    operation,
+    response,
+    owner,
+    refreshGeneration,
+    stateResponses = [],
+    telemetryResponses = [],
+  ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
-      || !validDesiredResponses(stateResponses, response.deployments)) return false;
+      || !validDesiredResponses(stateResponses, response.deployments)
+      || !validTelemetryResponses(
+        telemetryResponses,
+        response.deployments,
+        canReadTelemetry || canReadUsage,
+      )) return false;
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
     if (ids.size > 1) return false;
     deployments = Object.freeze([...response.deployments]);
     desiredStates = desiredStateMap(response.deployments, stateResponses);
+    telemetryStates = telemetryStateMap(response.deployments, telemetryResponses);
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
     listError = null;
@@ -204,6 +249,10 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     ]);
     desiredStates = Object.freeze({
       ...desiredStates,
+      [response.deployment.deployment_id]: null,
+    });
+    telemetryStates = Object.freeze({
+      ...telemetryStates,
       [response.deployment.deployment_id]: null,
     });
     listState = "ready";
@@ -382,9 +431,66 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     if (operations.command === operation) operations.command = null;
   }
 
+  function beginTelemetryPolicy(owner, deploymentId, telemetryLevel) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const telemetry = telemetryStates[deploymentId] ?? null;
+    if (!owns(owner) || !canManageTelemetry || !deployment
+      || deployment.status !== "active" || !telemetry?.policy
+      || !["minimal", "operational", "billing"].includes(telemetryLevel)
+      || telemetry.policy.telemetry_level === telemetryLevel || busy()) return null;
+    generations.policy += 1;
+    const operation = ticket("policy", {
+      controller: new AbortController(),
+      deploymentId,
+      telemetryLevel,
+      expectedRevision: telemetry.policy.revision,
+    });
+    operations.policy = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptTelemetryPolicy(operation, response, owner) {
+    if (!current("policy", operation, owner)
+      || response?.policy?.deployment_id !== operation.deploymentId
+      || response.policy.telemetry_level !== operation.telemetryLevel
+      || !Number.isSafeInteger(response.revision)) return false;
+    const previous = telemetryStates[operation.deploymentId];
+    if (!previous) return false;
+    telemetryStates = Object.freeze({
+      ...telemetryStates,
+      [operation.deploymentId]: Object.freeze({
+        ...previous,
+        policy: response.policy,
+        revision: response.revision,
+        request_id: response.request_id,
+        trace_id: response.trace_id,
+      }),
+    });
+    feedback = Object.freeze({
+      kind: "success",
+      code: response.idempotent_replay
+        ? "edge.telemetry_policy_replayed"
+        : "edge.telemetry_policy_updated",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectTelemetryPolicy(operation, error, owner) {
+    if (!current("policy", operation, owner)) return false;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishTelemetryPolicy(operation) {
+    if (operations.policy === operation) operations.policy = null;
+  }
+
   function blocksShellDomReplacement() {
     return dialog.open || stateDialog.open
-      || Boolean(operations.create || operations.copy || operations.revoke || operations.command);
+      || Boolean(operations.create || operations.copy || operations.revoke
+        || operations.command || operations.policy);
   }
 
   function snapshot() {
@@ -393,11 +499,15 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
       error: listError,
       deployments,
       desiredStates,
+      telemetryStates,
       dialog,
       stateDialog,
       registration,
       feedback,
       canManage,
+      canReadTelemetry,
+      canManageTelemetry,
+      canReadUsage,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -418,7 +528,8 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
   }
 
   function busy() {
-    return Boolean(operations.create || operations.revoke || operations.copy || operations.command);
+    return Boolean(operations.create || operations.revoke || operations.copy
+      || operations.command || operations.policy);
   }
 
   function clearRegistration() { registration = null; }
@@ -434,6 +545,8 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     beginCopy, acceptCopy, rejectCopy, beginRevoke, acceptRevoke, rejectRevoke,
     finishRevoke, openStateCommand, closeStateCommand, beginStateCommand,
     acceptStateCommand, rejectStateCommand, finishStateCommand,
+    beginTelemetryPolicy, acceptTelemetryPolicy, rejectTelemetryPolicy,
+    finishTelemetryPolicy,
     blocksShellDomReplacement, snapshot,
   });
 }
@@ -443,7 +556,9 @@ export function isPrivateGatewayAbortError(error) { return error?.name === "Abor
 function ownerKeyFor(owner) {
   if (!owner || owner.page !== PAGE_ID || !owner.tenantId || !owner.readIdentity || !owner.navigationOwner) return "";
   return JSON.stringify([
-    owner.page, owner.tenantId, owner.readIdentity, owner.manageIdentity, owner.navigationOwner,
+    owner.page, owner.tenantId, owner.readIdentity, owner.manageIdentity,
+    owner.telemetryReadIdentity, owner.telemetryManageIdentity, owner.usageReadIdentity,
+    owner.navigationOwner,
   ]);
 }
 
@@ -474,6 +589,29 @@ function validDesiredResponses(responses, deployments) {
 }
 
 function desiredStateMap(deployments, responses) {
+  const values = Object.fromEntries(deployments.map((item) => [item.deployment_id, null]));
+  for (const item of responses) values[item.deploymentId] = Object.freeze(item.response);
+  return Object.freeze(values);
+}
+
+function validTelemetryResponses(responses, deployments, required) {
+  if (!Array.isArray(responses)
+    || (required && responses.length !== deployments.length)
+    || (!required && responses.length !== 0)) return false;
+  const deploymentIds = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((item) => {
+    const id = String(item?.deploymentId ?? "");
+    if (!deploymentIds.has(id) || seen.has(id)
+      || item?.response?.deployment_id !== id
+      || !Number.isSafeInteger(item.response.revision)
+      || item.response.revision < 0) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function telemetryStateMap(deployments, responses) {
   const values = Object.fromEntries(deployments.map((item) => [item.deployment_id, null]));
   for (const item of responses) values[item.deploymentId] = Object.freeze(item.response);
   return Object.freeze(values);
