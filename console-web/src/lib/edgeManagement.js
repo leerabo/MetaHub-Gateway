@@ -14,7 +14,11 @@ const CONFIG_SNAPSHOT_ID = /^csn_[0-9a-f]{32}$/u;
 const TELEMETRY_POLICY_ID = /^etp_[0-9a-f]{32}$/u;
 const TELEMETRY_CURSOR_ID = /^euc_[0-9a-f]{32}$/u;
 const TELEMETRY_EPOCH_ID = /^ete_[0-9a-f]{32}$/u;
+const SECRET_REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
+const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
+const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
+const UTC_TIME = /^20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{3})?Z$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
 const SAFE_CODE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u;
@@ -53,6 +57,11 @@ const DESIRED_STATE_KEYS = Object.freeze([
   "applied_generation", "lkg_generation", "last_ack_status", "last_reason_code", "drifted",
   "requested_at", "decided_at", "published_at", "last_ack_at", "updated_at",
 ]);
+const SECRET_REFERENCE_KEYS = Object.freeze([
+  "active_version", "capabilities", "deployment_id", "kind", "label",
+  "last_test_outcome", "provider_connection_id", "reference_id", "revision",
+  "rotated_at", "schema_version", "status", "tenant_id", "updated_at", "workspace_id",
+]);
 
 export async function listEdgeDeployments({ controlApiUrl, signal } = {}) {
   const result = await request(controlApiUrl, "/edge/deployments", { signal }, "workspace");
@@ -64,6 +73,20 @@ export async function listEdgeDeployments({ controlApiUrl, signal } = {}) {
     deployments: Object.freeze(deployments),
     ...trace(result.payload),
   });
+}
+
+export async function listEdgeSecretReferences({ controlApiUrl, signal } = {}) {
+  const result = await request(
+    controlApiUrl,
+    "/edge/secret-references",
+    { signal },
+    "workspace",
+  );
+  exact(result.payload, ["references", "request_id", "trace_id"], "secret_references");
+  boundedArray(result.payload.references, 500, "secret_references");
+  const references = result.payload.references.map(validateSecretReference);
+  unique(references.map((item) => item.reference_id), "secret_references");
+  return Object.freeze({ references: Object.freeze(references), ...trace(result.payload) });
 }
 
 export async function createEdgeRegistration({
@@ -416,6 +439,54 @@ function validateEvent(value) {
     reason_code: responseText(value.reason_code, 80, "reason_code"),
     occurred_at: timestamp(value.occurred_at, "occurred_at"),
   });
+}
+
+function validateSecretReference(value) {
+  plain(value, "secret_reference");
+  exact(value, SECRET_REFERENCE_KEYS, "secret_reference");
+  const reference = Object.freeze({
+    schema_version: responseChoice(value.schema_version, ["1"], "secret_schema_version"),
+    reference_id: responseId(value.reference_id, SECRET_REFERENCE_ID, "reference_id"),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    tenant_id: responseId(value.tenant_id, OWNER_ID, "tenant_id"),
+    workspace_id: responseId(value.workspace_id, OWNER_ID, "workspace_id"),
+    provider_connection_id: responseId(
+      value.provider_connection_id,
+      OWNER_ID,
+      "provider_connection_id",
+    ),
+    label: responseSafeLabel(value.label),
+    kind: responseChoice(value.kind, [
+      "api_key", "bearer_token", "basic_password", "oauth_client_secret",
+    ], "secret_kind"),
+    status: responseChoice(value.status, [
+      "active", "rotating", "degraded", "disabled",
+    ], "secret_status"),
+    revision: integer(value.revision, 1, 2_147_483_647, "secret_revision"),
+    active_version: nullableInteger(
+      value.active_version,
+      1,
+      2_147_483_647,
+      "active_version",
+    ),
+    last_test_outcome: value.last_test_outcome === null ? null : responseChoice(
+      value.last_test_outcome,
+      [
+        "succeeded", "authentication_failed", "authorization_failed", "rate_limited",
+        "timeout", "tls_failed", "network_unreachable", "provider_unavailable", "unsupported",
+      ],
+      "last_test_outcome",
+    ),
+    capabilities: responseCapabilities(value.capabilities),
+    rotated_at: value.rotated_at === null ? null : responseUtcTime(value.rotated_at, "rotated_at"),
+    updated_at: responseUtcTime(value.updated_at, "updated_at"),
+  });
+  if ((reference.status === "active" && reference.active_version === null)
+    || (reference.status === "disabled" && reference.active_version !== null)
+    || (reference.last_test_outcome === null && reference.capabilities.length)) {
+    invalidWorkspaceResponse("secret_reference_state");
+  }
+  return reference;
 }
 
 function validateFleetDeployment(value) {
@@ -861,6 +932,31 @@ function responseText(value, maximum, label, platform = false) {
     invalidWorkspaceResponse(label);
   }
   return value;
+}
+
+function responseSafeLabel(value) {
+  const text = responseText(value, 80, "secret_label");
+  if (!SAFE_LABEL.test(text)) invalidWorkspaceResponse("secret_label");
+  return text;
+}
+
+function responseCapabilities(value) {
+  boundedArray(value, 3, "secret_capabilities");
+  const capabilities = value.map((item) => responseChoice(
+    item,
+    ["chat_completions", "embeddings", "models"],
+    "secret_capability",
+  ));
+  if (capabilities.join("\0") !== [...new Set(capabilities)].sort().join("\0")) {
+    invalidWorkspaceResponse("secret_capabilities");
+  }
+  return Object.freeze(capabilities);
+}
+
+function responseUtcTime(value, label) {
+  const text = responseText(value, 24, label);
+  if (!UTC_TIME.test(text)) invalidWorkspaceResponse(label);
+  return text;
 }
 
 function nullableText(value, maximum, label, platform = false) {

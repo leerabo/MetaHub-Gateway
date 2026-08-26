@@ -20,6 +20,8 @@ from metahub_gateway.feedback.routes import router as feedback_router
 from metahub_gateway.gateway_fleet import install_gateway_placement_sync
 from metahub_gateway.intent_security import install_intent_security_dispatcher
 from metahub_gateway.local_model_events import install_local_model_event_recovery
+from metahub_gateway.local_secrets import install_local_secret_runtime
+from metahub_gateway.local_secrets.routes import router as local_secret_router
 from metahub_gateway.policies import install_policy_snapshot_cache
 from metahub_gateway.policies.redaction import install_policy_mask_runtime
 from metahub_gateway.quota import install_quota_reconciliation
@@ -34,12 +36,28 @@ app = create_service_app(
     service_name="gateway-data-plane",
     title="MetaHub Gateway Data Plane",
     # 公开会话身份只服务 PRD-070 风险治理，不转发 Provider；浏览器调用需显式通过 CORS 预检。
-    extra_cors_allow_headers=("X-MetaHub-Session-ID", "X-MetaHub-Turn-ID"),
+    extra_cors_allow_headers=(
+        "If-Match",
+        "X-CSRF-Token",
+        "X-Local-Account-ID",
+        "X-Local-Deployment-ID",
+        "X-Local-Secret-Kind",
+        "X-Local-Secret-Label",
+        "X-Local-Tenant-ID",
+        "X-Local-Workspace-ID",
+        "X-MetaHub-Session-ID",
+        "X-MetaHub-Turn-ID",
+        "X-Provider-Connection-ID",
+    ),
+    extra_cors_expose_headers=("X-CSRF-Token",),
+    cors_allow_credentials=True,
 )
 app.include_router(openai_compatible_router)
 app.include_router(internal_chat_router)
 app.include_router(internal_batch_router)
 app.include_router(feedback_router)
+app.include_router(local_secret_router)
+install_local_secret_runtime(app)
 # mask 能力先做纯内存自检再进入 readiness；默认门禁关闭时不会改变旧部署健康状态。
 install_policy_mask_runtime(app)
 # 启动恢复必须作为最内层 lifespan 最先执行；失败时事件 worker、Policy cache 和端口均不启动。

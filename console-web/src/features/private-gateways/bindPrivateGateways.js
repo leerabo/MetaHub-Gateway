@@ -1,9 +1,10 @@
-/** PRD-120..122 registration, desired-state, and telemetry-policy binding. */
+/** PRD-120..123 registration, telemetry, and local Secret binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
   if (!root) return;
   eraseOneUse(root);
+  eraseSensitive(root);
   root.replaceChildren?.();
 }
 
@@ -31,9 +32,108 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       button.dataset.level ?? "",
     ));
   });
+  root.querySelectorAll("[data-private-gateway-secret-open]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onSecretOpen?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.privateGatewaySecretOpen ?? "",
+      button.dataset.referenceId ?? "",
+    ));
+  });
+  root.querySelectorAll("[data-private-gateway-secret-command]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onSecretCommand?.({
+      action: button.dataset.privateGatewaySecretCommand ?? "",
+      deploymentId: button.dataset.deploymentId ?? "",
+      referenceId: button.dataset.referenceId ?? "",
+    }));
+  });
   bindDialog(root, callbacks);
   bindStateDialog(root, callbacks);
+  bindSecretDialog(root, callbacks);
   return true;
+}
+
+function bindSecretDialog(root, callbacks) {
+  const dialog = root.querySelector("[data-private-gateway-secret-dialog]");
+  if (!dialog) return;
+  const close = async () => {
+    eraseSensitive(dialog);
+    const closed = await callbacks.onSecretClose?.();
+    if (closed !== false) {
+      globalThis.document?.querySelector?.("[data-private-gateway-secret-open]")?.focus?.();
+    }
+  };
+  dialog.querySelectorAll("[data-private-gateway-secret-close]").forEach((button) => {
+    button.addEventListener("click", () => void close());
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    eraseSensitive(dialog);
+    if (dialog.getAttribute("aria-busy") !== "true") void close();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") trapDialogFocus(dialog, event);
+  });
+  const form = dialog.querySelector("[data-private-gateway-secret-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitSecretForm(form, dialog, callbacks);
+  });
+  if (!dialog.open) dialog.showModal?.();
+  dialog.querySelector("input")?.focus?.();
+}
+
+async function submitSecretForm(form, dialog, callbacks) {
+  const action = form.dataset.privateGatewaySecretForm ?? "";
+  const deploymentId = dialog.dataset.deploymentId ?? "";
+  const sensitive = form.querySelector("[data-private-gateway-sensitive]");
+  const bytes = consumeSensitive(sensitive);
+  try {
+    const data = new FormData(form);
+    if (action === "handoff") {
+      const localApiOrigin = String(data.get("local_api_origin") ?? "").trim();
+      if (!/^https?:\/\/[^/?#]+$/u.test(localApiOrigin) || bytes.length < 32
+        || bytes.length > 512 || bytes.some((value) => value < 33 || value > 126)) {
+        setSecretFormError(dialog, "请检查本地 Origin 和管理凭据");
+        return;
+      }
+      setSecretFormError(dialog, "");
+      await callbacks.onLocalSession?.({ deploymentId, localApiOrigin, handoffCredential: bytes });
+      return;
+    }
+    if (!bytes.length || bytes.length > 65_536) {
+      setSecretFormError(dialog, "Secret 长度无效");
+      return;
+    }
+    if (action === "create") {
+      const input = {
+        action,
+        deploymentId,
+        providerConnectionId: String(data.get("provider_connection_id") ?? "").trim(),
+        label: String(data.get("label") ?? "").trim(),
+        kind: String(data.get("kind") ?? ""),
+        secretBytes: bytes,
+      };
+      if (!/^[a-z0-9][a-z0-9_:-]{2,79}$/u.test(input.providerConnectionId)
+        || !/^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u.test(input.label)
+        || !["api_key", "bearer_token", "basic_password", "oauth_client_secret"].includes(input.kind)) {
+        setSecretFormError(dialog, "请检查 Provider、标签和类型");
+        return;
+      }
+      setSecretFormError(dialog, "");
+      await callbacks.onSecretMutation?.(input);
+      return;
+    }
+    setSecretFormError(dialog, "");
+    await callbacks.onSecretMutation?.({
+      action: "rotate",
+      deploymentId,
+      referenceId: form.dataset.referenceId ?? "",
+      secretBytes: bytes,
+    });
+  } finally {
+    bytes.fill(0);
+    eraseSensitive(form);
+  }
 }
 
 function bindStateDialog(root, callbacks) {
@@ -129,7 +229,20 @@ export function trapDialogFocus(dialog, event, documentRef = globalThis.document
 function eraseOneUse(root) {
   for (const node of root?.querySelectorAll?.("[data-private-gateway-one-use] code") ?? []) node.textContent = "";
 }
+function eraseSensitive(root) {
+  for (const node of root?.querySelectorAll?.("[data-private-gateway-sensitive]") ?? []) {
+    node.value = "";
+  }
+}
+function consumeSensitive(input) {
+  let value = String(input?.value ?? "");
+  if (input) input.value = "";
+  const bytes = new TextEncoder().encode(value);
+  value = "";
+  return bytes;
+}
 function strictInteger(value) { const text = String(value ?? ""); return /^[1-9][0-9]*$/u.test(text) && Number.isSafeInteger(Number(text)) ? Number(text) : 0; }
 function setFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-form-error]"); if (node) node.textContent = value; }
 function setStateFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-state-form-error]"); if (node) node.textContent = value; }
+function setSecretFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-secret-form-error]"); if (node) node.textContent = value; }
 function cssEscape(value) { return globalThis.CSS?.escape?.(String(value)) ?? String(value).replace(/[^A-Za-z0-9_-]/gu, ""); }

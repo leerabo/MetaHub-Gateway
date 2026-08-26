@@ -303,7 +303,7 @@ async def test_edge_telemetry_policy_ordering_reconciliation_and_projection(
 ) -> None:
     database = tmp_path / "prd122.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0114"
+    assert apply_migrations(database_url).applied[-1] == "0115"
     with monkeypatch.context() as seed_patch:
         seed_patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)

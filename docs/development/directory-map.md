@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-122 - 私有网关遥测、用量与失败事实同步` 已完成；当前下一项是
-`PRD-123 - 私有网关本地Secret托管与轮换`。
+`PRD-123 - 私有网关本地Secret托管与轮换` 已完成；当前下一项是
+`PRD-124 - 云管私有Gateway安装包、预检与接入向导`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2389,6 +2389,22 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `docs/prd/PRD-122-private-gateway-telemetry-usage-failure-sync.md` 与
   `docs/testing/PRD-122-tests.md`：保存两轮自审、专项/必要回归、真实上传链路、双视口 Browser 和独立
   敏感审计；下一权威项为 PRD-123，G5 在 PRD-130 后统一执行。
+
+## PRD-123 私有网关本地 Secret 托管与轮换（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/local_secrets.py`：严格引用、密文 envelope、轮换/测试事件、
+  Agent sync batch/receipt、AAD owner 绑定、AES-256-GCM 和可清零短生命周期 lease。
+- `gateway-data-plane/src/metahub_gateway/local_secrets/`：独立 schema v2、DPAPI/客户 KMS KeyStore、本地
+  create/rotate/delete/test、prepare-test-activate-drain-retire、引用/lease 删除门禁和持久同步 outbox。
+- `control-plane-api/src/metahub_control/edge_management/secret_reference_service.py` 与同域 models/routes：
+  mTLS + EdgeSession sync、幂等 hash、复合 owner、Workspace 安全引用读取和固定事件/outbox。
+- `infra/migrations/0115_edge_secret_reference_sync.sql/.down.sql`：安全引用、sync batch/event/receipt/outbox、
+  权限扩展、不可变事实、复合外键和业务事实 down guard；云端 schema 无密文/value/token 列。
+- `console-web/src/lib/localSecretManagement.js` 与 Private Gateway 页面：严格本地 CORS/Cookie/CSRF client、
+  `security_admin` 写边界、Secret Reference 列表、输入双层清零、迟到响应/离页/登出本地 Session 清理。
+- `docs/prd/PRD-123-private-gateway-local-secret-custody-rotation.md` 与
+  `docs/testing/PRD-123-tests.md`：保存两轮自审、迁移/API/性能/安全专项、单浏览器 fail-closed 事实和独立
+  敏感审计；下一权威项为 PRD-124，G5 在 PRD-130 后统一执行。
 
 ## MVP 非目标
 

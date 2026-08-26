@@ -1,4 +1,4 @@
-/** PRD-120..122 safe identity, desired state, telemetry, and registration views. */
+/** PRD-120..123 safe Edge identity, telemetry, and Secret Reference views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 
@@ -8,7 +8,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
   return `
     <div class="private-gateway-workspace" data-private-gateway-root>
       <header class="private-gateway-toolbar">
-        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、期望状态与遥测水位</p></div>
+        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、期望状态、遥测与本地 Secret 引用</p></div>
         <div class="private-gateway-commands">
           <button type="button" class="private-gateway-icon" data-private-gateway-refresh title="刷新" aria-label="刷新私有 Gateway"${state.busy ? " disabled" : ""}>&#8635;</button>
           ${owner.canManage ? `<button type="button" class="primary" data-private-gateway-open${state.busy ? " disabled" : ""}>创建 Deployment</button>` : ""}
@@ -18,6 +18,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
       ${renderList(state, owner)}
       ${renderDialog(state, owner)}
       ${renderStateDialog(state, owner)}
+      ${renderSecretDialog(state, owner)}
     </div>`;
 }
 
@@ -47,6 +48,7 @@ function renderDeployment(item, state, owner) {
       </div>
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
+      ${renderSecrets(item, state, owner)}
       ${renderTimeline(item.recent_events)}
       ${owner.canManage && active ? `
         <div class="private-gateway-actions">
@@ -56,6 +58,41 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderSecrets(deployment, state, owner) {
+  if (!owner.canReadSecrets) return "";
+  const references = (state.secretReferences ?? []).filter(
+    (item) => item.deployment_id === deployment.deployment_id,
+  );
+  const connected = state.localSession?.deploymentId === deployment.deployment_id;
+  const manageable = owner.canManageSecrets && deployment.status !== "revoked"
+    && deployment.status !== "retired";
+  return `<section class="private-gateway-secrets" aria-label="本地 Secret 引用">
+    <header>
+      <div><h5>本地 Secret 引用</h5><span class="private-gateway-state-status tone-${connected ? "applied" : "not_observed"}">${connected ? "本地会话有效" : `${references.length} 个引用`}</span></div>
+      ${manageable ? (connected
+        ? `<button type="button" class="primary" data-private-gateway-secret-open="create" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${state.secretBusy ? " disabled" : ""}>新增 Secret</button>`
+        : `<button type="button" data-private-gateway-secret-open="handoff" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${state.secretBusy ? " disabled" : ""}>连接本地托管</button>`)
+      : ""}
+    </header>
+    ${references.length ? `<div class="private-gateway-secret-list">${references.map((reference) => `
+      <div class="private-gateway-secret-row">
+        <div><strong>${escapeHtml(reference.label)}</strong><code>${escapeHtml(reference.reference_id)}</code><span>${secretKindLabel(reference.kind)}</span></div>
+        <dl>
+          ${fact("状态", secretStatusLabel(reference.status))}
+          ${fact("版本", integer(reference.active_version))}
+          ${fact("最后测试", providerTestLabel(reference.last_test_outcome))}
+          ${fact("能力", reference.capabilities.length ? reference.capabilities.map(capabilityLabel).join(" / ") : "-")}
+          ${fact("更新时间", formatTime(reference.updated_at))}
+        </dl>
+        ${manageable && connected && reference.status !== "disabled" ? `<div class="private-gateway-secret-actions">
+          <button type="button" data-private-gateway-secret-command="test" data-deployment-id="${escapeAttribute(deployment.deployment_id)}" data-reference-id="${escapeAttribute(reference.reference_id)}"${state.secretBusy ? " disabled" : ""}>测试</button>
+          <button type="button" data-private-gateway-secret-open="rotate" data-deployment-id="${escapeAttribute(deployment.deployment_id)}" data-reference-id="${escapeAttribute(reference.reference_id)}"${state.secretBusy ? " disabled" : ""}>轮换</button>
+          <button type="button" class="danger" data-private-gateway-secret-command="delete" data-deployment-id="${escapeAttribute(deployment.deployment_id)}" data-reference-id="${escapeAttribute(reference.reference_id)}"${state.secretBusy ? " disabled" : ""}>删除</button>
+        </div>` : ""}
+      </div>`).join("")}</div>` : '<div class="private-gateway-state-empty">尚无本地 Secret 引用</div>'}
+  </section>`;
 }
 
 function renderTelemetry(deployment, entry, pageState, owner) {
@@ -197,6 +234,50 @@ function renderStateDialog(state, owner) {
   </dialog>`;
 }
 
+function renderSecretDialog(state, owner) {
+  const dialog = state.secretDialog;
+  if (!owner.canManageSecrets || !dialog?.open) return "";
+  const submitting = dialog.state === "submitting";
+  const titles = {
+    handoff: ["连接本地托管", "短时安全管理员会话"],
+    create: ["新增本地 Secret", "只提交到客户环境"],
+    rotate: ["轮换本地 Secret", "旧版本完成 drain 后退役"],
+  };
+  const [title, subtitle] = titles[dialog.action] ?? ["本地 Secret", "客户环境"];
+  return `<dialog class="private-gateway-dialog private-gateway-secret-dialog" data-private-gateway-secret-dialog data-deployment-id="${escapeAttribute(dialog.deploymentId)}" aria-labelledby="private-gateway-secret-dialog-title" aria-busy="${submitting}">
+    <header><div><h3 id="private-gateway-secret-dialog-title">${title}</h3><span>${subtitle}</span></div><button type="button" class="private-gateway-icon" data-private-gateway-secret-close title="关闭" aria-label="关闭"${submitting ? " disabled" : ""}>&times;</button></header>
+    ${dialog.error ? renderError(dialog.error) : ""}
+    ${renderSecretForm(dialog, submitting)}
+  </dialog>`;
+}
+
+function renderSecretForm(dialog, submitting) {
+  if (dialog.action === "handoff") {
+    return `<form data-private-gateway-secret-form="handoff" autocomplete="off" novalidate>
+      <label><span>本地 Gateway Origin</span><input name="local_api_origin" type="url" value="http://localhost:8000" maxlength="240" autocomplete="off" required${submitting ? " disabled" : ""}></label>
+      <label><span>本地管理凭据</span><input name="handoff_credential" type="password" maxlength="512" autocomplete="new-password" data-private-gateway-sensitive required${submitting ? " disabled" : ""}></label>
+      ${secretFormFooter("连接", submitting)}
+    </form>`;
+  }
+  if (dialog.action === "create") {
+    return `<form data-private-gateway-secret-form="create" autocomplete="off" novalidate>
+      <label><span>Provider Connection ID</span><input name="provider_connection_id" pattern="[a-z0-9][a-z0-9_:-]{2,79}" maxlength="80" autocomplete="off" required${submitting ? " disabled" : ""}></label>
+      <label><span>标签</span><input name="label" maxlength="80" autocomplete="off" required${submitting ? " disabled" : ""}></label>
+      <label><span>类型</span><select name="kind"${submitting ? " disabled" : ""}><option value="api_key">API Key</option><option value="bearer_token">Bearer Token</option><option value="basic_password">Basic Password</option><option value="oauth_client_secret">OAuth Client Secret</option></select></label>
+      <label><span>Secret</span><input name="secret_value" type="password" maxlength="65536" autocomplete="new-password" data-private-gateway-sensitive required${submitting ? " disabled" : ""}></label>
+      ${secretFormFooter("创建", submitting)}
+    </form>`;
+  }
+  return `<form data-private-gateway-secret-form="rotate" data-reference-id="${escapeAttribute(dialog.referenceId)}" autocomplete="off" novalidate>
+    <label><span>新 Secret</span><input name="secret_value" type="password" maxlength="65536" autocomplete="new-password" data-private-gateway-sensitive required${submitting ? " disabled" : ""}></label>
+    ${secretFormFooter("轮换", submitting)}
+  </form>`;
+}
+
+function secretFormFooter(label, submitting) {
+  return `<p class="private-gateway-form-error" data-private-gateway-secret-form-error role="alert"></p><div class="private-gateway-dialog-actions"><button type="button" data-private-gateway-secret-close${submitting ? " disabled" : ""}>取消</button><button type="submit" class="primary"${submitting ? " disabled" : ""}>${submitting ? "正在提交" : label}</button></div>`;
+}
+
 function renderStateForm(dialog, desired, submitting) {
   let fields = "";
   if (dialog.action === "publish") {
@@ -248,6 +329,11 @@ function renderFeedback(feedback) {
     "edge.desired_state_rolled_back": "已从 LKG 创建新的回滚 generation",
     "edge.telemetry_policy_updated": "遥测策略已更新",
     "edge.telemetry_policy_replayed": "已恢复遥测策略结果",
+    "local_admin.session_created": "本地安全管理员会话已建立",
+    "local_secret.created": "本地 Secret 已创建",
+    "local_secret.rotated": "本地 Secret 已完成轮换",
+    "local_secret.deleted": "本地 Secret 已删除",
+    "local_secret.test_completed": "Provider 连接测试已完成",
   };
   if (feedback.kind === "error") return renderError(feedback);
   return `<div class="private-gateway-feedback" role="status"><strong>${escapeHtml(labels[feedback.code] ?? feedback.code)}</strong><span>request_id: ${escapeHtml(feedback.requestId ?? "-")}</span></div>`;
@@ -272,6 +358,10 @@ function seconds(value) { return Number.isSafeInteger(value) ? `${value}s` : "-"
 function micros(value, currency) { return Number.isSafeInteger(value) ? `${currency} ${(value / 1_000_000).toFixed(6)}` : "-"; }
 function stateActionLabel(value) { return ({ publish: "发布", approve: "批准", reject: "拒绝", rollback: "回滚" })[value] ?? "提交"; }
 function eventLabel(value) { return ({ "edge.registered": "设备注册", "edge.certificate_rotated": "证书轮换", "edge.revoked": "Deployment 吊销", "edge.authentication_failed": "认证失败" })[value] ?? value; }
+function secretKindLabel(value) { return ({ api_key: "API Key", bearer_token: "Bearer Token", basic_password: "Basic Password", oauth_client_secret: "OAuth Client Secret" })[value] ?? value; }
+function secretStatusLabel(value) { return ({ active: "有效", rotating: "轮换中", degraded: "降级", disabled: "已停用" })[value] ?? value; }
+function providerTestLabel(value) { return ({ succeeded: "成功", authentication_failed: "认证失败", authorization_failed: "授权失败", rate_limited: "限流", timeout: "超时", tls_failed: "TLS 失败", network_unreachable: "网络不可达", provider_unavailable: "Provider 不可用", unsupported: "不支持" })[value] ?? "未测试"; }
+function capabilityLabel(value) { return ({ chat_completions: "Chat", embeddings: "Embeddings", models: "Models" })[value] ?? value; }
 function formatTime(value) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }
 function integer(value) { return Number.isSafeInteger(value) ? String(value) : "-"; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/gu, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]); }

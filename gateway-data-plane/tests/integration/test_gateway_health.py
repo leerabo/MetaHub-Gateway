@@ -1,12 +1,12 @@
 """模块职责：说明本文件在 MetaHub 企业级 AI Gateway 中承担的接口、服务或测试职责。
 
-维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，Provider Key 与 Token 不得明文落日志。
+维护边界：关键判断必须保留 request_id、tenant_id、权限校验、用量追踪和敏感信息脱敏语义，
+Provider Key 与 Token 不得明文落日志。
 来源文件：gateway-data-plane/tests/integration/test_gateway_health.py
 """
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from metahub_gateway.app import app
 
 
@@ -103,6 +103,38 @@ async def test_cors_preflight_allows_delete_management_calls() -> None:
 
 
 @pytest.mark.anyio
+async def test_cors_preflight_allows_credentialed_local_secret_headers() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.options(
+            "/local/admin/session-handoffs",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": (
+                    "content-type,x-local-account-id,x-local-deployment-id,"
+                    "x-local-tenant-id,x-local-workspace-id"
+                ),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    allowed = {
+        item.strip().lower()
+        for item in response.headers["access-control-allow-headers"].split(",")
+    }
+    assert {
+        "content-type",
+        "x-local-account-id",
+        "x-local-deployment-id",
+        "x-local-tenant-id",
+        "x-local-workspace-id",
+    }.issubset(allowed)
+
+
+@pytest.mark.anyio
 async def test_cors_exposes_request_and_trace_headers_to_console() -> None:
     """浏览器流程：跨域调试台必须能读取 request_id 和 trace_id 响应头。"""
 
@@ -123,7 +155,12 @@ async def test_cors_exposes_request_and_trace_headers_to_console() -> None:
         item.strip().lower()
         for item in response.headers["access-control-expose-headers"].split(",")
     }
-    assert exposed_headers == {"content-disposition", "x-request-id", "x-trace-id"}
+    assert exposed_headers == {
+        "content-disposition",
+        "x-csrf-token",
+        "x-request-id",
+        "x-trace-id",
+    }
     assert response.headers["X-Request-ID"] == "req_cors_exposed"
     assert response.headers["X-Trace-ID"] == "trc_cors_exposed"
 
@@ -140,7 +177,10 @@ async def test_gateway_concurrent_requests_do_not_mix_trace_ids() -> None:
             *[
                 client.get(
                     "/health",
-                    headers={"X-Request-ID": f"req_parallel_{idx}", "X-Trace-ID": f"trc_parallel_{idx}"},
+                    headers={
+                        "X-Request-ID": f"req_parallel_{idx}",
+                        "X-Trace-ID": f"trc_parallel_{idx}",
+                    },
                 )
                 for idx in range(8)
             ]

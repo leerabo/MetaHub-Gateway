@@ -112,6 +112,25 @@
 .private-gateway-failures th,
 .private-gateway-failures td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
 .private-gateway-failure-empty { color: var(--muted); }
+.private-gateway-secrets { display: grid; gap: 12px; padding: 14px; border-bottom: 1px solid var(--line); background: #f7fbfa; }
+.private-gateway-secrets > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.private-gateway-secrets > header > div { display: grid; gap: 6px; }
+.private-gateway-secrets h5 { margin: 0; letter-spacing: 0; }
+.private-gateway-secret-list { display: grid; border: 1px solid var(--line); background: var(--panel); }
+.private-gateway-secret-row { display: grid; gap: 10px; padding: 12px; min-width: 0; }
+.private-gateway-secret-row + .private-gateway-secret-row { border-top: 1px solid var(--line); }
+.private-gateway-secret-row > div:first-child { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; align-items: center; }
+.private-gateway-secret-row > div:first-child code { grid-column: 1; color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-secret-row > div:first-child span { grid-column: 2; grid-row: 1 / span 2; color: var(--muted); font-size: 0.78rem; }
+.private-gateway-secret-row dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); }
+.private-gateway-secret-row dl > div { min-width: 0; padding: 8px 9px; background: var(--panel); }
+.private-gateway-secret-row dt { color: var(--muted); font-size: 0.72rem; }
+.private-gateway-secret-row dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.private-gateway-secret-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.private-gateway-secret-actions .danger { border-color: #e4a19b; background: #fff8f7; color: var(--danger); }
+.private-gateway-secret-dialog form > label { display: grid; gap: 6px; color: var(--muted); }
+.private-gateway-secret-dialog input,
+.private-gateway-secret-dialog select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
 .private-gateway-state-form { display: grid; gap: 16px; padding: 18px; }
 .private-gateway-state-form > label:not(.private-gateway-confirm) { display: grid; gap: 6px; color: var(--muted); }
 .private-gateway-state-form input,
@@ -153,6 +172,7 @@
   .private-gateway-deployment > header { align-items: flex-start; flex-direction: column; }
   .private-gateway-state > header { align-items: stretch; flex-direction: column; }
   .private-gateway-telemetry > header { align-items: stretch; flex-direction: column; }
+  .private-gateway-secrets > header { align-items: stretch; flex-direction: column; }
   .private-gateway-commands { width: 100%; }
   .private-gateway-commands .primary { flex: 1; }
   .private-gateway-deployment > header dl,
@@ -163,6 +183,7 @@
   .private-gateway-cursors > div:nth-child(odd) { border-left: 0; }
   .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
   .private-gateway-usage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-secret-row dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-deployment > header dl > div,
   .private-gateway-facts > div { border-left: 0; border-top: 1px solid var(--line); }
 }
@@ -174,7 +195,8 @@
   .private-gateway-state-diff { grid-template-columns: 1fr; }
   .private-gateway-policy,
   .private-gateway-cursors,
-  .private-gateway-usage { grid-template-columns: 1fr; }
+  .private-gateway-usage,
+  .private-gateway-secret-row dl { grid-template-columns: 1fr; }
   .private-gateway-cursors > div + div,
   .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); border-left: 0; }
   .private-gateway-policy button,
@@ -186,6 +208,9 @@
   .private-gateway-actions,
   .private-gateway-dialog-actions { align-items: stretch; flex-direction: column; }
   .private-gateway-state-actions { align-items: stretch; flex-direction: column; }
+  .private-gateway-secret-actions { display: grid; grid-template-columns: 1fr; }
+  .private-gateway-secrets > header button,
+  .private-gateway-secret-actions button { width: 100%; }
   .private-gateway-actions label { display: grid; }
   .private-gateway-actions select,
   .private-gateway-actions button,

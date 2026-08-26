@@ -1,4 +1,4 @@
-/** PRD-120..122 owner-bound identity, desired-state, telemetry, and registration lifecycle. */
+/** PRD-120..123 owner-bound Edge identity, telemetry, and local Secret lifecycle. */
 
 import {
   authorizationFingerprint,
@@ -11,6 +11,10 @@ import {
 
 const PAGE_ID = "private-gateways";
 const DEPLOYMENT_ID = /^edp_[0-9a-f]{32}$/u;
+const REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
+const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
+const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
+const LOCAL_ORIGIN = /^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}(?::[0-9]{1,5})?$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 
 const ERROR_MESSAGES = Object.freeze({
@@ -31,6 +35,24 @@ const ERROR_MESSAGES = Object.freeze({
   "edge.request_invalid": "私有 Gateway 请求不合法",
   "edge.response_invalid": "私有 Gateway 响应合同不完整",
   "edge.unavailable": "私有 Gateway 服务暂不可用",
+  "local_admin.authentication_failed": "本地管理凭据无效或会话已过期",
+  "local_admin.rate_limited": "本地管理尝试过多，请稍后重试",
+  "local_admin.origin_invalid": "本地 Gateway 不允许当前控制台 Origin",
+  "local_admin.network_denied": "当前网络不能访问本地管理接口",
+  "local_admin.request_invalid": "本地管理请求不合法",
+  "local_admin.response_invalid": "本地管理响应合同不完整",
+  "local_secret.content_type_invalid": "本地 Secret 请求格式不受支持",
+  "local_secret.payload_invalid": "本地 Secret 字段不合法",
+  "local_secret.not_found": "本地 Secret 引用不存在",
+  "local_secret.conflict": "本地 Secret 状态已变化，请刷新后重试",
+  "local_secret.revision_conflict": "本地 Secret 版本已变化，请刷新后重试",
+  "local_secret.rotation_conflict": "本地 Secret 正在轮换",
+  "local_secret.rotation_in_progress": "本地 Secret 正在轮换",
+  "local_secret.in_use": "该 Secret 仍被配置、LKG、回滚或备份引用",
+  "local_secret.network_unavailable": "本地 Gateway 暂不可达",
+  "local_secret.request_failed": "本地 Secret 请求未完成",
+  "local_secret.response_invalid": "本地 Secret 响应合同不完整",
+  "local_secret.unavailable": "本地 Secret 托管暂不可用",
 });
 
 export function privateGatewayReadIdentitySnapshot(authContext) {
@@ -51,7 +73,12 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
   const usageReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_USAGE_READ)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_USAGE_READ)
     : "";
+  const secretReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_SECRET_REFERENCE_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_SECRET_REFERENCE_READ)
+    : "";
   const tenantId = mirroredTenantId(authContext);
+  const accountId = mirroredAccountId(authContext);
+  const role = String(authContext?.user?.role ?? "");
   const permissions = permissionCodesFromAuthContext(authContext);
   const navigation = consoleShellState?.navigation;
   const item = Array.isArray(navigation?.navigation_items)
@@ -83,6 +110,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     telemetryReadIdentity,
     telemetryManageIdentity,
     usageReadIdentity,
+    secretReadIdentity,
+    accountId,
+    role,
     navigationOwner: JSON.stringify([
       item.id, item.target_section, required, permissions, revision, fingerprint,
     ]),
@@ -90,10 +120,15 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canReadTelemetry: Boolean(telemetryReadIdentity),
     canManageTelemetry: Boolean(telemetryManageIdentity),
     canReadUsage: Boolean(usageReadIdentity),
+    canReadSecrets: Boolean(secretReadIdentity),
+    canManageSecrets: Boolean(secretReadIdentity && accountId && role === "security_admin"),
   });
 }
 
-export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
+export function createPrivateGatewayPageState({
+  clearDom = () => {},
+  clearLocalSession = () => {},
+} = {}) {
   let ownerKey = "";
   let canManage = false;
   let listState = "loading";
@@ -101,19 +136,26 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
   let deployments = Object.freeze([]);
   let desiredStates = Object.freeze({});
   let telemetryStates = Object.freeze({});
+  let secretReferences = Object.freeze([]);
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
   let registration = null;
+  let secretDialog = closedSecretDialog();
+  let localSession = null;
   let feedback = null;
   let canReadTelemetry = false;
   let canManageTelemetry = false;
   let canReadUsage = false;
+  let canReadSecrets = false;
+  let canManageSecrets = false;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
+    localSession: 0, secret: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
+    localSession: null, secret: null,
   };
 
   function enter(owner) {
@@ -128,12 +170,19 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     canReadTelemetry = owner.canReadTelemetry === true;
     canManageTelemetry = owner.canManageTelemetry === true;
     canReadUsage = owner.canReadUsage === true;
+    canReadSecrets = owner.canReadSecrets === true;
+    canManageSecrets = owner.canManageSecrets === true;
     if (!canManage && dialog.open) closeDialogInternal();
+    if (!canManageSecrets) {
+      secretDialog = closedSecretDialog();
+      localSession = null;
+    }
     return true;
   }
 
   function clear() {
     const pending = Object.values(operations).filter(Boolean);
+    const localApiOrigin = localSession?.localApiOrigin ?? "";
     ownerKey = "";
     canManage = false;
     listState = "loading";
@@ -141,22 +190,29 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     deployments = Object.freeze([]);
     desiredStates = Object.freeze({});
     telemetryStates = Object.freeze({});
+    secretReferences = Object.freeze([]);
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
     registration = null;
+    secretDialog = closedSecretDialog();
+    localSession = null;
     feedback = null;
     canReadTelemetry = false;
     canManageTelemetry = false;
     canReadUsage = false;
+    canReadSecrets = false;
+    canManageSecrets = false;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
+      localSession: null, secret: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
     );
     try { clearDom(); } finally {
       for (const operation of pending) operation.controller?.abort?.();
+      clearLocalSession(localApiOrigin);
     }
   }
 
@@ -171,6 +227,7 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     // A refresh can observe a switched Workspace cookie; one-use material cannot cross that boundary.
     clearRegistration();
     stateDialog = closedStateDialog();
+    secretDialog = closedSecretDialog();
     return operation;
   }
 
@@ -185,6 +242,7 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     refreshGeneration,
     stateResponses = [],
     telemetryResponses = [],
+    secretResponse = null,
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -193,12 +251,16 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
         telemetryResponses,
         response.deployments,
         canReadTelemetry || canReadUsage,
-      )) return false;
+      )
+      || !validSecretResponse(secretResponse, response.deployments, canReadSecrets, owner)) {
+      return false;
+    }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
     if (ids.size > 1) return false;
     deployments = Object.freeze([...response.deployments]);
     desiredStates = desiredStateMap(response.deployments, stateResponses);
     telemetryStates = telemetryStateMap(response.deployments, telemetryResponses);
+    secretReferences = Object.freeze([...(secretResponse?.references ?? [])]);
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
     listError = null;
@@ -487,10 +549,189 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     if (operations.policy === operation) operations.policy = null;
   }
 
+  function openSecretDialog(owner, deploymentId, action, referenceId = "") {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const reference = secretReferences.find((item) => item.reference_id === referenceId);
+    const allowed = action === "handoff"
+      || (action === "create" && sessionActive(deploymentId))
+      || (action === "rotate" && sessionActive(deploymentId)
+        && reference?.deployment_id === deploymentId && reference.status !== "disabled");
+    if (!owns(owner) || !canManageSecrets || !deployment || !allowed || busy()) return false;
+    closeDialogInternal();
+    stateDialog = closedStateDialog();
+    secretDialog = Object.freeze({
+      open: true,
+      state: "form",
+      action,
+      deploymentId,
+      referenceId: action === "rotate" ? referenceId : "",
+      error: null,
+    });
+    feedback = null;
+    return true;
+  }
+
+  function closeSecretDialog(owner) {
+    if (!owns(owner) || operations.localSession || operations.secret) return false;
+    secretDialog = closedSecretDialog();
+    return true;
+  }
+
+  function beginLocalSession(owner, localApiOrigin) {
+    const deployment = deployments.find(
+      (item) => item.deployment_id === secretDialog.deploymentId,
+    );
+    const origin = String(localApiOrigin ?? "");
+    if (!owns(owner) || !canManageSecrets || secretDialog.action !== "handoff"
+      || secretDialog.state !== "form" || !deployment || !LOCAL_ORIGIN.test(origin)
+      || busy()) return null;
+    generations.localSession += 1;
+    const operation = ticket("localSession", {
+      controller: new AbortController(),
+      deploymentId: deployment.deployment_id,
+      workspaceId: deployment.workspace_id,
+      tenantId: owner.tenantId,
+      accountId: owner.accountId,
+      localApiOrigin: origin,
+    });
+    operations.localSession = operation;
+    secretDialog = Object.freeze({ ...secretDialog, state: "submitting", error: null });
+    return operation;
+  }
+
+  function acceptLocalSession(operation, response, owner) {
+    if (!current("localSession", operation, owner)
+      || response?.deployment_id !== operation.deploymentId
+      || response?.local_api_origin !== operation.localApiOrigin
+      || !Number.isSafeInteger(response?.expires_at)) return false;
+    localSession = Object.freeze({
+      deploymentId: operation.deploymentId,
+      localApiOrigin: operation.localApiOrigin,
+      expiresAt: response.expires_at,
+    });
+    secretDialog = closedSecretDialog();
+    feedback = Object.freeze({
+      kind: "success", code: "local_admin.session_created", requestId: "-",
+    });
+    return true;
+  }
+
+  function rejectLocalSession(operation, error, owner) {
+    if (!current("localSession", operation, owner)) return false;
+    localSession = null;
+    secretDialog = Object.freeze({ ...secretDialog, state: "form", error: fixedError(error) });
+    return true;
+  }
+
+  function finishLocalSession(operation) {
+    if (operations.localSession === operation) operations.localSession = null;
+  }
+
+  function beginSecretMutation(owner, action, values = {}) {
+    const deploymentId = String(values.deploymentId ?? secretDialog.deploymentId ?? "");
+    const referenceId = String(values.referenceId ?? secretDialog.referenceId ?? "");
+    const reference = secretReferences.find((item) => item.reference_id === referenceId);
+    if (!owns(owner) || !canManageSecrets || !sessionActive(deploymentId) || busy()) return null;
+    let request;
+    if (action === "create" && secretDialog.action === "create") {
+      const providerConnectionId = String(values.providerConnectionId ?? "");
+      const label = String(values.label ?? "");
+      const kind = String(values.kind ?? "");
+      if (!OWNER_ID.test(providerConnectionId) || !SAFE_LABEL.test(label)
+        || !["api_key", "bearer_token", "basic_password", "oauth_client_secret"].includes(kind)) {
+        return null;
+      }
+      request = Object.freeze({ providerConnectionId, label, kind });
+    } else if (action === "rotate" && secretDialog.action === "rotate"
+      && reference?.deployment_id === deploymentId && reference.status !== "disabled") {
+      request = Object.freeze({ referenceId, revision: reference.revision });
+    } else if (action === "delete" && reference?.deployment_id === deploymentId
+      && reference.status !== "disabled") {
+      request = Object.freeze({ referenceId, revision: reference.revision });
+    } else if (action === "test" && reference?.deployment_id === deploymentId
+      && reference.status !== "disabled") {
+      request = Object.freeze({
+        referenceId,
+        providerConnectionId: reference.provider_connection_id,
+      });
+    } else {
+      return null;
+    }
+    generations.secret += 1;
+    const operation = ticket("secret", {
+      controller: new AbortController(), deploymentId, action, request,
+    });
+    operations.secret = operation;
+    if (["create", "rotate"].includes(action)) {
+      secretDialog = Object.freeze({ ...secretDialog, state: "submitting", error: null });
+    }
+    feedback = null;
+    return operation;
+  }
+
+  function acceptSecretMutation(operation, response, owner) {
+    if (!current("secret", operation, owner)) return false;
+    if (["create", "rotate"].includes(operation.action)) {
+      if (!validSecretReference(response)
+        || response.deployment_id !== operation.deploymentId
+        || response.tenant_id !== owner.tenantId) return false;
+      secretReferences = Object.freeze([
+        response,
+        ...secretReferences.filter((item) => item.reference_id !== response.reference_id),
+      ]);
+      secretDialog = closedSecretDialog();
+    } else if (operation.action === "delete") {
+      if (response !== true) return false;
+      secretReferences = Object.freeze(secretReferences.filter(
+        (item) => item.reference_id !== operation.request.referenceId,
+      ));
+    } else if (operation.action === "test") {
+      if (response?.reference_id !== operation.request.referenceId) return false;
+      secretReferences = Object.freeze(secretReferences.map((item) => (
+        item.reference_id === response.reference_id
+          ? Object.freeze({
+            ...item,
+            active_version: response.version,
+            last_test_outcome: response.outcome,
+            capabilities: response.capabilities,
+            updated_at: response.created_at,
+          })
+          : item
+      )));
+    } else return false;
+    const codes = {
+      create: "local_secret.created",
+      rotate: "local_secret.rotated",
+      delete: "local_secret.deleted",
+      test: "local_secret.test_completed",
+    };
+    feedback = Object.freeze({
+      kind: "success", code: codes[operation.action], requestId: "-",
+    });
+    return true;
+  }
+
+  function rejectSecretMutation(operation, error, owner) {
+    if (!current("secret", operation, owner)) return false;
+    const fixed = fixedError(error);
+    if (fixed.code === "local_admin.authentication_failed") localSession = null;
+    if (["create", "rotate"].includes(operation.action)) {
+      secretDialog = Object.freeze({ ...secretDialog, state: "form", error: fixed });
+    } else {
+      feedback = Object.freeze({ kind: "error", ...fixed });
+    }
+    return true;
+  }
+
+  function finishSecretMutation(operation) {
+    if (operations.secret === operation) operations.secret = null;
+  }
+
   function blocksShellDomReplacement() {
-    return dialog.open || stateDialog.open
+    return dialog.open || stateDialog.open || secretDialog.open
       || Boolean(operations.create || operations.copy || operations.revoke
-        || operations.command || operations.policy);
+        || operations.command || operations.policy || operations.localSession
+        || operations.secret);
   }
 
   function snapshot() {
@@ -500,17 +741,23 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
       deployments,
       desiredStates,
       telemetryStates,
+      secretReferences,
       dialog,
       stateDialog,
       registration,
+      secretDialog,
+      localSession,
       feedback,
       canManage,
       canReadTelemetry,
       canManageTelemetry,
       canReadUsage,
+      canReadSecrets,
+      canManageSecrets,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
+      secretBusy: Boolean(operations.localSession || operations.secret),
     });
   }
 
@@ -529,7 +776,13 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
 
   function busy() {
     return Boolean(operations.create || operations.revoke || operations.copy
-      || operations.command || operations.policy);
+      || operations.command || operations.policy || operations.localSession
+      || operations.secret);
+  }
+
+  function sessionActive(deploymentId) {
+    return Boolean(localSession && localSession.deploymentId === deploymentId
+      && localSession.expiresAt > Math.floor(Date.now() / 1000));
   }
 
   function clearRegistration() { registration = null; }
@@ -547,6 +800,9 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     acceptStateCommand, rejectStateCommand, finishStateCommand,
     beginTelemetryPolicy, acceptTelemetryPolicy, rejectTelemetryPolicy,
     finishTelemetryPolicy,
+    openSecretDialog, closeSecretDialog, beginLocalSession, acceptLocalSession,
+    rejectLocalSession, finishLocalSession, beginSecretMutation,
+    acceptSecretMutation, rejectSecretMutation, finishSecretMutation,
     blocksShellDomReplacement, snapshot,
   });
 }
@@ -558,6 +814,7 @@ function ownerKeyFor(owner) {
   return JSON.stringify([
     owner.page, owner.tenantId, owner.readIdentity, owner.manageIdentity,
     owner.telemetryReadIdentity, owner.telemetryManageIdentity, owner.usageReadIdentity,
+    owner.secretReadIdentity, owner.accountId, owner.role,
     owner.navigationOwner,
   ]);
 }
@@ -617,6 +874,40 @@ function telemetryStateMap(deployments, responses) {
   return Object.freeze(values);
 }
 
+function validSecretResponse(response, deployments, required, owner) {
+  if (!required) return response === null;
+  if (!response || !Array.isArray(response.references) || response.references.length > 500) {
+    return false;
+  }
+  const deploymentMap = new Map(
+    deployments.map((item) => [item.deployment_id, item.workspace_id]),
+  );
+  const seen = new Set();
+  return response.references.every((reference) => {
+    if (!validSecretReference(reference) || seen.has(reference.reference_id)
+      || reference.tenant_id !== owner.tenantId
+      || deploymentMap.get(reference.deployment_id) !== reference.workspace_id) return false;
+    seen.add(reference.reference_id);
+    return true;
+  });
+}
+
+function validSecretReference(value) {
+  return Boolean(value && REFERENCE_ID.test(String(value.reference_id ?? ""))
+    && DEPLOYMENT_ID.test(String(value.deployment_id ?? ""))
+    && OWNER_ID.test(String(value.tenant_id ?? ""))
+    && OWNER_ID.test(String(value.workspace_id ?? ""))
+    && OWNER_ID.test(String(value.provider_connection_id ?? ""))
+    && SAFE_LABEL.test(String(value.label ?? ""))
+    && ["api_key", "bearer_token", "basic_password", "oauth_client_secret"].includes(value.kind)
+    && ["active", "rotating", "degraded", "disabled"].includes(value.status)
+    && Number.isSafeInteger(value.revision) && value.revision > 0
+    && (value.active_version === null
+      || (Number.isSafeInteger(value.active_version) && value.active_version > 0))
+    && !(value.status === "active" && value.active_version === null)
+    && !(value.status === "disabled" && value.active_version !== null));
+}
+
 function commandRequest(action, input, desired) {
   if (action === "publish") {
     const sourceConfigSnapshotId = String(input.sourceConfigSnapshotId ?? "");
@@ -659,6 +950,17 @@ function closedStateDialog() {
   });
 }
 
+function closedSecretDialog() {
+  return Object.freeze({
+    open: false,
+    state: "closed",
+    action: "",
+    deploymentId: "",
+    referenceId: "",
+    error: null,
+  });
+}
+
 function normalizePermissionCodes(value) {
   if (!Array.isArray(value)) return null;
   const normalized = value.map(String).sort();
@@ -670,4 +972,9 @@ function mirroredTenantId(authContext) {
   const tenant = String(authContext?.tenant?.tenant_id ?? "");
   return userTenant && userTenant === tenant && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u.test(userTenant)
     ? userTenant : "";
+}
+
+function mirroredAccountId(authContext) {
+  const accountId = String(authContext?.user?.user_id ?? "");
+  return OWNER_ID.test(accountId) ? accountId : "";
 }

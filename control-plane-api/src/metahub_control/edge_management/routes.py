@@ -11,6 +11,8 @@ from typing import Annotated, Any
 import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
 from metahub_shared.private_gateway import (
+    EdgeSecretSyncBatch,
+    EdgeSecretSyncReceipt,
     EdgeTelemetryBatch,
     EdgeTelemetryError,
     EdgeTelemetryReceiptWire,
@@ -67,6 +69,7 @@ from .models import (
     EdgeDesiredStatePullResponse,
     EdgeDesiredStateResponse,
     EdgeDesiredStateRollbackRequest,
+    EdgeSecretReferenceListResponse,
     EdgeSessionCreateRequest,
     EdgeSessionResponse,
     EdgeTelemetryPolicyPatchRequest,
@@ -75,6 +78,10 @@ from .models import (
     PlatformEdgeFleetResponse,
     WorkspaceRegistrationCreateRequest,
     WorkspaceRegistrationResponse,
+)
+from .secret_reference_service import (
+    list_workspace_secret_references,
+    synchronize_agent_secret_references,
 )
 from .service import (
     create_edge_session,
@@ -121,6 +128,48 @@ async def get_edge_deployments(request: Request, response: Response) -> EdgeDepl
         trace_id=_trace_id(request),
     )
     _private(response)
+    return result
+
+
+@router.get("/edge/secret-references", response_model=EdgeSecretReferenceListResponse)
+async def get_edge_secret_references(
+    request: Request, response: Response
+) -> EdgeSecretReferenceListResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        list_workspace_secret_references,
+        request.app.state.config,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/internal/edge/secret-references/sync",
+    response_model=EdgeSecretSyncReceipt,
+)
+async def post_edge_secret_reference_sync(
+    request: Request, response: Response
+) -> EdgeSecretSyncReceipt:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeSecretSyncBatch
+    )
+    result = await _run(
+        synchronize_agent_secret_references,
+        request.app.state.config,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
     return result
 
 

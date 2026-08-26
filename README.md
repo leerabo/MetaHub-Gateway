@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-122 - 私有网关遥测、用量与失败事实同步` 已完成；当前下一条未完成项是
-  `PRD-123 - 私有网关本地Secret托管与轮换`。
+- 新 `PRD-090` 至 `PRD-123 - 私有网关本地Secret托管与轮换` 已完成；当前下一条未完成项是
+  `PRD-124 - 云管私有Gateway安装包、预检与接入向导`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态

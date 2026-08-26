@@ -377,3 +377,69 @@ def test_policy_snapshot_control_url_enforces_https_and_loopback_http(
             load_app_config("gateway-data-plane")
         assert exc.value.code == "infra.config_invalid"
         assert "secret" not in exc.value.message
+
+
+def test_local_secret_management_config_is_disabled_and_path_safe_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED", raising=False)
+    config = load_app_config("gateway-data-plane")
+    assert config.local_secret_management_enabled is False
+    assert config.features["local_secret_management_enabled"] is False
+    dumped = str(config.model_dump())
+    assert config.local_secret_database_path not in dumped
+    assert config.local_secret_keystore_path not in dumped
+
+
+def test_local_secret_management_config_requires_exact_local_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    database_path = tmp_path / "custody.sqlite3"
+    keystore_path = tmp_path / "keystore.json"
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED", "true")
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_DEPLOYMENT_ID", "edp_" + "1" * 32)
+    monkeypatch.setenv(
+        "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET", "h" * 48
+    )
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_KEYSTORE_PATH", str(keystore_path))
+    monkeypatch.setenv(
+        "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS", "http://127.0.0.1:5173"
+    )
+    monkeypatch.setenv("METAHUB_ALLOWED_ORIGINS", "http://127.0.0.1:5173")
+    config = load_app_config("gateway-data-plane")
+    assert config.local_secret_management_enabled is True
+    assert config.local_secret_deployment_id == "edp_" + "1" * 32
+    assert config.local_management_allow_loopback is True
+
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_KEYSTORE_PATH", str(database_path))
+    with pytest.raises(ConfigError, match="deployment boundary"):
+        load_app_config("gateway-data-plane")
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("METAHUB_LOCAL_SECRET_DEPLOYMENT_ID", "invalid"),
+        ("METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS", "http://management.example.test"),
+        ("METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS", "https://localhost:99999"),
+        ("METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET", "too-short"),
+        ("METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET", "h" * 32 + " "),
+        ("METAHUB_ALLOWED_ORIGINS", "http://localhost:5174"),
+    ),
+)
+def test_local_secret_management_config_rejects_ambiguous_identity_or_origin(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED", "true")
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_DEPLOYMENT_ID", "edp_" + "1" * 32)
+    monkeypatch.setenv(
+        "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET", "h" * 48
+    )
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ConfigError) as exc:
+        load_app_config("gateway-data-plane")
+    assert exc.value.code == "infra.config_invalid"
+    if key == "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET":
+        assert value not in exc.value.message
+        assert value not in exc.value.suggestion

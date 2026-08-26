@@ -645,5 +645,5 @@ def test_telemetry_command_blocks_down(migrated_0113: tuple[Path, Path]) -> None
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database = tmp_path / "fresh.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0114"
+    assert apply_migrations(database_url).applied[-1] == "0115"
     _healthy(database_url)

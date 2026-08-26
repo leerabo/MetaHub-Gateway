@@ -369,6 +369,14 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_LOCAL_ENDPOINT_OVERALL_TIMEOUT_SECONDS": "120",
     "METAHUB_LOCAL_ENDPOINT_MAX_RESPONSE_BYTES": "16777216",
     "METAHUB_LOCAL_ENDPOINT_MAX_STREAM_BYTES": "67108864",
+    "METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED": "false",
+    "METAHUB_LOCAL_SECRET_DATABASE_PATH": ".data/private-gateway/local-secrets.sqlite3",
+    "METAHUB_LOCAL_SECRET_KEYSTORE_PATH": ".data/private-gateway/local-keystore.json",
+    "METAHUB_LOCAL_SECRET_DEPLOYMENT_ID": "",
+    "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET": "",
+    "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS": "http://localhost:5173",
+    "METAHUB_LOCAL_MANAGEMENT_ALLOWED_CLIENT_CIDRS": "",
+    "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK": "true",
     # 用量导出只在控制面运行；同步、总量和字节三层上限共同保护 SQLite 与进程内存。
     "METAHUB_USAGE_EXPORT_ENABLED": "true",
     "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS": "2",
@@ -818,6 +826,22 @@ class AppConfig(BaseModel):
     local_endpoint_overall_timeout_seconds: int = 120
     local_endpoint_max_response_bytes: int = 16_777_216
     local_endpoint_max_stream_bytes: int = 67_108_864
+    local_secret_management_enabled: bool = False
+    local_secret_database_path: str = Field(
+        default=".data/private-gateway/local-secrets.sqlite3", exclude=True, repr=False
+    )
+    local_secret_keystore_path: str = Field(
+        default=".data/private-gateway/local-keystore.json", exclude=True, repr=False
+    )
+    local_secret_deployment_id: str | None = None
+    local_secret_admin_handoff_secret: bytes | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    local_management_allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173"]
+    )
+    local_management_allowed_client_cidrs: list[str] = Field(default_factory=list)
+    local_management_allow_loopback: bool = True
     # 导出配置带安全默认值，兼容测试直接构造 AppConfig，同时禁止无界任务和长期 BLOB。
     usage_export_enabled: bool = True
     usage_export_poll_interval_seconds: int = 2
@@ -2111,6 +2135,62 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Disable METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK in production.",
         )
 
+    local_secret_management_enabled = _boolean(
+        values, "METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED"
+    )
+    local_secret_deployment_id = _optional_value(
+        values, "METAHUB_LOCAL_SECRET_DEPLOYMENT_ID"
+    )
+    local_management_allowed_origins = _local_management_origins(
+        _value(values, "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS"),
+        environment=environment,
+        enabled=local_secret_management_enabled,
+    )
+    local_management_allowed_client_cidrs = _canonical_network_list(
+        _value(values, "METAHUB_LOCAL_MANAGEMENT_ALLOWED_CLIENT_CIDRS")
+    )
+    local_management_allow_loopback = _boolean(
+        values, "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK"
+    )
+    local_secret_database_path = _value(values, "METAHUB_LOCAL_SECRET_DATABASE_PATH")
+    local_secret_keystore_path = _value(values, "METAHUB_LOCAL_SECRET_KEYSTORE_PATH")
+    local_secret_admin_handoff_secret_value = _raw_optional_value(
+        values, "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET"
+    )
+    try:
+        local_secret_admin_handoff_secret = (
+            None
+            if local_secret_admin_handoff_secret_value is None
+            else local_secret_admin_handoff_secret_value.encode("ascii")
+        )
+    except UnicodeEncodeError:
+        local_secret_admin_handoff_secret = None
+    if local_secret_management_enabled and (
+        service_name != "gateway-data-plane"
+        or local_secret_deployment_id is None
+        or re.fullmatch(r"edp_[0-9a-f]{32}", local_secret_deployment_id) is None
+        or local_secret_admin_handoff_secret is None
+        or not 32 <= len(local_secret_admin_handoff_secret) <= 512
+        or any(
+            character < 33 or character > 126
+            for character in local_secret_admin_handoff_secret
+        )
+        or not set(local_management_allowed_origins).issubset(
+            _split_origins(_value(values, "METAHUB_ALLOWED_ORIGINS"))
+        )
+        or (not local_management_allow_loopback and not local_management_allowed_client_cidrs)
+        or Path(local_secret_database_path).resolve()
+        == Path(local_secret_keystore_path).resolve()
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Local secret management deployment boundary is invalid.",
+            suggestion=(
+                "Configure one Edge deployment, distinct local database/key-store paths, "
+                "an independent handoff credential, and an allowed local management origin."
+            ),
+        )
+
     mcp_values = _load_mcp_config(
         values,
         environment=environment,
@@ -2395,6 +2475,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "response_cache_enabled": response_cache_enabled,
             "mcp_enabled": bool(mcp_values["mcp_enabled"]),
             "gateway_placement_enabled": gateway_placement_enabled,
+            "local_secret_management_enabled": local_secret_management_enabled,
             "payment_commerce_enabled": (
                 payment_webhook_secret is not None
                 and payment_receipt_encryption_secret is not None
@@ -2668,6 +2749,14 @@ def load_app_config(service_name: str) -> AppConfig:
             minimum=65_536,
             maximum=268_435_456,
         ),
+        local_secret_management_enabled=local_secret_management_enabled,
+        local_secret_database_path=local_secret_database_path,
+        local_secret_keystore_path=local_secret_keystore_path,
+        local_secret_deployment_id=local_secret_deployment_id,
+        local_secret_admin_handoff_secret=local_secret_admin_handoff_secret,
+        local_management_allowed_origins=local_management_allowed_origins,
+        local_management_allowed_client_cidrs=local_management_allowed_client_cidrs,
+        local_management_allow_loopback=local_management_allow_loopback,
         usage_export_enabled=_boolean(values, "METAHUB_USAGE_EXPORT_ENABLED"),
         usage_export_poll_interval_seconds=_bounded_int(
             values, "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS", minimum=1, maximum=60
@@ -3987,6 +4076,11 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_OUTPUT_SAFETY_MAX_FULL_TEXT_CODE_POINTS",
     }
     summary_keys.update(key for key in DEFAULT_CONFIG if key.startswith("METAHUB_MCP_"))
+    summary_keys.update(
+        key
+        for key in DEFAULT_CONFIG
+        if key.startswith(("METAHUB_LOCAL_SECRET_", "METAHUB_LOCAL_MANAGEMENT_"))
+    )
     summary_keys.update(key for key in values if key.startswith("METAHUB_PROVIDER_"))
 
     return [_build_config_item(key, values.get(key)) for key in sorted(summary_keys)]
@@ -5128,6 +5222,50 @@ def _split_origins(raw: str | None) -> list[str]:
     if not raw:
         return ["http://localhost:5173"]
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _local_management_origins(
+    raw: str, *, environment: EnvironmentName, enabled: bool
+) -> list[str]:
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    if not 1 <= len(origins) <= 8 or len(origins) != len(set(origins)):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Local management Origin allowlist is invalid.",
+            suggestion="Configure one to eight distinct HTTPS or local development origins.",
+        )
+    for origin in origins:
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError:
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local management Origin allowlist is invalid.",
+                suggestion="Use HTTPS origins; dev/test HTTP is limited to literal loopback.",
+            ) from None
+        loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or port == 0
+            or (
+                enabled
+                and parsed.scheme == "http"
+                and (environment == "prod" or not loopback)
+            )
+        ):
+            raise ConfigError(
+                code="infra.config_invalid",
+                message="Local management Origin allowlist is invalid.",
+                suggestion="Use HTTPS origins; dev/test HTTP is limited to literal loopback.",
+            )
+    return origins
 
 
 def _workspace_allowed_regions(raw: str | None) -> tuple[str, ...]:

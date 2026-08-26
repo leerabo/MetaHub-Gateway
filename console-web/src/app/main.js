@@ -539,12 +539,22 @@ import {
   getEdgeDesiredState,
   getEdgeTelemetryWatermark,
   listEdgeDeployments,
+  listEdgeSecretReferences,
   patchEdgeTelemetryPolicy,
   publishEdgeDesiredState,
   rollbackEdgeDesiredState,
   revokeEdgeDeployment,
   workspaceCookieApiOrigin,
 } from "../lib/edgeManagement.js";
+import {
+  clearLocalAdminSession,
+  createLocalAdminSession,
+  createLocalSecret,
+  deleteLocalAdminSession,
+  deleteLocalSecret,
+  rotateLocalSecret,
+  testLocalProviderConnection,
+} from "../lib/localSecretManagement.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
@@ -944,7 +954,13 @@ const mcpToolPageState = createMcpToolPageState({ clearDom: clearMcpToolDom });
 // PAGE-116 的 URL/Token 只存在当前授权 Dialog；列表、创建和测试 ticket 均绑定独立 owner/generation。
 const localEndpointPageState = createLocalEndpointPageState({ clearDom: clearLocalEndpointDom });
 // PRD-120 registration token/challenge live only inside this owner and its transient Dialog DOM.
-const privateGatewayPageState = createPrivateGatewayPageState({ clearDom: clearPrivateGatewayDom });
+const privateGatewayPageState = createPrivateGatewayPageState({
+  clearDom: clearPrivateGatewayDom,
+  clearLocalSession(localApiOrigin) {
+    if (localApiOrigin) void deleteLocalAdminSession({ localApiOrigin });
+    else clearLocalAdminSession();
+  },
+});
 // PAGE-117 只持有当前授权 tenant 的七阶段聚合；DOM 清理先于 Abort 回调发生。
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
@@ -7047,11 +7063,151 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
         consoleShellState,
       );
     },
+    async onSecretOpen(deploymentId, action, referenceId) {
+      if (!privateGatewayPageState.openSecretDialog(
+        currentPrivateGatewayOwner(consoleShellState),
+        deploymentId,
+        action,
+        referenceId,
+      )) return false;
+      refreshSequence += 1;
+      renderCurrentPrivateGatewayPanel(consoleShellState);
+      return true;
+    },
+    async onSecretClose() {
+      const closed = privateGatewayPageState.closeSecretDialog(
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+      if (closed) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return closed;
+    },
+    async onLocalSession(input) {
+      return submitPrivateGatewayLocalSession(input, consoleShellState);
+    },
+    async onSecretMutation(input) {
+      return submitPrivateGatewaySecretMutation(input, consoleShellState);
+    },
+    async onSecretCommand(input) {
+      if (input.action === "delete") {
+        const confirmed = globalThis.confirm?.(
+          "仅当配置、LKG、回滚和备份均未引用时才能删除。确认继续？",
+        ) === true;
+        if (!confirmed) return false;
+      }
+      return submitPrivateGatewaySecretMutation(input, consoleShellState);
+    },
     async onRevoke(deploymentId, reasonCode) {
       const confirmed = globalThis.confirm?.("吊销会立即终止该 Deployment 的活跃 Edge Session。确认继续？") === true;
       return confirmed ? submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) : false;
     },
   });
+}
+
+async function submitPrivateGatewayLocalSession(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginLocalSession(owner, input.localApiOrigin);
+  if (!operation) {
+    input.handoffCredential?.fill?.(0);
+    return null;
+  }
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const previous = privateGatewayPageState.snapshot().localSession;
+    if (previous && previous.localApiOrigin !== operation.localApiOrigin) {
+      await deleteLocalAdminSession({ localApiOrigin: previous.localApiOrigin });
+    }
+    const result = await createLocalAdminSession({
+      localApiOrigin: operation.localApiOrigin,
+      deploymentId: operation.deploymentId,
+      accountId: operation.accountId,
+      tenantId: operation.tenantId,
+      workspaceId: operation.workspaceId,
+      handoffCredential: input.handoffCredential,
+      signal: operation.controller.signal,
+    });
+    const accepted = privateGatewayPageState.acceptLocalSession(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+    if (!accepted) {
+      await deleteLocalAdminSession({ localApiOrigin: result.local_api_origin });
+    }
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectLocalSession(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    input.handoffCredential?.fill?.(0);
+    privateGatewayPageState.finishLocalSession(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewaySecretMutation(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginSecretMutation(owner, input.action, input);
+  if (!operation) {
+    input.secretBytes?.fill?.(0);
+    return null;
+  }
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    let result;
+    if (operation.action === "create") {
+      result = await createLocalSecret({
+        deploymentId: operation.deploymentId,
+        ...operation.request,
+        secretBytes: input.secretBytes,
+        signal: operation.controller.signal,
+      });
+    } else if (operation.action === "rotate") {
+      result = await rotateLocalSecret({
+        deploymentId: operation.deploymentId,
+        ...operation.request,
+        secretBytes: input.secretBytes,
+        signal: operation.controller.signal,
+      });
+    } else if (operation.action === "delete") {
+      result = await deleteLocalSecret({
+        deploymentId: operation.deploymentId,
+        ...operation.request,
+        signal: operation.controller.signal,
+      });
+    } else {
+      result = await testLocalProviderConnection({
+        deploymentId: operation.deploymentId,
+        providerConnectionId: operation.request.providerConnectionId,
+        signal: operation.controller.signal,
+      });
+    }
+    privateGatewayPageState.acceptSecretMutation(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectSecretMutation(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+      if (error?.code === "local_admin.authentication_failed") clearLocalAdminSession();
+    }
+  } finally {
+    input.secretBytes?.fill?.(0);
+    privateGatewayPageState.finishSecretMutation(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
 }
 
 async function submitPrivateGatewayTelemetryPolicy(
@@ -16707,11 +16863,17 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       controlApiUrl: workspaceControlApiUrl,
       signal: operation.controller.signal,
     });
-    const [desiredStates, telemetryStates] = await Promise.all([
+    const [desiredStates, telemetryStates, secretReferences] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
         ? loadPrivateGatewayTelemetryStates(result.deployments, operation.controller.signal)
         : Promise.resolve([]),
+      owner.canReadSecrets
+        ? listEdgeSecretReferences({
+          controlApiUrl: workspaceControlApiUrl,
+          signal: operation.controller.signal,
+        })
+        : Promise.resolve(null),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -16721,6 +16883,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       refreshId,
       desiredStates,
       telemetryStates,
+      secretReferences,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {

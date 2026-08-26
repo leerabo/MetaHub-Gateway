@@ -18,6 +18,12 @@ EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS = {
     "security_admin": ("edge.telemetry.manage", "edge.telemetry.read"),
     "finance_admin": ("edge.usage.read",),
 }
+EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": ("edge.secret_reference.read",),
+    "admin": ("edge.secret_reference.read",),
+    "security_admin": ("edge.secret_reference.read",),
+    "auditor": ("edge.secret_reference.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -50,6 +56,17 @@ def load_verified_workspace_edge_permissions(
             catalog_table="workspace_edge_telemetry_permission_extensions",
             assignments_table="workspace_edge_telemetry_role_permissions",
             introduced_migration="0114",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_secret_permission_extensions",
+            assignments_table="workspace_edge_secret_role_permissions",
+            introduced_migration="0115",
             unavailable_error_code=unavailable_error_code,
         )
     )
@@ -153,6 +170,7 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 __all__ = (
     "EDGE_PLATFORM_ROLE_PERMISSIONS",
+    "EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_WORKSPACE_ROLE_PERMISSIONS",
     "load_verified_platform_edge_permissions",

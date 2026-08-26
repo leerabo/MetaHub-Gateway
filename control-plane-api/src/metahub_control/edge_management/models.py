@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from metahub_shared.private_gateway import TelemetryLevel, TelemetryStream
+from metahub_shared.private_gateway import (
+    SecretReference,
+    TelemetryLevel,
+    TelemetryStream,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -328,6 +332,12 @@ class EdgeAgentTelemetryWatermarkResponse(_StrictModel):
 class EdgeTelemetryPolicyResponse(_StrictModel):
     policy: EdgeTelemetryPolicySummary
     idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeSecretReferenceListResponse(_StrictModel):
+    references: tuple[SecretReference, ...]
     request_id: str
     trace_id: str
 
