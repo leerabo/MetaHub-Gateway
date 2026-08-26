@@ -1,4 +1,4 @@
-/** PRD-120 Workspace Edge deployment and Platform Fleet clients. */
+/** PRD-120/121 Workspace Edge identity, desired state, and Platform Fleet clients. */
 
 import { AuthApiError } from "./auth.js";
 import { PlatformApiError } from "./platform.js";
@@ -9,6 +9,8 @@ const INTENT_ID = /^eri_[0-9a-f]{32}$/u;
 const CERTIFICATE_ID = /^edc_[0-9a-f]{32}$/u;
 const IDENTITY_ID = /^edi_[0-9a-f]{32}$/u;
 const EVENT_ID = /^ege_[0-9a-f]{32}$/u;
+const DESIRED_STATE_ID = /^edst_[0-9a-f]{32}$/u;
+const CONFIG_SNAPSHOT_ID = /^csn_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
@@ -34,7 +36,16 @@ const EVENT_KEYS = Object.freeze([
 const FLEET_KEYS = Object.freeze([
   "agent_version", "certificate_expires_at", "deployment_id", "health_code",
   "last_connected_at", "mode", "region_code", "revision", "revocation_generation",
-  "status", "updated_at",
+  "status", "updated_at", "desired_generation", "applied_generation", "lkg_generation",
+  "desired_state_status", "desired_state_reason_code", "desired_state_drifted",
+]);
+const DESIRED_STATE_KEYS = Object.freeze([
+  "desired_state_id", "deployment_id", "generation", "base_generation",
+  "rollback_of_generation", "source_config_snapshot_id", "source_generation",
+  "source_revocation_watermark", "change_class", "status", "revision", "head_revision",
+  "requested_by_account_id", "approved_by_account_id", "desired_generation",
+  "applied_generation", "lkg_generation", "last_ack_status", "last_reason_code", "drifted",
+  "requested_at", "decided_at", "published_at", "last_ack_at", "updated_at",
 ]);
 
 export async function listEdgeDeployments({ controlApiUrl, signal } = {}) {
@@ -123,6 +134,117 @@ export async function revokeEdgeDeployment({
     revoked_session_count: integer(result.payload.revoked_session_count, 0, Number.MAX_SAFE_INTEGER, "revoked_session_count"),
     idempotent_replay: boolean(result.payload.idempotent_replay, "idempotent_replay"),
     ...trace(result.payload),
+  });
+}
+
+export async function getEdgeDesiredState({ controlApiUrl, deploymentId, signal } = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/desired-state`,
+    { signal },
+    "workspace",
+  );
+  exact(result.payload, ["state", "idempotent_replay", "request_id", "trace_id"], "desired_state");
+  const state = result.payload.state === null ? null : validateDesiredState(result.payload.state);
+  if (state && state.deployment_id !== id) invalidWorkspaceResponse("desired_state_owner");
+  const revision = responseRevision(result.response);
+  if (revision !== desiredResponseRevision(state)) invalidWorkspaceResponse("desired_state_etag");
+  return Object.freeze({
+    state,
+    revision,
+    idempotent_replay: boolean(result.payload.idempotent_replay, "idempotent_replay"),
+    ...trace(result.payload),
+  });
+}
+
+export async function publishEdgeDesiredState({
+  controlApiUrl,
+  deploymentId,
+  sourceConfigSnapshotId,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return writeDesiredState({
+    controlApiUrl,
+    deploymentId,
+    path: "desired-state",
+    body: {
+      action: "publish",
+      source_config_snapshot_id: clientId(
+        sourceConfigSnapshotId,
+        CONFIG_SNAPSHOT_ID,
+        "source_config_snapshot_id",
+      ),
+    },
+    expectedRevision,
+    idempotencyKey,
+    signal,
+  });
+}
+
+export async function decideEdgeDesiredState({
+  controlApiUrl,
+  deploymentId,
+  action,
+  desiredStateId,
+  reasonCode,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  const decision = clientChoice(action, ["approve", "reject"], "action");
+  return writeDesiredState({
+    controlApiUrl,
+    deploymentId,
+    path: "desired-state",
+    body: {
+      action: decision,
+      desired_state_id: clientId(desiredStateId, DESIRED_STATE_ID, "desired_state_id"),
+      reason_code: clientChoice(
+        reasonCode,
+        decision === "approve"
+          ? ["approved_change"]
+          : ["risk_unacceptable", "change_not_required"],
+        "reason_code",
+      ),
+    },
+    expectedRevision,
+    idempotencyKey,
+    signal,
+  });
+}
+
+export async function rollbackEdgeDesiredState({
+  controlApiUrl,
+  deploymentId,
+  lkgGeneration,
+  reasonCode,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  return writeDesiredState({
+    controlApiUrl,
+    deploymentId,
+    path: "rollbacks",
+    body: {
+      lkg_generation: clientInteger(
+        lkgGeneration,
+        1,
+        Number.MAX_SAFE_INTEGER,
+        "lkg_generation",
+      ),
+      reason_code: clientChoice(
+        reasonCode,
+        ["operator_requested", "apply_failed_recovery"],
+        "reason_code",
+      ),
+    },
+    expectedRevision,
+    idempotencyKey,
+    signal,
   });
 }
 
@@ -227,6 +349,31 @@ function validateEvent(value) {
 function validateFleetDeployment(value) {
   plain(value, "fleet_deployment", true);
   exact(value, FLEET_KEYS, "fleet_deployment", true);
+  const desiredGeneration = integer(
+    value.desired_generation,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "desired_generation",
+    true,
+  );
+  const appliedGeneration = integer(
+    value.applied_generation,
+    0,
+    desiredGeneration,
+    "applied_generation",
+    true,
+  );
+  const lkgGeneration = integer(
+    value.lkg_generation,
+    0,
+    appliedGeneration,
+    "lkg_generation",
+    true,
+  );
+  const drifted = platformBoolean(value.desired_state_drifted, "desired_state_drifted");
+  if (drifted !== (desiredGeneration !== appliedGeneration)) {
+    invalidPlatformResponse("desired_state_drifted");
+  }
   return Object.freeze({
     deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id", false, true),
     region_code: responseRegion(value.region_code, true),
@@ -238,7 +385,136 @@ function validateFleetDeployment(value) {
     health_code: responseText(value.health_code, 80, "health_code", true),
     certificate_expires_at: nullableTimestamp(value.certificate_expires_at, "certificate_expires_at", true),
     last_connected_at: nullableTimestamp(value.last_connected_at, "last_connected_at", true),
+    desired_generation: desiredGeneration,
+    applied_generation: appliedGeneration,
+    lkg_generation: lkgGeneration,
+    desired_state_status: responseChoice(value.desired_state_status, [
+      "not_published", "not_observed", "applied", "failed",
+    ], "desired_state_status", true),
+    desired_state_reason_code: responseChoice(value.desired_state_reason_code, [
+      "not_published", "not_observed", "applied", "preflight_failed", "apply_failed",
+      "storage_failed",
+    ], "desired_state_reason_code", true),
+    desired_state_drifted: drifted,
     updated_at: timestamp(value.updated_at, "updated_at", true),
+  });
+}
+
+function validateDesiredState(value) {
+  plain(value, "desired_state");
+  exact(value, DESIRED_STATE_KEYS, "desired_state");
+  const desiredGeneration = integer(
+    value.desired_generation,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "desired_generation",
+  );
+  const appliedGeneration = integer(
+    value.applied_generation,
+    0,
+    desiredGeneration,
+    "applied_generation",
+  );
+  const lkgGeneration = integer(value.lkg_generation, 0, appliedGeneration, "lkg_generation");
+  const generation = integer(value.generation, 1, Number.MAX_SAFE_INTEGER, "generation");
+  const baseGeneration = integer(
+    value.base_generation,
+    0,
+    generation - 1,
+    "base_generation",
+  );
+  const drifted = boolean(value.drifted, "drifted");
+  if (drifted !== (desiredGeneration !== appliedGeneration)) {
+    invalidWorkspaceResponse("drifted");
+  }
+  return Object.freeze({
+    desired_state_id: responseId(value.desired_state_id, DESIRED_STATE_ID, "desired_state_id"),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    generation,
+    base_generation: baseGeneration,
+    rollback_of_generation: nullableInteger(
+      value.rollback_of_generation,
+      1,
+      Number.MAX_SAFE_INTEGER,
+      "rollback_of_generation",
+    ),
+    source_config_snapshot_id: responseId(
+      value.source_config_snapshot_id,
+      CONFIG_SNAPSHOT_ID,
+      "source_config_snapshot_id",
+    ),
+    source_generation: integer(value.source_generation, 1, Number.MAX_SAFE_INTEGER, "source_generation"),
+    source_revocation_watermark: integer(
+      value.source_revocation_watermark,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "source_revocation_watermark",
+    ),
+    change_class: responseChoice(value.change_class, ["standard", "high_risk"], "change_class"),
+    status: responseChoice(
+      value.status,
+      ["approval_pending", "published", "superseded", "rejected"],
+      "desired_status",
+    ),
+    revision: integer(value.revision, 1, Number.MAX_SAFE_INTEGER, "desired_revision"),
+    head_revision: integer(value.head_revision, 0, Number.MAX_SAFE_INTEGER, "head_revision"),
+    requested_by_account_id: responseText(value.requested_by_account_id, 160, "requested_by"),
+    approved_by_account_id: nullableText(value.approved_by_account_id, 160, "approved_by"),
+    desired_generation: desiredGeneration,
+    applied_generation: appliedGeneration,
+    lkg_generation: lkgGeneration,
+    last_ack_status: responseChoice(
+      value.last_ack_status,
+      ["not_observed", "applied", "failed"],
+      "last_ack_status",
+    ),
+    last_reason_code: responseChoice(value.last_reason_code, [
+      "not_observed", "applied", "preflight_failed", "apply_failed", "storage_failed",
+    ], "last_reason_code"),
+    drifted,
+    requested_at: timestamp(value.requested_at, "requested_at"),
+    decided_at: nullableTimestamp(value.decided_at, "decided_at"),
+    published_at: nullableTimestamp(value.published_at, "published_at"),
+    last_ack_at: nullableTimestamp(value.last_ack_at, "last_ack_at"),
+    updated_at: timestamp(value.updated_at, "desired_updated_at"),
+  });
+}
+
+async function writeDesiredState({
+  controlApiUrl,
+  deploymentId,
+  path,
+  body,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const result = await request(controlApiUrl, `/edge/deployments/${encodeURIComponent(id)}/${path}`, {
+    method: "POST",
+    body,
+    csrf: true,
+    headers: {
+      "Idempotency-Key": clientIdempotencyKey(idempotencyKey),
+      "If-Match": `"${clientInteger(
+        expectedRevision,
+        0,
+        Number.MAX_SAFE_INTEGER,
+        "expected_revision",
+      )}"`,
+    },
+    signal,
+  }, "workspace");
+  exact(result.payload, ["state", "idempotent_replay", "request_id", "trace_id"], "desired_state");
+  const state = validateDesiredState(result.payload.state);
+  if (state.deployment_id !== id) invalidWorkspaceResponse("desired_state_owner");
+  const revision = responseRevision(result.response);
+  if (revision !== desiredResponseRevision(state)) invalidWorkspaceResponse("desired_state_etag");
+  return Object.freeze({
+    state,
+    revision,
+    idempotent_replay: boolean(result.payload.idempotent_replay, "idempotent_replay"),
+    ...trace(result.payload),
   });
 }
 
@@ -397,6 +673,11 @@ function boolean(value, label) {
   return value;
 }
 
+function platformBoolean(value, label) {
+  if (typeof value !== "boolean") invalidPlatformResponse(label);
+  return value;
+}
+
 function timestamp(value, label, platform = false) {
   const text = responseText(value, 40, label, platform);
   if (!Number.isFinite(Date.parse(text))) {
@@ -428,6 +709,24 @@ function clientText(value, maximum, label, minimum = 1) {
     invalidWorkspaceRequest(label);
   }
   return value;
+}
+
+function clientId(value, pattern, label) {
+  const text = clientText(value, 160, label);
+  if (!pattern.test(text)) invalidWorkspaceRequest(label);
+  return text;
+}
+
+function responseRevision(response) {
+  const match = /^"(0|[1-9][0-9]*)"$/u.exec(String(response.headers?.get?.("ETag") ?? ""));
+  const revision = Number(match?.[1] ?? Number.NaN);
+  if (!Number.isSafeInteger(revision)) invalidWorkspaceResponse("etag");
+  return revision;
+}
+
+function desiredResponseRevision(state) {
+  if (!state) return 0;
+  return state.status === "approval_pending" ? state.revision : state.head_revision;
 }
 
 function clientRegion(value) {

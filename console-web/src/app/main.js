@@ -535,7 +535,11 @@ import {
 import {
   createEdgeIdempotencyKey,
   createEdgeRegistration,
+  decideEdgeDesiredState,
+  getEdgeDesiredState,
   listEdgeDeployments,
+  publishEdgeDesiredState,
+  rollbackEdgeDesiredState,
   revokeEdgeDeployment,
   workspaceCookieApiOrigin,
 } from "../lib/edgeManagement.js";
@@ -7014,11 +7018,77 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
     },
     async onCreate(input) { return submitPrivateGatewayCreate(input, consoleShellState); },
     async onCopy() { return copyPrivateGatewayRegistration(consoleShellState); },
+    async onStateOpen(deploymentId, action) {
+      if (!privateGatewayPageState.openStateCommand(
+        currentPrivateGatewayOwner(consoleShellState),
+        deploymentId,
+        action,
+      )) return false;
+      refreshSequence += 1;
+      renderCurrentPrivateGatewayPanel(consoleShellState);
+      return true;
+    },
+    async onStateClose() {
+      const closed = privateGatewayPageState.closeStateCommand(
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+      if (closed) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return closed;
+    },
+    async onStateCommand(input) {
+      return submitPrivateGatewayStateCommand(input, consoleShellState);
+    },
     async onRevoke(deploymentId, reasonCode) {
       const confirmed = globalThis.confirm?.("吊销会立即终止该 Deployment 的活跃 Edge Session。确认继续？") === true;
       return confirmed ? submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) : false;
     },
   });
+}
+
+async function submitPrivateGatewayStateCommand(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginStateCommand(owner, input);
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const common = {
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      expectedRevision: operation.expectedRevision,
+      idempotencyKey: createEdgeIdempotencyKey(`desired-${operation.action}`),
+      signal: operation.controller.signal,
+    };
+    let result;
+    if (operation.action === "publish") {
+      result = await publishEdgeDesiredState({ ...common, ...operation.request });
+    } else if (["approve", "reject"].includes(operation.action)) {
+      result = await decideEdgeDesiredState({
+        ...common,
+        ...operation.request,
+        action: operation.action,
+      });
+    } else {
+      result = await rollbackEdgeDesiredState({ ...common, ...operation.request });
+    }
+    privateGatewayPageState.acceptStateCommand(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectStateCommand(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishStateCommand(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
 }
 
 async function submitPrivateGatewayCreate(input, consoleShellState) {
@@ -16586,9 +16656,17 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       controlApiUrl: workspaceControlApiUrl,
       signal: operation.controller.signal,
     });
+    const desiredStates = await loadPrivateGatewayDesiredStates(
+      result.deployments,
+      operation.controller.signal,
+    );
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
-      operation, result, currentPrivateGatewayOwner(consoleShellState), refreshId,
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+      refreshId,
+      desiredStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -16601,6 +16679,29 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayDesiredStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getEdgeDesiredState({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = Object.freeze({ deploymentId, response });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 /** 读取 PAGE-117 精确聚合，并丢弃租户、导航、权限或刷新代际已过期的异步结果。 */

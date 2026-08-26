@@ -363,6 +363,12 @@ def canonical_json_bytes(value: object) -> bytes:
     return encoded
 
 
+def validate_config_manifest(value: object) -> dict[str, object]:
+    """Return the strict PRD-108 safe manifest projection for an outer protocol."""
+
+    return _manifest(value)
+
+
 def test_kms_verifier(master_key: str, *, key_version: str = "test-v1") -> Verifier:
     """Build a trusted test verifier without retaining the derived private key object."""
 

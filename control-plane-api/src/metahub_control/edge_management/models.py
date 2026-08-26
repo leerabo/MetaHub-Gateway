@@ -50,6 +50,34 @@ class EdgeDeploymentRevokeRequest(_StrictModel):
     ] = "owner_requested"
 
 
+class EdgeDesiredStatePublishRequest(_StrictModel):
+    action: Literal["publish"]
+    source_config_snapshot_id: str = Field(pattern=r"^csn_[0-9a-f]{32}$")
+
+
+class EdgeDesiredStateApprovalRequest(_StrictModel):
+    action: Literal["approve", "reject"]
+    desired_state_id: str = Field(pattern=r"^edst_[0-9a-f]{32}$")
+    reason_code: Literal["approved_change", "risk_unacceptable", "change_not_required"]
+
+
+class EdgeDesiredStateRollbackRequest(_StrictModel):
+    lkg_generation: int = Field(ge=1)
+    reason_code: Literal["operator_requested", "apply_failed_recovery"]
+
+
+class EdgeAckCreateRequest(_StrictModel):
+    signed_snapshot_id: str = Field(pattern=r"^edsn_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    envelope_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["applied", "failed"]
+    reason_code: Literal["applied", "preflight_failed", "apply_failed", "storage_failed"]
+    apply_duration_ms: int = Field(ge=0, le=300_000)
+    lkg_generation: int = Field(ge=0)
+    lkg_envelope_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    attempt_nonce: str = Field(min_length=36, max_length=68, repr=False)
+
+
 class EdgeCertificateSummary(_StrictModel):
     certificate_id: str
     identity_id: str
@@ -140,9 +168,7 @@ class EdgeCertificateResponse(_StrictModel):
     certificate: EdgeCertificateSummary
     certificate_pem: str = Field(repr=False)
     ca_certificate_pem: str
-    permissions: tuple[
-        Literal["edge.self.connect", "edge.self.register", "edge.self.rotate"], ...
-    ]
+    permissions: tuple[Literal["edge.self.connect", "edge.self.register", "edge.self.rotate"], ...]
     idempotent_replay: bool
     request_id: str
     trace_id: str
@@ -169,6 +195,65 @@ class EdgeDeploymentRevokeResponse(_StrictModel):
     trace_id: str
 
 
+class EdgeDesiredStateSummary(_StrictModel):
+    desired_state_id: str
+    deployment_id: str
+    generation: int
+    base_generation: int
+    rollback_of_generation: int | None = None
+    source_config_snapshot_id: str
+    source_generation: int
+    source_revocation_watermark: int
+    change_class: Literal["standard", "high_risk"]
+    status: Literal["approval_pending", "published", "superseded", "rejected"]
+    revision: int
+    head_revision: int
+    requested_by_account_id: str
+    approved_by_account_id: str | None = None
+    desired_generation: int
+    applied_generation: int
+    lkg_generation: int
+    last_ack_status: Literal["not_observed", "applied", "failed"]
+    last_reason_code: Literal[
+        "not_observed", "applied", "preflight_failed", "apply_failed", "storage_failed"
+    ]
+    drifted: bool
+    requested_at: datetime
+    decided_at: datetime | None = None
+    published_at: datetime | None = None
+    last_ack_at: datetime | None = None
+    updated_at: datetime
+
+
+class EdgeDesiredStateResponse(_StrictModel):
+    state: EdgeDesiredStateSummary | None = None
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeDesiredStatePullResponse(_StrictModel):
+    deployment_id: str
+    generation: int
+    envelope_sha256: str
+    snapshot: dict[str, object]
+    trust_manifest: dict[str, object]
+    request_id: str
+    trace_id: str
+
+
+class EdgeAckResponse(_StrictModel):
+    ack_id: str
+    disposition: Literal["accepted", "late"]
+    status: Literal["applied", "failed"]
+    desired_generation: int
+    applied_generation: int
+    lkg_generation: int
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
 class PlatformEdgeFleetSummary(_StrictModel):
     deployment_id: str
     region_code: str
@@ -180,6 +265,21 @@ class PlatformEdgeFleetSummary(_StrictModel):
     health_code: str
     certificate_expires_at: datetime | None = None
     last_connected_at: datetime | None = None
+    desired_generation: int = 0
+    applied_generation: int = 0
+    lkg_generation: int = 0
+    desired_state_status: Literal["not_published", "not_observed", "applied", "failed"] = (
+        "not_published"
+    )
+    desired_state_reason_code: Literal[
+        "not_published",
+        "not_observed",
+        "applied",
+        "preflight_failed",
+        "apply_failed",
+        "storage_failed",
+    ] = "not_published"
+    desired_state_drifted: bool = False
     updated_at: datetime
 
 

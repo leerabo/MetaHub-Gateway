@@ -165,6 +165,18 @@ REQUIRED_DOCS = {
         "PRD-121",
         "0112",
     ),
+    ROOT / "docs/prd/PRD-121-edge-desired-state-signed-snapshot-offline-lkg.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0113",
+    ),
+    ROOT / "docs/testing/PRD-121-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-122",
+        "0113",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -828,10 +840,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 112
+        and migration_versions[-1] == 113
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0112 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0113 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -889,6 +901,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             ROOT / "infra/migrations/0112_edge_agent_device_identity_mtls.down.sql"
         ).is_file(),
         "PRD-120 owns reversible migration 0112 with guarded Edge-identity rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0113_edge_desired_state_signed_snapshot_lkg.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0113_edge_desired_state_signed_snapshot_lkg.down.sql"
+        ).is_file(),
+        "PRD-121 owns reversible migration 0113 with guarded desired-state rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

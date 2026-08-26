@@ -10,6 +10,7 @@ from .runtime import (
     canonical_json_bytes,
     create_manifest_delta,
     test_kms_verifier,
+    validate_config_manifest,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "canonical_json_bytes",
     "create_manifest_delta",
     "test_kms_verifier",
+    "validate_config_manifest",
 ]

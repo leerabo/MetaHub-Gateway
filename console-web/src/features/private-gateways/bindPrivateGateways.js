@@ -1,4 +1,4 @@
-/** PRD-120 Dialog binding and synchronous one-use DOM cleanup. */
+/** PRD-120/121 registration and desired-state dialog binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -19,8 +19,59 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       void callbacks.onRevoke?.(deploymentId, reason);
     });
   });
+  root.querySelectorAll("[data-private-gateway-state-open]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onStateOpen?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.privateGatewayStateOpen ?? "",
+    ));
+  });
   bindDialog(root, callbacks);
+  bindStateDialog(root, callbacks);
   return true;
+}
+
+function bindStateDialog(root, callbacks) {
+  const dialog = root.querySelector("[data-private-gateway-state-dialog]");
+  if (!dialog) return;
+  const close = async () => {
+    const closed = await callbacks.onStateClose?.();
+    if (closed !== false) {
+      globalThis.document?.querySelector?.("[data-private-gateway-state-open]")?.focus?.();
+    }
+  };
+  dialog.querySelectorAll("[data-private-gateway-state-close]").forEach((button) => {
+    button.addEventListener("click", () => void close());
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (dialog.getAttribute("aria-busy") !== "true") void close();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") trapDialogFocus(dialog, event);
+  });
+  const form = dialog.querySelector("[data-private-gateway-state-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const action = form.dataset.action ?? "";
+    if (data.get("confirmed") !== "on") {
+      setStateFormError(dialog, "请确认本次操作");
+      return;
+    }
+    const input = {
+      action,
+      sourceConfigSnapshotId: String(data.get("source_config_snapshot_id") ?? "").trim(),
+      reasonCode: String(data.get("reason_code") ?? ""),
+    };
+    if (action === "publish" && !/^csn_[0-9a-f]{32}$/u.test(input.sourceConfigSnapshotId)) {
+      setStateFormError(dialog, "请输入有效的配置快照 ID");
+      return;
+    }
+    setStateFormError(dialog, "");
+    void callbacks.onStateCommand?.(input);
+  });
+  if (!dialog.open) dialog.showModal?.();
+  (dialog.querySelector("input:not([type=checkbox]), select, input[type=checkbox]"))?.focus?.();
 }
 
 function bindDialog(root, callbacks) {
@@ -74,4 +125,5 @@ function eraseOneUse(root) {
 }
 function strictInteger(value) { const text = String(value ?? ""); return /^[1-9][0-9]*$/u.test(text) && Number.isSafeInteger(Number(text)) ? Number(text) : 0; }
 function setFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-form-error]"); if (node) node.textContent = value; }
+function setStateFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-state-form-error]"); if (node) node.textContent = value; }
 function cssEscape(value) { return globalThis.CSS?.escape?.(String(value)) ?? String(value).replace(/[^A-Za-z0-9_-]/gu, ""); }

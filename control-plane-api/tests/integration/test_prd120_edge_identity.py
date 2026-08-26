@@ -72,7 +72,7 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd120-edge-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0112"
+    assert apply_migrations(database_url).applied[-1] == "0113"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)
@@ -416,6 +416,12 @@ async def test_registration_rotation_session_replay_and_atomic_revoke(
             "health_code",
             "certificate_expires_at",
             "last_connected_at",
+            "desired_generation",
+            "applied_generation",
+            "lkg_generation",
+            "desired_state_status",
+            "desired_state_reason_code",
+            "desired_state_drifted",
             "updated_at",
         }
 

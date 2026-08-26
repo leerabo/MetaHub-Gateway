@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成；当前下一项是
-`PRD-121 - 云边期望状态、签名快照与离线LKG`。
+`PRD-121 - 云边期望状态、签名快照与离线LKG` 已完成；当前下一项是
+`PRD-122 - 私有网关遥测、用量与失败事实同步`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2355,6 +2355,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   Workspace 一次性注册材料只驻留内存，Platform 只读取安全 Fleet 字段，直达 hash 与离页清理已验证。
 - `docs/prd/PRD-120-edge-agent-device-identity-mtls.md` 与 `docs/testing/PRD-120-tests.md`：保存迁移、API、
   mTLS、Browser、SLO 和敏感审计事实；下一权威项为 PRD-121，G5 在 PRD-130 后统一执行。
+
+## PRD-121 云边期望状态、签名快照与离线 LKG（已完成）
+
+- `control-plane-api/src/metahub_control/edge_management/desired_state_service.py` 与同域 models/routes/service：
+  Desired State CAS、服务端风险派生、不同管理员审批、RFC 8785 + Ed25519 制品、trust manifest、Agent 拉取、
+  单调 ACK/LKG、递增 generation 回滚和 Platform Fleet 最小投影；Cookie/Agent/Platform 三凭据域失败关闭。
+- `shared-sdk/python/metahub_shared/private_gateway/desired_state.py`：严格 envelope/artifact/trust schema、
+  duplicate key/non-finite/超限数字拒绝、用途域签名、owner/audience/TTL 校验和固定失败码。
+- `gateway-data-plane/src/metahub_gateway/config/edge_desired_state.py`：候选 slot、高水位、active pointer 与
+  父目录固定 fsync 顺序，跨重启单调恢复、有界 LKG 和完整性故障隔离。
+- `infra/migrations/0113_edge_desired_state_signed_snapshot_lkg.sql/.down.sql`：不可变 Desired State、head、
+  approval、artifact/snapshot、apply/ack/LKG、事件/outbox、复合 owner 约束和业务事实 down guard。
+- `console-web/src/features/private-gateways/`、`console-web/src/lib/edgeManagement.js` 与 Platform Fleet：
+  Workspace 期望/实际/LKG、审批/发布/回滚和固定失败摘要；Platform 只获得 generation/lag/stale/failure code。
+- `docs/prd/PRD-121-edge-desired-state-signed-snapshot-offline-lkg.md`、
+  `docs/development/edge-desired-state-sync.md` 与 `docs/testing/PRD-121-tests.md`：保存协议、原子恢复、
+  两轮自审、专项/必要回归、真实非自批审批与 Agent ACK、双视口 Browser 和敏感审计；下一权威项为
+  PRD-122，G5 在 PRD-130 后统一执行。
 
 ## MVP 非目标
 

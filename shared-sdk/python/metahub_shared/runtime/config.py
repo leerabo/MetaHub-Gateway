@@ -102,6 +102,9 @@ DEFAULT_APPROVAL_HMAC_SECRET = "dev-only-change-me-metahub-approval-hmac-secret-
 DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET = (
     "dev-only-change-me-metahub-gateway-placement-signing-secret-2026"
 )
+DEFAULT_EDGE_SNAPSHOT_SIGNING_SECRET = (
+    "dev-only-change-me-metahub-edge-snapshot-signing-secret-2026"
+)
 # 租户导出 ZIP 与注销留存分段共享一个 PRD-089 根密钥，但通过固定 AAD/domain 分离用途。
 # 公开默认值只服务 dev/test；生产缺失时仅 tenant-data 功能关闭失败，不能回退到 Auth/Provider 密钥。
 DEFAULT_TENANT_DATA_ENCRYPTION_SECRET = (
@@ -142,6 +145,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_VERSION": "1",
     "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET": "",
     "METAHUB_GATEWAY_PLACEMENT_SNAPSHOT_TTL_SECONDS": "30",
+    "METAHUB_EDGE_SNAPSHOT_SIGNING_VERSION": "1",
+    "METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET": "",
     "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT": "100",
     "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT": "50",
     "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT": "10",
@@ -518,6 +523,10 @@ class AppConfig(BaseModel):
         default=None, exclude=True, repr=False
     )
     gateway_placement_snapshot_ttl_seconds: int = 30
+    edge_snapshot_signing_version: int = 1
+    edge_snapshot_signing_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
     gateway_capacity_tenant_limit: int = 100
     gateway_capacity_workspace_limit: int = 50
     gateway_capacity_key_limit: int = 10
@@ -1548,6 +1557,15 @@ def load_app_config(service_name: str) -> AppConfig:
     tenant_data_encryption_secret = configured_tenant_data_encryption_secret or (
         DEFAULT_TENANT_DATA_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
+    edge_snapshot_signing_version = _positive_int(
+        values, "METAHUB_EDGE_SNAPSHOT_SIGNING_VERSION"
+    )
+    configured_edge_snapshot_signing_secret = _raw_optional_value(
+        values, "METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET"
+    )
+    edge_snapshot_signing_secret = configured_edge_snapshot_signing_secret or (
+        DEFAULT_EDGE_SNAPSHOT_SIGNING_SECRET if environment in {"dev", "test"} else None
+    )
     response_cache_enabled = _boolean(values, "METAHUB_RESPONSE_CACHE_ENABLED")
     response_cache_hmac_version = _positive_int(values, "METAHUB_RESPONSE_CACHE_HMAC_VERSION")
     response_cache_encryption_version = _positive_int(
@@ -1847,6 +1865,7 @@ def load_app_config(service_name: str) -> AppConfig:
             batch_encryption_secret,
             prompt_template_encryption_secret,
             file_encryption_secret,
+            edge_snapshot_signing_secret,
             _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
             session_risk_hmac_secret,
             session_risk_previous_hmac_secret,
@@ -1855,6 +1874,27 @@ def load_app_config(service_name: str) -> AppConfig:
             response_cache_control_idempotency_secret,
             response_cache_failure_spool_secret,
             *provider_api_keys.values(),
+        ),
+    )
+    _validate_edge_snapshot_signing_secret(
+        environment=environment,
+        signing_secret=edge_snapshot_signing_secret,
+        forbidden_secrets=(
+            auth_token_secret,
+            identity_session_secret,
+            identity_challenge_secret,
+            workspace_session_secret,
+            platform_session_secret,
+            support_session_secret,
+            identity_mfa_encryption_secret,
+            platform_bootstrap_recovery_secret,
+            identity_pii_encryption_secret,
+            cache_affinity_hmac_secret,
+            gateway_placement_signing_secret,
+            tenant_data_encryption_secret,
+            prompt_template_encryption_secret,
+            file_encryption_secret,
+            _raw_optional_value(values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"),
         ),
     )
     _validate_session_risk_hmac_config(
@@ -2294,6 +2334,8 @@ def load_app_config(service_name: str) -> AppConfig:
             minimum=5,
             maximum=300,
         ),
+        edge_snapshot_signing_version=edge_snapshot_signing_version,
+        edge_snapshot_signing_secret=edge_snapshot_signing_secret,
         gateway_capacity_tenant_limit=_bounded_int(
             values, "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT", minimum=1, maximum=100000
         ),
@@ -3769,6 +3811,8 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_GATEWAY_PLACEMENT_SIGNING_VERSION",
         "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET",
         "METAHUB_GATEWAY_PLACEMENT_SNAPSHOT_TTL_SECONDS",
+        "METAHUB_EDGE_SNAPSHOT_SIGNING_VERSION",
+        "METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET",
         "METAHUB_GATEWAY_CAPACITY_TENANT_LIMIT",
         "METAHUB_GATEWAY_CAPACITY_WORKSPACE_LIMIT",
         "METAHUB_GATEWAY_CAPACITY_KEY_LIMIT",
@@ -4467,6 +4511,52 @@ def _validate_tenant_data_encryption_secret(
             code="infra.config_invalid",
             message="METAHUB_TENANT_DATA_ENCRYPTION_SECRET must be replaced in prod.",
             suggestion="Configure a dedicated production tenant-data encryption secret.",
+        )
+
+
+def _validate_edge_snapshot_signing_secret(
+    *,
+    environment: EnvironmentName,
+    signing_secret: str | None,
+    forbidden_secrets: tuple[str | None, ...],
+) -> None:
+    """Validate the independent Ed25519 root used for Edge desired-state snapshots."""
+
+    if signing_secret is None:
+        return
+    try:
+        encoded = signing_secret.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET is invalid.",
+            suggestion="Configure an independent high-entropy UTF-8 signing secret.",
+        ) from None
+    if not 32 <= len(encoded) <= 512 or any(
+        character.isspace() or ord(character) < 32 for character in signing_secret
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET does not meet security requirements.",
+            suggestion="Use an independent 32-512 byte secret without whitespace or controls.",
+        )
+    if any(
+        type(candidate) is str and hmac.compare_digest(signing_secret, candidate)
+        for candidate in forbidden_secrets
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Edge snapshot signing must use an independent key domain.",
+            suggestion="Configure a dedicated METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET.",
+        )
+    if environment == "prod" and (
+        hmac.compare_digest(signing_secret, DEFAULT_EDGE_SNAPSHOT_SIGNING_SECRET)
+        or signing_secret.startswith("replace-with-")
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET must be replaced in prod.",
+            suggestion="Configure a dedicated production Edge snapshot signing secret.",
         )
 
 

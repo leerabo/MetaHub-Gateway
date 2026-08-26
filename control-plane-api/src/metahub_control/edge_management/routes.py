@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
+from metahub_shared.private_gateway import canonical_edge_json_bytes
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
@@ -36,13 +37,27 @@ from metahub_control.workspace_access.constants import (
     WORKSPACE_SESSION_COOKIE,
 )
 
+from .desired_state_service import (
+    acknowledge_agent_desired_state,
+    get_workspace_desired_state,
+    pull_agent_desired_state,
+    rollback_workspace_desired_state,
+    write_workspace_desired_state,
+)
 from .models import (
+    EdgeAckCreateRequest,
+    EdgeAckResponse,
     EdgeAgentRegistrationRequest,
     EdgeCertificateResponse,
     EdgeCertificateRotationRequest,
     EdgeDeploymentListResponse,
     EdgeDeploymentRevokeRequest,
     EdgeDeploymentRevokeResponse,
+    EdgeDesiredStateApprovalRequest,
+    EdgeDesiredStatePublishRequest,
+    EdgeDesiredStatePullResponse,
+    EdgeDesiredStateResponse,
+    EdgeDesiredStateRollbackRequest,
     EdgeSessionCreateRequest,
     EdgeSessionResponse,
     PlatformEdgeFleetResponse,
@@ -128,9 +143,7 @@ async def post_edge_registration(
 
 
 @router.post("/edge/certificates", response_model=EdgeCertificateResponse)
-async def post_edge_certificate(
-    request: Request, response: Response
-) -> EdgeCertificateResponse:
+async def post_edge_certificate(request: Request, response: Response) -> EdgeCertificateResponse:
     _reject_query(request)
     fingerprint = _prepare_agent(request, require_mtls=True)
     payload = _model(
@@ -157,9 +170,7 @@ async def post_edge_certificate(
 async def post_edge_session(request: Request, response: Response) -> EdgeSessionResponse:
     _reject_query(request)
     fingerprint = _prepare_agent(request, require_mtls=True)
-    payload = _model(
-        await _strict_json(request, "edge.request_invalid"), EdgeSessionCreateRequest
-    )
+    payload = _model(await _strict_json(request, "edge.request_invalid"), EdgeSessionCreateRequest)
     result = await _run(
         create_edge_session,
         request.app.state.config,
@@ -201,9 +212,138 @@ async def post_edge_deployment_revoke(
     return result
 
 
+@router.get(
+    "/edge/deployments/{deployment_id}/desired-state",
+    response_model=EdgeDesiredStateResponse | EdgeDesiredStatePullResponse,
+)
+async def get_edge_desired_state(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDesiredStateResponse | EdgeDesiredStatePullResponse | Response:
+    _reject_query(request)
+    if _cookie_values(request, WORKSPACE_SESSION_COOKIE):
+        _prepare_workspace(request, write=False)
+        result = await _run(
+            get_workspace_desired_state,
+            request.app.state.config,
+            deployment_id,
+            session_token=_workspace_cookie(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        response.headers["ETag"] = _desired_etag(result)
+    else:
+        fingerprint = _prepare_agent(request, require_mtls=True)
+        result = await _run(
+            pull_agent_desired_state,
+            request.app.state.config,
+            deployment_id,
+            verified_fingerprint=fingerprint,
+            edge_session_token=_edge_session(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        response = Response(
+            content=canonical_edge_json_bytes(result.model_dump(mode="json"), maximum=786_432),
+            media_type="application/json",
+        )
+        response.headers["ETag"] = f'"{result.envelope_sha256}"'
+        _edge_private(response)
+        return response
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/desired-state",
+    response_model=EdgeDesiredStateResponse,
+)
+async def post_edge_desired_state(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDesiredStateResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    raw = await _strict_json(request, "edge.request_invalid")
+    if raw.get("action") == "publish":
+        payload = _model(raw, EdgeDesiredStatePublishRequest)
+    elif raw.get("action") in {"approve", "reject"}:
+        payload = _model(raw, EdgeDesiredStateApprovalRequest)
+    else:
+        raise ApiError("edge.request_invalid")
+    result = await _run(
+        write_workspace_desired_state,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        expected_revision=_desired_if_match(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _desired_etag(result)
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/acks",
+    response_model=EdgeAckResponse,
+)
+async def post_edge_ack(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeAckResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(await _strict_json(request, "edge.request_invalid"), EdgeAckCreateRequest)
+    result = await _run(
+        acknowledge_agent_desired_state,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/rollbacks",
+    response_model=EdgeDesiredStateResponse,
+)
+async def post_edge_rollback(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDesiredStateResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"),
+        EdgeDesiredStateRollbackRequest,
+    )
+    result = await _run(
+        rollback_workspace_desired_state,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        expected_revision=_desired_if_match(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = _desired_etag(result)
+    _edge_private(response)
+    return result
+
+
 def require_platform_edge_fleet(request: Request) -> PlatformContext:
     if (
         _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
         or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
@@ -246,6 +386,7 @@ def _prepare_workspace(request: Request, *, write: bool) -> None:
     clear_workspace_cookies_on_error(request)
     if (
         _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
         or _cookie_values(request, PLATFORM_SESSION_COOKIE)
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
@@ -260,8 +401,7 @@ def _prepare_agent(request: Request, *, require_mtls: bool) -> str:
     if _raw_headers(request, b"authorization") or _raw_headers(request, b"cookie"):
         raise ApiError("edge.authentication_failed")
     if any(
-        name.lower() in _UNTRUSTED_CERT_HEADERS
-        for name, _value in request.scope.get("headers", ())
+        name.lower() in _UNTRUSTED_CERT_HEADERS for name, _value in request.scope.get("headers", ())
     ):
         raise ApiError("edge.authentication_failed")
     fingerprint = verified_mtls_fingerprint(request)
@@ -275,9 +415,7 @@ def _workspace_cookie(request: Request) -> str:
 
 
 def _workspace_csrf(request: Request) -> str:
-    return _required_csrf(
-        request, WORKSPACE_CSRF_COOKIE, "workspace_session.csrf_invalid"
-    )
+    return _required_csrf(request, WORKSPACE_CSRF_COOKIE, "workspace_session.csrf_invalid")
 
 
 def _if_match(request: Request) -> int:
@@ -285,6 +423,31 @@ def _if_match(request: Request) -> int:
     if len(values) != 1 or re.fullmatch(r'"[1-9][0-9]*"', values[0]) is None:
         raise ApiError("edge.request_invalid")
     return int(values[0][1:-1])
+
+
+def _desired_if_match(request: Request) -> int:
+    values = _raw_headers(request, b"if-match")
+    if len(values) != 1 or re.fullmatch(r'"(?:0|[1-9][0-9]*)"', values[0]) is None:
+        raise ApiError("edge.request_invalid")
+    return int(values[0][1:-1])
+
+
+def _edge_session(request: Request) -> str:
+    values = _raw_headers(request, b"x-edge-session")
+    if len(values) != 1:
+        raise ApiError("edge.authentication_failed")
+    return values[0]
+
+
+def _desired_etag(result: EdgeDesiredStateResponse) -> str:
+    if result.state is None:
+        return '"0"'
+    revision = (
+        result.state.revision
+        if result.state.status == "approval_pending"
+        else result.state.head_revision
+    )
+    return f'"{revision}"'
 
 
 def _idempotency_key(request: Request) -> str:
@@ -313,9 +476,7 @@ def _edge_private(response: Response) -> None:
 
 
 async def _run(function, /, *args, **kwargs):
-    return await anyio.to_thread.run_sync(
-        partial(function, *args, **kwargs), limiter=_WORK_LIMITER
-    )
+    return await anyio.to_thread.run_sync(partial(function, *args, **kwargs), limiter=_WORK_LIMITER)
 
 
 __all__ = ["router"]

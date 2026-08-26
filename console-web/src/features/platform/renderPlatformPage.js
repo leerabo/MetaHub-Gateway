@@ -1468,8 +1468,8 @@ function edgeFleetView(state) {
     <section class="platform-band">
       ${state.loading && !state.edgeFleet ? '<div class="platform-empty" role="status">正在读取 Fleet 摘要</div>' : `
         <div class="platform-table-wrap"><table class="platform-edge-fleet-table">
-          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>Revision</th></tr></thead>
-          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 7)}</tbody>
+          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>期望 / 实际 / LKG</th><th>配置状态</th><th>Revision</th></tr></thead>
+          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 9)}</tbody>
         </table></div>`}
     </section>`;
 }
@@ -1482,6 +1482,8 @@ function edgeFleetRow(item) {
     <td data-label="Agent"><strong>${escapeHtml(item.agent_version ?? "-")}</strong></td>
     <td data-label="证书"><strong>${formatOptionalTime(item.certificate_expires_at)}</strong><small>revocation ${number(item.revocation_generation)}</small></td>
     <td data-label="最近连接"><strong>${formatOptionalTime(item.last_connected_at)}</strong></td>
+    <td data-label="期望 / 实际 / LKG"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong><small>${item.desired_state_drifted ? `lag ${number(Math.max(0, item.desired_generation - item.applied_generation))}` : "converged"}</small></td>
+    <td data-label="配置状态">${status(item.desired_state_status)}<small>${escapeHtml(statusLabel(item.desired_state_reason_code))}</small></td>
     <td data-label="Revision"><strong>${number(item.revision)}</strong></td>
   </tr>`;
 }

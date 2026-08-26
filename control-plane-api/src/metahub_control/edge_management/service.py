@@ -128,9 +128,7 @@ def create_workspace_registration(
                     idempotency_sha256,
                 ),
             ).fetchone()
-            deployment = _owned_deployment(
-                connection, context, str(replay["result_object_id"])
-            )
+            deployment = _owned_deployment(connection, context, str(replay["result_object_id"]))
             if intent is None:
                 raise ApiError("edge.unavailable")
             result = WorkspaceRegistrationResponse(
@@ -304,9 +302,7 @@ def register_edge_agent(
             """,
             (token_hmac,),
         ).fetchone()
-        if row is None or not hmac.compare_digest(
-            str(row["edge_deployment_id"]), deployment_id
-        ):
+        if row is None or not hmac.compare_digest(str(row["edge_deployment_id"]), deployment_id):
             raise ApiError("edge.authentication_failed")
         if not hmac.compare_digest(
             str(row["challenge_hmac"]),
@@ -389,10 +385,13 @@ def register_edge_agent(
                 request_id=request_id,
                 trace_id=trace_id,
             )
-        if connection.execute(
-            "SELECT 1 FROM edge_device_identities WHERE public_key_sha256=?",
-            (parsed_csr.public_key_sha256,),
-        ).fetchone() is not None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM edge_device_identities WHERE public_key_sha256=?",
+                (parsed_csr.public_key_sha256,),
+            ).fetchone()
+            is not None
+        ):
             _reject_known_agent(
                 connection,
                 row,
@@ -531,9 +530,7 @@ def rotate_edge_certificate(
     except ValueError as exc:
         code = str(exc)
         error_code = (
-            "edge.csr_invalid"
-            if code == "edge.csr_invalid"
-            else "edge.authentication_failed"
+            "edge.csr_invalid" if code == "edge.csr_invalid" else "edge.authentication_failed"
         )
         raise ApiError(error_code) from None
     request_sha256 = _digest(payload.model_dump(mode="json"))
@@ -597,10 +594,13 @@ def rotate_edge_certificate(
                 certificate_id=str(source["edge_device_certificate_id"]),
                 error_code="edge.generation_conflict",
             )
-        if connection.execute(
-            "SELECT 1 FROM edge_device_identities WHERE public_key_sha256=?",
-            (parsed_csr.public_key_sha256,),
-        ).fetchone() is not None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM edge_device_identities WHERE public_key_sha256=?",
+                (parsed_csr.public_key_sha256,),
+            ).fetchone()
+            is not None
+        ):
             raise ApiError("edge.csr_invalid")
         generation = payload.expected_generation + 1
         identity_id = _id("edi_")
@@ -650,8 +650,7 @@ def rotate_edge_certificate(
                 source["tenant_id"],
                 deployment_id,
                 parsed_csr.public_key_sha256,
-                _optional_digest(payload.hardware_proof_sha256)
-                or source["hardware_proof_sha256"],
+                _optional_digest(payload.hardware_proof_sha256) or source["hardware_proof_sha256"],
                 source["capability_codes_json"],
                 source["agent_version"],
                 generation,
@@ -765,9 +764,7 @@ def create_edge_session(
         if (
             str(certificate["deployment_status"]) != "active"
             or not (
-                certificate_status == "active"
-                and identity_status == "active"
-                or draining_valid
+                certificate_status == "active" and identity_status == "active" or draining_valid
             )
             or _datetime(certificate["not_before"]) > now
             or _datetime(certificate["not_after"]) <= now
@@ -781,13 +778,14 @@ def create_edge_session(
                 identity_id=str(certificate["edge_device_identity_id"]),
                 certificate_id=str(certificate["edge_device_certificate_id"]),
             )
-        nonce_hmac = _secret_hmac(
-            config, f"edge-session-nonce-v1\0{deployment_id}", nonce
-        )
-        if connection.execute(
-            "SELECT 1 FROM edge_sessions WHERE edge_deployment_id=? AND handshake_nonce_hmac=?",
-            (deployment_id, nonce_hmac),
-        ).fetchone() is not None:
+        nonce_hmac = _secret_hmac(config, f"edge-session-nonce-v1\0{deployment_id}", nonce)
+        if (
+            connection.execute(
+                "SELECT 1 FROM edge_sessions WHERE edge_deployment_id=? AND handshake_nonce_hmac=?",
+                (deployment_id, nonce_hmac),
+            ).fetchone()
+            is not None
+        ):
             _reject_known_agent(
                 connection,
                 certificate,
@@ -888,9 +886,7 @@ def revoke_edge_deployment(
             csrf_token=csrf_token,
             permission="edge.deployment.manage",
         )
-        idempotency_sha256 = _workspace_idempotency(
-            config, context, "edge.revoke", idempotency_key
-        )
+        idempotency_sha256 = _workspace_idempotency(config, context, "edge.revoke", idempotency_key)
         replay = _workspace_command(connection, context, "edge.revoke", idempotency_sha256)
         if replay is not None:
             if str(replay["request_sha256"]) != request_sha256:
@@ -1036,9 +1032,19 @@ def list_platform_edge_fleet(
     try:
         rows = connection.execute(
             """
-            SELECT edge_deployment_id,region_code,mode,status,revision,revocation_generation,
-              agent_version,health_code,certificate_expires_at,last_connected_at,updated_at
-            FROM edge_deployments ORDER BY updated_at DESC,edge_deployment_id DESC
+            SELECT deployment.edge_deployment_id,deployment.region_code,deployment.mode,
+              deployment.status,deployment.revision,deployment.revocation_generation,
+              deployment.agent_version,deployment.health_code,
+              deployment.certificate_expires_at,deployment.last_connected_at,
+              deployment.updated_at,coalesce(head.generation,0) desired_generation,
+              coalesce(head.applied_generation,0) applied_generation,
+              coalesce(head.lkg_generation,0) lkg_generation,
+              coalesce(head.last_ack_status,'not_published') desired_state_status,
+              coalesce(head.last_reason_code,'not_published') desired_state_reason_code
+            FROM edge_deployments deployment
+            LEFT JOIN edge_desired_state_heads head
+              ON head.edge_deployment_id=deployment.edge_deployment_id
+            ORDER BY deployment.updated_at DESC,deployment.edge_deployment_id DESC
             """
         ).fetchall()
         return PlatformEdgeFleetResponse(
@@ -1054,6 +1060,14 @@ def list_platform_edge_fleet(
                     health_code=str(row["health_code"]),
                     certificate_expires_at=_optional_datetime(row["certificate_expires_at"]),
                     last_connected_at=_optional_datetime(row["last_connected_at"]),
+                    desired_generation=int(row["desired_generation"]),
+                    applied_generation=int(row["applied_generation"]),
+                    lkg_generation=int(row["lkg_generation"]),
+                    desired_state_status=str(row["desired_state_status"]),
+                    desired_state_reason_code=str(row["desired_state_reason_code"]),
+                    desired_state_drifted=(
+                        int(row["desired_generation"]) != int(row["applied_generation"])
+                    ),
                     updated_at=_datetime(row["updated_at"]),
                 )
                 for row in rows
@@ -1120,9 +1134,7 @@ def _issue_certificate(
             ),
             critical=True,
         )
-        .add_extension(
-            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True
-        )
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
         .add_extension(
             x509.SubjectAlternativeName(
                 [
@@ -1379,9 +1391,7 @@ def _insert_workspace_command(
     )
 
 
-def _deployment_summary(
-    connection: sqlite3.Connection, row: sqlite3.Row
-) -> EdgeDeploymentSummary:
+def _deployment_summary(connection: sqlite3.Connection, row: sqlite3.Row) -> EdgeDeploymentSummary:
     certificate = connection.execute(
         """
         SELECT * FROM edge_device_certificates

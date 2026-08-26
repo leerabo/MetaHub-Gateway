@@ -223,6 +223,7 @@ def test_env_template_uses_placeholders_and_no_real_default_secret() -> None:
     assert "replace-with-generated-response-cache-encryption-secret" in env_template
     assert "replace-with-generated-response-cache-control-secret" in env_template
     assert "replace-with-generated-response-cache-spool-secret" in env_template
+    assert "replace-with-generated-edge-snapshot-signing-secret" in env_template
     assert "METAHUB_RESPONSE_CACHE_ENABLED=false" in env_template
     assert "MetaHubLocal!2026" not in env_template
     assert "sk-" not in env_template

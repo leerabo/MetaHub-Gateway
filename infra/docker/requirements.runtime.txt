@@ -4,6 +4,9 @@ uvicorn[standard]>=0.30,<1.0
 pydantic>=2.7,<3.0
 httpx>=0.27,<1.0
 cryptography>=42,<46
+# PRD-121 locks signed Edge desired-state artifacts to RFC 8785 JCS.  Keep the
+# minor line capped so numeric and Unicode canonicalization cannot drift silently.
+rfc8785>=0.1.4,<0.2
 # PRD-100 production infrastructure adapters.  PostgreSQL is the production
 # database, Redis is disposable coordination/cache state, and boto3 targets
 # S3-compatible object stores plus KMS without exposing provider credentials.

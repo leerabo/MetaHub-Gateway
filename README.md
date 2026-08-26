@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成；当前下一条未完成项是
-  `PRD-121 - 云边期望状态、签名快照与离线LKG`。
+- 新 `PRD-090` 至 `PRD-121 - 云边期望状态、签名快照与离线LKG` 已完成；当前下一条未完成项是
+  `PRD-122 - 私有网关遥测、用量与失败事实同步`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,15 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-121 - 云边期望状态、签名快照与离线LKG` 已完成：0113、不可变 Desired State、非自批高危审批、
+  RFC 8785 canonical envelope、Ed25519 签名快照、独立 trust manifest、Agent 原子双槽/持久高水位/LKG、
+  单调 ACK、递增 generation 回滚、Workspace 期望/实际/LKG 和 Platform Fleet 安全投影均已交付。
+  Migration `4/4`、Shared + Gateway `15/15`、Control API `1/1`、PRD-120 后端回归 `3/3`、Console
+  PRD-120/121 `12/12` 通过，Console lint `371 files` 通过；真实流程证明 Owner 不能自批、第二管理员审批、
+  Agent mTLS Session 拉取并 ACK 后 `期望 1 / 实际 1 / LKG 1` 且 `converged/applied`，1280px 与 536px
+  Workspace/Platform 均无页面级横向溢出或浏览器错误。详见
+  [PRD-121 设计](docs/prd/PRD-121-edge-desired-state-signed-snapshot-offline-lkg.md) 和
+  [PRD-121 测试记录](docs/testing/PRD-121-tests.md)。下一权威项为 PRD-122；G5 在 PRD-130 独立提交后统一执行。
 - `PRD-120 - Edge Agent注册、设备身份与mTLS` 已完成：0112、一次性注册、Ed25519 CSR/设备证书、mTLS
   transport 证明、证书轮换、45 秒 EdgeSession、吊销、Workspace 私有 Gateway 和 Platform Fleet 均已
   交付。Migration/API/共享合同/导航/Console 专项 `19/19` 通过，Console lint `370 files` 通过；真实

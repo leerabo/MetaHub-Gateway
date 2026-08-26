@@ -1,4 +1,4 @@
-/** PRD-120 exact authorization owner and memory-only registration lifecycle. */
+/** PRD-120/121 owner-bound identity, desired-state, and one-use registration lifecycle. */
 
 import {
   authorizationFingerprint,
@@ -21,8 +21,12 @@ const ERROR_MESSAGES = Object.freeze({
   "workspace_session.permission_denied": "当前成员没有私有 Gateway 权限",
   "workspace_session.credential_conflict": "检测到冲突的登录凭据，请重新进入 Workspace",
   "edge.permission_denied": "当前成员没有私有 Gateway 权限",
+  "edge.authentication_failed": "私有 Gateway 认证状态已失效",
   "edge.not_found": "当前 Workspace 中找不到该 Deployment",
+  "edge.deployment_not_found": "当前 Workspace 中找不到该 Deployment",
   "edge.conflict": "Deployment 状态已变化，请刷新后重试",
+  "edge.revision_conflict": "期望状态已变化，请刷新后重试",
+  "edge.state_conflict": "当前期望状态不允许此操作，请刷新后重试",
   "edge.idempotency_conflict": "该操作标识已用于其他意图",
   "edge.request_invalid": "私有 Gateway 请求不合法",
   "edge.response_invalid": "私有 Gateway 响应合同不完整",
@@ -80,12 +84,14 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
   let listState = "loading";
   let listError = null;
   let deployments = Object.freeze([]);
+  let desiredStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
+  let stateDialog = closedStateDialog();
   let registration = null;
   let feedback = null;
-  let generations = { load: 0, create: 0, revoke: 0, copy: 0 };
-  let operations = { load: null, create: null, revoke: null, copy: null };
+  let generations = { load: 0, create: 0, revoke: 0, copy: 0, command: 0 };
+  let operations = { load: null, create: null, revoke: null, copy: null, command: null };
 
   function enter(owner) {
     const key = ownerKeyFor(owner);
@@ -107,11 +113,13 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     listState = "loading";
     listError = null;
     deployments = Object.freeze([]);
+    desiredStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
+    stateDialog = closedStateDialog();
     registration = null;
     feedback = null;
-    operations = { load: null, create: null, revoke: null, copy: null };
+    operations = { load: null, create: null, revoke: null, copy: null, command: null };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
     );
@@ -130,6 +138,7 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     if (!deployments.length) listState = "loading";
     // A refresh can observe a switched Workspace cookie; one-use material cannot cross that boundary.
     clearRegistration();
+    stateDialog = closedStateDialog();
     return operation;
   }
 
@@ -137,11 +146,14 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     return current("load", operation, owner) && operation.refreshGeneration === refreshGeneration;
   }
 
-  function acceptLoad(operation, response, owner, refreshGeneration) {
-    if (!isLoadCurrent(operation, owner, refreshGeneration) || !validList(response)) return false;
+  function acceptLoad(operation, response, owner, refreshGeneration, stateResponses = []) {
+    if (!isLoadCurrent(operation, owner, refreshGeneration)
+      || !validList(response)
+      || !validDesiredResponses(stateResponses, response.deployments)) return false;
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
     if (ids.size > 1) return false;
     deployments = Object.freeze([...response.deployments]);
+    desiredStates = desiredStateMap(response.deployments, stateResponses);
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
     listError = null;
@@ -160,6 +172,7 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
   function openCreate(owner) {
     if (!owns(owner) || !canManage || busy()) return false;
     clearRegistration();
+    stateDialog = closedStateDialog();
     dialog = Object.freeze({ open: true, state: "form", error: null });
     feedback = null;
     return true;
@@ -189,6 +202,10 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
       response.deployment,
       ...deployments.filter((item) => item.deployment_id !== response.deployment.deployment_id),
     ]);
+    desiredStates = Object.freeze({
+      ...desiredStates,
+      [response.deployment.deployment_id]: null,
+    });
     listState = "ready";
     listError = null;
     if (response.registration_token && response.challenge) {
@@ -285,8 +302,89 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
 
   function finishRevoke(operation) { if (operations.revoke === operation) operations.revoke = null; }
 
+  function openStateCommand(owner, deploymentId, action) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const entry = desiredStates[deploymentId] ?? null;
+    const desired = entry?.state ?? null;
+    const allowed = (action === "publish" && desired?.status !== "approval_pending")
+      || (["approve", "reject"].includes(action) && desired?.status === "approval_pending")
+      || (action === "rollback" && desired?.status !== "approval_pending"
+        && Number.isSafeInteger(desired?.lkg_generation) && desired.lkg_generation > 0);
+    if (!owns(owner) || !canManage || !deployment || deployment.status !== "active"
+      || !allowed || busy()) return false;
+    closeDialogInternal();
+    stateDialog = Object.freeze({
+      open: true,
+      state: "form",
+      action,
+      deploymentId,
+      error: null,
+    });
+    feedback = null;
+    return true;
+  }
+
+  function closeStateCommand(owner) {
+    if (!owns(owner) || operations.command) return false;
+    stateDialog = closedStateDialog();
+    return true;
+  }
+
+  function beginStateCommand(owner, input = {}) {
+    const deploymentId = stateDialog.deploymentId;
+    const action = stateDialog.action;
+    const entry = desiredStates[deploymentId] ?? null;
+    const desired = entry?.state ?? null;
+    if (!owns(owner) || !canManage || stateDialog.state !== "form" || !entry || busy()) return null;
+    const request = commandRequest(action, input, desired);
+    if (!request) return null;
+    generations.command += 1;
+    const operation = ticket("command", {
+      controller: new AbortController(),
+      deploymentId,
+      action,
+      expectedRevision: entry.revision,
+      request,
+    });
+    operations.command = operation;
+    stateDialog = Object.freeze({ ...stateDialog, state: "submitting", error: null });
+    return operation;
+  }
+
+  function acceptStateCommand(operation, response, owner) {
+    if (!current("command", operation, owner)
+      || response?.state?.deployment_id !== operation.deploymentId
+      || !Number.isSafeInteger(response.revision)) return false;
+    desiredStates = Object.freeze({
+      ...desiredStates,
+      [operation.deploymentId]: Object.freeze(response),
+    });
+    stateDialog = closedStateDialog();
+    const successCodes = {
+      publish: response.state.status === "approval_pending"
+        ? "edge.desired_state_pending" : "edge.desired_state_published",
+      approve: "edge.desired_state_approved",
+      reject: "edge.desired_state_rejected",
+      rollback: "edge.desired_state_rolled_back",
+    };
+    const code = successCodes[operation.action] ?? "edge.desired_state_published";
+    feedback = Object.freeze({ kind: "success", code, requestId: safeChain(response.request_id) });
+    return true;
+  }
+
+  function rejectStateCommand(operation, error, owner) {
+    if (!current("command", operation, owner)) return false;
+    stateDialog = Object.freeze({ ...stateDialog, state: "form", error: fixedError(error) });
+    return true;
+  }
+
+  function finishStateCommand(operation) {
+    if (operations.command === operation) operations.command = null;
+  }
+
   function blocksShellDomReplacement() {
-    return dialog.open || Boolean(operations.create || operations.copy || operations.revoke);
+    return dialog.open || stateDialog.open
+      || Boolean(operations.create || operations.copy || operations.revoke || operations.command);
   }
 
   function snapshot() {
@@ -294,11 +392,14 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
       state: listState,
       error: listError,
       deployments,
+      desiredStates,
       dialog,
+      stateDialog,
       registration,
       feedback,
       canManage,
       revokingId: operations.revoke?.deploymentId ?? "",
+      commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
     });
   }
@@ -316,7 +417,9 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
       && !operation.controller?.signal?.aborted);
   }
 
-  function busy() { return Boolean(operations.create || operations.revoke || operations.copy); }
+  function busy() {
+    return Boolean(operations.create || operations.revoke || operations.copy || operations.command);
+  }
 
   function clearRegistration() { registration = null; }
 
@@ -329,7 +432,9 @@ export function createPrivateGatewayPageState({ clearDom = () => {} } = {}) {
     enter, clear, beginLoad, isLoadCurrent, acceptLoad, rejectLoad, finishLoad,
     openCreate, closeCreate, beginCreate, acceptCreate, rejectCreate, finishCreate,
     beginCopy, acceptCopy, rejectCopy, beginRevoke, acceptRevoke, rejectRevoke,
-    finishRevoke, blocksShellDomReplacement, snapshot,
+    finishRevoke, openStateCommand, closeStateCommand, beginStateCommand,
+    acceptStateCommand, rejectStateCommand, finishStateCommand,
+    blocksShellDomReplacement, snapshot,
   });
 }
 
@@ -352,6 +457,52 @@ function validRegistration(response) {
     && typeof response.idempotent_replay === "boolean");
 }
 
+function validDesiredResponses(responses, deployments) {
+  if (!Array.isArray(responses) || responses.length > deployments.length) return false;
+  const deploymentIds = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((item) => {
+    const id = String(item?.deploymentId ?? "");
+    const state = item?.response?.state ?? null;
+    if (!deploymentIds.has(id) || seen.has(id)
+      || !Number.isSafeInteger(item?.response?.revision)
+      || item.response.revision < 0
+      || (state !== null && state?.deployment_id !== id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function desiredStateMap(deployments, responses) {
+  const values = Object.fromEntries(deployments.map((item) => [item.deployment_id, null]));
+  for (const item of responses) values[item.deploymentId] = Object.freeze(item.response);
+  return Object.freeze(values);
+}
+
+function commandRequest(action, input, desired) {
+  if (action === "publish") {
+    const sourceConfigSnapshotId = String(input.sourceConfigSnapshotId ?? "");
+    return /^csn_[0-9a-f]{32}$/u.test(sourceConfigSnapshotId)
+      ? Object.freeze({ sourceConfigSnapshotId }) : null;
+  }
+  if (action === "approve" && desired?.status === "approval_pending") {
+    return Object.freeze({ desiredStateId: desired.desired_state_id, reasonCode: "approved_change" });
+  }
+  if (action === "reject" && desired?.status === "approval_pending"
+    && ["risk_unacceptable", "change_not_required"].includes(input.reasonCode)) {
+    return Object.freeze({ desiredStateId: desired.desired_state_id, reasonCode: input.reasonCode });
+  }
+  if (action === "rollback" && Number.isSafeInteger(desired?.lkg_generation)
+    && desired.lkg_generation > 0
+    && ["operator_requested", "apply_failed_recovery"].includes(input.reasonCode)) {
+    return Object.freeze({
+      lkgGeneration: desired.lkg_generation,
+      reasonCode: input.reasonCode,
+    });
+  }
+  return null;
+}
+
 function fixedError(error) {
   const candidate = String(error?.code ?? "");
   const code = Object.hasOwn(ERROR_MESSAGES, candidate) ? candidate : "edge.unavailable";
@@ -360,6 +511,15 @@ function fixedError(error) {
 
 function safeChain(value) { const candidate = String(value ?? ""); return CHAIN_ID.test(candidate) ? candidate : "-"; }
 function closedDialog() { return Object.freeze({ open: false, state: "closed", error: null }); }
+function closedStateDialog() {
+  return Object.freeze({
+    open: false,
+    state: "closed",
+    action: "",
+    deploymentId: "",
+    error: null,
+  });
+}
 
 function normalizePermissionCodes(value) {
   if (!Array.isArray(value)) return null;
