@@ -10,9 +10,14 @@ import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
-
-from metahub_control.auth import AuthContext, require_request_log_reader
 from metahub_shared.runtime.errors import ApiError
+
+from metahub_control.auth import (
+    AuthContext,
+    require_request_log_reader,
+    require_request_log_reader_or_machine,
+)
+from metahub_control.machine_identity.service import MachineAuthContext
 
 from .models import (
     RequestLogDetailResponse,
@@ -20,7 +25,7 @@ from .models import (
     SavedFilterListResponse,
     SavedFilterResponse,
 )
-from .query import list_request_logs_advanced
+from .query import list_request_logs_advanced, list_request_logs_machine
 from .saved_filters import (
     create_saved_filter,
     delete_saved_filter,
@@ -41,16 +46,28 @@ PATCH_BODY_FIELDS = CREATE_BODY_FIELDS | {"version"}
 async def get_request_logs(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_request_log_reader)],
+    context: Annotated[
+        AuthContext | MachineAuthContext,
+        Depends(require_request_log_reader_or_machine),
+    ],
 ) -> RequestLogListResponse:
     """高级或兼容模式分页查询当前租户调用日志，并写 query_executed 源事实。"""
 
     _private_no_store(response)
     # multi_items 保留重复单值参数，服务层可关闭拒绝而不是由“最后一个值”制造歧义。
+    query_items = tuple(request.query_params.multi_items())
+    if isinstance(context, MachineAuthContext):
+        return list_request_logs_machine(
+            request.app.state.config,
+            context,
+            query_items=query_items,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
     return list_request_logs_advanced(
         request.app.state.config,
         context,
-        query_items=tuple(request.query_params.multi_items()),
+        query_items=query_items,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

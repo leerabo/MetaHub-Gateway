@@ -14,8 +14,10 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
+    require_provider_reader_or_machine,
     require_workspace_or_legacy_permissions,
 )
+from metahub_control.machine_identity.service import MachineAuthContext
 
 from .models import (
     CreateProviderKeyRequest,
@@ -47,8 +49,8 @@ provider_keys_router = APIRouter(prefix="/provider-keys", tags=["provider-keys"]
 async def get_providers(
     request: Request,
     context: Annotated[
-        AuthContext,
-        Depends(require_workspace_or_legacy_permissions("provider.read")),
+        AuthContext | MachineAuthContext,
+        Depends(require_provider_reader_or_machine),
     ],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     provider_type: str | None = None,

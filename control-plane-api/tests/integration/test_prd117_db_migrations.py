@@ -309,6 +309,11 @@ def test_owner_constraints_and_durable_evidence_block_down(
 
 
 def test_fresh_schema_installs_prd117_head(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 109:
+            shutil.copy2(source, migrations / source.name)
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0109"
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0109"
     _healthy(database_url)

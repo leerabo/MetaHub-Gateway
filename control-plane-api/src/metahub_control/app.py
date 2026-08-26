@@ -67,6 +67,7 @@ from .invitations.routes import router as invitations_router
 from .invoice_reconciliation import install_invoice_reconciliation_scheduler
 from .invoice_reconciliation import router as invoice_reconciliation_router
 from .local_endpoints import router as local_endpoints_router
+from .machine_identity import router as machine_identity_router
 from .mcp_governance import install_mcp_scheduler
 from .mcp_governance import router as mcp_governance_router
 from .model_aliases.routes import router as model_aliases_router
@@ -168,7 +169,12 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
     # Control GETs commonly authenticate and then read through a separate service.
     # Reuse one handle for that request only; writes keep their existing ownership.
-    scope = database_request_scope() if request.method in {"GET", "HEAD"} else nullcontext()
+    reusable_machine_read = request.url.path in {"/providers", "/request-logs"}
+    scope = (
+        database_request_scope(reuse_connections=reusable_machine_read)
+        if request.method in {"GET", "HEAD"}
+        else nullcontext()
+    )
     with scope:
         response = await call_next(request)
     if (
@@ -250,11 +256,24 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/applications/")
         or request.url.path == "/virtual-keys"
         or request.url.path.startswith("/virtual-keys/")
+        or request.url.path == "/service-accounts"
+        or request.url.path.startswith("/service-accounts/")
+        or request.url.path == "/oauth/clients"
+        or request.url.path == "/oauth/token"
+        or request.url.path == "/request-logs"
     ):
         # 依赖或 parser 可能在路由函数设置 Header 前失败，因此必须在应用最外层再次覆盖。
         # Preserve endpoint-specific directives while covering error responses
         # that do not set a cache boundary themselves.
         response.headers.setdefault("Cache-Control", "no-store, private")
+    if request.url.path in {"/service-accounts", "/oauth/clients"} or request.url.path.startswith(
+        "/service-accounts/"
+    ):
+        response.headers.setdefault("Pragma", "no-cache")
+    if request.url.path == "/oauth/token":
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
     if request.url.path == "/admin-assistant/query":
         response.headers["Pragma"] = "no-cache"
         response.headers["Vary"] = "Authorization"
@@ -315,6 +334,7 @@ app.include_router(users_router)
 app.include_router(invitations_router)
 app.include_router(intent_security_router)
 app.include_router(local_endpoints_router)
+app.include_router(machine_identity_router)
 app.include_router(virtual_keys_router)
 app.include_router(providers_router)
 app.include_router(provider_health_router)

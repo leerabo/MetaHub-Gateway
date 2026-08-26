@@ -26,6 +26,7 @@ GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 SCIM_CONTENT = "application/scim+json"
 VERIFIED_MEMBER_EMAIL = "verified.directory.member@example.com"
 SEED_PATH = Path(__file__).resolve().parents[3] / "infra" / "seeds" / "default_seed.json"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 
 
 def _local_seed_admin() -> tuple[str, str]:
@@ -36,8 +37,19 @@ def _local_seed_admin() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    database = tmp_path_factory.mktemp("prd115-api-migrated") / "scim-current.sqlite3"
-    assert apply_migrations(f"sqlite:///{database.as_posix()}").applied[-1] == "0108"
+    root = tmp_path_factory.mktemp("prd115-api-migrated")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 108:
+            shutil.copy2(source, migrations / source.name)
+    database = root / "scim-current.sqlite3"
+    assert (
+        apply_migrations(
+            f"sqlite:///{database.as_posix()}", migrations_dir=migrations
+        ).applied[-1]
+        == "0108"
+    )
     return database
 
 

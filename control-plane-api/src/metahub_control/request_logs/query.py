@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from time import perf_counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from metahub_shared.runtime.config import AppConfig
@@ -28,6 +28,9 @@ from metahub_control.auth import AuthContext
 
 from .models import RequestLogListResponse
 from .service import _connect, _request_log_info
+
+if TYPE_CHECKING:
+    from metahub_control.machine_identity.service import MachineAuthContext
 
 # 下列限额、字段白名单和阶段表达式共同冻结公开查询协议及数据库索引语义。
 MAX_FILTER_WIRE_LENGTH = 4096
@@ -95,7 +98,9 @@ LEGACY_ALIASES = {
     "output_safety_exposure": "output_safety_exposure",
     "output_safety_billing": "output_safety_billing",
 }
-CONTROL_KEYS = frozenset({"filters", "saved_filter_id", "sort_by", "sort_direction", "limit", "offset"})
+CONTROL_KEYS = frozenset(
+    {"filters", "saved_filter_id", "sort_by", "sort_direction", "limit", "offset"}
+)
 ALLOWED_QUERY_KEYS = frozenset(LEGACY_ALIASES) | CONTROL_KEYS
 SAFE_TEXT = re.compile(r"^[A-Za-z0-9_.:/@-]{1,160}$")
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -106,7 +111,9 @@ TERMINAL_STAGE_SQL = """CASE
     THEN 'output_safety'
   WHEN rl.status='success' THEN 'completed'
   WHEN rl.error_code IN ('gateway.auth_missing','gateway.auth_invalid') THEN 'authentication'
-  WHEN rl.error_code IN ('gateway.rate_limit_exceeded','gateway.rate_limit_unavailable') THEN 'rate_limit'
+  WHEN rl.error_code IN (
+    'gateway.rate_limit_exceeded','gateway.rate_limit_unavailable'
+  ) THEN 'rate_limit'
   WHEN rl.error_code IN ('gateway.budget_exhausted','gateway.budget_unavailable') THEN 'budget'
   WHEN rl.error_code IN ('gateway.dlp_blocked','gateway.dlp_unavailable') THEN 'dlp'
   WHEN rl.error_code LIKE 'gateway.policy_%' THEN 'policy'
@@ -167,42 +174,8 @@ def list_request_logs_advanced(
     started = perf_counter()
     connection = _connect(config)
     try:
-        query = _parse_query(connection, context, query_items)
-        where_sql, parameters = _build_where(
-            context.user.tenant_id,
-            query.filters,
-            legacy_model=query.legacy_model,
-        )
-        order_sql = _build_order(query.sort_by, query.sort_direction)
-        index_hint = _matched_index_hint(query.filters, query.sort_by)
-        connection.execute("BEGIN")
-        rows = connection.execute(
-            f"""
-            WITH matched AS MATERIALIZED (
-              SELECT rl.rowid AS matched_rowid, COUNT(*) OVER() AS _matched_total
-              FROM request_logs rl {index_hint}
-              {_OUTPUT_SAFETY_JOIN}
-              {where_sql}
-              {order_sql}
-              LIMIT ? OFFSET ?
-            )
-            {_PAGE_SELECT_SQL}
-            {order_sql}
-            """,
-            [*parameters, query.limit + 1, query.offset],
-        ).fetchall()
-        if rows:
-            # window count 与分页 rowid 来自同一条语句、同一快照，避免原实现先 COUNT
-            # 再为展示 JOIN 重复扫描十万行租户数据。
-            total = int(rows[0]["_matched_total"])
-        else:
-            # offset 超过末页时 window 没有承载 total 的行；只在这个低频空页分支执行
-            # 有界回退计数，仍处于同一个显式读事务，不会混入并发写入后的新快照。
-            total_row = connection.execute(
-                f"SELECT COUNT(*) AS total FROM request_logs rl {_OUTPUT_SAFETY_JOIN} {where_sql}",
-                parameters,
-            ).fetchone()
-            total = int(total_row["total"] if total_row else 0)
+        query = _parse_query(connection, context, query_items, allow_saved_filters=True)
+        rows, total = _read_page(connection, context.user.tenant_id, query)
         connection.rollback()
     # 已归一的业务错误保持原错误码，但仍需回滚并关闭本次数据库连接。
     except ApiError:
@@ -262,10 +235,96 @@ def list_request_logs_advanced(
     )
 
 
+def list_request_logs_machine(
+    config: AppConfig,
+    context: MachineAuthContext,
+    *,
+    query_items: tuple[tuple[str, str], ...],
+    request_id: str,
+    trace_id: str,
+) -> RequestLogListResponse:
+    """Read the tenant list without personal SavedFilters or personal query-event FKs."""
+
+    connection = _connect(config)
+    try:
+        query = _parse_query(
+            connection,
+            context,
+            query_items,
+            allow_saved_filters=False,
+        )
+        rows, total = _read_page(connection, context.tenant_id, query)
+        connection.rollback()
+        page_rows = rows[: query.limit]
+        request_logs = [_request_log_info(row) for row in page_rows]
+    except ApiError:
+        _rollback(connection)
+        raise
+    except sqlite3.Error as exc:
+        _rollback(connection)
+        raise ApiError("request_log.query_unavailable") from exc
+    except Exception as exc:
+        _rollback(connection)
+        raise ApiError("request_log.query_unavailable") from exc
+    finally:
+        connection.close()
+    return RequestLogListResponse(
+        request_logs=request_logs,
+        total=total,
+        limit=query.limit,
+        offset=query.offset,
+        has_more=query.offset + len(page_rows) < total,
+        sort_by=query.sort_by,
+        sort_direction=query.sort_direction,
+        query_event_id=None,
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+
+
+def _read_page(
+    connection: sqlite3.Connection,
+    tenant_id: str,
+    query: AdvancedQuery,
+) -> tuple[list[sqlite3.Row], int]:
+    where_sql, parameters = _build_where(
+        tenant_id,
+        query.filters,
+        legacy_model=query.legacy_model,
+    )
+    order_sql = _build_order(query.sort_by, query.sort_direction)
+    index_hint = _matched_index_hint(query.filters, query.sort_by)
+    connection.execute("BEGIN")
+    rows = connection.execute(
+        f"""
+        WITH matched AS MATERIALIZED (
+          SELECT rl.rowid AS matched_rowid, COUNT(*) OVER() AS _matched_total
+          FROM request_logs rl {index_hint}
+          {_OUTPUT_SAFETY_JOIN}
+          {where_sql}
+          {order_sql}
+          LIMIT ? OFFSET ?
+        )
+        {_PAGE_SELECT_SQL}
+        {order_sql}
+        """,
+        [*parameters, query.limit + 1, query.offset],
+    ).fetchall()
+    if rows:
+        return rows, int(rows[0]["_matched_total"])
+    total_row = connection.execute(
+        f"SELECT COUNT(*) AS total FROM request_logs rl {_OUTPUT_SAFETY_JOIN} {where_sql}",
+        parameters,
+    ).fetchone()
+    return rows, int(total_row["total"] if total_row else 0)
+
+
 def _parse_query(
     connection: sqlite3.Connection,
-    context: AuthContext,
+    context: AuthContext | MachineAuthContext,
     items: tuple[tuple[str, str], ...],
+    *,
+    allow_saved_filters: bool = True,
 ) -> AdvancedQuery:
     """严格解析三种互斥来源：inline filters、可信 SavedFilter 或 legacy 参数。"""
 
@@ -277,6 +336,8 @@ def _parse_query(
         values[key] = value
     inline = "filters" in values
     saved = "saved_filter_id" in values
+    if saved and not allow_saved_filters:
+        raise ApiError("request_log.query_invalid")
     legacy_keys = set(values) & set(LEGACY_ALIASES)
     # 旧显式查询保留 PRD-016 的 query_invalid；版本化 filters 与可信 SavedFilter
     # 使用 PRD-055 新增的 pagination_invalid，避免破坏既有客户端错误分支。
@@ -446,7 +507,14 @@ def normalize_filters(value: object, *, error_code: str) -> dict[str, Any]:
             result[key] = normalized
         else:
             result[key] = _safe_text(raw, error_code)
-    for key in {"snapshot_version", "latency_ms_min", "latency_ms_max", "total_tokens_min", "total_tokens_max"}:
+    integer_fields = {
+        "snapshot_version",
+        "latency_ms_min",
+        "latency_ms_max",
+        "total_tokens_min",
+        "total_tokens_max",
+    }
+    for key in integer_fields:
         if key in value:
             result[key] = _filter_integer(
                 value[key],
@@ -728,7 +796,10 @@ def _decimal_text(raw: object, error_code: str) -> str:
     """规范化非负十进制金额字符串，最多六位小数且不经二进制浮点。"""
 
     # 金额只接受非负十进制字符串和六位小数，禁止二进制浮点进入成本比较。
-    if not isinstance(raw, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,6})?", raw):
+    if not isinstance(raw, str) or not re.fullmatch(
+        r"(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,6})?",
+        raw,
+    ):
         raise ApiError(error_code)
     try:
         value = Decimal(raw)

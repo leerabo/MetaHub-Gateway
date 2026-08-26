@@ -236,6 +236,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderDataGovernanceSection(state)}
         ${renderEnterpriseIdentitySection(state)}
         ${renderScimDirectorySection(state)}
+        ${renderMachineIdentitySection(state)}
         <section class="identity-sessions" aria-labelledby="identity-current-session-title">
           <div class="identity-section-heading">
             <div>
@@ -1917,6 +1918,176 @@ function scimConflictStatusLabel(value) {
 
 function scimSubjectLabel(value) {
   return ({ user: "用户", group: "Group", membership: "成员关系" })[value] ?? "目录对象";
+}
+
+function renderMachineIdentitySection(state) {
+  if (!state.machineIdentityVisible) return "";
+  const accounts = Array.isArray(state.machineIdentity?.service_accounts)
+    ? state.machineIdentity.service_accounts : [];
+  const busy = state.machineIdentityBusy === true;
+  const canManage = state.machineIdentityCanManage === true;
+  return `
+    <section class="identity-machine" aria-labelledby="identity-machine-title" aria-busy="${busy}">
+      <div class="identity-section-heading">
+        <div><p>Developer access</p><h2 id="identity-machine-title">机器身份</h2></div>
+        <button class="identity-icon-command" type="button"
+          data-identity-action="refresh-machine-identity" aria-label="刷新机器身份"
+          title="刷新机器身份" ${busy ? "disabled" : ""}>↻</button>
+      </div>
+      ${state.machineIdentityError ? renderError(state.machineIdentityError) : ""}
+      ${renderMachineAccountTable(accounts, canManage, busy)}
+      ${canManage && state.machineIdentity ? renderMachineAccountForm(busy) : !canManage ? `
+        <p class="identity-empty">当前职责仅可查看机器身份。</p>
+      ` : ""}
+      ${state.machineCredential ? renderMachineCredentialDialog(state.machineCredential) : ""}
+    </section>
+  `;
+}
+
+function renderMachineAccountTable(accounts, canManage, busy) {
+  if (accounts.length === 0) {
+    return '<p class="identity-empty">当前空间尚未创建 Service Account。</p>';
+  }
+  return `
+    <div class="identity-machine-table-wrap">
+      <table class="identity-machine-table">
+        <thead>
+          <tr><th>Service Account</th><th>Scope</th><th>约束</th><th>OAuth client</th><th>状态</th><th><span class="identity-sr-only">操作</span></th></tr>
+        </thead>
+        <tbody>
+          ${accounts.map((account, index) => renderMachineAccountRow(
+            account,
+            index,
+            canManage,
+            busy,
+          )).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderMachineAccountRow(account, index, canManage, busy) {
+  const client = account.oauth_client;
+  const network = account.ip_allowlist.length > 0
+    ? account.ip_allowlist.join(", ") : "任意可信来源";
+  const lastUsed = account.last_used_at || client?.last_used_at;
+  return `
+    <tr>
+      <td data-label="Service Account">
+        <strong>${escapeHtml(account.display_name)}</strong>
+        <code>${escapeHtml(account.name)}</code>
+      </td>
+      <td data-label="Scope">
+        <strong>${escapeHtml(machineScopeTemplateLabel(account.scope_template))}</strong>
+        <span>${account.scopes.map((scope) => escapeHtml(scope)).join(" · ")}</span>
+      </td>
+      <td data-label="约束">
+        <strong>${escapeHtml(network)}</strong>
+        <span>${account.mtls_required ? "mTLS 必需" : "未要求 mTLS"} · ${account.token_ttl_seconds}s TTL</span>
+      </td>
+      <td data-label="OAuth client">
+        ${client ? `
+          <code>${escapeHtml(client.client_id)}</code>
+          <span>${client.credential_prefix ? `${escapeHtml(client.credential_prefix)}…` : "无活动 secret"} · Generation ${client.credential_generation}</span>
+        ` : '<span>尚未创建</span>'}
+      </td>
+      <td data-label="状态">
+        <span class="identity-machine-state is-${escapeAttribute(account.status)}">
+          ${escapeHtml(machineAccountStatusLabel(account.status))}
+        </span>
+        <time datetime="${escapeAttribute(lastUsed || account.updated_at)}">
+          ${lastUsed ? `最近使用 ${escapeHtml(formatDateTime(lastUsed))}` : "尚未使用"}
+        </time>
+      </td>
+      <td data-label="操作">
+        <div class="identity-machine-actions">
+          ${canManage && account.status === "active" && !client ? `
+            <button type="button" data-identity-action="create-oauth-client"
+              data-machine-account-index="${index}" ${busy ? "disabled" : ""}>创建 client</button>
+          ` : ""}
+          ${canManage && account.status === "active" && client && client.status !== "revoked" ? `
+            <button type="button" data-identity-action="rotate-machine-credential"
+              data-machine-account-index="${index}" ${busy ? "disabled" : ""}>轮换</button>
+          ` : ""}
+          ${canManage && account.status !== "revoked" ? `
+            <button class="identity-danger-command" type="button"
+              data-identity-action="revoke-machine-account"
+              data-machine-account-index="${index}" ${busy ? "disabled" : ""}>撤销</button>
+          ` : ""}
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderMachineAccountForm(busy) {
+  return `
+    <form class="identity-machine-form" data-machine-account-form>
+      <div class="identity-machine-form-heading">
+        <span>Workspace automation</span>
+        <h3>创建 Service Account</h3>
+      </div>
+      <label><span>名称</span><input name="name" type="text" minlength="2" maxlength="80"
+        pattern="[a-z0-9][a-z0-9_-]+" autocomplete="off" required /></label>
+      <label><span>显示名称</span><input name="displayName" type="text" minlength="2"
+        maxlength="120" autocomplete="off" required /></label>
+      <label><span>Scope 模板</span><select name="scopeTemplate" required>
+        <option value="provider_reader">Provider 只读</option>
+        <option value="observability_reader">请求日志只读</option>
+      </select></label>
+      <label><span>Token TTL</span><select name="tokenTtlSeconds" required>
+        <option value="300">5 分钟</option><option value="900" selected>15 分钟</option>
+        <option value="1800">30 分钟</option><option value="3600">60 分钟</option>
+      </select></label>
+      <label class="is-wide"><span>IP allowlist</span>
+        <textarea name="ipAllowlist" rows="2" maxlength="1040" autocomplete="off"></textarea>
+      </label>
+      <label class="is-wide"><span>mTLS SHA-256 fingerprint</span>
+        <input name="mtlsFingerprint" type="text" minlength="64" maxlength="64"
+          pattern="[0-9a-fA-F]{64}" autocomplete="off" spellcheck="false" />
+      </label>
+      <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>创建</button>
+    </form>
+  `;
+}
+
+function renderMachineCredentialDialog(credential) {
+  return `
+    <dialog class="identity-machine-dialog" data-machine-credential-dialog tabindex="-1"
+      aria-labelledby="identity-machine-credential-title">
+      <div class="identity-machine-dialog-heading">
+        <div><span>仅本次显示</span><h3 id="identity-machine-credential-title">OAuth client credential</h3></div>
+        <button class="identity-icon-command" type="button"
+          data-identity-action="dismiss-machine-credential" title="关闭" aria-label="关闭">&#215;</button>
+      </div>
+      <dl>
+        <div><dt>Service Account</dt><dd>${escapeHtml(credential.displayName)}</dd></div>
+        <div><dt>Generation</dt><dd>${Number(credential.generation)}</dd></div>
+        <div class="is-wide"><dt>Client ID</dt>
+          <dd><code data-machine-credential-value>${escapeHtml(credential.clientId)}</code></dd></div>
+        <div class="is-wide"><dt>Client secret</dt>
+          <dd><code data-machine-credential-value>${escapeHtml(credential.clientSecret)}</code></dd></div>
+        <div class="is-wide"><dt>到期时间</dt>
+          <dd>${credential.expiresAt ? escapeHtml(formatDateTime(credential.expiresAt)) : "-"}</dd></div>
+      </dl>
+      <div class="identity-machine-dialog-actions">
+        <button type="button" data-identity-action="copy-machine-client-id">复制 Client ID</button>
+        <button class="identity-primary" type="button"
+          data-identity-action="copy-machine-client-secret">复制 secret</button>
+        <button type="button" data-identity-action="dismiss-machine-credential">关闭</button>
+      </div>
+    </dialog>
+  `;
+}
+
+function machineScopeTemplateLabel(value) {
+  return ({ provider_reader: "Provider 读取", observability_reader: "可观测性读取" })[value]
+    ?? "机器只读";
+}
+
+function machineAccountStatusLabel(value) {
+  return ({ active: "活动", disabled: "已停用", revoked: "已撤销" })[value] ?? "未知";
 }
 
 function renderMfaSection(state) {

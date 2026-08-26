@@ -56,6 +56,7 @@ WORKSPACE_TOKEN = "w" * 43
 WORKSPACE_CSRF = "c" * 43
 PLATFORM_TOKEN = "p" * 43
 GLOBAL_TOKEN = "g" * 43
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 
 
 def _url(path: Path) -> str:
@@ -88,9 +89,15 @@ def _config(database_url: str) -> AppConfig:
 
 @pytest.fixture(scope="module")
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    database = tmp_path_factory.mktemp("prd117-governance-base") / "base.sqlite3"
+    root = tmp_path_factory.mktemp("prd117-governance-base")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 109:
+            shutil.copy2(source, migrations / source.name)
+    database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0109"
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0109"
     apply_seed_data(database_url)
     with connect_database(database_url) as connection:
         owner = connection.execute(

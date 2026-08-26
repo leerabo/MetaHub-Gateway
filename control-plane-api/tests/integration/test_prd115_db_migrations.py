@@ -277,6 +277,11 @@ def test_scim_conflicts_accept_only_directory_roles(
 
 
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 108:
+            shutil.copy2(source, migrations / source.name)
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0108"
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0108"
     _healthy(database_url)

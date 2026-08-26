@@ -9,7 +9,7 @@ from __future__ import annotations
 import secrets
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Header, Request
 from metahub_shared.feedback import FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
@@ -32,6 +32,9 @@ from .service import (
     require_any_permission,
     require_permission,
 )
+
+if TYPE_CHECKING:
+    from metahub_control.machine_identity.service import MachineAuthContext
 
 
 def _require_request_permissions(
@@ -137,6 +140,67 @@ def require_workspace_or_legacy_permissions(
         return context
 
     return dependency
+
+
+def require_provider_reader_or_machine(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext | MachineAuthContext:
+    """Allow the Provider collection to one human domain or one machine Bearer."""
+
+    return _require_human_or_machine(
+        request,
+        authorization,
+        permission_code="provider.read",
+    )
+
+
+def require_request_log_reader_or_machine(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext | MachineAuthContext:
+    """Allow only the request-log collection, never detail or SavedFilter routes."""
+
+    return _require_human_or_machine(
+        request,
+        authorization,
+        permission_code="request_log.read",
+    )
+
+
+def _require_human_or_machine(
+    request: Request,
+    authorization: str | None,
+    *,
+    permission_code: str,
+) -> AuthContext | MachineAuthContext:
+    from metahub_control.machine_identity.service import authenticate_machine_request
+    from metahub_control.machine_identity.transport import (
+        direct_peer_ip,
+        optional_machine_bearer,
+        reject_machine_cookies,
+        verified_mtls_fingerprint,
+    )
+
+    access_token = optional_machine_bearer(request)
+    if access_token is None:
+        human_dependency = require_workspace_or_legacy_permissions(permission_code)
+        return human_dependency(request, authorization)
+    reject_machine_cookies(request)
+    context = authenticate_machine_request(
+        request.app.state.config,
+        access_token=access_token,
+        method=request.method,
+        path=request.url.path,
+        peer_ip=direct_peer_ip(request),
+        verified_mtls_fingerprint=verified_mtls_fingerprint(request),
+        request_id=getattr(request.state, "request_id", ""),
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
+    if permission_code not in context.permission_codes:
+        raise ApiError("machine_auth.invalid")
+    request.state.credential_domain = "machine"
+    return context
 
 
 def _reject_mixed_workspace_credential(

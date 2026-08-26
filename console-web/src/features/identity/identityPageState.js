@@ -110,6 +110,11 @@ export function createIdentityPageController({
   let dataGovernanceDraft = null;
   let dataGovernanceSimulationFingerprint = null;
   let dataGovernanceIntent = null;
+  let machineIdentity = null;
+  let machineIdentityBusy = false;
+  let machineIdentityError = null;
+  let machineCredential = null;
+  let machineIdentityIntents = new Map();
   let platformAccess = false;
   let pendingWrite = Promise.resolve();
   let contextGeneration = 0;
@@ -2038,6 +2043,7 @@ export function createIdentityPageController({
     },
     async openNotifications() {
       if (!workspaceContext || typeof api.notifications !== "function") return false;
+      clearMachineCredential();
       notificationCenterOpen = true;
       renderSecurity();
       if (notificationInbox && notificationPreferences) return true;
@@ -2145,6 +2151,182 @@ export function createIdentityPageController({
         renderSecurity();
         return false;
       }
+    },
+    async refreshMachineIdentity() {
+      if (!workspaceMachineReadAllowed() || typeof api.machineIdentity !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      clearMachineCredential();
+      machineIdentityIntents = new Map();
+      machineIdentityBusy = true;
+      machineIdentityError = null;
+      renderSecurity();
+      return loadMachineIdentity(ticket, "机器身份已刷新。");
+    },
+    async createServiceAccount(input = {}) {
+      if (!workspaceMachineManageAllowed() || machineIdentityBusy
+        || !Array.isArray(machineIdentity?.service_accounts)
+        || typeof api.createServiceAccount !== "function") return false;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      clearMachineCredential();
+      machineIdentityBusy = true;
+      machineIdentityError = null;
+      renderSecurity({ feedback: "正在创建 Service Account…" });
+      try {
+        const idempotencyKey = await machineIdentityIntent("service_account.create", input);
+        const result = await queueWrite(() => api.createServiceAccount({
+          workspaceId: ownerWorkspaceId,
+          ...input,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        machineIdentityIntents.delete("service_account.create");
+        applyMachineAccount(result.service_account);
+        machineIdentityBusy = false;
+        renderSecurity({ feedback: "Service Account 已创建，可继续创建 OAuth client。" });
+        return true;
+      } catch (error) {
+        settleMachineIdentityIntent("service_account.create", error);
+        return handleMachineIdentityError(error, ticket);
+      }
+    },
+    async createOAuthClient(index) {
+      const accountProjection = machineIdentity?.service_accounts?.[Number(index)];
+      if (!workspaceMachineManageAllowed() || machineIdentityBusy
+        || !accountProjection || accountProjection.status !== "active"
+        || accountProjection.oauth_client !== null
+        || typeof api.createOAuthClient !== "function") return false;
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      clearMachineCredential();
+      machineIdentityBusy = true;
+      machineIdentityError = null;
+      renderSecurity({ feedback: "正在创建 OAuth client…" });
+      try {
+        const intent = { serviceAccountId: accountProjection.service_account_id };
+        const idempotencyKey = await machineIdentityIntent("oauth_client.create", intent);
+        const result = await queueWrite(() => api.createOAuthClient({
+          workspaceId: ownerWorkspaceId,
+          serviceAccountId: accountProjection.service_account_id,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        machineIdentityIntents.delete("oauth_client.create");
+        applyMachineCredentialResult(result);
+        machineIdentityBusy = false;
+        renderSecurity({ feedback: "OAuth client 已创建。" });
+        focusMachineCredentialDialog();
+        return true;
+      } catch (error) {
+        settleMachineIdentityIntent("oauth_client.create", error);
+        return handleMachineIdentityError(error, ticket);
+      }
+    },
+    async rotateServiceAccountCredential(index) {
+      const accountProjection = machineIdentity?.service_accounts?.[Number(index)];
+      const client = accountProjection?.oauth_client;
+      if (!workspaceMachineManageAllowed() || machineIdentityBusy
+        || accountProjection?.status !== "active" || !client
+        || client.status === "revoked"
+        || typeof api.rotateServiceAccountCredential !== "function"
+        || !confirmAction("确认轮换此 Service Account 的 client secret？旧 secret 将进入短暂宽限。")) {
+        return false;
+      }
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      clearMachineCredential();
+      machineIdentityBusy = true;
+      machineIdentityError = null;
+      renderSecurity({ feedback: "正在轮换 client secret…" });
+      try {
+        const intent = {
+          serviceAccountId: accountProjection.service_account_id,
+          revision: client.revision,
+        };
+        const idempotencyKey = await machineIdentityIntent("oauth_client.rotate", intent);
+        const result = await queueWrite(() => api.rotateServiceAccountCredential({
+          workspaceId: ownerWorkspaceId,
+          serviceAccountId: accountProjection.service_account_id,
+          revision: client.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        machineIdentityIntents.delete("oauth_client.rotate");
+        applyMachineCredentialResult(result);
+        machineIdentityBusy = false;
+        renderSecurity({ feedback: "client secret 已轮换。" });
+        focusMachineCredentialDialog();
+        return true;
+      } catch (error) {
+        settleMachineIdentityIntent("oauth_client.rotate", error);
+        return handleMachineIdentityError(error, ticket);
+      }
+    },
+    async revokeServiceAccount(index) {
+      const accountProjection = machineIdentity?.service_accounts?.[Number(index)];
+      if (!workspaceMachineManageAllowed() || machineIdentityBusy
+        || !accountProjection || accountProjection.status === "revoked"
+        || typeof api.revokeServiceAccount !== "function"
+        || !confirmAction("确认撤销此 Service Account？现有 client 和 access token 将立即失效。")) {
+        return false;
+      }
+      const ticket = beginRequest();
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      clearMachineCredential();
+      machineIdentityBusy = true;
+      machineIdentityError = null;
+      renderSecurity({ feedback: "正在撤销 Service Account…" });
+      try {
+        const intent = {
+          serviceAccountId: accountProjection.service_account_id,
+          revision: accountProjection.revision,
+        };
+        const idempotencyKey = await machineIdentityIntent("service_account.revoke", intent);
+        const result = await queueWrite(() => api.revokeServiceAccount({
+          workspaceId: ownerWorkspaceId,
+          serviceAccountId: accountProjection.service_account_id,
+          revision: accountProjection.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        machineIdentityIntents.delete("service_account.revoke");
+        applyMachineAccount(result.service_account);
+        machineIdentityBusy = false;
+        renderSecurity({ feedback: "Service Account 已撤销。" });
+        return true;
+      } catch (error) {
+        settleMachineIdentityIntent("service_account.revoke", error);
+        return handleMachineIdentityError(error, ticket);
+      }
+    },
+    async copyMachineCredential(kind) {
+      const value = kind === "client_id"
+        ? machineCredential?.clientId
+        : kind === "client_secret" ? machineCredential?.clientSecret : null;
+      if (!value) return false;
+      try {
+        await copyText(value);
+        renderSecurity({ feedback: kind === "client_id" ? "Client ID 已复制。" : "Client secret 已复制。" });
+        focusMachineCredentialDialog();
+        return true;
+      } catch (error) {
+        clearMachineCredential();
+        machineIdentityError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    dismissMachineCredential() {
+      if (!machineCredential) return false;
+      clearMachineCredential();
+      renderSecurity();
+      return true;
     },
     async refreshWorkspaceContext() {
       return invalidateWorkspaceContext({ broadcast: false, feedback: "空间上下文已刷新。" });
@@ -2532,6 +2714,22 @@ export function createIdentityPageController({
     );
   }
 
+  function workspaceMachineReadAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("machine_identity.read"),
+    );
+  }
+
+  function workspaceMachineManageAllowed() {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes("machine_identity.manage"),
+    );
+  }
+
   async function loadEnterpriseIdentity(ticket, feedback = "", { render = true } = {}) {
     if (!workspaceEnterpriseReadAllowed() || typeof api.enterpriseIdentity !== "function") {
       enterpriseIdentity = null;
@@ -2709,6 +2907,126 @@ export function createIdentityPageController({
       if (render) renderSecurity();
       return false;
     }
+  }
+
+  async function loadMachineIdentity(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceMachineReadAllowed() || typeof api.machineIdentity !== "function") {
+      machineIdentity = null;
+      machineIdentityBusy = false;
+      machineIdentityError = null;
+      machineIdentityIntents = new Map();
+      clearMachineCredential();
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    machineIdentityBusy = true;
+    const ownerWorkspaceId = workspaceContext.workspace_id;
+    try {
+      const result = await api.machineIdentity({
+        workspaceId: ownerWorkspaceId,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+      machineIdentity = result;
+      machineIdentityBusy = false;
+      machineIdentityError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      clearMachineCredential();
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      machineIdentity = null;
+      machineIdentityBusy = false;
+      machineIdentityError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  function applyMachineAccount(accountProjection) {
+    const accounts = Array.isArray(machineIdentity?.service_accounts)
+      ? machineIdentity.service_accounts : [];
+    machineIdentity = {
+      ...(machineIdentity ?? { request_id: "-", trace_id: "-" }),
+      service_accounts: [
+        accountProjection,
+        ...accounts.filter((item) =>
+          item.service_account_id !== accountProjection.service_account_id),
+      ],
+    };
+  }
+
+  function applyMachineCredentialResult(result) {
+    applyMachineAccount(result.service_account);
+    machineCredential = {
+      clientId: result.oauth_client.client_id,
+      clientSecret: result.client_secret,
+      displayName: result.service_account.display_name,
+      generation: result.oauth_client.credential_generation,
+      expiresAt: result.oauth_client.credential_expires_at,
+    };
+    result.client_secret = "";
+  }
+
+  async function machineIdentityIntent(action, input) {
+    const fingerprint = await secureEnterpriseFingerprint(input);
+    const previous = machineIdentityIntents.get(action);
+    const idempotencyKey = previous?.fingerprint === fingerprint
+      ? previous.idempotencyKey
+      : newIdempotencyKey();
+    machineIdentityIntents.set(action, { fingerprint, idempotencyKey });
+    return idempotencyKey;
+  }
+
+  function settleMachineIdentityIntent(action, error) {
+    if (!(error instanceof IdentityApiError) || ![0, 503].includes(error.status)) {
+      machineIdentityIntents.delete(action);
+    }
+  }
+
+  function handleMachineIdentityError(error, ticket) {
+    clearMachineCredential();
+    if (!isCurrent(ticket) || isAbort(error)) return false;
+    machineIdentityBusy = false;
+    if (isWorkspaceAuthorizationDrift(error)) {
+      return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+    }
+    if (error instanceof IdentityApiError
+      && new Set(["machine_identity.revision_conflict", "machine_identity.conflict"])
+        .has(error.code)) {
+      return loadMachineIdentity(ticket, "机器身份状态已变化，请重新操作。");
+    }
+    machineIdentityError = safePageError(error);
+    renderSecurity();
+    return false;
+  }
+
+  function clearMachineCredential() {
+    for (const node of root.querySelectorAll?.("[data-machine-credential-value]") ?? []) {
+      node.textContent = "";
+    }
+    if (machineCredential) {
+      machineCredential.clientId = "";
+      machineCredential.clientSecret = "";
+      machineCredential.displayName = "";
+      machineCredential.expiresAt = null;
+    }
+    machineCredential = null;
+  }
+
+  function focusMachineCredentialDialog() {
+    const dialog = root.querySelector?.("[data-machine-credential-dialog]");
+    if (!dialog) return;
+    if (!dialog.open) {
+      try {
+        if (typeof dialog.showModal === "function") dialog.showModal();
+        else dialog.setAttribute?.("open", "");
+      } catch {
+        dialog.setAttribute?.("open", "");
+      }
+    }
+    dialog.focus?.({ preventScroll: true });
   }
 
   async function mutateScimDirectory(action, input, operation, applyResult, feedback) {
@@ -3185,6 +3503,7 @@ export function createIdentityPageController({
         loadScimDirectory(ticket, "", { render: false }),
         loadConditionalAccess(ticket, "", { render: false }),
         loadDataGovernance(ticket, "", { render: false }),
+        loadMachineIdentity(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
       if (!isCurrent(ticket)) return false;
@@ -3272,6 +3591,7 @@ export function createIdentityPageController({
   }
 
   function renderSecurity(extra = {}) {
+    if (extra.error) clearMachineCredential();
     if (!account || !currentSession) {
       renderIdentityLoginPage(root, { error: extra.error });
       return;
@@ -3328,6 +3648,12 @@ export function createIdentityPageController({
       dataGovernanceCanManage: workspaceGovernanceManageAllowed(),
       legalHoldVisible: workspaceLegalHoldReadAllowed(),
       legalHoldCanManage: workspaceLegalHoldManageAllowed(),
+      machineIdentity,
+      machineIdentityBusy,
+      machineIdentityError,
+      machineCredential,
+      machineIdentityVisible: workspaceMachineReadAllowed(),
+      machineIdentityCanManage: workspaceMachineManageAllowed(),
       notificationCenterOpen,
       notificationInbox,
       notificationPreferences,
@@ -3428,6 +3754,11 @@ export function createIdentityPageController({
     dataGovernanceDraft = null;
     dataGovernanceSimulationFingerprint = null;
     dataGovernanceIntent = null;
+    machineIdentity = null;
+    machineIdentityBusy = false;
+    machineIdentityError = null;
+    machineIdentityIntents = new Map();
+    clearMachineCredential();
     notificationCenterOpen = false;
     notificationInbox = null;
     notificationPreferences = null;
@@ -3453,6 +3784,8 @@ export function createIdentityPageController({
       'input[name="code"]',
       'input[name="answer"]',
       'input[autocomplete="one-time-code"]',
+      'input[name="mtlsFingerprint"]',
+      'textarea[name="ipAllowlist"]',
     ]) {
       for (const input of root.querySelectorAll?.(selector) ?? []) {
         input.value = "";
@@ -3750,6 +4083,34 @@ export function createIdentityPageController({
           groupIndex: fields.get("groupIndex"),
           roleCode: fields.get("roleCode"),
         });
+      } else if (form?.matches?.("[data-machine-account-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const scopeTemplate = String(fields.get("scopeTemplate") ?? "");
+        const ipAllowlist = [...new Set(
+          String(fields.get("ipAllowlist") ?? "")
+            .split(/[\s,]+/u)
+            .map((value) => value.trim())
+            .filter(Boolean),
+        )].sort();
+        const input = {
+          name: fields.get("name"),
+          displayName: fields.get("displayName"),
+          scopeTemplate,
+          scopes: scopeTemplate === "provider_reader"
+            ? ["provider.read"]
+            : scopeTemplate === "observability_reader" ? ["request_log.read"] : [],
+          tokenTtlSeconds: Number(fields.get("tokenTtlSeconds")),
+          ipAllowlist,
+          mtlsFingerprintSha256: fields.get("mtlsFingerprint") || null,
+        };
+        scrubMachineIdentityForm(form);
+        try {
+          await controller.createServiceAccount(input);
+        } finally {
+          input.mtlsFingerprintSha256 = null;
+          input.ipAllowlist = [];
+        }
       } else if (form?.matches?.("[data-saas-subscription-create-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -3854,6 +4215,20 @@ export function createIdentityPageController({
         await controller.simulateConditionalAccess();
       } else if (button.dataset.identityAction === "refresh-data-governance") {
         await controller.refreshDataGovernance();
+      } else if (button.dataset.identityAction === "refresh-machine-identity") {
+        await controller.refreshMachineIdentity();
+      } else if (button.dataset.identityAction === "create-oauth-client") {
+        await controller.createOAuthClient(button.dataset.machineAccountIndex);
+      } else if (button.dataset.identityAction === "rotate-machine-credential") {
+        await controller.rotateServiceAccountCredential(button.dataset.machineAccountIndex);
+      } else if (button.dataset.identityAction === "revoke-machine-account") {
+        await controller.revokeServiceAccount(button.dataset.machineAccountIndex);
+      } else if (button.dataset.identityAction === "copy-machine-client-id") {
+        await controller.copyMachineCredential("client_id");
+      } else if (button.dataset.identityAction === "copy-machine-client-secret") {
+        await controller.copyMachineCredential("client_secret");
+      } else if (button.dataset.identityAction === "dismiss-machine-credential") {
+        controller.dismissMachineCredential();
       } else if (button.dataset.identityAction === "show-register") {
         controller.showRegistration();
       } else if (button.dataset.identityAction === "show-reset") {
@@ -3958,6 +4333,18 @@ export function createIdentityPageController({
         toggle.checked === true,
       );
     });
+    root.addEventListener?.("cancel", (event) => {
+      if (!event.target?.matches?.("[data-machine-credential-dialog]")) return;
+      event.preventDefault();
+      controller.dismissMachineCredential();
+    });
+    root.addEventListener?.("keydown", (event) => {
+      if (event.key === "Escape"
+        && event.target?.closest?.("[data-machine-credential-dialog]")) {
+        event.preventDefault();
+        controller.dismissMachineCredential();
+      }
+    });
     root.addEventListener?.("input", (event) => {
       if (event.target?.matches?.("[data-workspace-search]")) {
         filterWorkspaceOptions(event.target.value);
@@ -3993,6 +4380,14 @@ function scrubFormSecrets(form) {
 
 function scrubEnterpriseConnectionForm(form) {
   for (const name of ["clientSecret", "certificatePem", "jwks"]) {
+    for (const input of form?.querySelectorAll?.(`[name="${name}"]`) ?? []) {
+      input.value = "";
+    }
+  }
+}
+
+function scrubMachineIdentityForm(form) {
+  for (const name of ["mtlsFingerprint", "ipAllowlist"]) {
     for (const input of form?.querySelectorAll?.(`[name="${name}"]`) ?? []) {
       input.value = "";
     }

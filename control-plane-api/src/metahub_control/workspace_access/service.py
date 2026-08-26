@@ -16,7 +16,7 @@ from uuid import uuid4
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import hash_token, verify_password
-from metahub_shared.rbac import PERMISSION_BY_CODE
+from metahub_shared.rbac import PERMISSION_BY_CODE, authorization_fingerprint
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
@@ -98,6 +98,11 @@ _GOVERNANCE_ROLE_PERMISSIONS = {
     ),
     "auditor": ("data_governance.read", "legal_hold.read"),
 }
+_MACHINE_IDENTITY_ROLE_PERMISSIONS = {
+    "owner": ("machine_identity.manage", "machine_identity.read"),
+    "security_admin": ("machine_identity.manage", "machine_identity.read"),
+    "developer": ("machine_identity.read",),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +112,19 @@ class _WorkspacePermissionSnapshot:
     matrix_sha256: str
     authorization_fingerprint: str
     legacy_authorization_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceActorPermissionSnapshot:
+    """Current human Workspace authority used by delegated machine principals."""
+
+    account_id: str
+    workspace_id: str
+    tenant_id: str
+    membership_role: str
+    permission_codes: tuple[str, ...]
+    permission_revision: int
+    authorization_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +543,126 @@ def authenticate_workspace_session_in_transaction(
         touch=touch,
     )
     return context
+
+
+def workspace_actor_permissions_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    account_id: str,
+    workspace_id: str,
+    tenant_id: str,
+) -> WorkspaceActorPermissionSnapshot:
+    """Reload one active human Workspace actor without creating or touching a Session."""
+
+    row = _switch_target(connection, account_id, workspace_id)
+    if row is None or row["tenant_id"] != tenant_id:
+        raise ApiError("workspace_session.permission_denied")
+    snapshot = _permission_snapshot(connection, row)
+    return WorkspaceActorPermissionSnapshot(
+        account_id=str(row["account_id"]),
+        workspace_id=str(row["workspace_id"]),
+        tenant_id=str(row["tenant_id"]),
+        membership_role=str(row["role_code"]),
+        permission_codes=snapshot.permission_codes,
+        permission_revision=snapshot.permission_revision,
+        authorization_fingerprint=snapshot.authorization_fingerprint,
+    )
+
+
+def workspace_actor_authorization_probe_in_transaction(
+    connection: sqlite3.Connection,
+    *,
+    account_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    permission_codes: tuple[str, ...],
+) -> WorkspaceActorPermissionSnapshot:
+    """Revalidate one delegated actor without rebuilding the full RBAC catalog."""
+
+    if (
+        not permission_codes
+        or len(permission_codes) != len(set(permission_codes))
+        or any(code not in PERMISSION_BY_CODE for code in permission_codes)
+    ):
+        raise ApiError("workspace_session.unavailable")
+    row = _switch_target(
+        connection,
+        account_id,
+        workspace_id,
+        require_operational_state=True,
+    )
+    if row is None or row["tenant_id"] != tenant_id:
+        raise ApiError("workspace_session.permission_denied")
+    placeholders = ",".join("?" for _code in permission_codes)
+    role_rows = connection.execute(
+        f"""SELECT role.role_id,role.tenant_id,role.code,role.status,
+                   role.permission_revision,role.matrix_sha256,
+                   permission.code granted_permission_code
+              FROM roles role
+              JOIN role_permissions assignment
+                ON assignment.tenant_id=role.tenant_id
+               AND assignment.role_id=role.role_id
+              JOIN permissions permission
+                ON permission.tenant_id=assignment.tenant_id
+               AND permission.permission_id=assignment.permission_id
+             WHERE role.tenant_id=? AND role.code=?
+               AND permission.status='active'
+               AND permission.code IN ({placeholders})""",
+        (tenant_id, row["legacy_role"], *permission_codes),
+    ).fetchall()
+    if not role_rows:
+        raise ApiError("workspace_session.permission_denied")
+    role = role_rows[0]
+    revision = role["permission_revision"]
+    matrix_sha256 = role["matrix_sha256"]
+    if (
+        any(
+            item["role_id"] != role["role_id"]
+            or item["tenant_id"] != role["tenant_id"]
+            or item["code"] != role["code"]
+            or item["status"] != role["status"]
+            or item["permission_revision"] != revision
+            or item["matrix_sha256"] != matrix_sha256
+            for item in role_rows
+        )
+        or role["tenant_id"] != tenant_id
+        or role["code"] != row["legacy_role"]
+        or role["status"] != "active"
+        or type(revision) is not int
+        or revision < 1
+        or type(matrix_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", matrix_sha256) is None
+    ):
+        raise ApiError("workspace_session.unavailable")
+    granted = {str(item["granted_permission_code"]) for item in role_rows}
+    if granted != set(permission_codes):
+        raise ApiError("workspace_session.permission_denied")
+    governance, machine_identity = _workspace_extension_permissions(
+        connection,
+        role_code=str(row["role_code"]),
+        require_catalogs=True,
+    )
+    legacy_fingerprint = authorization_fingerprint(
+        tenant_id=tenant_id,
+        user_id=str(row["legacy_user_id"]),
+        role=str(row["legacy_role"]),
+        permission_revision=revision,
+        matrix_sha256=matrix_sha256,
+    )
+    return WorkspaceActorPermissionSnapshot(
+        account_id=str(row["account_id"]),
+        workspace_id=str(row["workspace_id"]),
+        tenant_id=str(row["tenant_id"]),
+        membership_role=str(row["role_code"]),
+        permission_codes=tuple(sorted(permission_codes)),
+        permission_revision=revision,
+        authorization_fingerprint=_workspace_authorization_fingerprint(
+            legacy_fingerprint=legacy_fingerprint,
+            membership_role=str(row["role_code"]),
+            governance_permissions=governance,
+            machine_identity_permissions=machine_identity,
+        ),
+    )
 
 
 def issue_federated_workspace_session_in_transaction(
@@ -1754,12 +1892,15 @@ def _switch_target(
     connection: sqlite3.Connection,
     account_id: str,
     workspace_id: str,
+    *,
+    require_operational_state: bool = False,
 ) -> sqlite3.Row | None:
     operational_filter = (
         "AND EXISTS(SELECT 1 FROM workspace_operational_states operational "
         "WHERE operational.workspace_id=member.workspace_id "
         "AND operational.tenant_id=member.tenant_id AND operational.status='active')"
-        if _table_exists(connection, "workspace_operational_states")
+        if require_operational_state
+        or _table_exists(connection, "workspace_operational_states")
         else ""
     )
     row = connection.execute(
@@ -1803,57 +1944,197 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
     )
-    has_extension = _table_exists(connection, "workspace_governance_role_permissions")
-    has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
-    if not has_extension and not has_catalog:
-        return legacy
-    if not has_extension or not has_catalog:
-        raise ApiError("workspace_session.unavailable")
-    expected = {
-        (role_code, permission_code)
-        for role_code, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
-    }
-    catalog = {
-        str(item[0])
-        for item in connection.execute(
-            "SELECT permission_code FROM workspace_governance_permission_extensions"
-        ).fetchall()
-    }
-    assignments = {
-        (str(item[0]), str(item[1]))
-        for item in connection.execute(
-            "SELECT role_code,permission_code FROM workspace_governance_role_permissions"
-        ).fetchall()
-    }
-    if catalog != {code for _, code in expected} or assignments != expected:
-        raise ApiError("workspace_session.unavailable")
-    governance = tuple(
-        str(item[0])
-        for item in connection.execute(
-            "SELECT permission_code FROM workspace_governance_role_permissions "
-            "WHERE role_code=? ORDER BY permission_code",
-            (row["role_code"],),
-        ).fetchall()
+    governance, machine_identity = _workspace_extension_permissions(
+        connection,
+        role_code=str(row["role_code"]),
     )
-    permissions = tuple(sorted({*legacy.permission_codes, *governance}))
-    fingerprint = hashlib.sha256(
-        json.dumps(
-            {
-                "legacy": legacy.authorization_fingerprint,
-                "membership_role": str(row["role_code"]),
-                "governance_permissions": governance,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("ascii")
-    ).hexdigest()
+    if not governance and not machine_identity:
+        return legacy
+    permissions = tuple(sorted({*legacy.permission_codes, *governance, *machine_identity}))
+    fingerprint = _workspace_authorization_fingerprint(
+        legacy_fingerprint=legacy.authorization_fingerprint,
+        membership_role=str(row["role_code"]),
+        governance_permissions=governance,
+        machine_identity_permissions=machine_identity,
+    )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
         permission_revision=legacy.permission_revision,
         matrix_sha256=legacy.matrix_sha256,
         authorization_fingerprint=fingerprint,
         legacy_authorization_fingerprint=legacy.authorization_fingerprint,
+    )
+
+
+def _workspace_extension_permissions(
+    connection: sqlite3.Connection,
+    *,
+    role_code: str,
+    require_catalogs: bool = False,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if require_catalogs:
+        return _required_workspace_extension_permissions(connection, role_code=role_code)
+    has_extension = require_catalogs or _table_exists(
+        connection, "workspace_governance_role_permissions"
+    )
+    has_catalog = require_catalogs or _table_exists(
+        connection, "workspace_governance_permission_extensions"
+    )
+    if has_extension != has_catalog:
+        raise ApiError("workspace_session.unavailable")
+    governance_expected = {
+        (assigned_role, permission_code)
+        for assigned_role, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
+    governance = _verified_extension_permissions(
+        connection,
+        role_code=role_code,
+        catalog_table="workspace_governance_permission_extensions",
+        assignments_table="workspace_governance_role_permissions",
+        expected=governance_expected,
+        available=has_extension,
+    )
+    has_machine_catalog = require_catalogs or _table_exists(
+        connection, "workspace_machine_permission_extensions"
+    )
+    has_machine_assignments = require_catalogs or _table_exists(
+        connection, "workspace_machine_role_permissions"
+    )
+    if has_machine_catalog != has_machine_assignments:
+        raise ApiError("workspace_session.unavailable")
+    machine_expected = {
+        (assigned_role, permission_code)
+        for assigned_role, permission_codes in _MACHINE_IDENTITY_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
+    machine_identity = _verified_extension_permissions(
+        connection,
+        role_code=role_code,
+        catalog_table="workspace_machine_permission_extensions",
+        assignments_table="workspace_machine_role_permissions",
+        expected=machine_expected,
+        available=has_machine_catalog,
+    )
+    return governance, machine_identity
+
+
+def _required_workspace_extension_permissions(
+    connection: sqlite3.Connection,
+    *,
+    role_code: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    rows = connection.execute(
+        """SELECT 'governance_catalog' row_kind,'' role_code,permission_code
+             FROM workspace_governance_permission_extensions
+           UNION ALL
+           SELECT 'governance_assignment',role_code,permission_code
+             FROM workspace_governance_role_permissions
+           UNION ALL
+           SELECT 'machine_catalog','',permission_code
+             FROM workspace_machine_permission_extensions
+           UNION ALL
+           SELECT 'machine_assignment',role_code,permission_code
+             FROM workspace_machine_role_permissions"""
+    ).fetchall()
+    grouped: dict[str, set[tuple[str, str]]] = {
+        "governance_catalog": set(),
+        "governance_assignment": set(),
+        "machine_catalog": set(),
+        "machine_assignment": set(),
+    }
+    for row in rows:
+        kind = str(row["row_kind"])
+        if kind not in grouped:
+            raise ApiError("workspace_session.unavailable")
+        grouped[kind].add((str(row["role_code"]), str(row["permission_code"])))
+    governance_expected = {
+        (assigned_role, permission_code)
+        for assigned_role, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
+    machine_expected = {
+        (assigned_role, permission_code)
+        for assigned_role, permission_codes in _MACHINE_IDENTITY_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
+    if (
+        grouped["governance_catalog"]
+        != {("", permission_code) for _, permission_code in governance_expected}
+        or grouped["governance_assignment"] != governance_expected
+        or grouped["machine_catalog"]
+        != {("", permission_code) for _, permission_code in machine_expected}
+        or grouped["machine_assignment"] != machine_expected
+    ):
+        raise ApiError("workspace_session.unavailable")
+    governance = tuple(
+        sorted(
+            permission_code
+            for assigned_role, permission_code in governance_expected
+            if assigned_role == role_code
+        )
+    )
+    machine_identity = tuple(
+        sorted(
+            permission_code
+            for assigned_role, permission_code in machine_expected
+            if assigned_role == role_code
+        )
+    )
+    return governance, machine_identity
+
+
+def _workspace_authorization_fingerprint(
+    *,
+    legacy_fingerprint: str,
+    membership_role: str,
+    governance_permissions: tuple[str, ...],
+    machine_identity_permissions: tuple[str, ...],
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "legacy": legacy_fingerprint,
+                "membership_role": membership_role,
+                "governance_permissions": governance_permissions,
+                "machine_identity_permissions": machine_identity_permissions,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+
+
+def _verified_extension_permissions(
+    connection: sqlite3.Connection,
+    *,
+    role_code: str,
+    catalog_table: str,
+    assignments_table: str,
+    expected: set[tuple[str, str]],
+    available: bool,
+) -> tuple[str, ...]:
+    if not available:
+        return ()
+    catalog = {
+        str(item[0])
+        for item in connection.execute(f"SELECT permission_code FROM {catalog_table}").fetchall()
+    }
+    assignments = {
+        (str(item[0]), str(item[1]))
+        for item in connection.execute(
+            f"SELECT role_code,permission_code FROM {assignments_table}"
+        ).fetchall()
+    }
+    if catalog != {code for _, code in expected} or assignments != expected:
+        raise ApiError("workspace_session.unavailable")
+    return tuple(
+        str(item[0])
+        for item in connection.execute(
+            f"SELECT permission_code FROM {assignments_table} "
+            "WHERE role_code=? ORDER BY permission_code",
+            (role_code,),
+        ).fetchall()
     )
 
 

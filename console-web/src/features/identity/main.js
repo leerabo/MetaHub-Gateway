@@ -103,6 +103,13 @@ import {
   releaseWorkspaceLegalHold,
   updateWorkspaceDataGovernance,
 } from "../../lib/dataGovernance.js";
+import {
+  createWorkspaceOAuthClient,
+  createWorkspaceServiceAccount,
+  listWorkspaceServiceAccounts,
+  revokeWorkspaceServiceAccount,
+  rotateWorkspaceServiceAccountCredential,
+} from "../../lib/machineIdentity.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
@@ -246,6 +253,15 @@ if (root) {
       }),
       createLegalHold: (input) => createWorkspaceLegalHold({ controlApiUrl, ...input }),
       releaseLegalHold: (input) => releaseWorkspaceLegalHold({ controlApiUrl, ...input }),
+      machineIdentity: (input) => listWorkspaceServiceAccounts({ controlApiUrl, ...input }),
+      createServiceAccount: (input) => createWorkspaceServiceAccount({ controlApiUrl, ...input }),
+      createOAuthClient: (input) => createWorkspaceOAuthClient({ controlApiUrl, ...input }),
+      rotateServiceAccountCredential: (input) =>
+        rotateWorkspaceServiceAccountCredential({ controlApiUrl, ...input }),
+      revokeServiceAccount: (input) => revokeWorkspaceServiceAccount({
+        controlApiUrl,
+        ...input,
+      }),
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
