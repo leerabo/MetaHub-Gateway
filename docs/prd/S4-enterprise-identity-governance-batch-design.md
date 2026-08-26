@@ -1,6 +1,6 @@
 # S4 企业身份与治理批次设计
 
-状态：设计冻结；PRD-114..119 功能已完成，当前下一项为 PRD-120；G4 在 PRD-119 独立提交后执行。权威范围来自
+状态：设计冻结；PRD-114..119 功能与 G4 已完成，当前下一项为 PRD-120。权威范围来自
 `企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx` 的 S4 与 G4。
 
 ## 1. 批次目标与顺序
@@ -15,7 +15,7 @@ PRD-119 独立提交后统一执行 G4 数据库、集成、流程、真实浏�
 当前进度：PRD-114..116 已交付企业 SSO、SCIM、MFA/条件访问；PRD-117 已交付 `0109` 驻留、保留与
 法律保全；PRD-118 已交付 `0110` 机器身份；PRD-119 已交付 `0111` 签名 Provider 目录、Workspace
 实例化/preflight 和 Platform 发布。六条均通过各自专项、必要回归、本地认证、Browser 和敏感审计；
-G4 仍按本设计在 PRD-119 独立提交后执行，不以各条专项结果替代批次退出证据。
+G4 已在 PRD-119 独立提交后按本设计完成，批次退出证据见第 9 节。
 
 ## 2. 共享权威边界
 
@@ -117,3 +117,27 @@ G4 仍按本设计在 PRD-119 独立提交后执行，不以各条专项结果�
 重放边界；停用/撤权传播；驻留在路由、存储、备份和删除生效；机器 scope 最小授权；Provider 目录
 签名和 SSRF 边界；三浏览器三档缩放；Excel SLO；静止终态、句柄/连接/队列水位；敏感字面量和
 禁止文件为零。任一必需证据缺失、跳过、失败或含敏感明文，G4 即失败。
+
+## 9. G4 执行记录（2026-08-26）
+
+结论：通过。G4 在 PRD-119 独立提交 `9cc83bc` 后执行，最终代码基线包含 PRD-114..119 的六个
+独立功能提交和 Workspace 风险控制幂等修复 `698ea63`；没有把批次证据反向混入任一功能提交。
+
+| 门禁 | 最终证据 |
+| --- | --- |
+| 后端、迁移与协议 | Control PRD-114..119 migration/API/protocol/security/flow/performance 合并批次 `58/58`；因 pytest 同名模块拆分的 shared identity contracts `8/8`、Gateway residency snapshot `4/4` |
+| 必要回归 | PRD-119 必要后端回归 `30/30`、PRD-118 完整回归 `6/6`；Console 全量 `1108/1108`，零失败、零取消、零跳过；lint `365 files` |
+| WEB/UI/UCD/COMP/FLOW | Product QA Web contracts `16/16`；本地 seed 管理员真实登录并打开 Provider Catalog，浏览器 warning/error 为 `0` |
+| 三浏览器三缩放 | Chromium、Edge、Firefox 在 `1/1.25/1.5` 共 `9/9` 组合、`27/27` 条真实三角色旅程通过；每份证据均为 `111/0111`、`integrity_check=ok`、外键违规 `0` |
+| SLO | 官方目录四维筛选 40 次真实请求 p95 `68.87ms < 300ms`；preflight 成功/幂等终态 `<30s`，签名目录发布传播 `<5min` |
+| 当前开发库 | `573` 张业务表、`3682` 行、`111/0111`、`integrity_check=ok`、外键违规 `0`；Browser 登录新增的 Session/审计事实保留在开发库，不改写为测试通过数 |
+| Outbox/queue 水位 | 两次只读采样一致：44 张 outbox 表共 25 行、22 行待投递；9 张 queue/watermark/scheduler 表共 4 行。后台消费者停用时保留原水位，不伪造投递；G4 owned process 为 `0` |
+| 静止终态 | Product QA 子进程 `0`、本轮 Browser/pytest/matrix 临时目录 `0`；仅保留预期开发服务监听 `5173/8000/8001` 和正式 `.artifacts` 证据 |
+| 隐私与禁止文件 | 当前 seed/`.env` 六个来源、五个去重本地敏感值在 38 个 G4 制品、数据库结构化值和原始字节中命中 `0`；Private Key、长 Bearer 和高风险访问密钥格式命中 `0`；提交候选仅含本记录文档，禁止文件 `0` |
+| Roadmap | 权威 Excel 保持 PRD-119 已完成、PRD-120 未启动；roadmap validator `128/128`，下一项为 PRD-120 |
+
+首轮通用矩阵保留了环境诊断事实：Web contracts、lint 和 Edge 三组合通过，Chromium/Firefox 六组合因
+测试机缺少 Playwright 对应版本二进制失败；补齐仓库锁定版本后全部重跑通过。Chromium `1.5` 的一次
+三实例并发执行触发 120 秒资源超时，改为独占顺序执行后通过，阈值和产品断言均未调整。首轮证据位于
+`.artifacts/product-qa/20260826-165918`，最终 Chromium/Firefox 证据位于
+`.artifacts/product-qa/s4-g4-browser-rerun-final-20260826z`。
