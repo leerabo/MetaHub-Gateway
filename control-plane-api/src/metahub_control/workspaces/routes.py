@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import secrets
+import weakref
 from collections.abc import Iterable
 from functools import partial
 from typing import Any
@@ -16,16 +19,22 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_control.identity.service import (
     CSRF_COOKIE,
     SESSION_COOKIE,
-    authenticate_global_session,
     valid_opaque_value,
 )
 
 from .models import WorkspaceListResponse, WorkspaceResponse
-from .service import create_workspace, get_workspace, list_workspaces, update_workspace
+from .service import (
+    create_workspace,
+    get_workspace,
+    list_workspaces,
+    probe_workspace_creation_replay,
+    update_workspace,
+)
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 _MAX_BODY_BYTES = 4096
 _WORK_LIMITER = anyio.CapacityLimiter(4)
+_CREATION_LOCKS_STATE = "workspace_creation_replay_locks"
 
 
 @router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)
@@ -44,32 +53,54 @@ async def post_workspace(request: Request, response: Response) -> WorkspaceRespo
     if set(payload) != required:
         raise ApiError("workspace.request_invalid")
     session_token = _required_session_cookie(request)
-    identity = await _run(authenticate_global_session, _config(request), session_token)
-    subjects = {"account": identity.account_id}
-    if request.client and request.client.host:
-        subjects["ip_prefix"] = request.client.host
-    assessment = await runtime_for(request.app.state, _config(request)).assess(
-        "resource_creation",
-        subjects,
-        request_id=_request_id(request),
-        trace_id=_trace_id(request),
-    )
-    if assessment.outcome != "allow":
-        raise ApiError("risk.challenge_required")
-    result = await _run(
-        create_workspace,
-        _config(request),
-        session_token=session_token,
-        csrf_token=_required_csrf(request),
-        idempotency_key=idempotency_key,
-        kind=kind,
-        name=_optional_string(payload, "name", maximum=160),
-        slug=_optional_string(payload, "slug", maximum=48),
-        region=_required_string(payload, "region", maximum=40),
-        service_mode=_required_string(payload, "service_mode", maximum=40),
-        request_id=_request_id(request),
-        trace_id=_trace_id(request),
-    )
+    csrf_token = _required_csrf(request)
+    name = _optional_string(payload, "name", maximum=160)
+    slug = _optional_string(payload, "slug", maximum=48)
+    region = _required_string(payload, "region", maximum=40)
+    service_mode = _required_string(payload, "service_mode", maximum=40)
+    async with _workspace_creation_lock(request, session_token, idempotency_key):
+        account_id, replay = await _run(
+            probe_workspace_creation_replay,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            idempotency_key=idempotency_key,
+            kind=kind,
+            name=name,
+            slug=slug,
+            region=region,
+            service_mode=service_mode,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        if replay is not None:
+            response.headers["ETag"] = _etag(replay.workspace.revision)
+            return replay
+        subjects = {"account": account_id}
+        if request.client and request.client.host:
+            subjects["ip_prefix"] = request.client.host
+        assessment = await runtime_for(request.app.state, _config(request)).assess(
+            "resource_creation",
+            subjects,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        if assessment.outcome != "allow":
+            raise ApiError("risk.challenge_required")
+        result = await _run(
+            create_workspace,
+            _config(request),
+            session_token=session_token,
+            csrf_token=csrf_token,
+            idempotency_key=idempotency_key,
+            kind=kind,
+            name=name,
+            slug=slug,
+            region=region,
+            service_mode=service_mode,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
     response.headers["ETag"] = _etag(result.workspace.revision)
     return result
 
@@ -308,6 +339,34 @@ def _raw_header_values(request: Request, name: bytes) -> list[str]:
         for header_name, value in request.scope.get("headers", ())
         if header_name.lower() == name
     ]
+
+
+def _workspace_creation_lock(
+    request: Request,
+    session_token: str,
+    idempotency_key: str,
+) -> asyncio.Lock:
+    """Singleflight one session's exact creation command on this event loop."""
+
+    loop = asyncio.get_running_loop()
+    runtime = getattr(request.app.state, _CREATION_LOCKS_STATE, None)
+    if (
+        not isinstance(runtime, tuple)
+        or len(runtime) != 2
+        or not callable(runtime[0])
+        or runtime[0]() is not loop
+        or not isinstance(runtime[1], weakref.WeakValueDictionary)
+    ):
+        runtime = (weakref.ref(loop), weakref.WeakValueDictionary())
+        setattr(request.app.state, _CREATION_LOCKS_STATE, runtime)
+    key = hashlib.sha256(
+        f"workspace-create-v1\0{session_token}\0{idempotency_key}".encode()
+    ).hexdigest()
+    lock = runtime[1].get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        runtime[1][key] = lock
+    return lock
 
 
 async def _run(function, *args, **kwargs):

@@ -403,6 +403,75 @@ def create_workspace(
         connection.close()
 
 
+def probe_workspace_creation_replay(
+    config: AppConfig,
+    *,
+    session_token: str,
+    csrf_token: str,
+    idempotency_key: str,
+    kind: str,
+    name: str | None,
+    slug: str | None,
+    region: str,
+    service_mode: str,
+    request_id: str,
+    trace_id: str,
+) -> tuple[str, WorkspaceResponse | None]:
+    """Return an exact completed replay before consuming resource-creation risk."""
+
+    normalized = _normalize_create_input(
+        config,
+        kind=kind,
+        name=name,
+        slug=slug,
+        region=region,
+        service_mode=service_mode,
+    )
+    if not _IDEMPOTENCY_RE.fullmatch(idempotency_key):
+        raise ApiError("workspace.idempotency_invalid")
+    request_sha256 = _request_sha256(normalized)
+    key_hmac = _idempotency_hmac(config, idempotency_key)
+    connection = _connect(config)
+    try:
+        identity, _now = authenticate_global_session_in_transaction(
+            connection,
+            config,
+            session_token=session_token,
+            csrf_token=csrf_token,
+            touch=False,
+        )
+        _require_verified_account(connection, identity.account_id)
+        existing = connection.execute(
+            """
+            SELECT request_sha256,workspace_id FROM workspace_creation_requests
+            WHERE account_id=? AND idempotency_key_hmac=?
+            """,
+            (identity.account_id, key_hmac),
+        ).fetchone()
+        if existing is None:
+            return identity.account_id, None
+        if not hmac.compare_digest(str(existing["request_sha256"]), request_sha256):
+            raise ApiError("workspace.idempotency_conflict")
+        return identity.account_id, WorkspaceResponse(
+            workspace=_load_workspace(
+                connection,
+                identity.account_id,
+                str(existing["workspace_id"]),
+            ),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+    except ApiError as exc:
+        _finish_identity_error(connection, exc)
+        raise
+    except (sqlite3.Error, DbError, ValueError, TypeError):
+        if connection.in_transaction:
+            connection.rollback()
+        raise ApiError("workspace.unavailable") from None
+    finally:
+        connection.close()
+
+
 def list_workspaces(
     config: AppConfig,
     *,

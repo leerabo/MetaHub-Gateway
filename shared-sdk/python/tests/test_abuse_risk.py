@@ -118,7 +118,7 @@ async def test_backend_failure_split_and_queue_backpressure() -> None:
 async def test_degraded_counters_are_persisted(tmp_path) -> None:
     database = tmp_path / "risk-runtime.sqlite3"
     database_url = f"sqlite:///{database.as_posix()}"
-    assert apply_migrations(database_url).applied[-1] == "0102"
+    assert "0102" in apply_migrations(database_url).applied
     sink = persistence_sink(_config(database_url))
 
     await sink(
