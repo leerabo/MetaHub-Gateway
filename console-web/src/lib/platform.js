@@ -323,6 +323,47 @@ export function createPlatformSaasPlan({ controlApiUrl, plan, signal } = {}) {
   });
 }
 
+export function getPlatformProviderCatalog({ controlApiUrl, signal } = {}) {
+  return request(controlApiUrl, "/platform/provider-catalog", { signal });
+}
+
+export function publishPlatformProviderCatalog({
+  controlApiUrl,
+  manifest,
+  keyId,
+  signature,
+  reasonCode,
+  confirmed,
+  expectedRevision,
+  idempotencyKey,
+  signal,
+} = {}) {
+  if (!manifest || Object.getPrototypeOf(manifest) !== Object.prototype
+    || manifest.schema_version !== 1
+    || !/^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,3}$/u.test(String(manifest.version ?? ""))
+    || !Array.isArray(manifest.entries) || manifest.entries.length < 10 || manifest.entries.length > 100
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/u.test(String(keyId ?? ""))
+    || !/^[A-Za-z0-9_-]{86}$/u.test(String(signature ?? ""))
+    || !new Set(["catalog_release", "compliance_update", "endpoint_update"]).has(reasonCode)
+    || confirmed !== true) invalidRequest();
+  return request(controlApiUrl, "/platform/provider-catalog/versions", {
+    method: "POST",
+    body: {
+      manifest,
+      key_id: String(keyId),
+      signature: String(signature),
+      reason_code: reasonCode,
+      confirmed: true,
+    },
+    csrf: PLATFORM_CSRF_COOKIE,
+    headers: {
+      "If-Match": `"${positiveInteger(expectedRevision)}"`,
+      "Idempotency-Key": idempotency(idempotencyKey),
+    },
+    signal,
+  });
+}
+
 export function readPlatformCsrfCookie(cookieText = globalThis.document?.cookie ?? "") {
   return readCookie(PLATFORM_CSRF_COOKIE, cookieText);
 }

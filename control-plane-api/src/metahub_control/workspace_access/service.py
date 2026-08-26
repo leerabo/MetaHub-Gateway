@@ -42,6 +42,10 @@ from .models import (
     WorkspaceSessionResponse,
     WorkspaceSwitchResponse,
 )
+from .provider_catalog_permissions import (
+    PROVIDER_CATALOG_ROLE_PERMISSIONS,
+    load_verified_provider_catalog_permissions,
+)
 
 logger = logging.getLogger("metahub.control.workspace_access")
 
@@ -637,7 +641,7 @@ def workspace_actor_authorization_probe_in_transaction(
     granted = {str(item["granted_permission_code"]) for item in role_rows}
     if granted != set(permission_codes):
         raise ApiError("workspace_session.permission_denied")
-    governance, machine_identity = _workspace_extension_permissions(
+    governance, machine_identity, provider_catalog = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
         require_catalogs=True,
@@ -661,6 +665,7 @@ def workspace_actor_authorization_probe_in_transaction(
             membership_role=str(row["role_code"]),
             governance_permissions=governance,
             machine_identity_permissions=machine_identity,
+            provider_catalog_permissions=provider_catalog,
         ),
     )
 
@@ -1944,18 +1949,21 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
     )
-    governance, machine_identity = _workspace_extension_permissions(
+    governance, machine_identity, provider_catalog = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
     )
-    if not governance and not machine_identity:
+    if not governance and not machine_identity and not provider_catalog:
         return legacy
-    permissions = tuple(sorted({*legacy.permission_codes, *governance, *machine_identity}))
+    permissions = tuple(
+        sorted({*legacy.permission_codes, *governance, *machine_identity, *provider_catalog})
+    )
     fingerprint = _workspace_authorization_fingerprint(
         legacy_fingerprint=legacy.authorization_fingerprint,
         membership_role=str(row["role_code"]),
         governance_permissions=governance,
         machine_identity_permissions=machine_identity,
+        provider_catalog_permissions=provider_catalog,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -1971,15 +1979,17 @@ def _workspace_extension_permissions(
     *,
     role_code: str,
     require_catalogs: bool = False,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     if require_catalogs:
-        return _required_workspace_extension_permissions(connection, role_code=role_code)
-    has_extension = require_catalogs or _table_exists(
-        connection, "workspace_governance_role_permissions"
-    )
-    has_catalog = require_catalogs or _table_exists(
-        connection, "workspace_governance_permission_extensions"
-    )
+        governance, machine_identity, provider_catalog = (
+            _required_workspace_extension_permissions(
+                connection,
+                role_code=role_code,
+            )
+        )
+        return governance, machine_identity, provider_catalog
+    has_extension = _table_exists(connection, "workspace_governance_role_permissions")
+    has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
     if has_extension != has_catalog:
         raise ApiError("workspace_session.unavailable")
     governance_expected = {
@@ -1995,10 +2005,10 @@ def _workspace_extension_permissions(
         expected=governance_expected,
         available=has_extension,
     )
-    has_machine_catalog = require_catalogs or _table_exists(
+    has_machine_catalog = _table_exists(
         connection, "workspace_machine_permission_extensions"
     )
-    has_machine_assignments = require_catalogs or _table_exists(
+    has_machine_assignments = _table_exists(
         connection, "workspace_machine_role_permissions"
     )
     if has_machine_catalog != has_machine_assignments:
@@ -2016,14 +2026,19 @@ def _workspace_extension_permissions(
         expected=machine_expected,
         available=has_machine_catalog,
     )
-    return governance, machine_identity
+    provider_catalog = load_verified_provider_catalog_permissions(
+        connection,
+        role_code=role_code,
+        unavailable_error_code="workspace_session.unavailable",
+    )
+    return governance, machine_identity, provider_catalog
 
 
 def _required_workspace_extension_permissions(
     connection: sqlite3.Connection,
     *,
     role_code: str,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     rows = connection.execute(
         """SELECT 'governance_catalog' row_kind,'' role_code,permission_code
              FROM workspace_governance_permission_extensions
@@ -2035,13 +2050,21 @@ def _required_workspace_extension_permissions(
              FROM workspace_machine_permission_extensions
            UNION ALL
            SELECT 'machine_assignment',role_code,permission_code
-             FROM workspace_machine_role_permissions"""
+             FROM workspace_machine_role_permissions
+           UNION ALL
+           SELECT 'provider_catalog_catalog','',permission_code
+             FROM workspace_provider_catalog_permission_extensions
+           UNION ALL
+           SELECT 'provider_catalog_assignment',role_code,permission_code
+             FROM workspace_provider_catalog_role_permissions"""
     ).fetchall()
     grouped: dict[str, set[tuple[str, str]]] = {
         "governance_catalog": set(),
         "governance_assignment": set(),
         "machine_catalog": set(),
         "machine_assignment": set(),
+        "provider_catalog_catalog": set(),
+        "provider_catalog_assignment": set(),
     }
     for row in rows:
         kind = str(row["row_kind"])
@@ -2058,6 +2081,11 @@ def _required_workspace_extension_permissions(
         for assigned_role, permission_codes in _MACHINE_IDENTITY_ROLE_PERMISSIONS.items()
         for permission_code in permission_codes
     }
+    provider_catalog_expected = {
+        (assigned_role, permission_code)
+        for assigned_role, permission_codes in PROVIDER_CATALOG_ROLE_PERMISSIONS.items()
+        for permission_code in permission_codes
+    }
     if (
         grouped["governance_catalog"]
         != {("", permission_code) for _, permission_code in governance_expected}
@@ -2065,6 +2093,9 @@ def _required_workspace_extension_permissions(
         or grouped["machine_catalog"]
         != {("", permission_code) for _, permission_code in machine_expected}
         or grouped["machine_assignment"] != machine_expected
+        or grouped["provider_catalog_catalog"]
+        != {("", permission_code) for _, permission_code in provider_catalog_expected}
+        or grouped["provider_catalog_assignment"] != provider_catalog_expected
     ):
         raise ApiError("workspace_session.unavailable")
     governance = tuple(
@@ -2081,7 +2112,14 @@ def _required_workspace_extension_permissions(
             if assigned_role == role_code
         )
     )
-    return governance, machine_identity
+    provider_catalog = tuple(
+        sorted(
+            permission_code
+            for assigned_role, permission_code in provider_catalog_expected
+            if assigned_role == role_code
+        )
+    )
+    return governance, machine_identity, provider_catalog
 
 
 def _workspace_authorization_fingerprint(
@@ -2090,6 +2128,7 @@ def _workspace_authorization_fingerprint(
     membership_role: str,
     governance_permissions: tuple[str, ...],
     machine_identity_permissions: tuple[str, ...],
+    provider_catalog_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2098,6 +2137,7 @@ def _workspace_authorization_fingerprint(
                 "membership_role": membership_role,
                 "governance_permissions": governance_permissions,
                 "machine_identity_permissions": machine_identity_permissions,
+                "provider_catalog_permissions": provider_catalog_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

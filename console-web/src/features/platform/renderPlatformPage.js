@@ -43,7 +43,8 @@ export function renderPlatformWorkspace(container, state) {
   const operator = context?.operator ?? {};
   const permissions = new Set(context?.permissions ?? []);
   const disasterRecoveryBusy = Boolean(
-    state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent)
+    state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
+      || state.providerCatalogPublishIntent)
   );
   container.innerHTML = `
     <div class="platform-shell">
@@ -89,7 +90,65 @@ function renderView(state, permissions) {
   if (state.view === "compliance") return complianceView(state, permissions);
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
+  if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
   return domainPlaceholderView(state);
+}
+
+function providerCatalogView(state, permissions) {
+  const response = state.providerCatalog ?? {};
+  const current = response.current ?? null;
+  const recent = Array.isArray(response.recent_versions) ? response.recent_versions : [];
+  const canManage = permissions.has("platform.provider_catalog.manage");
+  const securityProjection = response.security_projection === true;
+  return `
+    <header class="platform-page-heading">
+      <div><p>Signed release channel</p><h1>Provider catalog</h1></div>
+      <span>${securityProjection ? "Security projection" : "Release management"}</span>
+    </header>
+    <section class="platform-metrics" aria-label="Provider catalog release summary">
+      ${metric("Generation", current?.generation ?? 0, "immutable head")}
+      ${metric("Entries", current?.entry_count ?? 0, "published matrix")}
+      ${metric("Compatibility", current?.compatibility_change_count ?? 0, "changes in head")}
+      ${metric("Recent", recent.length, "retained versions")}
+    </section>
+    <section class="platform-band platform-provider-catalog-head">
+      <div class="platform-section-heading"><div><p>Verified publication</p><h2>Current release</h2></div>${current ? status("active") : ""}</div>
+      ${current ? `<dl>
+        <div><dt>Version</dt><dd>${escapeHtml(current.version)}</dd></div>
+        <div><dt>Generation</dt><dd>${number(current.generation)}</dd></div>
+        <div><dt>Manifest</dt><dd><code>${escapeHtml(shortHash(current.manifest_sha256))}</code></dd></div>
+        <div><dt>Signing key</dt><dd>${escapeHtml(current.key_id)}</dd></div>
+        <div><dt>Algorithm</dt><dd>${escapeHtml(current.signature_algorithm)}</dd></div>
+        <div><dt>Signature proof</dt><dd><code>${escapeHtml(shortHash(current.signature_sha256))}</code></dd></div>
+        <div><dt>Published</dt><dd>${formatTime(current.published_at)}</dd></div>
+      </dl>` : '<p class="platform-empty">Provider catalog is unavailable.</p>'}
+    </section>
+    <section class="platform-band platform-provider-catalog-history">
+      <div class="platform-section-heading"><div><p>Immutable history</p><h2>Recent versions</h2></div><span>${number(recent.length)} versions</span></div>
+      <div class="platform-table-wrap"><table class="platform-provider-catalog-table">
+        <thead><tr><th>Version</th><th>Generation</th><th>Entries</th><th>Compatibility</th><th>Manifest</th><th>Published</th></tr></thead>
+        <tbody>${recent.map((item) => `<tr>
+          <td data-label="Version"><strong>${escapeHtml(item.version)}</strong></td>
+          <td data-label="Generation">${number(item.generation)}</td>
+          <td data-label="Entries">${number(item.entry_count)}</td>
+          <td data-label="Compatibility">${number(item.compatibility_change_count)}</td>
+          <td data-label="Manifest"><code>${escapeHtml(shortHash(item.manifest_sha256))}</code></td>
+          <td data-label="Published">${formatTime(item.published_at)}</td>
+        </tr>`).join("") || emptyRow("No catalog versions available", 6)}</tbody>
+      </table></div>
+    </section>
+    ${canManage ? `<section class="platform-band platform-provider-catalog-release">
+      <div class="platform-section-heading"><div><p>CAS publication</p><h2>Publish signed manifest</h2></div><span>Expected generation ${number(current?.generation)}</span></div>
+      <form data-platform-provider-catalog-form autocomplete="off">
+        <label class="platform-provider-catalog-manifest"><span>Canonical manifest</span><textarea name="manifest" rows="12" maxlength="250000" spellcheck="false" required placeholder='{"schema_version":1,"version":"YYYY.MM.DD.N","entries":[]}'></textarea></label>
+        <label><span>Trusted key ID</span><input name="keyId" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{2,127}" maxlength="128" required /></label>
+        <label><span>Detached Ed25519 signature</span><input name="signature" pattern="[A-Za-z0-9_-]{86}" minlength="86" maxlength="86" autocomplete="off" required /></label>
+        <label><span>Release reason</span><select name="reasonCode"><option value="catalog_release">Catalog release</option><option value="compliance_update">Compliance update</option><option value="endpoint_update">Endpoint update</option></select></label>
+        <label class="platform-check platform-provider-catalog-confirm"><input name="confirmed" type="checkbox" required /><span>确认版本、签名、区域与兼容变更已完成发布审核</span></label>
+        <button class="platform-primary" type="submit" ${state.loading || !current ? "disabled" : ""}>Publish version</button>
+      </form>
+    </section>` : ""}
+  `;
 }
 
 function dataResidencyView(state) {

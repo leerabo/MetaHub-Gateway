@@ -169,6 +169,12 @@ _NAVIGATION = (
         "Customer success",
         "/platform.html#customer-success",
     ),
+    (
+        "platform.provider_catalog.security_read",
+        "provider-catalog",
+        "Provider catalog",
+        "/platform.html#provider-catalog",
+    ),
     ("platform.growth.read", "growth", "Growth", "/platform.html#growth"),
     (
         "platform.notification_template.read",
@@ -193,6 +199,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_status_role_permissions",
     "platform_capacity_role_permissions",
     "platform_data_governance_role_permissions",
+    "platform_provider_catalog_role_permissions",
 )
 
 
@@ -2463,6 +2470,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_data_governance_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if "platform_provider_catalog_role_permissions" in extension_tables:
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_provider_catalog_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

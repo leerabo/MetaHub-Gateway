@@ -141,6 +141,18 @@ REQUIRED_DOCS = {
         "PRD-097",
         "0088",
     ),
+    ROOT / "docs/prd/PRD-119-official-provider-catalog-regional-compliance.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0111",
+    ),
+    ROOT / "docs/testing/PRD-119-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-120",
+        "0111",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -804,10 +816,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 106
+        and migration_versions[-1] == 111
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0106 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0111 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -833,6 +845,31 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0088_platform_workspace_operations.sql").is_file()
         and (ROOT / "infra/migrations/0088_platform_workspace_operations.down.sql").is_file(),
         "PRD-096 owns reversible migration 0088 with guarded operational-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0109_data_residency_retention_legal_hold.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0109_data_residency_retention_legal_hold.down.sql"
+        ).is_file(),
+        "PRD-117 owns reversible migration 0109 with guarded governance-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0110_service_account_oauth_machine_identity.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0110_service_account_oauth_machine_identity.down.sql"
+        ).is_file(),
+        "PRD-118 owns reversible migration 0110 with guarded machine-identity rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0111_official_provider_catalog_regional_compliance.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0111_official_provider_catalog_regional_compliance.down.sql"
+        ).is_file(),
+        "PRD-119 owns reversible migration 0111 with guarded catalog-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

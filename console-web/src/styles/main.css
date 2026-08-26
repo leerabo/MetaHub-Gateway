@@ -4176,6 +4176,215 @@ h3 {
   }
 }
 
+/* PRD-119 signed Provider Catalog uses a dense operational list rather than marketing cards. */
+.provider-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(112px, 1fr));
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.provider-tabs button {
+  min-height: 38px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 0 14px;
+  background: #ffffff;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.provider-tabs button:first-child { border-left: 0; }
+.provider-tabs button[aria-selected="true"] { background: #16202d; color: #ffffff; }
+
+.provider-catalog { display: grid; gap: 14px; }
+
+.provider-catalog-heading,
+.provider-catalog-entry header,
+.provider-catalog-next,
+.provider-catalog-checkpoint,
+.provider-catalog-preflight-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-catalog-heading p {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.provider-catalog-heading h3 { margin: 0; font-size: 18px; }
+.provider-catalog-heading code { color: var(--muted); font-size: 12px; }
+
+.provider-catalog-filters {
+  display: grid;
+  grid-template-columns: 140px repeat(3, minmax(140px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-block: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.provider-catalog-filters label,
+.provider-catalog-create label,
+.provider-catalog-create fieldset,
+.provider-catalog-checkpoint form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-catalog-filters input,
+.provider-catalog-filters select,
+.provider-catalog-create input,
+.provider-catalog-create select,
+.provider-catalog-checkpoint input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  background: #ffffff;
+  color: var(--text);
+  font: inherit;
+}
+
+.provider-catalog-filters button,
+.provider-catalog-create > button,
+.provider-catalog-checkpoint form button,
+.provider-catalog-compatibility > button {
+  min-height: 36px;
+  border: 1px solid var(--accent-dark);
+  padding: 0 12px;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.provider-catalog-list {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.provider-catalog-entry {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.provider-catalog-entry:first-child { border-top: 0; }
+.provider-catalog-entry header > div { display: grid; gap: 3px; }
+.provider-catalog-entry header span { color: var(--muted); font-size: 12px; }
+
+.provider-catalog-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+
+.provider-catalog-meta span { min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.provider-catalog-meta b { display: block; margin-bottom: 2px; color: var(--text); }
+
+.provider-catalog-capabilities { display: flex; flex-wrap: wrap; gap: 6px; }
+.provider-catalog-capabilities span {
+  border: 1px solid #bfd4c7;
+  padding: 4px 7px;
+  background: #f0f7f2;
+  color: #285b38;
+  font-size: 12px;
+}
+
+.provider-catalog-create {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(180px, 1fr) minmax(170px, 0.9fr);
+  gap: 10px;
+  align-items: end;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.provider-catalog-create fieldset {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border: 0;
+  padding: 0;
+}
+
+.provider-catalog-check { display: inline-flex !important; grid-template-columns: 18px minmax(0, 1fr); align-items: center; }
+.provider-catalog-check input { width: 18px; min-height: 18px; margin: 0; }
+.provider-catalog-confirm { grid-column: 1 / -2; color: var(--text) !important; }
+
+.provider-catalog-compatibility { display: flex; align-items: center; gap: 10px; }
+.provider-catalog-compatibility > button { border-color: var(--line); background: #ffffff; color: var(--text); }
+.provider-catalog-compatibility > div { display: grid; gap: 2px; }
+.provider-catalog-compatibility span,
+.provider-catalog-compatibility small { color: var(--muted); font-size: 12px; }
+
+.provider-catalog-next {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.provider-catalog-next a { color: var(--accent-dark); font-weight: 700; }
+
+.provider-catalog-checkpoint {
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid #9dc8aa;
+  border-radius: 6px;
+  background: #f0f7f2;
+}
+
+.provider-catalog-checkpoint > div:first-child { display: grid; gap: 3px; }
+.provider-catalog-checkpoint span,
+.provider-catalog-checkpoint small { color: var(--muted); font-size: 12px; }
+.provider-catalog-checkpoint form { display: flex; align-items: end; gap: 8px; }
+.provider-catalog-checkpoint form input { width: 92px; }
+.provider-catalog-preflight-result { flex-wrap: wrap; }
+
+.provider-feedback-error {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .provider-catalog-filters,
+  .provider-catalog-create,
+  .provider-catalog-meta { grid-template-columns: minmax(0, 1fr); }
+  .provider-catalog-confirm,
+  .provider-catalog-create fieldset { grid-column: 1; }
+  .provider-catalog-heading,
+  .provider-catalog-next,
+  .provider-catalog-checkpoint { align-items: stretch; flex-direction: column; }
+  .provider-catalog-checkpoint form { align-items: stretch; flex-direction: column; }
+  .provider-catalog-checkpoint form input { width: 100%; }
+}
+
 /* PAGE-117 增长分析：七个权威阶段保持紧凑可扫描，并在窄屏切换为稳定单列。 */
 .growth-analytics-panel {
   min-width: 0;

@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-116 - MFA、条件访问、设备与会话安全` 已完成；当前下一条未完成项是
-  `PRD-117 - 数据驻留、保留策略与法律保全`。
+- 新 `PRD-090` 至 `PRD-119 - 官方Provider连接目录与区域合规接入` 已完成；当前下一条未完成项是
+  `PRD-120 - Edge Agent注册、设备身份与mTLS`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,14 +114,21 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-119 - 官方Provider连接目录与区域合规接入` 已完成：0111、Ed25519 签名不可变目录、官方/
+  云服务区域与能力模板、Workspace Provider 实例化/预检、迁移兼容说明、Platform 发布以及企业/平台
+  双 Console 均已交付。最终 Migration/API `10/10`、必要后端回归 `30/30`、PRD-118 全量 `6/6`、
+  Console 专项 `6/6`、Console 全量 `1108/1108` 和 lint `365 files` 均通过；真实目录查询 40 次
+  p95 `68.87ms`，四维筛选只返回 DeepSeek，Browser 零横向溢出和零 warning/error。详见
+  [PRD-119 设计](docs/prd/PRD-119-official-provider-catalog-regional-compliance.md) 和
+  [PRD-119 测试记录](docs/testing/PRD-119-tests.md)。下一权威项为 PRD-120；S4 G4 在本条独立提交后统一执行。
 - `PRD-116 - MFA、条件访问、设备与会话安全` 已完成：0108、多因子 TOTP/WebAuthn、恢复码、受信设备、
   Global/Workspace Session 撤销、条件访问与一次性 step-up 均已交付。最终 Migration `4/4`、Identity/API
   `2/2`、Shared SDK `1/1`、Console 专项 `11/11`、Console 全量 `1093/1093` 和 lint `358 files` 均通过。
   真实受控恢复验证 24 小时冷静期拒绝、48 小时窗口内双证明、旧身份安全状态原子撤销、新 `recovery`
   Session 轮换和 Workspace 跨刷新保持清空；三视口均无溢出、越界、重叠、broken image 或浏览器错误。
   详见 [PRD-116 设计](docs/prd/PRD-116-mfa-conditional-access-device-session-security.md) 和
-  [PRD-116 测试记录](docs/testing/PRD-116-tests.md)。下一权威项为 PRD-117，S4 G4 仍保留到 PRD-119
-  独立提交后统一执行。
+  [PRD-116 测试记录](docs/testing/PRD-116-tests.md)。其历史下一项已由 PRD-117..119 完成交付；
+  S4 G4 仍在 PRD-119 独立提交后统一执行。
 - `PRD-115 - SCIM目录同步与成员生命周期` 已完成：0107、Workspace 所有权绑定的 SCIM Bearer、
   Users/Groups、受限 filter/PATCH、token 轮换、role mapping、Membership 投影、Owner 保护、冲突 CAS、
   事件/outbox 与 Identity Console 均已交付。最终 Migration `5/5`、API `1/1`、Shared SDK `3/3`、

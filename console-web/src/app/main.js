@@ -634,6 +634,13 @@ import {
   updateProviderKey,
 } from "../lib/providers.js";
 import {
+  createProviderCatalogIdempotencyKey,
+  createProviderFromCatalog,
+  getProviderCatalogCompatibility,
+  listProviderCatalog,
+  preflightCatalogProvider,
+} from "../lib/providerCatalog.js";
+import {
   createVirtualKey,
   disableVirtualKey,
   listVirtualKeys,
@@ -804,6 +811,16 @@ let modelPriceFilters = { effectiveStatus: "all", limit: 100, offset: 0 };
 let providerActionError = null;
 let providerFeedback = "";
 let providerLastTestResult = null;
+let providerCatalogActiveTab = "catalog";
+let providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
+let providerCatalogActionError = null;
+let providerCatalogFeedback = "";
+let providerCatalogCompatibilityByEntryCode = {};
+let providerCatalogLastCreated = null;
+let providerCatalogLastPreflight = null;
+let providerCatalogCreateIntent = null;
+let providerCatalogPreflightIntent = null;
+let providerCatalogIdentity = "";
 // PAGE-088 筛选只驻留当前页面内存；tenant_id、窗口和 Endpoint 永不进入浏览器筛选状态。
 let providerStatusFilters = { limit: 50, offset: 0 };
 let providerHealthActionError = null;
@@ -2316,7 +2333,7 @@ async function loadAndRenderActiveNavigation({
       await load("environmentState", loadEnvironmentState);
       break;
     case "providers":
-      await load("providersState", loadProvidersState);
+      await load("providersState", () => loadProvidersState({ includeCatalog: true }));
       break;
     case "provider-health":
       await load("providerHealthState", () => loadProviderHealthState(consoleShellState));
@@ -3665,6 +3682,170 @@ function bindAuthenticatedEvents(consoleShellState) {
       }
     });
   }
+
+  for (const tab of document.querySelectorAll("[data-provider-tab]")) {
+    tab.addEventListener("click", async () => {
+      const nextTab = tab.dataset.providerTab;
+      if (!new Set(["catalog", "providers"]).has(nextTab)) return;
+      providerCatalogActiveTab = nextTab;
+      providerCatalogActionError = null;
+      await refresh();
+    });
+  }
+
+  const providerCatalogFilterForm = document.querySelector("[data-provider-catalog-filter-form]");
+  providerCatalogFilterForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(providerCatalogFilterForm);
+    providerCatalogFilters = {
+      status: String(data.get("status") ?? ""),
+      vendorCode: String(data.get("vendorCode") ?? "").trim(),
+      capabilityCode: String(data.get("capabilityCode") ?? "").trim(),
+      regionCode: String(data.get("regionCode") ?? "").trim(),
+    };
+    providerCatalogActionError = null;
+    providerCatalogFeedback = "筛选已应用";
+    await refresh();
+  });
+
+  for (const button of document.querySelectorAll("[data-provider-catalog-compatibility]")) {
+    button.addEventListener("click", async () => {
+      const token = authSession.token;
+      if (!token) {
+        renderLogin();
+        return;
+      }
+      button.disabled = true;
+      providerCatalogActionError = null;
+      providerCatalogFeedback = "正在读取兼容说明";
+      try {
+        const result = await getProviderCatalogCompatibility({
+          controlApiUrl,
+          token,
+          entryCode: button.dataset.entryCode,
+        });
+        providerCatalogCompatibilityByEntryCode = {
+          ...providerCatalogCompatibilityByEntryCode,
+          [result.entry_code]: result,
+        };
+        providerCatalogFeedback = "兼容说明已更新";
+        await refresh();
+      } catch (error) {
+        if (error instanceof AuthApiError && error.status === 401) {
+          clearAuthSession();
+          authSession = { token: null, context: null };
+          renderLogin(authErrorMessage(error), error.requestId);
+          return;
+        }
+        providerCatalogActionError = error;
+        providerCatalogFeedback = "兼容说明读取失败";
+        await refresh();
+      }
+    });
+  }
+
+  for (const form of document.querySelectorAll("[data-provider-catalog-create-form]")) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const token = authSession.token;
+      if (!token) {
+        renderLogin();
+        return;
+      }
+      const data = new FormData(form);
+      const input = {
+        entryCode: String(data.get("entryCode") ?? ""),
+        version: String(data.get("version") ?? ""),
+        regionCode: String(data.get("regionCode") ?? ""),
+        capabilityCodes: data.getAll("capabilityCodes").map(String).sort(),
+        providerCode: String(data.get("providerCode") ?? "").trim(),
+        name: String(data.get("name") ?? "").trim(),
+        confirmed: data.get("confirmed") === "on",
+      };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = providerCatalogCreateIntent?.fingerprint === fingerprint
+        ? providerCatalogCreateIntent.idempotencyKey
+        : createProviderCatalogIdempotencyKey("instantiate");
+      providerCatalogCreateIntent = { fingerprint, idempotencyKey };
+      form.querySelector("button[type='submit']").disabled = true;
+      providerCatalogActionError = null;
+      providerCatalogFeedback = "正在创建目录实例";
+      providerCatalogLastPreflight = null;
+      try {
+        const result = await createProviderFromCatalog({
+          controlApiUrl,
+          token,
+          ...input,
+          idempotencyKey,
+        });
+        providerCatalogCreateIntent = null;
+        providerCatalogLastCreated = result;
+        providerCatalogFeedback = result.idempotent_replay ? "已恢复同一创建结果" : "Provider 已从目录创建";
+        await refresh();
+      } catch (error) {
+        if (error instanceof AuthApiError && error.status === 401) {
+          clearAuthSession();
+          authSession = { token: null, context: null };
+          renderLogin(authErrorMessage(error), error.requestId);
+          return;
+        }
+        if (!(error instanceof AuthApiError) || ![0, 503].includes(error.status)) {
+          providerCatalogCreateIntent = null;
+        }
+        providerCatalogActionError = error;
+        providerCatalogFeedback = "目录实例创建失败";
+        await refresh();
+      }
+    });
+  }
+
+  const providerCatalogPreflightForm = document.querySelector("[data-provider-catalog-preflight-form]");
+  providerCatalogPreflightForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const token = authSession.token;
+    if (!token) {
+      renderLogin();
+      return;
+    }
+    const data = new FormData(providerCatalogPreflightForm);
+    const input = {
+      providerId: String(data.get("providerId") ?? ""),
+      timeoutSeconds: Number(data.get("timeoutSeconds")),
+    };
+    const fingerprint = JSON.stringify(input);
+    const idempotencyKey = providerCatalogPreflightIntent?.fingerprint === fingerprint
+      ? providerCatalogPreflightIntent.idempotencyKey
+      : createProviderCatalogIdempotencyKey("preflight");
+    providerCatalogPreflightIntent = { fingerprint, idempotencyKey };
+    providerCatalogPreflightForm.querySelector("button[type='submit']").disabled = true;
+    providerCatalogActionError = null;
+    providerCatalogFeedback = "正在运行受限预检";
+    try {
+      const result = await preflightCatalogProvider({
+        controlApiUrl,
+        token,
+        ...input,
+        idempotencyKey,
+      });
+      providerCatalogPreflightIntent = null;
+      providerCatalogLastPreflight = result;
+      providerCatalogFeedback = result.idempotent_replay ? "已恢复同一预检结果" : "预检已完成";
+      await refresh();
+    } catch (error) {
+      if (error instanceof AuthApiError && error.status === 401) {
+        clearAuthSession();
+        authSession = { token: null, context: null };
+        renderLogin(authErrorMessage(error), error.requestId);
+        return;
+      }
+      if (!(error instanceof AuthApiError) || ![0, 503].includes(error.status)) {
+        providerCatalogPreflightIntent = null;
+      }
+      providerCatalogActionError = error;
+      providerCatalogFeedback = "预检失败";
+      await refresh();
+    }
+  });
 
   const createProviderForm = document.querySelector("#create-provider-form");
   createProviderForm?.addEventListener("submit", async (event) => {
@@ -11496,17 +11677,57 @@ async function loadUsersState(consoleShellState) {
  * 执行 控制台主应用 的 `loadProvidersState` 辅助逻辑，保持页面状态和后端响应口径一致。
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
-async function loadProvidersState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.PROVIDER_READ)) {
+async function loadProvidersState({ includeCatalog = false } = {}) {
+  const canReadProviders = hasPermission(authSession.context, PERMISSIONS.PROVIDER_READ);
+  const canReadCatalog = includeCatalog
+    && hasPermission(authSession.context, PERMISSIONS.PROVIDER_CATALOG_READ);
+  if (!canReadProviders && !canReadCatalog) {
     return null;
   }
+  const identity = JSON.stringify([
+    authSession.context?.user?.tenant_id ?? authSession.context?.tenant?.tenant_id ?? "",
+    authSession.context?.user?.user_id ?? authSession.context?.user?.email ?? "",
+    authSession.context?.session?.session_id ?? "",
+  ]);
+  if (providerCatalogIdentity && providerCatalogIdentity !== identity) {
+    providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
+    providerCatalogCompatibilityByEntryCode = {};
+    providerCatalogLastCreated = null;
+    providerCatalogLastPreflight = null;
+    providerCatalogCreateIntent = null;
+    providerCatalogPreflightIntent = null;
+    providerCatalogActionError = null;
+    providerCatalogFeedback = "";
+  }
+  providerCatalogIdentity = identity;
   providersLoadController?.abort();
   const controller = new AbortController();
   providersLoadController = controller;
   try {
-    const state = await listProviders({ controlApiUrl, token: authSession.token, signal: controller.signal });
+    const [state, catalog] = await Promise.all([
+      canReadProviders
+        ? listProviders({ controlApiUrl, token: authSession.token, signal: controller.signal })
+        : Promise.resolve({ state: "ok", providers: [] }),
+      canReadCatalog
+        ? listProviderCatalog({
+            controlApiUrl,
+            token: authSession.token,
+            filters: providerCatalogFilters,
+            signal: controller.signal,
+          }).catch((error) => {
+            if (isAbortError(error) || (error instanceof AuthApiError && error.status === 401)) {
+              throw error;
+            }
+            return {
+              state: "error",
+              message: authErrorMessage(error),
+              requestId: error?.requestId ?? "-",
+            };
+          })
+        : Promise.resolve(null),
+    ]);
     const providerKeyEntries = await Promise.all(
-      (state.providers ?? []).map(async (provider) => {
+      (canReadProviders ? state.providers ?? [] : []).map(async (provider) => {
         try {
           return [
             provider.provider_id,
@@ -11538,6 +11759,16 @@ async function loadProvidersState() {
       actionError: providerActionError,
       feedback: providerFeedback,
       lastTestResult: providerLastTestResult,
+      providerCatalog: catalog ? {
+        ...catalog,
+        activeTab: providerCatalogActiveTab,
+        filters: providerCatalogFilters,
+        actionError: providerCatalogActionError,
+        feedback: providerCatalogFeedback,
+        compatibilityByEntryCode: providerCatalogCompatibilityByEntryCode,
+        lastCreated: providerCatalogLastCreated,
+        lastPreflight: providerCatalogLastPreflight,
+      } : null,
     };
   } catch (error) {
     if (isAbortError(error)) {

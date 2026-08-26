@@ -15,6 +15,80 @@
   --red-soft: #fbe9e7;
   --blue: #245f9a;
 }
+
+/* PRD-119 Provider Catalog publication stays isolated from tenant Provider controls. */
+.platform-provider-catalog-head dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.platform-provider-catalog-head dl > div {
+  min-width: 0;
+  padding: 14px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.platform-provider-catalog-head dl > div:nth-child(4n) { border-right: 0; }
+.platform-provider-catalog-head dt { margin-bottom: 5px; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.platform-provider-catalog-head dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-weight: 700; }
+.platform-provider-catalog-head code,
+.platform-provider-catalog-table code { font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+
+.platform-provider-catalog-table { min-width: 820px; }
+.platform-provider-catalog-table td strong { display: block; }
+
+.platform-provider-catalog-release form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.platform-provider-catalog-release input,
+.platform-provider-catalog-release select,
+.platform-provider-catalog-release textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #bfc8c0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+  letter-spacing: 0;
+}
+
+.platform-provider-catalog-release textarea {
+  min-height: 260px;
+  resize: vertical;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.platform-provider-catalog-manifest { grid-column: 1 / -1; }
+.platform-provider-catalog-confirm { grid-column: 1 / -2; }
+
+@media (max-width: 900px) {
+  .platform-provider-catalog-head dl,
+  .platform-provider-catalog-release form { grid-template-columns: minmax(0, 1fr); }
+  .platform-provider-catalog-head dl > div { border-right: 0; }
+  .platform-provider-catalog-manifest,
+  .platform-provider-catalog-confirm { grid-column: 1; }
+  .platform-provider-catalog-table { min-width: 0; }
+  .platform-provider-catalog-table thead { display: none; }
+  .platform-provider-catalog-table tbody,
+  .platform-provider-catalog-table tr,
+  .platform-provider-catalog-table td { display: block; width: 100%; }
+  .platform-provider-catalog-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-provider-catalog-table td { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; }
+  .platform-provider-catalog-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+}
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #f4f6f2; color: var(--ink); }
 button, input, select { font: inherit; letter-spacing: 0; }

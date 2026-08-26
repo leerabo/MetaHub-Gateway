@@ -2166,8 +2166,8 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   威胁、迁移、自审和实际验收记录。
 
 新 `PRD-090 - SaaS总体架构与兼容迁移基线` 至
-`PRD-116 - MFA、条件访问、设备与会话安全` 已完成；当前下一项是
-`PRD-117 - 数据驻留、保留策略与法律保全`。
+`PRD-119 - 官方Provider连接目录与区域合规接入` 已完成；当前下一项是
+`PRD-120 - Edge Agent注册、设备身份与mTLS`。
 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## PRD-091 全局账号目录
@@ -2308,8 +2308,40 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
 - `console-web/src/lib/{identity,conditionalAccess}.js`、`src/features/identity/` 与 `src/styles/identity.css`：
   身份安全、条件访问、一次性证明清理、恢复后 Workspace 显式重入和三档响应式布局。
 - `docs/prd/PRD-116-mfa-conditional-access-device-session-security.md` 与 `docs/testing/PRD-116-tests.md`：
-  冻结设计、两轮自审、专项/必要回归、本地认证、受控恢复、三视口 Browser 与敏感扫描记录。下一权威项为
-  PRD-117；S4 G4 保留到 PRD-119 独立提交后统一执行。
+  冻结设计、两轮自审、专项/必要回归、本地认证、受控恢复、三视口 Browser 与敏感扫描记录。其历史下一项
+  已由 PRD-117..119 关闭；S4 G4 在 PRD-119 独立提交后统一执行。
+
+## PRD-117 数据驻留、保留与法律保全目录（已完成）
+
+- `control-plane-api/src/metahub_control/data_governance/` 与消费者适配：版本化驻留/保留策略、Legal Hold、
+  删除调度、低敏证据和路由/备份/DR/job/tenant deletion 失败关闭。
+- `infra/migrations/0109_data_residency_retention_legal_hold.sql/.down.sql`：分类、策略、hold、删除计划、
+  evidence、事件/outbox、权限与业务事实 down guard。
+- Workspace/Platform Console：策略 simulation/confirmed apply、Hold 生命周期和驻留证据筛选；移动端单列布局。
+- `docs/prd/PRD-117-data-residency-retention-legal-hold.md` 与 `docs/testing/PRD-117-tests.md`：保存专项、
+  必要回归、性能、本地认证、Browser 和敏感审计事实。
+
+## PRD-118 机器身份目录（已完成）
+
+- `control-plane-api/src/metahub_control/machine_identity/`：Service Account、OAuth client、短期 opaque token、
+  machine-safe scope、IP/mTLS 约束、轮换/撤销、幂等命令和机器审计。
+- `infra/migrations/0110_service_account_oauth_machine_identity.sql/.down.sql`：机器主体、credential/token grant、
+  route scope、事件/outbox、复合 owner 和业务事实 down guard。
+- Identity Console：机器身份列表、一次性 client secret、关闭/导航/错误清理和响应式表单。
+- `docs/prd/PRD-118-service-account-oauth-machine-identity.md` 与 `docs/testing/PRD-118-tests.md`：保存迁移、
+  API/性能、必要回归、本地 Owner、Browser 和敏感审计事实。
+
+## PRD-119 官方 Provider 目录（已完成）
+
+- `control-plane-api/src/metahub_control/provider_catalog/`：签名目录读取、Workspace 实例化/兼容说明/preflight、
+  Platform canonical manifest 发布、动态权限和企业/平台凭据域隔离。
+- `infra/migrations/0111_official_provider_catalog_regional_compliance.sql/.down.sql`：可信公钥、不可变版本、
+  entry/capability/region/compatibility、实例/preflight、事件/outbox、权限扩展和 down guard。
+- `console-web/src/lib/providerCatalog.js`、Provider Catalog 视图与 Platform 发布视图：四维筛选、凭据后续动作、
+  preflight、签名输入清理、发布/安全投影分权和移动端布局。
+- `docs/prd/PRD-119-official-provider-catalog-regional-compliance.md` 与 `docs/testing/PRD-119-tests.md`：
+  保存两轮自审、专项/必要回归、真实 API/Browser、性能和敏感审计；下一权威项为 PRD-120，S4 G4 在
+  PRD-119 独立提交后统一执行。
 
 ## MVP 非目标
 

@@ -100,6 +100,7 @@ from .product_analytics import install_product_event_scheduler
 from .product_analytics import router as product_analytics_router
 from .projects.routes import router as projects_router
 from .prompt_templates.routes import router as prompt_templates_router
+from .provider_catalog import router as provider_catalog_router
 from .provider_health import install_provider_health_scheduler
 from .provider_health import router as provider_health_router
 from .provider_status import router as provider_status_router
@@ -244,6 +245,8 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/environments/")
         or request.url.path == "/providers"
         or request.url.path.startswith("/providers/")
+        or request.url.path == "/provider-catalog"
+        or request.url.path.startswith("/provider-catalog/")
         or request.url.path.startswith("/provider-keys/")
         or request.url.path == "/provider-health"
         or request.url.path == "/models"
@@ -337,6 +340,7 @@ app.include_router(local_endpoints_router)
 app.include_router(machine_identity_router)
 app.include_router(virtual_keys_router)
 app.include_router(providers_router)
+app.include_router(provider_catalog_router)
 app.include_router(provider_health_router)
 app.include_router(provider_status_router)
 app.include_router(projects_router)

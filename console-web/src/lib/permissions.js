@@ -24,6 +24,7 @@ export const PERMISSIONS = Object.freeze({
   VIRTUAL_KEY_WRITE: "virtual_key.write",
   PROVIDER_READ: "provider.read",
   PROVIDER_WRITE: "provider.write",
+  PROVIDER_CATALOG_READ: "provider_catalog.read",
   PROVIDER_HEALTH_READ: "provider.health.read",
   PROVIDER_HEALTH_PROBE: "provider.health.probe",
   PROVIDER_ERROR_MAP_READ: "provider_error_map.read",

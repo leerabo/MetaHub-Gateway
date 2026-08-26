@@ -1,4 +1,5 @@
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { renderProviderCatalog } from "./renderProviderCatalog.js";
 
 // Provider 面板的类型标签用于控制台展示，Provider Key 明文永远不应进入前端列表状态。
 
@@ -41,10 +42,26 @@ const PROVIDER_OPTIONS = [
  * admin 权限和当前 tenant_id。
  */
 export function renderProviderPanel(providersState, authContext) {
-  // 缺少后端 provider.read 时零 DOM，不能按角色名推导 Provider 可见性。
-  if (!hasPermission(authContext, PERMISSIONS.PROVIDER_READ)) {
+  const canReadProviders = hasPermission(authContext, PERMISSIONS.PROVIDER_READ);
+  const canReadCatalog = hasPermission(authContext, PERMISSIONS.PROVIDER_CATALOG_READ);
+  if (!canReadProviders && !canReadCatalog) {
     return "";
   }
+  const catalogState = providersState?.providerCatalog ?? null;
+  const activeTab = canReadCatalog ? catalogState?.activeTab ?? "catalog" : "providers";
+  const tabs = canReadCatalog && canReadProviders ? `
+    <div class="provider-tabs" role="tablist" aria-label="Provider 视图">
+      <button type="button" role="tab" data-provider-tab="catalog" aria-selected="${activeTab === "catalog"}">官方目录</button>
+      <button type="button" role="tab" data-provider-tab="providers" aria-selected="${activeTab === "providers"}">已配置</button>
+    </div>` : "";
+  if (activeTab === "catalog" && canReadCatalog) {
+    return `
+      <div class="panel-heading providers-heading"><div><h2 id="providers-title">Provider 管理</h2><p>从签名目录选择官方区域和能力，凭据仍由当前 Workspace 自持。</p></div></div>
+      ${tabs}
+      ${renderProviderCatalog(catalogState, authContext)}
+    `;
+  }
+  if (!canReadProviders) return "";
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   if (!providersState) {
@@ -80,6 +97,7 @@ export function renderProviderPanel(providersState, authContext) {
       </div>
       <span class="providers-count">${providers.length} 个 Provider</span>
     </div>
+    ${tabs}
     ${renderActionError(providersState.actionError)}
     ${renderTestResult(providersState.lastTestResult)}
     ${canWrite ? `<form class="create-provider-form" id="create-provider-form">

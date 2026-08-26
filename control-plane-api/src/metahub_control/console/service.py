@@ -839,7 +839,7 @@ def get_console_navigation(
         gateway_base_url, gateway_status = _trusted_gateway_base_url(config)
         response_permissions = context.permission_codes
         response_fingerprint = context.authorization_fingerprint
-        if workspace_scoped and context.extension_permission_codes:
+        if context.extension_permission_codes:
             response_permissions = tuple(
                 sorted({*response_permissions, *context.extension_permission_codes})
             )

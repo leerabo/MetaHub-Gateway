@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import sqlite3
@@ -39,6 +40,11 @@ from metahub_shared.rbac import (
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
+
+from metahub_control.workspace_access.provider_catalog_permissions import (
+    PROVIDER_CATALOG_PERMISSION_CODE,
+    load_verified_provider_catalog_permissions,
+)
 
 from .models import AuthSession, AuthTenant, AuthUser, LoginResponse, MeResponse
 from .tokens import TokenClaims, decode_access_token, encode_access_token
@@ -108,6 +114,36 @@ def _prime_last_seen_gate(session_id: str) -> None:
     """
 
     _claim_last_seen_update(session_id, time.monotonic())
+
+
+def _extension_authorization_fingerprint(
+    base_fingerprint: str,
+    extension_permissions: tuple[str, ...],
+) -> str:
+    """Bind response change detection to the verified PRD-119 permission projection."""
+
+    material = "\0".join(
+        ("provider-catalog-extension-v1", base_fingerprint, *extension_permissions)
+    )
+    return hashlib.sha256(material.encode("ascii")).hexdigest()
+
+
+def _auth_user_with_extensions(
+    user: AuthUser,
+    extension_permissions: tuple[str, ...],
+) -> AuthUser:
+    if not extension_permissions:
+        return user
+    permissions = tuple(sorted({*user.permission_codes, *extension_permissions}))
+    return user.model_copy(
+        update={
+            "permission_codes": permissions,
+            "authorization_fingerprint": _extension_authorization_fingerprint(
+                user.authorization_fingerprint,
+                extension_permissions,
+            ),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +264,11 @@ def login_admin(
             role_code=user["role"],
             unavailable_error_code="rbac.unavailable",
         )
+        extension_permissions = load_verified_provider_catalog_permissions(
+            connection,
+            role_code=user["role"],
+            unavailable_error_code="rbac.unavailable",
+        )
     except Exception:
         # 登录失败路径同样释放 SQLite 句柄，避免 Windows 验收后数据库无法重命名。
         connection.close()
@@ -271,6 +312,7 @@ def login_admin(
     _prime_last_seen_gate(session_id)
 
     auth_user = _auth_user(user, snapshot)
+    response_user = _auth_user_with_extensions(auth_user, extension_permissions)
     logger.info(
         "user.logged_in",
         extra={
@@ -292,10 +334,10 @@ def login_admin(
         access_token=token,
         expires_at=expires_at,
         session_id=session_id,
-        user=auth_user,
-        permission_codes=auth_user.permission_codes,
-        permission_revision=auth_user.permission_revision,
-        authorization_fingerprint=auth_user.authorization_fingerprint,
+        user=response_user,
+        permission_codes=response_user.permission_codes,
+        permission_revision=response_user.permission_revision,
+        authorization_fingerprint=response_user.authorization_fingerprint,
         request_id=request_id,
         trace_id=trace_id,
     )
@@ -517,6 +559,13 @@ def _authenticate_bearer_context(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),
     )
+    extension_permissions = load_verified_provider_catalog_permissions(
+        connection,
+        role_code=row["role"],
+        unavailable_error_code=(
+            deadline_error_code if deadline is not None else "rbac.unavailable"
+        ),
+    )
 
     if update_last_seen:
         # 普通 API 仍在认证成功后立即刷新；PAGE-107 会把该写入并入最终不可变审计事务。
@@ -545,6 +594,15 @@ def _authenticate_bearer_context(
         session=AuthSession(session_id=row["session_id"], expires_at=expires_at),
         token=token,
         token_jti=row["token_jti"],
+        extension_permission_codes=extension_permissions,
+        extension_authorization_fingerprint=(
+            _extension_authorization_fingerprint(
+                snapshot.authorization_fingerprint,
+                extension_permissions,
+            )
+            if extension_permissions
+            else None
+        ),
     )
     if deadline is not None:
         # SQL 之间的 Python 校验也消耗入口预算，迟到结果不得在 handler 清除后返回成功。
@@ -592,13 +650,17 @@ def current_user_response(
     不能相信前端传入的权限边界。
     """
 
+    response_user = _auth_user_with_extensions(
+        context.user,
+        context.extension_permission_codes,
+    )
     return MeResponse(
-        user=context.user,
+        user=response_user,
         tenant=context.tenant,
         session=context.session,
-        permission_codes=context.permission_codes,
+        permission_codes=response_user.permission_codes,
         permission_revision=context.permission_revision,
-        authorization_fingerprint=context.authorization_fingerprint,
+        authorization_fingerprint=response_user.authorization_fingerprint,
         request_id=request_id,
         trace_id=trace_id,
     )
@@ -642,11 +704,19 @@ def require_permission(context: AuthContext, permission_code: str) -> AuthContex
     """
 
     # 认证和矩阵事实任一异常都必须失败关闭，禁止回退 Token claim 或默认角色权限。
-    if type(permission_code) is not str or permission_code not in PERMISSION_CODES:
+    extension_known = permission_code == PROVIDER_CATALOG_PERMISSION_CODE
+    if type(permission_code) is not str or (
+        permission_code not in PERMISSION_CODES and not extension_known
+    ):
         # 认证和矩阵事实任一异常都必须失败关闭，禁止回退 Token claim 或默认角色权限。
         raise ApiError("rbac.matrix_integrity_failed")
     # 这里只消费已经过数据库哈希复核的集合，严禁改查共享默认角色集合。
-    if permission_code not in context.permission_codes:
+    granted = (
+        permission_code in context.extension_permission_codes
+        if extension_known
+        else permission_code in context.permission_codes
+    )
+    if not granted:
         raise ApiError("auth.permission_denied")
     return context
 

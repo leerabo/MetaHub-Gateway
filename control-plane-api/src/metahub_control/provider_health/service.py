@@ -7,6 +7,7 @@ API 响应和异常映射都只使用固定分类，不能包含 Authorization �
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -370,6 +371,56 @@ def probe_provider_for_tenant(
     connection = _connect(config)
     row = _load_health_row(connection, tenant_id, provider_id)
     item = _health_item(row, config)
+    if transitioned:
+        _dispatch_unhealthy_event(config, claim, item, attempts, request_id, trace_id)
+    return ProviderProbeResponse(
+        provider_health=item,
+        result_status=result_status,
+        attempts=[_attempt_info(index, attempt) for index, attempt in enumerate(attempts, 1)],
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+
+
+def probe_catalog_provider_for_tenant(
+    config: AppConfig,
+    tenant_id: str,
+    provider_id: str,
+    *,
+    expected_base_url: str,
+    request_id: str,
+    trace_id: str,
+) -> ProviderProbeResponse:
+    """Probe only when the leased Provider snapshot matches the signed catalog URL."""
+
+    claim, credentials = _claim_provider(config, tenant_id, provider_id, "manual")
+    if not hmac.compare_digest(claim.base_url, expected_base_url):
+        attempts = [
+            _fixed_attempt(
+                "failed",
+                "unverified",
+                "endpoint_blocked",
+                "Provider endpoint does not match its signed catalog instance.",
+                _utcnow(),
+            )
+        ]
+    else:
+        attempts = _perform_probe(config, claim, credentials)
+    result_status = _aggregate_result(attempts)
+    transitioned = _complete_probe(
+        config,
+        claim,
+        attempts,
+        result_status=result_status,
+        trigger_type="manual",
+        request_id=request_id,
+        trace_id=trace_id,
+    )
+    connection = _connect(config)
+    try:
+        item = _health_item(_load_health_row(connection, tenant_id, provider_id), config)
+    finally:
+        connection.close()
     if transitioned:
         _dispatch_unhealthy_event(config, claim, item, attempts, request_id, trace_id)
     return ProviderProbeResponse(

@@ -25,6 +25,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "privacy",
   "releases",
   "providers",
+  "provider-catalog",
   "channels",
   "customer-success",
   "growth",
@@ -61,6 +62,8 @@ export function createPlatformPageController({
     navigation: [],
     operators: null,
     plans: null,
+    providerCatalog: null,
+    providerCatalogPublishIntent: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -176,7 +179,7 @@ export function createPlatformPageController({
     },
     async refresh() {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-        || state.capacityIntent)) return false;
+        || state.capacityIntent || state.providerCatalogPublishIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -201,12 +204,13 @@ export function createPlatformPageController({
     },
     selectView(view) {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-        || state.capacityIntent)) return false;
+        || state.capacityIntent || state.providerCatalogPublishIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
+        "provider-catalog",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -230,6 +234,8 @@ export function createPlatformPageController({
           state.capacityIntent = null;
         } else if (state.view === "abuse-risk") {
           state.riskDecisionIntent = null;
+        } else if (state.view === "provider-catalog") {
+          state.providerCatalogPublishIntent = null;
         }
         state.loading = false;
       }
@@ -259,6 +265,9 @@ export function createPlatformPageController({
         void loadResidencyEvidence();
       }
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
+      if (state.view === "provider-catalog" && !state.providerCatalog) {
+        void loadProviderCatalog();
+      }
     },
     async filterJobs(status) {
       state.jobStatus = normalizeJobStatus(status);
@@ -753,6 +762,69 @@ export function createPlatformPageController({
     },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
+    },
+    async publishProviderCatalog({ manifestText, keyId, signature, reasonCode, confirmed }) {
+      if (confirmed !== true
+        || typeof api.publishProviderCatalog !== "function"
+        || typeof api.providerCatalog !== "function"
+        || !currentPermissions().has("platform.provider_catalog.manage")) return false;
+      let manifest;
+      try {
+        const source = String(manifestText ?? "");
+        if (source.length < 2 || source.length > 250_000) throw new Error("invalid");
+        manifest = JSON.parse(source);
+        if (!manifest || Object.getPrototypeOf(manifest) !== Object.prototype) {
+          throw new Error("invalid");
+        }
+      } catch {
+        state.error = safeError(new PlatformApiError({
+          status: 422,
+          code: "provider_catalog.manifest_invalid",
+          message: "Canonical manifest 必须是有效且有界的 JSON 对象。",
+        }));
+        render();
+        return false;
+      }
+      const expectedRevision = Number(state.providerCatalog?.current?.generation);
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return false;
+      const fingerprint = JSON.stringify([
+        String(manifest.version ?? ""), expectedRevision, String(keyId ?? ""), reasonCode,
+      ]);
+      const idempotencyKey = state.providerCatalogPublishIntent?.fingerprint === fingerprint
+        ? state.providerCatalogPublishIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.providerCatalogPublishIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const result = await api.publishProviderCatalog({
+          manifest,
+          keyId,
+          signature,
+          reasonCode,
+          confirmed: true,
+          expectedRevision,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!current(ticket)) return false;
+        state.providerCatalog = await api.providerCatalog({ signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.providerCatalogPublishIntent = null;
+        state.loading = false;
+        state.feedback = result.idempotent_replay
+          ? "已恢复同一目录发布结果。"
+          : result.propagated ? "目录版本已发布并进入传播。" : "目录版本已发布。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.providerCatalogPublishIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async createBackup({ backupType, retentionDays }) {
       if (typeof api.createBackup !== "function") return false;
@@ -1305,6 +1377,7 @@ export function createPlatformPageController({
         navigation: normalizeNavigation(navigation.items),
         operators: null,
         plans: null,
+        providerCatalog: null,
         billing: null,
         refunds: null,
         verification: null,
@@ -1332,6 +1405,13 @@ export function createPlatformPageController({
       }
       if (permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
+      }
+      if ((permissions.has("platform.provider_catalog.manage")
+        || permissions.has("platform.provider_catalog.security_read"))
+        && typeof api.providerCatalog === "function") {
+        tasks.push(api.providerCatalog({ signal: ticket.signal }).then((value) => {
+          next.providerCatalog = value;
+        }));
       }
       if (permissions.has("platform.billing.read") && typeof api.billingSummary === "function") {
         tasks.push(api.billingSummary({
@@ -1501,6 +1581,10 @@ export function createPlatformPageController({
       }
       if (!state.navigation.some((item) => item.id === "abuse-risk")) {
         state.riskDecisionIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "provider-catalog")) {
+        state.providerCatalog = null;
+        state.providerCatalogPublishIntent = null;
       }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
@@ -1705,6 +1789,26 @@ export function createPlatformPageController({
         limit: 50,
         signal: ticket.signal,
       });
+      if (!current(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadProviderCatalog() {
+    const permissions = currentPermissions();
+    if ((!permissions.has("platform.provider_catalog.manage")
+      && !permissions.has("platform.provider_catalog.security_read"))
+      || typeof api.providerCatalog !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.providerCatalog = await api.providerCatalog({ signal: ticket.signal });
       if (!current(ticket)) return false;
       state.loading = false;
       render();
@@ -2157,6 +2261,15 @@ export function createPlatformPageController({
           publish: data.get("publish") === "on",
         });
       }
+      if (form.matches("[data-platform-provider-catalog-form]")) {
+        controller.publishProviderCatalog({
+          manifestText: data.get("manifest"),
+          keyId: data.get("keyId"),
+          signature: data.get("signature"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
@@ -2569,6 +2682,8 @@ export function createPlatformPageController({
     state.navigation = [];
     state.operators = null;
     state.plans = null;
+    state.providerCatalog = null;
+    state.providerCatalogPublishIntent = null;
     state.billing = null;
     state.billingStatus = "";
     state.billingCursor = null;
