@@ -2,6 +2,11 @@
 
 from .distribution import ConfigSyncResult, GatewayConfigSynchronizer
 from .edge_desired_state import DesiredStateSyncResult, GatewayDesiredStateSynchronizer
+from .edge_licenses import (
+    GatewayLicenseSynchronizer,
+    LicenseSyncResult,
+    LicenseUsageSnapshot,
+)
 from .edge_upgrades import GatewayUpgradeSynchronizer, UpgradeSyncResult
 
 __all__ = [
@@ -9,6 +14,9 @@ __all__ = [
     "DesiredStateSyncResult",
     "GatewayConfigSynchronizer",
     "GatewayDesiredStateSynchronizer",
+    "GatewayLicenseSynchronizer",
     "GatewayUpgradeSynchronizer",
+    "LicenseSyncResult",
+    "LicenseUsageSnapshot",
     "UpgradeSyncResult",
 ]

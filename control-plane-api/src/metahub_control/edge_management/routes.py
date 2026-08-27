@@ -86,6 +86,25 @@ from .installer_service import (
     submit_platform_installer_release,
     update_workspace_installation,
 )
+from .license_models import (
+    AgentLicenseAcknowledgementRequest,
+    AgentLicenseAcknowledgementResponse,
+    AgentLicenseResponse,
+    LicenseListResponse,
+    LicenseResponse,
+    PlatformLicenseIssueRequest,
+    PlatformLicenseRevokeRequest,
+    WorkspaceLicenseRefreshRequest,
+)
+from .license_service import (
+    acknowledge_agent_license,
+    get_workspace_license,
+    issue_platform_license,
+    list_platform_licenses,
+    pull_agent_license,
+    refresh_workspace_license,
+    revoke_platform_license,
+)
 from .models import (
     EdgeAckCreateRequest,
     EdgeAckResponse,
@@ -924,6 +943,119 @@ async def post_edge_deployment_revoke(
 
 
 @router.get(
+    "/edge/licenses/{deployment_id}",
+    response_model=LicenseResponse,
+)
+async def get_edge_license(
+    deployment_id: str, request: Request, response: Response
+) -> LicenseResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        get_workspace_license,
+        request.app.state.config,
+        deployment_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.license.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/licenses/{license_id}/refresh",
+    response_model=LicenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_license_refresh(
+    license_id: str, request: Request, response: Response
+) -> LicenseResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge_license.request_invalid"),
+        WorkspaceLicenseRefreshRequest,
+        error_code="edge_license.request_invalid",
+    )
+    result = await _run(
+        refresh_workspace_license,
+        request.app.state.config,
+        license_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.license.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/license",
+    response_model=AgentLicenseResponse | None,
+)
+async def get_agent_license(
+    deployment_id: str, request: Request, response: Response
+) -> AgentLicenseResponse | None:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    result = await _run(
+        pull_agent_license,
+        request.app.state.config,
+        deployment_id,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result is None:
+        response.status_code = status.HTTP_204_NO_CONTENT
+        _edge_private(response)
+        return None
+    response.headers["ETag"] = f'"{result.entitlement.manifest_sha256}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/license/acks",
+    response_model=AgentLicenseAcknowledgementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_agent_license_acknowledgement(
+    deployment_id: str, request: Request, response: Response
+) -> AgentLicenseAcknowledgementResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _json_model(
+        await _strict_json(request, "edge_license.ack_invalid"),
+        AgentLicenseAcknowledgementRequest,
+        error_code="edge_license.ack_invalid",
+    )
+    result = await _run(
+        acknowledge_agent_license,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.get(
     "/edge/deployments/{deployment_id}/upgrade",
     response_model=WorkspaceUpgradeResponse,
 )
@@ -1394,6 +1526,120 @@ def require_platform_edge_upgrade(request: Request) -> PlatformContext:
     }.intersection(context.permissions):
         raise ApiError("platform.permission_denied")
     return context
+
+
+def require_platform_edge_license(request: Request) -> PlatformContext:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    context = authenticate_platform_session_context(
+        request.app.state.config,
+        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=csrf,
+    )
+    if not {
+        "platform.edge_license.read",
+        "platform.edge_license.issue",
+        "platform.edge_license.revoke",
+    }.intersection(context.permissions):
+        raise ApiError("platform.permission_denied")
+    return context
+
+
+@router.post(
+    "/edge/licenses",
+    response_model=LicenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_platform_edge_license(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_license)],
+) -> LicenseResponse:
+    _reject_query(request)
+    payload = _json_model(
+        await _strict_json(request, "edge_license.request_invalid"),
+        PlatformLicenseIssueRequest,
+        error_code="edge_license.request_invalid",
+    )
+    result = await _run(
+        issue_platform_license,
+        request.app.state.config,
+        context,
+        payload,
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_license.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.license.revision}"'
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/edge/licenses",
+    response_model=LicenseListResponse,
+)
+async def get_platform_edge_licenses(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_license)],
+) -> LicenseListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_licenses,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post(
+    "/edge/licenses/{license_id}/revoke",
+    response_model=LicenseResponse,
+)
+async def post_platform_edge_license_revoke(
+    license_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_license)],
+) -> LicenseResponse:
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge_license.request_invalid"),
+        PlatformLicenseRevokeRequest,
+        error_code="edge_license.request_invalid",
+    )
+    result = await _run(
+        revoke_platform_license,
+        request.app.state.config,
+        context,
+        license_id,
+        payload,
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_license.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.license.revision}"'
+    _private(response)
+    return result
 
 
 @router.get("/platform/releases", response_model=GatewayReleaseListResponse)

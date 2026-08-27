@@ -249,6 +249,18 @@ REQUIRED_DOCS = {
         "PRD-128",
         "0119",
     ),
+    ROOT / "docs/prd/PRD-128-private-gateway-license-capacity-offline-grace.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0120",
+    ),
+    ROOT / "docs/testing/PRD-128-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-129",
+        "0120",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -912,10 +924,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 119
+        and migration_versions[-1] == 120
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0119 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0120 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1046,6 +1058,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0119_edge_fleet_staged_upgrade_rollback.down.sql"
         ).is_file(),
         "PRD-127 owns reversible migration 0119 with guarded Fleet rollout rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0120_edge_license_capacity_offline_grace.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0120_edge_license_capacity_offline_grace.down.sql"
+        ).is_file(),
+        "PRD-128 owns reversible migration 0120 with guarded License rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

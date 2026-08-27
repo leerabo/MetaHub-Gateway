@@ -1,4 +1,4 @@
-/** PRD-120..126 installer, health, diagnostic, support, and security binding. */
+/** PRD-120..128 installer, license, health, support, and security binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -45,6 +45,11 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
     button.addEventListener("click", () => void callbacks.onTelemetryPolicy?.(
       button.dataset.deploymentId ?? "",
       button.dataset.level ?? "",
+    ));
+  });
+  root.querySelectorAll("[data-private-gateway-license-refresh]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onLicenseRefresh?.(
+      button.dataset.privateGatewayLicenseRefresh ?? "",
     ));
   });
   root.querySelectorAll("[data-private-gateway-maintenance]").forEach((form) => {

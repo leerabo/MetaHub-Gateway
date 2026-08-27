@@ -1160,6 +1160,9 @@ def _visible_navigation_items(
         "edge.rollback.manage",
         "edge.upgrade.manage",
         "edge.upgrade.read",
+        "edge.license.import",
+        "edge.license.read",
+        "edge.license.refresh",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

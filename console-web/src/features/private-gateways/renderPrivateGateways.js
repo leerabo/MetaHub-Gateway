@@ -1,4 +1,4 @@
-/** PRD-120..126 safe Edge identity, health, diagnostics, and lifecycle views. */
+/** PRD-120..128 safe Edge identity, license, health, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 import {
@@ -236,6 +236,7 @@ function renderDeployment(item, state, owner) {
         ${fact("证书状态", certificate ? certificateStatusLabel(certificate.status) : "未签发")}
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
+      ${renderLicense(item, state, owner)}
       ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderUpgrade(item, state, owner)}
@@ -252,6 +253,65 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderLicense(deployment, state, owner) {
+  if (!owner.canReadLicenses) return "";
+  const license = state.licenseStates?.[deployment.deployment_id] ?? null;
+  if (!license) {
+    return `<section class="private-gateway-license" aria-label="License 容量">
+      <header><div><h5>License 容量</h5><small>尚未签发</small></div><span class="private-gateway-state-status tone-not_observed">待签发</span></header>
+    </section>`;
+  }
+  const phase = licensePhase(license);
+  const usage = license.latest_usage;
+  const acknowledgement = license.last_acknowledgement;
+  const active = deployment.status === "active" && license.status === "active";
+  return `<section class="private-gateway-license" aria-label="License 容量、用量与宽限">
+    <header>
+      <div><h5>License 容量</h5><small>generation ${integer(license.generation)} · revision ${integer(license.revision)}</small></div>
+      <span class="private-gateway-state-status tone-${escapeAttribute(phase.tone)}">${escapeHtml(phase.label)}</span>
+    </header>
+    <dl class="private-gateway-license-facts">
+      ${fact("节点", `${integer(usage?.active_node_units ?? 0)} / ${integer(license.capacity.node_limit)}`)}
+      ${fact("并发请求", `${integer(usage?.active_request_units ?? 0)} / ${integer(license.capacity.concurrent_request_limit)}`)}
+      ${fact("拒绝数", integer(usage?.denied_count ?? 0))}
+      ${fact("到期", formatTime(license.expires_at))}
+      ${fact("宽限结束", formatTime(license.grace_ends_at))}
+      ${fact("最近 ACK", acknowledgement ? `${acknowledgement.disposition} · ${acknowledgement.decision_status}` : "未确认")}
+      ${fact("用量窗口", usage ? formatTime(usage.bucket_ended_at) : "未上报")}
+      ${fact("功能", license.capacity.features.length ? license.capacity.features.map(licenseFeatureLabel).join(" / ") : "基础")}
+    </dl>
+    <div class="private-gateway-license-actions">
+      ${owner.canRefreshLicenses && active ? `<button type="button" data-private-gateway-license-refresh="${escapeAttribute(deployment.deployment_id)}"${state.licenseBusy || state.busy ? " disabled" : ""}>在线刷新</button>` : ""}
+      ${active ? '<a href="#plans">扩容</a>' : ""}
+    </div>
+  </section>`;
+}
+
+function licensePhase(license) {
+  if (license.status === "revoked") return Object.freeze({ tone: "failed", label: "已吊销" });
+  const now = Date.now();
+  if (now < Date.parse(license.not_before)) {
+    return Object.freeze({ tone: "pending", label: "尚未生效" });
+  }
+  if (now <= Date.parse(license.expires_at)) {
+    return Object.freeze({ tone: "applied", label: "有效" });
+  }
+  if (now <= Date.parse(license.grace_ends_at)) {
+    return Object.freeze({ tone: "pending", label: "宽限中" });
+  }
+  return Object.freeze({ tone: "failed", label: "受限" });
+}
+
+function licenseFeatureLabel(value) {
+  return ({
+    advanced_routing: "高级路由",
+    audit_export: "审计导出",
+    diagnostic_support: "诊断支持",
+    policy_enforcement: "策略执行",
+    telemetry_export: "遥测导出",
+  })[value] ?? "未知";
 }
 
 function renderUpgrade(deployment, state, owner) {

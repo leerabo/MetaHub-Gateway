@@ -50,7 +50,7 @@ export function renderPlatformWorkspace(container, state) {
   const permissions = new Set(context?.permissions ?? []);
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent)
+      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent || state.edgeLicenseIntent)
   );
   container.innerHTML = `
     <div class="platform-shell">
@@ -81,6 +81,7 @@ function renderView(state, permissions) {
   if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "edge-fleet") return edgeFleetView(state, permissions);
   if (state.view === "edge-upgrades") return edgeUpgradesView(state, permissions);
+  if (state.view === "edge-licenses") return edgeLicensesView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1466,6 +1467,64 @@ function gatewayView(state, permissions) {
     </section>
     ${permissions.has("platform.gateway.manage") ? gatewayPlacementForm(active) : ""}
     ${placement ? gatewayPlacementResult(placement) : ""}`;
+}
+
+function edgeLicensesView(state, permissions) {
+  const licenses = state.edgeLicenses?.licenses ?? [];
+  const canIssue = permissions.has("platform.edge_license.issue");
+  const canRevoke = permissions.has("platform.edge_license.revoke");
+  const disabled = state.loading ? " disabled" : "";
+  return `
+    <header class="platform-page-heading">
+      <div><p>Commercial capacity</p><h1>Gateway licenses</h1></div>
+      <button type="button" class="platform-icon-button" data-platform-action="edge-licenses-refresh" title="刷新 License" aria-label="刷新 License"${disabled}>↻</button>
+    </header>
+    ${canIssue ? `<section class="platform-band platform-edge-license-issue">
+      <div class="platform-section-heading"><div><p>Issue or expand</p><h2>签发与扩容</h2></div><span>${state.edgeLicenseIntent ? "正在提交" : "Billing"}</span></div>
+      <form data-platform-edge-license-issue-form autocomplete="off">
+        <label><span>Deployment ID</span><input name="deploymentId" pattern="edp_[0-9a-f]{32}" maxlength="36" required${disabled}></label>
+        <label><span>节点上限</span><input name="nodeLimit" type="number" min="1" max="100000" value="3" required${disabled}></label>
+        <label><span>并发请求上限</span><input name="concurrentRequestLimit" type="number" min="1" max="10000000" value="100" required${disabled}></label>
+        <label><span>到期时间</span><input name="expiresAt" type="datetime-local" value="${escapeAttribute(defaultLicenseExpiry())}" required${disabled}></label>
+        <label><span>宽限天数</span><input name="graceDays" type="number" min="7" max="30" value="7" required${disabled}></label>
+        <label><span>当前 revision</span><input name="expectedRevision" type="number" min="1" placeholder="首次签发留空"${disabled}></label>
+        <label><span>正式订单 ID</span><input name="sourceOrderId" pattern="ord_[0-9a-f]{32}" maxlength="36" placeholder="无付款要求时留空"${disabled}></label>
+        <label><span>原因</span><select name="reasonCode" required${disabled}><option value="commercial_activation">商业激活</option><option value="capacity_expansion">容量扩展</option><option value="renewal">续期</option></select></label>
+        <fieldset><legend>功能</legend>
+          ${[["advanced_routing", "高级路由"], ["audit_export", "审计导出"], ["diagnostic_support", "诊断支持"], ["policy_enforcement", "策略执行"], ["telemetry_export", "遥测导出"]].map(([code, label]) => `<label><input type="checkbox" name="features" value="${code}"${disabled}><span>${label}</span></label>`).join("")}
+        </fieldset>
+        <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>确认商业依据、容量和有效期</span></label>
+        <button class="platform-primary" type="submit"${disabled}>签发或扩容</button>
+      </form>
+    </section>` : ""}
+    <section class="platform-band platform-edge-licenses">
+      <div class="platform-section-heading"><div><p>Safe summaries</p><h2>License 清单</h2></div><span>${number(licenses.length)} 项</span></div>
+      ${licenses.length ? `<div class="platform-table-wrap"><table class="platform-edge-license-table"><thead><tr><th>Deployment</th><th>状态</th><th>容量 / 用量</th><th>有效期 / 宽限</th><th>ACK</th><th>操作</th></tr></thead><tbody>${licenses.map((license) => edgeLicenseRow(license, canRevoke, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">尚无 Gateway License</div>'}
+    </section>`;
+}
+
+function edgeLicenseRow(license, canRevoke, loading) {
+  const usage = license.latest_usage;
+  const ack = license.last_acknowledgement;
+  const active = license.status === "active";
+  return `<tr>
+    <td data-label="Deployment"><strong>${escapeHtml(shortReference(license.deployment_id))}</strong><small>generation ${number(license.generation)} · r${number(license.revision)}</small></td>
+    <td data-label="状态"><span class="platform-status tone-${active ? "healthy" : "critical"}">${active ? "有效" : "已吊销"}</span><small>${escapeHtml(license.revoked_reason_code ?? "-")}</small></td>
+    <td data-label="容量 / 用量"><strong>${number(usage?.active_node_units ?? 0)} / ${number(license.capacity.node_limit)} 节点</strong><small>${number(usage?.active_request_units ?? 0)} / ${number(license.capacity.concurrent_request_limit)} 并发 · 拒绝 ${number(usage?.denied_count ?? 0)}</small></td>
+    <td data-label="有效期 / 宽限"><strong>${formatTime(license.expires_at)}</strong><small>${formatTime(license.grace_ends_at)}</small></td>
+    <td data-label="ACK"><strong>${ack ? escapeHtml(ack.decision_status) : "未确认"}</strong><small>${ack ? formatTime(ack.acknowledged_at) : "-"}</small></td>
+    <td data-label="操作">${canRevoke && active ? `<form data-platform-edge-license-revoke-form autocomplete="off">
+      <input type="hidden" name="licenseId" value="${escapeAttribute(license.license_id)}">
+      <input type="hidden" name="expectedRevision" value="${number(license.revision)}">
+      <label><span>原因</span><select name="reasonCode"${loading ? " disabled" : ""}><option value="security_revocation">安全吊销</option><option value="commercial_termination">商业终止</option><option value="deployment_retired">Deployment 退役</option></select></label>
+      <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${loading ? " disabled" : ""}><span>确认立即吊销</span></label>
+      <button class="platform-danger" type="submit"${loading ? " disabled" : ""}>吊销</button>
+    </form>` : "-"}</td>
+  </tr>`;
+}
+
+function defaultLicenseExpiry() {
+  return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
 }
 
 function edgeUpgradesView(state, permissions) {

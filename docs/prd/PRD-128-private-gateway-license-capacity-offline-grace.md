@@ -1,6 +1,6 @@
 # PRD-128 私有 Gateway License、容量与离线宽限
 
-状态：设计冻结，尚未编码；计划迁移 0120。依赖 PRD-098/103/120/127，范围以 Excel PRD-128 为准。
+状态：已完成；迁移 0120、Control/Agent API、Shared SDK、Gateway 同步、CLI 与双域 Console 已交付。依赖 PRD-098/103/120/127，范围以 Excel PRD-128 为准。
 
 ## Excel 权威合同
 
@@ -40,6 +40,14 @@ platform_billing 可签发但不能读取 tenant 内容；tenant owner/finance_a
 
 两轮均为修正后通过，无未关闭 P0/P1。
 
-## 6. 专项验证计划
+## 6. 专项验证结果
 
-0120 迁移；错误签名/owner/hash/乱序/复制；在线刷新和离线导入；7 天宽限、过期、明确吊销、时钟回拨；并发容量 lease/原子扩容；License 不授予数据访问；三浏览器容量/提醒；2ms/1s SLO；manifest、日志、DB、CLI 敏感扫描和静止终态。
+0120 往返迁移和业务 down guard、错误签名/owner/hash/乱序/复制、在线刷新和离线导入、7 天宽限/过期/明确吊销/时钟回拨、并发容量 lease/原子扩容、Agent ACK/Usage bucket 幂等、License 不授予数据访问、本地热路径 2ms SLO、Workspace/Platform Console、CLI verify-before-apply 均由专项自动化覆盖。真实多浏览器、在线刷新 1s 网络 SLO、跨平台断网和批次安全/性能门禁留到 PRD-130 后统一执行 G5。
+
+## 7. 实施闭环
+
+- 0120 新增不可变 License head、SignedEntitlement、容量 grant/lease、Agent ACK/Usage 报告、审计/outbox，以及 Workspace/Platform 分域权限和受业务事实保护的 down migration。
+- Control API 支持平台签发/扩容/吊销和 Workspace 安全摘要/在线刷新；Agent 只拉取自身 Deployment 的签名 entitlement 并上报 ACK 与容量桶。DTO、ETag、幂等键、owner 和 no-store 均失败关闭。
+- Shared SDK 使用独立 Ed25519 purpose、canonical envelope、原子 LKG、单调 generation/可信时钟 checkpoint 和并发容量 lease；Gateway 在线同步不把 entitlement claim 转换为 RBAC。
+- `metahub license import` 从 stdin 或私有文件验签后再原子应用，不回显签名或包正文。Workspace Console 显示容量、使用量、拒绝数、到期/宽限和 ACK，Platform Console 提供独立签发/扩容/吊销工作台。
+- 实施自审修正了不存在的 `platform_auditor` 角色、Workspace 导航扩展权限白名单和 ACK 后新增 Usage bucket 的幂等回归；两轮修正后无未关闭 P0/P1。

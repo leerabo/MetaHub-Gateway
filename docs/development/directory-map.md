@@ -2474,6 +2474,22 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   自审、0119/API/Shared/Gateway/Console、移动视口浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-128，
   G5 在 PRD-130 后统一执行。
 
+## PRD-128 私有 Gateway License、容量与离线宽限（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/licenses.py`：用途分域 Ed25519 entitlement、exact owner/hash、
+  单调 generation、可信时钟/LKG、宽限与明确吊销，以及线程安全容量 lease。
+- `gateway-data-plane/src/metahub_gateway/config/edge_licenses.py` 与 Installer CLI：Agent 在线拉取/ACK/Usage bucket，
+  离线包从 stdin 或私有文件 verify-before-apply，错误只返回固定码且不回显签名正文。
+- `control-plane-api/src/metahub_control/edge_management/license_models.py`、`license_service.py` 与 routes：Platform
+  签发/扩容/吊销、Workspace 安全摘要/在线刷新、Agent entitlement/ACK/lease report 和严格分域授权。
+- `infra/migrations/0120_edge_license_capacity_offline_grace.sql/.down.sql`：License head、不可变 entitlement、容量 grant/
+  lease、ACK/Usage report、审计/outbox、Workspace/Platform 权限、不变触发器、复合 owner 和业务 down guard。
+- `console-web/src/lib/edgeLicenses.js`、Private Gateway 与 Platform 页面：严格双域 client/DTO/store、容量/到期/宽限/
+  ACK 展示、在线刷新、扩容入口及平台签发/吊销，拒绝 claims、签名、公钥或 envelope 进入 DOM/Storage。
+- `docs/prd/PRD-128-private-gateway-license-capacity-offline-grace.md` 与 `docs/testing/PRD-128-tests.md`：保存两轮实施
+  自审、0120/API/Shared/Gateway/CLI/Console、浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-129，
+  G5 在 PRD-130 后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

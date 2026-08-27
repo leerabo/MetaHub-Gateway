@@ -60,6 +60,12 @@ EDGE_UPGRADE_WORKSPACE_ROLE_PERMISSIONS = {
     "security_admin": ("edge.upgrade.read",),
     "auditor": ("edge.upgrade.read",),
 }
+EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": ("edge.license.import", "edge.license.read", "edge.license.refresh"),
+    "admin": ("edge.license.read", "edge.license.refresh"),
+    "finance_admin": ("edge.license.read",),
+    "auditor": ("edge.license.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -95,6 +101,23 @@ EDGE_UPGRADE_PLATFORM_ROLE_PERMISSIONS = {
         "platform.edge_release.manage",
         "platform.edge_release.read",
         "platform.edge_rollout.read",
+    ),
+}
+EDGE_LICENSE_PLATFORM_ROLE_PERMISSIONS = {
+    "platform_owner": (
+        "platform.edge_license.issue",
+        "platform.edge_license.read",
+        "platform.edge_license.revoke",
+    ),
+    "platform_ops": ("platform.edge_license.read",),
+    "platform_security": (
+        "platform.edge_license.read",
+        "platform.edge_license.revoke",
+    ),
+    "platform_billing": (
+        "platform.edge_license.issue",
+        "platform.edge_license.read",
+        "platform.edge_license.revoke",
     ),
 }
 
@@ -240,6 +263,17 @@ def load_verified_workspace_edge_permissions(
             unavailable_error_code=unavailable_error_code,
         )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_license_permission_extensions",
+            assignments_table="workspace_edge_license_role_permissions",
+            introduced_migration="0120",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
     return tuple(sorted(permissions))
 
 
@@ -259,6 +293,17 @@ def load_verified_platform_edge_permissions(
                 catalog_table="platform_edge_permission_extensions",
                 assignments_table="platform_edge_role_permissions",
                 introduced_migration="0112",
+                unavailable_error_code=unavailable_error_code,
+            )
+        )
+        permissions.update(
+            _load_verified_permissions(
+                connection,
+                role_code=role_code,
+                expected_by_role=EDGE_LICENSE_PLATFORM_ROLE_PERMISSIONS,
+                catalog_table="platform_edge_license_permission_extensions",
+                assignments_table="platform_edge_license_role_permissions",
+                introduced_migration="0120",
                 unavailable_error_code=unavailable_error_code,
             )
         )
@@ -364,6 +409,8 @@ __all__ = (
     "EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS",
+    "EDGE_LICENSE_PLATFORM_ROLE_PERMISSIONS",
+    "EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS",

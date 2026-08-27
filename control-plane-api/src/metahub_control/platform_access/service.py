@@ -114,6 +114,12 @@ _NAVIGATION = (
         "/platform.html#edge-upgrades",
     ),
     (
+        "platform.edge_license.read",
+        "edge-licenses",
+        "Gateway licenses",
+        "/platform.html#edge-licenses",
+    ),
+    (
         "platform.job.read",
         "job-runtime",
         "Job runtime",

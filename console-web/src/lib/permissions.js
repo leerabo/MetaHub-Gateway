@@ -109,6 +109,10 @@ export const PERMISSIONS = Object.freeze({
   EDGE_UPGRADE_READ: "edge.upgrade.read",
   EDGE_UPGRADE_MANAGE: "edge.upgrade.manage",
   EDGE_ROLLBACK_MANAGE: "edge.rollback.manage",
+  // PRD-128 License 只控制容量和商业功能；不得参与 RBAC 或推导数据访问权限。
+  EDGE_LICENSE_READ: "edge.license.read",
+  EDGE_LICENSE_REFRESH: "edge.license.refresh",
+  EDGE_LICENSE_IMPORT: "edge.license.import",
   // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
   EDGE_TELEMETRY_READ: "edge.telemetry.read",
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",

@@ -1,4 +1,4 @@
-/** PRD-120..126 owner-bound Edge identity, health, diagnostics, and lifecycle state. */
+/** PRD-120..128 owner-bound Edge identity, license, health, and lifecycle state. */
 
 import {
   authorizationFingerprint,
@@ -58,6 +58,18 @@ const ERROR_MESSAGES = Object.freeze({
   "edge_upgrade.unavailable": "升级服务暂不可用",
   "edge_upgrade.network_unavailable": "升级服务暂不可达",
   "edge_upgrade.request_failed": "升级请求未完成",
+  "edge_license.permission_denied": "当前成员没有 License 权限",
+  "edge_license.request_invalid": "License 请求字段不合法",
+  "edge_license.response_invalid": "License 响应合同不完整",
+  "edge_license.not_found": "当前 Deployment 尚未签发 License",
+  "edge_license.revoked": "License 已被明确吊销，不能在线刷新",
+  "edge_license.revision_conflict": "License 已变化，请刷新后重试",
+  "edge_license.idempotency_conflict": "该操作标识已用于另一 License 意图",
+  "edge_license.integrity_failed": "License 完整性校验失败",
+  "edge_license.state_conflict": "License 状态已变化，请刷新后重试",
+  "edge_license.unavailable": "License 服务暂不可用",
+  "edge_license.network_unavailable": "License 服务暂不可达",
+  "edge_license.request_failed": "License 请求未完成",
   "edge.installer_not_found": "安装介质已下架或不可用",
   "edge.installer_integrity_failed": "安装介质完整性校验失败",
   "edge.preflight_invalid": "预检报告无效",
@@ -187,6 +199,12 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_UPGRADE_MANAGE) : "";
   const rollbackManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_ROLLBACK_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_ROLLBACK_MANAGE) : "";
+  const licenseReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_LICENSE_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_LICENSE_READ) : "";
+  const licenseRefreshIdentity = hasPermission(authContext, PERMISSIONS.EDGE_LICENSE_REFRESH)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_LICENSE_REFRESH) : "";
+  const licenseImportIdentity = hasPermission(authContext, PERMISSIONS.EDGE_LICENSE_IMPORT)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_LICENSE_IMPORT) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -234,6 +252,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     upgradeReadIdentity,
     upgradeManageIdentity,
     rollbackManageIdentity,
+    licenseReadIdentity,
+    licenseRefreshIdentity,
+    licenseImportIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -262,6 +283,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canReadUpgrades: Boolean(upgradeReadIdentity),
     canManageUpgrades: Boolean(upgradeReadIdentity && upgradeManageIdentity),
     canRollbackUpgrades: Boolean(upgradeReadIdentity && rollbackManageIdentity),
+    canReadLicenses: Boolean(licenseReadIdentity),
+    canRefreshLicenses: Boolean(licenseReadIdentity && licenseRefreshIdentity),
+    canImportLicenses: Boolean(licenseReadIdentity && licenseImportIdentity),
   });
 }
 
@@ -283,6 +307,7 @@ export function createPrivateGatewayPageState({
   let supportBundleStates = Object.freeze({});
   let healthStates = Object.freeze({});
   let upgradeStates = Object.freeze({});
+  let licenseStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
@@ -310,17 +335,22 @@ export function createPrivateGatewayPageState({
   let canReadUpgrades = false;
   let canManageUpgrades = false;
   let canRollbackUpgrades = false;
+  let canReadLicenses = false;
+  let canRefreshLicenses = false;
+  let canImportLicenses = false;
   let maintenanceIntent = null;
   let rollbackUpgradeIntent = null;
+  let licenseRefreshIntent = null;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
     localSession: 0, secret: 0, validation: 0, acceptance: 0, supportBundle: 0,
-    diagnostic: 0, maintenance: 0, rollbackUpgrade: 0,
+    diagnostic: 0, maintenance: 0, rollbackUpgrade: 0, refreshLicense: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
     localSession: null, secret: null, validation: null, acceptance: null,
     supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
+    refreshLicense: null,
   };
 
   function enter(owner) {
@@ -351,6 +381,9 @@ export function createPrivateGatewayPageState({
     canReadUpgrades = owner.canReadUpgrades === true;
     canManageUpgrades = owner.canManageUpgrades === true && canReadUpgrades;
     canRollbackUpgrades = owner.canRollbackUpgrades === true && canReadUpgrades;
+    canReadLicenses = owner.canReadLicenses === true;
+    canRefreshLicenses = owner.canRefreshLicenses === true && canReadLicenses;
+    canImportLicenses = owner.canImportLicenses === true && canReadLicenses;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -362,6 +395,7 @@ export function createPrivateGatewayPageState({
     if (!canReadHealth) healthStates = Object.freeze({});
     if (!canApproveDiagnostics) diagnosticDialog = closedDiagnosticDialog();
     if (!canReadUpgrades) upgradeStates = Object.freeze({});
+    if (!canReadLicenses) licenseStates = Object.freeze({});
     return true;
   }
 
@@ -382,6 +416,7 @@ export function createPrivateGatewayPageState({
     supportBundleStates = Object.freeze({});
     healthStates = Object.freeze({});
     upgradeStates = Object.freeze({});
+    licenseStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
@@ -409,12 +444,17 @@ export function createPrivateGatewayPageState({
     canReadUpgrades = false;
     canManageUpgrades = false;
     canRollbackUpgrades = false;
+    canReadLicenses = false;
+    canRefreshLicenses = false;
+    canImportLicenses = false;
     maintenanceIntent = null;
     rollbackUpgradeIntent = null;
+    licenseRefreshIntent = null;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
       localSession: null, secret: null, validation: null, acceptance: null,
       supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
+      refreshLicense: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
@@ -457,6 +497,7 @@ export function createPrivateGatewayPageState({
     installerResponse = null,
     healthResponses = [],
     upgradeResponses = [],
+    licenseResponses = [],
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -478,7 +519,8 @@ export function createPrivateGatewayPageState({
         canReadHealth,
         canReadDiagnostics,
       )
-      || !validUpgradeResponses(upgradeResponses, response.deployments, canReadUpgrades)) {
+      || !validUpgradeResponses(upgradeResponses, response.deployments, canReadUpgrades)
+      || !validLicenseResponses(licenseResponses, response.deployments, canReadLicenses)) {
       return false;
     }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
@@ -507,6 +549,9 @@ export function createPrivateGatewayPageState({
       : Object.freeze({});
     upgradeStates = canReadUpgrades
       ? upgradeStateMap(response.deployments, upgradeResponses)
+      : Object.freeze({});
+    licenseStates = canReadLicenses
+      ? licenseStateMap(response.deployments, licenseResponses)
       : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
@@ -904,6 +949,65 @@ export function createPrivateGatewayPageState({
 
   function finishMaintenance(operation) {
     if (operations.maintenance === operation) operations.maintenance = null;
+  }
+
+  function beginLicenseRefresh(owner, deploymentId, candidateIdempotencyKey = "") {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const license = licenseStates[deploymentId] ?? null;
+    if (!owns(owner) || !canRefreshLicenses || !deployment || deployment.status !== "active"
+      || !license || license.status !== "active" || busy()) return null;
+    const fingerprint = JSON.stringify({
+      deploymentId,
+      licenseId: license.license_id,
+      expectedRevision: license.revision,
+      reasonCode: "online_refresh",
+    });
+    const idempotencyKey = licenseRefreshIntent?.fingerprint === fingerprint
+      ? licenseRefreshIntent.idempotencyKey : String(candidateIdempotencyKey ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u.test(idempotencyKey)) return null;
+    licenseRefreshIntent = Object.freeze({ fingerprint, idempotencyKey });
+    generations.refreshLicense += 1;
+    const operation = ticket("refreshLicense", {
+      controller: new AbortController(),
+      deploymentId,
+      licenseId: license.license_id,
+      expectedRevision: license.revision,
+      reasonCode: "online_refresh",
+      idempotencyKey,
+    });
+    operations.refreshLicense = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptLicenseRefresh(operation, response, owner) {
+    const license = response?.license;
+    if (!current("refreshLicense", operation, owner)
+      || license?.license_id !== operation.licenseId
+      || license.deployment_id !== operation.deploymentId
+      || license.status !== "active"
+      || !Number.isSafeInteger(license.revision)
+      || license.revision <= operation.expectedRevision) return false;
+    licenseStates = Object.freeze({ ...licenseStates, [operation.deploymentId]: license });
+    licenseRefreshIntent = null;
+    feedback = Object.freeze({
+      kind: "success",
+      code: response.idempotent_replay
+        ? "edge_license.refresh_replayed" : "edge_license.refresh_completed",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectLicenseRefresh(operation, error, owner) {
+    if (!current("refreshLicense", operation, owner)) return false;
+    if (![0, 503].includes(Number(error?.status ?? -1))) licenseRefreshIntent = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishLicenseRefresh(operation) {
+    if (operations.refreshLicense === operation) operations.refreshLicense = null;
   }
 
   function beginUpgradeRollback(
@@ -1529,7 +1633,7 @@ export function createPrivateGatewayPageState({
         || operations.command || operations.policy || operations.localSession
         || operations.secret || operations.validation || operations.acceptance
         || operations.supportBundle || operations.diagnostic || operations.maintenance
-        || operations.rollbackUpgrade);
+        || operations.rollbackUpgrade || operations.refreshLicense);
   }
 
   function snapshot() {
@@ -1546,6 +1650,7 @@ export function createPrivateGatewayPageState({
       supportBundleStates,
       healthStates,
       upgradeStates,
+      licenseStates,
       dialog,
       stateDialog,
       registration,
@@ -1573,6 +1678,9 @@ export function createPrivateGatewayPageState({
       canReadUpgrades,
       canManageUpgrades,
       canRollbackUpgrades,
+      canReadLicenses,
+      canRefreshLicenses,
+      canImportLicenses,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -1581,6 +1689,7 @@ export function createPrivateGatewayPageState({
       supportBundleBusy: Boolean(operations.supportBundle),
       diagnosticBusy: Boolean(operations.diagnostic),
       upgradeBusy: Boolean(operations.maintenance || operations.rollbackUpgrade),
+      licenseBusy: Boolean(operations.refreshLicense),
     });
   }
 
@@ -1602,7 +1711,7 @@ export function createPrivateGatewayPageState({
       || operations.command || operations.policy || operations.localSession
       || operations.secret || operations.validation || operations.acceptance
       || operations.supportBundle || operations.diagnostic || operations.maintenance
-      || operations.rollbackUpgrade);
+      || operations.rollbackUpgrade || operations.refreshLicense);
   }
 
   function sessionActive(deploymentId) {
@@ -1627,6 +1736,7 @@ export function createPrivateGatewayPageState({
     beginTelemetryPolicy, acceptTelemetryPolicy, rejectTelemetryPolicy,
     finishTelemetryPolicy,
     beginMaintenance, acceptMaintenance, rejectMaintenance, finishMaintenance,
+    beginLicenseRefresh, acceptLicenseRefresh, rejectLicenseRefresh, finishLicenseRefresh,
     beginUpgradeRollback, isUpgradeRollbackCurrent, acceptUpgradeRollback,
     rejectUpgradeRollback, finishUpgradeRollback,
     beginValidation, acceptValidation, rejectValidation, finishValidation,
@@ -1658,6 +1768,7 @@ function ownerKeyFor(owner) {
     owner.healthReadIdentity, owner.diagnosticReadIdentity,
     owner.diagnosticApproveIdentity,
     owner.upgradeReadIdentity, owner.upgradeManageIdentity, owner.rollbackManageIdentity,
+    owner.licenseReadIdentity, owner.licenseRefreshIdentity, owner.licenseImportIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -1733,6 +1844,36 @@ function upgradeStateMap(deployments, responses) {
   return Object.freeze(Object.fromEntries(responses.filter(
     (entry) => expected.has(entry.deploymentId),
   ).map((entry) => [entry.deploymentId, entry.response])));
+}
+
+function validLicenseResponses(responses, deployments, required) {
+  if (!required) return Array.isArray(responses) && responses.length === 0;
+  if (!Array.isArray(responses) || responses.length !== deployments.length) return false;
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((entry) => {
+    const deploymentId = String(entry?.deploymentId ?? "");
+    const license = entry?.response?.license ?? null;
+    if (!expected.has(deploymentId) || seen.has(deploymentId)) return false;
+    seen.add(deploymentId);
+    return license === null || (
+      license.deployment_id === deploymentId
+      && /^lic_[0-9a-f]{32}$/u.test(String(license.license_id ?? ""))
+      && ["active", "revoked"].includes(license.status)
+      && Number.isSafeInteger(license.revision) && license.revision > 0
+      && Number.isSafeInteger(license.generation) && license.generation > 0
+      && Number.isSafeInteger(license.capacity?.node_limit)
+      && Number.isSafeInteger(license.capacity?.concurrent_request_limit)
+      && Array.isArray(license.capacity?.features)
+    );
+  });
+}
+
+function licenseStateMap(deployments, responses) {
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return Object.freeze(Object.fromEntries(responses.filter(
+    (entry) => expected.has(entry.deploymentId),
+  ).map((entry) => [entry.deploymentId, entry.response?.license ?? null])));
 }
 
 function validValidationResponse(response, deploymentId) {

@@ -11,15 +11,19 @@ import re
 import stat
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
 from metahub_shared.config_distribution import canonical_json_bytes
 from metahub_shared.private_gateway import (
+    EdgeLicenseStore,
     InstallerContractError,
+    LicenseContractError,
     PreflightReport,
     load_strict_json,
     verify_installer_release,
+    verify_license_entitlement,
 )
 
 from .runtime import (
@@ -78,6 +82,21 @@ def _build_parser() -> _SafeArgumentParser:
     connect.add_argument("--registration-input")
     connect.add_argument("--agent-version", default="1.0.0")
 
+    license_command = commands.add_parser("license")
+    license_actions = license_command.add_subparsers(
+        dest="license_action", required=True, parser_class=_SafeArgumentParser
+    )
+    license_import = license_actions.add_parser("import")
+    source = license_import.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input")
+    source.add_argument("--stdin", action="store_true", dest="input_stdin")
+    license_import.add_argument("--trust-store", required=True)
+    license_import.add_argument("--state-root", required=True)
+    license_import.add_argument("--workspace-id", required=True)
+    license_import.add_argument("--tenant-id", required=True)
+    license_import.add_argument("--deployment-id", required=True)
+    license_import.add_argument("--device-generation", type=int, required=True)
+
     uninstall = commands.add_parser("uninstall")
     uninstall.add_argument("--target-root", default="/opt/metahub")
     uninstall.add_argument("--installation-id", required=True)
@@ -121,6 +140,8 @@ def run_cli(
     command_runner = runner or SubprocessCommandRunner()
     try:
         arguments = _build_parser().parse_args(list(argv) if argv is not None else None)
+        if arguments.command == "license":
+            return _import_license(arguments, input_stream, output_stream)
         if arguments.command in {"preflight", "install"}:
             verified = _verified_release(arguments)
         if arguments.command == "preflight":
@@ -214,6 +235,9 @@ def run_cli(
     except InstallerContractError as failure:
         _emit(error_stream, {"status": "error", "code": failure.code})
         return 4
+    except LicenseContractError as failure:
+        _emit(error_stream, {"status": "error", "code": failure.code})
+        return 4
     except InstallerRuntimeError as failure:
         _emit(error_stream, {"status": "error", "code": failure.code})
         return 5
@@ -235,12 +259,36 @@ def _verified_release(arguments: argparse.Namespace):
 
 
 def _trusted_keys(path: Path) -> dict[str, bytes]:
-    value = load_strict_json(path, maximum_bytes=64 * 1024)
+    return _purpose_trusted_keys(
+        path,
+        schema_version="metahub.installer-trust/v1",
+        purpose="metahub.edge-installer.release/v1",
+        error_code="installer.trust_store_invalid",
+    )
+
+
+def _license_trusted_keys(path: Path) -> dict[str, bytes]:
+    return _purpose_trusted_keys(
+        path,
+        schema_version="metahub.edge-license-trust/v1",
+        purpose="metahub.edge-license.entitlement/v1",
+        error_code="edge_license.trust_store_invalid",
+    )
+
+
+def _purpose_trusted_keys(
+    path: Path,
+    *,
+    schema_version: str,
+    purpose: str,
+    error_code: str,
+) -> dict[str, bytes]:
     try:
+        value = load_strict_json(path, maximum_bytes=64 * 1024)
         if type(value) is not dict or set(value) != {"schema_version", "keys"}:
             raise ValueError
         if (
-            value["schema_version"] != "metahub.installer-trust/v1"
+            value["schema_version"] != schema_version
             or type(value["keys"]) is not list
         ):
             raise ValueError
@@ -250,7 +298,7 @@ def _trusted_keys(path: Path) -> dict[str, bytes]:
                 type(item) is not dict
                 or set(item) != {"key_id", "algorithm", "public_key", "purpose", "status"}
                 or item["algorithm"] != "Ed25519"
-                or item["purpose"] != "metahub.edge-installer.release/v1"
+                or item["purpose"] != purpose
                 or item["status"] != "active"
                 or type(item["key_id"]) is not str
                 or item["key_id"] in result
@@ -269,8 +317,55 @@ def _trusted_keys(path: Path) -> dict[str, bytes]:
         if not result:
             raise ValueError
         return result
-    except (KeyError, TypeError, ValueError):
-        raise CliFailure("installer.trust_store_invalid", 4) from None
+    except (InstallerContractError, KeyError, TypeError, ValueError):
+        raise CliFailure(error_code, 4) from None
+
+
+def _import_license(
+    arguments: argparse.Namespace,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> int:
+    document = (
+        _read_stdin_json(input_stream)
+        if arguments.input_stdin
+        else _read_private_json(Path(arguments.input))
+    )
+    trusted_keys = _license_trusted_keys(Path(arguments.trust_store))
+    verified = verify_license_entitlement(document, trusted_keys=trusted_keys)
+    entitlement = verified.signed.entitlement
+    if (
+        entitlement.workspace_id != arguments.workspace_id
+        or entitlement.tenant_id != arguments.tenant_id
+        or entitlement.deployment_id != arguments.deployment_id
+        or entitlement.device_generation != _generation(arguments.device_generation)
+    ):
+        raise LicenseContractError("edge_license.owner_mismatch")
+    store = EdgeLicenseStore(
+        Path(arguments.state_root),
+        workspace_id=arguments.workspace_id,
+        tenant_id=arguments.tenant_id,
+        deployment_id=arguments.deployment_id,
+        device_generation=arguments.device_generation,
+        trusted_keys=trusted_keys,
+    )
+    now = datetime.now(UTC)
+    changed = store.apply(document, now=now)
+    decision = store.decision(now=now)
+    _emit(
+        output_stream,
+        {
+            "status": "applied" if changed else "not_modified",
+            "license_id": entitlement.license_id,
+            "deployment_id": entitlement.deployment_id,
+            "generation": entitlement.generation,
+            "decision_status": decision.status,
+            "manifest_sha256": verified.signed.manifest_sha256,
+            "expires_at": _optional_time(decision.expires_at),
+            "grace_ends_at": _optional_time(decision.grace_ends_at),
+        },
+    )
+    return 0
 
 
 def _preflight_report(path: Path) -> PreflightReport:
@@ -413,6 +508,12 @@ def _generation(value: int) -> int:
     if type(value) is not int or not 1 <= value <= 2_147_483_647:
         raise CliFailure("installer.argument_invalid", 2)
     return value
+
+
+def _optional_time(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _emit(stream: TextIO, value: object) -> None:

@@ -562,6 +562,10 @@ import {
   updateWorkspaceMaintenance,
 } from "../lib/edgeUpgrades.js";
 import {
+  getWorkspaceLicense,
+  refreshWorkspaceLicense,
+} from "../lib/edgeLicenses.js";
+import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
   clearLocalAdminSession,
@@ -7168,6 +7172,9 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
     async onUpgradeRollback(input) {
       return submitPrivateGatewayUpgradeRollback(input, consoleShellState);
     },
+    async onLicenseRefresh(deploymentId) {
+      return submitPrivateGatewayLicenseRefresh(deploymentId, consoleShellState);
+    },
     async onValidation(deploymentId, action) {
       return submitPrivateGatewayValidation(deploymentId, action, consoleShellState);
     },
@@ -7745,6 +7752,44 @@ async function submitPrivateGatewayMaintenance(input, consoleShellState) {
     }
   } finally {
     privateGatewayPageState.finishMaintenance(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayLicenseRefresh(deploymentId, consoleShellState) {
+  const operation = privateGatewayPageState.beginLicenseRefresh(
+    currentPrivateGatewayOwner(consoleShellState),
+    deploymentId,
+    createEdgeIdempotencyKey("license-refresh"),
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await refreshWorkspaceLicense({
+      controlApiUrl: workspaceControlApiUrl,
+      licenseId: operation.licenseId,
+      expectedRevision: operation.expectedRevision,
+      reasonCode: operation.reasonCode,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptLicenseRefresh(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectLicenseRefresh(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishLicenseRefresh(operation);
   }
   renderCurrentPrivateGatewayPanel(consoleShellState);
   return privateGatewayPageState.snapshot();
@@ -17469,6 +17514,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
     ]);
     const [
       desiredStates, telemetryStates, secretReferences, healthStates, upgradeStates,
+      licenseStates,
     ] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
@@ -17486,6 +17532,9 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       owner.canReadUpgrades
         ? loadPrivateGatewayUpgradeStates(result.deployments, operation.controller.signal)
         : Promise.resolve([]),
+      owner.canReadLicenses
+        ? loadPrivateGatewayLicenseStates(result.deployments, operation.controller.signal)
+        : Promise.resolve([]),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -17499,6 +17548,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       installerCatalog,
       healthStates,
       upgradeStates,
+      licenseStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -17511,6 +17561,38 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayLicenseStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      try {
+        const response = await getWorkspaceLicense({
+          controlApiUrl: workspaceControlApiUrl,
+          deploymentId,
+          signal,
+        });
+        results[index] = Object.freeze({ deploymentId, response });
+      } catch (error) {
+        if (error instanceof AuthApiError
+          && error.status === 404 && error.code === "edge_license.not_found") {
+          results[index] = Object.freeze({ deploymentId, response: null });
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 async function loadPrivateGatewayUpgradeStates(deployments, signal) {

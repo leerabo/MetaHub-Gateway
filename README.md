@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-127 - Fleet分批升级、回滚与维护窗口` 已完成；当前下一条未完成项是
-  `PRD-128 - 私有Gateway License、容量与离线宽限`。
+- 新 `PRD-090` 至 `PRD-128 - 私有Gateway License、容量与离线宽限` 已完成；当前下一条未完成项是
+  `PRD-129 - 私有Gateway备份、恢复与灾备演练`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-128 - 私有Gateway License、容量与离线宽限` 已完成：0120、用途分域 Ed25519 SignedEntitlement、
+  单调 generation/LKG/可信时钟、原子容量 lease、7 天离线宽限、明确吊销、Control/Agent API、在线同步、
+  `metahub license import` 和 Workspace/Platform 双域 Console 均已交付。Migration `2/2`、Control API `1/1`、
+  Shared/CLI/Gateway `14/14`、导航 `4/4`、Console 专项 `4/4` 及必要回归 `45/45` 通过。详见
+  [PRD-128 设计](docs/prd/PRD-128-private-gateway-license-capacity-offline-grace.md) 和
+  [PRD-128 测试记录](docs/testing/PRD-128-tests.md)。下一权威项为 PRD-129；G5 在 PRD-130 后统一执行。
 - `PRD-127 - Fleet分批升级、回滚与维护窗口` 已完成：0119、双人审批签名 release、确定性 cohort、
   客户维护窗口/冻结、兼容/容量/备份预检、失败自动暂停、可恢复 Agent lease/start/report、LKG 与单节点 rollback、
   Workspace/Platform 双域 Console 均已交付。Control `5/5`、Shared `7/7`、Gateway `2/2`、Console `4/4` 及

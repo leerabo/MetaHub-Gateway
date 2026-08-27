@@ -125,6 +125,11 @@ import {
   mutatePlatformRollout,
 } from "../../lib/edgeUpgrades.js";
 import {
+  issuePlatformLicense,
+  listPlatformLicenses,
+  revokePlatformLicense,
+} from "../../lib/edgeLicenses.js";
+import {
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
@@ -293,6 +298,9 @@ if (root) {
       residencyEvidence: (input) => listPlatformResidencyEvidence({ controlApiUrl, ...input }),
       edgeFleet: (input) => listPlatformFleet({ controlApiUrl, ...input }),
       gatewayReleases: (input) => listPlatformGatewayReleases({ controlApiUrl, ...input }),
+      edgeLicenses: (input) => listPlatformLicenses({ controlApiUrl, ...input }),
+      issueEdgeLicense: (input) => issuePlatformLicense({ controlApiUrl, ...input }),
+      revokeEdgeLicense: (input) => revokePlatformLicense({ controlApiUrl, ...input }),
       fleetRollouts: (input) => listPlatformRollouts({ controlApiUrl, ...input }),
       mutateGatewayRelease: (input) => mutatePlatformGatewayRelease({
         controlApiUrl,

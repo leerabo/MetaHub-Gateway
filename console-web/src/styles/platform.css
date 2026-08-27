@@ -1018,6 +1018,46 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   cursor: pointer;
   font-weight: 750;
 }
+.platform-edge-license-issue form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+.platform-edge-license-issue form > label,
+.platform-edge-license-issue fieldset { min-width: 0; }
+.platform-edge-license-issue input,
+.platform-edge-license-issue select { width: 100%; min-width: 0; }
+.platform-edge-license-issue fieldset {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.platform-edge-license-issue fieldset label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.platform-edge-license-issue fieldset input { width: 16px; min-height: 16px; margin: 0; }
+.platform-edge-license-issue .platform-edge-confirm,
+.platform-edge-license-issue form > button { grid-column: span 2; }
+.platform-edge-license-table { min-width: 1120px; }
+.platform-edge-license-table td > strong,
+.platform-edge-license-table td > small,
+.platform-edge-license-table td > span { display: block; overflow-wrap: anywhere; }
+.platform-edge-license-table td > small { margin-top: 4px; color: var(--muted); }
+.platform-edge-license-table form {
+  display: grid;
+  min-width: 220px;
+  gap: 8px;
+}
+.platform-edge-license-table form select { width: 100%; min-width: 0; }
 .platform-edge-upgrade-section {
   margin-top: 26px;
   padding-top: 22px;
@@ -1157,6 +1197,10 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-diagnostic-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-edge-diagnostic-summary > div { border-bottom: 1px solid var(--line); }
   .platform-edge-diagnostic-command dl { grid-template-columns: minmax(0, 1fr); }
+  .platform-edge-license-issue form,
+  .platform-edge-license-issue fieldset { grid-template-columns: minmax(0, 1fr); }
+  .platform-edge-license-issue .platform-edge-confirm,
+  .platform-edge-license-issue form > button { grid-column: 1; }
   .platform-edge-upgrade-form,
   .platform-edge-rollout-controls,
   .platform-edge-rollout-controls > form,
@@ -1173,14 +1217,19 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-release-actions form button,
   .platform-edge-release-actions .platform-edge-upgrade-check { grid-column: 1; }
   .platform-edge-release-table,
+  .platform-edge-license-table,
   .platform-edge-batch-table,
   .platform-edge-target-table { min-width: 0; }
   .platform-edge-release-table thead,
+  .platform-edge-license-table thead,
   .platform-edge-batch-table thead,
   .platform-edge-target-table thead { display: none; }
   .platform-edge-release-table tbody,
   .platform-edge-release-table tr,
   .platform-edge-release-table td,
+  .platform-edge-license-table tbody,
+  .platform-edge-license-table tr,
+  .platform-edge-license-table td,
   .platform-edge-batch-table tbody,
   .platform-edge-batch-table tr,
   .platform-edge-batch-table td,
@@ -1188,12 +1237,15 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-target-table tr,
   .platform-edge-target-table td { display: block; width: 100%; }
   .platform-edge-release-table tr,
+  .platform-edge-license-table tr,
   .platform-edge-batch-table tr,
   .platform-edge-target-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .platform-edge-release-table td,
+  .platform-edge-license-table td,
   .platform-edge-batch-table td,
   .platform-edge-target-table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; text-align: left; }
   .platform-edge-release-table td::before,
+  .platform-edge-license-table td::before,
   .platform-edge-batch-table td::before,
   .platform-edge-target-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-edge-release-actions { min-width: 0; }
