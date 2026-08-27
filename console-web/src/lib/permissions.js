@@ -113,6 +113,11 @@ export const PERMISSIONS = Object.freeze({
   // PRD-124 安装介质读取和安装生命周期管理独立授权；页面可见性不能替代后端校验。
   EDGE_INSTALLER_READ: "edge.installer.read",
   EDGE_INSTALLATION_MANAGE: "edge.installation.manage",
+  // PRD-125 验证、交付签署和支持包摘要分别授权；本地支持包同意仍由客户环境复核。
+  EDGE_VALIDATION_READ: "edge.validation.read",
+  EDGE_VALIDATION_MANAGE: "edge.validation.manage",
+  EDGE_DELIVERY_ACCEPT: "edge.delivery.accept",
+  EDGE_SUPPORT_BUNDLE_READ: "edge.support_bundle.read",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。

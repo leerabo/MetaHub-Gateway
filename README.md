@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-124 - 云管私有Gateway安装包、预检与接入向导` 已完成；当前下一条未完成项是
-  `PRD-125 - 私有部署验证与脱敏支持包`。
+- 新 `PRD-090` 至 `PRD-125 - 私有部署验证与脱敏支持包` 已完成；当前下一条未完成项是
+  `PRD-126 - Fleet资产、健康与受控远程诊断`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-125 - 私有部署验证与脱敏支持包` 已完成：0117、Gateway 编译期八项验证 runner、失败项重试与
+  DeliveryAcceptance step-up、本地固定 collector/递归敏感扫描/5 分钟清理、AES-GCM 上传、Workspace 裁剪摘要、
+  双域 SupportGrant 下载审计和 `ready -> expired -> deleted` TTL reaper 均已交付。Python `33/33`、Console
+  `5/5` 及 PRD-120..124 必要回归 `24/24` 通过；完整批次浏览器/性能/安全门禁仍在 PRD-130 后统一执行。
+  详见 [PRD-125 设计](docs/prd/PRD-125-private-deployment-validation-redacted-support-bundle.md) 和
+  [PRD-125 测试记录](docs/testing/PRD-125-tests.md)。下一权威项为 PRD-126。
 - `PRD-124 - 云管私有Gateway安装包、预检与接入向导` 已完成：0116、不可变签名制品、全 artifact/SBOM/hash
   校验、纯读预检、持久 step journal/hash-chain audit、崩溃恢复/补偿、默认保留卸载、双人发布、Workspace
   installer API/Console 和本地 CLI 均已交付。专项 `11/11 + 5/5 + 3/3 + 3/3` 通过；真实 API 校验五个

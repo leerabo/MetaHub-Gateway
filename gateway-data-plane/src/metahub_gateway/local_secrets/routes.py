@@ -8,7 +8,11 @@ from secrets import token_hex, token_urlsafe
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
-from metahub_shared.private_gateway import LOCAL_SECRET_MAX_BYTES
+from metahub_shared.private_gateway import (
+    LOCAL_SECRET_MAX_BYTES,
+    SUPPORT_BUNDLE_COLLECTOR_CODES,
+    strict_json_object,
+)
 
 from .auth import (
     LocalAdminAuthError,
@@ -19,6 +23,7 @@ from .auth import (
     csrf_sha256,
 )
 from .store import LocalSecretStore, LocalSecretStoreError, ProviderTestResult
+from .support_bundles import LocalSupportBundleError, LocalSupportBundleStore
 
 router = APIRouter(prefix="/local", tags=["local-secret-custody"])
 
@@ -28,6 +33,7 @@ _ID = re.compile(r"^[a-z][a-z0-9_:-]{2,79}$")
 _DEPLOYMENT_ID = re.compile(r"^edp_[0-9a-f]{32}$")
 _LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$")
 _KINDS = frozenset({"api_key", "bearer_token", "basic_password", "oauth_client_secret"})
+_SUPPORT_BUNDLE_BODY_BYTES = 4_096
 _FORWARDED_HEADERS = frozenset(
     {
         b"forwarded",
@@ -59,9 +65,7 @@ async def create_local_admin_session(request: Request) -> JSONResponse:
         if deployment_id != store.deployment_id or request.client is None:
             raise _api_error("local_admin.authentication_failed", 401)
         try:
-            _handoff_verifier(request).verify(
-                credential, client_id=request.client.host
-            )
+            _handoff_verifier(request).verify(credential, client_id=request.client.host)
         except LocalAdminAuthError as exc:
             status = 429 if exc.code == "local_admin.rate_limited" else 401
             raise _api_error(exc.code, status) from None
@@ -237,6 +241,57 @@ async def test_local_provider_connection(
         raise _store_api_error(exc) from None
 
 
+@router.post("/support-bundles")
+async def preview_local_support_bundle(request: Request) -> JSONResponse:
+    claims = _authorize(request)
+    collector_codes = await _support_bundle_body(request)
+    try:
+        summary = _support_bundle_store(request).preview(
+            tenant_id=claims.tenant_id,
+            workspace_id=claims.workspace_id,
+            account_id=claims.account_id,
+            collector_codes=collector_codes,
+        )
+        return _json(summary.model_dump(mode="json"), 201)
+    except LocalSupportBundleError as exc:
+        raise _support_bundle_api_error(exc) from None
+
+
+@router.post("/support-bundles/{bundle_id}/approve")
+async def approve_local_support_bundle(bundle_id: str, request: Request) -> JSONResponse:
+    claims = _authorize(request)
+    try:
+        summary = _support_bundle_store(request).approve(
+            bundle_id,
+            tenant_id=claims.tenant_id,
+            workspace_id=claims.workspace_id,
+            account_id=claims.account_id,
+            expected_revision=_revision(
+                request, error_code="local_support_bundle.revision_invalid"
+            ),
+        )
+        return _json(summary.model_dump(mode="json"), 200)
+    except LocalSupportBundleError as exc:
+        raise _support_bundle_api_error(exc) from None
+
+
+@router.delete("/support-bundles/{bundle_id}")
+async def cancel_local_support_bundle(bundle_id: str, request: Request) -> JSONResponse:
+    claims = _authorize(request)
+    try:
+        summary = _support_bundle_store(request).cancel(
+            bundle_id,
+            tenant_id=claims.tenant_id,
+            workspace_id=claims.workspace_id,
+            expected_revision=_revision(
+                request, error_code="local_support_bundle.revision_invalid"
+            ),
+        )
+        return _json(summary.model_dump(mode="json"), 200)
+    except LocalSupportBundleError as exc:
+        raise _support_bundle_api_error(exc) from None
+
+
 def _authorize(request: Request) -> LocalAdminClaims:
     _authorize_boundary(request)
     if len(_raw_headers(request, b"cookie")) != 1:
@@ -258,9 +313,7 @@ def _authorize(request: Request) -> LocalAdminClaims:
 
 
 def _authorize_boundary(request: Request) -> None:
-    forwarded = any(
-        name.lower() in _FORWARDED_HEADERS for name, _ in request.scope["headers"]
-    )
+    forwarded = any(name.lower() in _FORWARDED_HEADERS for name, _ in request.scope["headers"])
     if request.url.query or forwarded:
         raise _api_error("local_admin.request_invalid", 400)
     if request.client is None or not _policy(request).permits_client(request.client.host):
@@ -330,6 +383,50 @@ async def _secret_body(request: Request) -> bytearray:
         raise
 
 
+async def _support_bundle_body(request: Request) -> tuple[str, ...]:
+    if request.headers.get("content-type", "").partition(";")[0].lower() != ("application/json"):
+        raise _api_error("local_support_bundle.content_type_invalid", 415)
+    if request.headers.get("content-encoding") is not None:
+        raise _api_error("local_support_bundle.request_invalid", 422)
+    content_lengths = _raw_headers(request, b"content-length")
+    if len(content_lengths) > 1:
+        raise _api_error("local_support_bundle.request_invalid", 422)
+    if content_lengths:
+        try:
+            length_text = content_lengths[0].decode("ascii")
+            length = int(length_text)
+        except (UnicodeDecodeError, ValueError):
+            raise _api_error("local_support_bundle.request_invalid", 422) from None
+        if str(length) != length_text or not 1 <= length <= _SUPPORT_BUNDLE_BODY_BYTES:
+            raise _api_error("local_support_bundle.request_invalid", 422)
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > _SUPPORT_BUNDLE_BODY_BYTES:
+                raise _api_error("local_support_bundle.request_invalid", 422)
+        try:
+            payload = strict_json_object(
+                bytes(body), canonical=False, maximum=_SUPPORT_BUNDLE_BODY_BYTES
+            )
+        except ValueError:
+            raise _api_error("local_support_bundle.request_invalid", 422) from None
+    finally:
+        _zero(body)
+    if frozenset(payload) != {"collector_codes"}:
+        raise _api_error("local_support_bundle.request_invalid", 422)
+    codes = payload["collector_codes"]
+    if (
+        type(codes) is not list
+        or not 1 <= len(codes) <= len(SUPPORT_BUNDLE_COLLECTOR_CODES)
+        or any(type(code) is not str for code in codes)
+        or len(set(codes)) != len(codes)
+        or any(code not in SUPPORT_BUNDLE_COLLECTOR_CODES for code in codes)
+    ):
+        raise _api_error("local_support_bundle.request_invalid", 422)
+    return tuple(codes)
+
+
 def _tester(
     request: Request, provider_connection_id: str
 ) -> Callable[[memoryview], ProviderTestResult]:
@@ -360,13 +457,13 @@ def _provider_connection_id(
     return reference.provider_connection_id
 
 
-def _revision(request: Request) -> int:
+def _revision(request: Request, *, error_code: str = "local_secret.revision_invalid") -> int:
     raw = _header(request, "if-match")
     if re.fullmatch(r"[1-9][0-9]{0,9}", raw) is None:
-        raise _api_error("local_secret.revision_invalid", 422)
+        raise _api_error(error_code, 422)
     value = int(raw)
     if value > 2_147_483_647:
-        raise _api_error("local_secret.revision_invalid", 422)
+        raise _api_error(error_code, 422)
     return value
 
 
@@ -392,6 +489,13 @@ def _store(request: Request) -> LocalSecretStore:
     value = getattr(request.app.state, "local_secret_store", None)
     if type(value) is not LocalSecretStore:
         raise _api_error("local_secret.unavailable", 503)
+    return value
+
+
+def _support_bundle_store(request: Request) -> LocalSupportBundleStore:
+    value = getattr(request.app.state, "local_support_bundle_store", None)
+    if type(value) is not LocalSupportBundleStore:
+        raise _api_error("local_support_bundle.unavailable", 503)
     return value
 
 
@@ -440,6 +544,20 @@ def _store_api_error(error: LocalSecretStoreError) -> _LocalApiError:
         "local_secret.rotation_in_progress": 409,
         "local_secret.in_use": 409,
         "local_secret.payload_invalid": 422,
+    }.get(error.code, 503)
+    return _api_error(error.code, status)
+
+
+def _support_bundle_api_error(error: LocalSupportBundleError) -> _LocalApiError:
+    status = {
+        "local_support_bundle.not_found": 404,
+        "local_support_bundle.expired": 410,
+        "local_support_bundle.state_conflict": 409,
+        "local_support_bundle.revision_conflict": 409,
+        "local_support_bundle.revision_invalid": 422,
+        "local_support_bundle.request_invalid": 422,
+        "local_support_bundle.sensitive_detected": 422,
+        "local_support_bundle.size_exceeded": 422,
     }.get(error.code, 503)
     return _api_error(error.code, status)
 

@@ -1,9 +1,10 @@
-/** PRD-123 customer-owned local Secret API client. */
+/** PRD-123/125 customer-owned local Secret and support-bundle API client. */
 
 const DEPLOYMENT_ID = /^edp_[0-9a-f]{32}$/u;
 const REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
 const TEST_ID = /^lpt_[0-9a-f]{32}$/u;
-const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
+const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
+const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const SAFE_CODE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u;
 const CSRF = /^[A-Za-z0-9_-]{43}$/u;
@@ -14,6 +15,10 @@ const REFERENCE_KEYS = Object.freeze([
   "active_version", "capabilities", "deployment_id", "kind", "label",
   "last_test_outcome", "provider_connection_id", "reference_id", "revision",
   "rotated_at", "schema_version", "status", "tenant_id", "updated_at", "workspace_id",
+]);
+const SUPPORT_BUNDLE_COLLECTOR_CODES = Object.freeze([
+  "runtime.version", "runtime.watermarks", "runtime.health", "runtime.errors",
+  "runtime.logs",
 ]);
 
 let localSession = null;
@@ -254,6 +259,87 @@ export async function testLocalProviderConnection({
   });
 }
 
+export async function previewLocalSupportBundle({
+  deploymentId,
+  collectorCodes = SUPPORT_BUNDLE_COLLECTOR_CODES,
+  signal,
+} = {}) {
+  const session = requireSession(deploymentId);
+  const codes = supportBundleCollectorCodes(collectorCodes, "local_support_bundle.request_invalid");
+  const result = await localRequest(session.origin, "/local/support-bundles", {
+    method: "POST",
+    body: JSON.stringify({ collector_codes: codes }),
+    headers: { ...sessionHeaders(session), "Content-Type": "application/json" },
+    signal,
+    expectedStatus: 201,
+  });
+  return validateLocalSupportBundle(result.payload, session.owner);
+}
+
+export async function approveLocalSupportBundle({
+  deploymentId,
+  bundleId,
+  revision,
+  signal,
+} = {}) {
+  const session = requireSession(deploymentId);
+  const id = identifier(bundleId, SUPPORT_BUNDLE_ID, "local_support_bundle.request_invalid");
+  const result = await localRequest(
+    session.origin,
+    `/local/support-bundles/${encodeURIComponent(id)}/approve`,
+    {
+      method: "POST",
+      headers: {
+        ...sessionHeaders(session),
+        "If-Match": String(integer(
+          revision,
+          1,
+          2_147_483_647,
+          "local_support_bundle.request_invalid",
+        )),
+      },
+      signal,
+      expectedStatus: 200,
+    },
+  );
+  const bundle = validateLocalSupportBundle(result.payload, session.owner);
+  if (bundle.bundle_id !== id) invalidResponse("local_support_bundle.response_invalid");
+  return bundle;
+}
+
+export async function cancelLocalSupportBundle({
+  deploymentId,
+  bundleId,
+  revision,
+  signal,
+} = {}) {
+  const session = requireSession(deploymentId);
+  const id = identifier(bundleId, SUPPORT_BUNDLE_ID, "local_support_bundle.request_invalid");
+  const result = await localRequest(
+    session.origin,
+    `/local/support-bundles/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      headers: {
+        ...sessionHeaders(session),
+        "If-Match": String(integer(
+          revision,
+          1,
+          2_147_483_647,
+          "local_support_bundle.request_invalid",
+        )),
+      },
+      signal,
+      expectedStatus: 200,
+    },
+  );
+  const bundle = validateLocalSupportBundle(result.payload, session.owner);
+  if (bundle.bundle_id !== id || bundle.status !== "cancelled") {
+    invalidResponse("local_support_bundle.response_invalid");
+  }
+  return bundle;
+}
+
 async function localRequest(origin, path, options = {}) {
   let response;
   try {
@@ -390,6 +476,185 @@ function validateReference(value, owner) {
   return reference;
 }
 
+function validateLocalSupportBundle(value, owner) {
+  if (!plain(value)) invalidResponse("local_support_bundle.response_invalid");
+  exact(value, [
+    "approved_at", "bundle_id", "cloud_object_reference", "created_at", "deployment_id",
+    "expires_at", "failure_code", "manifest", "revision", "status", "uploaded_at",
+  ], "local_support_bundle.response_invalid");
+  const bundleId = identifier(
+    value.bundle_id,
+    SUPPORT_BUNDLE_ID,
+    "local_support_bundle.response_invalid",
+  );
+  const deploymentId = identifier(
+    value.deployment_id,
+    DEPLOYMENT_ID,
+    "local_support_bundle.response_invalid",
+  );
+  const manifest = validateSupportBundleManifest(value.manifest, bundleId, deploymentId);
+  const status = choice(value.status, [
+    "preview_ready", "uploading", "uploaded", "failed", "cancelled", "expired",
+  ], "local_support_bundle.response_invalid");
+  const cloudReference = value.cloud_object_reference === null
+    ? null
+    : identifier(
+      value.cloud_object_reference,
+      SUPPORT_BUNDLE_ID,
+      "local_support_bundle.response_invalid",
+    );
+  const failureCode = value.failure_code === null
+    ? null
+    : safeCode(value.failure_code, "local_support_bundle.response_invalid");
+  const approvedAt = value.approved_at === null
+    ? null
+    : utcTime(value.approved_at, "local_support_bundle.response_invalid");
+  const uploadedAt = value.uploaded_at === null
+    ? null
+    : utcTime(value.uploaded_at, "local_support_bundle.response_invalid");
+  const createdAt = utcTime(value.created_at, "local_support_bundle.response_invalid");
+  const expiresAt = utcTime(value.expires_at, "local_support_bundle.response_invalid");
+  if (deploymentId !== owner.deploymentId
+    || manifest.created_at !== createdAt || manifest.expires_at !== expiresAt
+    || (status === "preview_ready" && (
+      value.revision !== 1 || cloudReference !== null || failureCode !== null
+      || approvedAt !== null || uploadedAt !== null
+    ))
+    || (status === "uploaded" && (
+      cloudReference !== bundleId || failureCode !== null || approvedAt === null
+      || uploadedAt === null
+    ))
+    || (status === "failed") !== (failureCode !== null)
+    || (!["uploaded", "failed", "uploading"].includes(status) && approvedAt !== null)
+    || (status !== "uploaded" && cloudReference !== null)
+    || (status !== "uploaded" && uploadedAt !== null)) {
+    invalidResponse("local_support_bundle.response_invalid");
+  }
+  return Object.freeze({
+    bundle_id: bundleId,
+    deployment_id: deploymentId,
+    status,
+    revision: integer(
+      value.revision,
+      1,
+      2_147_483_647,
+      "local_support_bundle.response_invalid",
+    ),
+    manifest,
+    cloud_object_reference: cloudReference,
+    failure_code: failureCode,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    approved_at: approvedAt,
+    uploaded_at: uploadedAt,
+  });
+}
+
+function validateSupportBundleManifest(value, expectedBundleId, expectedDeploymentId) {
+  if (!plain(value)) invalidResponse("local_support_bundle.response_invalid");
+  exact(value, [
+    "archive_sha256", "archive_size_bytes", "bundle_id", "created_at", "deployment_id",
+    "entries", "expires_at", "scan_outcome", "scan_version", "schema_version",
+    "total_uncompressed_bytes",
+  ], "local_support_bundle.response_invalid");
+  const entries = Array.isArray(value.entries)
+    ? value.entries.map(validateSupportBundleEntry)
+    : invalidResponse("local_support_bundle.response_invalid");
+  if (!entries.length || entries.length > SUPPORT_BUNDLE_COLLECTOR_CODES.length
+    || entries.reduce((total, entry) => total + entry.size_bytes, 0)
+      !== value.total_uncompressed_bytes
+    || !supportBundleCollectorCodes(
+      entries.map((entry) => entry.collector_code),
+      "local_support_bundle.response_invalid",
+    )) {
+    invalidResponse("local_support_bundle.response_invalid");
+  }
+  const bundleId = identifier(
+    value.bundle_id,
+    SUPPORT_BUNDLE_ID,
+    "local_support_bundle.response_invalid",
+  );
+  const deploymentId = identifier(
+    value.deployment_id,
+    DEPLOYMENT_ID,
+    "local_support_bundle.response_invalid",
+  );
+  if (bundleId !== expectedBundleId || deploymentId !== expectedDeploymentId) {
+    invalidResponse("local_support_bundle.response_invalid");
+  }
+  return Object.freeze({
+    schema_version: choice(
+      value.schema_version,
+      ["metahub.support-bundle/v1"],
+      "local_support_bundle.response_invalid",
+    ),
+    bundle_id: bundleId,
+    deployment_id: deploymentId,
+    scan_version: choice(
+      value.scan_version,
+      ["support-bundle-scan-v1"],
+      "local_support_bundle.response_invalid",
+    ),
+    scan_outcome: choice(
+      value.scan_outcome,
+      ["clean"],
+      "local_support_bundle.response_invalid",
+    ),
+    entries: Object.freeze(entries),
+    total_uncompressed_bytes: integer(
+      value.total_uncompressed_bytes,
+      1,
+      100 * 1024 * 1024,
+      "local_support_bundle.response_invalid",
+    ),
+    archive_size_bytes: integer(
+      value.archive_size_bytes,
+      1,
+      100 * 1024 * 1024,
+      "local_support_bundle.response_invalid",
+    ),
+    archive_sha256: sha256(value.archive_sha256, "local_support_bundle.response_invalid"),
+    created_at: utcTime(value.created_at, "local_support_bundle.response_invalid"),
+    expires_at: utcTime(value.expires_at, "local_support_bundle.response_invalid"),
+  });
+}
+
+function validateSupportBundleEntry(value) {
+  if (!plain(value)) invalidResponse("local_support_bundle.response_invalid");
+  exact(value, [
+    "classification", "collector_code", "media_type", "path", "sha256", "size_bytes",
+  ], "local_support_bundle.response_invalid");
+  const collectorCode = choice(
+    value.collector_code,
+    SUPPORT_BUNDLE_COLLECTOR_CODES,
+    "local_support_bundle.response_invalid",
+  );
+  const expected = {
+    "runtime.version": ["meta/version.json", "version", "application/json"],
+    "runtime.watermarks": ["state/watermarks.json", "watermark", "application/json"],
+    "runtime.health": ["health/summary.json", "health", "application/json"],
+    "runtime.errors": ["errors/codes.json", "error_code", "application/json"],
+    "runtime.logs": ["logs/events.ndjson", "log_summary", "application/x-ndjson"],
+  }[collectorCode];
+  if (value.path !== expected[0] || value.classification !== expected[1]
+    || value.media_type !== expected[2]) {
+    invalidResponse("local_support_bundle.response_invalid");
+  }
+  return Object.freeze({
+    collector_code: collectorCode,
+    path: value.path,
+    classification: value.classification,
+    media_type: value.media_type,
+    size_bytes: integer(
+      value.size_bytes,
+      1,
+      8 * 1024 * 1024,
+      "local_support_bundle.response_invalid",
+    ),
+    sha256: sha256(value.sha256, "local_support_bundle.response_invalid"),
+  });
+}
+
 function requireSession(deploymentId) {
   const id = identifier(deploymentId, DEPLOYMENT_ID, "local_admin.authentication_failed");
   if (!localSession || localSession.owner.deploymentId !== id
@@ -437,6 +702,18 @@ function capabilities(value) {
   }
   return Object.freeze(result);
 }
+function supportBundleCollectorCodes(value, code) {
+  if (!Array.isArray(value) || !value.length || value.length > SUPPORT_BUNDLE_COLLECTOR_CODES.length) {
+    invalidByCode(code);
+  }
+  const result = value.map((item) => choice(item, SUPPORT_BUNDLE_COLLECTOR_CODES, code));
+  if (result.length !== new Set(result).size || result.some((item, index) => (
+    index > 0
+    && SUPPORT_BUNDLE_COLLECTOR_CODES.indexOf(result[index - 1])
+      >= SUPPORT_BUNDLE_COLLECTOR_CODES.indexOf(item)
+  ))) invalidByCode(code);
+  return Object.freeze(result);
+}
 function localOrigin(value) {
   let url;
   try { url = new URL(String(value ?? "")); } catch { invalidRequest("local_admin.request_invalid"); }
@@ -471,6 +748,16 @@ function integer(value, minimum, maximum, code = "local_secret.payload_invalid")
 function utcTime(value, code) {
   const text = String(value ?? "");
   if (!UTC_TIME.test(text)) invalidByCode(code);
+  return text;
+}
+function safeCode(value, code) {
+  const text = String(value ?? "");
+  if (!/^[a-z][a-z0-9_.-]{1,79}$/u.test(text)) invalidByCode(code);
+  return text;
+}
+function sha256(value, code) {
+  const text = String(value ?? "");
+  if (!/^[0-9a-f]{64}$/u.test(text)) invalidByCode(code);
   return text;
 }
 function exact(value, keys, code) {

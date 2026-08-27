@@ -48,6 +48,7 @@ from .debug_console.routes import router as debug_console_router
 from .developer_portal.routes import router as developer_portal_router
 from .disaster_recovery import router as disaster_recovery_router
 from .dlp.routes import router as dlp_router
+from .edge_management import install_edge_support_bundle_scheduler
 from .edge_management import router as edge_management_router
 from .enterprise_chat.routes import router as enterprise_chat_router
 from .enterprise_identity import router as enterprise_identity_router
@@ -407,6 +408,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_mcp_scheduler,
             install_tenant_data_scheduler,
             install_data_governance_scheduler,
+            install_edge_support_bundle_scheduler,
         )
     )
 install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)

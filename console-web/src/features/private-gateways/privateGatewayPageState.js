@@ -1,4 +1,4 @@
-/** PRD-120..124 owner-bound Edge identity, installer, telemetry, and Secret lifecycle. */
+/** PRD-120..125 owner-bound Edge identity, lifecycle, validation, and support state. */
 
 import {
   authorizationFingerprint,
@@ -16,7 +16,9 @@ const INSTALLER_RELEASE_ID = /^irl_[0-9a-f]{32}$/u;
 const INSTALL_PROFILE_ID = /^ipr_[0-9a-f]{32}$/u;
 const PREFLIGHT_REPORT_ID = /^pfr_[0-9a-f]{32}$/u;
 const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
-const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
+const VALIDATION_RUN_ID = /^dvr_[0-9a-f]{32}$/u;
+const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
+const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const LOCAL_ORIGIN = /^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}(?::[0-9]{1,5})?$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
@@ -45,6 +47,28 @@ const ERROR_MESSAGES = Object.freeze({
   "edge.preflight_failed": "预检未通过，安装已阻止",
   "edge.preflight_not_found": "预检报告不存在或已失效",
   "edge.installation_not_found": "安装记录不存在",
+  "edge.validation_not_ready": "当前 Deployment 尚未满足验证前置条件",
+  "edge.validation_not_found": "验证记录不存在或已失效",
+  "edge.validation_conflict": "相同验证计划正在执行，请刷新结果",
+  "edge.validation_state_conflict": "验证依据已变化，请重新运行全套验证",
+  "edge.validation_report_invalid": "Agent 返回的验证证据不完整",
+  "edge.validation_failed": "仍有检查项未通过，不能签署交付",
+  "edge.validation_integrity_failed": "验证证据链完整性校验失败",
+  "edge.delivery_already_accepted": "该验证结果已完成交付签署",
+  "edge.delivery_acceptance_not_found": "交付签署记录不存在",
+  "edge.support_bundle_invalid": "支持包合同或完整性校验失败",
+  "edge.support_bundle_not_found": "支持包不存在或不属于当前 Workspace",
+  "edge.support_bundle_conflict": "支持包状态已变化，请刷新后重试",
+  "edge.support_bundle_expired": "支持包已过期",
+  "edge.support_bundle_integrity_failed": "支持包对象完整性校验失败",
+  "edge.support_bundle_storage_unavailable": "支持包存储暂不可用",
+  "step_up.required": "签署交付前需要二次验证",
+  "step_up.invalid": "二次验证已失效，请重新验证",
+  "step_up.unavailable": "二次验证暂不可用",
+  "identity.request_invalid": "二次验证码格式无效",
+  "identity.mfa_verification_failed": "二次验证失败",
+  "identity.webauthn_unavailable": "当前浏览器无法使用安全密钥",
+  "conditional_access.forbidden": "当前条件访问策略不允许签署交付",
   "local_admin.authentication_failed": "本地管理凭据无效或会话已过期",
   "local_admin.rate_limited": "本地管理尝试过多，请稍后重试",
   "local_admin.origin_invalid": "本地 Gateway 不允许当前控制台 Origin",
@@ -63,6 +87,24 @@ const ERROR_MESSAGES = Object.freeze({
   "local_secret.request_failed": "本地 Secret 请求未完成",
   "local_secret.response_invalid": "本地 Secret 响应合同不完整",
   "local_secret.unavailable": "本地 Secret 托管暂不可用",
+  "local_support_bundle.content_type_invalid": "本地支持包请求格式不受支持",
+  "local_support_bundle.request_invalid": "本地支持包请求不合法",
+  "local_support_bundle.response_invalid": "本地支持包响应合同不完整",
+  "local_support_bundle.not_found": "本地支持包不存在或已清理",
+  "local_support_bundle.expired": "本地支持包预览已过期",
+  "local_support_bundle.state_conflict": "本地支持包状态已变化",
+  "local_support_bundle.revision_conflict": "本地支持包 revision 已变化",
+  "local_support_bundle.revision_invalid": "本地支持包 revision 无效",
+  "local_support_bundle.sensitive_detected": "支持包扫描发现敏感信息，已阻止上传",
+  "local_support_bundle.size_exceeded": "支持包超过 100 MiB 上限",
+  "local_support_bundle.collection_failed": "支持包采集未完成",
+  "local_support_bundle.generation_failed": "支持包生成未完成",
+  "local_support_bundle.encryption_failed": "支持包加密未完成",
+  "local_support_bundle.upload_failed": "支持包上传未完成",
+  "local_support_bundle.receipt_invalid": "支持包云端回执无效",
+  "local_support_bundle.integrity_failed": "本地支持包完整性校验失败",
+  "local_support_bundle.cleanup_failed": "支持包已处理，但本地清理未完成",
+  "local_support_bundle.unavailable": "本地支持包服务暂不可用",
 });
 
 export function privateGatewayReadIdentitySnapshot(authContext) {
@@ -92,6 +134,19 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
   const installationManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_INSTALLATION_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_INSTALLATION_MANAGE)
     : "";
+  const validationReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_VALIDATION_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_VALIDATION_READ)
+    : "";
+  const validationManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_VALIDATION_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_VALIDATION_MANAGE)
+    : "";
+  const deliveryAcceptIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DELIVERY_ACCEPT)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DELIVERY_ACCEPT)
+    : "";
+  const supportBundleReadIdentity = hasPermission(
+    authContext,
+    PERMISSIONS.EDGE_SUPPORT_BUNDLE_READ,
+  ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_SUPPORT_BUNDLE_READ) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -129,6 +184,10 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     secretReadIdentity,
     installerReadIdentity,
     installationManageIdentity,
+    validationReadIdentity,
+    validationManageIdentity,
+    deliveryAcceptIdentity,
+    supportBundleReadIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -142,6 +201,13 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canManageSecrets: Boolean(secretReadIdentity && accountId && role === "security_admin"),
     canReadInstallers: Boolean(installerReadIdentity),
     canManageInstallations: Boolean(installerReadIdentity && installationManageIdentity),
+    canReadValidations: Boolean(validationReadIdentity),
+    canManageValidations: Boolean(validationReadIdentity && validationManageIdentity),
+    canAcceptDelivery: Boolean(validationReadIdentity && deliveryAcceptIdentity),
+    canReadSupportBundles: Boolean(supportBundleReadIdentity),
+    canManageSupportBundles: Boolean(
+      supportBundleReadIdentity && accountId && role === "security_admin"
+    ),
   });
 }
 
@@ -159,11 +225,14 @@ export function createPrivateGatewayPageState({
   let secretReferences = Object.freeze([]);
   let installerCatalog = emptyInstallerCatalog();
   let installerSelection = emptyInstallerSelection();
+  let validationStates = Object.freeze({});
+  let supportBundleStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
   let registration = null;
   let secretDialog = closedSecretDialog();
+  let acceptanceDialog = closedAcceptanceDialog();
   let localSession = null;
   let feedback = null;
   let canReadTelemetry = false;
@@ -173,13 +242,19 @@ export function createPrivateGatewayPageState({
   let canManageSecrets = false;
   let canReadInstallers = false;
   let canManageInstallations = false;
+  let canReadValidations = false;
+  let canManageValidations = false;
+  let canAcceptDelivery = false;
+  let canReadSupportBundles = false;
+  let canManageSupportBundles = false;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
-    localSession: 0, secret: 0,
+    localSession: 0, secret: 0, validation: 0, acceptance: 0, supportBundle: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
-    localSession: null, secret: null,
+    localSession: null, secret: null, validation: null, acceptance: null,
+    supportBundle: null,
   };
 
   function enter(owner) {
@@ -198,11 +273,20 @@ export function createPrivateGatewayPageState({
     canManageSecrets = owner.canManageSecrets === true;
     canReadInstallers = owner.canReadInstallers === true;
     canManageInstallations = owner.canManageInstallations === true && canReadInstallers;
+    canReadValidations = owner.canReadValidations === true;
+    canManageValidations = owner.canManageValidations === true && canReadValidations;
+    canAcceptDelivery = owner.canAcceptDelivery === true && canReadValidations;
+    canReadSupportBundles = owner.canReadSupportBundles === true;
+    canManageSupportBundles = owner.canManageSupportBundles === true
+      && canReadSupportBundles;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
       localSession = null;
     }
+    if (!canAcceptDelivery) acceptanceDialog = closedAcceptanceDialog();
+    if (!canReadValidations) validationStates = Object.freeze({});
+    if (!canReadSupportBundles) supportBundleStates = Object.freeze({});
     return true;
   }
 
@@ -219,11 +303,14 @@ export function createPrivateGatewayPageState({
     secretReferences = Object.freeze([]);
     installerCatalog = emptyInstallerCatalog();
     installerSelection = emptyInstallerSelection();
+    validationStates = Object.freeze({});
+    supportBundleStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
     registration = null;
     secretDialog = closedSecretDialog();
+    acceptanceDialog = closedAcceptanceDialog();
     localSession = null;
     feedback = null;
     canReadTelemetry = false;
@@ -233,9 +320,15 @@ export function createPrivateGatewayPageState({
     canManageSecrets = false;
     canReadInstallers = false;
     canManageInstallations = false;
+    canReadValidations = false;
+    canManageValidations = false;
+    canAcceptDelivery = false;
+    canReadSupportBundles = false;
+    canManageSupportBundles = false;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
-      localSession: null, secret: null,
+      localSession: null, secret: null, validation: null, acceptance: null,
+      supportBundle: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
@@ -258,6 +351,7 @@ export function createPrivateGatewayPageState({
     clearRegistration();
     stateDialog = closedStateDialog();
     secretDialog = closedSecretDialog();
+    acceptanceDialog = closedAcceptanceDialog();
     return operation;
   }
 
@@ -305,6 +399,13 @@ export function createPrivateGatewayPageState({
       response.deployments,
       installerCatalog,
     );
+    const deploymentIds = new Set(response.deployments.map((item) => item.deployment_id));
+    validationStates = canReadValidations
+      ? retainOwnedMap(validationStates, deploymentIds)
+      : Object.freeze({});
+    supportBundleStates = canReadSupportBundles
+      ? retainOwnedMap(supportBundleStates, deploymentIds)
+      : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
     listError = null;
@@ -351,6 +452,8 @@ export function createPrivateGatewayPageState({
     if (!owns(owner) || !canManage || busy()) return false;
     clearRegistration();
     stateDialog = closedStateDialog();
+    secretDialog = closedSecretDialog();
+    acceptanceDialog = closedAcceptanceDialog();
     dialog = Object.freeze({ open: true, state: "form", error: null });
     feedback = null;
     return true;
@@ -386,6 +489,14 @@ export function createPrivateGatewayPageState({
     });
     telemetryStates = Object.freeze({
       ...telemetryStates,
+      [response.deployment.deployment_id]: null,
+    });
+    validationStates = Object.freeze({
+      ...validationStates,
+      [response.deployment.deployment_id]: null,
+    });
+    supportBundleStates = Object.freeze({
+      ...supportBundleStates,
       [response.deployment.deployment_id]: null,
     });
     listState = "ready";
@@ -495,6 +606,8 @@ export function createPrivateGatewayPageState({
     if (!owns(owner) || !canManage || !deployment || deployment.status !== "active"
       || !allowed || busy()) return false;
     closeDialogInternal();
+    secretDialog = closedSecretDialog();
+    acceptanceDialog = closedAcceptanceDialog();
     stateDialog = Object.freeze({
       open: true,
       state: "form",
@@ -620,6 +733,264 @@ export function createPrivateGatewayPageState({
     if (operations.policy === operation) operations.policy = null;
   }
 
+  function beginValidation(owner, deploymentId, action) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const currentValidation = validationStates[deploymentId] ?? null;
+    const canRead = action === "refresh" && canReadValidations;
+    const canWrite = ["start", "retry_failed"].includes(action) && canManageValidations;
+    const allowed = action === "start"
+      ? currentValidation === null
+      : action === "refresh"
+        ? Boolean(currentValidation?.validation?.validation_run_id)
+        : Boolean(
+          currentValidation?.validation?.status === "completed"
+          && currentValidation.validation.outcome === "failed"
+          && currentValidation.delivery_acceptance === null
+        );
+    if (!owns(owner) || (!canRead && !canWrite) || !deployment
+      || deployment.status !== "active" || !allowed || busy()) return null;
+    generations.validation += 1;
+    const operation = ticket("validation", {
+      controller: new AbortController(),
+      action,
+      deploymentId,
+      validationRunId: currentValidation?.validation?.validation_run_id ?? "",
+    });
+    operations.validation = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptValidation(operation, response, owner) {
+    if (!current("validation", operation, owner)
+      || !validValidationResponse(response, operation.deploymentId)) return false;
+    const previous = validationStates[operation.deploymentId] ?? null;
+    if ((operation.action === "refresh"
+      && response.validation.validation_run_id !== operation.validationRunId)
+      || (operation.action === "start"
+        && response.validation.source_validation_run_id !== null)
+      || (operation.action === "retry_failed" && (
+        response.validation.source_validation_run_id !== operation.validationRunId
+        || response.validation.attempt !== previous?.validation?.attempt + 1
+      ))) return false;
+    validationStates = Object.freeze({
+      ...validationStates,
+      [operation.deploymentId]: Object.freeze(response),
+    });
+    feedback = Object.freeze({
+      kind: "success",
+      code: operation.action === "retry_failed"
+        ? "edge.validation_retry_started"
+        : operation.action === "refresh"
+          ? "edge.validation_refreshed"
+          : "edge.validation_started",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectValidation(operation, error, owner) {
+    if (!current("validation", operation, owner)) return false;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishValidation(operation) {
+    if (operations.validation === operation) operations.validation = null;
+  }
+
+  function openDeliveryAcceptance(owner, deploymentId) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const response = validationStates[deploymentId] ?? null;
+    const validation = response?.validation;
+    if (!owns(owner) || !canAcceptDelivery || !deployment
+      || deployment.status !== "active" || validation?.status !== "completed"
+      || validation.outcome !== "passed" || response.delivery_acceptance !== null
+      || validation.effective_checks.length !== 8
+      || validation.effective_checks.some((item) => item.outcome !== "passed")
+      || busy()) return false;
+    closeDialogInternal();
+    stateDialog = closedStateDialog();
+    acceptanceDialog = closedAcceptanceDialog();
+    secretDialog = closedSecretDialog();
+    acceptanceDialog = Object.freeze({
+      open: true,
+      state: "form",
+      deploymentId,
+      validationRunId: validation.validation_run_id,
+      error: null,
+    });
+    feedback = null;
+    return true;
+  }
+
+  function closeDeliveryAcceptance(owner) {
+    if (!owns(owner) || operations.acceptance) return false;
+    acceptanceDialog = closedAcceptanceDialog();
+    return true;
+  }
+
+  function beginDeliveryAcceptance(owner) {
+    const deployment = deployments.find(
+      (item) => item.deployment_id === acceptanceDialog.deploymentId,
+    );
+    const response = validationStates[acceptanceDialog.deploymentId] ?? null;
+    if (!owns(owner) || !canAcceptDelivery || acceptanceDialog.state !== "form"
+      || !deployment || deployment.status !== "active"
+      || response?.validation?.validation_run_id !== acceptanceDialog.validationRunId
+      || response.validation.outcome !== "passed" || response.delivery_acceptance !== null
+      || busy()) return null;
+    generations.acceptance += 1;
+    const operation = ticket("acceptance", {
+      controller: new AbortController(),
+      deploymentId: deployment.deployment_id,
+      workspaceId: deployment.workspace_id,
+      validationRunId: acceptanceDialog.validationRunId,
+      expectedRevision: deployment.revision,
+    });
+    operations.acceptance = operation;
+    acceptanceDialog = Object.freeze({
+      ...acceptanceDialog,
+      state: "submitting",
+      error: null,
+    });
+    return operation;
+  }
+
+  function acceptDeliveryAcceptance(operation, response, owner) {
+    if (!current("acceptance", operation, owner)
+      || response?.acceptance?.validation_run_id !== operation.validationRunId) return false;
+    const validationResponse = validationStates[operation.deploymentId];
+    if (validationResponse?.validation?.validation_run_id !== operation.validationRunId) {
+      return false;
+    }
+    validationStates = Object.freeze({
+      ...validationStates,
+      [operation.deploymentId]: Object.freeze({
+        ...validationResponse,
+        delivery_acceptance: response.acceptance,
+        idempotent_replay: response.idempotent_replay,
+        request_id: response.request_id,
+        trace_id: response.trace_id,
+      }),
+    });
+    acceptanceDialog = closedAcceptanceDialog();
+    feedback = Object.freeze({
+      kind: "success",
+      code: response.idempotent_replay
+        ? "edge.delivery_acceptance_replayed"
+        : "edge.delivery_accepted",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectDeliveryAcceptance(operation, error, owner) {
+    if (!current("acceptance", operation, owner)) return false;
+    acceptanceDialog = Object.freeze({
+      ...acceptanceDialog,
+      state: "form",
+      error: fixedError(error),
+    });
+    return true;
+  }
+
+  function finishDeliveryAcceptance(operation) {
+    if (operations.acceptance === operation) operations.acceptance = null;
+  }
+
+  function isDeliveryAcceptanceCurrent(operation, owner) {
+    return current("acceptance", operation, owner);
+  }
+
+  function beginSupportBundle(owner, deploymentId, action) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const entry = supportBundleStates[deploymentId] ?? null;
+    const local = entry?.local ?? null;
+    const bundleId = local?.cloud_object_reference
+      ?? entry?.cloud?.bundle?.support_bundle_id
+      ?? local?.bundle_id
+      ?? "";
+    let allowed = false;
+    if (action === "preview") {
+      allowed = canManageSupportBundles && sessionActive(deploymentId)
+        && (!local || ["uploaded", "failed", "cancelled", "expired"].includes(local.status));
+    } else if (["approve", "cancel"].includes(action)) {
+      allowed = canManageSupportBundles && sessionActive(deploymentId)
+        && local?.status === "preview_ready";
+    } else if (action === "refresh") {
+      allowed = canReadSupportBundles && SUPPORT_BUNDLE_ID.test(bundleId);
+    }
+    if (!owns(owner) || !deployment || deployment.status !== "active"
+      || !allowed || busy()) return null;
+    generations.supportBundle += 1;
+    const operation = ticket("supportBundle", {
+      controller: new AbortController(),
+      deploymentId,
+      action,
+      bundleId,
+      revision: local?.revision ?? 0,
+    });
+    operations.supportBundle = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptSupportBundle(operation, response, owner) {
+    if (!current("supportBundle", operation, owner)) return false;
+    const previous = supportBundleStates[operation.deploymentId] ?? Object.freeze({
+      local: null,
+      cloud: null,
+    });
+    let next;
+    if (operation.action === "refresh") {
+      if (response?.bundle?.support_bundle_id !== operation.bundleId
+        || response.bundle.deployment_id !== operation.deploymentId) return false;
+      next = Object.freeze({ ...previous, cloud: Object.freeze(response) });
+    } else {
+      const local = response?.local ?? response;
+      const cloud = response?.cloud ?? null;
+      if (!validLocalBundleState(local, operation.deploymentId)
+        || (operation.action === "preview" && local.status !== "preview_ready")
+        || (operation.action === "approve" && local.status !== "uploaded")
+        || (operation.action === "cancel" && local.status !== "cancelled")
+        || (operation.action !== "preview" && local.bundle_id !== operation.bundleId)
+        || (cloud && (
+          cloud.bundle?.support_bundle_id !== local.cloud_object_reference
+          || cloud.bundle?.deployment_id !== operation.deploymentId
+        ))) return false;
+      next = Object.freeze({ local: Object.freeze(local), cloud: cloud ? Object.freeze(cloud) : null });
+    }
+    supportBundleStates = Object.freeze({
+      ...supportBundleStates,
+      [operation.deploymentId]: next,
+    });
+    const codes = {
+      preview: "local_support_bundle.preview_ready",
+      approve: "local_support_bundle.uploaded",
+      cancel: "local_support_bundle.cancelled",
+      refresh: "edge.support_bundle_refreshed",
+    };
+    feedback = Object.freeze({
+      kind: "success",
+      code: codes[operation.action],
+      requestId: safeChain(response?.cloud?.request_id ?? response?.request_id),
+    });
+    return true;
+  }
+
+  function rejectSupportBundle(operation, error, owner) {
+    if (!current("supportBundle", operation, owner)) return false;
+    const fixed = fixedError(error);
+    if (fixed.code === "local_admin.authentication_failed") localSession = null;
+    feedback = Object.freeze({ kind: "error", ...fixed });
+    return true;
+  }
+
+  function finishSupportBundle(operation) {
+    if (operations.supportBundle === operation) operations.supportBundle = null;
+  }
+
   function openSecretDialog(owner, deploymentId, action, referenceId = "") {
     const deployment = deployments.find((item) => item.deployment_id === deploymentId);
     const reference = secretReferences.find((item) => item.reference_id === referenceId);
@@ -630,6 +1001,7 @@ export function createPrivateGatewayPageState({
     if (!owns(owner) || !canManageSecrets || !deployment || !allowed || busy()) return false;
     closeDialogInternal();
     stateDialog = closedStateDialog();
+    acceptanceDialog = closedAcceptanceDialog();
     secretDialog = Object.freeze({
       open: true,
       state: "form",
@@ -799,10 +1171,11 @@ export function createPrivateGatewayPageState({
   }
 
   function blocksShellDomReplacement() {
-    return dialog.open || stateDialog.open || secretDialog.open
+    return dialog.open || stateDialog.open || secretDialog.open || acceptanceDialog.open
       || Boolean(operations.create || operations.copy || operations.revoke
         || operations.command || operations.policy || operations.localSession
-        || operations.secret);
+        || operations.secret || operations.validation || operations.acceptance
+        || operations.supportBundle);
   }
 
   function snapshot() {
@@ -815,10 +1188,13 @@ export function createPrivateGatewayPageState({
       secretReferences,
       installerCatalog,
       installerSelection,
+      validationStates,
+      supportBundleStates,
       dialog,
       stateDialog,
       registration,
       secretDialog,
+      acceptanceDialog,
       localSession,
       feedback,
       canManage,
@@ -829,10 +1205,17 @@ export function createPrivateGatewayPageState({
       canManageSecrets,
       canReadInstallers,
       canManageInstallations,
+      canReadValidations,
+      canManageValidations,
+      canAcceptDelivery,
+      canReadSupportBundles,
+      canManageSupportBundles,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
       secretBusy: Boolean(operations.localSession || operations.secret),
+      validationBusy: Boolean(operations.validation || operations.acceptance),
+      supportBundleBusy: Boolean(operations.supportBundle),
     });
   }
 
@@ -852,7 +1235,8 @@ export function createPrivateGatewayPageState({
   function busy() {
     return Boolean(operations.create || operations.revoke || operations.copy
       || operations.command || operations.policy || operations.localSession
-      || operations.secret);
+      || operations.secret || operations.validation || operations.acceptance
+      || operations.supportBundle);
   }
 
   function sessionActive(deploymentId) {
@@ -876,6 +1260,11 @@ export function createPrivateGatewayPageState({
     acceptStateCommand, rejectStateCommand, finishStateCommand,
     beginTelemetryPolicy, acceptTelemetryPolicy, rejectTelemetryPolicy,
     finishTelemetryPolicy,
+    beginValidation, acceptValidation, rejectValidation, finishValidation,
+    openDeliveryAcceptance, closeDeliveryAcceptance, beginDeliveryAcceptance,
+    acceptDeliveryAcceptance, rejectDeliveryAcceptance, finishDeliveryAcceptance,
+    isDeliveryAcceptanceCurrent,
+    beginSupportBundle, acceptSupportBundle, rejectSupportBundle, finishSupportBundle,
     openSecretDialog, closeSecretDialog, beginLocalSession, acceptLocalSession,
     rejectLocalSession, finishLocalSession, beginSecretMutation,
     acceptSecretMutation, rejectSecretMutation, finishSecretMutation,
@@ -892,6 +1281,8 @@ function ownerKeyFor(owner) {
     owner.telemetryReadIdentity, owner.telemetryManageIdentity, owner.usageReadIdentity,
     owner.secretReadIdentity, owner.accountId, owner.role,
     owner.installerReadIdentity, owner.installationManageIdentity,
+    owner.validationReadIdentity, owner.validationManageIdentity,
+    owner.deliveryAcceptIdentity, owner.supportBundleReadIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -904,6 +1295,39 @@ function validList(response) {
 function validRegistration(response) {
   return Boolean(response?.deployment && DEPLOYMENT_ID.test(String(response.deployment.deployment_id ?? ""))
     && typeof response.idempotent_replay === "boolean");
+}
+
+function validValidationResponse(response, deploymentId) {
+  const validation = response?.validation;
+  const acceptance = response?.delivery_acceptance ?? null;
+  return Boolean(validation
+    && VALIDATION_RUN_ID.test(String(validation.validation_run_id ?? ""))
+    && validation.deployment_id === deploymentId
+    && Number.isSafeInteger(validation.attempt) && validation.attempt > 0
+    && ["requested", "completed"].includes(validation.status)
+    && Array.isArray(validation.requested_check_codes)
+    && Array.isArray(validation.checks)
+    && Array.isArray(validation.effective_checks)
+    && (acceptance === null
+      || acceptance.validation_run_id === validation.validation_run_id));
+}
+
+function validLocalBundleState(value, deploymentId) {
+  return Boolean(value
+    && SUPPORT_BUNDLE_ID.test(String(value.bundle_id ?? ""))
+    && value.deployment_id === deploymentId
+    && ["preview_ready", "uploading", "uploaded", "failed", "cancelled", "expired"]
+      .includes(value.status)
+    && Number.isSafeInteger(value.revision) && value.revision > 0
+    && Array.isArray(value.manifest?.entries)
+    && value.manifest.bundle_id === value.bundle_id
+    && value.manifest.deployment_id === deploymentId);
+}
+
+function retainOwnedMap(value, deploymentIds) {
+  return Object.freeze(Object.fromEntries(Object.entries(value).filter(
+    ([deploymentId]) => deploymentIds.has(deploymentId),
+  )));
 }
 
 function validDesiredResponses(responses, deployments) {
@@ -1156,6 +1580,16 @@ function closedSecretDialog() {
     action: "",
     deploymentId: "",
     referenceId: "",
+    error: null,
+  });
+}
+
+function closedAcceptanceDialog() {
+  return Object.freeze({
+    open: false,
+    state: "closed",
+    deploymentId: "",
+    validationRunId: "",
     error: null,
   });
 }

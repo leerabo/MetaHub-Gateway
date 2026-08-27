@@ -1,4 +1,4 @@
-/** PRD-120..122 Workspace Edge identity, desired state, telemetry, and Fleet clients. */
+/** PRD-120..125 Workspace Edge identity, lifecycle, validation, and support clients. */
 
 import { AuthApiError } from "./auth.js";
 import { PlatformApiError } from "./platform.js";
@@ -20,8 +20,12 @@ const INSTALLER_ARTIFACT_ID = /^ira_[0-9a-f]{32}$/u;
 const INSTALL_PROFILE_ID = /^ipr_[0-9a-f]{32}$/u;
 const PREFLIGHT_REPORT_ID = /^pfr_[0-9a-f]{32}$/u;
 const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
+const VALIDATION_RUN_ID = /^dvr_[0-9a-f]{32}$/u;
+const VALIDATION_CHECK_ID = /^dvc_[0-9a-f]{32}$/u;
+const DELIVERY_ACCEPTANCE_ID = /^eda_[0-9a-f]{32}$/u;
+const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
-const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
+const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const UTC_TIME = /^20[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{3})?Z$/u;
 const CHAIN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
@@ -50,6 +54,15 @@ const INSTALLER_MEDIA_TYPES = Object.freeze([
   "application/json", "application/spdx+json",
   "application/vnd.docker.distribution.manifest.v2+json", "application/x-tar",
   "application/yaml", "text/x-python",
+]);
+const VALIDATION_CHECK_CODES = Object.freeze([
+  "device_certificate", "signed_config_lkg", "provider_connectivity",
+  "minimal_gateway_request", "usage_cost_failure_sync", "backup_readiness",
+  "capacity_readiness", "performance_baseline",
+]);
+const SUPPORT_BUNDLE_COLLECTOR_CODES = Object.freeze([
+  "runtime.version", "runtime.watermarks", "runtime.health", "runtime.errors",
+  "runtime.logs",
 ]);
 
 const DEPLOYMENT_KEYS = Object.freeze([
@@ -159,6 +172,127 @@ export async function listEdgeSecretReferences({ controlApiUrl, signal } = {}) {
   const references = result.payload.references.map(validateSecretReference);
   unique(references.map((item) => item.reference_id), "secret_references");
   return Object.freeze({ references: Object.freeze(references), ...trace(result.payload) });
+}
+
+export async function startEdgeValidation({
+  controlApiUrl,
+  deploymentId,
+  action = "start",
+  sourceValidationRunId = null,
+  idempotencyKey,
+  signal,
+} = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const normalizedAction = clientChoice(
+    action,
+    ["start", "retry_failed"],
+    "validation_action",
+  );
+  const source = sourceValidationRunId === null
+    ? null
+    : clientId(sourceValidationRunId, VALIDATION_RUN_ID, "source_validation_run_id");
+  if ((normalizedAction === "retry_failed") !== (source !== null)) {
+    invalidWorkspaceRequest("validation_action");
+  }
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/validations`,
+    {
+      method: "POST",
+      body: { action: normalizedAction, source_validation_run_id: source },
+      csrf: true,
+      headers: { "Idempotency-Key": clientIdempotencyKey(idempotencyKey) },
+      signal,
+    },
+    "workspace",
+  );
+  return validateEdgeValidationResponse(result.payload, id);
+}
+
+export async function getEdgeValidation({
+  controlApiUrl,
+  deploymentId,
+  validationRunId,
+  signal,
+} = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const runId = clientId(validationRunId, VALIDATION_RUN_ID, "validation_run_id");
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/validations/${encodeURIComponent(runId)}`,
+    { signal },
+    "workspace",
+  );
+  const response = validateEdgeValidationResponse(result.payload, id);
+  if (response.validation.validation_run_id !== runId) {
+    invalidWorkspaceResponse("validation_owner");
+  }
+  return response;
+}
+
+export async function acceptEdgeDelivery({
+  controlApiUrl,
+  deploymentId,
+  validationRunId,
+  expectedRevision,
+  idempotencyKey,
+  stepUpGrant,
+  signal,
+} = {}) {
+  const id = clientId(deploymentId, DEPLOYMENT_ID, "deployment_id");
+  const runId = clientId(validationRunId, VALIDATION_RUN_ID, "validation_run_id");
+  const grant = String(stepUpGrant ?? "");
+  if (!/^[A-Za-z0-9_-]{43,128}$/u.test(grant)) {
+    invalidWorkspaceRequest("step_up_grant");
+  }
+  const result = await request(
+    controlApiUrl,
+    `/edge/deployments/${encodeURIComponent(id)}/delivery-acceptances`,
+    {
+      method: "POST",
+      body: { validation_run_id: runId },
+      csrf: true,
+      headers: {
+        "Idempotency-Key": clientIdempotencyKey(idempotencyKey),
+        "If-Match": `"${clientInteger(
+          expectedRevision,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          "expected_revision",
+        )}"`,
+        "X-Step-Up-Grant": grant,
+      },
+      signal,
+    },
+    "workspace",
+  );
+  exact(result.payload, [
+    "acceptance", "idempotent_replay", "request_id", "trace_id",
+  ], "delivery_acceptance");
+  const acceptance = validateDeliveryAcceptance(result.payload.acceptance);
+  if (acceptance.validation_run_id !== runId
+    || acceptance.deployment_revision !== expectedRevision) {
+    invalidWorkspaceResponse("delivery_acceptance_owner");
+  }
+  return Object.freeze({
+    acceptance,
+    idempotent_replay: boolean(result.payload.idempotent_replay, "idempotent_replay"),
+    ...trace(result.payload),
+  });
+}
+
+export async function getEdgeSupportBundle({ controlApiUrl, bundleId, signal } = {}) {
+  const id = clientId(bundleId, SUPPORT_BUNDLE_ID, "support_bundle_id");
+  const result = await request(
+    controlApiUrl,
+    `/edge/support-bundles/${encodeURIComponent(id)}`,
+    { signal },
+    "workspace",
+  );
+  exact(result.payload, ["bundle", "request_id", "trace_id"], "support_bundle");
+  const bundle = validateEdgeSupportBundle(result.payload.bundle);
+  if (bundle.support_bundle_id !== id) invalidWorkspaceResponse("support_bundle_owner");
+  return Object.freeze({ bundle, ...trace(result.payload) });
 }
 
 export async function createEdgeRegistration({
@@ -788,6 +922,327 @@ function installerCode(value, label) {
   const text = responseText(value, 80, label);
   if (!INSTALLER_CODE.test(text)) invalidWorkspaceResponse(label);
   return text;
+}
+
+function validateEdgeValidationResponse(value, expectedDeploymentId) {
+  plain(value, "validation_response");
+  exact(value, [
+    "delivery_acceptance", "idempotent_replay", "request_id", "trace_id", "validation",
+  ], "validation_response");
+  const validation = validateValidationRun(value.validation);
+  const acceptance = value.delivery_acceptance === null
+    ? null
+    : validateDeliveryAcceptance(value.delivery_acceptance);
+  if (validation.deployment_id !== expectedDeploymentId
+    || (acceptance && (
+      acceptance.validation_run_id !== validation.validation_run_id
+      || acceptance.deployment_revision !== validation.deployment_revision
+      || acceptance.installer_release_id !== validation.installer_release_id
+      || acceptance.desired_generation !== validation.desired_generation
+      || acceptance.applied_generation !== validation.applied_generation
+      || acceptance.lkg_generation !== validation.lkg_generation
+    ))) {
+    invalidWorkspaceResponse("validation_owner");
+  }
+  return Object.freeze({
+    validation,
+    delivery_acceptance: acceptance,
+    idempotent_replay: boolean(value.idempotent_replay, "idempotent_replay"),
+    ...trace(value),
+  });
+}
+
+function validateValidationRun(value) {
+  plain(value, "validation");
+  exact(value, [
+    "applied_generation", "attempt", "checks", "completed_at", "created_at",
+    "deployment_id", "deployment_revision", "duration_ms", "effective_checks",
+    "input_contract_sha256", "installer_release_id", "lkg_generation", "outcome",
+    "plan_version", "requested_check_codes", "source_validation_run_id", "started_at",
+    "status", "updated_at", "validation_run_id", "desired_generation",
+  ], "validation");
+  boundedArray(value.requested_check_codes, VALIDATION_CHECK_CODES.length, "validation_codes");
+  boundedArray(value.checks, VALIDATION_CHECK_CODES.length, "validation_checks");
+  boundedArray(value.effective_checks, VALIDATION_CHECK_CODES.length, "effective_checks");
+  if (!value.requested_check_codes.length) invalidWorkspaceResponse("validation_codes");
+  const requested = value.requested_check_codes.map((item) => responseChoice(
+    item,
+    VALIDATION_CHECK_CODES,
+    "validation_code",
+  ));
+  const checks = value.checks.map(validateValidationCheck);
+  const effectiveChecks = value.effective_checks.map(validateValidationCheck);
+  if (!canonicalCodes(requested)
+    || !canonicalCodes(checks.map((item) => item.code))
+    || !canonicalCodes(effectiveChecks.map((item) => item.code))) {
+    invalidWorkspaceResponse("validation_check_order");
+  }
+  const runId = responseId(value.validation_run_id, VALIDATION_RUN_ID, "validation_run_id");
+  const sourceId = value.source_validation_run_id === null
+    ? null
+    : responseId(
+      value.source_validation_run_id,
+      VALIDATION_RUN_ID,
+      "source_validation_run_id",
+    );
+  const attempt = integer(value.attempt, 1, Number.MAX_SAFE_INTEGER, "validation_attempt");
+  const status = responseChoice(value.status, ["requested", "completed"], "validation_status");
+  const outcome = value.outcome === null
+    ? null
+    : responseChoice(value.outcome, ["passed", "failed"], "validation_outcome");
+  const duration = value.duration_ms === null
+    ? null
+    : integer(value.duration_ms, 0, 900_000, "validation_duration");
+  const startedAt = nullableTimestamp(value.started_at, "validation_started_at");
+  const completedAt = nullableTimestamp(value.completed_at, "validation_completed_at");
+  if ((attempt === 1) !== (sourceId === null)
+    || checks.some((item) => item.source_validation_run_id !== runId)
+    || (status === "requested" && (
+      outcome !== null || duration !== null || checks.length || startedAt !== null
+      || completedAt !== null
+    ))
+    || (status === "completed" && (
+      outcome === null || duration === null || startedAt === null || completedAt === null
+      || checks.length !== requested.length
+      || checks.some((item, index) => item.code !== requested[index])
+      || effectiveChecks.length !== VALIDATION_CHECK_CODES.length
+      || (outcome === "failed") !== checks.some((item) => item.outcome === "failed")
+    ))) {
+    invalidWorkspaceResponse("validation_state");
+  }
+  const desiredGeneration = integer(
+    value.desired_generation,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "desired_generation",
+  );
+  const appliedGeneration = integer(
+    value.applied_generation,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "applied_generation",
+  );
+  const lkgGeneration = integer(
+    value.lkg_generation,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    "lkg_generation",
+  );
+  if (appliedGeneration > desiredGeneration || lkgGeneration > appliedGeneration) {
+    invalidWorkspaceResponse("validation_generations");
+  }
+  return Object.freeze({
+    validation_run_id: runId,
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    source_validation_run_id: sourceId,
+    attempt,
+    plan_version: responseChoice(value.plan_version, ["edge-delivery-v1"], "validation_plan"),
+    deployment_revision: integer(
+      value.deployment_revision,
+      1,
+      Number.MAX_SAFE_INTEGER,
+      "validation_deployment_revision",
+    ),
+    installer_release_id: responseId(
+      value.installer_release_id,
+      INSTALLER_RELEASE_ID,
+      "installer_release_id",
+    ),
+    desired_generation: desiredGeneration,
+    applied_generation: appliedGeneration,
+    lkg_generation: lkgGeneration,
+    input_contract_sha256: digest(value.input_contract_sha256, "input_contract_sha256"),
+    requested_check_codes: Object.freeze(requested),
+    status,
+    outcome,
+    duration_ms: duration,
+    checks: Object.freeze(checks),
+    effective_checks: Object.freeze(effectiveChecks),
+    started_at: startedAt,
+    completed_at: completedAt,
+    created_at: timestamp(value.created_at, "validation_created_at"),
+    updated_at: timestamp(value.updated_at, "validation_updated_at"),
+  });
+}
+
+function validateValidationCheck(value) {
+  plain(value, "validation_check");
+  exact(value, [
+    "code", "created_at", "duration_ms", "evidence_sha256", "outcome",
+    "reason_code", "recovery_action_code", "source_validation_run_id",
+    "validation_check_id",
+  ], "validation_check");
+  const outcome = responseChoice(value.outcome, ["passed", "failed"], "check_outcome");
+  const recovery = value.recovery_action_code === null
+    ? null
+    : installerCode(value.recovery_action_code, "recovery_action_code");
+  if ((outcome === "failed") !== (recovery !== null)) {
+    invalidWorkspaceResponse("recovery_action_code");
+  }
+  return Object.freeze({
+    validation_check_id: responseId(
+      value.validation_check_id,
+      VALIDATION_CHECK_ID,
+      "validation_check_id",
+    ),
+    code: responseChoice(value.code, VALIDATION_CHECK_CODES, "validation_code"),
+    outcome,
+    reason_code: installerCode(value.reason_code, "validation_reason_code"),
+    recovery_action_code: recovery,
+    evidence_sha256: digest(value.evidence_sha256, "validation_evidence_sha256"),
+    duration_ms: integer(value.duration_ms, 0, 900_000, "validation_check_duration"),
+    source_validation_run_id: responseId(
+      value.source_validation_run_id,
+      VALIDATION_RUN_ID,
+      "source_validation_run_id",
+    ),
+    created_at: timestamp(value.created_at, "validation_check_created_at"),
+  });
+}
+
+function validateDeliveryAcceptance(value) {
+  plain(value, "delivery_acceptance");
+  exact(value, [
+    "accepted_at", "accepted_by_account_id", "applied_generation",
+    "delivery_acceptance_id", "deployment_revision", "desired_generation",
+    "installer_release_id", "lkg_generation", "validation_run_id",
+    "validation_set_sha256",
+  ], "delivery_acceptance");
+  return Object.freeze({
+    delivery_acceptance_id: responseId(
+      value.delivery_acceptance_id,
+      DELIVERY_ACCEPTANCE_ID,
+      "delivery_acceptance_id",
+    ),
+    validation_run_id: responseId(
+      value.validation_run_id,
+      VALIDATION_RUN_ID,
+      "validation_run_id",
+    ),
+    validation_set_sha256: digest(value.validation_set_sha256, "validation_set_sha256"),
+    deployment_revision: integer(
+      value.deployment_revision,
+      1,
+      Number.MAX_SAFE_INTEGER,
+      "acceptance_deployment_revision",
+    ),
+    installer_release_id: responseId(
+      value.installer_release_id,
+      INSTALLER_RELEASE_ID,
+      "installer_release_id",
+    ),
+    desired_generation: integer(
+      value.desired_generation,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "desired_generation",
+    ),
+    applied_generation: integer(
+      value.applied_generation,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "applied_generation",
+    ),
+    lkg_generation: integer(
+      value.lkg_generation,
+      0,
+      Number.MAX_SAFE_INTEGER,
+      "lkg_generation",
+    ),
+    accepted_by_account_id: responseId(
+      value.accepted_by_account_id,
+      OWNER_ID,
+      "accepted_by_account_id",
+    ),
+    accepted_at: timestamp(value.accepted_at, "accepted_at"),
+  });
+}
+
+function validateEdgeSupportBundle(value) {
+  plain(value, "support_bundle");
+  exact(value, [
+    "approved_at", "approved_by_account_id", "archive_size_bytes", "created_at",
+    "deployment_id", "entries", "expires_at", "manifest_sha256", "object_size_bytes",
+    "revision", "scan_outcome", "scan_version", "status", "support_bundle_id",
+  ], "support_bundle");
+  boundedArray(value.entries, 64, "support_bundle_entries");
+  if (!value.entries.length) invalidWorkspaceResponse("support_bundle_entries");
+  const entries = value.entries.map(validateEdgeSupportBundleEntry);
+  if (!canonicalCodes(entries.map((item) => item.collector_code), SUPPORT_BUNDLE_COLLECTOR_CODES)) {
+    invalidWorkspaceResponse("support_bundle_entries");
+  }
+  return Object.freeze({
+    support_bundle_id: responseId(
+      value.support_bundle_id,
+      SUPPORT_BUNDLE_ID,
+      "support_bundle_id",
+    ),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    status: responseChoice(value.status, ["ready", "expired", "deleted"], "bundle_status"),
+    revision: integer(value.revision, 1, Number.MAX_SAFE_INTEGER, "bundle_revision"),
+    manifest_sha256: digest(value.manifest_sha256, "manifest_sha256"),
+    entries: Object.freeze(entries),
+    scan_version: responseChoice(
+      value.scan_version,
+      ["support-bundle-scan-v1"],
+      "scan_version",
+    ),
+    scan_outcome: responseChoice(value.scan_outcome, ["clean"], "scan_outcome"),
+    archive_size_bytes: integer(
+      value.archive_size_bytes,
+      1,
+      100 * 1024 * 1024,
+      "archive_size_bytes",
+    ),
+    object_size_bytes: integer(
+      value.object_size_bytes,
+      34,
+      100 * 1024 * 1024 + 64,
+      "object_size_bytes",
+    ),
+    approved_by_account_id: responseId(
+      value.approved_by_account_id,
+      OWNER_ID,
+      "approved_by_account_id",
+    ),
+    approved_at: timestamp(value.approved_at, "approved_at"),
+    expires_at: timestamp(value.expires_at, "expires_at"),
+    created_at: timestamp(value.created_at, "created_at"),
+  });
+}
+
+function validateEdgeSupportBundleEntry(value) {
+  plain(value, "support_bundle_entry");
+  exact(value, [
+    "classification", "collector_code", "media_type", "size_bytes",
+  ], "support_bundle_entry");
+  const collectorCode = responseChoice(
+    value.collector_code,
+    SUPPORT_BUNDLE_COLLECTOR_CODES,
+    "collector_code",
+  );
+  const expected = {
+    "runtime.version": ["version", "application/json"],
+    "runtime.watermarks": ["watermark", "application/json"],
+    "runtime.health": ["health", "application/json"],
+    "runtime.errors": ["error_code", "application/json"],
+    "runtime.logs": ["log_summary", "application/x-ndjson"],
+  }[collectorCode];
+  if (value.classification !== expected[0] || value.media_type !== expected[1]) {
+    invalidWorkspaceResponse("support_bundle_entry");
+  }
+  return Object.freeze({
+    collector_code: collectorCode,
+    classification: value.classification,
+    media_type: value.media_type,
+    size_bytes: integer(value.size_bytes, 1, 8 * 1024 * 1024, "entry_size_bytes"),
+  });
+}
+
+function canonicalCodes(values, order = VALIDATION_CHECK_CODES) {
+  return values.length === new Set(values).size
+    && values.every((value, index) => index === 0
+      || order.indexOf(values[index - 1]) < order.indexOf(value));
 }
 
 function validateDeployment(value) {

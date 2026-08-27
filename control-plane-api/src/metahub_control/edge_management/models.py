@@ -6,14 +6,16 @@ from datetime import datetime
 from typing import Literal
 
 from metahub_shared.private_gateway import (
+    DeploymentValidationReport,
     InstallerRelease,
     PreflightCheck,
     PreflightReport,
     SecretReference,
     TelemetryLevel,
     TelemetryStream,
+    ValidationCheckCode,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _StrictModel(BaseModel):
@@ -476,6 +478,125 @@ class EdgeInstallationUpdateRequest(_StrictModel):
 class EdgeInstallationResponse(_StrictModel):
     installation: EdgeInstallationSummary
     idempotent_replay: bool
+    request_id: str
+    trace_id: str
+
+
+class EdgeValidationStartRequest(_StrictModel):
+    action: Literal["start", "retry_failed"]
+    source_validation_run_id: str | None = Field(
+        default=None, pattern=r"^dvr_[0-9a-f]{32}$"
+    )
+
+    @model_validator(mode="after")
+    def _source_matches_action(self) -> EdgeValidationStartRequest:
+        if (self.action == "retry_failed") != (self.source_validation_run_id is not None):
+            raise ValueError("edge.validation_request_invalid")
+        return self
+
+
+class EdgeValidationCheckSummary(_StrictModel):
+    validation_check_id: str = Field(pattern=r"^dvc_[0-9a-f]{32}$")
+    code: ValidationCheckCode
+    outcome: Literal["passed", "failed"]
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    recovery_action_code: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_.-]{1,79}$"
+    )
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    duration_ms: int = Field(ge=0, le=900_000)
+    source_validation_run_id: str = Field(pattern=r"^dvr_[0-9a-f]{32}$")
+    created_at: datetime
+
+
+class EdgeDeliveryAcceptanceSummary(_StrictModel):
+    delivery_acceptance_id: str = Field(pattern=r"^eda_[0-9a-f]{32}$")
+    validation_run_id: str = Field(pattern=r"^dvr_[0-9a-f]{32}$")
+    validation_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    deployment_revision: int = Field(ge=1)
+    installer_release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    desired_generation: int = Field(ge=0)
+    applied_generation: int = Field(ge=0)
+    lkg_generation: int = Field(ge=0)
+    accepted_by_account_id: str
+    accepted_at: datetime
+
+
+class EdgeValidationRunSummary(_StrictModel):
+    validation_run_id: str = Field(pattern=r"^dvr_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    source_validation_run_id: str | None = Field(
+        default=None, pattern=r"^dvr_[0-9a-f]{32}$"
+    )
+    attempt: int = Field(ge=1)
+    plan_version: Literal["edge-delivery-v1"]
+    deployment_revision: int = Field(ge=1)
+    installer_release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    desired_generation: int = Field(ge=0)
+    applied_generation: int = Field(ge=0)
+    lkg_generation: int = Field(ge=0)
+    input_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_check_codes: tuple[ValidationCheckCode, ...]
+    status: Literal["requested", "completed"]
+    outcome: Literal["passed", "failed"] | None = None
+    duration_ms: int | None = Field(default=None, ge=0, le=900_000)
+    checks: tuple[EdgeValidationCheckSummary, ...] = ()
+    effective_checks: tuple[EdgeValidationCheckSummary, ...] = ()
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EdgeValidationResponse(_StrictModel):
+    validation: EdgeValidationRunSummary
+    delivery_acceptance: EdgeDeliveryAcceptanceSummary | None = None
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeValidationReportRequest(_StrictModel):
+    report: DeploymentValidationReport
+
+
+class EdgeDeliveryAcceptanceRequest(_StrictModel):
+    validation_run_id: str = Field(pattern=r"^dvr_[0-9a-f]{32}$")
+
+
+class EdgeDeliveryAcceptanceResponse(_StrictModel):
+    acceptance: EdgeDeliveryAcceptanceSummary
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeSupportBundleEntrySummary(_StrictModel):
+    collector_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    classification: Literal["version", "watermark", "health", "error_code", "log_summary"]
+    media_type: Literal["application/json", "application/x-ndjson"]
+    size_bytes: int = Field(ge=1, le=8 * 1024 * 1024)
+
+
+class EdgeSupportBundleSummary(_StrictModel):
+    support_bundle_id: str = Field(pattern=r"^esb_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    status: Literal["ready", "expired", "deleted"]
+    revision: int = Field(ge=1)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    entries: tuple[EdgeSupportBundleEntrySummary, ...] = Field(min_length=1, max_length=64)
+    scan_version: Literal["support-bundle-scan-v1"]
+    scan_outcome: Literal["clean"]
+    archive_size_bytes: int = Field(ge=1, le=100 * 1024 * 1024)
+    object_size_bytes: int = Field(ge=34, le=100 * 1024 * 1024 + 64)
+    approved_by_account_id: str
+    approved_at: datetime
+    expires_at: datetime
+    created_at: datetime
+
+
+class EdgeSupportBundleResponse(_StrictModel):
+    bundle: EdgeSupportBundleSummary
     request_id: str
     trace_id: str
 

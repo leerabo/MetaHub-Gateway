@@ -1,6 +1,6 @@
 # PRD-125 私有部署验证与脱敏支持包
 
-状态：设计冻结，尚未编码；计划迁移 0117。依赖 PRD-120..124，范围以 Excel PRD-125 为准。
+状态：已完成；迁移 0117、Agent 验证执行器、Control 验证/交付接受、本地脱敏支持包、加密上传、受控下载和 Workspace Console 已交付。依赖 PRD-120..124，范围以 Excel PRD-125 为准。
 
 ## Excel 权威合同
 
@@ -45,3 +45,20 @@ tenant admin 执行验证和接受；security_admin 预览/批准支持包；pla
 ## 6. 专项验证计划
 
 0117 迁移；真实调用到 Usage/失败闭环、失败项重试、跨版本比较；路径穿越/符号链接/压缩炸弹/大小预算；Secret 值/格式/熵扫描；SupportGrant 缺失/过期/撤销/字段裁剪；三浏览器预览/接受；验证/支持包 SLO；对象 TTL、临时目录、日志和静止终态。
+
+## 7. 实施闭环
+
+- Shared SDK 固化八项 `edge-delivery-v1` 验证顺序、不可变 report/check、RFC 8785 摘要、五个编译期支持包 collector、固定归档路径、递归字段/格式/熵/本地 Secret HMAC 扫描、确定性 ZIP 和 AES-256-GCM 加密合同。支持包在任何 collector 前后检查单调时钟，达到 5 分钟立即失败关闭并清理 staging。
+- Gateway `DeploymentValidationRunner` 只接受完整编译期 probe 表，按 Control 指定的合法顺序执行全部或失败子集。每类证据使用独立 exact schema；最小 Gateway 请求与 Usage/成本/失败核对必须携带同一 `probe_sha256`，异常、超时、字段漂移和伪通过均只形成固定失败码。15 分钟后当前项和未执行项统一失败关闭，不回显 probe 异常正文。
+- Gateway 本地管理 API 仅允许 `tenant_security_admin` 的同源 Cookie/CSRF/step-up Session；preview 只接受固定 collector code，批准使用 revision CAS。原始 ZIP 仅在 `preview_ready` 存活，批准后生成加密对象并上传，成功、失败、取消、过期和重启恢复均清理 ZIP/密文/staging。
+- Control 0117 保存不可变 validation/check、DeliveryAcceptance、support bundle 裁剪元数据、逐次下载审计、事件/outbox 和幂等命令。验证输入绑定 Deployment revision、安装 release、Desired/LKG、Identity/Certificate generation；重试生成关联 attempt，完整有效检查通过后才允许绑定 Deployment 的 step-up 接受。
+- 支持包上传同时恢复 mTLS、EdgeSession、identity/revocation generation、diagnostics capability、owner 和客户批准绑定；云端从不加载解密 Secret。Workspace 只读取裁剪摘要；平台下载只接受 `workspace.diagnostics.read` SupportGrant，逐请求恢复客户/平台双审批、operator/workspace revision、撤销和 TTL，并记录不可变 download audit。后台 reaper 按 `ready -> expired -> deleted` 有界删除密文，失败保留 `expired` 供下轮重试，读取路径另有同步兜底。
+- Console 使用严格 DTO、Cookie-only/no-store 请求、幂等/CAS 和 Workspace 代次防护；owner/admin 可启动、刷新和仅重试失败项，DeliveryAcceptance 的 TOTP/恢复码/WebAuthn 与 step-up grant 只存在提交闭包。security_admin 可本地预览/取消/批准，页面不展示 raw log、证据 hash、对象引用、密文、审批证明或云端内部路径。
+
+## 8. 实施后两轮自审与验证
+
+- 第一轮按验收真实性、Agent 边界和客户授权复核。发现 Control 只有 report 接收端、Gateway 缺少实际执行器，已补齐编译期八项 runner、exact 证据 schema、统一 probe 关联和异常/超时失败关闭；确认失败项重试不覆盖历史 run，DeliveryAcceptance 绑定当前完整输入合同与 Deployment step-up。
+- 第二轮按支持包静止终态、授权撤销和 SLO 复核。发现 5 分钟常量未进入执行路径、云端对象仅在读取时懒删除，已补齐 collector 前后 deadline、`expired -> deleted` 数据库状态机、有界后台 reaper 和失败重试；确认本地原始文件各终态清理、云端只存加密对象、SupportGrant 每次下载动态恢复双域审批和 authority revision。
+- 聚焦自动化覆盖 Python `33/33`、PRD-125 Console `5/5`、PRD-120..124 Console 回归 `24/24`、Ruff、`py_compile`、Console lint 和 diff hygiene。API 测试使用 fresh 0117 数据库、真实文件对象、mTLS/EdgeSession、SupportGrant 双审批/撤销/漂移/过期和逐次下载审计；完整记录见 `docs/testing/PRD-125-tests.md`。
+
+两轮实施自审均关闭 P0/P1；下一权威项为 PRD-126。按 S5 批次规则，真实三浏览器、Linux/对象存储、性能、长稳和 0111..0122 全迁移门禁保留到 PRD-130 独立提交后统一执行。

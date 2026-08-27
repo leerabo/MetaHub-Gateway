@@ -1,4 +1,4 @@
-/** PRD-120..124 installer, registration, telemetry, and local Secret binding. */
+/** PRD-120..125 installer, validation, support, and local security binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -47,6 +47,23 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       button.dataset.level ?? "",
     ));
   });
+  root.querySelectorAll("[data-private-gateway-validation]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onValidation?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.privateGatewayValidation ?? "",
+    ));
+  });
+  root.querySelectorAll("[data-private-gateway-acceptance-open]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onAcceptanceOpen?.(
+      button.dataset.deploymentId ?? "",
+    ));
+  });
+  root.querySelectorAll("[data-private-gateway-support-bundle]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onSupportBundle?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.privateGatewaySupportBundle ?? "",
+    ));
+  });
   root.querySelectorAll("[data-private-gateway-secret-open]").forEach((button) => {
     button.addEventListener("click", () => void callbacks.onSecretOpen?.(
       button.dataset.deploymentId ?? "",
@@ -64,7 +81,71 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
   bindDialog(root, callbacks);
   bindStateDialog(root, callbacks);
   bindSecretDialog(root, callbacks);
+  bindAcceptanceDialog(root, callbacks);
   return true;
+}
+
+function bindAcceptanceDialog(root, callbacks) {
+  const dialog = root.querySelector("[data-private-gateway-acceptance-dialog]");
+  if (!dialog) return;
+  const close = async () => {
+    eraseSensitive(dialog);
+    const closed = await callbacks.onAcceptanceClose?.();
+    if (closed !== false) {
+      globalThis.document?.querySelector?.("[data-private-gateway-acceptance-open]")?.focus?.();
+    }
+  };
+  dialog.querySelectorAll("[data-private-gateway-acceptance-close]").forEach((button) => {
+    button.addEventListener("click", () => void close());
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    eraseSensitive(dialog);
+    if (dialog.getAttribute("aria-busy") !== "true") void close();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") trapDialogFocus(dialog, event);
+  });
+  const form = dialog.querySelector("[data-private-gateway-acceptance-form]");
+  const methodSelect = form?.querySelector("[data-private-gateway-acceptance-method]");
+  const codeLabel = form?.querySelector("[data-private-gateway-acceptance-code]");
+  const codeInput = codeLabel?.querySelector("[data-private-gateway-sensitive]");
+  methodSelect?.addEventListener("change", () => {
+    const usesSecurityKey = methodSelect.value === "webauthn";
+    if (codeInput) {
+      codeInput.value = "";
+      codeInput.disabled = usesSecurityKey;
+      codeInput.required = !usesSecurityKey;
+    }
+    if (codeLabel) codeLabel.hidden = usesSecurityKey;
+  });
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const method = String(data.get("method") ?? "");
+    const input = form.querySelector("[data-private-gateway-sensitive]");
+    let verificationCode = String(input?.value ?? "").trim().toUpperCase();
+    if (input) input.value = "";
+    const valid = data.get("confirmed") === "on" && (method === "webauthn"
+      || (method === "totp"
+      ? /^[0-9]{6}$/u.test(verificationCode)
+      : method === "recovery_code"
+        && /^MHRC-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}$/u.test(verificationCode)));
+    if (!valid) {
+      verificationCode = "";
+      setAcceptanceFormError(dialog, "请输入有效的二次验证码");
+      return;
+    }
+    setAcceptanceFormError(dialog, "");
+    try {
+      await callbacks.onAcceptance?.({ method, verificationCode });
+    } finally {
+      verificationCode = "";
+      eraseSensitive(form);
+    }
+  });
+  if (!dialog.open) dialog.showModal?.();
+  dialog.querySelector("select")?.focus?.();
 }
 
 function bindSecretDialog(root, callbacks) {
@@ -260,4 +341,5 @@ function strictInteger(value) { const text = String(value ?? ""); return /^[1-9]
 function setFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-form-error]"); if (node) node.textContent = value; }
 function setStateFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-state-form-error]"); if (node) node.textContent = value; }
 function setSecretFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-secret-form-error]"); if (node) node.textContent = value; }
+function setAcceptanceFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-acceptance-form-error]"); if (node) node.textContent = value; }
 function cssEscape(value) { return globalThis.CSS?.escape?.(String(value)) ?? String(value).replace(/[^A-Za-z0-9_-]/gu, ""); }

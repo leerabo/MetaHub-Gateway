@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import sqlite3
 import threading
@@ -521,9 +522,7 @@ class LocalSecretStore:
     ) -> LocalProviderConnectionTest:
         if not callable(tester):
             raise LocalSecretStoreError("local_secret.tester_invalid")
-        with self.acquire(
-            reference_id, tenant_id=tenant_id, workspace_id=workspace_id
-        ) as lease:
+        with self.acquire(reference_id, tenant_id=tenant_id, workspace_id=workspace_id) as lease:
             result = self._invoke_tester(tester, lease.view())
             version = lease.version
         return self._record_test(reference_id, version=version, result=result)
@@ -822,9 +821,7 @@ class LocalSecretStore:
                         ),
                     )
                     reference = self._reference(connection, reference_id)
-                    self._event(
-                        connection, "edge.secret_reference_changed", reference, now=now
-                    )
+                    self._event(connection, "edge.secret_reference_changed", reference, now=now)
                 self._event(
                     connection,
                     "edge.provider_test_completed",
@@ -850,6 +847,137 @@ class LocalSecretStore:
                 raise LocalSecretStoreError("local_secret.storage_unavailable") from None
             finally:
                 connection.close()
+
+    def support_bundle_inputs(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        scanner_hmac_key: bytes,
+    ) -> tuple[dict[str, object], tuple[str, ...]]:
+        """Return an exact operational snapshot plus HMAC-only local-value scan material."""
+
+        if not 32 <= len(scanner_hmac_key) <= 512:
+            raise LocalSecretStoreError("local_secret.payload_invalid")
+        references = self.list_references(tenant_id=tenant_id, workspace_id=workspace_id)
+        fingerprints: list[str] = []
+        for reference in references:
+            if reference.status == "disabled":
+                continue
+            with self.acquire(
+                reference.reference_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+            ) as lease:
+                fingerprints.append(
+                    hmac.new(scanner_hmac_key, lease.view(), hashlib.sha256).hexdigest()
+                )
+        connection = self._connect()
+        try:
+            integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+            if integrity != "ok":
+                raise LocalSecretStoreError("local_secret.storage_unavailable")
+            counts = {
+                str(row["status"]): int(row["entry_count"])
+                for row in connection.execute(
+                    """
+                    SELECT status,COUNT(*) entry_count FROM local_secrets
+                    WHERE deployment_id=? AND tenant_id=? AND workspace_id=?
+                    GROUP BY status ORDER BY status
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchall()
+            }
+            revision = int(
+                connection.execute(
+                    """
+                    SELECT coalesce(MAX(revision),0) FROM local_secrets
+                    WHERE deployment_id=? AND tenant_id=? AND workspace_id=?
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchone()[0]
+            )
+            delivery = connection.execute(
+                """
+                SELECT COUNT(*) total_count,
+                  coalesce(SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END),0) pending_count,
+                  coalesce(MAX(outbox.created_at),'1970-01-01T00:00:00.000Z') latest_at
+                FROM local_secret_outbox outbox
+                JOIN local_secrets owner ON owner.reference_id=outbox.reference_id
+                WHERE owner.deployment_id=? AND owner.tenant_id=? AND owner.workspace_id=?
+                """,
+                (self._deployment_id, tenant_id, workspace_id),
+            ).fetchone()
+            outcomes = [
+                {"code": str(row["outcome"]), "count": int(row["outcome_count"])}
+                for row in connection.execute(
+                    """
+                    SELECT test.outcome,COUNT(*) outcome_count
+                    FROM local_provider_connection_tests test
+                    JOIN local_secrets owner ON owner.reference_id=test.reference_id
+                    WHERE owner.deployment_id=? AND owner.tenant_id=? AND owner.workspace_id=?
+                    GROUP BY test.outcome ORDER BY test.outcome
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchall()
+            ]
+            events = [
+                json.dumps(
+                    {
+                        "event_code": str(row["event_type"]),
+                        "occurred_at": str(row["created_at"]),
+                        "delivery_state": (
+                            "delivered" if row["delivered_at"] is not None else "pending"
+                        ),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                for row in connection.execute(
+                    """
+                    SELECT outbox.event_type,outbox.created_at,outbox.delivered_at
+                    FROM local_secret_outbox outbox
+                    JOIN local_secrets owner ON owner.reference_id=outbox.reference_id
+                    WHERE owner.deployment_id=? AND owner.tenant_id=? AND owner.workspace_id=?
+                    ORDER BY outbox.created_at DESC,outbox.event_id DESC LIMIT 100
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchall()
+            ]
+            snapshot: dict[str, object] = {
+                "runtime.version": {
+                    "schema_version": "1",
+                    "component_code": "gateway",
+                    "deployment_sha256": hashlib.sha256(
+                        self._deployment_id.encode("ascii")
+                    ).hexdigest(),
+                    "local_schema_version": _SCHEMA_VERSION,
+                },
+                "runtime.watermarks": {
+                    "revision": revision,
+                    "event_count": int(delivery["total_count"]),
+                    "pending_event_count": int(delivery["pending_count"]),
+                    "latest_event_at": str(delivery["latest_at"]),
+                },
+                "runtime.health": {
+                    "storage_outcome": integrity,
+                    "reference_count": len(references),
+                    "active_count": counts.get("active", 0),
+                    "rotating_count": counts.get("rotating", 0),
+                    "degraded_count": counts.get("degraded", 0),
+                    "disabled_count": counts.get("disabled", 0),
+                },
+                "runtime.errors": {"outcomes": outcomes},
+                "runtime.logs": ("\n".join(reversed(events)) + "\n") if events else "{}\n",
+            }
+            return snapshot, tuple(sorted(fingerprints))
+        except LocalSecretStoreError:
+            raise
+        except sqlite3.Error:
+            raise LocalSecretStoreError("local_secret.storage_unavailable") from None
+        finally:
+            connection.close()
 
     def next_sync_batch(self, *, limit: int = 64) -> EdgeSecretSyncBatch | None:
         """Claim the oldest safe outbox facts under one retry-stable batch ID."""
@@ -1196,9 +1324,7 @@ class LocalSecretStore:
                     "status": row["status"],
                     "revision": int(row["revision"]),
                     "active_version": (
-                        int(row["active_version"])
-                        if row["active_version"] is not None
-                        else None
+                        int(row["active_version"]) if row["active_version"] is not None else None
                     ),
                     "last_test_outcome": row["last_test_outcome"],
                     "capabilities": json.loads(row["capabilities_json"]),
@@ -1266,11 +1392,7 @@ class LocalSecretStore:
     ) -> None:
         if event_type not in _EVENT_TYPES:
             raise LocalSecretStoreError("local_secret.event_invalid")
-        body = (
-            payload.model_dump(mode="json")
-            if isinstance(payload, SecretReference)
-            else payload
-        )
+        body = payload.model_dump(mode="json") if isinstance(payload, SecretReference) else payload
         connection.execute(
             """
             INSERT INTO local_secret_outbox(

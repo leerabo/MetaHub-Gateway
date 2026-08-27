@@ -132,6 +132,52 @@
 .private-gateway-secret-dialog form > label { display: grid; gap: 6px; color: var(--muted); }
 .private-gateway-secret-dialog input,
 .private-gateway-secret-dialog select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
+.private-gateway-validation,
+.private-gateway-support { display: grid; gap: 12px; padding: 14px; border-bottom: 1px solid var(--line); }
+.private-gateway-validation { background: #fbfcfe; }
+.private-gateway-support { background: #fffdf7; }
+.private-gateway-validation > header,
+.private-gateway-support > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.private-gateway-validation > header > div:first-child,
+.private-gateway-support > header > div:first-child { display: grid; gap: 6px; }
+.private-gateway-validation h5,
+.private-gateway-support h5 { margin: 0; letter-spacing: 0; }
+.private-gateway-validation-actions,
+.private-gateway-support-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.private-gateway-validation-facts,
+.private-gateway-support-preview dl,
+.private-gateway-support-cloud dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--line); background: var(--line); }
+.private-gateway-support-cloud dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.private-gateway-validation-facts > div,
+.private-gateway-support-preview dl > div,
+.private-gateway-support-cloud dl > div { min-width: 0; padding: 9px 10px; background: var(--panel); }
+.private-gateway-validation-facts dt,
+.private-gateway-support-preview dt,
+.private-gateway-support-cloud dt { color: var(--muted); font-size: 0.72rem; }
+.private-gateway-validation-facts dd,
+.private-gateway-support-preview dd,
+.private-gateway-support-cloud dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.private-gateway-validation-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0; border: 1px solid var(--line); list-style: none; }
+.private-gateway-validation-checks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; min-width: 0; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.private-gateway-validation-checks li:nth-child(odd) { border-right: 1px solid var(--line); }
+.private-gateway-validation-checks li:nth-last-child(-n + 2) { border-bottom: 0; }
+.private-gateway-validation-checks small { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-validation-checks .tone-passed strong { color: var(--ok); }
+.private-gateway-validation-checks .tone-failed strong { color: var(--danger); }
+.private-gateway-validation-checks .tone-pending strong { color: var(--warning); }
+.private-gateway-acceptance-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; padding: 10px 12px; border-left: 3px solid var(--ok); background: #f0faf3; }
+.private-gateway-acceptance-summary small { grid-column: 1 / -1; color: var(--muted); }
+.private-gateway-support-preview,
+.private-gateway-support-cloud { display: grid; gap: 10px; }
+.private-gateway-support-entries { display: grid; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--panel); list-style: none; }
+.private-gateway-support-entries li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 8px 10px; }
+.private-gateway-support-entries li + li { border-top: 1px solid var(--line); }
+.private-gateway-support-entries span { display: grid; gap: 2px; min-width: 0; }
+.private-gateway-support-entries small { color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-support-entries b { flex: 0 0 auto; }
+.private-gateway-acceptance-dialog form > label:not(.private-gateway-confirm) { display: grid; gap: 6px; color: var(--muted); }
+.private-gateway-acceptance-dialog input,
+.private-gateway-acceptance-dialog select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
 .private-gateway-state-form { display: grid; gap: 16px; padding: 18px; }
 .private-gateway-state-form > label:not(.private-gateway-confirm) { display: grid; gap: 6px; color: var(--muted); }
 .private-gateway-state-form input,
@@ -226,6 +272,8 @@
   .private-gateway-state > header { align-items: stretch; flex-direction: column; }
   .private-gateway-telemetry > header { align-items: stretch; flex-direction: column; }
   .private-gateway-secrets > header { align-items: stretch; flex-direction: column; }
+  .private-gateway-validation > header,
+  .private-gateway-support > header { align-items: stretch; flex-direction: column; }
   .private-gateway-commands { width: 100%; }
   .private-gateway-commands .primary { flex: 1; }
   .private-gateway-deployment > header dl,
@@ -260,6 +308,14 @@
   .private-gateway-installer-environment dl,
   .private-gateway-installer-steps,
   .private-gateway-installer-status dl { grid-template-columns: 1fr; }
+  .private-gateway-validation-facts,
+  .private-gateway-support-preview dl,
+  .private-gateway-support-cloud dl,
+  .private-gateway-validation-checks { grid-template-columns: 1fr; }
+  .private-gateway-validation-checks li,
+  .private-gateway-validation-checks li:nth-child(odd),
+  .private-gateway-validation-checks li:nth-last-child(-n + 2) { border-right: 0; border-bottom: 1px solid var(--line); }
+  .private-gateway-validation-checks li:last-child { border-bottom: 0; }
   .private-gateway-installer > header,
   .private-gateway-installer-media > header,
   .private-gateway-installer-preflight > header,
@@ -279,8 +335,12 @@
   .private-gateway-dialog-actions { align-items: stretch; flex-direction: column; }
   .private-gateway-state-actions { align-items: stretch; flex-direction: column; }
   .private-gateway-secret-actions { display: grid; grid-template-columns: 1fr; }
+  .private-gateway-validation-actions,
+  .private-gateway-support-actions { display: grid; grid-template-columns: 1fr; }
   .private-gateway-secrets > header button,
   .private-gateway-secret-actions button { width: 100%; }
+  .private-gateway-validation-actions button,
+  .private-gateway-support-actions button { width: 100%; }
   .private-gateway-actions label { display: grid; }
   .private-gateway-actions select,
   .private-gateway-actions button,

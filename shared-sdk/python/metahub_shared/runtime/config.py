@@ -105,6 +105,9 @@ DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET = (
 DEFAULT_EDGE_SNAPSHOT_SIGNING_SECRET = (
     "dev-only-change-me-metahub-edge-snapshot-signing-secret-2026"
 )
+DEFAULT_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET = (
+    "dev-only-change-me-metahub-edge-support-bundle-encryption-secret-2026"
+)
 # 租户导出 ZIP 与注销留存分段共享一个 PRD-089 根密钥，但通过固定 AAD/domain 分离用途。
 # 公开默认值只服务 dev/test；生产缺失时仅 tenant-data 功能关闭失败，不能回退到 Auth/Provider 密钥。
 DEFAULT_TENANT_DATA_ENCRYPTION_SECRET = (
@@ -377,6 +380,11 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS": "http://localhost:5173",
     "METAHUB_LOCAL_MANAGEMENT_ALLOWED_CLIENT_CIDRS": "",
     "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK": "true",
+    "METAHUB_EDGE_SUPPORT_BUNDLE_ROOT": ".data/private-gateway/support-bundles",
+    "METAHUB_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET": (
+        DEFAULT_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET
+    ),
+    "METAHUB_EDGE_SUPPORT_BUNDLE_TTL_SECONDS": "86400",
     # 用量导出只在控制面运行；同步、总量和字节三层上限共同保护 SQLite 与进程内存。
     "METAHUB_USAGE_EXPORT_ENABLED": "true",
     "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS": "2",
@@ -586,6 +594,13 @@ class AppConfig(BaseModel):
     )
     status_bundle_root: str = Field(default=".data/status-page", exclude=True, repr=False)
     status_bundle_ttl_seconds: int = 86_400
+    edge_support_bundle_root: str = Field(
+        default=".data/private-gateway/support-bundles", exclude=True, repr=False
+    )
+    edge_support_bundle_encryption_secret: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    edge_support_bundle_ttl_seconds: int = 86_400
     backup_worker_enabled: bool = False
     backup_poll_interval_seconds: int = 5
     backup_default_retention_days: int = 30
@@ -2154,6 +2169,18 @@ def load_app_config(service_name: str) -> AppConfig:
     )
     local_secret_database_path = _value(values, "METAHUB_LOCAL_SECRET_DATABASE_PATH")
     local_secret_keystore_path = _value(values, "METAHUB_LOCAL_SECRET_KEYSTORE_PATH")
+    edge_support_bundle_root = _value(values, "METAHUB_EDGE_SUPPORT_BUNDLE_ROOT")
+    edge_support_bundle_encryption_secret = (
+        _optional_value(values, "METAHUB_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET")
+        if service_name == "gateway-data-plane"
+        else None
+    )
+    edge_support_bundle_ttl_seconds = _bounded_int(
+        values,
+        "METAHUB_EDGE_SUPPORT_BUNDLE_TTL_SECONDS",
+        minimum=300,
+        maximum=604_800,
+    )
     local_secret_admin_handoff_secret_value = _raw_optional_value(
         values, "METAHUB_LOCAL_SECRET_ADMIN_HANDOFF_SECRET"
     )
@@ -2188,6 +2215,29 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion=(
                 "Configure one Edge deployment, distinct local database/key-store paths, "
                 "an independent handoff credential, and an allowed local management origin."
+            ),
+        )
+
+    if service_name == "gateway-data-plane" and (
+        edge_support_bundle_encryption_secret is None
+        or len(edge_support_bundle_encryption_secret.encode("utf-8")) < 32
+        or (
+            environment == "prod"
+            and edge_support_bundle_encryption_secret
+            == DEFAULT_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET
+        )
+        or Path(edge_support_bundle_root).resolve()
+        in {
+            Path(local_secret_database_path).resolve(),
+            Path(local_secret_keystore_path).resolve(),
+        }
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Edge support bundle encryption or storage boundary is invalid.",
+            suggestion=(
+                "Configure an independent support-bundle root and a deployment-specific "
+                "encryption secret of at least 32 bytes."
             ),
         )
 
@@ -2515,6 +2565,9 @@ def load_app_config(service_name: str) -> AppConfig:
         status_bundle_ttl_seconds=_bounded_int(
             values, "METAHUB_STATUS_BUNDLE_TTL_SECONDS", minimum=300, maximum=604800
         ),
+        edge_support_bundle_root=edge_support_bundle_root,
+        edge_support_bundle_encryption_secret=edge_support_bundle_encryption_secret,
+        edge_support_bundle_ttl_seconds=edge_support_bundle_ttl_seconds,
         backup_worker_enabled=backup_worker_enabled,
         backup_poll_interval_seconds=backup_poll_interval_seconds,
         backup_default_retention_days=backup_default_retention_days,
@@ -4079,7 +4132,13 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
     summary_keys.update(
         key
         for key in DEFAULT_CONFIG
-        if key.startswith(("METAHUB_LOCAL_SECRET_", "METAHUB_LOCAL_MANAGEMENT_"))
+        if key.startswith(
+            (
+                "METAHUB_LOCAL_SECRET_",
+                "METAHUB_LOCAL_MANAGEMENT_",
+                "METAHUB_EDGE_SUPPORT_BUNDLE_",
+            )
+        )
     )
     summary_keys.update(key for key in values if key.startswith("METAHUB_PROVIDER_"))
 

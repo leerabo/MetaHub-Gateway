@@ -533,12 +533,15 @@ import {
   testLocalEndpoint,
 } from "../lib/localEndpoints.js";
 import {
+  acceptEdgeDelivery,
   createEdgeIdempotencyKey,
   createEdgeRegistration,
   decideEdgeDesiredState,
   edgeInstallerArtifactUrl,
   getEdgeDesiredState,
+  getEdgeSupportBundle,
   getEdgeTelemetryWatermark,
+  getEdgeValidation,
   listEdgeDeployments,
   listEdgeInstallers,
   listEdgeSecretReferences,
@@ -546,17 +549,26 @@ import {
   publishEdgeDesiredState,
   rollbackEdgeDesiredState,
   revokeEdgeDeployment,
+  startEdgeValidation,
   workspaceCookieApiOrigin,
 } from "../lib/edgeManagement.js";
 import {
+  approveLocalSupportBundle,
+  cancelLocalSupportBundle,
   clearLocalAdminSession,
   createLocalAdminSession,
   createLocalSecret,
   deleteLocalAdminSession,
   deleteLocalSecret,
+  previewLocalSupportBundle,
   rotateLocalSecret,
   testLocalProviderConnection,
 } from "../lib/localSecretManagement.js";
+import {
+  beginIdentityWebAuthnStepUp,
+  createIdentityStepUpGrant,
+  getWebAuthnAssertion,
+} from "../lib/identity.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
@@ -7141,6 +7153,31 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
         consoleShellState,
       );
     },
+    async onValidation(deploymentId, action) {
+      return submitPrivateGatewayValidation(deploymentId, action, consoleShellState);
+    },
+    async onAcceptanceOpen(deploymentId) {
+      if (!privateGatewayPageState.openDeliveryAcceptance(
+        currentPrivateGatewayOwner(consoleShellState),
+        deploymentId,
+      )) return false;
+      refreshSequence += 1;
+      renderCurrentPrivateGatewayPanel(consoleShellState);
+      return true;
+    },
+    async onAcceptanceClose() {
+      const closed = privateGatewayPageState.closeDeliveryAcceptance(
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+      if (closed) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return closed;
+    },
+    async onAcceptance(input) {
+      return submitPrivateGatewayDeliveryAcceptance(input, consoleShellState);
+    },
+    async onSupportBundle(deploymentId, action) {
+      return submitPrivateGatewaySupportBundle(deploymentId, action, consoleShellState);
+    },
     async onSecretOpen(deploymentId, action, referenceId) {
       if (!privateGatewayPageState.openSecretDialog(
         currentPrivateGatewayOwner(consoleShellState),
@@ -7202,6 +7239,204 @@ function downloadPrivateGatewayInstallerArtifact(downloadPath, consoleShellState
   globalThis.document.body?.append?.(anchor);
   try { anchor.click?.(); } finally { anchor.remove?.(); }
   return true;
+}
+
+async function submitPrivateGatewayValidation(deploymentId, action, consoleShellState) {
+  const operation = privateGatewayPageState.beginValidation(
+    currentPrivateGatewayOwner(consoleShellState),
+    deploymentId,
+    action,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = operation.action === "refresh"
+      ? await getEdgeValidation({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId: operation.deploymentId,
+        validationRunId: operation.validationRunId,
+        signal: operation.controller.signal,
+      })
+      : await startEdgeValidation({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId: operation.deploymentId,
+        action: operation.action,
+        sourceValidationRunId: operation.action === "retry_failed"
+          ? operation.validationRunId
+          : null,
+        idempotencyKey: createEdgeIdempotencyKey(`validation-${operation.action}`),
+        signal: operation.controller.signal,
+      });
+    privateGatewayPageState.acceptValidation(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectValidation(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishValidation(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayDeliveryAcceptance(input, consoleShellState) {
+  const operation = privateGatewayPageState.beginDeliveryAcceptance(
+    currentPrivateGatewayOwner(consoleShellState),
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  let verificationCode = String(input?.verificationCode ?? "");
+  let stepUpGrant = "";
+  let webAuthnCredential = null;
+  try {
+    let challengeId;
+    if (input?.method === "webauthn") {
+      const challenge = await beginIdentityWebAuthnStepUp({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      });
+      if (!privateGatewayPageState.isDeliveryAcceptanceCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+      challengeId = challenge.challenge_id;
+      webAuthnCredential = await getWebAuthnAssertion(challenge.public_key_options);
+      if (!privateGatewayPageState.isDeliveryAcceptanceCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+    }
+    const stepUp = await createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      method: input?.method,
+      workspaceId: operation.workspaceId,
+      actionCode: "edge.delivery.accept",
+      resourceType: "edge_deployment",
+      resourceId: operation.deploymentId,
+      code: verificationCode,
+      challengeId,
+      credential: webAuthnCredential,
+      signal: operation.controller.signal,
+    });
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = stepUp.grant;
+    if (!privateGatewayPageState.isDeliveryAcceptanceCurrent(
+      operation,
+      currentPrivateGatewayOwner(consoleShellState),
+    )) return null;
+    const result = await acceptEdgeDelivery({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      validationRunId: operation.validationRunId,
+      expectedRevision: operation.expectedRevision,
+      idempotencyKey: createEdgeIdempotencyKey("delivery-acceptance"),
+      stepUpGrant,
+      signal: operation.controller.signal,
+    });
+    stepUpGrant = "";
+    privateGatewayPageState.acceptDeliveryAcceptance(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    verificationCode = "";
+    stepUpGrant = "";
+    webAuthnCredential = null;
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectDeliveryAcceptance(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    verificationCode = "";
+    stepUpGrant = "";
+    webAuthnCredential = null;
+    privateGatewayPageState.finishDeliveryAcceptance(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewaySupportBundle(deploymentId, action, consoleShellState) {
+  const operation = privateGatewayPageState.beginSupportBundle(
+    currentPrivateGatewayOwner(consoleShellState),
+    deploymentId,
+    action,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    let result;
+    if (operation.action === "preview") {
+      result = await previewLocalSupportBundle({
+        deploymentId: operation.deploymentId,
+        signal: operation.controller.signal,
+      });
+    } else if (operation.action === "approve") {
+      const local = await approveLocalSupportBundle({
+        deploymentId: operation.deploymentId,
+        bundleId: operation.bundleId,
+        revision: operation.revision,
+        signal: operation.controller.signal,
+      });
+      let cloud = null;
+      try {
+        cloud = await getEdgeSupportBundle({
+          controlApiUrl: workspaceControlApiUrl,
+          bundleId: local.cloud_object_reference,
+          signal: operation.controller.signal,
+        });
+      } catch (error) {
+        if (isPrivateGatewayAbortError(error)) throw error;
+      }
+      result = Object.freeze({ local, cloud });
+    } else if (operation.action === "cancel") {
+      result = await cancelLocalSupportBundle({
+        deploymentId: operation.deploymentId,
+        bundleId: operation.bundleId,
+        revision: operation.revision,
+        signal: operation.controller.signal,
+      });
+    } else {
+      result = await getEdgeSupportBundle({
+        controlApiUrl: workspaceControlApiUrl,
+        bundleId: operation.bundleId,
+        signal: operation.controller.signal,
+      });
+    }
+    privateGatewayPageState.acceptSupportBundle(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectSupportBundle(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishSupportBundle(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
 }
 
 async function submitPrivateGatewayLocalSession(input, consoleShellState) {

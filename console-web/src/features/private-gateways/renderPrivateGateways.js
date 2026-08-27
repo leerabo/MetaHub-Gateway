@@ -1,6 +1,12 @@
-/** PRD-120..124 safe Edge identity, installer, telemetry, and Secret Reference views. */
+/** PRD-120..125 safe Edge identity, validation, support, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
+
+const VALIDATION_CHECK_CODES = Object.freeze([
+  "device_certificate", "signed_config_lkg", "provider_connectivity",
+  "minimal_gateway_request", "usage_cost_failure_sync", "backup_readiness",
+  "capacity_readiness", "performance_baseline",
+]);
 
 export function renderPrivateGateways(state, authContext, consoleShellState) {
   const owner = privateGatewayPageOwner(authContext, consoleShellState);
@@ -8,7 +14,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
   return `
     <div class="private-gateway-workspace" data-private-gateway-root>
       <header class="private-gateway-toolbar">
-        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、期望状态、遥测与本地 Secret 引用</p></div>
+        <div><p class="eyebrow">Customer-owned runtime</p><h3 id="private-gateways-title">私有 Gateway</h3><p>设备身份、交付验证、脱敏支持与运行状态</p></div>
         <div class="private-gateway-commands">
           <button type="button" class="private-gateway-icon" data-private-gateway-refresh title="刷新" aria-label="刷新私有 Gateway"${state.busy ? " disabled" : ""}>&#8635;</button>
           ${owner.canManage ? `<button type="button" class="primary" data-private-gateway-open${state.busy ? " disabled" : ""}>创建 Deployment</button>` : ""}
@@ -20,6 +26,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
       ${renderDialog(state, owner)}
       ${renderStateDialog(state, owner)}
       ${renderSecretDialog(state, owner)}
+      ${renderAcceptanceDialog(state, owner)}
     </div>`;
 }
 
@@ -225,6 +232,8 @@ function renderDeployment(item, state, owner) {
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderSecrets(item, state, owner)}
+      ${renderValidation(item, state, owner)}
+      ${renderSupportBundle(item, state, owner)}
       ${renderTimeline(item.recent_events)}
       ${owner.canManage && active ? `
         <div class="private-gateway-actions">
@@ -269,6 +278,96 @@ function renderSecrets(deployment, state, owner) {
         </div>` : ""}
       </div>`).join("")}</div>` : '<div class="private-gateway-state-empty">尚无本地 Secret 引用</div>'}
   </section>`;
+}
+
+function renderValidation(deployment, state, owner) {
+  if (!owner.canReadValidations) return "";
+  const response = state.validationStates?.[deployment.deployment_id] ?? null;
+  const validation = response?.validation ?? null;
+  const acceptance = response?.delivery_acceptance ?? null;
+  const active = deployment.status === "active";
+  const busy = state.validationBusy || state.busy;
+  if (!validation) {
+    return `<section class="private-gateway-validation" aria-label="交付验证">
+      <header><div><h5>交付验证</h5><span class="private-gateway-state-status tone-not_observed">尚未运行</span></div>
+        ${owner.canManageValidations && active ? `<button type="button" class="primary" data-private-gateway-validation="start" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>运行全套验证</button>` : ""}
+      </header>
+      <div class="private-gateway-state-empty">等待版本化验证计划</div>
+    </section>`;
+  }
+  const pending = validation.status === "requested";
+  const failed = validation.outcome === "failed";
+  const passed = validation.outcome === "passed";
+  const tone = pending ? "pending" : failed ? "failed" : "applied";
+  const status = pending ? "执行中" : failed ? "存在失败项" : "全部通过";
+  const checksByCode = new Map(validation.effective_checks.map((item) => [item.code, item]));
+  return `<section class="private-gateway-validation" aria-label="交付验证">
+    <header>
+      <div><h5>交付验证</h5><span class="private-gateway-state-status tone-${tone}">${status}</span></div>
+      <div class="private-gateway-validation-actions">
+        <button type="button" data-private-gateway-validation="refresh" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>刷新结果</button>
+        ${owner.canManageValidations && failed && !acceptance ? `<button type="button" class="primary" data-private-gateway-validation="retry_failed" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>仅重试失败项</button>` : ""}
+        ${owner.canAcceptDelivery && passed && !acceptance ? `<button type="button" class="primary" data-private-gateway-acceptance-open data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>签署交付</button>` : ""}
+      </div>
+    </header>
+    <dl class="private-gateway-validation-facts">
+      ${fact("计划", validation.plan_version)}
+      ${fact("Attempt", integer(validation.attempt))}
+      ${fact("Generation", `${integer(validation.applied_generation)} / ${integer(validation.desired_generation)}`)}
+      ${fact("耗时", validation.duration_ms === null ? "-" : secondsFromMs(validation.duration_ms))}
+    </dl>
+    <ol class="private-gateway-validation-checks">${VALIDATION_CHECK_CODES.map((code) => {
+      const check = checksByCode.get(code) ?? null;
+      const waiting = pending && validation.requested_check_codes.includes(code);
+      const outcome = waiting ? "pending" : check?.outcome ?? "pending";
+      const label = waiting ? "等待执行" : check ? (check.outcome === "passed" ? "通过" : "失败") : "未执行";
+      return `<li class="tone-${outcome}"><span>${validationCheckLabel(code)}</span><strong>${label}</strong>${check && !waiting ? `<small>${escapeHtml(check.reason_code)}${check.recovery_action_code ? ` · ${escapeHtml(validationRecoveryLabel(code))}` : ""}</small>` : ""}</li>`;
+    }).join("")}</ol>
+    ${acceptance ? `<div class="private-gateway-acceptance-summary">
+      <strong>交付已签署</strong><span>${formatTime(acceptance.accepted_at)} · ${escapeHtml(acceptance.accepted_by_account_id)}</span><small>revision ${integer(acceptance.deployment_revision)} · generation ${integer(acceptance.applied_generation)}</small>
+    </div>` : ""}
+  </section>`;
+}
+
+function renderSupportBundle(deployment, state, owner) {
+  if (!owner.canReadSupportBundles) return "";
+  const entry = state.supportBundleStates?.[deployment.deployment_id] ?? null;
+  const local = entry?.local ?? null;
+  const cloud = entry?.cloud?.bundle ?? null;
+  const connected = state.localSession?.deploymentId === deployment.deployment_id;
+  const active = deployment.status === "active";
+  const busy = state.supportBundleBusy || state.busy;
+  const preview = local?.status === "preview_ready";
+  const knownBundleId = local?.cloud_object_reference
+    ?? cloud?.support_bundle_id
+    ?? "";
+  const tone = preview ? "pending" : cloud?.status === "ready" ? "applied" : "not_observed";
+  const label = preview ? "等待客户批准" : cloud ? supportBundleStatusLabel(cloud.status) : "暂无摘要";
+  return `<section class="private-gateway-support" aria-label="脱敏支持包">
+    <header>
+      <div><h5>脱敏支持包</h5><span class="private-gateway-state-status tone-${tone}">${label}</span></div>
+      <div class="private-gateway-support-actions">
+        ${owner.canManageSupportBundles && active && !connected ? `<button type="button" data-private-gateway-secret-open="handoff" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>连接本地托管</button>` : ""}
+        ${owner.canManageSupportBundles && active && connected && !preview ? `<button type="button" class="primary" data-private-gateway-support-bundle="preview" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>生成脱敏预览</button>` : ""}
+        ${preview ? `<button type="button" data-private-gateway-support-bundle="cancel" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>取消</button><button type="button" class="primary" data-private-gateway-support-bundle="approve" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>批准加密上传</button>` : ""}
+        ${knownBundleId ? `<button type="button" data-private-gateway-support-bundle="refresh" data-deployment-id="${escapeAttribute(deployment.deployment_id)}"${busy ? " disabled" : ""}>刷新云端摘要</button>` : ""}
+      </div>
+    </header>
+    ${preview ? `<div class="private-gateway-support-preview">
+      <dl>${fact("扫描", "通过")}${fact("文件", integer(local.manifest.entries.length))}${fact("原始大小", formatBytes(local.manifest.total_uncompressed_bytes))}${fact("压缩大小", formatBytes(local.manifest.archive_size_bytes))}</dl>
+      ${renderSupportEntries(local.manifest.entries, true)}
+    </div>` : ""}
+    ${cloud ? `<div class="private-gateway-support-cloud">
+      <dl>${fact("Bundle ID", cloud.support_bundle_id)}${fact("扫描", "通过")}${fact("压缩大小", formatBytes(cloud.archive_size_bytes))}${fact("密文大小", formatBytes(cloud.object_size_bytes))}${fact("批准时间", formatTime(cloud.approved_at))}${fact("到期时间", formatTime(cloud.expires_at))}</dl>
+      ${renderSupportEntries(cloud.entries, false)}
+    </div>` : ""}
+    ${local && !preview && !cloud ? `<div class="private-gateway-state-empty">本地状态：${escapeHtml(localSupportBundleStatusLabel(local.status))}${local.failure_code ? ` · ${escapeHtml(local.failure_code)}` : ""}</div>` : ""}
+    ${!local && !cloud ? '<div class="private-gateway-state-empty">尚无当前会话可恢复的支持包摘要</div>' : ""}
+  </section>`;
+}
+
+function renderSupportEntries(entries, includePath) {
+  return `<ul class="private-gateway-support-entries">${entries.map((item) => `<li><span><strong>${supportCollectorLabel(item.collector_code)}</strong><small>${includePath ? `${escapeHtml(item.path)} · ` : ""}${supportClassificationLabel(item.classification)}</small></span><b>${formatBytes(item.size_bytes)}</b></li>`).join("")}</ul>`;
 }
 
 function renderTelemetry(deployment, entry, pageState, owner) {
@@ -427,6 +526,23 @@ function renderSecretDialog(state, owner) {
   </dialog>`;
 }
 
+function renderAcceptanceDialog(state, owner) {
+  const dialog = state.acceptanceDialog;
+  if (!owner.canAcceptDelivery || !dialog?.open) return "";
+  const submitting = dialog.state === "submitting";
+  return `<dialog class="private-gateway-dialog private-gateway-acceptance-dialog" data-private-gateway-acceptance-dialog aria-labelledby="private-gateway-acceptance-dialog-title" aria-busy="${submitting}">
+    <header><div><h3 id="private-gateway-acceptance-dialog-title">签署交付</h3><span>绑定当前验证 generation</span></div><button type="button" class="private-gateway-icon" data-private-gateway-acceptance-close title="关闭" aria-label="关闭"${submitting ? " disabled" : ""}>&times;</button></header>
+    ${dialog.error ? renderError(dialog.error) : ""}
+    <form data-private-gateway-acceptance-form autocomplete="off" novalidate>
+      <label><span>二次验证方式</span><select name="method" data-private-gateway-acceptance-method${submitting ? " disabled" : ""}><option value="totp">Authenticator 验证码</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+      <label data-private-gateway-acceptance-code><span>验证码</span><input name="verification_code" type="password" maxlength="20" autocomplete="one-time-code" data-private-gateway-sensitive required${submitting ? " disabled" : ""}></label>
+      <label class="private-gateway-confirm"><input type="checkbox" name="confirmed" required${submitting ? " disabled" : ""}><span>确认当前八项有效检查全部通过并接受本次交付</span></label>
+      <p class="private-gateway-form-error" data-private-gateway-acceptance-form-error role="alert"></p>
+      <div class="private-gateway-dialog-actions"><button type="button" data-private-gateway-acceptance-close${submitting ? " disabled" : ""}>取消</button><button type="submit" class="primary"${submitting ? " disabled" : ""}>${submitting ? "正在签署" : "验证并签署"}</button></div>
+    </form>
+  </dialog>`;
+}
+
 function renderSecretForm(dialog, submitting) {
   if (dialog.action === "handoff") {
     return `<form data-private-gateway-secret-form="handoff" autocomplete="off" novalidate>
@@ -510,6 +626,15 @@ function renderFeedback(feedback) {
     "local_secret.rotated": "本地 Secret 已完成轮换",
     "local_secret.deleted": "本地 Secret 已删除",
     "local_secret.test_completed": "Provider 连接测试已完成",
+    "edge.validation_started": "全套交付验证已启动",
+    "edge.validation_retry_started": "失败检查项已重新发起",
+    "edge.validation_refreshed": "验证结果已刷新",
+    "edge.delivery_accepted": "交付已签署",
+    "edge.delivery_acceptance_replayed": "已恢复交付签署结果",
+    "local_support_bundle.preview_ready": "脱敏支持包预览已生成",
+    "local_support_bundle.uploaded": "支持包已批准、加密并上传",
+    "local_support_bundle.cancelled": "支持包预览已取消并清理",
+    "edge.support_bundle_refreshed": "云端支持包摘要已刷新",
   };
   if (feedback.kind === "error") return renderError(feedback);
   return `<div class="private-gateway-feedback" role="status"><strong>${escapeHtml(labels[feedback.code] ?? feedback.code)}</strong><span>request_id: ${escapeHtml(feedback.requestId ?? "-")}</span></div>`;
@@ -547,6 +672,12 @@ function proxyLabel(value) { return value === "http_connect" ? "HTTP Proxy" : "D
 function caLabel(value) { return value === "system_or_custom" ? "System / Custom CA" : "System CA"; }
 function preflightOutcomeLabel(value) { return ({ passed: "通过", warning: "警告", failed: "失败" })[value] ?? "未知"; }
 function preflightCheckLabel(value) { return ({ "artifact.integrity": "介质完整性", "host.os": "Linux 基线", "host.architecture": "CPU 架构", "host.root": "Root 权限", "host.cpu": "CPU", "host.memory": "内存", "host.disk": "磁盘", "network.ports": "端口", "network.dns": "DNS", "host.clock": "系统时间", "network.proxy": "代理", "network.ca": "CA", "host.filesystem": "文件系统", "runtime.container": "容器运行时" })[value] ?? value; }
+function validationCheckLabel(value) { return ({ device_certificate: "设备证书", signed_config_lkg: "签名配置与 LKG", provider_connectivity: "Provider 连通性", minimal_gateway_request: "最小真实请求", usage_cost_failure_sync: "Usage / 成本 / 失败同步", backup_readiness: "备份就绪", capacity_readiness: "容量就绪", performance_baseline: "性能基线" })[value] ?? value; }
+function validationRecoveryLabel(value) { return ({ device_certificate: "轮换或重新签发设备证书", signed_config_lkg: "重新发布配置并确认 LKG", provider_connectivity: "检查本地 Provider 连接", minimal_gateway_request: "检查 Gateway 路由与模型可用性", usage_cost_failure_sync: "恢复遥测同步并重新对账", backup_readiness: "完成备份就绪检查", capacity_readiness: "调整安装规格或容量", performance_baseline: "恢复性能基线后重试" })[value] ?? "按产品恢复动作处理"; }
+function supportBundleStatusLabel(value) { return ({ ready: "可供授权支持读取", expired: "已过期", deleted: "已删除" })[value] ?? "未知"; }
+function localSupportBundleStatusLabel(value) { return ({ preview_ready: "等待批准", uploading: "加密上传中", uploaded: "已上传", failed: "处理失败", cancelled: "已取消", expired: "已过期" })[value] ?? "未知"; }
+function supportCollectorLabel(value) { return ({ "runtime.version": "运行版本", "runtime.watermarks": "同步水位", "runtime.health": "健康摘要", "runtime.errors": "错误码摘要", "runtime.logs": "日志事件摘要" })[value] ?? value; }
+function supportClassificationLabel(value) { return ({ version: "版本", watermark: "水位", health: "健康", error_code: "错误码", log_summary: "日志摘要" })[value] ?? value; }
 function formatBytes(value) { if (!Number.isSafeInteger(value)) return "-"; if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${value} B`; }
 function secondsFromMs(value) { return Number.isSafeInteger(value) ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}s` : "-"; }
 function formatTime(value) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }

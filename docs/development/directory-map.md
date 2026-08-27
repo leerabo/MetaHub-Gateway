@@ -2424,6 +2424,23 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/testing/PRD-124-tests.md`：保存两轮自审、Installer/API/迁移/Console、真实下载和三视口浏览器证据及
   独立敏感审计；下一权威项为 PRD-125，G5 在 PRD-130 后统一执行。
 
+## PRD-125 私有部署验证与脱敏支持包（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/validation.py`：八项交付验证与不可变报告、固定支持包 collector、
+  exact manifest、递归敏感扫描、5 分钟时限、确定性 ZIP、批准绑定和 AES-256-GCM 密文合同。
+- `gateway-data-plane/src/metahub_gateway/validation.py` 与 `local_secrets/support_bundles.py`：编译期 probe runner、
+  最小请求/Usage 同一关联摘要、15 分钟失败关闭，以及本地 preview/CAS 批准/上传/取消/重启恢复和全终态清理。
+- `control-plane-api/src/metahub_control/edge_management/validation_service.py`、`support_bundle_service.py` 与
+  `scheduler.py`：验证 attempt/report/失败项重试、DeliveryAcceptance step-up、mTLS 密文上传、Workspace 裁剪摘要、
+  双域 SupportGrant 下载审计和 `ready -> expired -> deleted` TTL reaper。
+- `infra/migrations/0117_edge_validation_delivery_support_bundles.sql/.down.sql`：验证、检查、接受、支持包/下载审计、
+  事件/outbox、幂等命令、权限扩展、复合 owner、不变事实、合法终态和业务事实 down guard。
+- `console-web/src/lib/edgeManagement.js`、`localSecretManagement.js` 与 Private Gateway 页面：严格 DTO、验证刷新/失败项
+  重试、短生命周期 TOTP/恢复码/WebAuthn、支持包固定 collector 预览/批准/取消及 Workspace 迟到响应防护。
+- `docs/prd/PRD-125-private-deployment-validation-redacted-support-bundle.md` 与
+  `docs/testing/PRD-125-tests.md`：保存两轮实施自审、Python/迁移/API/Console 专项、敏感审计和批次门禁边界；
+  下一权威项为 PRD-126，G5 在 PRD-130 后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

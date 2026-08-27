@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import re
 import zlib
 from functools import partial
@@ -12,16 +15,22 @@ import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import FileResponse
 from metahub_shared.private_gateway import (
+    MAX_SUPPORT_BUNDLE_BYTES,
+    DeploymentValidationReport,
     EdgeSecretSyncBatch,
     EdgeSecretSyncReceipt,
     EdgeTelemetryBatch,
     EdgeTelemetryError,
     EdgeTelemetryReceiptWire,
+    SupportBundleUploadMetadata,
+    SupportBundleUploadReceipt,
     canonical_edge_json_bytes,
     reject_forbidden_telemetry_fields,
+    strict_json_object,
 )
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.background import BackgroundTask
 
 from metahub_control.identity.service import valid_opaque_value
 from metahub_control.machine_identity.transport import verified_mtls_fingerprint
@@ -74,6 +83,8 @@ from .models import (
     EdgeAgentTelemetryWatermarkResponse,
     EdgeCertificateResponse,
     EdgeCertificateRotationRequest,
+    EdgeDeliveryAcceptanceRequest,
+    EdgeDeliveryAcceptanceResponse,
     EdgeDeploymentListResponse,
     EdgeDeploymentRevokeRequest,
     EdgeDeploymentRevokeResponse,
@@ -91,9 +102,12 @@ from .models import (
     EdgeSecretReferenceListResponse,
     EdgeSessionCreateRequest,
     EdgeSessionResponse,
+    EdgeSupportBundleResponse,
     EdgeTelemetryPolicyPatchRequest,
     EdgeTelemetryPolicyResponse,
     EdgeTelemetryWatermarkResponse,
+    EdgeValidationResponse,
+    EdgeValidationStartRequest,
     PlatformEdgeFleetResponse,
     PlatformInstallerReleaseDecisionRequest,
     PlatformInstallerReleaseListResponse,
@@ -115,11 +129,25 @@ from .service import (
     revoke_edge_deployment,
     rotate_edge_certificate,
 )
+from .support_bundle_service import (
+    authorize_agent_support_bundle_upload,
+    get_workspace_support_bundle,
+    prepare_support_bundle_staging,
+    resolve_support_bundle_download,
+    store_agent_support_bundle,
+)
 from .telemetry_service import (
     get_agent_telemetry_watermark,
     get_workspace_telemetry_watermark,
     patch_workspace_telemetry_policy,
     receive_agent_telemetry,
+)
+from .validation_service import (
+    accept_workspace_delivery,
+    get_agent_validation,
+    get_workspace_validation,
+    record_agent_validation,
+    start_workspace_validation,
 )
 
 router = APIRouter(tags=["edge-management"])
@@ -127,6 +155,11 @@ _WORK_LIMITER = anyio.CapacityLimiter(4)
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _MAX_TELEMETRY_COMPRESSED_BYTES = 262_144
 _MAX_TELEMETRY_BYTES = 1_048_576
+_MAX_SUPPORT_BUNDLE_METADATA_BYTES = 65_536
+_MAX_SUPPORT_BUNDLE_WIRE_BYTES = (
+    4 + _MAX_SUPPORT_BUNDLE_METADATA_BYTES + MAX_SUPPORT_BUNDLE_BYTES + 64
+)
+_SUPPORT_BUNDLE_MEDIA_TYPE = "application/vnd.metahub.edge-support-bundle"
 _UNTRUSTED_CERT_HEADERS = frozenset(
     {
         b"ssl-client-cert",
@@ -151,6 +184,220 @@ async def get_edge_deployments(request: Request, response: Response) -> EdgeDepl
         trace_id=_trace_id(request),
     )
     _private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/validations",
+    response_model=EdgeValidationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_validation(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeValidationResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeValidationStartRequest
+    )
+    result = await _run(
+        start_workspace_validation,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/validations/{validation_run_id}",
+    response_model=EdgeValidationResponse,
+)
+async def get_edge_validation(
+    deployment_id: str,
+    validation_run_id: str,
+    request: Request,
+    response: Response,
+) -> EdgeValidationResponse:
+    _reject_query(request)
+    if _cookie_values(request, WORKSPACE_SESSION_COOKIE):
+        _prepare_workspace(request, write=False)
+        result = await _run(
+            get_workspace_validation,
+            request.app.state.config,
+            deployment_id,
+            validation_run_id,
+            session_token=_workspace_cookie(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    else:
+        fingerprint = _prepare_agent(request, require_mtls=True)
+        result = await _run(
+            get_agent_validation,
+            request.app.state.config,
+            deployment_id,
+            validation_run_id,
+            verified_fingerprint=fingerprint,
+            edge_session_token=_edge_session(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/validations/{validation_run_id}/report",
+    response_model=EdgeValidationResponse,
+)
+async def post_edge_validation_report(
+    deployment_id: str,
+    validation_run_id: str,
+    request: Request,
+    response: Response,
+) -> EdgeValidationResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    report = _model(
+        await _strict_json(request, "edge.request_invalid"), DeploymentValidationReport
+    )
+    result = await _run(
+        record_agent_validation,
+        request.app.state.config,
+        deployment_id,
+        validation_run_id,
+        report,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/delivery-acceptances",
+    response_model=EdgeDeliveryAcceptanceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_delivery_acceptance(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDeliveryAcceptanceResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeDeliveryAcceptanceRequest
+    )
+    result = await _run(
+        accept_workspace_delivery,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_required_step_up_grant(request),
+        expected_revision=_if_match(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/support-bundles",
+    response_model=SupportBundleUploadReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_support_bundle(
+    request: Request, response: Response
+) -> SupportBundleUploadReceipt:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    deployment_id = _edge_deployment(request)
+    edge_session = _edge_session(request)
+    authorization = await _run(
+        authorize_agent_support_bundle_upload,
+        request.app.state.config,
+        deployment_id,
+        verified_fingerprint=fingerprint,
+        edge_session_token=edge_session,
+    )
+    staged_path = await _run(prepare_support_bundle_staging, request.app.state.config)
+    try:
+        metadata = await _read_support_bundle_upload(request, staged_path)
+        result = await _run(
+            store_agent_support_bundle,
+            request.app.state.config,
+            authorization,
+            metadata,
+            staged_path,
+            verified_fingerprint=fingerprint,
+            edge_session_token=edge_session,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    finally:
+        try:
+            staged_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.get("/edge/support-bundles/{bundle_id}", response_model=None)
+async def get_edge_support_bundle(
+    bundle_id: str, request: Request, response: Response
+) -> Response | EdgeSupportBundleResponse:
+    _reject_query(request)
+    support_credentials = _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    if support_credentials:
+        _prepare_support(request)
+        download = await _run(
+            resolve_support_bundle_download,
+            request.app.state.config,
+            bundle_id,
+            support_session_token=support_credentials[0],
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        return FileResponse(
+            download.path,
+            media_type="application/vnd.metahub.edge-support-bundle-encrypted",
+            filename=f"{bundle_id}.enc",
+            headers={
+                "Cache-Control": "no-store, private",
+                "Content-Security-Policy": "default-src 'none'",
+                "X-Content-Type-Options": "nosniff",
+            },
+            background=BackgroundTask(download.cleanup),
+        )
+    _prepare_workspace(request, write=False)
+    result: EdgeSupportBundleResponse = await _run(
+        get_workspace_support_bundle,
+        request.app.state.config,
+        bundle_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
     return result
 
 
@@ -864,6 +1111,25 @@ def _edge_session(request: Request) -> str:
     return values[0]
 
 
+def _edge_deployment(request: Request) -> str:
+    values = _raw_headers(request, b"x-edge-deployment-id")
+    if len(values) != 1 or re.fullmatch(r"edp_[0-9a-f]{32}", values[0]) is None:
+        raise ApiError("edge.authentication_failed")
+    return values[0]
+
+
+def _prepare_support(request: Request) -> None:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+    ):
+        raise ApiError("support.session_invalid")
+    values = _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    if len(values) != 1 or not valid_opaque_value(values[0]):
+        raise ApiError("support.session_invalid")
+
+
 def _desired_etag(result: EdgeDesiredStateResponse) -> str:
     if result.state is None:
         return '"0"'
@@ -993,6 +1259,96 @@ async def _bounded_body(request: Request, maximum: int) -> bytes:
             raise ApiError("edge.request_invalid")
         body.extend(chunk)
     return bytes(body)
+
+
+async def _read_support_bundle_upload(
+    request: Request, staged_path
+) -> SupportBundleUploadMetadata:
+    content_types = _raw_headers(request, b"content-type")
+    lengths = _raw_headers(request, b"content-length")
+    if (
+        len(content_types) != 1
+        or content_types[0].lower() != _SUPPORT_BUNDLE_MEDIA_TYPE
+        or len(lengths) != 1
+        or not lengths[0].isascii()
+        or not lengths[0].isdecimal()
+    ):
+        raise ApiError("edge.support_bundle_invalid")
+    declared_length = int(lengths[0])
+    if not 38 <= declared_length <= _MAX_SUPPORT_BUNDLE_WIRE_BYTES:
+        raise ApiError("edge.support_bundle_invalid")
+    prefix = bytearray()
+    metadata_bytes = bytearray()
+    metadata_length: int | None = None
+    metadata: SupportBundleUploadMetadata | None = None
+    object_digest = hashlib.sha256()
+    object_size = 0
+    object_prefix = bytearray()
+    received = 0
+    try:
+        with staged_path.open("wb") as writer:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > declared_length or received > _MAX_SUPPORT_BUNDLE_WIRE_BYTES:
+                    raise ApiError("edge.support_bundle_invalid")
+                offset = 0
+                while offset < len(chunk):
+                    if len(prefix) < 4:
+                        count = min(4 - len(prefix), len(chunk) - offset)
+                        prefix.extend(chunk[offset : offset + count])
+                        offset += count
+                        if len(prefix) == 4:
+                            metadata_length = int.from_bytes(prefix, "big")
+                            if not 1 <= metadata_length <= _MAX_SUPPORT_BUNDLE_METADATA_BYTES:
+                                raise ApiError("edge.support_bundle_invalid")
+                        continue
+                    if metadata is None:
+                        assert metadata_length is not None
+                        count = min(metadata_length - len(metadata_bytes), len(chunk) - offset)
+                        metadata_bytes.extend(chunk[offset : offset + count])
+                        offset += count
+                        if len(metadata_bytes) < metadata_length:
+                            continue
+                        try:
+                            metadata = SupportBundleUploadMetadata.model_validate(
+                                strict_json_object(
+                                    bytes(metadata_bytes),
+                                    canonical=True,
+                                    maximum=_MAX_SUPPORT_BUNDLE_METADATA_BYTES,
+                                )
+                            )
+                        except ValueError:
+                            raise ApiError("edge.support_bundle_invalid") from None
+                        if declared_length != 4 + metadata_length + metadata.object_size_bytes:
+                            raise ApiError("edge.support_bundle_invalid")
+                        continue
+                    count = len(chunk) - offset
+                    if object_size + count > metadata.object_size_bytes:
+                        raise ApiError("edge.support_bundle_invalid")
+                    part = chunk[offset:]
+                    if len(object_prefix) < 5:
+                        object_prefix.extend(part[: 5 - len(object_prefix)])
+                    writer.write(part)
+                    object_digest.update(part)
+                    object_size += count
+                    offset = len(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        if (
+            received != declared_length
+            or metadata is None
+            or object_size != metadata.object_size_bytes
+            or bytes(object_prefix) != b"MHSB1"
+            or not hmac.compare_digest(object_digest.hexdigest(), metadata.object_sha256)
+        ):
+            raise ApiError("edge.support_bundle_invalid")
+        return metadata
+    except ApiError:
+        raise
+    except (OSError, RuntimeError):
+        raise ApiError("edge.support_bundle_storage_unavailable") from None
 
 
 def _reject_query(request: Request) -> None:

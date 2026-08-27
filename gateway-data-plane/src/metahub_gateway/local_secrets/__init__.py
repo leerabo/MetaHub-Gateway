@@ -28,6 +28,14 @@ from .store import (
     LocalVersionLease,
     ProviderTestResult,
 )
+from .support_bundle_upload import CloudSupportBundleUploader, SupportBundleUploadError
+from .support_bundles import (
+    LocalSupportBundleError,
+    LocalSupportBundleStatus,
+    LocalSupportBundleStore,
+    LocalSupportBundleSummary,
+    SupportBundleUploader,
+)
 from .sync import LocalSecretSyncError, LocalSecretSyncUploader
 
 __all__ = (
@@ -48,9 +56,16 @@ __all__ = (
     "LocalSecretStoreError",
     "LocalSecretSyncError",
     "LocalSecretSyncUploader",
+    "LocalSupportBundleError",
+    "LocalSupportBundleStatus",
+    "LocalSupportBundleStore",
+    "CloudSupportBundleUploader",
+    "SupportBundleUploadError",
+    "LocalSupportBundleSummary",
     "LocalVersionLease",
     "OpenAICompatibleProviderTester",
     "ProviderTestResult",
+    "SupportBundleUploader",
     "TestKmsProtector",
     "WindowsDpapiProtector",
     "build_key_protector",

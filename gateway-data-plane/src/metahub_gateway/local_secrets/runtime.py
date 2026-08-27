@@ -14,7 +14,8 @@ from .auth import (
 from .keystore import LocalKeyMaterialStore, build_key_protector
 from .provider_testing import LocalProviderTesterRegistry
 from .routes import install_local_api_error_handler
-from .store import LocalSecretStore
+from .store import LocalSecretStore, LocalSecretStoreError
+from .support_bundles import LocalSupportBundleError, LocalSupportBundleStore
 
 
 def install_local_secret_runtime(app: Any) -> None:
@@ -34,17 +35,14 @@ def install_local_secret_runtime(app: Any) -> None:
         kms_key_id=config.kms_key_id,
         kms_test_master_key=config.kms_test_master_key,
     )
-    material = LocalKeyMaterialStore(
-        config.local_secret_keystore_path, protector
-    ).load_or_create()
-    app.state.local_secret_store = LocalSecretStore(
+    material = LocalKeyMaterialStore(config.local_secret_keystore_path, protector).load_or_create()
+    local_secret_store = LocalSecretStore(
         config.local_secret_database_path,
         deployment_id=deployment_id,
         keyring=material.keyring,
     )
-    app.state.local_admin_session_signer = LocalAdminSessionSigner(
-        material.session_signing_key
-    )
+    app.state.local_secret_store = local_secret_store
+    app.state.local_admin_session_signer = LocalAdminSessionSigner(material.session_signing_key)
     app.state.local_admin_handoff_verifier = LocalAdminHandoffVerifier(handoff_secret)
     app.state.local_management_policy = LocalManagementPolicy.build(
         allowed_origins=tuple(config.local_management_allowed_origins),
@@ -55,7 +53,38 @@ def install_local_secret_runtime(app: Any) -> None:
         config.provider_base_urls,
         timeout_seconds=float(config.infrastructure_probe_timeout_seconds),
     )
+    support_bundle_secret = config.edge_support_bundle_encryption_secret
+    if support_bundle_secret is None:
+        raise RuntimeError("local_support_bundle.configuration_unavailable")
+    configured_uploader = getattr(app.state, "local_support_bundle_uploader", None)
+    uploader = configured_uploader if callable(configured_uploader) else _unavailable_uploader
+
+    def support_bundle_inputs(
+        tenant_id: str, workspace_id: str, scanner_hmac_key: bytes
+    ) -> tuple[dict[str, object], tuple[str, ...]]:
+        try:
+            return local_secret_store.support_bundle_inputs(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                scanner_hmac_key=scanner_hmac_key,
+            )
+        except LocalSecretStoreError:
+            raise LocalSupportBundleError("local_support_bundle.collection_failed") from None
+
+    app.state.local_support_bundle_store = LocalSupportBundleStore(
+        config.local_secret_database_path,
+        output_root=config.edge_support_bundle_root,
+        deployment_id=deployment_id,
+        encryption_secret=support_bundle_secret.encode("utf-8"),
+        input_provider=support_bundle_inputs,
+        uploader=uploader,
+        ttl_seconds=config.edge_support_bundle_ttl_seconds,
+    )
     install_local_api_error_handler(app)
+
+
+def _unavailable_uploader(*_args: object, **_kwargs: object) -> str:
+    raise RuntimeError("local_support_bundle.upload_unavailable")
 
 
 __all__ = ("install_local_secret_runtime",)

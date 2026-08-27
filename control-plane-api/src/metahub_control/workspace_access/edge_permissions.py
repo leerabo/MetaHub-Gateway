@@ -27,6 +27,22 @@ EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS = {
 EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS = {
     "owner": ("edge.installation.manage", "edge.installer.read"),
 }
+EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": (
+        "edge.delivery.accept",
+        "edge.support_bundle.read",
+        "edge.validation.manage",
+        "edge.validation.read",
+    ),
+    "admin": (
+        "edge.delivery.accept",
+        "edge.support_bundle.read",
+        "edge.validation.manage",
+        "edge.validation.read",
+    ),
+    "security_admin": ("edge.support_bundle.read", "edge.validation.read"),
+    "auditor": ("edge.validation.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -151,6 +167,17 @@ def load_verified_workspace_edge_permissions(
             unavailable_error_code=unavailable_error_code,
         )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_validation_permission_extensions",
+            assignments_table="workspace_edge_validation_role_permissions",
+            introduced_migration="0117",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
     return tuple(sorted(permissions))
 
 
@@ -266,6 +293,7 @@ __all__ = (
     "EDGE_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS",
+    "EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_WORKSPACE_ROLE_PERMISSIONS",
     "load_verified_platform_edge_permissions",
     "load_verified_workspace_edge_permissions",
