@@ -1,6 +1,6 @@
 # PRD-127 Fleet 分批升级、回滚与维护窗口
 
-状态：设计冻结，尚未编码；计划迁移 0119。依赖 PRD-121/124..126，范围以 Excel PRD-127 为准。
+状态：已完成；迁移 0119、Control API、Shared SDK、Gateway Agent、Workspace/Platform Console 已交付。依赖 PRD-121/124..126，范围以 Excel PRD-127 为准。
 
 ## Excel 权威合同
 
@@ -40,6 +40,22 @@ release_manager 发布、另一具备 release approval 的平台主体审批；p
 
 两轮均为修正后通过，无未关闭 P0/P1。
 
-## 6. 专项验证计划
+## 6. 实现闭环
 
-0119 迁移；签名/兼容/窗口/冻结/审批；确定性 Canary、健康缺失/失败自动暂停、并发 pause、租约重启；真实请求排空、N/N-1 升级与回滚、不可逆 migration 阻断；三浏览器进度/失败节点；Canary/节点/暂停 SLO；制品敏感扫描和静止终态。
+- 0119 新增私有 Gateway release/artifact/channel、维护窗口、rollout/batch/target、升级命令、rollback attempt、事件/outbox 与权限事实；状态 CHECK、不变触发器、复合 owner、tenant deletion manifest 和业务 down guard 已落盘。
+- Control API 实现 release 双人发布、兼容性查询、确定性 target 选择、客户窗口/冻结/策略 revision 复核、rollout pause、Workspace 配置与单节点 rollback，以及 Agent lease/start/report。所有写入绑定幂等键、generation/nonce 和权威 owner。
+- Shared SDK 实现用途分域 Ed25519 release/command 签名、exact manifest、兼容/窗口验证及持久升级执行器；Gateway 同步器只访问本设备 machine routes，先排空、staging、校验、切换和持久 receipt，并保留 LKG。
+- Workspace 页面管理 release channel、维护窗口、冻结和单节点回滚；Platform 页面管理 release、rollout、门禁和暂停。两个入口使用独立 Session/API/DTO，权限、状态和迟到响应保持分域。
+
+## 7. 两轮实施自审
+
+- 第一轮按 owner、审批和客户策略复核。修正 Console 扩展权限白名单未接受 PRD-125..127 权限、合法登录会被错误拒绝的问题；补齐完整扩展集回归。确认平台 release 发布需要非自批审批，rollout 只能选择通过兼容/容量/备份/维护窗口预检的 Deployment，Workspace channel/window/freeze 使用 CAS，Agent apply 再次验证签名、owner、hash、generation 和策略 revision。Platform 与 Workspace DTO、Cookie/CSRF/client/store 不复用。
+- 第二轮按崩溃恢复、deadline 和移动端复核。发现短 lease 到期时命令仍停留在 `leased`，Agent 崩溃后无法重新领取；修正为事务内清除旧 lease nonce/expiry、命令回到 `issued`、target 回到 `selected`，随后可重新 lease/start/report。总 deadline 到期时 rollout 命令失败并自动暂停，rollback attempt 进入失败终态，迟到结果不能覆盖；新增恢复闭环回归。修正宽表依赖页面级横向溢出的问题，为升级表提供有界局部滚动，并在真实 390x844 视口验证无页面溢出。
+
+两轮实施自审均为修正后通过，无未关闭 P0/P1。下一权威项为 PRD-128。
+
+## 8. 专项验证与批次边界
+
+0119 `0118 -> 0119 -> 0118 -> 0119`、业务 down guard、Control API/导航共 `5/5`；Shared SDK `7/7`；Gateway 同步 `2/2`；PRD-127 Console `4/4`，PRD-120..127 Console 必要回归 `41/41`。Workspace 与 Platform 在真实 390x844 Chromium 视口完成渲染验收，页面无横向溢出且浏览器日志为空。完整命令、敏感审计与结果见 [PRD-127 测试记录](../testing/PRD-127-tests.md)。
+
+真实 Linux/代理/断网请求排空、N/N-1 制品切换、Canary 30 分钟观察、节点 10 分钟升级、60 秒自动暂停、三浏览器/多缩放、长稳、0111..0122 全迁移矩阵、性能和安全全门禁按批次规则保留到 PRD-130 独立提交后统一执行 G5，当前聚焦测试不替代这些证据。

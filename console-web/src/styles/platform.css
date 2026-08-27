@@ -228,7 +228,8 @@ legend { margin-bottom: 7px; color: #455048; font-size: 13px; font-weight: 650; 
 .platform-form-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 34px; }
 .platform-form-split form { display: grid; align-content: start; gap: 13px; padding-right: 32px; border-right: 1px solid var(--line); }
 .platform-form-split form:last-child { padding-right: 0; border-right: 0; }
-.platform-table-wrap { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
+.platform-table-wrap,
+.platform-table-scroll { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 th, td { padding: 12px 10px; border-bottom: 1px solid #e2e6e1; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 th { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
@@ -1017,6 +1018,117 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   cursor: pointer;
   font-weight: 750;
 }
+.platform-edge-upgrade-section {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.platform-edge-upgrade-section > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.platform-edge-upgrade-section > header p,
+.platform-edge-upgrade-section > header h2 { margin: 0; }
+.platform-edge-upgrade-section > header p { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.platform-edge-upgrade-section > header h2 { margin-top: 4px; font-size: 20px; }
+.platform-edge-upgrade-form,
+.platform-edge-rollout-controls > form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+.platform-edge-upgrade-form label,
+.platform-edge-rollout-controls label,
+.platform-edge-release-actions label,
+.platform-edge-rollout-command label { min-width: 0; }
+.platform-edge-upgrade-form input,
+.platform-edge-upgrade-form select,
+.platform-edge-rollout-controls input,
+.platform-edge-rollout-controls select,
+.platform-edge-rollout-controls textarea,
+.platform-edge-release-actions input,
+.platform-edge-release-actions select,
+.platform-edge-rollout-command input { width: 100%; min-width: 0; }
+.platform-edge-upgrade-wide { grid-column: span 2; }
+.platform-edge-upgrade-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.platform-edge-upgrade-check input { width: 16px; min-height: 16px; margin: 0; }
+.platform-edge-upgrade-form > button { min-height: 40px; }
+.platform-edge-release-table { min-width: 1100px; }
+.platform-edge-release-table td > strong,
+.platform-edge-release-table td > small,
+.platform-edge-release-table td > span { display: block; overflow-wrap: anywhere; }
+.platform-edge-release-table td > small { margin-top: 4px; color: var(--muted); }
+.platform-edge-release-actions { min-width: 330px; }
+.platform-edge-release-actions form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.platform-edge-release-actions form:last-child { border-bottom: 0; }
+.platform-edge-release-actions form button,
+.platform-edge-release-actions .platform-edge-upgrade-check { grid-column: span 2; }
+.platform-edge-rollout-controls {
+  display: grid;
+  grid-template-columns: minmax(280px, .8fr) minmax(440px, 1.2fr);
+  gap: 24px;
+}
+.platform-edge-rollout-controls > form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+.platform-edge-rollout-controls > form + form {
+  padding-left: 24px;
+  border-left: 1px solid var(--line);
+}
+.platform-edge-rollout-controls h3,
+.platform-edge-rollout-controls .platform-edge-compatibility { grid-column: 1 / -1; }
+.platform-edge-rollout-controls h3 { margin: 0; font-size: 15px; }
+.platform-edge-compatibility {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-left: 3px solid currentColor;
+  background: #f4f6f2;
+}
+.platform-edge-compatibility span,
+.platform-edge-compatibility small { overflow-wrap: anywhere; }
+.platform-edge-rollout-list { display: grid; gap: 24px; }
+.platform-edge-rollout {
+  min-width: 0;
+  padding: 18px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+.platform-edge-rollout > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.platform-edge-rollout > header strong,
+.platform-edge-rollout > header code { display: block; overflow-wrap: anywhere; }
+.platform-edge-rollout > header code { margin-top: 4px; color: var(--muted); }
+.platform-edge-rollout details { margin-top: 14px; }
+.platform-edge-rollout summary { cursor: pointer; font-weight: 700; }
+.platform-edge-rollout-command {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 14px;
+}
+.platform-edge-batch-table { min-width: 760px; }
+.platform-edge-target-table { min-width: 900px; }
 
 @media (max-width: 760px) {
   .platform-edge-fleet-table { min-width: 0; }
@@ -1045,4 +1157,44 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-diagnostic-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-edge-diagnostic-summary > div { border-bottom: 1px solid var(--line); }
   .platform-edge-diagnostic-command dl { grid-template-columns: minmax(0, 1fr); }
+  .platform-edge-upgrade-form,
+  .platform-edge-rollout-controls,
+  .platform-edge-rollout-controls > form,
+  .platform-edge-release-actions form,
+  .platform-edge-rollout-command { grid-template-columns: minmax(0, 1fr); }
+  .platform-edge-rollout-controls > form + form {
+    padding-top: 22px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .platform-edge-upgrade-wide,
+  .platform-edge-upgrade-form > button,
+  .platform-edge-release-actions form button,
+  .platform-edge-release-actions .platform-edge-upgrade-check { grid-column: 1; }
+  .platform-edge-release-table,
+  .platform-edge-batch-table,
+  .platform-edge-target-table { min-width: 0; }
+  .platform-edge-release-table thead,
+  .platform-edge-batch-table thead,
+  .platform-edge-target-table thead { display: none; }
+  .platform-edge-release-table tbody,
+  .platform-edge-release-table tr,
+  .platform-edge-release-table td,
+  .platform-edge-batch-table tbody,
+  .platform-edge-batch-table tr,
+  .platform-edge-batch-table td,
+  .platform-edge-target-table tbody,
+  .platform-edge-target-table tr,
+  .platform-edge-target-table td { display: block; width: 100%; }
+  .platform-edge-release-table tr,
+  .platform-edge-batch-table tr,
+  .platform-edge-target-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-edge-release-table td,
+  .platform-edge-batch-table td,
+  .platform-edge-target-table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; text-align: left; }
+  .platform-edge-release-table td::before,
+  .platform-edge-batch-table td::before,
+  .platform-edge-target-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .platform-edge-release-actions { min-width: 0; }
 }

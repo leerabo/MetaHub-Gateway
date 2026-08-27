@@ -117,6 +117,14 @@ import {
   runPlatformDiagnostic,
 } from "../../lib/edgeDiagnostics.js";
 import {
+  createPlatformRollout,
+  getFleetCompatibility,
+  listPlatformGatewayReleases,
+  listPlatformRollouts,
+  mutatePlatformGatewayRelease,
+  mutatePlatformRollout,
+} from "../../lib/edgeUpgrades.js";
+import {
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
@@ -284,6 +292,15 @@ if (root) {
       commandCapacityChaos: (input) => commandCapacityChaos({ controlApiUrl, ...input }),
       residencyEvidence: (input) => listPlatformResidencyEvidence({ controlApiUrl, ...input }),
       edgeFleet: (input) => listPlatformFleet({ controlApiUrl, ...input }),
+      gatewayReleases: (input) => listPlatformGatewayReleases({ controlApiUrl, ...input }),
+      fleetRollouts: (input) => listPlatformRollouts({ controlApiUrl, ...input }),
+      mutateGatewayRelease: (input) => mutatePlatformGatewayRelease({
+        controlApiUrl,
+        ...input,
+      }),
+      createFleetRollout: (input) => createPlatformRollout({ controlApiUrl, ...input }),
+      mutateFleetRollout: (input) => mutatePlatformRollout({ controlApiUrl, ...input }),
+      fleetCompatibility: (input) => getFleetCompatibility({ controlApiUrl, ...input }),
       requestEdgeDiagnosticGrant: (input) => requestPlatformDiagnosticGrant({
         controlApiUrl,
         ...input,

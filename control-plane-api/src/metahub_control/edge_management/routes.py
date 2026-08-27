@@ -163,6 +163,38 @@ from .telemetry_service import (
     patch_workspace_telemetry_policy,
     receive_agent_telemetry,
 )
+from .upgrade_models import (
+    AgentUpgradeCommandResponse,
+    AgentUpgradeMutationRequest,
+    AgentUpgradeReceiptResponse,
+    AgentUpgradeReportRequest,
+    FleetCompatibilityResponse,
+    FleetRolloutMutationRequest,
+    GatewayReleaseListResponse,
+    GatewayReleaseResponse,
+    MaintenanceWindowUpdateRequest,
+    PlatformGatewayReleaseMutationRequest,
+    PlatformRolloutCreateRequest,
+    RollbackCreateRequest,
+    RollbackResponse,
+    RolloutListResponse,
+    RolloutResponse,
+    WorkspaceUpgradeResponse,
+)
+from .upgrade_service import (
+    create_platform_rollout,
+    get_fleet_compatibility,
+    get_workspace_upgrade,
+    list_platform_gateway_releases,
+    list_platform_rollouts,
+    mutate_agent_upgrade,
+    mutate_platform_gateway_release,
+    mutate_platform_rollout,
+    pull_agent_upgrade,
+    record_agent_upgrade_report,
+    request_workspace_rollback,
+    update_workspace_maintenance,
+)
 from .validation_service import (
     accept_workspace_delivery,
     get_agent_validation,
@@ -892,6 +924,182 @@ async def post_edge_deployment_revoke(
 
 
 @router.get(
+    "/edge/deployments/{deployment_id}/upgrade",
+    response_model=WorkspaceUpgradeResponse,
+)
+async def get_edge_upgrade(
+    deployment_id: str, request: Request, response: Response
+) -> WorkspaceUpgradeResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        get_workspace_upgrade,
+        request.app.state.config,
+        deployment_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.head.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.patch(
+    "/edge/deployments/{deployment_id}/maintenance-window",
+    response_model=WorkspaceUpgradeResponse,
+)
+async def patch_edge_maintenance_window(
+    deployment_id: str, request: Request, response: Response
+) -> WorkspaceUpgradeResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge_upgrade.maintenance_invalid"),
+        MaintenanceWindowUpdateRequest,
+        error_code="edge_upgrade.maintenance_invalid",
+    )
+    result = await _run(
+        update_workspace_maintenance,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.maintenance.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/rollback",
+    response_model=RollbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_upgrade_rollback(
+    deployment_id: str, request: Request, response: Response
+) -> RollbackResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge_upgrade.request_invalid"),
+        RollbackCreateRequest,
+        error_code="edge_upgrade.request_invalid",
+    )
+    result = await _run(
+        request_workspace_rollback,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_required_step_up_grant(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.rollback.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/upgrades/pending",
+    response_model=AgentUpgradeCommandResponse | None,
+)
+async def get_agent_upgrade(
+    deployment_id: str, request: Request, response: Response
+) -> AgentUpgradeCommandResponse | None:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    result = await _run(
+        pull_agent_upgrade,
+        request.app.state.config,
+        deployment_id,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result is None:
+        response.status_code = status.HTTP_204_NO_CONTENT
+        _edge_private(response)
+        return None
+    response.headers["ETag"] = f'"{result.command_revision if result else 0}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/upgrades/{command_id}",
+    response_model=AgentUpgradeCommandResponse,
+)
+async def post_agent_upgrade(
+    deployment_id: str, command_id: str, request: Request, response: Response
+) -> AgentUpgradeCommandResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(
+        await _strict_json(request, "edge_upgrade.request_invalid"),
+        AgentUpgradeMutationRequest,
+        error_code="edge_upgrade.request_invalid",
+    )
+    result = await _run(
+        mutate_agent_upgrade,
+        request.app.state.config,
+        deployment_id,
+        command_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.command_revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/upgrades/{command_id}/report",
+    response_model=AgentUpgradeReceiptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_agent_upgrade_report(
+    deployment_id: str, command_id: str, request: Request, response: Response
+) -> AgentUpgradeReceiptResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _json_model(
+        await _strict_json(request, "edge_upgrade.receipt_invalid"),
+        AgentUpgradeReportRequest,
+        error_code="edge_upgrade.receipt_invalid",
+    )
+    if payload.report.upgrade_command_id != command_id:
+        raise ApiError("edge_upgrade.receipt_invalid")
+    result = await _run(
+        record_agent_upgrade_report,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.get(
     "/edge/deployments/{deployment_id}/desired-state",
     response_model=EdgeDesiredStateResponse | EdgeDesiredStatePullResponse,
 )
@@ -1160,6 +1368,189 @@ def require_platform_edge_installer(request: Request) -> PlatformContext:
     return context
 
 
+def require_platform_edge_upgrade(request: Request) -> PlatformContext:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    context = authenticate_platform_session_context(
+        request.app.state.config,
+        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=csrf,
+    )
+    if not {
+        "platform.edge_release.read",
+        "platform.edge_release.manage",
+        "platform.edge_release.approve",
+        "platform.edge_rollout.read",
+        "platform.edge_rollout.manage",
+    }.intersection(context.permissions):
+        raise ApiError("platform.permission_denied")
+    return context
+
+
+@router.get("/platform/releases", response_model=GatewayReleaseListResponse)
+async def get_platform_gateway_releases(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> GatewayReleaseListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_gateway_releases,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post("/platform/releases", response_model=GatewayReleaseResponse)
+async def post_platform_gateway_release(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> GatewayReleaseResponse:
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "fleet.release_request_invalid"),
+        PlatformGatewayReleaseMutationRequest,
+        error_code="fleet.release_request_invalid",
+    )
+    result = await _run(
+        mutate_platform_gateway_release,
+        request.app.state.config,
+        context,
+        payload,
+        step_up_grant=(
+            None if payload.action == "submit" else _required_step_up_grant(request)
+        ),
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="fleet.release_request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if payload.action == "submit" and not result.idempotent_replay:
+        response.status_code = status.HTTP_201_CREATED
+    response.headers["ETag"] = f'"{result.release.revision}"'
+    _private(response)
+    return result
+
+
+@router.get("/platform/rollouts", response_model=RolloutListResponse)
+async def get_platform_rollouts(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> RolloutListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_rollouts,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/releases/{release_id}/rollouts",
+    response_model=RolloutResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_platform_rollout(
+    release_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> RolloutResponse:
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "fleet.rollout_request_invalid"),
+        PlatformRolloutCreateRequest,
+        error_code="fleet.rollout_request_invalid",
+    )
+    result = await _run(
+        create_platform_rollout,
+        request.app.state.config,
+        context,
+        release_id,
+        payload,
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="fleet.rollout_request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.rollout.revision}"'
+    _private(response)
+    return result
+
+
+@router.post("/fleet/rollouts/{rollout_id}/pause", response_model=RolloutResponse)
+async def post_fleet_rollout_pause(
+    rollout_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> RolloutResponse:
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "fleet.rollout_request_invalid"),
+        FleetRolloutMutationRequest,
+        error_code="fleet.rollout_request_invalid",
+    )
+    result = await _run(
+        mutate_platform_rollout,
+        request.app.state.config,
+        context,
+        rollout_id,
+        payload,
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="fleet.rollout_request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.rollout.revision}"'
+    _private(response)
+    return result
+
+
+@router.get("/fleet/compatibility", response_model=FleetCompatibilityResponse)
+async def get_platform_fleet_compatibility(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_upgrade)],
+) -> FleetCompatibilityResponse:
+    query = _compatibility_query(request)
+    result = await _run(
+        get_fleet_compatibility,
+        request.app.state.config,
+        context,
+        release_id=query["release_id"],
+        deployment_id=query["deployment_id"],
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
 @router.get(
     "/platform/edge/installers",
     response_model=PlatformInstallerReleaseListResponse,
@@ -1385,10 +1776,12 @@ def _idempotency_key(request: Request) -> str:
     return values[0]
 
 
-def _platform_idempotency_key(request: Request) -> str:
+def _platform_idempotency_key(
+    request: Request, *, error_code: str = "platform.edge_installer_request_invalid"
+) -> str:
     values = _raw_headers(request, b"idempotency-key")
     if len(values) != 1 or _IDEMPOTENCY_RE.fullmatch(values[0]) is None:
-        raise ApiError("platform.edge_installer_request_invalid")
+        raise ApiError(error_code)
     return values[0]
 
 
@@ -1420,6 +1813,17 @@ def _model(
 ):
     try:
         return model_type.model_validate(payload)
+    except ValueError:
+        raise ApiError(error_code) from None
+
+
+def _json_model(
+    payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"
+):
+    try:
+        return model_type.model_validate_json(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        )
     except ValueError:
         raise ApiError(error_code) from None
 
@@ -1615,6 +2019,24 @@ def _fleet_query(request: Request) -> dict[str, str | int | None]:
         "cursor": values.get("cursor"),
         "limit": limit,
     }
+
+
+def _compatibility_query(request: Request) -> dict[str, str | None]:
+    allowed = {"release_id", "deployment_id"}
+    items = request.query_params.multi_items()
+    names = [name for name, _value in items]
+    if any(name not in allowed for name in names) or len(names) != len(set(names)):
+        raise ApiError("fleet.compatibility_request_invalid")
+    values = dict(items)
+    release_id = values.get("release_id")
+    deployment_id = values.get("deployment_id")
+    if release_id is not None and re.fullmatch(r"ger_[0-9a-f]{32}", release_id) is None:
+        raise ApiError("fleet.compatibility_request_invalid")
+    if deployment_id is not None and re.fullmatch(
+        r"edp_[0-9a-f]{32}", deployment_id
+    ) is None:
+        raise ApiError("fleet.compatibility_request_invalid")
+    return {"release_id": release_id, "deployment_id": deployment_id}
 
 
 def _edge_private(response: Response) -> None:

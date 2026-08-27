@@ -42,6 +42,22 @@ const ERROR_MESSAGES = Object.freeze({
   "edge.request_invalid": "私有 Gateway 请求不合法",
   "edge.response_invalid": "私有 Gateway 响应合同不完整",
   "edge.unavailable": "私有 Gateway 服务暂不可用",
+  "edge_upgrade.permission_denied": "当前成员没有升级管理权限",
+  "edge_upgrade.request_invalid": "升级请求字段不合法",
+  "edge_upgrade.response_invalid": "升级响应合同不完整",
+  "edge_upgrade.not_found": "当前 Deployment 尚无升级状态",
+  "edge_upgrade.revision_conflict": "升级策略已变化，请刷新后重试",
+  "edge_upgrade.idempotency_conflict": "该操作标识已用于另一升级意图",
+  "edge_upgrade.head_not_found": "当前 Deployment 尚无可回滚版本",
+  "edge_upgrade.maintenance_closed": "当前维护窗口或冻结策略不允许回滚",
+  "edge_upgrade.maintenance_invalid": "维护窗口字段或冻结区间无效",
+  "edge_upgrade.rollback_unavailable": "LKG 或 N-1 数据迁移路径不可用",
+  "edge_upgrade.rollback_not_found": "找不到指定的回滚目标",
+  "edge_upgrade.state_conflict": "升级状态已变化，请刷新后重试",
+  "edge_upgrade.version_incompatible": "目标版本与当前版本不兼容",
+  "edge_upgrade.unavailable": "升级服务暂不可用",
+  "edge_upgrade.network_unavailable": "升级服务暂不可达",
+  "edge_upgrade.request_failed": "升级请求未完成",
   "edge.installer_not_found": "安装介质已下架或不可用",
   "edge.installer_integrity_failed": "安装介质完整性校验失败",
   "edge.preflight_invalid": "预检报告无效",
@@ -165,6 +181,12 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     authContext,
     PERMISSIONS.EDGE_DIAGNOSTIC_APPROVE,
   ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DIAGNOSTIC_APPROVE) : "";
+  const upgradeReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_UPGRADE_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_UPGRADE_READ) : "";
+  const upgradeManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_UPGRADE_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_UPGRADE_MANAGE) : "";
+  const rollbackManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_ROLLBACK_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_ROLLBACK_MANAGE) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -209,6 +231,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     healthReadIdentity,
     diagnosticReadIdentity,
     diagnosticApproveIdentity,
+    upgradeReadIdentity,
+    upgradeManageIdentity,
+    rollbackManageIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -234,6 +259,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canApproveDiagnostics: Boolean(
       healthReadIdentity && diagnosticReadIdentity && diagnosticApproveIdentity
     ),
+    canReadUpgrades: Boolean(upgradeReadIdentity),
+    canManageUpgrades: Boolean(upgradeReadIdentity && upgradeManageIdentity),
+    canRollbackUpgrades: Boolean(upgradeReadIdentity && rollbackManageIdentity),
   });
 }
 
@@ -254,6 +282,7 @@ export function createPrivateGatewayPageState({
   let validationStates = Object.freeze({});
   let supportBundleStates = Object.freeze({});
   let healthStates = Object.freeze({});
+  let upgradeStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
@@ -278,15 +307,20 @@ export function createPrivateGatewayPageState({
   let canReadHealth = false;
   let canReadDiagnostics = false;
   let canApproveDiagnostics = false;
+  let canReadUpgrades = false;
+  let canManageUpgrades = false;
+  let canRollbackUpgrades = false;
+  let maintenanceIntent = null;
+  let rollbackUpgradeIntent = null;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
     localSession: 0, secret: 0, validation: 0, acceptance: 0, supportBundle: 0,
-    diagnostic: 0,
+    diagnostic: 0, maintenance: 0, rollbackUpgrade: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
     localSession: null, secret: null, validation: null, acceptance: null,
-    supportBundle: null, diagnostic: null,
+    supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
   };
 
   function enter(owner) {
@@ -314,6 +348,9 @@ export function createPrivateGatewayPageState({
     canReadHealth = owner.canReadHealth === true;
     canReadDiagnostics = owner.canReadDiagnostics === true && canReadHealth;
     canApproveDiagnostics = owner.canApproveDiagnostics === true && canReadDiagnostics;
+    canReadUpgrades = owner.canReadUpgrades === true;
+    canManageUpgrades = owner.canManageUpgrades === true && canReadUpgrades;
+    canRollbackUpgrades = owner.canRollbackUpgrades === true && canReadUpgrades;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -324,6 +361,7 @@ export function createPrivateGatewayPageState({
     if (!canReadSupportBundles) supportBundleStates = Object.freeze({});
     if (!canReadHealth) healthStates = Object.freeze({});
     if (!canApproveDiagnostics) diagnosticDialog = closedDiagnosticDialog();
+    if (!canReadUpgrades) upgradeStates = Object.freeze({});
     return true;
   }
 
@@ -343,6 +381,7 @@ export function createPrivateGatewayPageState({
     validationStates = Object.freeze({});
     supportBundleStates = Object.freeze({});
     healthStates = Object.freeze({});
+    upgradeStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
@@ -367,10 +406,15 @@ export function createPrivateGatewayPageState({
     canReadHealth = false;
     canReadDiagnostics = false;
     canApproveDiagnostics = false;
+    canReadUpgrades = false;
+    canManageUpgrades = false;
+    canRollbackUpgrades = false;
+    maintenanceIntent = null;
+    rollbackUpgradeIntent = null;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
       localSession: null, secret: null, validation: null, acceptance: null,
-      supportBundle: null, diagnostic: null,
+      supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
@@ -412,6 +456,7 @@ export function createPrivateGatewayPageState({
     secretResponse = null,
     installerResponse = null,
     healthResponses = [],
+    upgradeResponses = [],
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -432,7 +477,8 @@ export function createPrivateGatewayPageState({
         response.deployments,
         canReadHealth,
         canReadDiagnostics,
-      )) {
+      )
+      || !validUpgradeResponses(upgradeResponses, response.deployments, canReadUpgrades)) {
       return false;
     }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
@@ -458,6 +504,9 @@ export function createPrivateGatewayPageState({
       : Object.freeze({});
     healthStates = canReadHealth
       ? healthStateMap(response.deployments, healthResponses)
+      : Object.freeze({});
+    upgradeStates = canReadUpgrades
+      ? upgradeStateMap(response.deployments, upgradeResponses)
       : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
@@ -784,6 +833,140 @@ export function createPrivateGatewayPageState({
 
   function finishTelemetryPolicy(operation) {
     if (operations.policy === operation) operations.policy = null;
+  }
+
+  function beginMaintenance(owner, deploymentId, input = {}, candidateIdempotencyKey = "") {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const upgrade = upgradeStates[deploymentId] ?? null;
+    const weekdays = Array.isArray(input.weekdays)
+      ? [...new Set(input.weekdays.map(Number))].sort((left, right) => left - right) : [];
+    const freezeStartsAt = String(input.freezeStartsAt ?? "") || null;
+    const freezeEndsAt = String(input.freezeEndsAt ?? "") || null;
+    const request = {
+      releaseChannel: String(input.releaseChannel ?? ""),
+      timezoneName: String(input.timezoneName ?? ""),
+      weekdays,
+      startMinute: Number(input.startMinute),
+      durationMinutes: Number(input.durationMinutes),
+      freezeStartsAt,
+      freezeEndsAt,
+      status: String(input.status ?? ""),
+      expectedRevision: upgrade?.maintenance?.revision ?? 0,
+      reasonCode: String(input.reasonCode ?? ""),
+    };
+    if (!owns(owner) || !canManageUpgrades || !deployment || deployment.status !== "active"
+      || !upgrade || !["preview", "stable", "extended"].includes(request.releaseChannel)
+      || !/^[A-Za-z0-9_+./-]{3,64}$/u.test(request.timezoneName)
+      || weekdays.length < 1 || weekdays.some((item) => !Number.isInteger(item)
+        || item < 0 || item > 6)
+      || !Number.isInteger(request.startMinute) || request.startMinute < 0
+      || request.startMinute > 1439
+      || !Number.isInteger(request.durationMinutes) || request.durationMinutes < 30
+      || request.durationMinutes > 720
+      || (freezeStartsAt === null) !== (freezeEndsAt === null)
+      || !["active", "disabled"].includes(request.status)
+      || !/^[a-z][a-z0-9_.-]{1,79}$/u.test(request.reasonCode) || busy()) return null;
+    const fingerprint = JSON.stringify({ deploymentId, ...request });
+    const idempotencyKey = maintenanceIntent?.fingerprint === fingerprint
+      ? maintenanceIntent.idempotencyKey : String(candidateIdempotencyKey ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u.test(idempotencyKey)) return null;
+    maintenanceIntent = Object.freeze({ fingerprint, idempotencyKey });
+    generations.maintenance += 1;
+    const operation = ticket("maintenance", {
+      controller: new AbortController(), deploymentId, request: Object.freeze(request),
+      idempotencyKey,
+    });
+    operations.maintenance = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptMaintenance(operation, response, owner) {
+    if (!current("maintenance", operation, owner)
+      || !validUpgradeResponse(response, operation.deploymentId)
+      || response.maintenance === null
+      || response.maintenance.revision <= operation.request.expectedRevision) return false;
+    upgradeStates = Object.freeze({ ...upgradeStates, [operation.deploymentId]: response });
+    maintenanceIntent = null;
+    feedback = Object.freeze({
+      kind: "success", code: "edge_upgrade.maintenance_updated",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectMaintenance(operation, error, owner) {
+    if (!current("maintenance", operation, owner)) return false;
+    if (![0, 503].includes(Number(error?.status ?? -1))) maintenanceIntent = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishMaintenance(operation) {
+    if (operations.maintenance === operation) operations.maintenance = null;
+  }
+
+  function beginUpgradeRollback(
+    owner, deploymentId, targetReleaseId = null, reasonCode = "operator_requested",
+    candidateIdempotencyKey = "",
+  ) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const upgrade = upgradeStates[deploymentId] ?? null;
+    const target = targetReleaseId || upgrade?.head?.lkg_release_id || null;
+    if (!owns(owner) || !canRollbackUpgrades || !deployment
+      || deployment.status !== "active" || !upgrade || !target
+      || target === upgrade.head.current_release_id
+      || !/^[a-z][a-z0-9_.-]{1,79}$/u.test(String(reasonCode ?? "")) || busy()) return null;
+    const fingerprint = JSON.stringify({
+      deploymentId, targetReleaseId: target, expectedHeadRevision: upgrade.head.revision,
+      reasonCode: String(reasonCode),
+    });
+    const idempotencyKey = rollbackUpgradeIntent?.fingerprint === fingerprint
+      ? rollbackUpgradeIntent.idempotencyKey : String(candidateIdempotencyKey ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u.test(idempotencyKey)) return null;
+    rollbackUpgradeIntent = Object.freeze({ fingerprint, idempotencyKey });
+    generations.rollbackUpgrade += 1;
+    const operation = ticket("rollbackUpgrade", {
+      controller: new AbortController(),
+      deploymentId,
+      workspaceId,
+      targetReleaseId: target,
+      expectedHeadRevision: upgrade.head.revision,
+      reasonCode: String(reasonCode),
+      idempotencyKey,
+    });
+    operations.rollbackUpgrade = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function isUpgradeRollbackCurrent(operation, owner) {
+    return current("rollbackUpgrade", operation, owner);
+  }
+
+  function acceptUpgradeRollback(operation, response, owner) {
+    if (!current("rollbackUpgrade", operation, owner)
+      || !validUpgradeResponse(response, operation.deploymentId)
+      || response.head.desired_generation <= upgradeStates[operation.deploymentId]
+        ?.head?.desired_generation) return false;
+    upgradeStates = Object.freeze({ ...upgradeStates, [operation.deploymentId]: response });
+    rollbackUpgradeIntent = null;
+    feedback = Object.freeze({
+      kind: "success", code: "edge_upgrade.rollback_requested",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectUpgradeRollback(operation, error, owner) {
+    if (!current("rollbackUpgrade", operation, owner)) return false;
+    if (![0, 503].includes(Number(error?.status ?? -1))) rollbackUpgradeIntent = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishUpgradeRollback(operation) {
+    if (operations.rollbackUpgrade === operation) operations.rollbackUpgrade = null;
   }
 
   function beginValidation(owner, deploymentId, action) {
@@ -1345,7 +1528,8 @@ export function createPrivateGatewayPageState({
       || Boolean(operations.create || operations.copy || operations.revoke
         || operations.command || operations.policy || operations.localSession
         || operations.secret || operations.validation || operations.acceptance
-        || operations.supportBundle || operations.diagnostic);
+        || operations.supportBundle || operations.diagnostic || operations.maintenance
+        || operations.rollbackUpgrade);
   }
 
   function snapshot() {
@@ -1361,6 +1545,7 @@ export function createPrivateGatewayPageState({
       validationStates,
       supportBundleStates,
       healthStates,
+      upgradeStates,
       dialog,
       stateDialog,
       registration,
@@ -1385,6 +1570,9 @@ export function createPrivateGatewayPageState({
       canReadHealth,
       canReadDiagnostics,
       canApproveDiagnostics,
+      canReadUpgrades,
+      canManageUpgrades,
+      canRollbackUpgrades,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -1392,6 +1580,7 @@ export function createPrivateGatewayPageState({
       validationBusy: Boolean(operations.validation || operations.acceptance),
       supportBundleBusy: Boolean(operations.supportBundle),
       diagnosticBusy: Boolean(operations.diagnostic),
+      upgradeBusy: Boolean(operations.maintenance || operations.rollbackUpgrade),
     });
   }
 
@@ -1412,7 +1601,8 @@ export function createPrivateGatewayPageState({
     return Boolean(operations.create || operations.revoke || operations.copy
       || operations.command || operations.policy || operations.localSession
       || operations.secret || operations.validation || operations.acceptance
-      || operations.supportBundle || operations.diagnostic);
+      || operations.supportBundle || operations.diagnostic || operations.maintenance
+      || operations.rollbackUpgrade);
   }
 
   function sessionActive(deploymentId) {
@@ -1436,6 +1626,9 @@ export function createPrivateGatewayPageState({
     acceptStateCommand, rejectStateCommand, finishStateCommand,
     beginTelemetryPolicy, acceptTelemetryPolicy, rejectTelemetryPolicy,
     finishTelemetryPolicy,
+    beginMaintenance, acceptMaintenance, rejectMaintenance, finishMaintenance,
+    beginUpgradeRollback, isUpgradeRollbackCurrent, acceptUpgradeRollback,
+    rejectUpgradeRollback, finishUpgradeRollback,
     beginValidation, acceptValidation, rejectValidation, finishValidation,
     openDeliveryAcceptance, closeDeliveryAcceptance, beginDeliveryAcceptance,
     acceptDeliveryAcceptance, rejectDeliveryAcceptance, finishDeliveryAcceptance,
@@ -1464,6 +1657,7 @@ function ownerKeyFor(owner) {
     owner.deliveryAcceptIdentity, owner.supportBundleReadIdentity,
     owner.healthReadIdentity, owner.diagnosticReadIdentity,
     owner.diagnosticApproveIdentity,
+    owner.upgradeReadIdentity, owner.upgradeManageIdentity, owner.rollbackManageIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -1498,6 +1692,43 @@ function validHealthResponses(responses, deployments, readsHealth, readsDiagnost
 }
 
 function healthStateMap(deployments, responses) {
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return Object.freeze(Object.fromEntries(responses.filter(
+    (entry) => expected.has(entry.deploymentId),
+  ).map((entry) => [entry.deploymentId, entry.response])));
+}
+
+function validUpgradeResponses(responses, deployments, required) {
+  if (!required) return Array.isArray(responses) && responses.length === 0;
+  if (!Array.isArray(responses) || responses.length !== deployments.length) return false;
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((entry) => {
+    const deploymentId = String(entry?.deploymentId ?? "");
+    if (!expected.has(deploymentId) || seen.has(deploymentId)
+      || !validUpgradeResponse(entry?.response, deploymentId)) return false;
+    seen.add(deploymentId);
+    return true;
+  });
+}
+
+function validUpgradeResponse(response, deploymentId) {
+  return Boolean(response?.deployment_id === deploymentId
+    && response.head?.deployment_id === deploymentId
+    && Number.isSafeInteger(response.head.revision) && response.head.revision > 0
+    && Number.isSafeInteger(response.head.desired_generation)
+    && Number.isSafeInteger(response.head.applied_generation)
+    && Number.isSafeInteger(response.head.lkg_generation)
+    && response.head.lkg_generation <= response.head.applied_generation
+    && response.head.applied_generation <= response.head.desired_generation
+    && (response.maintenance === null || response.maintenance?.deployment_id === deploymentId)
+    && Array.isArray(response.rollouts)
+    && response.rollouts.every((item) => item.deployment_id === deploymentId)
+    && Array.isArray(response.rollback_attempts)
+    && response.rollback_attempts.every((item) => item.deployment_id === deploymentId));
+}
+
+function upgradeStateMap(deployments, responses) {
   const expected = new Set(deployments.map((item) => item.deployment_id));
   return Object.freeze(Object.fromEntries(responses.filter(
     (entry) => expected.has(entry.deploymentId),

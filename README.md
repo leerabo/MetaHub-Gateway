@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-126 - Fleet资产、健康与受控远程诊断` 已完成；当前下一条未完成项是
-  `PRD-127 - Fleet分批升级、回滚与维护窗口`。
+- 新 `PRD-090` 至 `PRD-127 - Fleet分批升级、回滚与维护窗口` 已完成；当前下一条未完成项是
+  `PRD-128 - 私有Gateway License、容量与离线宽限`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-127 - Fleet分批升级、回滚与维护窗口` 已完成：0119、双人审批签名 release、确定性 cohort、
+  客户维护窗口/冻结、兼容/容量/备份预检、失败自动暂停、可恢复 Agent lease/start/report、LKG 与单节点 rollback、
+  Workspace/Platform 双域 Console 均已交付。Control `5/5`、Shared `7/7`、Gateway `2/2`、Console `4/4` 及
+  PRD-120..127 Console 必要回归 `41/41` 通过；两页 390x844 浏览器验收无页面溢出或日志错误。详见
+  [PRD-127 设计](docs/prd/PRD-127-fleet-staged-upgrade-rollback-maintenance-window.md) 和
+  [PRD-127 测试记录](docs/testing/PRD-127-tests.md)。下一权威项为 PRD-128；G5 在 PRD-130 后统一执行。
 - `PRD-126 - Fleet资产、健康与受控远程诊断` 已完成：0118、不可变健康快照/head、字段裁剪 Fleet 索引、
   1 万节点稳定 keyset、Workspace/Platform 双域权限、客户短时授权、Ed25519 签名命令、无 shell Agent handler、
   lease/取消/超时/重启恢复和双域 Console 均已交付。Python 专项 `15/15`、相邻回归 `151/151`、Console

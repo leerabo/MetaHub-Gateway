@@ -1150,6 +1150,16 @@ def _visible_navigation_items(
         "edge.secret_reference.read",
         "edge.installer.read",
         "edge.installation.manage",
+        "edge.delivery.accept",
+        "edge.support_bundle.read",
+        "edge.validation.manage",
+        "edge.validation.read",
+        "edge.diagnostic.approve",
+        "edge.diagnostic.read",
+        "edge.health.read",
+        "edge.rollback.manage",
+        "edge.upgrade.manage",
+        "edge.upgrade.read",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

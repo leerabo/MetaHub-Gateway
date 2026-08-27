@@ -75,8 +75,119 @@
 .edge-health-signals .tone-warning dd { color: #8b5000; }
 .edge-health-signals .tone-critical dd { color: #a3302e; }
 
+.private-gateway-upgrade {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #d7ddd6;
+}
+.private-gateway-upgrade > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.private-gateway-upgrade > header h5,
+.private-gateway-upgrade > header small { display: block; margin: 0; overflow-wrap: anywhere; }
+.private-gateway-upgrade > header small { margin-top: 4px; color: #667068; }
+.private-gateway-upgrade-head {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 14px 0 0;
+  overflow: hidden;
+  border: 1px solid #d7ddd6;
+  border-radius: 4px;
+  background: #d7ddd6;
+}
+.private-gateway-upgrade-head > div { min-width: 0; padding: 10px; background: #fff; }
+.private-gateway-upgrade-head dt { color: #667068; font-size: 10px; font-weight: 700; }
+.private-gateway-upgrade-head dd { margin: 4px 0 0; overflow-wrap: anywhere; font-weight: 750; }
+.private-gateway-upgrade-targets { margin-top: 14px; border-top: 1px solid #d7ddd6; }
+.private-gateway-upgrade-targets > div {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(140px, .7fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #d7ddd6;
+}
+.private-gateway-upgrade-targets span > strong,
+.private-gateway-upgrade-targets span > small { display: block; overflow-wrap: anywhere; }
+.private-gateway-upgrade-targets span > small,
+.private-gateway-upgrade-targets > div > small { color: #667068; }
+.private-gateway-upgrade-empty { margin-top: 12px; padding: 12px 0; color: #667068; }
+.private-gateway-maintenance,
+.private-gateway-upgrade-rollback {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #d7ddd6;
+}
+.private-gateway-maintenance h6,
+.private-gateway-upgrade-rollback h6 { grid-column: 1 / -1; margin: 0; font-size: 14px; }
+.private-gateway-maintenance label,
+.private-gateway-upgrade-rollback label { min-width: 0; }
+.private-gateway-maintenance input,
+.private-gateway-maintenance select,
+.private-gateway-upgrade-rollback input,
+.private-gateway-upgrade-rollback select { width: 100%; min-width: 0; }
+.private-gateway-maintenance fieldset {
+  display: grid;
+  grid-column: span 2;
+  grid-template-columns: repeat(7, minmax(32px, 1fr));
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #d7ddd6;
+  border-radius: 4px;
+}
+.private-gateway-maintenance fieldset label {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+}
+.private-gateway-maintenance fieldset input,
+.private-gateway-upgrade-check input { width: 16px; min-height: 16px; margin: 0; }
+.private-gateway-upgrade-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.private-gateway-maintenance > button,
+.private-gateway-upgrade-rollback > button { min-height: 40px; }
+.private-gateway-upgrade-rollback .private-gateway-form-error { grid-column: 1 / -1; margin: 0; }
+.private-gateway-rollback-history { margin-top: 18px; }
+.private-gateway-rollback-history h6 { margin: 0 0 8px; font-size: 13px; }
+.private-gateway-rollback-history ol { margin: 0; padding: 0; list-style: none; }
+.private-gateway-rollback-history li {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #d7ddd6;
+}
+.private-gateway-rollback-history li strong,
+.private-gateway-rollback-history li small { display: block; overflow-wrap: anywhere; }
+.private-gateway-rollback-history li small,
+.private-gateway-rollback-history time { color: #667068; }
+
 @media (max-width: 760px) {
   .edge-health-signals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .private-gateway-upgrade-head { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-upgrade-targets > div,
+  .private-gateway-maintenance,
+  .private-gateway-upgrade-rollback { grid-template-columns: minmax(0, 1fr); }
+  .private-gateway-maintenance h6,
+  .private-gateway-upgrade-rollback h6,
+  .private-gateway-maintenance fieldset { grid-column: 1; }
+  .private-gateway-maintenance fieldset { grid-template-columns: repeat(4, minmax(32px, 1fr)); }
 }
 
 @media (max-width: 420px) {

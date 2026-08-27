@@ -2458,6 +2458,22 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   自审、0118/API/Shared/Gateway/Console、1 万节点 SLO、相邻回归、敏感审计和批次门禁边界；下一权威项为
   PRD-127，G5 在 PRD-130 后统一执行。
 
+## PRD-127 Fleet 分批升级、回滚与维护窗口（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/upgrades.py`：用途分域 release/command 签名、exact manifest、兼容与
+  维护窗口验证、持久升级 journal、排空/staging/commit/LKG、取消水位、崩溃恢复和 rollback receipt。
+- `gateway-data-plane/src/metahub_gateway/config/edge_upgrades.py`：设备 machine route 同步、204 idle、lease/start/report、
+  有界执行和固定终态；只处理自身 Deployment 的已验证命令。
+- `control-plane-api/src/metahub_control/edge_management/upgrade_models.py`、`upgrade_service.py` 与同域 routes：双人 release
+  发布、确定性 rollout/预检/暂停、Workspace channel/window/freeze、Agent 短租约恢复与总 deadline 收敛、单节点 rollback。
+- `infra/migrations/0119_edge_fleet_staged_upgrade_rollback.sql/.down.sql`：release/artifact/channel、维护策略、rollout/
+  batch/target、升级命令、rollback、事件/outbox、权限扩展、不变触发器、复合 owner 和业务 down guard。
+- `console-web/src/lib/edgeUpgrades.js`、Private Gateway 与 Platform 页面：严格双域 DTO/client/store、维护策略和 rollback、
+  release/rollout/门禁/暂停、局部表格滚动、权限裁剪及跨 Workspace 迟到响应防护。
+- `docs/prd/PRD-127-fleet-staged-upgrade-rollback-maintenance-window.md` 与 `docs/testing/PRD-127-tests.md`：保存两轮实施
+  自审、0119/API/Shared/Gateway/Console、移动视口浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-128，
+  G5 在 PRD-130 后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

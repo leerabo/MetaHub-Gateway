@@ -50,7 +50,7 @@ export function renderPlatformWorkspace(container, state) {
   const permissions = new Set(context?.permissions ?? []);
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-      || state.providerCatalogPublishIntent)
+      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent)
   );
   container.innerHTML = `
     <div class="platform-shell">
@@ -80,6 +80,7 @@ function renderView(state, permissions) {
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "edge-fleet") return edgeFleetView(state, permissions);
+  if (state.view === "edge-upgrades") return edgeUpgradesView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1465,6 +1466,160 @@ function gatewayView(state, permissions) {
     </section>
     ${permissions.has("platform.gateway.manage") ? gatewayPlacementForm(active) : ""}
     ${placement ? gatewayPlacementResult(placement) : ""}`;
+}
+
+function edgeUpgradesView(state, permissions) {
+  const releases = state.gatewayReleases?.releases ?? [];
+  const rollouts = state.fleetRollouts?.rollouts ?? [];
+  const released = releases.filter((item) => item.status === "released");
+  const active = rollouts.filter((item) => new Set(["preparing", "running", "paused"])
+    .has(item.status));
+  const canSubmit = permissions.has("platform.edge_release.manage");
+  const canApprove = permissions.has("platform.edge_release.approve");
+  const canManageRollout = permissions.has("platform.edge_rollout.manage");
+  const canReadRollout = permissions.has("platform.edge_rollout.read");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Private Gateway delivery</p><h1>Fleet upgrades</h1></div>
+      <button type="button" class="platform-icon-button" data-platform-action="edge-upgrades-refresh" title="刷新升级状态" aria-label="刷新升级状态"${state.loading ? " disabled" : ""}>↻</button>
+    </header>
+    <section class="platform-metrics" aria-label="Fleet upgrade summary">
+      ${metric("Released", released.length, `${releases.length} 个签名 Release`)}
+      ${metric("Active rollouts", active.length, `${rollouts.length} 个 rollout`)}
+      ${metric("Failed targets", rollouts.reduce((total, item) => total + item.failed_count, 0), "自动暂停计入")}
+    </section>
+    ${state.loading && !state.gatewayReleases ? '<div class="platform-empty" role="status">正在读取 Fleet upgrade 状态</div>' : `
+      ${canSubmit ? edgeReleaseSubmitForm(state.loading) : ""}
+      ${edgeReleaseTable(releases, state, canApprove, canSubmit)}
+      ${canReadRollout ? edgeRolloutControl(released, state, canManageRollout) : ""}
+      ${canReadRollout ? edgeRolloutList(rollouts, state, canManageRollout) : ""}
+    `}`;
+}
+
+function edgeReleaseSubmitForm(loading) {
+  return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-release-submit-title">
+    <header><div><p>Immutable signed artifact</p><h2 id="edge-release-submit-title">提交 Release</h2></div></header>
+    <form class="platform-edge-upgrade-form" data-platform-edge-release-submit-form autocomplete="off">
+      <label><span>Installer Release ID</span><input name="installerReleaseId" pattern="irl_[0-9a-f]{32}" required /></label>
+      <label><span>Channel</span><select name="releaseChannel"><option value="stable">Stable</option><option value="preview">Preview</option><option value="extended">Extended</option></select></label>
+      <label><span>Schema from</span><input name="schemaFrom" type="number" min="1" max="9999" value="1" required /></label>
+      <label><span>Schema to</span><input name="schemaTo" type="number" min="1" max="9999" value="1" required /></label>
+      <label class="platform-edge-upgrade-wide"><span>Compatible versions</span><input name="compatibleFromVersions" placeholder="1.0.0, 1.1.0" required /></label>
+      <label><span>Reason code</span><input name="reasonCode" value="scheduled_release" pattern="[a-z][a-z0-9_.-]{1,79}" required /></label>
+      <label class="platform-edge-upgrade-check"><input name="downMigrationSupported" type="checkbox" /><span>支持 N-1 down migration</span></label>
+      <label class="platform-edge-upgrade-check"><input name="confirmed" type="checkbox" required /><span>已核对签名、SBOM 与兼容矩阵</span></label>
+      <button type="submit" class="platform-primary"${loading ? " disabled" : ""}>提交审批</button>
+    </form>
+  </section>`;
+}
+
+function edgeReleaseTable(releases, state, canApprove, canWithdraw) {
+  const operatorId = String(state.session?.context?.operator?.operator_id ?? "");
+  return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-release-list-title">
+    <header><div><p>Two-person approval</p><h2 id="edge-release-list-title">Release 列表</h2></div></header>
+    <div class="platform-table-scroll"><table class="platform-table platform-edge-release-table">
+      <thead><tr><th>Release</th><th>Channel</th><th>Schema</th><th>状态</th><th>提交</th><th>操作</th></tr></thead>
+      <tbody>${releases.map((item) => {
+        const selfSubmitted = operatorId && operatorId === item.submitted_by_operator_id;
+        return `<tr>
+          <td data-label="Release"><strong>${escapeHtml(item.version)}</strong><small>${escapeHtml(item.release_id)} · ${number(item.artifact_count)} artifacts</small></td>
+          <td data-label="Channel">${escapeHtml(item.release_channel)}</td>
+          <td data-label="Schema">${number(item.schema_from)} → ${number(item.schema_to)}${item.down_migration_supported ? " · N-1" : ""}</td>
+          <td data-label="状态">${status(item.status)}</td>
+          <td data-label="提交"><span>${formatTime(item.submitted_at)}</span><small>${selfSubmitted ? "由当前操作员提交" : escapeHtml(item.submitted_by_operator_id)}</small></td>
+          <td data-label="操作" class="platform-edge-release-actions">
+            ${canApprove && item.status === "approval_pending"
+              ? edgeReleaseDecisionForm(item, "approve", "审批", state.loading, selfSubmitted) : ""}
+            ${canWithdraw && new Set(["approval_pending", "released"]).has(item.status)
+              ? edgeReleaseDecisionForm(item, "withdraw", "撤回", state.loading, false) : ""}
+          </td>
+        </tr>`;
+      }).join("") || emptyRow("暂无 Gateway Release", 6)}</tbody>
+    </table></div>
+  </section>`;
+}
+
+function edgeReleaseDecisionForm(release, action, label, loading, selfSubmitted) {
+  const disabled = loading || selfSubmitted;
+  return `<form data-platform-edge-release-decision-form autocomplete="off">
+    <input type="hidden" name="action" value="${action}" />
+    <input type="hidden" name="releaseId" value="${escapeAttribute(release.release_id)}" />
+    <input type="hidden" name="expectedRevision" value="${number(release.revision)}" />
+    <label><span>验证方式</span><select name="method"${disabled ? " disabled" : ""}><option value="totp">TOTP</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+    <label data-platform-step-up-code><span>二次验证码</span><input type="password" name="verificationCode" data-platform-sensitive autocomplete="one-time-code" required${disabled ? " disabled" : ""} /></label>
+    <label><span>Reason code</span><input name="reasonCode" value="${action === "approve" ? "release_approved" : "release_withdrawn"}" pattern="[a-z][a-z0-9_.-]{1,79}" required${disabled ? " disabled" : ""} /></label>
+    <label class="platform-edge-upgrade-check"><input name="confirmed" type="checkbox" required${disabled ? " disabled" : ""} /><span>${selfSubmitted ? "必须由另一位发布负责人审批" : "确认执行"}</span></label>
+    <button type="submit"${action === "approve" ? ' class="platform-primary"' : ""}${disabled ? " disabled" : ""}>${label}</button>
+  </form>`;
+}
+
+function edgeRolloutControl(releases, state, canManage) {
+  const releaseOptions = releases.map((item) => `<option value="${escapeAttribute(item.release_id)}">${escapeHtml(item.version)} · ${escapeHtml(item.release_channel)}</option>`).join("");
+  const compatibility = state.fleetCompatibility;
+  return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-rollout-control-title">
+    <header><div><p>Compatibility and deterministic Canary</p><h2 id="edge-rollout-control-title">Rollout 控制</h2></div></header>
+    <div class="platform-edge-rollout-controls">
+      <form data-platform-edge-compatibility-form autocomplete="off">
+        <h3>兼容性预检</h3>
+        <label><span>Release</span><select name="releaseId" required>${releaseOptions}</select></label>
+        <label><span>Deployment ID</span><input name="deploymentId" pattern="edp_[0-9a-f]{32}" required /></label>
+        <button type="submit"${state.loading || !releaseOptions ? " disabled" : ""}>检查</button>
+        ${compatibility ? `<div class="platform-edge-compatibility tone-${compatibility.compatible ? "applied" : "failed"}" role="status"><strong>${compatibility.compatible ? "兼容" : "已阻止"}</strong><span>${compatibility.reason_codes.length ? compatibility.reason_codes.map(escapeHtml).join(" / ") : "all_checks_passed"}</span><small>${escapeHtml(compatibility.deployment_id)} · ${escapeHtml(compatibility.current_version)} → ${escapeHtml(compatibility.release_version ?? "-")}</small></div>` : ""}
+      </form>
+      ${canManage ? `<form data-platform-edge-rollout-create-form autocomplete="off">
+        <h3>创建 rollout</h3>
+        <label><span>Release</span><select name="releaseId" required>${releaseOptions}</select></label>
+        <label class="platform-edge-upgrade-wide"><span>Deployment IDs</span><textarea name="deploymentIds" rows="3" placeholder="edp_... , edp_..." required></textarea></label>
+        <label><span>Canary bps</span><input name="canaryBasisPoints" type="number" min="100" max="10000" value="100" required /></label>
+        <label><span>观察秒数</span><input name="observationSeconds" type="number" min="1800" max="86400" value="1800" required /></label>
+        <label><span>批次大小</span><input name="batchSize" type="number" min="1" max="1000" value="50" required /></label>
+        <label><span>失败阈值 bps</span><input name="failureThresholdBasisPoints" type="number" min="1" max="10000" value="1000" required /></label>
+        <label><span>Reason code</span><input name="reasonCode" value="scheduled_upgrade" pattern="[a-z][a-z0-9_.-]{1,79}" required /></label>
+        <label class="platform-edge-upgrade-check"><input name="confirmed" type="checkbox" required /><span>确认目标、窗口与备份门禁</span></label>
+        <button type="submit" class="platform-primary"${state.loading || !releaseOptions ? " disabled" : ""}>创建 rollout</button>
+      </form>` : ""}
+    </div>
+  </section>`;
+}
+
+function edgeRolloutList(rollouts, state, canManage) {
+  return `<section class="platform-edge-upgrade-section" aria-labelledby="edge-rollout-list-title">
+    <header><div><p>Generation-bound execution</p><h2 id="edge-rollout-list-title">Rollout 列表</h2></div></header>
+    <div class="platform-edge-rollout-list">${rollouts.map((rollout) => `
+      <article class="platform-edge-rollout">
+        <header><div><strong>${escapeHtml(rollout.release_version)}</strong><code>${escapeHtml(rollout.rollout_id)}</code></div>${status(rollout.status)}</header>
+        <dl class="platform-fact-grid">
+          <div><dt>Generation</dt><dd>${number(rollout.generation)} / cancel ${number(rollout.cancel_watermark)}</dd></div>
+          <div><dt>Targets</dt><dd>${number(rollout.succeeded_count)} succeeded · ${number(rollout.failed_count)} failed · ${number(rollout.target_count)} total</dd></div>
+          <div><dt>Canary</dt><dd>${basisPoints(rollout.canary_basis_points)} · ${number(rollout.observation_seconds)}s</dd></div>
+          <div><dt>Pause reason</dt><dd>${escapeHtml(rollout.pause_reason_code ?? "-")}</dd></div>
+        </dl>
+        ${canManage && new Set(["preparing", "running", "paused"]).has(rollout.status)
+          ? edgeRolloutCommandForm(rollout, state.loading) : ""}
+        <details><summary>批次 (${number(rollout.batches.length)})</summary>${edgeRolloutBatchTable(rollout.batches)}</details>
+        <details><summary>目标 (${number(rollout.targets.length)})</summary>${edgeRolloutTargetTable(rollout.targets)}</details>
+      </article>`).join("") || '<div class="platform-empty">暂无 Fleet rollout</div>'}</div>
+  </section>`;
+}
+
+function edgeRolloutCommandForm(rollout, loading) {
+  const action = rollout.status === "paused" ? "resume" : "pause";
+  return `<form class="platform-edge-rollout-command" data-platform-edge-rollout-command-form autocomplete="off">
+    <input type="hidden" name="rolloutId" value="${escapeAttribute(rollout.rollout_id)}" />
+    <input type="hidden" name="action" value="${action}" />
+    <input type="hidden" name="expectedRevision" value="${number(rollout.revision)}" />
+    <label><span>Reason code</span><input name="reasonCode" value="${action === "pause" ? "operator_pause" : "operator_resume"}" pattern="[a-z][a-z0-9_.-]{1,79}" required /></label>
+    <label class="platform-edge-upgrade-check"><input name="confirmed" type="checkbox" required /><span>确认 ${action === "pause" ? "暂停后续批次" : "恢复门禁调度"}</span></label>
+    <button type="submit"${action === "resume" ? ' class="platform-primary"' : ""}${loading ? " disabled" : ""}>${action === "pause" ? "暂停" : "恢复"}</button>
+  </form>`;
+}
+
+function edgeRolloutBatchTable(items) {
+  return `<div class="platform-table-scroll"><table class="platform-table platform-edge-batch-table"><thead><tr><th>批次</th><th>类型</th><th>状态</th><th>成功 / 失败 / 总数</th><th>观察截止</th></tr></thead><tbody>${items.map((item) => `<tr><td data-label="批次">${number(item.sequence)}</td><td data-label="类型">${escapeHtml(item.batch_kind)}</td><td data-label="状态">${status(item.status)}</td><td data-label="结果">${number(item.succeeded_count)} / ${number(item.failed_count)} / ${number(item.target_count)}</td><td data-label="观察截止">${formatTime(item.observe_until)}</td></tr>`).join("") || emptyRow("尚未生成批次", 5)}</tbody></table></div>`;
+}
+
+function edgeRolloutTargetTable(items) {
+  return `<div class="platform-table-scroll"><table class="platform-table platform-edge-target-table"><thead><tr><th>Deployment</th><th>批次</th><th>版本</th><th>状态</th><th>失败原因</th></tr></thead><tbody>${items.map((item) => `<tr><td data-label="Deployment"><code>${escapeHtml(item.deployment_id)}</code></td><td data-label="批次">${number(item.batch_sequence)}</td><td data-label="版本">${escapeHtml(item.current_version)} → ${escapeHtml(item.target_version)}</td><td data-label="状态">${status(item.status)}</td><td data-label="失败原因">${escapeHtml(item.failure_reason_code ?? "-")}</td></tr>`).join("") || emptyRow("暂无目标", 5)}</tbody></table></div>`;
 }
 
 function edgeFleetView(state, permissions) {

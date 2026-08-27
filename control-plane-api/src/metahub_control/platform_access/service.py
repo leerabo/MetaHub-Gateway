@@ -108,6 +108,12 @@ _NAVIGATION = (
         "/platform.html#edge-fleet",
     ),
     (
+        "platform.edge_release.read",
+        "edge-upgrades",
+        "Fleet upgrades",
+        "/platform.html#edge-upgrades",
+    ),
+    (
         "platform.job.read",
         "job-runtime",
         "Job runtime",

@@ -7,6 +7,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "infrastructure",
   "gateway",
   "edge-fleet",
+  "edge-upgrades",
   "job-runtime",
   "feature-rollouts",
   "config-distribution",
@@ -92,6 +93,10 @@ export function createPlatformPageController({
     edgeDiagnosticIntent: null,
     edgeDiagnosticGrant: null,
     edgeDiagnosticCommand: null,
+    gatewayReleases: null,
+    fleetRollouts: null,
+    fleetCompatibility: null,
+    edgeUpgradeIntent: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
     jobQueues: null,
@@ -187,7 +192,8 @@ export function createPlatformPageController({
     },
     async refresh() {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-        || state.capacityIntent || state.providerCatalogPublishIntent)) return false;
+        || state.capacityIntent || state.providerCatalogPublishIntent
+        || state.edgeUpgradeIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -212,13 +218,14 @@ export function createPlatformPageController({
     },
     selectView(view) {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-        || state.capacityIntent || state.providerCatalogPublishIntent)) return false;
+        || state.capacityIntent || state.providerCatalogPublishIntent
+        || state.edgeUpgradeIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "provider-catalog", "edge-fleet",
+        "provider-catalog", "edge-fleet", "edge-upgrades",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -252,6 +259,11 @@ export function createPlatformPageController({
           state.edgeDiagnosticIntent = null;
           state.edgeDiagnosticGrant = null;
           state.edgeDiagnosticCommand = null;
+        } else if (state.view === "edge-upgrades") {
+          state.gatewayReleases = null;
+          state.fleetRollouts = null;
+          state.fleetCompatibility = null;
+          state.edgeUpgradeIntent = null;
         }
         state.loading = false;
       }
@@ -286,6 +298,8 @@ export function createPlatformPageController({
         void loadProviderCatalog();
       }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
+      if (state.view === "edge-upgrades"
+        && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
     },
     async filterEdgeFleet(filters) {
       if (state.view !== "edge-fleet") return false;
@@ -305,6 +319,169 @@ export function createPlatformPageController({
       if (state.view !== "edge-fleet" || !state.edgeFleetCursorHistory.length) return false;
       state.edgeFleetCursor = state.edgeFleetCursorHistory.pop() ?? null;
       return loadEdgeFleet();
+    },
+    async refreshEdgeUpgrades() {
+      return loadEdgeUpgrades();
+    },
+    async submitGatewayRelease(input) {
+      if (state.view !== "edge-upgrades" || input?.confirmed !== true
+        || typeof api.mutateGatewayRelease !== "function"
+        || !currentPermissions().has("platform.edge_release.manage")) return false;
+      const requestInput = {
+        action: "submit",
+        installerReleaseId: String(input.installerReleaseId ?? ""),
+        releaseChannel: String(input.releaseChannel ?? ""),
+        schemaFrom: Number(input.schemaFrom),
+        schemaTo: Number(input.schemaTo),
+        downMigrationSupported: input.downMigrationSupported === true,
+        compatibleFromVersions: Array.isArray(input.compatibleFromVersions)
+          ? input.compatibleFromVersions.map(String) : [],
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      return edgeUpgradeWrite(
+        JSON.stringify(requestInput),
+        "Release 已提交，等待另一位发布负责人审批。",
+        (idempotencyKey, signal) => api.mutateGatewayRelease({
+          ...requestInput,
+          idempotencyKey,
+          signal,
+        }),
+        (response) => { state.gatewayReleases = upsertRelease(state.gatewayReleases, response.release); },
+      );
+    },
+    async decideGatewayRelease(input) {
+      const action = String(input?.action ?? "");
+      const permission = action === "approve"
+        ? "platform.edge_release.approve" : "platform.edge_release.manage";
+      const webAuthn = input?.method === "webauthn";
+      if (state.view !== "edge-upgrades" || !["approve", "withdraw"].includes(action)
+        || state.loading || input?.confirmed !== true
+        || typeof api.mutateGatewayRelease !== "function"
+        || typeof api.createIdentityStepUpGrant !== "function"
+        || (webAuthn && (typeof api.beginIdentityStepUp !== "function"
+          || typeof api.getWebAuthnAssertion !== "function"))
+        || !currentPermissions().has(permission)) return false;
+      const releaseId = String(input.releaseId ?? "");
+      const expectedRevision = Number(input.expectedRevision);
+      const reasonCode = String(input.reasonCode ?? "");
+      const fingerprint = JSON.stringify({ action, releaseId, expectedRevision, reasonCode });
+      const idempotencyKey = state.edgeUpgradeIntent?.fingerprint === fingerprint
+        ? state.edgeUpgradeIntent.idempotencyKey : newIdempotencyKey();
+      state.edgeUpgradeIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      let verificationCode = String(input.verificationCode ?? "");
+      let stepUpGrant = "";
+      try {
+        stepUpGrant = await createGlobalStepUp({
+          method: input.method,
+          verificationCode,
+          actionCode: `fleet.release.${action}`,
+          resourceType: "edge_gateway_release",
+          resourceId: releaseId,
+          ticket,
+        });
+        verificationCode = "";
+        if (!stepUpGrant || !currentEdgeUpgradeTicket(ticket)) return false;
+        const response = await api.mutateGatewayRelease({
+          action,
+          releaseId,
+          expectedRevision,
+          reasonCode,
+          stepUpGrant,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        stepUpGrant = "";
+        if (!currentEdgeUpgradeTicket(ticket)) return false;
+        state.gatewayReleases = upsertRelease(state.gatewayReleases, response.release);
+        state.edgeUpgradeIntent = null;
+        state.loading = false;
+        state.feedback = action === "approve" ? "Release 已审批并可用于 rollout。" : "Release 已撤回。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.edgeUpgradeIntent = null;
+        }
+        return fail(ticket, error);
+      } finally {
+        verificationCode = "";
+        stepUpGrant = "";
+      }
+    },
+    async createFleetRollout(input) {
+      if (state.view !== "edge-upgrades" || input?.confirmed !== true
+        || typeof api.createFleetRollout !== "function"
+        || !currentPermissions().has("platform.edge_rollout.manage")) return false;
+      const requestInput = {
+        releaseId: String(input.releaseId ?? ""),
+        deploymentIds: Array.isArray(input.deploymentIds) ? input.deploymentIds.map(String) : [],
+        canaryBasisPoints: Number(input.canaryBasisPoints),
+        observationSeconds: Number(input.observationSeconds),
+        batchSize: Number(input.batchSize),
+        failureThresholdBasisPoints: Number(input.failureThresholdBasisPoints),
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      return edgeUpgradeWrite(
+        JSON.stringify({ action: "create_rollout", ...requestInput }),
+        "Fleet rollout 已创建，Canary 门禁开始执行。",
+        (idempotencyKey, signal) => api.createFleetRollout({
+          ...requestInput,
+          idempotencyKey,
+          signal,
+        }),
+        (response) => { state.fleetRollouts = upsertRollout(state.fleetRollouts, response.rollout); },
+      );
+    },
+    async mutateFleetRollout(input) {
+      const action = String(input?.action ?? "");
+      if (state.view !== "edge-upgrades" || !["pause", "resume"].includes(action)
+        || input?.confirmed !== true || typeof api.mutateFleetRollout !== "function"
+        || !currentPermissions().has("platform.edge_rollout.manage")) return false;
+      const requestInput = {
+        rolloutId: String(input.rolloutId ?? ""),
+        action,
+        expectedRevision: Number(input.expectedRevision),
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      return edgeUpgradeWrite(
+        JSON.stringify(requestInput),
+        action === "pause" ? "Rollout 已暂停，未派发批次不会继续。" : "Rollout 已恢复。",
+        (idempotencyKey, signal) => api.mutateFleetRollout({
+          ...requestInput,
+          idempotencyKey,
+          signal,
+        }),
+        (response) => { state.fleetRollouts = upsertRollout(state.fleetRollouts, response.rollout); },
+      );
+    },
+    async checkFleetCompatibility(input) {
+      if (state.view !== "edge-upgrades" || state.loading
+        || typeof api.fleetCompatibility !== "function"
+        || !currentPermissions().has("platform.edge_rollout.read")) return false;
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const response = await api.fleetCompatibility({
+          releaseId: String(input?.releaseId ?? ""),
+          deploymentId: String(input?.deploymentId ?? ""),
+          signal: ticket.signal,
+        });
+        if (!currentEdgeUpgradeTicket(ticket)) return false;
+        state.fleetCompatibility = response.item;
+        state.loading = false;
+        state.feedback = response.item.compatible
+          ? "该 Deployment 通过兼容性预检。" : "兼容性预检未通过。";
+        render();
+        return true;
+      } catch (error) {
+        return fail(ticket, error);
+      }
     },
     async requestEdgeDiagnostic(input) {
       if (state.view !== "edge-fleet" || input?.confirmed !== true
@@ -1574,6 +1751,9 @@ export function createPlatformPageController({
         infrastructure: null,
         gatewayCells: null,
         edgeFleet: null,
+        gatewayReleases: null,
+        fleetRollouts: null,
+        fleetCompatibility: null,
         jobQueues: null,
         featureFlags: null,
         configDistribution: null,
@@ -1590,7 +1770,7 @@ export function createPlatformPageController({
         workspaceEvents: null,
       };
       const tasks = [];
-      const fleetOnly = state.view === "edge-fleet";
+      const fleetOnly = new Set(["edge-fleet", "edge-upgrades"]).has(state.view);
       if (!fleetOnly && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
       }
@@ -1654,6 +1834,20 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => {
           next.edgeFleet = value;
+        }));
+      }
+      if (state.view === "edge-upgrades"
+        && permissions.has("platform.edge_release.read")
+        && typeof api.gatewayReleases === "function") {
+        tasks.push(api.gatewayReleases({ signal: ticket.signal }).then((value) => {
+          next.gatewayReleases = value;
+        }));
+      }
+      if (state.view === "edge-upgrades"
+        && permissions.has("platform.edge_rollout.read")
+        && typeof api.fleetRollouts === "function") {
+        tasks.push(api.fleetRollouts({ signal: ticket.signal }).then((value) => {
+          next.fleetRollouts = value;
         }));
       }
       if (!fleetOnly && permissions.has("platform.job.read")
@@ -1806,6 +2000,12 @@ export function createPlatformPageController({
         state.edgeDiagnosticGrant = null;
         state.edgeDiagnosticCommand = null;
       }
+      if (!state.navigation.some((item) => item.id === "edge-upgrades")) {
+        state.gatewayReleases = null;
+        state.fleetRollouts = null;
+        state.fleetCompatibility = null;
+        state.edgeUpgradeIntent = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -1859,6 +2059,83 @@ export function createPlatformPageController({
     } catch (error) {
       return fail(ticket, error);
     }
+  }
+
+  async function loadEdgeUpgrades() {
+    const permissions = currentPermissions();
+    if (state.view !== "edge-upgrades"
+      || !permissions.has("platform.edge_release.read")) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const [releases, rollouts] = await Promise.all([
+        api.gatewayReleases({ signal: ticket.signal }),
+        permissions.has("platform.edge_rollout.read") && typeof api.fleetRollouts === "function"
+          ? api.fleetRollouts({ signal: ticket.signal }) : Promise.resolve(null),
+      ]);
+      if (!currentEdgeUpgradeTicket(ticket)) return false;
+      state.gatewayReleases = releases;
+      state.fleetRollouts = rollouts;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function edgeUpgradeWrite(fingerprint, message, operation, accept) {
+    if (state.view !== "edge-upgrades" || state.loading) return false;
+    const idempotencyKey = state.edgeUpgradeIntent?.fingerprint === fingerprint
+      ? state.edgeUpgradeIntent.idempotencyKey : newIdempotencyKey();
+    state.edgeUpgradeIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const response = await operation(idempotencyKey, ticket.signal);
+      if (!currentEdgeUpgradeTicket(ticket)) return false;
+      accept(response);
+      state.edgeUpgradeIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.edgeUpgradeIntent = null;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function createGlobalStepUp({
+    method, verificationCode, actionCode, resourceType, resourceId, ticket,
+  }) {
+    let challengeId;
+    let credential = null;
+    if (method === "webauthn") {
+      const challenge = await api.beginIdentityStepUp({ signal: ticket.signal });
+      if (!currentEdgeUpgradeTicket(ticket)) return "";
+      challengeId = challenge.challenge_id;
+      credential = await api.getWebAuthnAssertion(challenge.public_key_options);
+      if (!currentEdgeUpgradeTicket(ticket)) return "";
+    }
+    const response = await api.createIdentityStepUpGrant({
+      method,
+      actionCode,
+      resourceType,
+      resourceId,
+      code: verificationCode,
+      challengeId,
+      credential,
+      signal: ticket.signal,
+    });
+    credential = null;
+    return currentEdgeUpgradeTicket(ticket) ? String(response.grant ?? "") : "";
   }
 
   async function loadJobRuntime() {
@@ -2601,6 +2878,61 @@ export function createPlatformPageController({
           health: data.get("health"),
         });
       }
+      if (form.matches("[data-platform-edge-release-submit-form]")) {
+        controller.submitGatewayRelease({
+          installerReleaseId: data.get("installerReleaseId"),
+          releaseChannel: data.get("releaseChannel"),
+          schemaFrom: Number(data.get("schemaFrom")),
+          schemaTo: Number(data.get("schemaTo")),
+          downMigrationSupported: data.get("downMigrationSupported") === "on",
+          compatibleFromVersions: commaList(data.get("compatibleFromVersions")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-edge-release-decision-form]")) {
+        let verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => {
+          node.value = "";
+        });
+        controller.decideGatewayRelease({
+          action: data.get("action"),
+          releaseId: data.get("releaseId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          reasonCode: data.get("reasonCode"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+        verificationCode = "";
+      }
+      if (form.matches("[data-platform-edge-rollout-create-form]")) {
+        controller.createFleetRollout({
+          releaseId: data.get("releaseId"),
+          deploymentIds: commaList(data.get("deploymentIds")),
+          canaryBasisPoints: Number(data.get("canaryBasisPoints")),
+          observationSeconds: Number(data.get("observationSeconds")),
+          batchSize: Number(data.get("batchSize")),
+          failureThresholdBasisPoints: Number(data.get("failureThresholdBasisPoints")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-edge-rollout-command-form]")) {
+        controller.mutateFleetRollout({
+          rolloutId: data.get("rolloutId"),
+          action: data.get("action"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-edge-compatibility-form]")) {
+        controller.checkFleetCompatibility({
+          releaseId: data.get("releaseId"),
+          deploymentId: data.get("deploymentId"),
+        });
+      }
       if (form.matches("[data-platform-edge-diagnostic-request-form]")) {
         controller.requestEdgeDiagnostic({
           deploymentId: data.get("deploymentId"),
@@ -2906,6 +3238,7 @@ export function createPlatformPageController({
       if (action === "billing-previous") controller.previousBillingPage();
       if (action === "edge-fleet-next") controller.nextEdgeFleetPage();
       if (action === "edge-fleet-previous") controller.previousEdgeFleetPage();
+      if (action === "edge-upgrades-refresh") controller.refreshEdgeUpgrades();
       if (action === "refund-approve") {
         controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
       }
@@ -2955,6 +3288,17 @@ export function createPlatformPageController({
         }
         if (code) code.hidden = webAuthn;
       }
+      if (select?.matches?.('[data-platform-edge-release-decision-form] select[name="method"]')) {
+        const code = select.form?.querySelector?.("[data-platform-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
     });
   }
 
@@ -2969,11 +3313,15 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "edge-fleet"
       && currentPermissions().has("platform.edge_fleet.read");
   }
+  function currentEdgeUpgradeTicket(ticket) {
+    return current(ticket) && state.view === "edge-upgrades"
+      && currentPermissions().has("platform.edge_release.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
   }
-  function scrubSensitive() { root.querySelectorAll('input[type="password"], input[name="totpCode"]').forEach((node) => { node.value = ""; }); }
+  function scrubSensitive() { root.querySelectorAll('input[type="password"], input[name="totpCode"], [data-platform-sensitive]').forEach((node) => { node.value = ""; }); }
   function currentWorkspace() { return state.workspaceDetail?.workspace ?? null; }
   function clearWorkspaceDetail() {
     state.selectedWorkspaceId = null;
@@ -3014,6 +3362,10 @@ export function createPlatformPageController({
     state.edgeDiagnosticIntent = null;
     state.edgeDiagnosticGrant = null;
     state.edgeDiagnosticCommand = null;
+    state.gatewayReleases = null;
+    state.fleetRollouts = null;
+    state.fleetCompatibility = null;
+    state.edgeUpgradeIntent = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
     state.jobQueues = null;
@@ -3065,6 +3417,28 @@ export function createPlatformPageController({
     clearProtectedFacts();
   }
   return controller;
+}
+
+function upsertRelease(response, release) {
+  const releases = response?.releases ?? [];
+  return Object.freeze({
+    ...(response ?? {}),
+    releases: Object.freeze([
+      release,
+      ...releases.filter((item) => item.release_id !== release.release_id),
+    ]),
+  });
+}
+
+function upsertRollout(response, rollout) {
+  const rollouts = response?.rollouts ?? [];
+  return Object.freeze({
+    ...(response ?? {}),
+    rollouts: Object.freeze([
+      rollout,
+      ...rollouts.filter((item) => item.rollout_id !== rollout.rollout_id),
+    ]),
+  });
 }
 
 function normalizeNavigation(items) {

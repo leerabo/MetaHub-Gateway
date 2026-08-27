@@ -557,6 +557,11 @@ import {
   getWorkspaceEdgeHealth,
 } from "../lib/edgeDiagnostics.js";
 import {
+  getWorkspaceUpgrade,
+  requestWorkspaceRollback,
+  updateWorkspaceMaintenance,
+} from "../lib/edgeUpgrades.js";
+import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
   clearLocalAdminSession,
@@ -7157,6 +7162,12 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
         consoleShellState,
       );
     },
+    async onUpgradeMaintenance(input) {
+      return submitPrivateGatewayMaintenance(input, consoleShellState);
+    },
+    async onUpgradeRollback(input) {
+      return submitPrivateGatewayUpgradeRollback(input, consoleShellState);
+    },
     async onValidation(deploymentId, action) {
       return submitPrivateGatewayValidation(deploymentId, action, consoleShellState);
     },
@@ -7696,6 +7707,142 @@ async function submitPrivateGatewayTelemetryPolicy(
     }
   } finally {
     privateGatewayPageState.finishTelemetryPolicy(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayMaintenance(input, consoleShellState) {
+  const operation = privateGatewayPageState.beginMaintenance(
+    currentPrivateGatewayOwner(consoleShellState),
+    input?.deploymentId,
+    input,
+    createEdgeIdempotencyKey("upgrade-maintenance"),
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await updateWorkspaceMaintenance({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      ...operation.request,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptMaintenance(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectMaintenance(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishMaintenance(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayUpgradeRollback(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const operation = privateGatewayPageState.beginUpgradeRollback(
+    owner,
+    input?.deploymentId,
+    input?.targetReleaseId || null,
+    input?.reasonCode,
+    createEdgeIdempotencyKey("upgrade-rollback"),
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  let verificationCode = String(input?.verificationCode ?? "");
+  let webAuthnCredential = null;
+  let stepUpGrant = "";
+  try {
+    let challengeId;
+    if (input?.method === "webauthn") {
+      const challenge = await beginIdentityWebAuthnStepUp({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      });
+      if (!privateGatewayPageState.isUpgradeRollbackCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+      challengeId = challenge.challenge_id;
+      webAuthnCredential = await getWebAuthnAssertion(challenge.public_key_options);
+      if (!privateGatewayPageState.isUpgradeRollbackCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+    }
+    const stepUp = await createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      method: input?.method,
+      workspaceId: operation.workspaceId,
+      actionCode: "edge.rollback.request",
+      resourceType: "edge_deployment",
+      resourceId: operation.deploymentId,
+      code: verificationCode,
+      challengeId,
+      credential: webAuthnCredential,
+      signal: operation.controller.signal,
+    });
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = stepUp.grant;
+    if (!privateGatewayPageState.isUpgradeRollbackCurrent(
+      operation,
+      currentPrivateGatewayOwner(consoleShellState),
+    )) return null;
+    await requestWorkspaceRollback({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      targetReleaseId: operation.targetReleaseId,
+      expectedHeadRevision: operation.expectedHeadRevision,
+      reasonCode: operation.reasonCode,
+      stepUpGrant,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    stepUpGrant = "";
+    if (!privateGatewayPageState.isUpgradeRollbackCurrent(
+      operation,
+      currentPrivateGatewayOwner(consoleShellState),
+    )) return null;
+    const result = await getWorkspaceUpgrade({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptUpgradeRollback(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectUpgradeRollback(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    privateGatewayPageState.finishUpgradeRollback(operation);
   }
   renderCurrentPrivateGatewayPanel(consoleShellState);
   return privateGatewayPageState.snapshot();
@@ -17320,7 +17467,9 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
         })
         : Promise.resolve(null),
     ]);
-    const [desiredStates, telemetryStates, secretReferences, healthStates] = await Promise.all([
+    const [
+      desiredStates, telemetryStates, secretReferences, healthStates, upgradeStates,
+    ] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
         ? loadPrivateGatewayTelemetryStates(result.deployments, operation.controller.signal)
@@ -17334,6 +17483,9 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       owner.canReadHealth
         ? loadPrivateGatewayHealthStates(result.deployments, operation.controller.signal)
         : Promise.resolve([]),
+      owner.canReadUpgrades
+        ? loadPrivateGatewayUpgradeStates(result.deployments, operation.controller.signal)
+        : Promise.resolve([]),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -17346,6 +17498,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       secretReferences,
       installerCatalog,
       healthStates,
+      upgradeStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -17358,6 +17511,29 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayUpgradeStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getWorkspaceUpgrade({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = Object.freeze({ deploymentId, response });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 async function loadPrivateGatewayHealthStates(deployments, signal) {

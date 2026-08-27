@@ -105,6 +105,10 @@ export const PERMISSIONS = Object.freeze({
   // PRD-120 Workspace Gateway 读取和管理独立授权；Platform Fleet 使用另一凭据域。
   EDGE_DEPLOYMENT_READ: "edge.deployment.read",
   EDGE_DEPLOYMENT_MANAGE: "edge.deployment.manage",
+  // PRD-127 upgrade policy and rollback are intentionally separate from deployment lifecycle.
+  EDGE_UPGRADE_READ: "edge.upgrade.read",
+  EDGE_UPGRADE_MANAGE: "edge.upgrade.manage",
+  EDGE_ROLLBACK_MANAGE: "edge.rollback.manage",
   // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
   EDGE_TELEMETRY_READ: "edge.telemetry.read",
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",

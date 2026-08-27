@@ -47,6 +47,77 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       button.dataset.level ?? "",
     ));
   });
+  root.querySelectorAll("[data-private-gateway-maintenance]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const startMinute = timeMinute(data.get("startTime"));
+      const freezeStartsAt = optionalLocalTimestamp(data.get("freezeStartsAt"));
+      const freezeEndsAt = optionalLocalTimestamp(data.get("freezeEndsAt"));
+      if (startMinute === null || freezeStartsAt.invalid || freezeEndsAt.invalid
+        || freezeStartsAt.value === null !== (freezeEndsAt.value === null)) return;
+      void callbacks.onUpgradeMaintenance?.({
+        deploymentId: String(data.get("deploymentId") ?? ""),
+        releaseChannel: String(data.get("releaseChannel") ?? ""),
+        timezoneName: String(data.get("timezoneName") ?? ""),
+        weekdays: data.getAll("weekdays").map(Number),
+        startMinute,
+        durationMinutes: Number(data.get("durationMinutes")),
+        freezeStartsAt: freezeStartsAt.value,
+        freezeEndsAt: freezeEndsAt.value,
+        status: String(data.get("status") ?? ""),
+        reasonCode: String(data.get("reasonCode") ?? ""),
+        confirmed: data.get("confirmed") === "on",
+      });
+    });
+  });
+  root.querySelectorAll("[data-private-gateway-upgrade-rollback]").forEach((form) => {
+    const method = form.querySelector('select[name="method"]');
+    method?.addEventListener("change", () => {
+      const code = form.querySelector("[data-private-gateway-upgrade-code]");
+      const input = code?.querySelector("[data-private-gateway-sensitive]");
+      const webAuthn = method.value === "webauthn";
+      if (input) {
+        input.value = "";
+        input.disabled = webAuthn;
+        input.required = !webAuthn;
+      }
+      if (code) code.hidden = webAuthn;
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const input = form.querySelector("[data-private-gateway-sensitive]");
+      let verificationCode = String(input?.value ?? "").trim().toUpperCase();
+      if (input) input.value = "";
+      const methodValue = String(data.get("method") ?? "");
+      const validCode = methodValue === "webauthn"
+        || methodValue === "totp" && /^[0-9]{6}$/u.test(verificationCode)
+        || methodValue === "recovery_code"
+          && /^MHRC-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}$/u
+            .test(verificationCode);
+      const error = form.querySelector("[data-private-gateway-upgrade-error]");
+      if (!validCode || data.get("confirmed") !== "on") {
+        verificationCode = "";
+        if (error) error.textContent = "请确认回滚并完成有效的二次验证";
+        return;
+      }
+      if (error) error.textContent = "";
+      try {
+        await callbacks.onUpgradeRollback?.({
+          deploymentId: String(data.get("deploymentId") ?? ""),
+          targetReleaseId: String(data.get("targetReleaseId") ?? ""),
+          reasonCode: String(data.get("reasonCode") ?? ""),
+          method: methodValue,
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      } finally {
+        verificationCode = "";
+        eraseSensitive(form);
+      }
+    });
+  });
   root.querySelectorAll("[data-private-gateway-validation]").forEach((button) => {
     button.addEventListener("click", () => void callbacks.onValidation?.(
       button.dataset.deploymentId ?? "",
@@ -91,6 +162,20 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
   bindAcceptanceDialog(root, callbacks);
   bindDiagnosticDialog(root, callbacks);
   return true;
+}
+
+function timeMinute(value) {
+  const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/u.exec(String(value ?? ""));
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function optionalLocalTimestamp(value) {
+  const text = String(value ?? "");
+  if (!text) return { value: null, invalid: false };
+  const date = new Date(text);
+  return Number.isNaN(date.valueOf())
+    ? { value: null, invalid: true }
+    : { value: date.toISOString(), invalid: false };
 }
 
 function bindDiagnosticDialog(root, callbacks) {

@@ -238,6 +238,7 @@ function renderDeployment(item, state, owner) {
       </div>
       ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
+      ${renderUpgrade(item, state, owner)}
       ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderSecrets(item, state, owner)}
       ${renderValidation(item, state, owner)}
@@ -251,6 +252,98 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderUpgrade(deployment, state, owner) {
+  if (!owner.canReadUpgrades) return "";
+  const response = state.upgradeStates?.[deployment.deployment_id] ?? null;
+  if (!response) {
+    return `<section class="private-gateway-upgrade" aria-label="版本升级"><div class="private-gateway-state-empty" role="status">升级状态暂不可用</div></section>`;
+  }
+  const head = response.head;
+  const maintenance = response.maintenance;
+  const active = deployment.status === "active";
+  const canRollback = owner.canRollbackUpgrades && active && head.lkg_release_id
+    && head.lkg_release_id !== head.current_release_id;
+  return `<section class="private-gateway-upgrade" aria-label="版本升级与维护窗口">
+    <header>
+      <div><h5>版本升级</h5><small>${escapeHtml(head.current_version || "未安装")} · ${formatTime(head.updated_at)}</small></div>
+      <span class="private-gateway-state-status tone-${head.applied_generation === head.desired_generation ? "applied" : "pending"}">${head.applied_generation === head.desired_generation ? "已收敛" : "执行中"}</span>
+    </header>
+    <dl class="private-gateway-upgrade-head">
+      ${fact("Current", head.current_version || "-")}
+      ${fact("LKG", head.lkg_version || "-")}
+      ${fact("Desired", integer(head.desired_generation))}
+      ${fact("Applied", integer(head.applied_generation))}
+      ${fact("LKG generation", integer(head.lkg_generation))}
+      ${fact("Head revision", integer(head.revision))}
+    </dl>
+    ${renderUpgradeTargets(response.rollouts)}
+    ${owner.canManageUpgrades && active ? renderMaintenanceForm(
+      deployment.deployment_id, maintenance, state.upgradeBusy || state.busy,
+    ) : renderMaintenanceSummary(maintenance)}
+    ${renderRollbackHistory(response.rollback_attempts)}
+    ${canRollback ? renderUpgradeRollbackForm(
+      deployment.deployment_id, head, state.upgradeBusy || state.busy,
+    ) : ""}
+  </section>`;
+}
+
+function renderUpgradeTargets(items) {
+  if (!items.length) return '<div class="private-gateway-upgrade-empty">当前没有 rollout target</div>';
+  return `<div class="private-gateway-upgrade-targets">${items.map((item) => `<div>
+    <span><strong>${escapeHtml(item.current_version)} → ${escapeHtml(item.target_version)}</strong><small>batch ${integer(item.batch_sequence)} · bucket ${integer(item.stable_bucket)}</small></span>
+    <span class="private-gateway-state-status tone-${item.status === "failed" ? "failed" : item.status === "succeeded" || item.status === "rolled_back" ? "applied" : "pending"}">${upgradeTargetStatusLabel(item.status)}</span>
+    <small>${escapeHtml(item.failure_reason_code ?? "-")}</small>
+  </div>`).join("")}</div>`;
+}
+
+function renderMaintenanceForm(deploymentId, value, busy) {
+  const weekdays = new Set(value?.weekdays ?? [1, 2, 3, 4, 5]);
+  return `<form class="private-gateway-maintenance" data-private-gateway-maintenance autocomplete="off">
+    <input type="hidden" name="deploymentId" value="${escapeAttribute(deploymentId)}" />
+    <h6>维护策略</h6>
+    <label><span>Channel</span><select name="releaseChannel"><option value="stable"${selected(value?.release_channel === "stable" || !value)}>Stable</option><option value="preview"${selected(value?.release_channel === "preview")}>Preview</option><option value="extended"${selected(value?.release_channel === "extended")}>Extended</option></select></label>
+    <label><span>时区</span><input name="timezoneName" value="${escapeAttribute(value?.timezone_name ?? "Asia/Shanghai")}" pattern="[A-Za-z0-9_+./-]{3,64}" required /></label>
+    <fieldset><legend>星期</legend>${[[1, "一"], [2, "二"], [3, "三"], [4, "四"], [5, "五"], [6, "六"], [0, "日"]].map(([day, label]) => `<label><input type="checkbox" name="weekdays" value="${day}"${weekdays.has(day) ? " checked" : ""} /><span>${label}</span></label>`).join("")}</fieldset>
+    <label><span>开始时间</span><input name="startTime" type="time" value="${minuteTime(value?.start_minute ?? 120)}" required /></label>
+    <label><span>持续分钟</span><input name="durationMinutes" type="number" min="30" max="720" value="${integer(value?.duration_minutes ?? 120)}" required /></label>
+    <label><span>冻结开始</span><input name="freezeStartsAt" type="datetime-local" value="${localDateTimeValue(value?.freeze_starts_at)}" /></label>
+    <label><span>冻结结束</span><input name="freezeEndsAt" type="datetime-local" value="${localDateTimeValue(value?.freeze_ends_at)}" /></label>
+    <label><span>状态</span><select name="status"><option value="active"${selected(value?.status !== "disabled")}>Active</option><option value="disabled"${selected(value?.status === "disabled")}>Disabled</option></select></label>
+    <label><span>Reason code</span><input name="reasonCode" value="maintenance_policy_updated" pattern="[a-z][a-z0-9_.-]{1,79}" required /></label>
+    <label class="private-gateway-upgrade-check"><input name="confirmed" type="checkbox" required /><span>确认窗口、时区与冻结区间</span></label>
+    <button type="submit" class="primary"${busy ? " disabled" : ""}>保存维护策略</button>
+  </form>`;
+}
+
+function renderMaintenanceSummary(value) {
+  if (!value) return '<div class="private-gateway-upgrade-empty">尚未配置维护策略</div>';
+  return `<dl class="private-gateway-upgrade-head">
+    ${fact("Channel", value.release_channel)}
+    ${fact("窗口", `${value.timezone_name} · ${minuteTime(value.start_minute)} · ${integer(value.duration_minutes)} min`)}
+    ${fact("状态", value.status)}
+    ${fact("冻结", value.freeze_starts_at ? `${formatTime(value.freeze_starts_at)} - ${formatTime(value.freeze_ends_at)}` : "无")}
+  </dl>`;
+}
+
+function renderRollbackHistory(items) {
+  if (!items.length) return "";
+  return `<div class="private-gateway-rollback-history"><h6>回滚历史</h6><ol>${items.map((item) => `<li><span><strong>${rollbackStatusLabel(item.status)}</strong><small>${escapeHtml(item.reason_code)} · generation ${integer(item.desired_generation)}</small></span><time>${formatTime(item.updated_at)}</time></li>`).join("")}</ol></div>`;
+}
+
+function renderUpgradeRollbackForm(deploymentId, head, busy) {
+  return `<form class="private-gateway-upgrade-rollback" data-private-gateway-upgrade-rollback autocomplete="off">
+    <input type="hidden" name="deploymentId" value="${escapeAttribute(deploymentId)}" />
+    <input type="hidden" name="targetReleaseId" value="${escapeAttribute(head.lkg_release_id)}" />
+    <h6>回滚至 LKG ${escapeHtml(head.lkg_version)}</h6>
+    <label><span>验证方式</span><select name="method"><option value="totp">TOTP</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+    <label data-private-gateway-upgrade-code><span>二次验证码</span><input type="password" name="verificationCode" data-private-gateway-sensitive autocomplete="one-time-code" required /></label>
+    <label><span>Reason code</span><input name="reasonCode" value="operator_requested" pattern="[a-z][a-z0-9_.-]{1,79}" required /></label>
+    <label class="private-gateway-upgrade-check"><input name="confirmed" type="checkbox" required /><span>确认维护窗口、备份与 N-1 路径</span></label>
+    <p class="private-gateway-form-error" data-private-gateway-upgrade-error role="alert"></p>
+    <button type="submit" class="danger"${busy ? " disabled" : ""}>请求回滚</button>
+  </form>`;
 }
 
 function renderHealthDiagnostics(deployment, state, owner) {
@@ -724,6 +817,8 @@ function renderFeedback(feedback) {
     "local_support_bundle.uploaded": "支持包已批准、加密并上传",
     "local_support_bundle.cancelled": "支持包预览已取消并清理",
     "edge.support_bundle_refreshed": "云端支持包摘要已刷新",
+    "edge_upgrade.maintenance_updated": "维护策略已更新",
+    "edge_upgrade.rollback_requested": "已从 LKG 创建新的回滚 generation",
   };
   if (feedback.kind === "error") return renderError(feedback);
   return `<div class="private-gateway-feedback" role="status"><strong>${escapeHtml(labels[feedback.code] ?? feedback.code)}</strong><span>request_id: ${escapeHtml(feedback.requestId ?? "-")}</span></div>`;
@@ -767,6 +862,11 @@ function supportBundleStatusLabel(value) { return ({ ready: "可供授权支持�
 function localSupportBundleStatusLabel(value) { return ({ preview_ready: "等待批准", uploading: "加密上传中", uploaded: "已上传", failed: "处理失败", cancelled: "已取消", expired: "已过期" })[value] ?? "未知"; }
 function supportCollectorLabel(value) { return ({ "runtime.version": "运行版本", "runtime.watermarks": "同步水位", "runtime.health": "健康摘要", "runtime.errors": "错误码摘要", "runtime.logs": "日志事件摘要" })[value] ?? value; }
 function supportClassificationLabel(value) { return ({ version: "版本", watermark: "水位", health: "健康", error_code: "错误码", log_summary: "日志摘要" })[value] ?? value; }
+function upgradeTargetStatusLabel(value) { return ({ selected: "已选择", leased: "已租约", draining: "排空中", staging: "暂存中", migrating: "迁移中", health_check: "健康检查", committing: "切换中", succeeded: "已成功", failed: "失败", cancelled: "已取消", rolled_back: "已回滚" })[value] ?? value; }
+function rollbackStatusLabel(value) { return ({ requested: "已请求", issued: "已下发", completed: "已完成", failed: "失败" })[value] ?? value; }
+function selected(value) { return value ? " selected" : ""; }
+function minuteTime(value) { const minute = Number.isSafeInteger(value) ? value : 0; return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`; }
+function localDateTimeValue(value) { if (!value) return ""; const date = new Date(value); if (Number.isNaN(date.valueOf())) return ""; const local = new Date(date.valueOf() - date.getTimezoneOffset() * 60_000); return local.toISOString().slice(0, 16); }
 function formatBytes(value) { if (!Number.isSafeInteger(value)) return "-"; if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${value} B`; }
 function secondsFromMs(value) { return Number.isSafeInteger(value) ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}s` : "-"; }
 function formatTime(value) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }
