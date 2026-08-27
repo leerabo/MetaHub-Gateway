@@ -175,6 +175,90 @@
 .private-gateway-support-entries span { display: grid; gap: 2px; min-width: 0; }
 .private-gateway-support-entries small { color: var(--muted); overflow-wrap: anywhere; }
 .private-gateway-support-entries b { flex: 0 0 auto; }
+.private-gateway-health {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: #f7fbfa;
+}
+.private-gateway-health > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.private-gateway-health > header > div { display: grid; gap: 4px; min-width: 0; }
+.private-gateway-health h5,
+.private-gateway-health h6 { margin: 0; letter-spacing: 0; }
+.private-gateway-health header small { color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-health-empty,
+.private-gateway-diagnostic-empty { margin: 0; color: var(--muted); }
+.private-gateway-health-watermarks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+.private-gateway-health-watermarks > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--panel);
+}
+.private-gateway-health-watermarks dt { color: var(--muted); font-size: .72rem; }
+.private-gateway-health-watermarks dd { margin: 3px 0 0; font-weight: 700; }
+.private-gateway-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  padding-top: 2px;
+}
+.private-gateway-diagnostic-column { min-width: 0; }
+.private-gateway-diagnostic-column > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.private-gateway-diagnostic-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.private-gateway-diagnostic-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.private-gateway-diagnostic-row strong,
+.private-gateway-diagnostic-row small { overflow-wrap: anywhere; }
+.private-gateway-diagnostic-row small,
+.private-gateway-diagnostic-row time { color: var(--muted); font-size: .76rem; }
+.private-gateway-diagnostic-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.private-gateway-diagnostic-dialog form > label:not(.private-gateway-confirm) {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+.private-gateway-diagnostic-dialog input,
+.private-gateway-diagnostic-dialog select {
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+}
 .private-gateway-acceptance-dialog form > label:not(.private-gateway-confirm) { display: grid; gap: 6px; color: var(--muted); }
 .private-gateway-acceptance-dialog input,
 .private-gateway-acceptance-dialog select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
@@ -273,7 +357,8 @@
   .private-gateway-telemetry > header { align-items: stretch; flex-direction: column; }
   .private-gateway-secrets > header { align-items: stretch; flex-direction: column; }
   .private-gateway-validation > header,
-  .private-gateway-support > header { align-items: stretch; flex-direction: column; }
+  .private-gateway-support > header,
+  .private-gateway-health > header { align-items: stretch; flex-direction: column; }
   .private-gateway-commands { width: 100%; }
   .private-gateway-commands .primary { flex: 1; }
   .private-gateway-deployment > header dl,
@@ -284,6 +369,7 @@
   .private-gateway-cursors > div:nth-child(odd) { border-left: 0; }
   .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
   .private-gateway-usage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-diagnostics { grid-template-columns: minmax(0, 1fr); }
   .private-gateway-secret-row dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-installer-environment { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-installer-environment dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -303,6 +389,7 @@
   .private-gateway-policy,
   .private-gateway-cursors,
   .private-gateway-usage,
+  .private-gateway-health-watermarks,
   .private-gateway-secret-row dl { grid-template-columns: 1fr; }
   .private-gateway-installer-environment,
   .private-gateway-installer-environment dl,
@@ -336,11 +423,13 @@
   .private-gateway-state-actions { align-items: stretch; flex-direction: column; }
   .private-gateway-secret-actions { display: grid; grid-template-columns: 1fr; }
   .private-gateway-validation-actions,
-  .private-gateway-support-actions { display: grid; grid-template-columns: 1fr; }
+  .private-gateway-support-actions,
+  .private-gateway-diagnostic-actions { display: grid; grid-template-columns: 1fr; }
   .private-gateway-secrets > header button,
   .private-gateway-secret-actions button { width: 100%; }
   .private-gateway-validation-actions button,
-  .private-gateway-support-actions button { width: 100%; }
+  .private-gateway-support-actions button,
+  .private-gateway-diagnostic-actions button { width: 100%; }
   .private-gateway-actions label { display: grid; }
   .private-gateway-actions select,
   .private-gateway-actions button,

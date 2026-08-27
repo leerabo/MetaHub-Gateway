@@ -2441,6 +2441,23 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/testing/PRD-125-tests.md`：保存两轮实施自审、Python/迁移/API/Console 专项、敏感审计和批次门禁边界；
   下一权威项为 PRD-126，G5 在 PRD-130 后统一执行。
 
+## PRD-126 Fleet 资产、健康与受控远程诊断（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/diagnostics.py`：四种只读 invocation/result 严格联合、grant/command
+  hash 绑定、Ed25519 用途分域签名、authority/TTL 校验和敏感字段递归拒绝。
+- `gateway-data-plane/src/metahub_gateway/diagnostics.py`：编译期 version/watermark/disk/connectivity handler、deadline/
+  cancellation 固定终态和零 shell/subprocess/自由输出执行边界。
+- `control-plane-api/src/metahub_control/edge_management/fleet_diagnostic_service.py` 与同域 models/routes/service：
+  PRD-120..125 事务健康投影、不可变 head、字段裁剪 Fleet keyset、Workspace/Platform 双域权限以及
+  grant/command/lease/result/取消/超时/重启恢复状态机。
+- `infra/migrations/0118_edge_fleet_health_controlled_diagnostics.sql/.down.sql`：健康快照/head、Fleet 索引、诊断
+  grant/command/result/event/outbox、权限扩展、复合 owner、不变触发器、tenant deletion manifest 和业务 down guard。
+- `console-web/src/lib/edgeDiagnostics.js`、`features/edge-operations/`、Private Gateway 与 Platform 页面：严格双域
+  client/DTO/store、最多四并发健康读取、稳定 cursor、固定诊断参数、客户批准/撤销及短生命周期 Identity step-up。
+- `docs/prd/PRD-126-fleet-assets-health-controlled-diagnostics.md` 与 `docs/testing/PRD-126-tests.md`：保存两轮实施
+  自审、0118/API/Shared/Gateway/Console、1 万节点 SLO、相邻回归、敏感审计和批次门禁边界；下一权威项为
+  PRD-127，G5 在 PRD-130 后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

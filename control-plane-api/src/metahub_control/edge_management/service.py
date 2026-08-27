@@ -211,6 +211,13 @@ def create_workspace_registration(
             result_object_id=deployment_id,
             now=now_db,
         )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
         deployment = _owned_deployment(connection, context, deployment_id)
         result = WorkspaceRegistrationResponse(
             deployment=_deployment_summary(connection, deployment),
@@ -499,6 +506,13 @@ def register_edge_agent(
             trace_id=trace_id,
             now=now_db,
         )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
         result = _certificate_response(
             connection,
             config,
@@ -719,6 +733,13 @@ def rotate_edge_certificate(
             trace_id=trace_id,
             now=now_db,
         )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
+        )
         result = _certificate_response(
             connection,
             config,
@@ -834,6 +855,13 @@ def create_edge_session(
             """UPDATE edge_deployments SET last_connected_at=?,health_code='healthy',updated_at=?
                WHERE edge_deployment_id=? AND status='active'""",
             (now_db, now_db, deployment_id),
+        )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=now,
         )
         result = EdgeSessionResponse(
             session_id=session_id,
@@ -1001,6 +1029,13 @@ def revoke_edge_deployment(
             request_sha256=request_sha256,
             result_object_id=checked_deployment_id,
             now=now_db,
+        )
+        _refresh_health_if_available(
+            connection,
+            checked_deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_datetime(now_db),
         )
         deployment = _owned_deployment(connection, context, checked_deployment_id)
         result = EdgeDeploymentRevokeResponse(
@@ -1687,6 +1722,32 @@ def _insert_default_telemetry_policy_if_available(
             policy_id,
             now,
         ),
+    )
+
+
+def _refresh_health_if_available(
+    connection: sqlite3.Connection,
+    deployment_id: str,
+    *,
+    request_id: str,
+    trace_id: str,
+    now: datetime,
+) -> None:
+    if (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='edge_health_snapshots'"
+        ).fetchone()
+        is None
+    ):
+        return
+    from .fleet_diagnostic_service import refresh_edge_health_projection_in_transaction
+
+    refresh_edge_health_projection_in_transaction(
+        connection,
+        deployment_id,
+        request_id=request_id,
+        trace_id=trace_id,
+        now=now,
     )
 
 

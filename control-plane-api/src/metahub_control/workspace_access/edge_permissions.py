@@ -43,6 +43,17 @@ EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS = {
     "security_admin": ("edge.support_bundle.read", "edge.validation.read"),
     "auditor": ("edge.validation.read",),
 }
+EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": ("edge.diagnostic.approve", "edge.diagnostic.read", "edge.health.read"),
+    "admin": ("edge.diagnostic.approve", "edge.diagnostic.read", "edge.health.read"),
+    "developer": ("edge.health.read",),
+    "security_admin": (
+        "edge.diagnostic.approve",
+        "edge.diagnostic.read",
+        "edge.health.read",
+    ),
+    "auditor": ("edge.diagnostic.read", "edge.health.read"),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -178,6 +189,17 @@ def load_verified_workspace_edge_permissions(
             unavailable_error_code=unavailable_error_code,
         )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_diagnostic_permission_extensions",
+            assignments_table="workspace_edge_diagnostic_role_permissions",
+            introduced_migration="0118",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
     return tuple(sorted(permissions))
 
 
@@ -288,6 +310,7 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 
 __all__ = (
+    "EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_PLATFORM_ROLE_PERMISSIONS",

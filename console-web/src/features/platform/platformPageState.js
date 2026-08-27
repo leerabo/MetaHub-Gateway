@@ -86,6 +86,12 @@ export function createPlatformPageController({
     infrastructure: null,
     gatewayCells: null,
     edgeFleet: null,
+    edgeFleetFilters: { status: "", region: "", health: "" },
+    edgeFleetCursor: null,
+    edgeFleetCursorHistory: [],
+    edgeDiagnosticIntent: null,
+    edgeDiagnosticGrant: null,
+    edgeDiagnosticCommand: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
     jobQueues: null,
@@ -240,6 +246,12 @@ export function createPlatformPageController({
           state.providerCatalogPublishIntent = null;
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
+          state.edgeFleetFilters = { status: "", region: "", health: "" };
+          state.edgeFleetCursor = null;
+          state.edgeFleetCursorHistory = [];
+          state.edgeDiagnosticIntent = null;
+          state.edgeDiagnosticGrant = null;
+          state.edgeDiagnosticCommand = null;
         }
         state.loading = false;
       }
@@ -274,6 +286,177 @@ export function createPlatformPageController({
         void loadProviderCatalog();
       }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
+    },
+    async filterEdgeFleet(filters) {
+      if (state.view !== "edge-fleet") return false;
+      state.edgeFleetFilters = normalizeEdgeFleetFilters(filters);
+      state.edgeFleetCursor = null;
+      state.edgeFleetCursorHistory = [];
+      return loadEdgeFleet();
+    },
+    async nextEdgeFleetPage() {
+      const cursor = state.edgeFleet?.next_cursor;
+      if (state.view !== "edge-fleet" || !cursor) return false;
+      state.edgeFleetCursorHistory.push(state.edgeFleetCursor);
+      state.edgeFleetCursor = cursor;
+      return loadEdgeFleet();
+    },
+    async previousEdgeFleetPage() {
+      if (state.view !== "edge-fleet" || !state.edgeFleetCursorHistory.length) return false;
+      state.edgeFleetCursor = state.edgeFleetCursorHistory.pop() ?? null;
+      return loadEdgeFleet();
+    },
+    async requestEdgeDiagnostic(input) {
+      if (state.view !== "edge-fleet" || input?.confirmed !== true
+        || typeof api.requestEdgeDiagnosticGrant !== "function"
+        || !currentPermissions().has("platform.edge_fleet.manage")) return false;
+      const requestInput = {
+        deploymentId: String(input.deploymentId ?? ""),
+        invocation: input.invocation,
+        reasonCode: String(input.reasonCode ?? ""),
+        maxRuns: Number(input.maxRuns),
+      };
+      const fingerprint = JSON.stringify({ action: "request", ...requestInput });
+      const idempotencyKey = state.edgeDiagnosticIntent?.fingerprint === fingerprint
+        ? state.edgeDiagnosticIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.edgeDiagnosticIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const response = await api.requestEdgeDiagnosticGrant({
+          ...requestInput,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!currentEdgeFleetTicket(ticket)) return false;
+        state.edgeDiagnosticIntent = null;
+        state.edgeDiagnosticGrant = response.grant;
+        state.edgeDiagnosticCommand = null;
+        state.loading = false;
+        state.feedback = "客户诊断授权请求已提交。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.edgeDiagnosticIntent = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async runEdgeDiagnostic(input) {
+      const webAuthn = input?.method === "webauthn";
+      if (state.view !== "edge-fleet" || input?.confirmed !== true
+        || typeof api.runEdgeDiagnostic !== "function"
+        || typeof api.createIdentityStepUpGrant !== "function"
+        || (webAuthn && (typeof api.beginIdentityStepUp !== "function"
+          || typeof api.getWebAuthnAssertion !== "function"))
+        || !currentPermissions().has("platform.edge_fleet.manage")) return false;
+      const runInput = {
+        deploymentId: String(input.deploymentId ?? ""),
+        grantId: String(input.grantId ?? ""),
+        deadlineSeconds: Number(input.deadlineSeconds),
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      const fingerprint = JSON.stringify({ action: "run", ...runInput });
+      const idempotencyKey = state.edgeDiagnosticIntent?.fingerprint === fingerprint
+        ? state.edgeDiagnosticIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.edgeDiagnosticIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      let verificationCode = String(input.verificationCode ?? "");
+      let webAuthnCredential = null;
+      let stepUpGrant = "";
+      try {
+        let challengeId;
+        if (webAuthn) {
+          const challenge = await api.beginIdentityStepUp({ signal: ticket.signal });
+          if (!currentEdgeFleetTicket(ticket)) return false;
+          challengeId = challenge.challenge_id;
+          webAuthnCredential = await api.getWebAuthnAssertion(challenge.public_key_options);
+          if (!currentEdgeFleetTicket(ticket)) return false;
+        }
+        const stepUp = await api.createIdentityStepUpGrant({
+          method: input.method,
+          actionCode: "edge.diagnostic.run",
+          resourceType: "edge_deployment",
+          resourceId: runInput.deploymentId,
+          code: verificationCode,
+          challengeId,
+          credential: webAuthnCredential,
+          signal: ticket.signal,
+        });
+        verificationCode = "";
+        webAuthnCredential = null;
+        stepUpGrant = stepUp.grant;
+        if (!currentEdgeFleetTicket(ticket)) return false;
+        const response = await api.runEdgeDiagnostic({
+          ...runInput,
+          stepUpGrant,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        stepUpGrant = "";
+        if (!currentEdgeFleetTicket(ticket)) return false;
+        state.edgeDiagnosticIntent = null;
+        state.edgeDiagnosticCommand = response.command;
+        state.loading = false;
+        state.feedback = "诊断命令已授权并等待 Agent 执行。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.edgeDiagnosticIntent = null;
+        }
+        return fail(ticket, error);
+      } finally {
+        verificationCode = "";
+        webAuthnCredential = null;
+        stepUpGrant = "";
+      }
+    },
+    async cancelEdgeDiagnostic(input) {
+      if (state.view !== "edge-fleet" || input?.confirmed !== true
+        || typeof api.cancelEdgeDiagnostic !== "function"
+        || !currentPermissions().has("platform.edge_fleet.manage")) return false;
+      const cancelInput = {
+        deploymentId: String(input.deploymentId ?? ""),
+        commandId: String(input.commandId ?? ""),
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      const fingerprint = JSON.stringify({ action: "cancel", ...cancelInput });
+      const idempotencyKey = state.edgeDiagnosticIntent?.fingerprint === fingerprint
+        ? state.edgeDiagnosticIntent.idempotencyKey
+        : newIdempotencyKey();
+      state.edgeDiagnosticIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const response = await api.cancelEdgeDiagnostic({
+          ...cancelInput,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!currentEdgeFleetTicket(ticket)) return false;
+        state.edgeDiagnosticIntent = null;
+        state.edgeDiagnosticCommand = response.command;
+        state.loading = false;
+        state.feedback = "诊断取消请求已提交。";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.edgeDiagnosticIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async filterJobs(status) {
       state.jobStatus = normalizeJobStatus(status);
@@ -1465,7 +1648,11 @@ export function createPlatformPageController({
       if (state.view === "edge-fleet"
         && permissions.has("platform.edge_fleet.read")
         && typeof api.edgeFleet === "function") {
-        tasks.push(api.edgeFleet({ signal: ticket.signal }).then((value) => {
+        tasks.push(api.edgeFleet({
+          filters: state.edgeFleetFilters,
+          cursor: state.edgeFleetCursor,
+          signal: ticket.signal,
+        }).then((value) => {
           next.edgeFleet = value;
         }));
       }
@@ -1610,7 +1797,15 @@ export function createPlatformPageController({
         state.providerCatalog = null;
         state.providerCatalogPublishIntent = null;
       }
-      if (!state.navigation.some((item) => item.id === "edge-fleet")) state.edgeFleet = null;
+      if (!state.navigation.some((item) => item.id === "edge-fleet")) {
+        state.edgeFleet = null;
+        state.edgeFleetFilters = { status: "", region: "", health: "" };
+        state.edgeFleetCursor = null;
+        state.edgeFleetCursorHistory = [];
+        state.edgeDiagnosticIntent = null;
+        state.edgeDiagnosticGrant = null;
+        state.edgeDiagnosticCommand = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -1651,8 +1846,12 @@ export function createPlatformPageController({
     state.error = null;
     render();
     try {
-      const fleet = await api.edgeFleet({ signal: ticket.signal });
-      if (!current(ticket) || state.view !== "edge-fleet") return false;
+      const fleet = await api.edgeFleet({
+        filters: state.edgeFleetFilters,
+        cursor: state.edgeFleetCursor,
+        signal: ticket.signal,
+      });
+      if (!currentEdgeFleetTicket(ticket)) return false;
       state.edgeFleet = fleet;
       state.loading = false;
       render();
@@ -2395,6 +2594,46 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-edge-fleet-filter-form]")) {
+        controller.filterEdgeFleet({
+          status: data.get("status"),
+          region: data.get("region"),
+          health: data.get("health"),
+        });
+      }
+      if (form.matches("[data-platform-edge-diagnostic-request-form]")) {
+        controller.requestEdgeDiagnostic({
+          deploymentId: data.get("deploymentId"),
+          invocation: edgeDiagnosticInvocation(data),
+          reasonCode: data.get("reasonCode"),
+          maxRuns: Number(data.get("maxRuns")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-edge-diagnostic-run-form]")) {
+        let verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => {
+          node.value = "";
+        });
+        controller.runEdgeDiagnostic({
+          deploymentId: data.get("deploymentId"),
+          grantId: data.get("grantId"),
+          deadlineSeconds: Number(data.get("deadlineSeconds")),
+          reasonCode: data.get("reasonCode"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+        verificationCode = "";
+      }
+      if (form.matches("[data-platform-edge-diagnostic-cancel-form]")) {
+        controller.cancelEdgeDiagnostic({
+          deploymentId: data.get("deploymentId"),
+          commandId: data.get("commandId"),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-job-filter-form]")) {
         controller.filterJobs(data.get("status"));
       }
@@ -2665,6 +2904,8 @@ export function createPlatformPageController({
       if (action === "workspace-previous") controller.previousWorkspacePage();
       if (action === "billing-next") controller.nextBillingPage();
       if (action === "billing-previous") controller.previousBillingPage();
+      if (action === "edge-fleet-next") controller.nextEdgeFleetPage();
+      if (action === "edge-fleet-previous") controller.previousEdgeFleetPage();
       if (action === "refund-approve") {
         controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
       }
@@ -2694,12 +2935,25 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
-      if (!select?.matches?.('[data-platform-notification-template-form] select[name="eventType"]')) {
-        return;
+      if (select?.matches?.('[data-platform-notification-template-form] select[name="eventType"]')) {
+        const output = select.form?.querySelector?.("[data-template-parameters]");
+        if (output) {
+          output.textContent = (NOTIFICATION_EVENT_PARAMETERS[select.value] ?? []).join(", ");
+        }
       }
-      const output = select.form?.querySelector?.("[data-template-parameters]");
-      if (output) {
-        output.textContent = (NOTIFICATION_EVENT_PARAMETERS[select.value] ?? []).join(", ");
+      if (select?.matches?.('[data-platform-edge-diagnostic-request-form] select[name="commandCode"]')) {
+        updateEdgeDiagnosticParameterControls(select.form, select.value);
+      }
+      if (select?.matches?.('[data-platform-edge-diagnostic-run-form] select[name="method"]')) {
+        const code = select.form?.querySelector?.("[data-platform-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
       }
     });
   }
@@ -2711,6 +2965,10 @@ export function createPlatformPageController({
     return { generation, signal: request.signal };
   }
   function current(ticket) { return ticket.generation === generation && !ticket.signal.aborted; }
+  function currentEdgeFleetTicket(ticket) {
+    return current(ticket) && state.view === "edge-fleet"
+      && currentPermissions().has("platform.edge_fleet.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -2750,6 +3008,12 @@ export function createPlatformPageController({
     state.infrastructure = null;
     state.gatewayCells = null;
     state.edgeFleet = null;
+    state.edgeFleetFilters = { status: "", region: "", health: "" };
+    state.edgeFleetCursor = null;
+    state.edgeFleetCursorHistory = [];
+    state.edgeDiagnosticIntent = null;
+    state.edgeDiagnosticGrant = null;
+    state.edgeDiagnosticCommand = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
     state.jobQueues = null;
@@ -2821,6 +3085,47 @@ function normalizeWorkspaceFilters(input) {
     if (WORKSPACE_FILTER_KEYS.has(key) && text) filters[key] = text;
   }
   return filters;
+}
+
+function normalizeEdgeFleetFilters(input) {
+  const status = String(input?.status ?? "");
+  const health = String(input?.health ?? "");
+  const region = String(input?.region ?? "").trim().toLowerCase();
+  return {
+    status: new Set(["", "pending", "active", "revoked", "retired"]).has(status)
+      ? status : "",
+    region: /^[a-z0-9][a-z0-9-]{1,39}$/u.test(region) ? region : "",
+    health: new Set([
+      "", "healthy", "degraded", "critical", "offline", "revoked", "unknown",
+    ]).has(health) ? health : "",
+  };
+}
+
+function edgeDiagnosticInvocation(data) {
+  const commandCode = String(data.get("commandCode") ?? "");
+  if (commandCode === "runtime.watermarks") {
+    return {
+      command_code: commandCode,
+      watermark_codes: data.getAll("watermarkCode").map(String),
+    };
+  }
+  if (commandCode === "runtime.disk_budget") {
+    return { command_code: commandCode, volume_code: String(data.get("volumeCode") ?? "") };
+  }
+  if (commandCode === "runtime.connectivity_summary") {
+    return { command_code: commandCode, target_code: String(data.get("targetCode") ?? "") };
+  }
+  return { command_code: commandCode };
+}
+
+function updateEdgeDiagnosticParameterControls(form, commandCode) {
+  for (const group of form?.querySelectorAll?.("[data-edge-command-parameter]") ?? []) {
+    const active = group.dataset.edgeCommandParameter === commandCode;
+    group.hidden = !active;
+    group.querySelectorAll("input, select").forEach((control) => {
+      control.disabled = !active;
+    });
+  }
 }
 
 function hasWorkspaceRead(permissions) {

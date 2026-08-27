@@ -110,7 +110,17 @@ import {
   getPlatformUnitEconomics,
 } from "../../lib/capacityManagement.js";
 import { listPlatformResidencyEvidence } from "../../lib/dataGovernance.js";
-import { listPlatformEdgeFleet } from "../../lib/edgeManagement.js";
+import {
+  cancelPlatformDiagnostic,
+  listPlatformFleet,
+  requestPlatformDiagnosticGrant,
+  runPlatformDiagnostic,
+} from "../../lib/edgeDiagnostics.js";
+import {
+  beginIdentityWebAuthnStepUp,
+  createIdentityStepUpGrant,
+  getWebAuthnAssertion,
+} from "../../lib/identity.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -273,7 +283,22 @@ if (root) {
       createCapacityLoadTest: (input) => createCapacityLoadTest({ controlApiUrl, ...input }),
       commandCapacityChaos: (input) => commandCapacityChaos({ controlApiUrl, ...input }),
       residencyEvidence: (input) => listPlatformResidencyEvidence({ controlApiUrl, ...input }),
-      edgeFleet: (input) => listPlatformEdgeFleet({ controlApiUrl, ...input }),
+      edgeFleet: (input) => listPlatformFleet({ controlApiUrl, ...input }),
+      requestEdgeDiagnosticGrant: (input) => requestPlatformDiagnosticGrant({
+        controlApiUrl,
+        ...input,
+      }),
+      runEdgeDiagnostic: (input) => runPlatformDiagnostic({ controlApiUrl, ...input }),
+      cancelEdgeDiagnostic: (input) => cancelPlatformDiagnostic({ controlApiUrl, ...input }),
+      beginIdentityStepUp: (input) => beginIdentityWebAuthnStepUp({
+        controlApiUrl,
+        ...input,
+      }),
+      createIdentityStepUpGrant: (input) => createIdentityStepUpGrant({
+        controlApiUrl,
+        ...input,
+      }),
+      getWebAuthnAssertion,
     },
   }).mount();
 }

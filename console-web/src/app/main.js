@@ -553,6 +553,10 @@ import {
   workspaceCookieApiOrigin,
 } from "../lib/edgeManagement.js";
 import {
+  decideWorkspaceDiagnosticGrant,
+  getWorkspaceEdgeHealth,
+} from "../lib/edgeDiagnostics.js";
+import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
   clearLocalAdminSession,
@@ -7178,6 +7182,27 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
     async onSupportBundle(deploymentId, action) {
       return submitPrivateGatewaySupportBundle(deploymentId, action, consoleShellState);
     },
+    async onDiagnosticOpen(deploymentId, grantId, action) {
+      if (!privateGatewayPageState.openDiagnosticDecision(
+        currentPrivateGatewayOwner(consoleShellState),
+        deploymentId,
+        grantId,
+        action,
+      )) return false;
+      refreshSequence += 1;
+      renderCurrentPrivateGatewayPanel(consoleShellState);
+      return true;
+    },
+    async onDiagnosticClose() {
+      const closed = privateGatewayPageState.closeDiagnosticDecision(
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+      if (closed) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return closed;
+    },
+    async onDiagnosticDecision(input) {
+      return submitPrivateGatewayDiagnosticDecision(input, consoleShellState);
+    },
     async onSecretOpen(deploymentId, action, referenceId) {
       if (!privateGatewayPageState.openSecretDialog(
         currentPrivateGatewayOwner(consoleShellState),
@@ -7366,6 +7391,94 @@ async function submitPrivateGatewayDeliveryAcceptance(input, consoleShellState) 
     stepUpGrant = "";
     webAuthnCredential = null;
     privateGatewayPageState.finishDeliveryAcceptance(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayDiagnosticDecision(input, consoleShellState) {
+  const operation = privateGatewayPageState.beginDiagnosticDecision(
+    currentPrivateGatewayOwner(consoleShellState),
+    input?.ttlSeconds,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  let verificationCode = String(input?.verificationCode ?? "");
+  let stepUpGrant = "";
+  let webAuthnCredential = null;
+  try {
+    let challengeId;
+    if (input?.method === "webauthn") {
+      const challenge = await beginIdentityWebAuthnStepUp({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      });
+      if (!privateGatewayPageState.isDiagnosticDecisionCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+      challengeId = challenge.challenge_id;
+      webAuthnCredential = await getWebAuthnAssertion(challenge.public_key_options);
+      if (!privateGatewayPageState.isDiagnosticDecisionCurrent(
+        operation,
+        currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+    }
+    const stepUp = await createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      method: input?.method,
+      workspaceId: operation.workspaceId,
+      actionCode: operation.action === "approve"
+        ? "edge.diagnostic.approve_grant"
+        : "edge.diagnostic.revoke_grant",
+      resourceType: "edge_diagnostic_grant",
+      resourceId: operation.grantId,
+      code: verificationCode,
+      challengeId,
+      credential: webAuthnCredential,
+      signal: operation.controller.signal,
+    });
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = stepUp.grant;
+    if (!privateGatewayPageState.isDiagnosticDecisionCurrent(
+      operation,
+      currentPrivateGatewayOwner(consoleShellState),
+    )) return null;
+    const result = await decideWorkspaceDiagnosticGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      grantId: operation.grantId,
+      action: operation.action,
+      reasonCode: operation.action === "approve" ? "customer_approved" : "customer_revoked",
+      ttlSeconds: operation.ttlSeconds,
+      stepUpGrant,
+      idempotencyKey: createEdgeIdempotencyKey(`diagnostic-${operation.action}`),
+      signal: operation.controller.signal,
+    });
+    stepUpGrant = "";
+    privateGatewayPageState.acceptDiagnosticDecision(
+      operation,
+      result,
+      currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    verificationCode = "";
+    stepUpGrant = "";
+    webAuthnCredential = null;
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectDiagnosticDecision(
+        operation,
+        error,
+        currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    verificationCode = "";
+    stepUpGrant = "";
+    webAuthnCredential = null;
+    privateGatewayPageState.finishDiagnosticDecision(operation);
   }
   renderCurrentPrivateGatewayPanel(consoleShellState);
   return privateGatewayPageState.snapshot();
@@ -17207,7 +17320,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
         })
         : Promise.resolve(null),
     ]);
-    const [desiredStates, telemetryStates, secretReferences] = await Promise.all([
+    const [desiredStates, telemetryStates, secretReferences, healthStates] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
         ? loadPrivateGatewayTelemetryStates(result.deployments, operation.controller.signal)
@@ -17218,6 +17331,9 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
           signal: operation.controller.signal,
         })
         : Promise.resolve(null),
+      owner.canReadHealth
+        ? loadPrivateGatewayHealthStates(result.deployments, operation.controller.signal)
+        : Promise.resolve([]),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -17229,6 +17345,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       telemetryStates,
       secretReferences,
       installerCatalog,
+      healthStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -17241,6 +17358,29 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayHealthStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getWorkspaceEdgeHealth({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = Object.freeze({ deploymentId, response });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 async function loadPrivateGatewayTelemetryStates(deployments, signal) {

@@ -40,6 +40,7 @@ from .service import (
     _id,
     _identifier,
     _owned_deployment,
+    _refresh_health_if_available,
     _rollback,
     _secret_hmac,
     _utcnow,
@@ -191,6 +192,13 @@ def start_workspace_validation(
             request_sha256=request_sha256,
             result_object_id=validation_run_id,
             now=now,
+        )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_datetime(now),
         )
         row = _owned_validation(
             connection, context, deployment_id, validation_run_id
@@ -399,6 +407,13 @@ def record_agent_validation(
                 if report.outcome == "failed"
                 else ("workspace", "fleet")
             ),
+        )
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_datetime(created_at),
         )
         completed_row = _agent_validation(
             connection, deployment_id, validation_run_id

@@ -118,6 +118,10 @@ export const PERMISSIONS = Object.freeze({
   EDGE_VALIDATION_MANAGE: "edge.validation.manage",
   EDGE_DELIVERY_ACCEPT: "edge.delivery.accept",
   EDGE_SUPPORT_BUNDLE_READ: "edge.support_bundle.read",
+  // PRD-126 health and diagnostic approval are independent from Deployment management.
+  EDGE_HEALTH_READ: "edge.health.read",
+  EDGE_DIAGNOSTIC_READ: "edge.diagnostic.read",
+  EDGE_DIAGNOSTIC_APPROVE: "edge.diagnostic.approve",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。

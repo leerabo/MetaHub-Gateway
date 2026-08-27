@@ -7,6 +7,10 @@ from typing import Literal
 
 from metahub_shared.private_gateway import (
     DeploymentValidationReport,
+    DiagnosticCommandEnvelope,
+    DiagnosticExecutionReport,
+    DiagnosticInvocation,
+    DiagnosticResult,
     InstallerRelease,
     PreflightCheck,
     PreflightReport,
@@ -696,3 +700,253 @@ class PlatformEdgeFleetResponse(_StrictModel):
     deployments: tuple[PlatformEdgeFleetSummary, ...]
     request_id: str
     trace_id: str
+
+
+class PlatformFleetDeployment(_StrictModel):
+    """Platform-safe projection; it intentionally contains no Workspace details."""
+
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    region_code: str = Field(min_length=2, max_length=40)
+    mode: Literal["connected", "isolated"]
+    status: Literal["pending", "active", "revoked", "retired"]
+    health_code: Literal["healthy", "degraded", "critical", "offline", "revoked", "unknown"]
+    health_score: int = Field(ge=0, le=100)
+    alert_code: Literal[
+        "none",
+        "certificate",
+        "version",
+        "capacity",
+        "configuration",
+        "telemetry",
+        "validation",
+        "offline",
+        "revoked",
+    ]
+    maintenance_mode: bool
+    agent_version: str | None = Field(default=None, min_length=1, max_length=64)
+    desired_generation: int = Field(ge=0)
+    applied_generation: int = Field(ge=0)
+    lkg_generation: int = Field(ge=0)
+    telemetry_lag_seconds: int | None = Field(default=None, ge=0)
+    certificate_signal: Literal["healthy", "expiring", "expired", "missing", "revoked"]
+    source_health_generation: int = Field(ge=1)
+    index_revision: int = Field(ge=1)
+    updated_at: datetime
+
+
+class PlatformFleetPageResponse(_StrictModel):
+    deployments: tuple[PlatformFleetDeployment, ...]
+    next_cursor: str | None = Field(default=None, min_length=16, max_length=2048)
+    count: int = Field(ge=0, le=200)
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticGrantMutationRequest(_StrictModel):
+    action: Literal["request", "approve", "revoke"]
+    diagnostic_grant_id: str | None = Field(default=None, pattern=r"^dgr_[0-9a-f]{32}$")
+    invocation: DiagnosticInvocation | None = None
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    max_runs: int | None = Field(default=None, ge=1, le=3)
+    ttl_seconds: int | None = Field(default=None, ge=60, le=300)
+
+    @model_validator(mode="after")
+    def _fields_match_action(self) -> EdgeDiagnosticGrantMutationRequest:
+        request_fields = self.invocation is not None and self.max_runs is not None
+        if self.action == "request":
+            if (
+                not request_fields
+                or self.diagnostic_grant_id is not None
+                or self.ttl_seconds is not None
+            ):
+                raise ValueError("edge.diagnostic_request_invalid")
+        elif self.action == "approve":
+            if (
+                self.diagnostic_grant_id is None
+                or self.ttl_seconds is None
+                or self.invocation is not None
+                or self.max_runs is not None
+            ):
+                raise ValueError("edge.diagnostic_request_invalid")
+        elif (
+            self.diagnostic_grant_id is None
+            or self.invocation is not None
+            or self.max_runs is not None
+            or self.ttl_seconds is not None
+        ):
+            raise ValueError("edge.diagnostic_request_invalid")
+        return self
+
+
+class EdgeDiagnosticGrantSummary(_StrictModel):
+    diagnostic_grant_id: str = Field(pattern=r"^dgr_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    status: Literal["pending_customer", "active", "revoked", "expired", "exhausted"]
+    command_code: Literal[
+        "runtime.version",
+        "runtime.watermarks",
+        "runtime.disk_budget",
+        "runtime.connectivity_summary",
+    ]
+    invocation: DiagnosticInvocation
+    parameters_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    max_runs: int = Field(ge=1, le=3)
+    run_count: int = Field(ge=0, le=3)
+    revision: int = Field(ge=1)
+    requested_at: datetime
+    approved_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    updated_at: datetime
+
+
+class EdgeDiagnosticGrantResponse(_StrictModel):
+    grant: EdgeDiagnosticGrantSummary
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticCommandMutationRequest(_StrictModel):
+    action: Literal["run", "cancel"]
+    diagnostic_grant_id: str | None = Field(default=None, pattern=r"^dgr_[0-9a-f]{32}$")
+    diagnostic_command_id: str | None = Field(default=None, pattern=r"^dcm_[0-9a-f]{32}$")
+    deadline_seconds: int | None = Field(default=None, ge=1, le=120)
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+
+    @model_validator(mode="after")
+    def _fields_match_action(self) -> EdgeDiagnosticCommandMutationRequest:
+        if self.action == "run":
+            if (
+                self.diagnostic_grant_id is None
+                or self.deadline_seconds is None
+                or self.diagnostic_command_id is not None
+            ):
+                raise ValueError("edge.diagnostic_request_invalid")
+        elif (
+            self.diagnostic_command_id is None
+            or self.diagnostic_grant_id is not None
+            or self.deadline_seconds is not None
+        ):
+            raise ValueError("edge.diagnostic_request_invalid")
+        return self
+
+
+class EdgeDiagnosticCommandSummary(_StrictModel):
+    diagnostic_command_id: str = Field(pattern=r"^dcm_[0-9a-f]{32}$")
+    diagnostic_grant_id: str = Field(pattern=r"^dgr_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    status: Literal[
+        "authorized", "leased", "running", "completed", "failed", "cancelled", "expired"
+    ]
+    command_code: Literal[
+        "runtime.version",
+        "runtime.watermarks",
+        "runtime.disk_budget",
+        "runtime.connectivity_summary",
+    ]
+    envelope_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    revision: int = Field(ge=1)
+    issued_at: datetime
+    deadline_at: datetime
+    expires_at: datetime
+    lease_expires_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
+
+
+class EdgeDiagnosticCommandResponse(_StrictModel):
+    command: EdgeDiagnosticCommandSummary
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticLeaseRequest(_StrictModel):
+    action: Literal["lease", "start"]
+    lease_nonce: str = Field(min_length=32, max_length=128, repr=False)
+    expected_revision: int = Field(ge=1)
+
+
+class EdgeDiagnosticPendingResponse(_StrictModel):
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    command: DiagnosticCommandEnvelope | None = Field(default=None, repr=False)
+    command_revision: int | None = Field(default=None, ge=1)
+    cancelled_command_ids: tuple[str, ...] = Field(default=(), max_length=20)
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticLeaseResponse(_StrictModel):
+    command: EdgeDiagnosticCommandSummary
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticResultSummary(_StrictModel):
+    diagnostic_result_id: str = Field(pattern=r"^drs_[0-9a-f]{32}$")
+    diagnostic_grant_id: str = Field(pattern=r"^dgr_[0-9a-f]{32}$")
+    diagnostic_command_id: str = Field(pattern=r"^dcm_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    status: Literal["completed", "failed", "cancelled", "timed_out"]
+    reason_code: Literal[
+        "completed",
+        "cancelled",
+        "deadline_exceeded",
+        "handler_failed",
+        "result_invalid",
+        "sensitive_output",
+    ]
+    result: DiagnosticResult | None = Field(default=None, repr=False)
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    duration_ms: int = Field(ge=0, le=120_000)
+    started_at: datetime
+    completed_at: datetime
+    received_at: datetime
+
+
+class EdgeDiagnosticResultResponse(_StrictModel):
+    result: EdgeDiagnosticResultSummary
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class EdgeHealthSnapshotSummary(_StrictModel):
+    edge_health_snapshot_id: str = Field(pattern=r"^ehs_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    score_model_version: Literal["edge-health-v1"]
+    health_score: int = Field(ge=0, le=100)
+    health_code: Literal["healthy", "degraded", "critical", "offline", "revoked", "unknown"]
+    certificate_signal: Literal["healthy", "expiring", "expired", "missing", "revoked"]
+    version_signal: Literal["current", "outdated", "unknown"]
+    capacity_signal: Literal["healthy", "warning", "critical", "unknown"]
+    config_signal: Literal["converged", "drifted", "not_published", "unknown"]
+    telemetry_signal: Literal["current", "lagging", "stale", "missing"]
+    validation_signal: Literal["passed", "failed", "pending", "missing"]
+    desired_generation: int = Field(ge=0)
+    applied_generation: int = Field(ge=0)
+    lkg_generation: int = Field(ge=0)
+    telemetry_lag_seconds: int | None = Field(default=None, ge=0)
+    certificate_expires_at: datetime | None = None
+    agent_version: str | None = Field(default=None, min_length=1, max_length=64)
+    observed_at: datetime
+    created_at: datetime
+
+
+class EdgeHealthResponse(_StrictModel):
+    health: EdgeHealthSnapshotSummary
+    diagnostic_grants: tuple[EdgeDiagnosticGrantSummary, ...] = Field(default=(), max_length=20)
+    diagnostic_results: tuple[EdgeDiagnosticResultSummary, ...] = Field(default=(), max_length=20)
+    request_id: str
+    trace_id: str
+
+
+class EdgeDiagnosticReportRequest(_StrictModel):
+    report: DiagnosticExecutionReport

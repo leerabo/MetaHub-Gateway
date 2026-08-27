@@ -295,7 +295,7 @@ test("Workspace state renders bounded sync, usage, failures, and policy updates"
   assert.deepEqual(state.snapshot().telemetryStates, {});
 });
 
-test("Platform Fleet accepts and renders only the safe telemetry projection", async (t) => {
+test("legacy Fleet client stays safe while the Platform view uses the PRD-126 projection", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
   globalThis.fetch = async () => response(fleetPayload(), "0");
@@ -304,6 +304,31 @@ test("Platform Fleet accepts and renders only the safe telemetry projection", as
   assert.equal(fleet.deployments[0].telemetry_failure_code, "provider_timeout");
 
   const root = { innerHTML: "" };
+  const platformProjection = {
+    deployments: fleet.deployments.map((item) => ({
+      deployment_id: item.deployment_id,
+      region_code: item.region_code,
+      mode: item.mode,
+      status: item.status,
+      health_code: item.health_code,
+      health_score: 86,
+      alert_code: "telemetry",
+      maintenance_mode: false,
+      agent_version: item.agent_version,
+      desired_generation: item.desired_generation,
+      applied_generation: item.applied_generation,
+      lkg_generation: item.lkg_generation,
+      telemetry_lag_seconds: item.telemetry_lag_seconds,
+      certificate_signal: "healthy",
+      source_health_generation: 2,
+      index_revision: 3,
+      updated_at: item.updated_at,
+    })),
+    next_cursor: null,
+    count: fleet.deployments.length,
+    request_id: fleet.request_id,
+    trace_id: fleet.trace_id,
+  };
   renderPlatformWorkspace(root, {
     session: {
       context: {
@@ -313,12 +338,12 @@ test("Platform Fleet accepts and renders only the safe telemetry projection", as
     },
     navigation: [],
     view: "edge-fleet",
-    edgeFleet: fleet,
+    edgeFleet: platformProjection,
     loading: false,
     error: null,
   });
-  assert.match(root.innerHTML, /lag 30s[\s\S]*backlog 90s/u);
-  assert.match(root.innerHTML, /CPU low[\s\S]*Memory medium[\s\S]*provider_timeout/u);
+  assert.match(root.innerHTML, /健康分 86[\s\S]*telemetry[\s\S]*30 s/u);
+  assert.doesNotMatch(root.innerHTML, /backlog|CPU low|Memory medium|provider_timeout/u);
   assert.doesNotMatch(root.innerHTML, /workspace_id|tenant_id|model_id|provider_id/u);
 
   globalThis.fetch = async () => response({

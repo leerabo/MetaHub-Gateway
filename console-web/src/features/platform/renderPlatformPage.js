@@ -1,5 +1,11 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+import {
+  edgeCommandLabel,
+  edgeDiagnosticStatusLabel,
+  edgeHealthLabel,
+  renderEdgeHealthScore,
+} from "../edge-operations/edgeHealthPresentation.js";
 
 const ROLE_OPTIONS = [
   "platform_owner",
@@ -73,7 +79,7 @@ function renderView(state, permissions) {
   if (state.view === "overview") return overviewView(state);
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
-  if (state.view === "edge-fleet") return edgeFleetView(state);
+  if (state.view === "edge-fleet") return edgeFleetView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1461,37 +1467,130 @@ function gatewayView(state, permissions) {
     ${placement ? gatewayPlacementResult(placement) : ""}`;
 }
 
-function edgeFleetView(state) {
+function edgeFleetView(state, permissions) {
   const items = state.edgeFleet?.deployments ?? [];
+  const filters = state.edgeFleetFilters ?? {};
+  const page = (state.edgeFleetCursorHistory?.length ?? 0) + 1;
+  const canManage = permissions.has("platform.edge_fleet.manage");
   return `
     <header class="platform-page-heading"><div><p>Customer-owned runtime</p><h1>Private Gateway fleet</h1></div><span>${number(items.length)} 个 Deployment</span></header>
     <section class="platform-band">
+      <form class="platform-edge-fleet-filter" data-platform-edge-fleet-filter-form>
+        <label><span>状态</span><select name="status">${edgeFleetStatusOptions(filters.status)}</select></label>
+        <label><span>区域</span><input name="region" value="${escapeAttribute(filters.region ?? "")}" pattern="[a-z0-9][a-z0-9-]{1,39}" maxlength="40" autocomplete="off" /></label>
+        <label><span>健康</span><select name="health">${edgeFleetHealthOptions(filters.health)}</select></label>
+        <button type="submit"${state.loading ? " disabled" : ""}>筛选</button>
+      </form>
       ${state.loading && !state.edgeFleet ? '<div class="platform-empty" role="status">正在读取 Fleet 摘要</div>' : `
         <div class="platform-table-wrap"><table class="platform-edge-fleet-table">
-          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>Agent</th><th>证书</th><th>最近连接</th><th>期望 / 实际 / LKG</th><th>配置状态</th><th>遥测</th><th>资源</th><th>错误</th><th>Revision</th></tr></thead>
-          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 12)}</tbody>
-        </table></div>`}
-    </section>`;
+          <thead><tr><th>Deployment</th><th>区域 / 模式</th><th>状态</th><th>健康分</th><th>告警</th><th>证书</th><th>Agent</th><th>Desired / Applied / LKG</th><th>遥测延迟</th><th>投影版本</th></tr></thead>
+          <tbody>${items.map(edgeFleetRow).join("") || emptyRow("暂无私有 Gateway Deployment", 10)}</tbody>
+        </table></div>
+        <div class="platform-pagination"><span>第 ${number(page)} 页</span><div><button type="button" data-platform-action="edge-fleet-previous" ${(state.edgeFleetCursorHistory?.length ?? 0) ? "" : "disabled"}>上一页</button><button type="button" data-platform-action="edge-fleet-next" ${state.edgeFleet?.next_cursor ? "" : "disabled"}>下一页</button></div></div>`}
+    </section>
+    ${canManage ? edgeDiagnosticControlView(state, items) : ""}`;
 }
 
 function edgeFleetRow(item) {
   return `<tr>
     <td data-label="Deployment"><strong>${escapeHtml(shortReference(item.deployment_id))}</strong><small>${formatTime(item.updated_at)}</small></td>
     <td data-label="区域 / 模式"><strong>${escapeHtml(item.region_code)}</strong><small>${escapeHtml(item.mode)}</small></td>
-    <td data-label="状态">${status(item.status)}<small>${escapeHtml(statusLabel(item.health_code))}</small></td>
+    <td data-label="状态">${status(item.status)}<small>${item.maintenance_mode ? "维护模式" : "正常接管"}</small></td>
+    <td data-label="健康分">${renderEdgeHealthScore(item.health_score, item.health_code, { compact: true })}<small>${escapeHtml(edgeHealthLabel(item.health_code))}</small></td>
+    <td data-label="告警">${status(item.alert_code)}</td>
+    <td data-label="证书">${status(item.certificate_signal)}</td>
     <td data-label="Agent"><strong>${escapeHtml(item.agent_version ?? "-")}</strong></td>
-    <td data-label="证书"><strong>${formatOptionalTime(item.certificate_expires_at)}</strong><small>revocation ${number(item.revocation_generation)}</small></td>
-    <td data-label="最近连接"><strong>${formatOptionalTime(item.last_connected_at)}</strong></td>
-    <td data-label="期望 / 实际 / LKG"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong><small>${item.desired_state_drifted ? `lag ${number(Math.max(0, item.desired_generation - item.applied_generation))}` : "converged"}</small></td>
-    <td data-label="配置状态">${status(item.desired_state_status)}<small>${escapeHtml(statusLabel(item.desired_state_reason_code))}</small></td>
-    <td data-label="遥测"><strong>${formatOptionalTime(item.telemetry_last_receipt_at)}</strong><small>lag ${optionalNumber(item.telemetry_lag_seconds)}s · backlog ${optionalNumber(item.telemetry_backlog_seconds)}s</small></td>
-    <td data-label="资源"><strong>CPU ${escapeHtml(item.telemetry_cpu_bucket)}</strong><small>Memory ${escapeHtml(item.telemetry_memory_bucket)}</small></td>
-    <td data-label="错误"><strong>${number(item.telemetry_error_rate_basis_points)} bp</strong><small>${escapeHtml(item.telemetry_failure_code)}</small></td>
-    <td data-label="Revision"><strong>${number(item.revision)}</strong></td>
+    <td data-label="Desired / Applied / LKG"><strong>${number(item.desired_generation)} / ${number(item.applied_generation)} / ${number(item.lkg_generation)}</strong></td>
+    <td data-label="遥测延迟"><strong>${item.telemetry_lag_seconds === null ? "-" : `${number(item.telemetry_lag_seconds)} s`}</strong></td>
+    <td data-label="投影版本"><strong>${number(item.index_revision)}</strong><small>health ${number(item.source_health_generation)}</small></td>
   </tr>`;
 }
 
-function optionalNumber(value) { return Number.isSafeInteger(value) ? number(value) : "-"; }
+function edgeFleetStatusOptions(selected) {
+  return [
+    ["", "全部"], ["pending", "待注册"], ["active", "活跃"],
+    ["revoked", "已吊销"], ["retired", "已退役"],
+  ].map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function edgeFleetHealthOptions(selected) {
+  return [
+    ["", "全部"], ["healthy", "健康"], ["degraded", "需关注"],
+    ["critical", "严重"], ["offline", "离线"], ["revoked", "已吊销"],
+    ["unknown", "未知"],
+  ].map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function edgeDiagnosticControlView(state, deployments) {
+  const disabled = state.loading ? " disabled" : "";
+  const deploymentOptions = (selectedId = "") => deployments.map((item) => (
+    `<option value="${escapeAttribute(item.deployment_id)}"${item.deployment_id === selectedId ? " selected" : ""}>${escapeHtml(shortReference(item.deployment_id))} · ${escapeHtml(item.region_code)}</option>`
+  )).join("");
+  const grant = state.edgeDiagnosticGrant;
+  const command = state.edgeDiagnosticCommand;
+  return `<section class="platform-band platform-edge-diagnostics">
+    <div class="platform-section-heading"><div><p>Controlled diagnostics</p><h2>受控远程诊断</h2></div><span>${state.edgeDiagnosticIntent ? "正在提交" : "待命"}</span></div>
+    <div class="platform-edge-diagnostic-forms">
+      <form data-platform-edge-diagnostic-request-form autocomplete="off">
+        <h3>请求客户授权</h3>
+        <label><span>Deployment</span><select name="deploymentId" required${disabled}>${deploymentOptions()}</select></label>
+        <label><span>命令</span><select name="commandCode" required${disabled}><option value="runtime.version">运行时版本</option><option value="runtime.watermarks">同步水位</option><option value="runtime.disk_budget">磁盘预算</option><option value="runtime.connectivity_summary">连接摘要</option></select></label>
+        <fieldset data-edge-command-parameter="runtime.watermarks" hidden>
+          <legend>水位</legend>
+          <label><input type="checkbox" name="watermarkCode" value="desired_generation" checked><span>Desired</span></label>
+          <label><input type="checkbox" name="watermarkCode" value="applied_generation" checked><span>Applied</span></label>
+          <label><input type="checkbox" name="watermarkCode" value="lkg_generation" checked><span>LKG</span></label>
+          <label><input type="checkbox" name="watermarkCode" value="telemetry_health_sequence"><span>Health sequence</span></label>
+          <label><input type="checkbox" name="watermarkCode" value="telemetry_failure_sequence"><span>Failure sequence</span></label>
+        </fieldset>
+        <label data-edge-command-parameter="runtime.disk_budget" hidden><span>卷</span><select name="volumeCode"><option value="runtime">Runtime</option><option value="state">State</option><option value="support_bundle">Support bundle</option></select></label>
+        <label data-edge-command-parameter="runtime.connectivity_summary" hidden><span>目标</span><select name="targetCode"><option value="control_plane">Control plane</option><option value="provider_pool">Provider pool</option></select></label>
+        <label><span>原因</span><select name="reasonCode" required${disabled}><option value="customer_reported_issue">客户报告问题</option><option value="incident_investigation">事件调查</option><option value="fleet_health_followup">Fleet 健康跟进</option></select></label>
+        <label><span>最多执行</span><select name="maxRuns" required${disabled}><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select></label>
+        <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>确认提交客户授权请求</span></label>
+        <button class="platform-primary" type="submit"${disabled}>请求授权</button>
+      </form>
+      <form data-platform-edge-diagnostic-run-form autocomplete="off">
+        <h3>执行已批准授权</h3>
+        <label><span>Deployment</span><select name="deploymentId" required${disabled}>${deploymentOptions(grant?.deployment_id)}</select></label>
+        <label><span>Diagnostic Grant ID</span><input name="grantId" value="${escapeAttribute(grant?.diagnostic_grant_id ?? "")}" pattern="dgr_[0-9a-f]{32}" maxlength="36" autocomplete="off" required${disabled}></label>
+        <label><span>截止时间</span><select name="deadlineSeconds" required${disabled}><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option></select></label>
+        <label><span>原因</span><select name="reasonCode" required${disabled}><option value="approved_diagnostic">已批准诊断</option><option value="incident_investigation">事件调查</option><option value="fleet_health_followup">Fleet 健康跟进</option></select></label>
+        <label><span>二次验证</span><select name="method" required${disabled}><option value="totp">Authenticator 验证码</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+        <label data-platform-step-up-code><span>验证码</span><input name="verificationCode" type="password" maxlength="20" autocomplete="one-time-code" inputmode="numeric" data-platform-sensitive required${disabled}></label>
+        <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>确认执行该短时只读命令</span></label>
+        <button class="platform-primary" type="submit"${disabled}>验证并执行</button>
+      </form>
+    </div>
+    ${grant ? edgeDiagnosticGrantSummary(grant) : ""}
+    ${command ? edgeDiagnosticCommandSummary(command, disabled) : ""}
+  </section>`;
+}
+
+function edgeDiagnosticGrantSummary(grant) {
+  return `<div class="platform-edge-diagnostic-summary">
+    <div><span>授权</span><strong>${escapeHtml(grant.diagnostic_grant_id)}</strong></div>
+    <div><span>命令</span><strong>${escapeHtml(edgeCommandLabel(grant.command_code))}</strong></div>
+    <div><span>状态</span><strong>${escapeHtml(edgeDiagnosticStatusLabel(grant.status))}</strong></div>
+    <div><span>次数</span><strong>${number(grant.run_count)} / ${number(grant.max_runs)}</strong></div>
+    <div><span>到期</span><strong>${formatOptionalTime(grant.expires_at)}</strong></div>
+  </div>`;
+}
+
+function edgeDiagnosticCommandSummary(command, disabled) {
+  const cancellable = new Set(["authorized", "leased", "running"]).has(command.status);
+  return `<div class="platform-edge-diagnostic-command">
+    <div class="platform-section-heading"><div><p>${escapeHtml(command.diagnostic_command_id)}</p><h3>${escapeHtml(edgeCommandLabel(command.command_code))}</h3></div><span>${escapeHtml(edgeDiagnosticStatusLabel(command.status))}</span></div>
+    <dl><div><dt>Generation</dt><dd>${number(command.generation)}</dd></div><div><dt>Deadline</dt><dd>${formatTime(command.deadline_at)}</dd></div><div><dt>Revision</dt><dd>${number(command.revision)}</dd></div></dl>
+    ${cancellable ? `<form data-platform-edge-diagnostic-cancel-form>
+      <input name="deploymentId" type="hidden" value="${escapeAttribute(command.deployment_id)}">
+      <input name="commandId" type="hidden" value="${escapeAttribute(command.diagnostic_command_id)}">
+      <label><span>取消原因</span><select name="reasonCode"${disabled}><option value="operator_cancelled">运维取消</option><option value="incident_resolved">事件已解决</option><option value="customer_revoked">客户已撤销</option></select></label>
+      <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>确认取消命令</span></label>
+      <button type="submit"${disabled}>取消命令</button>
+    </form>` : ""}
+  </div>`;
+}
 
 // Cell 行保持固定枚举列，避免把拓扑地址或客户信息扩展进运维表格。
 function gatewayCellRow(cell) {

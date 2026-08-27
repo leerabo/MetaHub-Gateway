@@ -1,6 +1,12 @@
-/** PRD-120..125 safe Edge identity, validation, support, and lifecycle views. */
+/** PRD-120..126 safe Edge identity, health, diagnostics, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
+import {
+  edgeCommandLabel,
+  edgeDiagnosticStatusLabel,
+  renderEdgeHealthScore,
+  renderEdgeSignalStrip,
+} from "../edge-operations/edgeHealthPresentation.js";
 
 const VALIDATION_CHECK_CODES = Object.freeze([
   "device_certificate", "signed_config_lkg", "provider_connectivity",
@@ -27,6 +33,7 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
       ${renderStateDialog(state, owner)}
       ${renderSecretDialog(state, owner)}
       ${renderAcceptanceDialog(state, owner)}
+      ${renderDiagnosticDialog(state, owner)}
     </div>`;
 }
 
@@ -229,6 +236,7 @@ function renderDeployment(item, state, owner) {
         ${fact("证书状态", certificate ? certificateStatusLabel(certificate.status) : "未签发")}
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
+      ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderSecrets(item, state, owner)}
@@ -243,6 +251,68 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderHealthDiagnostics(deployment, state, owner) {
+  if (!owner.canReadHealth) return "";
+  const response = state.healthStates?.[deployment.deployment_id];
+  if (!response) {
+    return `<section class="private-gateway-health" aria-label="运行健康">
+      <div class="private-gateway-health-empty" role="status">健康快照暂不可用</div>
+    </section>`;
+  }
+  const health = response.health;
+  const grants = owner.canReadDiagnostics ? response.diagnostic_grants : [];
+  const results = owner.canReadDiagnostics ? response.diagnostic_results : [];
+  return `<section class="private-gateway-health" aria-label="运行健康与远程诊断">
+    <header>
+      <div><h5>运行健康</h5><small>${formatTime(health.observed_at)} · ${escapeHtml(health.score_model_version)} · generation ${integer(health.generation)}</small></div>
+      ${renderEdgeHealthScore(health.health_score, health.health_code)}
+    </header>
+    ${renderEdgeSignalStrip(health)}
+    <dl class="private-gateway-health-watermarks">
+      ${fact("Desired", integer(health.desired_generation))}
+      ${fact("Applied", integer(health.applied_generation))}
+      ${fact("LKG", integer(health.lkg_generation))}
+      ${fact("遥测延迟", health.telemetry_lag_seconds === null ? "-" : `${integer(health.telemetry_lag_seconds)} s`)}
+    </dl>
+    ${owner.canReadDiagnostics ? `<div class="private-gateway-diagnostics">
+      <div class="private-gateway-diagnostic-column">
+        <header><h6>授权请求</h6><span>${integer(grants.length)}</span></header>
+        ${grants.map((grant) => renderDiagnosticGrant(deployment, grant, state, owner)).join("")
+          || '<p class="private-gateway-diagnostic-empty">暂无诊断授权</p>'}
+      </div>
+      <div class="private-gateway-diagnostic-column">
+        <header><h6>最近结果</h6><span>${integer(results.length)}</span></header>
+        ${results.map((result) => renderDiagnosticResult(result, grants)).join("")
+          || '<p class="private-gateway-diagnostic-empty">暂无诊断结果</p>'}
+      </div>
+    </div>` : ""}
+  </section>`;
+}
+
+function renderDiagnosticGrant(deployment, grant, state, owner) {
+  const pending = grant.status === "pending_customer";
+  const revocable = ["pending_customer", "active"].includes(grant.status);
+  return `<article class="private-gateway-diagnostic-row">
+    <div><strong>${edgeCommandLabel(grant.command_code)}</strong><small>${edgeDiagnosticStatusLabel(grant.status)} · ${integer(grant.run_count)}/${integer(grant.max_runs)} 次</small></div>
+    <time>${formatTime(grant.expires_at ?? grant.requested_at)}</time>
+    ${owner.canApproveDiagnostics && revocable ? `<div class="private-gateway-diagnostic-actions">
+      ${pending ? `<button type="button" class="primary" data-private-gateway-diagnostic="approve" data-deployment-id="${escapeAttribute(deployment.deployment_id)}" data-grant-id="${escapeAttribute(grant.diagnostic_grant_id)}"${state.diagnosticBusy ? " disabled" : ""}>批准</button>` : ""}
+      <button type="button" data-private-gateway-diagnostic="revoke" data-deployment-id="${escapeAttribute(deployment.deployment_id)}" data-grant-id="${escapeAttribute(grant.diagnostic_grant_id)}"${state.diagnosticBusy ? " disabled" : ""}>撤销</button>
+    </div>` : ""}
+  </article>`;
+}
+
+function renderDiagnosticResult(result, grants) {
+  const grant = grants.find(
+    (item) => item.diagnostic_grant_id === result.diagnostic_grant_id,
+  );
+  const commandCode = result.result?.command_code ?? grant?.command_code ?? "";
+  return `<article class="private-gateway-diagnostic-row">
+    <div><strong>${edgeCommandLabel(commandCode)}</strong><small>${edgeDiagnosticStatusLabel(result.status)} · generation ${integer(result.generation)}</small></div>
+    <time>${formatTime(result.completed_at)}</time>
+  </article>`;
 }
 
 function renderSecrets(deployment, state, owner) {
@@ -539,6 +609,25 @@ function renderAcceptanceDialog(state, owner) {
       <label class="private-gateway-confirm"><input type="checkbox" name="confirmed" required${submitting ? " disabled" : ""}><span>确认当前八项有效检查全部通过并接受本次交付</span></label>
       <p class="private-gateway-form-error" data-private-gateway-acceptance-form-error role="alert"></p>
       <div class="private-gateway-dialog-actions"><button type="button" data-private-gateway-acceptance-close${submitting ? " disabled" : ""}>取消</button><button type="submit" class="primary"${submitting ? " disabled" : ""}>${submitting ? "正在签署" : "验证并签署"}</button></div>
+    </form>
+  </dialog>`;
+}
+
+function renderDiagnosticDialog(state, owner) {
+  const dialog = state.diagnosticDialog;
+  if (!owner.canApproveDiagnostics || !dialog?.open) return "";
+  const submitting = dialog.state === "submitting";
+  const approving = dialog.action === "approve";
+  return `<dialog class="private-gateway-dialog private-gateway-diagnostic-dialog" data-private-gateway-diagnostic-dialog aria-labelledby="private-gateway-diagnostic-dialog-title" aria-busy="${submitting}">
+    <header><div><h3 id="private-gateway-diagnostic-dialog-title">${approving ? "批准远程诊断" : "撤销诊断授权"}</h3><span>${escapeHtml(dialog.grantId)}</span></div><button type="button" class="private-gateway-icon" data-private-gateway-diagnostic-close title="关闭" aria-label="关闭"${submitting ? " disabled" : ""}>&times;</button></header>
+    ${dialog.error ? renderError(dialog.error) : ""}
+    <form data-private-gateway-diagnostic-form autocomplete="off" novalidate>
+      ${approving ? `<label><span>授权时长</span><select name="ttl_seconds"${submitting ? " disabled" : ""}><option value="300">5 分钟</option><option value="180">3 分钟</option><option value="60">1 分钟</option></select></label>` : ""}
+      <label><span>二次验证方式</span><select name="method" data-private-gateway-diagnostic-method${submitting ? " disabled" : ""}><option value="totp">Authenticator 验证码</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+      <label data-private-gateway-diagnostic-code><span>验证码</span><input name="verification_code" type="password" maxlength="20" autocomplete="one-time-code" data-private-gateway-sensitive required${submitting ? " disabled" : ""}></label>
+      <label class="private-gateway-confirm"><input type="checkbox" name="confirmed" required${submitting ? " disabled" : ""}><span>确认该授权只允许固定只读命令、绑定参数与短时执行窗口</span></label>
+      <p class="private-gateway-form-error" data-private-gateway-diagnostic-form-error role="alert"></p>
+      <div class="private-gateway-dialog-actions"><button type="button" data-private-gateway-diagnostic-close${submitting ? " disabled" : ""}>取消</button><button type="submit" class="primary"${submitting ? " disabled" : ""}>${submitting ? "正在验证" : (approving ? "验证并批准" : "验证并撤销")}</button></div>
     </form>
   </dialog>`;
 }

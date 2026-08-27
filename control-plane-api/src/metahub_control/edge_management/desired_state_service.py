@@ -42,6 +42,7 @@ from .service import (
     _identifier,
     _optional_datetime,
     _owned_deployment,
+    _refresh_health_if_available,
     _rollback,
     _secret_hmac,
     _utcnow,
@@ -183,6 +184,13 @@ def write_workspace_desired_state(
             now=now,
         )
         state = _state_by_id(connection, context, deployment_id, state_id)
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_utcnow(),
+        )
         connection.commit()
         return EdgeDesiredStateResponse(
             state=state,
@@ -339,6 +347,13 @@ def rollback_workspace_desired_state(
             now=_db_time(_utcnow()),
         )
         state = _state_by_id(connection, context, deployment_id, state_id)
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_utcnow(),
+        )
         connection.commit()
         return EdgeDesiredStateResponse(
             state=state,
@@ -648,6 +663,13 @@ def acknowledge_agent_desired_state(
             """,
             (ack_id,),
         ).fetchone()
+        _refresh_health_if_available(
+            connection,
+            deployment_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            now=_utcnow(),
+        )
         connection.commit()
         return _ack_response(result, replay=False, request_id=request_id, trace_id=trace_id)
     except ApiError:

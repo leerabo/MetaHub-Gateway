@@ -66,6 +66,16 @@ from .desired_state_service import (
     rollback_workspace_desired_state,
     write_workspace_desired_state,
 )
+from .fleet_diagnostic_service import (
+    advance_agent_diagnostic,
+    decide_workspace_diagnostic_grant,
+    get_workspace_edge_health,
+    list_platform_fleet,
+    mutate_platform_diagnostic_command,
+    pull_agent_diagnostic,
+    record_agent_diagnostic_result,
+    request_platform_diagnostic_grant,
+)
 from .installer_service import (
     decide_platform_installer_release,
     list_platform_installer_releases,
@@ -93,6 +103,16 @@ from .models import (
     EdgeDesiredStatePullResponse,
     EdgeDesiredStateResponse,
     EdgeDesiredStateRollbackRequest,
+    EdgeDiagnosticCommandMutationRequest,
+    EdgeDiagnosticCommandResponse,
+    EdgeDiagnosticGrantMutationRequest,
+    EdgeDiagnosticGrantResponse,
+    EdgeDiagnosticLeaseRequest,
+    EdgeDiagnosticLeaseResponse,
+    EdgeDiagnosticPendingResponse,
+    EdgeDiagnosticReportRequest,
+    EdgeDiagnosticResultResponse,
+    EdgeHealthResponse,
     EdgeInstallationResponse,
     EdgeInstallationStartRequest,
     EdgeInstallationUpdateRequest,
@@ -109,6 +129,7 @@ from .models import (
     EdgeValidationResponse,
     EdgeValidationStartRequest,
     PlatformEdgeFleetResponse,
+    PlatformFleetPageResponse,
     PlatformInstallerReleaseDecisionRequest,
     PlatformInstallerReleaseListResponse,
     PlatformInstallerReleaseResponse,
@@ -184,6 +205,192 @@ async def get_edge_deployments(request: Request, response: Response) -> EdgeDepl
         trace_id=_trace_id(request),
     )
     _private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/health",
+    response_model=EdgeHealthResponse,
+)
+async def get_edge_health(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeHealthResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        get_workspace_edge_health,
+        request.app.state.config,
+        deployment_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.health.generation}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/diagnostic-grants",
+    response_model=EdgeDiagnosticGrantResponse,
+)
+async def post_edge_diagnostic_grant(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDiagnosticGrantResponse:
+    payload = _model(
+        await _strict_json(request, "edge.diagnostic_request_invalid"),
+        EdgeDiagnosticGrantMutationRequest,
+        error_code="edge.diagnostic_request_invalid",
+    )
+    if payload.action == "request":
+        context = require_platform_edge_fleet(request)
+        result = await _run(
+            request_platform_diagnostic_grant,
+            request.app.state.config,
+            context,
+            deployment_id,
+            payload,
+            idempotency_key=_platform_idempotency_key(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+        if not result.idempotent_replay:
+            response.status_code = status.HTTP_201_CREATED
+    else:
+        _prepare_workspace(request, write=True)
+        result = await _run(
+            decide_workspace_diagnostic_grant,
+            request.app.state.config,
+            deployment_id,
+            payload,
+            session_token=_workspace_cookie(request),
+            csrf_token=_workspace_csrf(request),
+            step_up_grant=_required_step_up_grant(request),
+            idempotency_key=_idempotency_key(request),
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
+    response.headers["ETag"] = f'"{result.grant.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/diagnostics",
+    response_model=EdgeDiagnosticCommandResponse,
+)
+async def post_edge_diagnostic(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDiagnosticCommandResponse:
+    context = require_platform_edge_fleet(request)
+    payload = _model(
+        await _strict_json(request, "edge.diagnostic_request_invalid"),
+        EdgeDiagnosticCommandMutationRequest,
+        error_code="edge.diagnostic_request_invalid",
+    )
+    result = await _run(
+        mutate_platform_diagnostic_command,
+        request.app.state.config,
+        context,
+        deployment_id,
+        payload,
+        step_up_grant=(
+            _required_step_up_grant(request)
+            if payload.action == "run"
+            else _optional_step_up_grant(request)
+        ),
+        idempotency_key=_platform_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if payload.action == "run" and not result.idempotent_replay:
+        response.status_code = status.HTTP_201_CREATED
+    response.headers["ETag"] = f'"{result.command.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/diagnostics/pending",
+    response_model=EdgeDiagnosticPendingResponse,
+)
+async def get_agent_diagnostic(
+    deployment_id: str, request: Request, response: Response
+) -> EdgeDiagnosticPendingResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    result = await _run(
+        pull_agent_diagnostic,
+        request.app.state.config,
+        deployment_id,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.command_revision or 0}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/diagnostics/{command_id}/lease",
+    response_model=EdgeDiagnosticLeaseResponse,
+)
+async def post_agent_diagnostic_lease(
+    deployment_id: str, command_id: str, request: Request, response: Response
+) -> EdgeDiagnosticLeaseResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(
+        await _strict_json(request, "edge.diagnostic_request_invalid"),
+        EdgeDiagnosticLeaseRequest,
+        error_code="edge.diagnostic_request_invalid",
+    )
+    result = await _run(
+        advance_agent_diagnostic,
+        request.app.state.config,
+        deployment_id,
+        command_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.command.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/diagnostics/{command_id}/result",
+    response_model=EdgeDiagnosticResultResponse,
+)
+async def post_agent_diagnostic_result(
+    deployment_id: str, command_id: str, request: Request, response: Response
+) -> EdgeDiagnosticResultResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _model(
+        await _strict_json(request, "edge.diagnostic_result_invalid"),
+        EdgeDiagnosticReportRequest,
+        error_code="edge.diagnostic_result_invalid",
+    )
+    result = await _run(
+        record_agent_diagnostic_result,
+        request.app.state.config,
+        deployment_id,
+        command_id,
+        payload.report,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if not result.idempotent_replay:
+        response.status_code = status.HTTP_201_CREATED
+    _edge_private(response)
     return result
 
 
@@ -906,10 +1113,14 @@ def require_platform_edge_fleet(request: Request) -> PlatformContext:
         or _cookie_values(request, SUPPORT_SESSION_COOKIE)
     ):
         raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
     context = authenticate_platform_session_context(
         request.app.state.config,
         _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
-        csrf_token=None,
+        csrf_token=csrf,
     )
     if not {
         "platform.edge_fleet.read",
@@ -1029,6 +1240,32 @@ async def patch_platform_edge_installer(
         trace_id=_trace_id(request),
     )
     response.headers["ETag"] = f'"{result.release.revision}"'
+    _private(response)
+    return result
+
+
+@router.get(
+    "/platform/fleet",
+    response_model=PlatformFleetPageResponse,
+)
+async def get_platform_fleet(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_fleet)],
+) -> PlatformFleetPageResponse:
+    query = _fleet_query(request)
+    result = await _run(
+        list_platform_fleet,
+        request.app.state.config,
+        context,
+        status_filter=query["status"],
+        region_filter=query["region"],
+        health_filter=query["health"],
+        cursor=query["cursor"],
+        limit=query["limit"],
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
     _private(response)
     return result
 
@@ -1178,11 +1415,13 @@ def _required_step_up_grant(request: Request) -> str:
     return grant
 
 
-def _model(payload: dict[str, Any], model_type):
+def _model(
+    payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"
+):
     try:
         return model_type.model_validate(payload)
     except ValueError:
-        raise ApiError("edge.request_invalid") from None
+        raise ApiError(error_code) from None
 
 
 def _platform_model(payload: dict[str, Any], model_type):
@@ -1354,6 +1593,28 @@ async def _read_support_bundle_upload(
 def _reject_query(request: Request) -> None:
     if request.query_params.multi_items():
         raise ApiError("edge.request_invalid")
+
+
+def _fleet_query(request: Request) -> dict[str, str | int | None]:
+    allowed = {"status", "region", "health", "cursor", "limit"}
+    items = request.query_params.multi_items()
+    names = [name for name, _value in items]
+    if any(name not in allowed for name in names) or len(names) != len(set(names)):
+        raise ApiError("platform.edge_fleet_request_invalid")
+    values = {name: value for name, value in items}
+    raw_limit = values.get("limit", "50")
+    if re.fullmatch(r"[1-9][0-9]{0,2}", raw_limit) is None:
+        raise ApiError("platform.edge_fleet_request_invalid")
+    limit = int(raw_limit)
+    if limit > 200:
+        raise ApiError("platform.edge_fleet_request_invalid")
+    return {
+        "status": values.get("status"),
+        "region": values.get("region"),
+        "health": values.get("health"),
+        "cursor": values.get("cursor"),
+        "limit": limit,
+    }
 
 
 def _edge_private(response: Response) -> None:

@@ -29,6 +29,7 @@ from metahub_control.workspace_access.service import (
 )
 
 from .desired_state_service import _authenticated_agent
+from .fleet_diagnostic_service import refresh_edge_health_projection_in_transaction
 from .models import (
     EdgeAgentTelemetryWatermarkResponse,
     EdgeFailureCountSummary,
@@ -210,6 +211,14 @@ def receive_agent_telemetry(
         lag_seconds, backlog_seconds = _update_fleet_projection(
             connection, batch, now, now_db
         )
+        if _table_exists(connection, "edge_health_snapshots"):
+            refresh_edge_health_projection_in_transaction(
+                connection,
+                batch.deployment_id,
+                request_id=request_id,
+                trace_id=trace_id,
+                now=now,
+            )
         _event(
             connection,
             agent,
@@ -544,6 +553,15 @@ def _policy_revision(
     if row is None:
         raise ApiError("edge.state_conflict")
     return row
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def _require_telemetry_capability(agent: sqlite3.Row) -> None:

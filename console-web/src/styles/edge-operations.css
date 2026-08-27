@@ -1,0 +1,84 @@
+.edge-health-score {
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) auto;
+  align-items: center;
+  width: min(100%, 210px);
+  min-height: 42px;
+  gap: 10px;
+}
+
+.edge-health-score > span {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  min-width: 92px;
+  gap: 3px;
+  padding-bottom: 9px;
+}
+
+.edge-health-score > span::before,
+.edge-health-score > span::after {
+  position: absolute;
+  bottom: 1px;
+  left: 0;
+  height: 5px;
+  border-radius: 2px;
+  content: "";
+}
+
+.edge-health-score > span::before { width: 100%; background: #dce2dc; }
+.edge-health-score > span::after {
+  width: calc(var(--edge-health-score) * 1%);
+  max-width: 100%;
+  background: #176b4d;
+}
+
+.edge-health-score strong { font-size: 19px; line-height: 1; }
+.edge-health-score small { color: #667068; font-size: 10px; }
+.edge-health-score em { color: #455048; font-size: 11px; font-style: normal; font-weight: 750; }
+.edge-health-score.tone-warning > span::after { background: #a15c00; }
+.edge-health-score.tone-critical > span::after,
+.edge-health-score.tone-offline > span::after,
+.edge-health-score.tone-revoked > span::after { background: #a3302e; }
+.edge-health-score.tone-unknown > span::after { background: #667068; }
+
+.edge-health-score.compact {
+  grid-template-columns: minmax(72px, 1fr);
+  width: 94px;
+  min-height: 34px;
+}
+
+.edge-health-score.compact > span { min-width: 72px; }
+.edge-health-score.compact > span strong { font-size: 15px; }
+.edge-health-score.compact > em { display: none; }
+
+.edge-health-signals {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(74px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid #d7ddd6;
+  border-radius: 4px;
+  background: #d7ddd6;
+}
+
+.edge-health-signals > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: #fff;
+}
+
+.edge-health-signals dt { color: #667068; font-size: 10px; font-weight: 700; }
+.edge-health-signals dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 750; }
+.edge-health-signals .tone-healthy dd { color: #176b4d; }
+.edge-health-signals .tone-warning dd { color: #8b5000; }
+.edge-health-signals .tone-critical dd { color: #a3302e; }
+
+@media (max-width: 760px) {
+  .edge-health-signals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 420px) {
+  .edge-health-signals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

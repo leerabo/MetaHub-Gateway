@@ -1,4 +1,4 @@
-/** PRD-120..125 owner-bound Edge identity, lifecycle, validation, and support state. */
+/** PRD-120..126 owner-bound Edge identity, health, diagnostics, and lifecycle state. */
 
 import {
   authorizationFingerprint,
@@ -18,6 +18,7 @@ const PREFLIGHT_REPORT_ID = /^pfr_[0-9a-f]{32}$/u;
 const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
 const VALIDATION_RUN_ID = /^dvr_[0-9a-f]{32}$/u;
 const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
+const DIAGNOSTIC_GRANT_ID = /^dgr_[0-9a-f]{32}$/u;
 const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const LOCAL_ORIGIN = /^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}(?::[0-9]{1,5})?$/u;
@@ -62,6 +63,13 @@ const ERROR_MESSAGES = Object.freeze({
   "edge.support_bundle_expired": "支持包已过期",
   "edge.support_bundle_integrity_failed": "支持包对象完整性校验失败",
   "edge.support_bundle_storage_unavailable": "支持包存储暂不可用",
+  "edge.diagnostic_not_found": "诊断授权不存在或不属于当前 Workspace",
+  "edge.diagnostic_state_conflict": "诊断授权状态已变化，请刷新后重试",
+  "edge.diagnostic_authority_changed": "诊断授权主体权限已变化，请重新发起授权",
+  "edge.diagnostic_expired": "诊断授权已过期，请重新发起授权",
+  "edge.diagnostic_request_invalid": "诊断授权请求不合法",
+  "edge.diagnostic_response_invalid": "诊断授权响应合同不完整",
+  "edge.diagnostic_unavailable": "远程诊断服务暂不可用",
   "step_up.required": "签署交付前需要二次验证",
   "step_up.invalid": "二次验证已失效，请重新验证",
   "step_up.unavailable": "二次验证暂不可用",
@@ -147,6 +155,16 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     authContext,
     PERMISSIONS.EDGE_SUPPORT_BUNDLE_READ,
   ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_SUPPORT_BUNDLE_READ) : "";
+  const healthReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_HEALTH_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_HEALTH_READ)
+    : "";
+  const diagnosticReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DIAGNOSTIC_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DIAGNOSTIC_READ)
+    : "";
+  const diagnosticApproveIdentity = hasPermission(
+    authContext,
+    PERMISSIONS.EDGE_DIAGNOSTIC_APPROVE,
+  ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DIAGNOSTIC_APPROVE) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -188,6 +206,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     validationManageIdentity,
     deliveryAcceptIdentity,
     supportBundleReadIdentity,
+    healthReadIdentity,
+    diagnosticReadIdentity,
+    diagnosticApproveIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -208,6 +229,11 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canManageSupportBundles: Boolean(
       supportBundleReadIdentity && accountId && role === "security_admin"
     ),
+    canReadHealth: Boolean(healthReadIdentity),
+    canReadDiagnostics: Boolean(healthReadIdentity && diagnosticReadIdentity),
+    canApproveDiagnostics: Boolean(
+      healthReadIdentity && diagnosticReadIdentity && diagnosticApproveIdentity
+    ),
   });
 }
 
@@ -227,12 +253,14 @@ export function createPrivateGatewayPageState({
   let installerSelection = emptyInstallerSelection();
   let validationStates = Object.freeze({});
   let supportBundleStates = Object.freeze({});
+  let healthStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
   let registration = null;
   let secretDialog = closedSecretDialog();
   let acceptanceDialog = closedAcceptanceDialog();
+  let diagnosticDialog = closedDiagnosticDialog();
   let localSession = null;
   let feedback = null;
   let canReadTelemetry = false;
@@ -247,14 +275,18 @@ export function createPrivateGatewayPageState({
   let canAcceptDelivery = false;
   let canReadSupportBundles = false;
   let canManageSupportBundles = false;
+  let canReadHealth = false;
+  let canReadDiagnostics = false;
+  let canApproveDiagnostics = false;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
     localSession: 0, secret: 0, validation: 0, acceptance: 0, supportBundle: 0,
+    diagnostic: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
     localSession: null, secret: null, validation: null, acceptance: null,
-    supportBundle: null,
+    supportBundle: null, diagnostic: null,
   };
 
   function enter(owner) {
@@ -279,6 +311,9 @@ export function createPrivateGatewayPageState({
     canReadSupportBundles = owner.canReadSupportBundles === true;
     canManageSupportBundles = owner.canManageSupportBundles === true
       && canReadSupportBundles;
+    canReadHealth = owner.canReadHealth === true;
+    canReadDiagnostics = owner.canReadDiagnostics === true && canReadHealth;
+    canApproveDiagnostics = owner.canApproveDiagnostics === true && canReadDiagnostics;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -287,6 +322,8 @@ export function createPrivateGatewayPageState({
     if (!canAcceptDelivery) acceptanceDialog = closedAcceptanceDialog();
     if (!canReadValidations) validationStates = Object.freeze({});
     if (!canReadSupportBundles) supportBundleStates = Object.freeze({});
+    if (!canReadHealth) healthStates = Object.freeze({});
+    if (!canApproveDiagnostics) diagnosticDialog = closedDiagnosticDialog();
     return true;
   }
 
@@ -305,12 +342,14 @@ export function createPrivateGatewayPageState({
     installerSelection = emptyInstallerSelection();
     validationStates = Object.freeze({});
     supportBundleStates = Object.freeze({});
+    healthStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
     registration = null;
     secretDialog = closedSecretDialog();
     acceptanceDialog = closedAcceptanceDialog();
+    diagnosticDialog = closedDiagnosticDialog();
     localSession = null;
     feedback = null;
     canReadTelemetry = false;
@@ -325,10 +364,13 @@ export function createPrivateGatewayPageState({
     canAcceptDelivery = false;
     canReadSupportBundles = false;
     canManageSupportBundles = false;
+    canReadHealth = false;
+    canReadDiagnostics = false;
+    canApproveDiagnostics = false;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
       localSession: null, secret: null, validation: null, acceptance: null,
-      supportBundle: null,
+      supportBundle: null, diagnostic: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
@@ -352,6 +394,7 @@ export function createPrivateGatewayPageState({
     stateDialog = closedStateDialog();
     secretDialog = closedSecretDialog();
     acceptanceDialog = closedAcceptanceDialog();
+    diagnosticDialog = closedDiagnosticDialog();
     return operation;
   }
 
@@ -368,6 +411,7 @@ export function createPrivateGatewayPageState({
     telemetryResponses = [],
     secretResponse = null,
     installerResponse = null,
+    healthResponses = [],
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -382,6 +426,12 @@ export function createPrivateGatewayPageState({
         installerResponse,
         response.deployments,
         canReadInstallers,
+      )
+      || !validHealthResponses(
+        healthResponses,
+        response.deployments,
+        canReadHealth,
+        canReadDiagnostics,
       )) {
       return false;
     }
@@ -405,6 +455,9 @@ export function createPrivateGatewayPageState({
       : Object.freeze({});
     supportBundleStates = canReadSupportBundles
       ? retainOwnedMap(supportBundleStates, deploymentIds)
+      : Object.freeze({});
+    healthStates = canReadHealth
+      ? healthStateMap(response.deployments, healthResponses)
       : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
@@ -903,6 +956,122 @@ export function createPrivateGatewayPageState({
     return current("acceptance", operation, owner);
   }
 
+  function openDiagnosticDecision(owner, deploymentId, grantId, action) {
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const response = healthStates[deploymentId] ?? null;
+    const grant = response?.diagnostic_grants?.find(
+      (item) => item.diagnostic_grant_id === grantId,
+    );
+    const allowed = action === "approve"
+      ? grant?.status === "pending_customer"
+      : ["pending_customer", "active"].includes(grant?.status);
+    if (!owns(owner) || !canApproveDiagnostics || !deployment
+      || deployment.status !== "active" || !grant || !allowed || busy()) return false;
+    closeDialogInternal();
+    stateDialog = closedStateDialog();
+    acceptanceDialog = closedAcceptanceDialog();
+    secretDialog = closedSecretDialog();
+    diagnosticDialog = Object.freeze({
+      open: true,
+      state: "form",
+      deploymentId,
+      grantId,
+      action,
+      ttlSeconds: 300,
+      error: null,
+    });
+    feedback = null;
+    return true;
+  }
+
+  function closeDiagnosticDecision(owner) {
+    if (!owns(owner) || operations.diagnostic) return false;
+    diagnosticDialog = closedDiagnosticDialog();
+    return true;
+  }
+
+  function beginDiagnosticDecision(owner, ttlSeconds = 300) {
+    const deployment = deployments.find(
+      (item) => item.deployment_id === diagnosticDialog.deploymentId,
+    );
+    const response = healthStates[diagnosticDialog.deploymentId] ?? null;
+    const grant = response?.diagnostic_grants?.find(
+      (item) => item.diagnostic_grant_id === diagnosticDialog.grantId,
+    );
+    const allowed = diagnosticDialog.action === "approve"
+      ? grant?.status === "pending_customer"
+      : ["pending_customer", "active"].includes(grant?.status);
+    const ttl = Number(ttlSeconds);
+    if (!owns(owner) || !canApproveDiagnostics || diagnosticDialog.state !== "form"
+      || !deployment || deployment.status !== "active" || !grant || !allowed || busy()
+      || (diagnosticDialog.action === "approve"
+        && (!Number.isSafeInteger(ttl) || ttl < 60 || ttl > 300))) return null;
+    generations.diagnostic += 1;
+    const operation = ticket("diagnostic", {
+      controller: new AbortController(),
+      deploymentId: deployment.deployment_id,
+      workspaceId: deployment.workspace_id,
+      grantId: grant.diagnostic_grant_id,
+      action: diagnosticDialog.action,
+      ttlSeconds: diagnosticDialog.action === "approve" ? ttl : null,
+    });
+    operations.diagnostic = operation;
+    diagnosticDialog = Object.freeze({
+      ...diagnosticDialog,
+      state: "submitting",
+      ttlSeconds: ttl,
+      error: null,
+    });
+    return operation;
+  }
+
+  function acceptDiagnosticDecision(operation, response, owner) {
+    if (!current("diagnostic", operation, owner)
+      || response?.grant?.diagnostic_grant_id !== operation.grantId
+      || response.grant.deployment_id !== operation.deploymentId) return false;
+    const previous = healthStates[operation.deploymentId];
+    if (!previous) return false;
+    const grants = previous.diagnostic_grants.map((item) => (
+      item.diagnostic_grant_id === operation.grantId ? response.grant : item
+    ));
+    healthStates = Object.freeze({
+      ...healthStates,
+      [operation.deploymentId]: Object.freeze({
+        ...previous,
+        diagnostic_grants: Object.freeze(grants),
+        request_id: response.request_id,
+        trace_id: response.trace_id,
+      }),
+    });
+    diagnosticDialog = closedDiagnosticDialog();
+    feedback = Object.freeze({
+      kind: "success",
+      code: operation.action === "approve"
+        ? "edge.diagnostic_grant_approved"
+        : "edge.diagnostic_grant_revoked",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectDiagnosticDecision(operation, error, owner) {
+    if (!current("diagnostic", operation, owner)) return false;
+    diagnosticDialog = Object.freeze({
+      ...diagnosticDialog,
+      state: "form",
+      error: fixedError(error),
+    });
+    return true;
+  }
+
+  function finishDiagnosticDecision(operation) {
+    if (operations.diagnostic === operation) operations.diagnostic = null;
+  }
+
+  function isDiagnosticDecisionCurrent(operation, owner) {
+    return current("diagnostic", operation, owner);
+  }
+
   function beginSupportBundle(owner, deploymentId, action) {
     const deployment = deployments.find((item) => item.deployment_id === deploymentId);
     const entry = supportBundleStates[deploymentId] ?? null;
@@ -1172,10 +1341,11 @@ export function createPrivateGatewayPageState({
 
   function blocksShellDomReplacement() {
     return dialog.open || stateDialog.open || secretDialog.open || acceptanceDialog.open
+      || diagnosticDialog.open
       || Boolean(operations.create || operations.copy || operations.revoke
         || operations.command || operations.policy || operations.localSession
         || operations.secret || operations.validation || operations.acceptance
-        || operations.supportBundle);
+        || operations.supportBundle || operations.diagnostic);
   }
 
   function snapshot() {
@@ -1190,11 +1360,13 @@ export function createPrivateGatewayPageState({
       installerSelection,
       validationStates,
       supportBundleStates,
+      healthStates,
       dialog,
       stateDialog,
       registration,
       secretDialog,
       acceptanceDialog,
+      diagnosticDialog,
       localSession,
       feedback,
       canManage,
@@ -1210,12 +1382,16 @@ export function createPrivateGatewayPageState({
       canAcceptDelivery,
       canReadSupportBundles,
       canManageSupportBundles,
+      canReadHealth,
+      canReadDiagnostics,
+      canApproveDiagnostics,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
       secretBusy: Boolean(operations.localSession || operations.secret),
       validationBusy: Boolean(operations.validation || operations.acceptance),
       supportBundleBusy: Boolean(operations.supportBundle),
+      diagnosticBusy: Boolean(operations.diagnostic),
     });
   }
 
@@ -1236,7 +1412,7 @@ export function createPrivateGatewayPageState({
     return Boolean(operations.create || operations.revoke || operations.copy
       || operations.command || operations.policy || operations.localSession
       || operations.secret || operations.validation || operations.acceptance
-      || operations.supportBundle);
+      || operations.supportBundle || operations.diagnostic);
   }
 
   function sessionActive(deploymentId) {
@@ -1264,6 +1440,9 @@ export function createPrivateGatewayPageState({
     openDeliveryAcceptance, closeDeliveryAcceptance, beginDeliveryAcceptance,
     acceptDeliveryAcceptance, rejectDeliveryAcceptance, finishDeliveryAcceptance,
     isDeliveryAcceptanceCurrent,
+    openDiagnosticDecision, closeDiagnosticDecision, beginDiagnosticDecision,
+    acceptDiagnosticDecision, rejectDiagnosticDecision, finishDiagnosticDecision,
+    isDiagnosticDecisionCurrent,
     beginSupportBundle, acceptSupportBundle, rejectSupportBundle, finishSupportBundle,
     openSecretDialog, closeSecretDialog, beginLocalSession, acceptLocalSession,
     rejectLocalSession, finishLocalSession, beginSecretMutation,
@@ -1283,6 +1462,8 @@ function ownerKeyFor(owner) {
     owner.installerReadIdentity, owner.installationManageIdentity,
     owner.validationReadIdentity, owner.validationManageIdentity,
     owner.deliveryAcceptIdentity, owner.supportBundleReadIdentity,
+    owner.healthReadIdentity, owner.diagnosticReadIdentity,
+    owner.diagnosticApproveIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -1295,6 +1476,32 @@ function validList(response) {
 function validRegistration(response) {
   return Boolean(response?.deployment && DEPLOYMENT_ID.test(String(response.deployment.deployment_id ?? ""))
     && typeof response.idempotent_replay === "boolean");
+}
+
+function validHealthResponses(responses, deployments, readsHealth, readsDiagnostics) {
+  if (!readsHealth) return Array.isArray(responses) && responses.length === 0;
+  if (!Array.isArray(responses) || responses.length !== deployments.length) return false;
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return responses.every((entry) => {
+    const deploymentId = String(entry?.deploymentId ?? "");
+    const response = entry?.response;
+    return expected.has(deploymentId)
+      && response?.health?.deployment_id === deploymentId
+      && Number.isSafeInteger(response.health.generation)
+      && response.health.generation > 0
+      && Array.isArray(response.diagnostic_grants)
+      && Array.isArray(response.diagnostic_results)
+      && (readsDiagnostics || (
+        response.diagnostic_grants.length === 0 && response.diagnostic_results.length === 0
+      ));
+  }) && new Set(responses.map((entry) => entry.deploymentId)).size === deployments.length;
+}
+
+function healthStateMap(deployments, responses) {
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return Object.freeze(Object.fromEntries(responses.filter(
+    (entry) => expected.has(entry.deploymentId),
+  ).map((entry) => [entry.deploymentId, entry.response])));
 }
 
 function validValidationResponse(response, deploymentId) {
@@ -1590,6 +1797,18 @@ function closedAcceptanceDialog() {
     state: "closed",
     deploymentId: "",
     validationRunId: "",
+    error: null,
+  });
+}
+
+function closedDiagnosticDialog() {
+  return Object.freeze({
+    open: false,
+    state: "closed",
+    deploymentId: "",
+    grantId: "",
+    action: "",
+    ttlSeconds: 300,
     error: null,
   });
 }

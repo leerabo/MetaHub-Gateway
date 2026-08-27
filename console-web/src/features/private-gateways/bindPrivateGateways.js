@@ -1,4 +1,4 @@
-/** PRD-120..125 installer, validation, support, and local security binding. */
+/** PRD-120..126 installer, health, diagnostic, support, and security binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -64,6 +64,13 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       button.dataset.privateGatewaySupportBundle ?? "",
     ));
   });
+  root.querySelectorAll("[data-private-gateway-diagnostic]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onDiagnosticOpen?.(
+      button.dataset.deploymentId ?? "",
+      button.dataset.grantId ?? "",
+      button.dataset.privateGatewayDiagnostic ?? "",
+    ));
+  });
   root.querySelectorAll("[data-private-gateway-secret-open]").forEach((button) => {
     button.addEventListener("click", () => void callbacks.onSecretOpen?.(
       button.dataset.deploymentId ?? "",
@@ -82,7 +89,74 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
   bindStateDialog(root, callbacks);
   bindSecretDialog(root, callbacks);
   bindAcceptanceDialog(root, callbacks);
+  bindDiagnosticDialog(root, callbacks);
   return true;
+}
+
+function bindDiagnosticDialog(root, callbacks) {
+  const dialog = root.querySelector("[data-private-gateway-diagnostic-dialog]");
+  if (!dialog) return;
+  const close = async () => {
+    eraseSensitive(dialog);
+    const closed = await callbacks.onDiagnosticClose?.();
+    if (closed !== false) {
+      root.querySelector("[data-private-gateway-diagnostic]")?.focus?.();
+    }
+  };
+  dialog.querySelectorAll("[data-private-gateway-diagnostic-close]").forEach((button) => {
+    button.addEventListener("click", () => void close());
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    eraseSensitive(dialog);
+    if (dialog.getAttribute("aria-busy") !== "true") void close();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") trapDialogFocus(dialog, event);
+  });
+  const form = dialog.querySelector("[data-private-gateway-diagnostic-form]");
+  const methodSelect = form?.querySelector("[data-private-gateway-diagnostic-method]");
+  const codeLabel = form?.querySelector("[data-private-gateway-diagnostic-code]");
+  const codeInput = codeLabel?.querySelector("[data-private-gateway-sensitive]");
+  methodSelect?.addEventListener("change", () => {
+    const usesSecurityKey = methodSelect.value === "webauthn";
+    if (codeInput) {
+      codeInput.value = "";
+      codeInput.disabled = usesSecurityKey;
+      codeInput.required = !usesSecurityKey;
+    }
+    if (codeLabel) codeLabel.hidden = usesSecurityKey;
+  });
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const method = String(data.get("method") ?? "");
+    const input = form.querySelector("[data-private-gateway-sensitive]");
+    let verificationCode = String(input?.value ?? "").trim().toUpperCase();
+    if (input) input.value = "";
+    const validCode = method === "webauthn"
+      || method === "totp" && /^[0-9]{6}$/u.test(verificationCode)
+      || method === "recovery_code"
+        && /^MHRC-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}$/u.test(verificationCode);
+    if (data.get("confirmed") !== "on" || !validCode) {
+      verificationCode = "";
+      setDiagnosticFormError(dialog, "请完成确认并输入有效的二次验证码");
+      return;
+    }
+    setDiagnosticFormError(dialog, "");
+    try {
+      await callbacks.onDiagnosticDecision?.({
+        method,
+        verificationCode,
+        ttlSeconds: Number(data.get("ttl_seconds") ?? 300),
+      });
+    } finally {
+      verificationCode = "";
+      eraseSensitive(form);
+    }
+  });
+  if (!dialog.open) dialog.showModal?.();
+  dialog.querySelector("select")?.focus?.();
 }
 
 function bindAcceptanceDialog(root, callbacks) {
@@ -342,4 +416,5 @@ function setFormError(root, value) { const node = root.querySelector?.("[data-pr
 function setStateFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-state-form-error]"); if (node) node.textContent = value; }
 function setSecretFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-secret-form-error]"); if (node) node.textContent = value; }
 function setAcceptanceFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-acceptance-form-error]"); if (node) node.textContent = value; }
+function setDiagnosticFormError(root, value) { const node = root.querySelector?.("[data-private-gateway-diagnostic-form-error]"); if (node) node.textContent = value; }
 function cssEscape(value) { return globalThis.CSS?.escape?.(String(value)) ?? String(value).replace(/[^A-Za-z0-9_-]/gu, ""); }
