@@ -1,0 +1,35 @@
+{
+  "schema_version": "metahub.install-profiles/v1",
+  "profiles": [
+    {
+      "install_profile_id": "ipr_12400000000000000000000000000001",
+      "profile_code": "compact",
+      "display_name": "Compact private gateway",
+      "cpu_cores": 2,
+      "memory_mib": 2048,
+      "disk_mib": 10240,
+      "required_ports": [443, 8000, 8090],
+      "dns_targets": ["api.metahub.example", "registry.metahub.example"],
+      "runtime": "docker",
+      "runtime_min_version": "24.0.0",
+      "filesystem": "local",
+      "proxy_modes": ["direct", "http_connect"],
+      "ca_mode": "system_or_custom"
+    },
+    {
+      "install_profile_id": "ipr_12400000000000000000000000000002",
+      "profile_code": "standard",
+      "display_name": "Standard private gateway",
+      "cpu_cores": 4,
+      "memory_mib": 8192,
+      "disk_mib": 40960,
+      "required_ports": [443, 8000, 8090],
+      "dns_targets": ["api.metahub.example", "registry.metahub.example"],
+      "runtime": "docker",
+      "runtime_min_version": "24.0.0",
+      "filesystem": "local",
+      "proxy_modes": ["direct", "http_connect"],
+      "ca_mode": "system_or_custom"
+    }
+  ]
+}

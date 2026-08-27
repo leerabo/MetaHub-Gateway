@@ -964,6 +964,53 @@ def consume_step_up_grant_in_transaction(
     return str(row["auth_method"])
 
 
+def consume_global_step_up_grant_in_transaction(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    *,
+    account_id: str,
+    global_session_id: str,
+    grant: str,
+    action_code: str,
+    resource_type: str,
+    resource_id: str,
+    now: datetime,
+) -> str:
+    """Consume a global step-up grant for an authenticated platform operation."""
+
+    if not connection.in_transaction or len(grant) < 43:
+        raise ApiError("step_up.invalid")
+    row = connection.execute(
+        "SELECT * FROM step_up_grants WHERE grant_hmac=?",
+        (_secret_hmac(config, "step-up-grant", grant.encode("ascii")),),
+    ).fetchone()
+    fingerprint = _permission_fingerprint(account_id, global_session_id, None)
+    if (
+        row is None
+        or row["status"] != "active"
+        or _parse_time(row["expires_at"]) <= now
+        or row["account_id"] != account_id
+        or row["global_session_id"] != global_session_id
+        or row["workspace_session_id"] is not None
+        or row["workspace_id"] is not None
+        or row["tenant_id"] is not None
+        or row["action_code"] != action_code
+        or row["resource_type"] != resource_type
+        or row["resource_id"] != resource_id
+        or not hmac.compare_digest(str(row["permission_fingerprint"]), fingerprint)
+    ):
+        raise ApiError("step_up.invalid")
+    updated = connection.execute(
+        """UPDATE step_up_grants
+              SET status='consumed',revision=revision+1,consumed_at=?,updated_at=?
+            WHERE step_up_grant_id=? AND status='active' AND revision=?""",
+        (_db_time(now), _db_time(now), row["step_up_grant_id"], row["revision"]),
+    ).rowcount
+    if updated != 1:
+        raise ApiError("step_up.invalid")
+    return str(row["auth_method"])
+
+
 def get_identity_security_overview(
     config: AppConfig, *, session_token: str
 ) -> IdentitySecurityOverview:

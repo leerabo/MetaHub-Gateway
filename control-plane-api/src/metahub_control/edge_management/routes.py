@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi.responses import FileResponse
 from metahub_shared.private_gateway import (
     EdgeSecretSyncBatch,
     EdgeSecretSyncReceipt,
@@ -22,8 +23,10 @@ from metahub_shared.private_gateway import (
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
+from metahub_control.identity.service import valid_opaque_value
 from metahub_control.machine_identity.transport import verified_mtls_fingerprint
 from metahub_control.platform_access.constants import (
+    PLATFORM_CSRF_COOKIE,
     PLATFORM_SESSION_COOKIE,
     SUPPORT_SESSION_COOKIE,
 )
@@ -54,6 +57,16 @@ from .desired_state_service import (
     rollback_workspace_desired_state,
     write_workspace_desired_state,
 )
+from .installer_service import (
+    decide_platform_installer_release,
+    list_platform_installer_releases,
+    list_workspace_installers,
+    record_workspace_preflight,
+    resolve_workspace_installer_artifact,
+    start_workspace_installation,
+    submit_platform_installer_release,
+    update_workspace_installation,
+)
 from .models import (
     EdgeAckCreateRequest,
     EdgeAckResponse,
@@ -69,6 +82,12 @@ from .models import (
     EdgeDesiredStatePullResponse,
     EdgeDesiredStateResponse,
     EdgeDesiredStateRollbackRequest,
+    EdgeInstallationResponse,
+    EdgeInstallationStartRequest,
+    EdgeInstallationUpdateRequest,
+    EdgeInstallerCatalogResponse,
+    EdgePreflightRecordRequest,
+    EdgePreflightRecordResponse,
     EdgeSecretReferenceListResponse,
     EdgeSessionCreateRequest,
     EdgeSessionResponse,
@@ -76,6 +95,10 @@ from .models import (
     EdgeTelemetryPolicyResponse,
     EdgeTelemetryWatermarkResponse,
     PlatformEdgeFleetResponse,
+    PlatformInstallerReleaseDecisionRequest,
+    PlatformInstallerReleaseListResponse,
+    PlatformInstallerReleaseResponse,
+    PlatformInstallerReleaseSubmitRequest,
     WorkspaceRegistrationCreateRequest,
     WorkspaceRegistrationResponse,
 )
@@ -128,6 +151,139 @@ async def get_edge_deployments(request: Request, response: Response) -> EdgeDepl
         trace_id=_trace_id(request),
     )
     _private(response)
+    return result
+
+
+@router.get("/edge/installers", response_model=EdgeInstallerCatalogResponse)
+async def get_edge_installers(
+    request: Request, response: Response
+) -> EdgeInstallerCatalogResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        list_workspace_installers,
+        request.app.state.config,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.get("/edge/installers/{release_id}/artifacts/{artifact_id}")
+async def get_edge_installer_artifact(
+    release_id: str, artifact_id: str, request: Request
+) -> Response:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    artifact = await _run(
+        resolve_workspace_installer_artifact,
+        request.app.state.config,
+        session_token=_workspace_cookie(request),
+        release_id=release_id,
+        artifact_id=artifact_id,
+    )
+    return FileResponse(
+        artifact.path,
+        media_type=artifact.media_type,
+        filename=artifact.filename,
+        content_disposition_type="attachment",
+        headers={
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "ETag": f'"{artifact.sha256}"',
+        },
+    )
+
+
+@router.post(
+    "/edge/preflights",
+    response_model=EdgePreflightRecordResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_preflight(
+    request: Request, response: Response
+) -> EdgePreflightRecordResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgePreflightRecordRequest
+    )
+    result = await _run(
+        record_workspace_preflight,
+        request.app.state.config,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/installations",
+    response_model=EdgeInstallationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_installation(
+    request: Request, response: Response
+) -> EdgeInstallationResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeInstallationStartRequest
+    )
+    result = await _run(
+        start_workspace_installation,
+        request.app.state.config,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.installation.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.patch(
+    "/edge/installations/{installation_id}", response_model=EdgeInstallationResponse
+)
+async def patch_edge_installation(
+    installation_id: str, request: Request, response: Response
+) -> EdgeInstallationResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge.request_invalid"), EdgeInstallationUpdateRequest
+    )
+    result = await _run(
+        update_workspace_installation,
+        request.app.state.config,
+        installation_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_optional_step_up_grant(request),
+        expected_revision=_if_match(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.installation.revision}"'
+    _edge_private(response)
     return result
 
 
@@ -516,6 +672,120 @@ def require_platform_edge_fleet(request: Request) -> PlatformContext:
     return context
 
 
+def require_platform_edge_installer(request: Request) -> PlatformContext:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    context = authenticate_platform_session_context(
+        request.app.state.config,
+        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=csrf,
+    )
+    allowed = (
+        {"platform.edge_installer.read"}
+        if request.method == "GET"
+        else {
+            "platform.edge_installer.manage",
+            "platform.edge_installer.approve",
+        }
+    )
+    if not allowed.intersection(context.permissions):
+        raise ApiError("platform.permission_denied")
+    return context
+
+
+@router.get(
+    "/platform/edge/installers",
+    response_model=PlatformInstallerReleaseListResponse,
+)
+async def get_platform_edge_installers(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_installer)],
+) -> PlatformInstallerReleaseListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_installer_releases,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/edge/installers",
+    response_model=PlatformInstallerReleaseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_platform_edge_installer(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_installer)],
+) -> PlatformInstallerReleaseResponse:
+    _reject_query(request)
+    payload = _platform_model(
+        await _strict_json(request, "platform.edge_installer_request_invalid"),
+        PlatformInstallerReleaseSubmitRequest,
+    )
+    result = await _run(
+        submit_platform_installer_release,
+        request.app.state.config,
+        context,
+        payload,
+        idempotency_key=_platform_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.release.revision}"'
+    _private(response)
+    return result
+
+
+@router.patch(
+    "/platform/edge/installers/{release_id}",
+    response_model=PlatformInstallerReleaseResponse,
+)
+async def patch_platform_edge_installer(
+    release_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_installer)],
+) -> PlatformInstallerReleaseResponse:
+    _reject_query(request)
+    payload = _platform_model(
+        await _strict_json(request, "platform.edge_installer_request_invalid"),
+        PlatformInstallerReleaseDecisionRequest,
+    )
+    result = await _run(
+        decide_platform_installer_release,
+        request.app.state.config,
+        context,
+        release_id,
+        payload,
+        step_up_grant=_required_step_up_grant(request),
+        expected_revision=_platform_if_match(request),
+        idempotency_key=_platform_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.release.revision}"'
+    _private(response)
+    return result
+
+
 @router.get(
     "/platform/fleet/edge-deployments",
     response_model=PlatformEdgeFleetResponse,
@@ -612,11 +882,48 @@ def _idempotency_key(request: Request) -> str:
     return values[0]
 
 
+def _platform_idempotency_key(request: Request) -> str:
+    values = _raw_headers(request, b"idempotency-key")
+    if len(values) != 1 or _IDEMPOTENCY_RE.fullmatch(values[0]) is None:
+        raise ApiError("platform.edge_installer_request_invalid")
+    return values[0]
+
+
+def _platform_if_match(request: Request) -> int:
+    values = _raw_headers(request, b"if-match")
+    if len(values) != 1 or re.fullmatch(r'"[1-9][0-9]*"', values[0]) is None:
+        raise ApiError("platform.edge_installer_request_invalid")
+    return int(values[0][1:-1])
+
+
+def _optional_step_up_grant(request: Request) -> str | None:
+    values = _raw_headers(request, b"x-step-up-grant")
+    if not values:
+        return None
+    if len(values) != 1 or not valid_opaque_value(values[0]):
+        raise ApiError("step_up.required")
+    return values[0]
+
+
+def _required_step_up_grant(request: Request) -> str:
+    grant = _optional_step_up_grant(request)
+    if grant is None:
+        raise ApiError("step_up.required")
+    return grant
+
+
 def _model(payload: dict[str, Any], model_type):
     try:
         return model_type.model_validate(payload)
     except ValueError:
         raise ApiError("edge.request_invalid") from None
+
+
+def _platform_model(payload: dict[str, Any], model_type):
+    try:
+        return model_type.model_validate(payload)
+    except ValueError:
+        raise ApiError("platform.edge_installer_request_invalid") from None
 
 
 async def _strict_telemetry_json(request: Request) -> dict[str, Any]:

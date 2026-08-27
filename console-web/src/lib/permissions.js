@@ -110,6 +110,9 @@ export const PERMISSIONS = Object.freeze({
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",
   EDGE_USAGE_READ: "edge.usage.read",
   EDGE_SECRET_REFERENCE_READ: "edge.secret_reference.read",
+  // PRD-124 安装介质读取和安装生命周期管理独立授权；页面可见性不能替代后端校验。
+  EDGE_INSTALLER_READ: "edge.installer.read",
+  EDGE_INSTALLATION_MANAGE: "edge.installation.manage",
   // PAGE-117 产品激活漏斗是独立只读 capability；不能由 dashboard、feedback 或角色名推导。
   PRODUCT_ANALYTICS_READ: "product_analytics.read",
   // PAGE-118 客户健康只读取版本化聚合；不能由 Dashboard、Billing、User 或角色名推导。

@@ -2406,6 +2406,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/testing/PRD-123-tests.md`：保存两轮自审、迁移/API/性能/安全专项、单浏览器 fail-closed 事实和独立
   敏感审计；下一权威项为 PRD-124，G5 在 PRD-130 后统一执行。
 
+## PRD-124 云管私有 Gateway 安装包、预检与接入向导（已完成）
+
+- `shared-sdk/python/metahub_shared/installer/` 与 `private_gateway/installer.py`：canonical manifest、Ed25519
+  用途域、全 artifact/SBOM/hash 校验、纯读预检、staging/journal/hash-chain audit、崩溃恢复、补偿、
+  身份复用和卸载保留/清除合同；root 安装/接入精确确认由 runtime 强制执行。
+- `infra/installers/`、`scripts/build-installer-media.ps1` 与 `scripts/metahub.ps1`：可信 key 清单、tenant-neutral
+  v1.0.0 Compose/容器/profile/SBOM/CLI/manifest、可复现在线/离线介质构建和本地 CLI 入口。
+- `control-plane-api/src/metahub_control/edge_management/installer_service.py` 与同域 models/routes：平台双人发布、
+  Workspace catalog/安全下载/preflight/installation API、复合 owner、幂等/CAS、合法状态机、固定错误/事件和
+  no-store；下载统一拒绝符号链接、越界或完整性失败。
+- `infra/migrations/0116_edge_installer_preflight_onboarding.sql/.down.sql`：可信 key、release/artifact/profile、
+  发布命令、preflight、installation/audit/event/outbox、权限扩展、不可变触发器和业务事实 down guard。
+- `console-web/src/lib/edgeManagement.js` 与 Private Gateway 页面：strict installer DTO/client、环境与 release 选择、
+  预检/安装/注册健康/恢复摘要、局部表格滚动和跨 Workspace 迟到响应防护；页面不承载注册凭据。
+- `docs/prd/PRD-124-private-gateway-installer-preflight-onboarding.md` 与
+  `docs/testing/PRD-124-tests.md`：保存两轮自审、Installer/API/迁移/Console、真实下载和三视口浏览器证据及
+  独立敏感审计；下一权威项为 PRD-125，G5 在 PRD-130 后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

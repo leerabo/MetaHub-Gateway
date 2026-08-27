@@ -6,6 +6,9 @@ from datetime import datetime
 from typing import Literal
 
 from metahub_shared.private_gateway import (
+    InstallerRelease,
+    PreflightCheck,
+    PreflightReport,
     SecretReference,
     TelemetryLevel,
     TelemetryStream,
@@ -338,6 +341,181 @@ class EdgeTelemetryPolicyResponse(_StrictModel):
 
 class EdgeSecretReferenceListResponse(_StrictModel):
     references: tuple[SecretReference, ...]
+    request_id: str
+    trace_id: str
+
+
+class InstallerArtifactDownload(_StrictModel):
+    artifact_id: str = Field(pattern=r"^ira_[0-9a-f]{32}$")
+    release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    filename: str
+    download_path: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+
+
+class EdgePreflightSummary(_StrictModel):
+    preflight_report_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    install_profile_id: str = Field(pattern=r"^ipr_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    outcome: Literal["passed", "failed"]
+    checks: tuple[PreflightCheck, ...]
+    duration_ms: int = Field(ge=0, le=120_000)
+    started_at: datetime
+    completed_at: datetime
+    received_at: datetime
+
+
+class EdgeInstallationSummary(_StrictModel):
+    installation_id: str = Field(pattern=r"^ins_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    install_profile_id: str = Field(pattern=r"^ipr_[0-9a-f]{32}$")
+    preflight_report_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    status: Literal[
+        "preflight_passed",
+        "installing",
+        "installed",
+        "connecting",
+        "active",
+        "failed",
+        "uninstalling",
+        "uninstalled",
+    ]
+    current_step: Literal[
+        "staging_prepared",
+        "artifacts_copied",
+        "runtime_validated",
+        "runtime_started",
+        "health_verified",
+        "release_committed",
+        "device_registered",
+        "initial_snapshot",
+    ] | None = None
+    revision: int = Field(ge=1)
+    journal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    last_receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    compensation_status: Literal["not_required", "pending", "completed", "failed"]
+    retain_config: bool
+    retain_audit: bool
+    retain_secrets: bool
+    failure_reason_code: str | None = None
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+
+
+class EdgeInstallerCatalogResponse(_StrictModel):
+    releases: tuple[InstallerRelease, ...]
+    downloads: tuple[InstallerArtifactDownload, ...]
+    preflights: tuple[EdgePreflightSummary, ...]
+    installations: tuple[EdgeInstallationSummary, ...]
+    request_id: str
+    trace_id: str
+
+
+class EdgePreflightRecordRequest(_StrictModel):
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    report: PreflightReport
+
+
+class EdgePreflightRecordResponse(_StrictModel):
+    preflight_report_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    release_id: str = Field(pattern=r"^irl_[0-9a-f]{32}$")
+    install_profile_id: str = Field(pattern=r"^ipr_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    outcome: Literal["passed", "failed"]
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    idempotent_replay: bool
+    request_id: str
+    trace_id: str
+
+
+class EdgeInstallationStartRequest(_StrictModel):
+    installation_id: str = Field(pattern=r"^ins_[0-9a-f]{32}$")
+    deployment_id: str = Field(pattern=r"^edp_[0-9a-f]{32}$")
+    preflight_report_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    journal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class EdgeInstallationUpdateRequest(_StrictModel):
+    status: Literal[
+        "installing",
+        "installed",
+        "connecting",
+        "active",
+        "failed",
+        "uninstalling",
+        "uninstalled",
+    ]
+    current_step: Literal[
+        "staging_prepared",
+        "artifacts_copied",
+        "runtime_validated",
+        "runtime_started",
+        "health_verified",
+        "release_committed",
+        "device_registered",
+        "initial_snapshot",
+    ] | None = None
+    journal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    compensation_status: Literal["not_required", "pending", "completed", "failed"]
+    retain_config: bool = True
+    retain_audit: bool = True
+    retain_secrets: bool = True
+    reason_code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+
+
+class EdgeInstallationResponse(_StrictModel):
+    installation: EdgeInstallationSummary
+    idempotent_replay: bool
+    request_id: str
+    trace_id: str
+
+
+class PlatformInstallerReleaseSubmitRequest(_StrictModel):
+    release: InstallerRelease
+    reason_code: Literal["release_candidate"]
+
+
+class PlatformInstallerReleaseDecisionRequest(_StrictModel):
+    action: Literal["approve", "withdraw"]
+    reason_code: Literal[
+        "release_approved",
+        "release_cancelled",
+        "integrity_incident",
+        "superseded",
+    ]
+
+
+class PlatformInstallerReleaseSummary(_StrictModel):
+    release: InstallerRelease
+    status: Literal["approval_pending", "released", "withdrawn"]
+    revision: int = Field(ge=1)
+    submitted_by_account_id: str
+    approved_by_account_id: str | None = None
+    submitted_at: datetime
+    approved_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+
+
+class PlatformInstallerReleaseResponse(_StrictModel):
+    release: PlatformInstallerReleaseSummary
+    idempotent_replay: bool
+    request_id: str
+    trace_id: str
+
+
+class PlatformInstallerReleaseListResponse(_StrictModel):
+    releases: tuple[PlatformInstallerReleaseSummary, ...]
+    security_projection: bool
     request_id: str
     trace_id: str
 

@@ -1,4 +1,4 @@
-/** PRD-120..123 owner-bound Edge identity, telemetry, and local Secret lifecycle. */
+/** PRD-120..124 owner-bound Edge identity, installer, telemetry, and Secret lifecycle. */
 
 import {
   authorizationFingerprint,
@@ -12,6 +12,10 @@ import {
 const PAGE_ID = "private-gateways";
 const DEPLOYMENT_ID = /^edp_[0-9a-f]{32}$/u;
 const REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
+const INSTALLER_RELEASE_ID = /^irl_[0-9a-f]{32}$/u;
+const INSTALL_PROFILE_ID = /^ipr_[0-9a-f]{32}$/u;
+const PREFLIGHT_REPORT_ID = /^pfr_[0-9a-f]{32}$/u;
+const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
 const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const LOCAL_ORIGIN = /^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}(?::[0-9]{1,5})?$/u;
@@ -35,6 +39,12 @@ const ERROR_MESSAGES = Object.freeze({
   "edge.request_invalid": "私有 Gateway 请求不合法",
   "edge.response_invalid": "私有 Gateway 响应合同不完整",
   "edge.unavailable": "私有 Gateway 服务暂不可用",
+  "edge.installer_not_found": "安装介质已下架或不可用",
+  "edge.installer_integrity_failed": "安装介质完整性校验失败",
+  "edge.preflight_invalid": "预检报告无效",
+  "edge.preflight_failed": "预检未通过，安装已阻止",
+  "edge.preflight_not_found": "预检报告不存在或已失效",
+  "edge.installation_not_found": "安装记录不存在",
   "local_admin.authentication_failed": "本地管理凭据无效或会话已过期",
   "local_admin.rate_limited": "本地管理尝试过多，请稍后重试",
   "local_admin.origin_invalid": "本地 Gateway 不允许当前控制台 Origin",
@@ -76,6 +86,12 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
   const secretReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_SECRET_REFERENCE_READ)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_SECRET_REFERENCE_READ)
     : "";
+  const installerReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_INSTALLER_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_INSTALLER_READ)
+    : "";
+  const installationManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_INSTALLATION_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_INSTALLATION_MANAGE)
+    : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -111,6 +127,8 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     telemetryManageIdentity,
     usageReadIdentity,
     secretReadIdentity,
+    installerReadIdentity,
+    installationManageIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -122,6 +140,8 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canReadUsage: Boolean(usageReadIdentity),
     canReadSecrets: Boolean(secretReadIdentity),
     canManageSecrets: Boolean(secretReadIdentity && accountId && role === "security_admin"),
+    canReadInstallers: Boolean(installerReadIdentity),
+    canManageInstallations: Boolean(installerReadIdentity && installationManageIdentity),
   });
 }
 
@@ -137,6 +157,8 @@ export function createPrivateGatewayPageState({
   let desiredStates = Object.freeze({});
   let telemetryStates = Object.freeze({});
   let secretReferences = Object.freeze([]);
+  let installerCatalog = emptyInstallerCatalog();
+  let installerSelection = emptyInstallerSelection();
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
@@ -149,6 +171,8 @@ export function createPrivateGatewayPageState({
   let canReadUsage = false;
   let canReadSecrets = false;
   let canManageSecrets = false;
+  let canReadInstallers = false;
+  let canManageInstallations = false;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
     localSession: 0, secret: 0,
@@ -172,6 +196,8 @@ export function createPrivateGatewayPageState({
     canReadUsage = owner.canReadUsage === true;
     canReadSecrets = owner.canReadSecrets === true;
     canManageSecrets = owner.canManageSecrets === true;
+    canReadInstallers = owner.canReadInstallers === true;
+    canManageInstallations = owner.canManageInstallations === true && canReadInstallers;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -191,6 +217,8 @@ export function createPrivateGatewayPageState({
     desiredStates = Object.freeze({});
     telemetryStates = Object.freeze({});
     secretReferences = Object.freeze([]);
+    installerCatalog = emptyInstallerCatalog();
+    installerSelection = emptyInstallerSelection();
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
@@ -203,6 +231,8 @@ export function createPrivateGatewayPageState({
     canReadUsage = false;
     canReadSecrets = false;
     canManageSecrets = false;
+    canReadInstallers = false;
+    canManageInstallations = false;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
       localSession: null, secret: null,
@@ -243,6 +273,7 @@ export function createPrivateGatewayPageState({
     stateResponses = [],
     telemetryResponses = [],
     secretResponse = null,
+    installerResponse = null,
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -252,7 +283,12 @@ export function createPrivateGatewayPageState({
         response.deployments,
         canReadTelemetry || canReadUsage,
       )
-      || !validSecretResponse(secretResponse, response.deployments, canReadSecrets, owner)) {
+      || !validSecretResponse(secretResponse, response.deployments, canReadSecrets, owner)
+      || !validInstallerResponse(
+        installerResponse,
+        response.deployments,
+        canReadInstallers,
+      )) {
       return false;
     }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
@@ -261,6 +297,14 @@ export function createPrivateGatewayPageState({
     desiredStates = desiredStateMap(response.deployments, stateResponses);
     telemetryStates = telemetryStateMap(response.deployments, telemetryResponses);
     secretReferences = Object.freeze([...(secretResponse?.references ?? [])]);
+    installerCatalog = canReadInstallers
+      ? freezeInstallerCatalog(installerResponse)
+      : emptyInstallerCatalog();
+    installerSelection = reconcileInstallerSelection(
+      installerSelection,
+      response.deployments,
+      installerCatalog,
+    );
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
     listError = null;
@@ -275,6 +319,33 @@ export function createPrivateGatewayPageState({
   }
 
   function finishLoad(operation) { if (operations.load === operation) operations.load = null; }
+
+  function selectInstallerEnvironment(owner, values = {}) {
+    if (!owns(owner) || !canReadInstallers || busy()) return false;
+    const deployment = deployments.find((item) => (
+      item.deployment_id === values.deploymentId
+      && !["revoked", "retired"].includes(item.status)
+    ));
+    const release = installerCatalog.releases.find(
+      (item) => item.manifest.release_id === values.releaseId,
+    );
+    const profile = release?.manifest.profiles.find(
+      (item) => item.install_profile_id === values.profileId,
+    ) ?? release?.manifest.profiles.find((item) => item.profile_code === "standard")
+      ?? release?.manifest.profiles[0];
+    const architecture = release?.manifest.supported_arch.includes(values.architecture)
+      ? values.architecture
+      : (release?.manifest.supported_arch.includes("x86_64") ? "x86_64"
+        : release?.manifest.supported_arch[0]);
+    if (!deployment || !release || !profile || !architecture) return false;
+    installerSelection = Object.freeze({
+      deploymentId: deployment.deployment_id,
+      releaseId: release.manifest.release_id,
+      profileId: profile.install_profile_id,
+      architecture,
+    });
+    return true;
+  }
 
   function openCreate(owner) {
     if (!owns(owner) || !canManage || busy()) return false;
@@ -742,6 +813,8 @@ export function createPrivateGatewayPageState({
       desiredStates,
       telemetryStates,
       secretReferences,
+      installerCatalog,
+      installerSelection,
       dialog,
       stateDialog,
       registration,
@@ -754,6 +827,8 @@ export function createPrivateGatewayPageState({
       canReadUsage,
       canReadSecrets,
       canManageSecrets,
+      canReadInstallers,
+      canManageInstallations,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -794,6 +869,7 @@ export function createPrivateGatewayPageState({
 
   return Object.freeze({
     enter, clear, beginLoad, isLoadCurrent, acceptLoad, rejectLoad, finishLoad,
+    selectInstallerEnvironment,
     openCreate, closeCreate, beginCreate, acceptCreate, rejectCreate, finishCreate,
     beginCopy, acceptCopy, rejectCopy, beginRevoke, acceptRevoke, rejectRevoke,
     finishRevoke, openStateCommand, closeStateCommand, beginStateCommand,
@@ -815,6 +891,7 @@ function ownerKeyFor(owner) {
     owner.page, owner.tenantId, owner.readIdentity, owner.manageIdentity,
     owner.telemetryReadIdentity, owner.telemetryManageIdentity, owner.usageReadIdentity,
     owner.secretReadIdentity, owner.accountId, owner.role,
+    owner.installerReadIdentity, owner.installationManageIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -906,6 +983,128 @@ function validSecretReference(value) {
       || (Number.isSafeInteger(value.active_version) && value.active_version > 0))
     && !(value.status === "active" && value.active_version === null)
     && !(value.status === "disabled" && value.active_version !== null));
+}
+
+function validInstallerResponse(response, deployments, required) {
+  if (!required) return response === null;
+  if (!response || !Array.isArray(response.releases) || !Array.isArray(response.downloads)
+    || !Array.isArray(response.preflights) || !Array.isArray(response.installations)
+    || response.releases.length > 100 || response.downloads.length > 3_200
+    || response.preflights.length > 500 || response.installations.length > 500) return false;
+  const deploymentIds = new Set(deployments.map((item) => item.deployment_id));
+  const releases = new Map();
+  for (const release of response.releases) {
+    const releaseId = String(release?.manifest?.release_id ?? "");
+    const profiles = release?.manifest?.profiles;
+    const artifacts = release?.manifest?.artifacts;
+    if (!INSTALLER_RELEASE_ID.test(releaseId) || releases.has(releaseId)
+      || !Array.isArray(profiles) || !profiles.length || !Array.isArray(artifacts)
+      || !artifacts.length || !Array.isArray(release.manifest.supported_arch)) return false;
+    const profileIds = profiles.map((item) => String(item?.install_profile_id ?? ""));
+    const artifactIds = artifacts.map((item) => String(item?.artifact_id ?? ""));
+    if (profileIds.some((id) => !INSTALL_PROFILE_ID.test(id))
+      || profileIds.length !== new Set(profileIds).size
+      || artifactIds.some((id) => !/^ira_[0-9a-f]{32}$/u.test(id))
+      || artifactIds.length !== new Set(artifactIds).size) return false;
+    releases.set(releaseId, {
+      profileIds: new Set(profileIds),
+      artifactIds: new Set(artifactIds),
+    });
+  }
+  const downloadKeys = new Set();
+  for (const download of response.downloads) {
+    const releaseId = String(download?.release_id ?? "");
+    const artifactId = String(download?.artifact_id ?? "");
+    const key = `${releaseId}\0${artifactId}`;
+    if (!releases.get(releaseId)?.artifactIds.has(artifactId) || downloadKeys.has(key)
+      || download.download_path !== `/edge/installers/${releaseId}/artifacts/${artifactId}`) {
+      return false;
+    }
+    downloadKeys.add(key);
+  }
+  if ([...releases.entries()].some(([releaseId, value]) => (
+    [...value.artifactIds].some((artifactId) => !downloadKeys.has(`${releaseId}\0${artifactId}`))
+  ))) return false;
+  const preflightIds = new Set();
+  for (const preflight of response.preflights) {
+    const id = String(preflight?.preflight_report_id ?? "");
+    if (!PREFLIGHT_REPORT_ID.test(id) || preflightIds.has(id)
+      || !deploymentIds.has(preflight?.deployment_id)
+      || !INSTALLER_RELEASE_ID.test(String(preflight?.release_id ?? ""))
+      || !INSTALL_PROFILE_ID.test(String(preflight?.install_profile_id ?? ""))
+      || !["passed", "failed"].includes(preflight?.outcome)
+      || !Array.isArray(preflight?.checks)) return false;
+    preflightIds.add(id);
+  }
+  const installationIds = new Set();
+  return response.installations.every((installation) => {
+    const id = String(installation?.installation_id ?? "");
+    if (!INSTALLATION_ID.test(id) || installationIds.has(id)
+      || !deploymentIds.has(installation?.deployment_id)
+      || !PREFLIGHT_REPORT_ID.test(String(installation?.preflight_report_id ?? ""))
+      || !INSTALLER_RELEASE_ID.test(String(installation?.release_id ?? ""))
+      || !INSTALL_PROFILE_ID.test(String(installation?.install_profile_id ?? ""))) return false;
+    installationIds.add(id);
+    return true;
+  });
+}
+
+function freezeInstallerCatalog(response) {
+  return Object.freeze({
+    releases: Object.freeze([...response.releases]),
+    downloads: Object.freeze([...response.downloads]),
+    preflights: Object.freeze([...response.preflights]),
+    installations: Object.freeze([...response.installations]),
+    request_id: safeChain(response.request_id),
+    trace_id: safeChain(response.trace_id),
+  });
+}
+
+function reconcileInstallerSelection(current, deployments, catalog) {
+  const availableDeployments = deployments.filter(
+    (item) => !["revoked", "retired"].includes(item.status),
+  );
+  const deployment = availableDeployments.find(
+    (item) => item.deployment_id === current.deploymentId,
+  ) ?? availableDeployments[0];
+  const release = catalog.releases.find(
+    (item) => item.manifest.release_id === current.releaseId,
+  ) ?? catalog.releases[0];
+  const profile = release?.manifest.profiles.find(
+    (item) => item.install_profile_id === current.profileId,
+  ) ?? release?.manifest.profiles.find((item) => item.profile_code === "standard")
+    ?? release?.manifest.profiles[0];
+  const architecture = release?.manifest.supported_arch.includes(current.architecture)
+    ? current.architecture
+    : (release?.manifest.supported_arch.includes("x86_64") ? "x86_64"
+      : release?.manifest.supported_arch[0]);
+  if (!deployment || !release || !profile || !architecture) return emptyInstallerSelection();
+  return Object.freeze({
+    deploymentId: deployment.deployment_id,
+    releaseId: release.manifest.release_id,
+    profileId: profile.install_profile_id,
+    architecture,
+  });
+}
+
+function emptyInstallerCatalog() {
+  return Object.freeze({
+    releases: Object.freeze([]),
+    downloads: Object.freeze([]),
+    preflights: Object.freeze([]),
+    installations: Object.freeze([]),
+    request_id: "-",
+    trace_id: "-",
+  });
+}
+
+function emptyInstallerSelection() {
+  return Object.freeze({
+    deploymentId: "",
+    releaseId: "",
+    profileId: "",
+    architecture: "",
+  });
 }
 
 function commandRequest(action, input, desired) {

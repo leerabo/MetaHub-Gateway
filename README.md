@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-123 - 私有网关本地Secret托管与轮换` 已完成；当前下一条未完成项是
-  `PRD-124 - 云管私有Gateway安装包、预检与接入向导`。
+- 新 `PRD-090` 至 `PRD-124 - 云管私有Gateway安装包、预检与接入向导` 已完成；当前下一条未完成项是
+  `PRD-125 - 私有部署验证与脱敏支持包`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,16 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-124 - 云管私有Gateway安装包、预检与接入向导` 已完成：0116、不可变签名制品、全 artifact/SBOM/hash
+  校验、纯读预检、持久 step journal/hash-chain audit、崩溃恢复/补偿、默认保留卸载、双人发布、Workspace
+  installer API/Console 和本地 CLI 均已交付。专项 `11/11 + 5/5 + 3/3 + 3/3` 通过；真实 API 校验五个
+  artifact 的长度/SHA-256/no-store，Chromium 390/1280/1440 完成失败预检到 active 的恢复闭环且无页面级
+  溢出或服务错误。详见 [PRD-124 设计](docs/prd/PRD-124-private-gateway-installer-preflight-onboarding.md)
+  和 [PRD-124 测试记录](docs/testing/PRD-124-tests.md)。下一权威项为 PRD-125；G5 在 PRD-130 独立提交后统一执行。
+- `PRD-123 - 私有网关本地Secret托管与轮换` 已完成：0115、本地 schema v2、DPAPI/客户 KMS 信封加密、
+  prepare-test-activate-drain-retire 原子轮换、固定 Provider 测试、Agent 引用同步、Control 零明文投影和
+  Workspace Console 均已交付。详见 [PRD-123 设计](docs/prd/PRD-123-private-gateway-local-secret-custody-rotation.md)
+  和 [PRD-123 测试记录](docs/testing/PRD-123-tests.md)。
 - `PRD-122 - 私有网关遥测、用量与失败事实同步` 已完成：0114、严格四流遥测 DTO、三档 policy、
   append-only 本地 spool、gzip 断点续传、连续 ACK/缺口恢复、Usage 幂等对账、固定失败事实、Workspace
   水位/策略和 Platform Fleet 安全投影均已交付。Shared/本地 spool、Control API、迁移、Console、静态检查、

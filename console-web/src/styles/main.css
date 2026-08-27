@@ -74,6 +74,7 @@
 .private-gateway-state-status.tone-pending,
 .private-gateway-state-status.tone-drifted { border-color: #e6bf8c; background: #fff8ed; color: var(--warning); }
 .private-gateway-state-status.tone-failed { border-color: #f0aaa4; background: #fff4f2; color: var(--danger); }
+.private-gateway-state-status.tone-not_observed { border-color: var(--line); background: #f1f4f8; color: var(--muted); }
 .private-gateway-watermarks { display: grid; grid-template-columns: repeat(3, minmax(72px, 1fr)); margin: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .private-gateway-watermarks > div { min-width: 72px; padding: 8px 12px; text-align: center; }
 .private-gateway-watermarks > div + div { border-left: 1px solid var(--line); }
@@ -137,6 +138,58 @@
 .private-gateway-state-form select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
 .private-gateway-confirm { display: flex; gap: 9px; align-items: center; }
 .private-gateway-confirm input { width: 18px; height: 18px; }
+.private-gateway-installer { display: grid; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #f8fafc; }
+.private-gateway-installer > header,
+.private-gateway-installer-media > header,
+.private-gateway-installer-preflight > header,
+.private-gateway-installer-status > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.private-gateway-installer > header,
+.private-gateway-installer-environment,
+.private-gateway-installer-steps,
+.private-gateway-installer-body { padding-right: 16px; padding-left: 16px; }
+.private-gateway-installer h4,
+.private-gateway-installer h5 { margin: 0; letter-spacing: 0; }
+.private-gateway-installer header > div { display: grid; gap: 4px; min-width: 0; }
+.private-gateway-installer header span,
+.private-gateway-installer header small,
+.private-gateway-installer-files small,
+.private-gateway-installer-steps small { color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-installer-empty { margin: 0; padding: 0 16px; color: var(--muted); }
+.private-gateway-installer-environment { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.private-gateway-installer-environment > label { display: grid; gap: 6px; min-width: 0; color: var(--muted); }
+.private-gateway-installer-environment select { width: 100%; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); }
+.private-gateway-installer-environment dl { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--line); background: var(--line); }
+.private-gateway-installer-environment dl > div { min-width: 0; padding: 9px 10px; background: var(--panel); }
+.private-gateway-installer-environment dt,
+.private-gateway-installer-status dt { color: var(--muted); font-size: 0.72rem; }
+.private-gateway-installer-environment dd,
+.private-gateway-installer-status dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.private-gateway-installer-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; list-style: none; background: var(--line); }
+.private-gateway-installer-steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; min-width: 0; padding: 11px; background: var(--panel); }
+.private-gateway-installer-steps li > span { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font-weight: 750; }
+.private-gateway-installer-steps li > div { display: grid; gap: 2px; min-width: 0; }
+.private-gateway-installer-steps li.tone-applied > span { border-color: #79c494; background: #effaf2; color: var(--ok); }
+.private-gateway-installer-steps li.tone-failed > span { border-color: #e89991; background: #fff4f2; color: var(--danger); }
+.private-gateway-installer-body { display: grid; grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.15fr) minmax(220px, 0.95fr); gap: 0; align-items: start; }
+.private-gateway-installer-media,
+.private-gateway-installer-preflight,
+.private-gateway-installer-status { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--line); background: var(--panel); }
+.private-gateway-installer-preflight,
+.private-gateway-installer-status { border-left: 0; }
+.private-gateway-installer-media > header code { max-width: 140px; color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-installer-files { display: grid; }
+.private-gateway-installer-files > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 0; border-top: 1px solid var(--line); }
+.private-gateway-installer-files > div > span { display: grid; gap: 2px; min-width: 0; }
+.private-gateway-installer-files button { flex: 0 0 auto; }
+.private-gateway-installer-recovery { border-color: #e6bf8c; background: #fff8ed; color: var(--warning); }
+.private-gateway-installer-preflight ul { display: grid; max-height: 312px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.private-gateway-installer-preflight li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+.private-gateway-installer-preflight li small { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; }
+.private-gateway-installer-preflight li.tone-failed strong { color: var(--danger); }
+.private-gateway-installer-preflight li.tone-warning strong { color: var(--warning); }
+.private-gateway-installer-preflight li.tone-passed strong { color: var(--ok); }
+.private-gateway-installer-status dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); }
+.private-gateway-installer-status dl > div { min-width: 0; padding: 9px; background: #f8fafc; }
 .private-gateway-empty { min-height: 160px; display: grid; place-items: center; color: var(--muted); border-top: 1px solid var(--line); }
 .private-gateway-feedback,
 .private-gateway-error { padding: 10px 12px; border-left: 3px solid var(--ok); background: #f0faf3; }
@@ -184,6 +237,12 @@
   .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
   .private-gateway-usage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .private-gateway-secret-row dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-installer-environment { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-installer-environment dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .private-gateway-installer-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .private-gateway-installer-body { grid-template-columns: 1fr; }
+  .private-gateway-installer-preflight,
+  .private-gateway-installer-status { border-top: 0; border-left: 1px solid var(--line); }
   .private-gateway-deployment > header dl > div,
   .private-gateway-facts > div { border-left: 0; border-top: 1px solid var(--line); }
 }
@@ -197,6 +256,17 @@
   .private-gateway-cursors,
   .private-gateway-usage,
   .private-gateway-secret-row dl { grid-template-columns: 1fr; }
+  .private-gateway-installer-environment,
+  .private-gateway-installer-environment dl,
+  .private-gateway-installer-steps,
+  .private-gateway-installer-status dl { grid-template-columns: 1fr; }
+  .private-gateway-installer > header,
+  .private-gateway-installer-media > header,
+  .private-gateway-installer-preflight > header,
+  .private-gateway-installer-status > header { align-items: stretch; flex-direction: column; }
+  .private-gateway-installer-files > div { align-items: stretch; flex-direction: column; }
+  .private-gateway-installer-files button,
+  .private-gateway-installer-recovery { width: 100%; }
   .private-gateway-cursors > div + div,
   .private-gateway-cursors > div:nth-child(n + 3) { border-top: 1px solid var(--line); border-left: 0; }
   .private-gateway-policy button,

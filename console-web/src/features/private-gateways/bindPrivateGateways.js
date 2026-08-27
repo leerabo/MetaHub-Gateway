@@ -1,4 +1,4 @@
-/** PRD-120..123 registration, telemetry, and local Secret binding. */
+/** PRD-120..124 installer, registration, telemetry, and local Secret binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -13,6 +13,21 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
   if (!root) return false;
   root.querySelector("[data-private-gateway-refresh]")?.addEventListener("click", () => void callbacks.onRefresh?.());
   root.querySelector("[data-private-gateway-open]")?.addEventListener("click", () => void callbacks.onOpen?.());
+  const installerEnvironment = root.querySelector("[data-private-gateway-installer-environment]");
+  installerEnvironment?.addEventListener("change", () => {
+    const data = new FormData(installerEnvironment);
+    void callbacks.onInstallerSelection?.({
+      deploymentId: String(data.get("deployment_id") ?? ""),
+      releaseId: String(data.get("release_id") ?? ""),
+      profileId: String(data.get("profile_id") ?? ""),
+      architecture: String(data.get("architecture") ?? ""),
+    });
+  });
+  root.querySelectorAll("[data-private-gateway-installer-download]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onInstallerDownload?.(
+      button.dataset.privateGatewayInstallerDownload ?? "",
+    ));
+  });
   root.querySelectorAll("[data-private-gateway-revoke]").forEach((button) => {
     button.addEventListener("click", () => {
       const deploymentId = button.dataset.privateGatewayRevoke ?? "";

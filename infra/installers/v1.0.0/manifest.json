@@ -1,0 +1,109 @@
+{
+  "manifest": {
+  "schema_version": "metahub.installer/v1",
+  "release_id": "irl_12400000000000000000000000000000",
+  "version": "1.0.0",
+  "channel": "stable",
+  "signature_purpose": "metahub.edge-installer.release/v1",
+  "supported_os": ["linux"],
+  "supported_arch": ["aarch64", "x86_64"],
+  "schema_min": 115,
+  "schema_max": 116,
+  "agent_min_version": "1.0.0",
+  "agent_max_version": "1.1.99",
+  "control_min_version": "1.0.0",
+  "control_max_version": "1.1.99",
+  "n_minus_one": true,
+  "artifacts": [
+    {
+      "artifact_id": "ira_12400000000000000000000000000001",
+      "kind": "cli",
+      "filename": "metahub-installer.py",
+      "media_type": "text/x-python",
+      "sha256": "a489a90a6a34a75a91c5eabec230a7a900e60cf08235ab17ee572f7383a1d613",
+      "sbom_sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "size_bytes": 201,
+      "executable": true
+    },
+    {
+      "artifact_id": "ira_12400000000000000000000000000002",
+      "kind": "compose",
+      "filename": "compose.yaml",
+      "media_type": "application/yaml",
+      "sha256": "b239c689b71397b143f6cfaf11e84c33de04276fcca7fb8e86a444fffc3517c5",
+      "sbom_sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "size_bytes": 1575,
+      "executable": false
+    },
+    {
+      "artifact_id": "ira_12400000000000000000000000000003",
+      "kind": "container_bundle",
+      "filename": "container-images.json",
+      "media_type": "application/vnd.docker.distribution.manifest.v2+json",
+      "sha256": "6b997c3d0f752bca53e37ee264c2b72aed8e250a1114bb9796073ab2bf7956c9",
+      "sbom_sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "size_bytes": 448,
+      "executable": false
+    },
+    {
+      "artifact_id": "ira_12400000000000000000000000000004",
+      "kind": "profile",
+      "filename": "profiles.json",
+      "media_type": "application/json",
+      "sha256": "d5a6f8ae5af6a5b137dd8d8006dcc959cbdc4a2bd865e342045d600e1e63791e",
+      "sbom_sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "size_bytes": 1142,
+      "executable": false
+    },
+    {
+      "artifact_id": "ira_12400000000000000000000000000005",
+      "kind": "sbom",
+      "filename": "sbom.spdx.json",
+      "media_type": "application/spdx+json",
+      "sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "sbom_sha256": "147f2ce8260f83fc22d10e8c0b29dffd0be66e9efa20d0c85685f0d78629492f",
+      "size_bytes": 985,
+      "executable": false
+    }
+  ],
+  "profiles": [
+    {
+      "install_profile_id": "ipr_12400000000000000000000000000001",
+      "profile_code": "compact",
+      "display_name": "Compact private gateway",
+      "cpu_cores": 2,
+      "memory_mib": 2048,
+      "disk_mib": 10240,
+      "required_ports": [443, 8000, 8090],
+      "dns_targets": ["api.metahub.example", "registry.metahub.example"],
+      "runtime": "docker",
+      "runtime_min_version": "24.0.0",
+      "filesystem": "local",
+      "proxy_modes": ["direct", "http_connect"],
+      "ca_mode": "system_or_custom"
+    },
+    {
+      "install_profile_id": "ipr_12400000000000000000000000000002",
+      "profile_code": "standard",
+      "display_name": "Standard private gateway",
+      "cpu_cores": 4,
+      "memory_mib": 8192,
+      "disk_mib": 40960,
+      "required_ports": [443, 8000, 8090],
+      "dns_targets": ["api.metahub.example", "registry.metahub.example"],
+      "runtime": "docker",
+      "runtime_min_version": "24.0.0",
+      "filesystem": "local",
+      "proxy_modes": ["direct", "http_connect"],
+      "ca_mode": "system_or_custom"
+    }
+  ]
+  },
+  "manifest_sha256": "430dea749d487ce6a3aee1a722e43f202f2a77ce199eca6837e930813598d587",
+  "signature": {
+    "algorithm": "Ed25519",
+    "key_id": "metahub-installer-release-v1",
+    "public_key": "iWdr6OXtZwavcXTcBc7NNFybeHG8C5iieyizQx1vdA8",
+    "value": "ETcoV9HjVqKMDuevJyw3rCs6fwaFTWkblRxcJh6w9XUKR3bRY2598UgpfbMMR2Cbl3_d87SvVvEOYvRs_mI8AQ"
+  }
+}

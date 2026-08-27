@@ -24,11 +24,81 @@ EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS = {
     "security_admin": ("edge.secret_reference.read",),
     "auditor": ("edge.secret_reference.read",),
 }
+EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": ("edge.installation.manage", "edge.installer.read"),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_security": ("platform.edge_fleet.read",),
 }
+EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS = {
+    "platform_owner": ("platform.edge_installer.read",),
+    "platform_security": ("platform.edge_installer.read",),
+    "release_manager": (
+        "platform.edge_installer.approve",
+        "platform.edge_installer.manage",
+        "platform.edge_installer.read",
+    ),
+}
+
+_LEGACY_ROLE_BY_WORKSPACE_ROLE = {
+    "owner": "admin",
+    "admin": "admin",
+    "developer": "developer",
+    "security_admin": "security_admin",
+    "finance_admin": "finance_admin",
+    "legal_admin": "viewer",
+    "auditor": "viewer",
+    "viewer": "viewer",
+}
+
+
+def resolve_verified_workspace_edge_role(
+    connection: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    legacy_user_id: str,
+    legacy_role_code: str,
+    unavailable_error_code: str,
+) -> str:
+    """Resolve Edge extensions from the active Workspace role, not the legacy role."""
+
+    required_tables = (
+        "workspace_memberships",
+        "workspaces",
+        "workspace_tenant_bindings",
+    )
+    try:
+        available = tuple(_table_exists(connection, table) for table in required_tables)
+        if not any(available):
+            return legacy_role_code
+        if not all(available):
+            raise ApiError(unavailable_error_code)
+        rows = connection.execute(
+            """
+            SELECT member.role_code
+            FROM workspace_memberships member
+            JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+            JOIN workspace_tenant_bindings binding
+              ON binding.workspace_id=member.workspace_id
+             AND binding.tenant_id=member.tenant_id
+            WHERE member.tenant_id=? AND member.legacy_user_id=?
+              AND member.status='active' AND member.role_code!='service_account'
+              AND workspace.status='active' AND binding.status='active'
+            """,
+            (tenant_id, legacy_user_id),
+        ).fetchall()
+        if not rows:
+            return ""
+        if len(rows) != 1:
+            raise ApiError(unavailable_error_code)
+        workspace_role = str(rows[0][0])
+        if _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(workspace_role) != legacy_role_code:
+            raise ApiError(unavailable_error_code)
+        return workspace_role
+    except sqlite3.Error as exc:
+        raise ApiError(unavailable_error_code) from exc
 
 
 def load_verified_workspace_edge_permissions(
@@ -63,6 +133,17 @@ def load_verified_workspace_edge_permissions(
         _load_verified_permissions(
             connection,
             role_code=role_code,
+            expected_by_role=EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_installer_permission_extensions",
+            assignments_table="workspace_edge_installer_role_permissions",
+            introduced_migration="0116",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
             expected_by_role=EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS,
             catalog_table="workspace_edge_secret_permission_extensions",
             assignments_table="workspace_edge_secret_role_permissions",
@@ -89,6 +170,17 @@ def load_verified_platform_edge_permissions(
                 catalog_table="platform_edge_permission_extensions",
                 assignments_table="platform_edge_role_permissions",
                 introduced_migration="0112",
+                unavailable_error_code=unavailable_error_code,
+            )
+        )
+        permissions.update(
+            _load_verified_permissions(
+                connection,
+                role_code=role_code,
+                expected_by_role=EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS,
+                catalog_table="platform_edge_installer_permission_extensions",
+                assignments_table="platform_edge_installer_role_permissions",
+                introduced_migration="0116",
                 unavailable_error_code=unavailable_error_code,
             )
         )
@@ -169,10 +261,13 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 
 __all__ = (
+    "EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS",
+    "EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_WORKSPACE_ROLE_PERMISSIONS",
     "load_verified_platform_edge_permissions",
     "load_verified_workspace_edge_permissions",
+    "resolve_verified_workspace_edge_role",
 )

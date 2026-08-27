@@ -15,6 +15,11 @@ const TELEMETRY_POLICY_ID = /^etp_[0-9a-f]{32}$/u;
 const TELEMETRY_CURSOR_ID = /^euc_[0-9a-f]{32}$/u;
 const TELEMETRY_EPOCH_ID = /^ete_[0-9a-f]{32}$/u;
 const SECRET_REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
+const INSTALLER_RELEASE_ID = /^irl_[0-9a-f]{32}$/u;
+const INSTALLER_ARTIFACT_ID = /^ira_[0-9a-f]{32}$/u;
+const INSTALL_PROFILE_ID = /^ipr_[0-9a-f]{32}$/u;
+const PREFLIGHT_REPORT_ID = /^pfr_[0-9a-f]{32}$/u;
+const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 const OWNER_ID = /^[a-z0-9][a-z0-9_:-]{2,79}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
@@ -25,7 +30,27 @@ const SAFE_CODE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u;
 const REGION_CODE = /^[a-z0-9][a-z0-9-]{1,39}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const ONE_USE_VALUE = /^e(?:rg|ch)_[A-Za-z0-9_-]{43}$/u;
+const SEMVER = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
+const INSTALLER_CODE = /^[a-z][a-z0-9_.-]{1,79}$/u;
+const INSTALLER_KEY_ID = /^[a-z0-9][a-z0-9._:-]{2,79}$/u;
+const INSTALLER_FILENAME = /^[^\u0000-\u0020\u007f\\/]{1,120}$/u;
+const INSTALLER_SIGNATURE = /^[A-Za-z0-9_-]+$/u;
+const DNS_TARGET = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+const PREFLIGHT_CHECK_CODES = Object.freeze([
+  "artifact.integrity", "host.os", "host.architecture", "host.root", "host.cpu",
+  "host.memory", "host.disk", "network.ports", "network.dns", "host.clock",
+  "network.proxy", "network.ca", "host.filesystem", "runtime.container",
+]);
+const INSTALLER_ARTIFACT_KINDS = Object.freeze([
+  "cli", "compose", "container_bundle", "profile", "sbom",
+]);
+const INSTALLER_MEDIA_TYPES = Object.freeze([
+  "application/json", "application/spdx+json",
+  "application/vnd.docker.distribution.manifest.v2+json", "application/x-tar",
+  "application/yaml", "text/x-python",
+]);
 
 const DEPLOYMENT_KEYS = Object.freeze([
   "agent_version", "certificate_expires_at", "created_at", "current_certificate",
@@ -73,6 +98,53 @@ export async function listEdgeDeployments({ controlApiUrl, signal } = {}) {
     deployments: Object.freeze(deployments),
     ...trace(result.payload),
   });
+}
+
+export async function listEdgeInstallers({ controlApiUrl, signal } = {}) {
+  const result = await request(controlApiUrl, "/edge/installers", { signal }, "workspace");
+  exact(result.payload, [
+    "downloads", "installations", "preflights", "releases", "request_id", "trace_id",
+  ], "installer_catalog");
+  boundedArray(result.payload.releases, 100, "installer_releases");
+  boundedArray(result.payload.downloads, 3_200, "installer_downloads");
+  boundedArray(result.payload.preflights, 500, "installer_preflights");
+  boundedArray(result.payload.installations, 500, "installer_installations");
+
+  const releases = result.payload.releases.map(validateInstallerRelease);
+  unique(releases.map((item) => item.manifest.release_id), "installer_releases");
+  const releasesById = new Map(releases.map((item) => [item.manifest.release_id, item]));
+  const downloads = result.payload.downloads.map((item) => (
+    validateInstallerDownload(item, releasesById)
+  ));
+  unique(downloads.map((item) => item.download_path), "installer_downloads");
+  unique(downloads.map((item) => `${item.release_id}\0${item.artifact_id}`), "installer_downloads");
+  const expectedArtifacts = releases.flatMap((release) => release.manifest.artifacts.map(
+    (artifact) => `${release.manifest.release_id}\0${artifact.artifact_id}`,
+  ));
+  if (downloads.length !== expectedArtifacts.length
+    || expectedArtifacts.some((key) => !downloads.some(
+      (item) => `${item.release_id}\0${item.artifact_id}` === key,
+    ))) invalidWorkspaceResponse("installer_downloads");
+
+  const preflights = result.payload.preflights.map(validateEdgePreflightSummary);
+  unique(preflights.map((item) => item.preflight_report_id), "installer_preflights");
+  const installations = result.payload.installations.map(validateEdgeInstallationSummary);
+  unique(installations.map((item) => item.installation_id), "installer_installations");
+  return Object.freeze({
+    releases: Object.freeze(releases),
+    downloads: Object.freeze(downloads),
+    preflights: Object.freeze(preflights),
+    installations: Object.freeze(installations),
+    ...trace(result.payload),
+  });
+}
+
+export function edgeInstallerArtifactUrl({ controlApiUrl, downloadPath } = {}) {
+  const path = String(downloadPath ?? "");
+  if (!/^\/edge\/installers\/irl_[0-9a-f]{32}\/artifacts\/ira_[0-9a-f]{32}$/u.test(path)) {
+    invalidWorkspaceRequest("download_path");
+  }
+  return apiUrl(controlApiUrl, path, "workspace");
 }
 
 export async function listEdgeSecretReferences({ controlApiUrl, signal } = {}) {
@@ -375,6 +447,347 @@ export function workspaceCookieApiOrigin(controlApiUrl, pageLocation = globalThi
     base.hostname = pageHostname;
   }
   return base.origin;
+}
+
+function validateInstallerRelease(value) {
+  plain(value, "installer_release");
+  exact(value, ["manifest", "manifest_sha256", "signature"], "installer_release");
+  const manifest = validateInstallerManifest(value.manifest);
+  const signature = validateInstallerSignature(value.signature);
+  return Object.freeze({
+    manifest,
+    manifest_sha256: digest(value.manifest_sha256, "installer_manifest_sha256"),
+    signature,
+  });
+}
+
+function validateInstallerManifest(value) {
+  plain(value, "installer_manifest");
+  exact(value, [
+    "agent_max_version", "agent_min_version", "artifacts", "channel",
+    "control_max_version", "control_min_version", "n_minus_one", "profiles",
+    "release_id", "schema_max", "schema_min", "schema_version", "signature_purpose",
+    "supported_arch", "supported_os", "version",
+  ], "installer_manifest");
+  boundedArray(value.supported_os, 1, "installer_supported_os");
+  boundedArray(value.supported_arch, 2, "installer_supported_arch");
+  if (JSON.stringify(value.supported_os) !== JSON.stringify(["linux"])
+    || JSON.stringify(value.supported_arch) !== JSON.stringify(["aarch64", "x86_64"])) {
+    invalidWorkspaceResponse("installer_platforms");
+  }
+  boundedArray(value.artifacts, 32, "installer_artifacts");
+  boundedArray(value.profiles, 8, "installer_profiles");
+  if (value.artifacts.length < 5 || value.profiles.length < 1) {
+    invalidWorkspaceResponse("installer_manifest");
+  }
+  const artifacts = value.artifacts.map(validateInstallerArtifact);
+  const profiles = value.profiles.map(validateInstallProfile);
+  unique(artifacts.map((item) => item.artifact_id), "installer_artifacts");
+  unique(artifacts.map((item) => item.filename), "installer_artifacts");
+  unique(profiles.map((item) => item.install_profile_id), "installer_profiles");
+  if (INSTALLER_ARTIFACT_KINDS.some((kind) => !artifacts.some((item) => item.kind === kind))
+    || artifacts.filter((item) => item.kind === "sbom").length !== 1
+    || artifacts.filter((item) => item.kind === "profile").length !== 1) {
+    invalidWorkspaceResponse("installer_artifacts");
+  }
+  const sbomDigest = artifacts.find((item) => item.kind === "sbom").sha256;
+  if (artifacts.some((item) => item.sbom_sha256 !== sbomDigest)) {
+    invalidWorkspaceResponse("installer_sbom");
+  }
+  const schemaMin = integer(value.schema_min, 1, 9_999, "installer_schema_min");
+  const schemaMax = integer(value.schema_max, 1, 9_999, "installer_schema_max");
+  const agentMin = installerSemver(value.agent_min_version, "installer_agent_min");
+  const agentMax = installerSemver(value.agent_max_version, "installer_agent_max");
+  const controlMin = installerSemver(value.control_min_version, "installer_control_min");
+  const controlMax = installerSemver(value.control_max_version, "installer_control_max");
+  if (schemaMin > schemaMax || compareSemver(agentMin, agentMax) > 0
+    || compareSemver(controlMin, controlMax) > 0) {
+    invalidWorkspaceResponse("installer_compatibility");
+  }
+  return Object.freeze({
+    schema_version: responseChoice(
+      value.schema_version, ["metahub.installer/v1"], "installer_schema_version",
+    ),
+    release_id: responseId(value.release_id, INSTALLER_RELEASE_ID, "installer_release_id"),
+    version: installerSemver(value.version, "installer_version"),
+    channel: responseChoice(value.channel, ["stable", "extended"], "installer_channel"),
+    signature_purpose: responseChoice(
+      value.signature_purpose,
+      ["metahub.edge-installer.release/v1"],
+      "installer_signature_purpose",
+    ),
+    supported_os: Object.freeze(["linux"]),
+    supported_arch: Object.freeze(["aarch64", "x86_64"]),
+    schema_min: schemaMin,
+    schema_max: schemaMax,
+    agent_min_version: agentMin,
+    agent_max_version: agentMax,
+    control_min_version: controlMin,
+    control_max_version: controlMax,
+    n_minus_one: boolean(value.n_minus_one, "installer_n_minus_one"),
+    artifacts: Object.freeze(artifacts),
+    profiles: Object.freeze(profiles),
+  });
+}
+
+function validateInstallerArtifact(value) {
+  plain(value, "installer_artifact");
+  exact(value, [
+    "artifact_id", "executable", "filename", "kind", "media_type", "sbom_sha256",
+    "sha256", "size_bytes",
+  ], "installer_artifact");
+  const filename = responseText(value.filename, 120, "installer_filename");
+  if (!INSTALLER_FILENAME.test(filename) || filename === "." || filename === "..") {
+    invalidWorkspaceResponse("installer_filename");
+  }
+  return Object.freeze({
+    artifact_id: responseId(value.artifact_id, INSTALLER_ARTIFACT_ID, "installer_artifact_id"),
+    kind: responseChoice(value.kind, INSTALLER_ARTIFACT_KINDS, "installer_artifact_kind"),
+    filename,
+    media_type: responseChoice(value.media_type, INSTALLER_MEDIA_TYPES, "installer_media_type"),
+    sha256: digest(value.sha256, "installer_artifact_sha256"),
+    sbom_sha256: digest(value.sbom_sha256, "installer_artifact_sbom_sha256"),
+    size_bytes: integer(value.size_bytes, 1, 8 * 1024 * 1024 * 1024, "installer_artifact_size"),
+    executable: boolean(value.executable, "installer_artifact_executable"),
+  });
+}
+
+function validateInstallProfile(value) {
+  plain(value, "install_profile");
+  exact(value, [
+    "ca_mode", "cpu_cores", "disk_mib", "display_name", "dns_targets", "filesystem",
+    "install_profile_id", "memory_mib", "profile_code", "proxy_modes", "required_ports",
+    "runtime", "runtime_min_version",
+  ], "install_profile");
+  boundedArray(value.required_ports, 16, "install_profile_ports");
+  boundedArray(value.dns_targets, 8, "install_profile_dns");
+  boundedArray(value.proxy_modes, 2, "install_profile_proxy");
+  if (!value.required_ports.length || !value.dns_targets.length || !value.proxy_modes.length) {
+    invalidWorkspaceResponse("install_profile");
+  }
+  const ports = value.required_ports.map((item) => integer(
+    item, 1, 65_535, "install_profile_port",
+  ));
+  if (JSON.stringify(ports) !== JSON.stringify([...new Set(ports)].sort((a, b) => a - b))) {
+    invalidWorkspaceResponse("install_profile_ports");
+  }
+  const dnsTargets = value.dns_targets.map((item) => {
+    const target = responseText(item, 253, "install_profile_dns");
+    if (!DNS_TARGET.test(target)) invalidWorkspaceResponse("install_profile_dns");
+    return target;
+  });
+  if (JSON.stringify(dnsTargets) !== JSON.stringify([...new Set(dnsTargets)].sort())) {
+    invalidWorkspaceResponse("install_profile_dns");
+  }
+  const proxyModes = value.proxy_modes.map((item) => responseChoice(
+    item, ["direct", "http_connect"], "install_profile_proxy",
+  ));
+  if (JSON.stringify(proxyModes) !== JSON.stringify([...new Set(proxyModes)].sort())) {
+    invalidWorkspaceResponse("install_profile_proxy");
+  }
+  return Object.freeze({
+    install_profile_id: responseId(
+      value.install_profile_id, INSTALL_PROFILE_ID, "install_profile_id",
+    ),
+    profile_code: responseChoice(value.profile_code, ["standard", "compact"], "install_profile_code"),
+    display_name: installerText(value.display_name, 2, 80, "install_profile_name"),
+    cpu_cores: integer(value.cpu_cores, 2, 256, "install_profile_cpu"),
+    memory_mib: integer(value.memory_mib, 2_048, 1_048_576, "install_profile_memory"),
+    disk_mib: integer(value.disk_mib, 10_240, 16_777_216, "install_profile_disk"),
+    required_ports: Object.freeze(ports),
+    dns_targets: Object.freeze(dnsTargets),
+    runtime: responseChoice(value.runtime, ["docker"], "install_profile_runtime"),
+    runtime_min_version: installerSemver(value.runtime_min_version, "install_profile_runtime_version"),
+    filesystem: responseChoice(value.filesystem, ["local"], "install_profile_filesystem"),
+    proxy_modes: Object.freeze(proxyModes),
+    ca_mode: responseChoice(value.ca_mode, ["system", "system_or_custom"], "install_profile_ca"),
+  });
+}
+
+function validateInstallerSignature(value) {
+  plain(value, "installer_signature");
+  exact(value, ["algorithm", "key_id", "public_key", "value"], "installer_signature");
+  const keyId = responseText(value.key_id, 80, "installer_key_id");
+  const publicKey = responseText(value.public_key, 43, "installer_public_key");
+  const signature = responseText(value.value, 86, "installer_signature_value");
+  if (!INSTALLER_KEY_ID.test(keyId) || publicKey.length !== 43 || signature.length !== 86
+    || !INSTALLER_SIGNATURE.test(publicKey) || !INSTALLER_SIGNATURE.test(signature)) {
+    invalidWorkspaceResponse("installer_signature");
+  }
+  return Object.freeze({
+    algorithm: responseChoice(value.algorithm, ["Ed25519"], "installer_signature_algorithm"),
+    key_id: keyId,
+    public_key: publicKey,
+    value: signature,
+  });
+}
+
+function validateInstallerDownload(value, releasesById) {
+  plain(value, "installer_download");
+  exact(value, [
+    "artifact_id", "download_path", "filename", "release_id", "sha256", "size_bytes",
+  ], "installer_download");
+  const releaseId = responseId(value.release_id, INSTALLER_RELEASE_ID, "installer_release_id");
+  const artifactId = responseId(value.artifact_id, INSTALLER_ARTIFACT_ID, "installer_artifact_id");
+  const artifact = releasesById.get(releaseId)?.manifest.artifacts.find(
+    (item) => item.artifact_id === artifactId,
+  );
+  const path = responseText(value.download_path, 240, "installer_download_path");
+  if (!artifact || path !== `/edge/installers/${releaseId}/artifacts/${artifactId}`
+    || value.filename !== artifact.filename || value.sha256 !== artifact.sha256
+    || value.size_bytes !== artifact.size_bytes) {
+    invalidWorkspaceResponse("installer_download");
+  }
+  return Object.freeze({
+    artifact_id: artifactId,
+    release_id: releaseId,
+    filename: artifact.filename,
+    download_path: path,
+    sha256: artifact.sha256,
+    size_bytes: artifact.size_bytes,
+  });
+}
+
+function validateEdgePreflightSummary(value) {
+  plain(value, "installer_preflight");
+  exact(value, [
+    "checks", "completed_at", "deployment_id", "duration_ms", "generation",
+    "install_profile_id", "outcome", "preflight_report_id", "received_at", "release_id",
+    "started_at",
+  ], "installer_preflight");
+  boundedArray(value.checks, 32, "installer_preflight_checks");
+  if (value.checks.length !== PREFLIGHT_CHECK_CODES.length) {
+    invalidWorkspaceResponse("installer_preflight_checks");
+  }
+  const checks = value.checks.map((item, index) => validatePreflightCheck(
+    item, PREFLIGHT_CHECK_CODES[index],
+  ));
+  const outcome = responseChoice(value.outcome, ["passed", "failed"], "installer_preflight_outcome");
+  const expectedOutcome = checks.some((item) => item.required && item.outcome === "failed")
+    ? "failed" : "passed";
+  const startedAt = timestamp(value.started_at, "installer_preflight_started_at");
+  const completedAt = timestamp(value.completed_at, "installer_preflight_completed_at");
+  const durationMs = integer(value.duration_ms, 0, 120_000, "installer_preflight_duration");
+  if (outcome !== expectedOutcome || Date.parse(completedAt) < Date.parse(startedAt)
+    || Math.abs(Date.parse(completedAt) - Date.parse(startedAt) - durationMs) > 2_000) {
+    invalidWorkspaceResponse("installer_preflight");
+  }
+  return Object.freeze({
+    preflight_report_id: responseId(
+      value.preflight_report_id, PREFLIGHT_REPORT_ID, "preflight_report_id",
+    ),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    release_id: responseId(value.release_id, INSTALLER_RELEASE_ID, "installer_release_id"),
+    install_profile_id: responseId(
+      value.install_profile_id, INSTALL_PROFILE_ID, "install_profile_id",
+    ),
+    generation: integer(value.generation, 1, 2_147_483_647, "installer_generation"),
+    outcome,
+    checks: Object.freeze(checks),
+    duration_ms: durationMs,
+    started_at: startedAt,
+    completed_at: completedAt,
+    received_at: timestamp(value.received_at, "installer_preflight_received_at"),
+  });
+}
+
+function validatePreflightCheck(value, expectedCode) {
+  plain(value, "installer_preflight_check");
+  exact(value, ["code", "duration_ms", "outcome", "reason_code", "required"], "installer_preflight_check");
+  const code = installerCode(value.code, "installer_preflight_code");
+  if (code !== expectedCode) invalidWorkspaceResponse("installer_preflight_checks");
+  return Object.freeze({
+    code,
+    outcome: responseChoice(
+      value.outcome, ["passed", "warning", "failed"], "installer_preflight_check_outcome",
+    ),
+    required: boolean(value.required, "installer_preflight_required"),
+    reason_code: installerCode(value.reason_code, "installer_preflight_reason"),
+    duration_ms: integer(value.duration_ms, 0, 120_000, "installer_preflight_check_duration"),
+  });
+}
+
+function validateEdgeInstallationSummary(value) {
+  plain(value, "installation");
+  exact(value, [
+    "compensation_status", "completed_at", "current_step", "deployment_id", "failed_at",
+    "failure_reason_code", "generation", "install_profile_id", "installation_id",
+    "journal_sha256", "last_receipt_sha256", "preflight_report_id", "release_id",
+    "retain_audit", "retain_config", "retain_secrets", "revision", "started_at", "status",
+    "updated_at",
+  ], "installation");
+  const startedAt = timestamp(value.started_at, "installation_started_at");
+  const updatedAt = timestamp(value.updated_at, "installation_updated_at");
+  const completedAt = nullableTimestamp(value.completed_at, "installation_completed_at");
+  const failedAt = nullableTimestamp(value.failed_at, "installation_failed_at");
+  if (Date.parse(updatedAt) < Date.parse(startedAt)
+    || (completedAt && Date.parse(completedAt) < Date.parse(startedAt))
+    || (failedAt && Date.parse(failedAt) < Date.parse(startedAt))) {
+    invalidWorkspaceResponse("installation_times");
+  }
+  return Object.freeze({
+    installation_id: responseId(value.installation_id, INSTALLATION_ID, "installation_id"),
+    deployment_id: responseId(value.deployment_id, DEPLOYMENT_ID, "deployment_id"),
+    release_id: responseId(value.release_id, INSTALLER_RELEASE_ID, "installer_release_id"),
+    install_profile_id: responseId(
+      value.install_profile_id, INSTALL_PROFILE_ID, "install_profile_id",
+    ),
+    preflight_report_id: responseId(
+      value.preflight_report_id, PREFLIGHT_REPORT_ID, "preflight_report_id",
+    ),
+    generation: integer(value.generation, 1, 2_147_483_647, "installation_generation"),
+    status: responseChoice(value.status, [
+      "preflight_passed", "installing", "installed", "connecting", "active", "failed",
+      "uninstalling", "uninstalled",
+    ], "installation_status"),
+    current_step: value.current_step === null ? null : responseChoice(value.current_step, [
+      "staging_prepared", "artifacts_copied", "runtime_validated", "runtime_started",
+      "health_verified", "release_committed", "device_registered", "initial_snapshot",
+    ], "installation_step"),
+    revision: integer(value.revision, 1, Number.MAX_SAFE_INTEGER, "installation_revision"),
+    journal_sha256: digest(value.journal_sha256, "installation_journal_sha256"),
+    last_receipt_sha256: value.last_receipt_sha256 === null
+      ? null : digest(value.last_receipt_sha256, "installation_receipt_sha256"),
+    compensation_status: responseChoice(value.compensation_status, [
+      "not_required", "pending", "completed", "failed",
+    ], "installation_compensation_status"),
+    retain_config: boolean(value.retain_config, "installation_retain_config"),
+    retain_audit: boolean(value.retain_audit, "installation_retain_audit"),
+    retain_secrets: boolean(value.retain_secrets, "installation_retain_secrets"),
+    failure_reason_code: value.failure_reason_code === null
+      ? null : installerCode(value.failure_reason_code, "installation_failure_reason"),
+    started_at: startedAt,
+    updated_at: updatedAt,
+    completed_at: completedAt,
+    failed_at: failedAt,
+  });
+}
+
+function installerText(value, minimum, maximum, label) {
+  const text = responseText(value, maximum, label);
+  if (text.length < minimum) invalidWorkspaceResponse(label);
+  return text;
+}
+
+function installerSemver(value, label) {
+  const text = responseText(value, 64, label);
+  if (!SEMVER.test(text)) invalidWorkspaceResponse(label);
+  return text;
+}
+
+function compareSemver(left, right) {
+  const first = left.split(".").map(Number);
+  const second = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (first[index] !== second[index]) return first[index] - second[index];
+  }
+  return 0;
+}
+
+function installerCode(value, label) {
+  const text = responseText(value, 80, label);
+  if (!INSTALLER_CODE.test(text)) invalidWorkspaceResponse(label);
+  return text;
 }
 
 function validateDeployment(value) {

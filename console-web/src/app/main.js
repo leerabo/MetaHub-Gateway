@@ -536,9 +536,11 @@ import {
   createEdgeIdempotencyKey,
   createEdgeRegistration,
   decideEdgeDesiredState,
+  edgeInstallerArtifactUrl,
   getEdgeDesiredState,
   getEdgeTelemetryWatermark,
   listEdgeDeployments,
+  listEdgeInstallers,
   listEdgeSecretReferences,
   patchEdgeTelemetryPolicy,
   publishEdgeDesiredState,
@@ -915,6 +917,7 @@ let errorMapDialogKeydownHandler = null;
 let errorMapBodyOverflow = null;
 // 每次刷新分配递增序号；较早刷新即使更晚返回，也不能覆盖用户已经切换的新页面。
 let refreshSequence = 0;
+let consoleWorkspaceContextChannel = null;
 // 登录使用独立代次；页面替换、重复提交或新 Session 建立都会淘汰更早的凭据请求回调。
 let loginGeneration = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
@@ -1093,6 +1096,7 @@ if (app && globalThis.window) {
     }, { once: true });
     renderPublicInvitation();
   } else {
+    bindConsoleWorkspaceContextInvalidation();
     window.addEventListener("hashchange", () => {
       // PAGE-107 的问题、回答和来源属于旧 hash owner；即使新 hash 仍规范化为同一页面，
       // 也必须先推进 generation 并同步擦除正文，再允许通用导航监听器发起后端复核。
@@ -1206,6 +1210,7 @@ if (app && globalThis.window) {
     bindNavigationHashRefresh(window, refresh);
     // 浏览器关闭、刷新或离开页面时同步 abort 活动流并销毁全部一次性凭据。
     window.addEventListener("pagehide", () => {
+      closeConsoleWorkspaceContextInvalidation();
       gatewayDebugLifecycle.leave();
       invitationPageState.clear();
       clearUsageExportSessionState();
@@ -1401,6 +1406,68 @@ async function refresh(options = {}) {
     return await performRefresh(options);
   } finally {
     activeRefreshCount -= 1;
+  }
+}
+
+/** Only the exact non-sensitive envelope emitted by identity.html may invalidate Console state. */
+export function isConsoleWorkspaceContextInvalidation(message) {
+  return Boolean(
+    message
+    && typeof message === "object"
+    && !Array.isArray(message)
+    && Object.keys(message).length === 2
+    && message.type === "context-invalidated"
+    && Number.isSafeInteger(message.generation)
+    && message.generation >= 1
+  );
+}
+
+/** Subscribe the Console to Workspace Cookie changes made by another same-origin page. */
+export function bindConsoleWorkspaceContextInvalidation({
+  channelFactory = (name) => (
+    typeof globalThis.BroadcastChannel === "function"
+      ? new globalThis.BroadcastChannel(name)
+      : null
+  ),
+  onInvalidated = handleConsoleWorkspaceContextInvalidation,
+} = {}) {
+  if (consoleWorkspaceContextChannel || typeof channelFactory !== "function"
+    || typeof onInvalidated !== "function") return false;
+  try {
+    consoleWorkspaceContextChannel = channelFactory("metahub-workspace-context-v1");
+  } catch {
+    consoleWorkspaceContextChannel = null;
+    return false;
+  }
+  if (!consoleWorkspaceContextChannel || typeof consoleWorkspaceContextChannel !== "object") {
+    consoleWorkspaceContextChannel = null;
+    return false;
+  }
+  consoleWorkspaceContextChannel.onmessage = (event) => {
+    if (!isConsoleWorkspaceContextInvalidation(event?.data)) return;
+    onInvalidated();
+  };
+  return true;
+}
+
+/** Fence old Cookie-scoped Edge work before any server-authoritative reload can begin. */
+function handleConsoleWorkspaceContextInvalidation() {
+  refreshSequence += 1;
+  providersLoadController?.abort();
+  providersLoadController = null;
+  consoleSidebarController?.abort();
+  consoleSidebarController = null;
+  privateGatewayPageState.clear();
+  void refresh();
+}
+
+export function closeConsoleWorkspaceContextInvalidation() {
+  const channel = consoleWorkspaceContextChannel;
+  consoleWorkspaceContextChannel = null;
+  if (!channel) return;
+  channel.onmessage = null;
+  try { channel.close?.(); } catch {
+    // Page teardown must continue even if the browser has already closed the channel.
   }
 }
 
@@ -7023,6 +7090,17 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
       const state = await loadPrivateGatewaysState(consoleShellState, generation);
       if (state) renderCurrentPrivateGatewayPanel(consoleShellState);
     },
+    async onInstallerSelection(input) {
+      const selected = privateGatewayPageState.selectInstallerEnvironment(
+        currentPrivateGatewayOwner(consoleShellState),
+        input,
+      );
+      if (selected) renderCurrentPrivateGatewayPanel(consoleShellState);
+      return selected;
+    },
+    async onInstallerDownload(downloadPath) {
+      return downloadPrivateGatewayInstallerArtifact(downloadPath, consoleShellState);
+    },
     async onOpen() {
       if (!privateGatewayPageState.openCreate(currentPrivateGatewayOwner(consoleShellState))) return false;
       refreshSequence += 1;
@@ -7101,6 +7179,29 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
       return confirmed ? submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShellState) : false;
     },
   });
+}
+
+function downloadPrivateGatewayInstallerArtifact(downloadPath, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  if (!owner?.canReadInstallers) return false;
+  let url;
+  try {
+    url = edgeInstallerArtifactUrl({
+      controlApiUrl: workspaceControlApiUrl,
+      downloadPath,
+    });
+  } catch {
+    return false;
+  }
+  const anchor = globalThis.document?.createElement?.("a");
+  if (!anchor) return false;
+  anchor.href = url;
+  anchor.download = "";
+  anchor.rel = "noopener";
+  anchor.hidden = true;
+  globalThis.document.body?.append?.(anchor);
+  try { anchor.click?.(); } finally { anchor.remove?.(); }
+  return true;
 }
 
 async function submitPrivateGatewayLocalSession(input, consoleShellState) {
@@ -16859,10 +16960,18 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   const operation = privateGatewayPageState.beginLoad(owner, refreshId);
   if (!operation) return null;
   try {
-    const result = await listEdgeDeployments({
-      controlApiUrl: workspaceControlApiUrl,
-      signal: operation.controller.signal,
-    });
+    const [result, installerCatalog] = await Promise.all([
+      listEdgeDeployments({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      }),
+      owner.canReadInstallers
+        ? listEdgeInstallers({
+          controlApiUrl: workspaceControlApiUrl,
+          signal: operation.controller.signal,
+        })
+        : Promise.resolve(null),
+    ]);
     const [desiredStates, telemetryStates, secretReferences] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
@@ -16884,6 +16993,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       desiredStates,
       telemetryStates,
       secretReferences,
+      installerCatalog,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {

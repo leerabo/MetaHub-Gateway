@@ -1,4 +1,4 @@
-/** PRD-120..123 safe Edge identity, telemetry, and Secret Reference views. */
+/** PRD-120..124 safe Edge identity, installer, telemetry, and Secret Reference views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 
@@ -15,11 +15,187 @@ export function renderPrivateGateways(state, authContext, consoleShellState) {
         </div>
       </header>
       ${renderFeedback(state.feedback)}
+      ${renderInstallerWorkbench(state, owner)}
       ${renderList(state, owner)}
       ${renderDialog(state, owner)}
       ${renderStateDialog(state, owner)}
       ${renderSecretDialog(state, owner)}
     </div>`;
+}
+
+function renderInstallerWorkbench(state, owner) {
+  if (!owner.canReadInstallers || state.state !== "ready") return "";
+  const catalog = state.installerCatalog;
+  const selection = state.installerSelection;
+  const release = catalog.releases.find(
+    (item) => item.manifest.release_id === selection.releaseId,
+  );
+  const deployment = state.deployments.find(
+    (item) => item.deployment_id === selection.deploymentId,
+  );
+  const profile = release?.manifest.profiles.find(
+    (item) => item.install_profile_id === selection.profileId,
+  );
+  if (!catalog.releases.length) {
+    return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
+      <header><div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-not_observed">暂无可用版本</span></header>
+    </section>`;
+  }
+  if (!deployment || !release || !profile) {
+    return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
+      <header><div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4></div><span class="private-gateway-state-status tone-pending">等待 Deployment</span></header>
+      <p class="private-gateway-installer-empty">创建 Deployment 后即可选择安装环境。</p>
+    </section>`;
+  }
+  const workflow = installerWorkflow(state, deployment, release, profile);
+  return `<section class="private-gateway-installer" aria-labelledby="private-gateway-installer-title">
+    <header>
+      <div><p class="eyebrow">Installer</p><h4 id="private-gateway-installer-title">安装与接入</h4><span>${escapeHtml(deployment.display_name)}</span></div>
+      <span class="private-gateway-state-status tone-${workflow.tone}">${workflow.label}</span>
+    </header>
+    ${renderInstallerEnvironment(state, release, profile, owner)}
+    ${renderInstallerSteps(workflow)}
+    <div class="private-gateway-installer-body">
+      ${renderInstallerDownloads(catalog, release, workflow, owner)}
+      ${renderPreflight(workflow.preflight)}
+      ${renderInstallation(workflow.installation, deployment, workflow)}
+    </div>
+  </section>`;
+}
+
+function renderInstallerEnvironment(state, release, profile, owner) {
+  const selection = state.installerSelection;
+  const activeDeployments = state.deployments.filter(
+    (item) => !["revoked", "retired"].includes(item.status),
+  );
+  const disabled = state.busy || !owner.canManageInstallations;
+  return `<form class="private-gateway-installer-environment" data-private-gateway-installer-environment>
+    <label><span>Deployment</span><select name="deployment_id"${disabled ? " disabled" : ""}>${activeDeployments.map((item) => `<option value="${escapeAttribute(item.deployment_id)}"${item.deployment_id === selection.deploymentId ? " selected" : ""}>${escapeHtml(item.display_name)} · ${escapeHtml(item.region_code)}</option>`).join("")}</select></label>
+    <label><span>版本</span><select name="release_id"${disabled ? " disabled" : ""}>${state.installerCatalog.releases.map((item) => `<option value="${escapeAttribute(item.manifest.release_id)}"${item.manifest.release_id === selection.releaseId ? " selected" : ""}>v${escapeHtml(item.manifest.version)} · ${installerChannelLabel(item.manifest.channel)}</option>`).join("")}</select></label>
+    <label><span>规格</span><select name="profile_id"${disabled ? " disabled" : ""}>${release.manifest.profiles.map((item) => `<option value="${escapeAttribute(item.install_profile_id)}"${item.install_profile_id === selection.profileId ? " selected" : ""}>${escapeHtml(item.display_name)}</option>`).join("")}</select></label>
+    <label><span>架构</span><select name="architecture"${disabled ? " disabled" : ""}>${release.manifest.supported_arch.map((item) => `<option value="${escapeAttribute(item)}"${item === selection.architecture ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+    <dl>
+      ${fact("CPU", `${integer(profile.cpu_cores)} cores`)}
+      ${fact("内存", `${integer(Math.round(profile.memory_mib / 1024))} GiB`)}
+      ${fact("磁盘", `${integer(Math.round(profile.disk_mib / 1024))} GiB`)}
+      ${fact("Runtime", `${profile.runtime} ${profile.runtime_min_version}+`)}
+      ${fact("端口", profile.required_ports.join(" / "))}
+      ${fact("代理 / CA", `${profile.proxy_modes.map(proxyLabel).join(" / ")} · ${caLabel(profile.ca_mode)}`)}
+    </dl>
+  </form>`;
+}
+
+function renderInstallerSteps(workflow) {
+  const steps = [
+    ["environment", "环境", workflow.environmentLabel],
+    ["preflight", "预检", workflow.preflightLabel],
+    ["installation", "安装", workflow.installationLabel],
+    ["registration", "注册", workflow.registrationLabel],
+  ];
+  return `<ol class="private-gateway-installer-steps" aria-label="安装进度">${steps.map(([code, label, detail], index) => `
+    <li class="tone-${installerStepTone(workflow, code)}"><span>${index + 1}</span><div><strong>${label}</strong><small>${escapeHtml(detail)}</small></div></li>
+  `).join("")}</ol>`;
+}
+
+function renderInstallerDownloads(catalog, release, workflow, owner) {
+  const artifacts = release.manifest.artifacts.map((artifact) => ({
+    artifact,
+    download: catalog.downloads.find((item) => (
+      item.release_id === release.manifest.release_id
+      && item.artifact_id === artifact.artifact_id
+    )),
+  })).filter((item) => item.download);
+  const disabled = !owner.canReadInstallers;
+  return `<section class="private-gateway-installer-media" aria-label="安装介质">
+    <header><div><h5>签名介质</h5><small>v${escapeHtml(release.manifest.version)} · ${escapeHtml(release.signature.key_id)}</small></div><code>${escapeHtml(release.manifest_sha256.slice(0, 16))}</code></header>
+    <div class="private-gateway-installer-files">${artifacts.map(({ artifact, download }) => `
+      <div><span><strong>${installerArtifactLabel(artifact.kind)}</strong><small>${escapeHtml(download.filename)} · ${formatBytes(download.size_bytes)}</small></span><button type="button" data-private-gateway-installer-download="${escapeAttribute(download.download_path)}" title="下载 ${escapeAttribute(download.filename)}"${disabled ? " disabled" : ""}>下载</button></div>
+    `).join("")}</div>
+    ${workflow.recoveryDownloadPath ? `<button type="button" class="private-gateway-installer-recovery" data-private-gateway-installer-download="${escapeAttribute(workflow.recoveryDownloadPath)}">重新下载恢复介质</button>` : ""}
+  </section>`;
+}
+
+function renderPreflight(preflight) {
+  if (!preflight) {
+    return `<section class="private-gateway-installer-preflight" aria-label="预检结果"><header><div><h5>预检结果</h5><small>尚未收到报告</small></div><span class="private-gateway-state-status tone-not_observed">未运行</span></header></section>`;
+  }
+  return `<section class="private-gateway-installer-preflight" aria-label="预检结果">
+    <header><div><h5>预检结果</h5><small>${formatTime(preflight.completed_at)} · ${secondsFromMs(preflight.duration_ms)}</small></div><span class="private-gateway-state-status tone-${preflight.outcome === "passed" ? "applied" : "failed"}">${preflight.outcome === "passed" ? "通过" : "未通过"}</span></header>
+    <ul>${preflight.checks.map((check) => `<li class="tone-${escapeAttribute(check.outcome)}"><span>${preflightCheckLabel(check.code)}</span><strong>${preflightOutcomeLabel(check.outcome)}</strong><small>${escapeHtml(check.reason_code)}</small></li>`).join("")}</ul>
+  </section>`;
+}
+
+function renderInstallation(installation, deployment, workflow) {
+  if (!installation) {
+    return `<section class="private-gateway-installer-status" aria-label="安装状态"><header><div><h5>安装状态</h5><small>尚未开始</small></div><span class="private-gateway-state-status tone-not_observed">待安装</span></header></section>`;
+  }
+  const retained = [
+    installation.retain_config ? "配置" : "",
+    installation.retain_audit ? "审计" : "",
+    installation.retain_secrets ? "Secret" : "",
+  ].filter(Boolean);
+  return `<section class="private-gateway-installer-status" aria-label="安装状态">
+    <header><div><h5>安装状态</h5><small>${formatTime(installation.updated_at)} · revision ${integer(installation.revision)}</small></div><span class="private-gateway-state-status tone-${workflow.tone}">${installerStatusLabel(installation.status)}</span></header>
+    <dl>
+      ${fact("当前步骤", installationStepLabel(installation.current_step))}
+      ${fact("补偿", compensationLabel(installation.compensation_status))}
+      ${fact("失败原因", installation.failure_reason_code ?? "-")}
+      ${fact("保留", retained.length ? retained.join(" / ") : "不保留")}
+      ${fact("注册健康", healthLabel(deployment.health_code))}
+      ${fact("最近连接", formatTime(deployment.last_connected_at))}
+    </dl>
+  </section>`;
+}
+
+function installerWorkflow(state, deployment, release, profile) {
+  const preflight = state.installerCatalog.preflights.find((item) => (
+    item.deployment_id === deployment.deployment_id
+    && item.release_id === release.manifest.release_id
+    && item.install_profile_id === profile.install_profile_id
+  )) ?? null;
+  const installation = state.installerCatalog.installations.find((item) => (
+    item.deployment_id === deployment.deployment_id
+    && item.release_id === release.manifest.release_id
+    && item.install_profile_id === profile.install_profile_id
+  )) ?? null;
+  const failed = preflight?.outcome === "failed" || installation?.status === "failed"
+    || installation?.compensation_status === "failed";
+  const complete = installation?.status === "active" && deployment.health_code === "healthy";
+  const tone = failed ? "failed" : (complete ? "applied" : "pending");
+  const recoveryDownloadPath = failed
+    ? state.installerCatalog.downloads.find((item) => (
+      item.release_id === release.manifest.release_id
+      && release.manifest.artifacts.find((artifact) => (
+        artifact.artifact_id === item.artifact_id && artifact.kind === "cli"
+      ))
+    ))?.download_path ?? ""
+    : "";
+  return Object.freeze({
+    preflight,
+    installation,
+    failed,
+    complete,
+    tone,
+    label: failed ? "需要恢复" : (complete ? "接入完成" : "进行中"),
+    environmentLabel: `${release.manifest.version} · ${profile.profile_code}`,
+    preflightLabel: preflight ? (preflight.outcome === "passed" ? "已通过" : "检查失败") : "未运行",
+    installationLabel: installation ? installerStatusLabel(installation.status) : "未开始",
+    registrationLabel: deployment.health_code === "healthy" ? "健康" : healthLabel(deployment.health_code),
+    recoveryDownloadPath,
+  });
+}
+
+function installerStepTone(workflow, code) {
+  if (code === "environment") return "applied";
+  if (code === "preflight") return workflow.preflight?.outcome === "failed"
+    ? "failed" : (workflow.preflight ? "applied" : "pending");
+  if (code === "installation") {
+    if (workflow.installation?.status === "failed") return "failed";
+    return workflow.installation ? (new Set(["active", "uninstalled"]).has(workflow.installation.status) ? "applied" : "pending") : "pending";
+  }
+  if (workflow.complete) return "applied";
+  if (workflow.installation?.status === "failed") return "failed";
+  return "pending";
 }
 
 function renderList(state, owner) {
@@ -362,6 +538,17 @@ function secretKindLabel(value) { return ({ api_key: "API Key", bearer_token: "B
 function secretStatusLabel(value) { return ({ active: "有效", rotating: "轮换中", degraded: "降级", disabled: "已停用" })[value] ?? value; }
 function providerTestLabel(value) { return ({ succeeded: "成功", authentication_failed: "认证失败", authorization_failed: "授权失败", rate_limited: "限流", timeout: "超时", tls_failed: "TLS 失败", network_unreachable: "网络不可达", provider_unavailable: "Provider 不可用", unsupported: "不支持" })[value] ?? "未测试"; }
 function capabilityLabel(value) { return ({ chat_completions: "Chat", embeddings: "Embeddings", models: "Models" })[value] ?? value; }
+function installerChannelLabel(value) { return value === "extended" ? "长期支持" : "稳定"; }
+function installerArtifactLabel(value) { return ({ cli: "安装器", compose: "Compose", container_bundle: "离线镜像清单", profile: "环境规格", sbom: "SBOM" })[value] ?? value; }
+function installerStatusLabel(value) { return ({ preflight_passed: "预检通过", installing: "安装中", installed: "已安装", connecting: "接入中", active: "运行中", failed: "安装失败", uninstalling: "卸载中", uninstalled: "已卸载" })[value] ?? "未知"; }
+function installationStepLabel(value) { return ({ staging_prepared: "暂存区就绪", artifacts_copied: "介质已复制", runtime_validated: "运行时已校验", runtime_started: "运行时已启动", health_verified: "健康已验证", release_committed: "版本已提交", device_registered: "设备已注册", initial_snapshot: "初始状态已同步" })[value] ?? "-"; }
+function compensationLabel(value) { return ({ not_required: "无需补偿", pending: "补偿中", completed: "补偿完成", failed: "补偿失败" })[value] ?? "-"; }
+function proxyLabel(value) { return value === "http_connect" ? "HTTP Proxy" : "Direct"; }
+function caLabel(value) { return value === "system_or_custom" ? "System / Custom CA" : "System CA"; }
+function preflightOutcomeLabel(value) { return ({ passed: "通过", warning: "警告", failed: "失败" })[value] ?? "未知"; }
+function preflightCheckLabel(value) { return ({ "artifact.integrity": "介质完整性", "host.os": "Linux 基线", "host.architecture": "CPU 架构", "host.root": "Root 权限", "host.cpu": "CPU", "host.memory": "内存", "host.disk": "磁盘", "network.ports": "端口", "network.dns": "DNS", "host.clock": "系统时间", "network.proxy": "代理", "network.ca": "CA", "host.filesystem": "文件系统", "runtime.container": "容器运行时" })[value] ?? value; }
+function formatBytes(value) { if (!Number.isSafeInteger(value)) return "-"; if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${value} B`; }
+function secondsFromMs(value) { return Number.isSafeInteger(value) ? `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}s` : "-"; }
 function formatTime(value) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? "-" : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }
 function integer(value) { return Number.isSafeInteger(value) ? String(value) : "-"; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/gu, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]); }

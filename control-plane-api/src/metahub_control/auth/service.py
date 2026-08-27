@@ -43,6 +43,7 @@ from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissio
 
 from metahub_control.workspace_access.edge_permissions import (
     load_verified_workspace_edge_permissions,
+    resolve_verified_workspace_edge_role,
 )
 from metahub_control.workspace_access.provider_catalog_permissions import (
     PROVIDER_CATALOG_PERMISSION_CODE,
@@ -272,9 +273,16 @@ def login_admin(
             role_code=user["role"],
             unavailable_error_code="rbac.unavailable",
         )
+        edge_role = resolve_verified_workspace_edge_role(
+            connection,
+            tenant_id=tenant["tenant_id"],
+            legacy_user_id=user["user_id"],
+            legacy_role_code=user["role"],
+            unavailable_error_code="rbac.unavailable",
+        )
         edge_permissions = load_verified_workspace_edge_permissions(
             connection,
-            role_code=user["role"],
+            role_code=edge_role,
             unavailable_error_code="rbac.unavailable",
         )
         extension_permissions = tuple(
@@ -577,9 +585,18 @@ def _authenticate_bearer_context(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),
     )
+    edge_role = resolve_verified_workspace_edge_role(
+        connection,
+        tenant_id=row["tenant_id"],
+        legacy_user_id=row["user_id"],
+        legacy_role_code=row["role"],
+        unavailable_error_code=(
+            deadline_error_code if deadline is not None else "rbac.unavailable"
+        ),
+    )
     edge_permissions = load_verified_workspace_edge_permissions(
         connection,
-        role_code=row["role"],
+        role_code=edge_role,
         unavailable_error_code=(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),

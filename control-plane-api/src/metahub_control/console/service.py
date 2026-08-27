@@ -1147,6 +1147,9 @@ def _visible_navigation_items(
         "edge.telemetry.manage",
         "edge.telemetry.read",
         "edge.usage.read",
+        "edge.secret_reference.read",
+        "edge.installer.read",
+        "edge.installation.manage",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

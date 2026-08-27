@@ -1,0 +1,15 @@
+{
+  "schema_version": "metahub.container-bundle/v1",
+  "images": [
+    {
+      "component": "gateway",
+      "reference": "ghcr.io/metahub-ai/gateway",
+      "digest": "sha256:4ef405537ade676a97adef3c86f1fc734be7bc59bfbd7f40efe02b26a728fca1"
+    },
+    {
+      "component": "local-control",
+      "reference": "ghcr.io/metahub-ai/local-control",
+      "digest": "sha256:3c70f4f98c17e07d60dbf28a9a2a47e527f418539772f38e4024c071919e75e8"
+    }
+  ]
+}
