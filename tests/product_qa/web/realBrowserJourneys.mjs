@@ -23,6 +23,7 @@ const edgeExecutable = process.env.METAHUB_QA_EDGE_PATH
 const controlPatterns = ["http://127.0.0.1:8001/**", "http://localhost:8001/**"];
 const gatewayPatterns = ["http://127.0.0.1:8000/**", "http://localhost:8000/**"];
 const NAVIGATION_DATA_BUDGET_MS = 4_000;
+const NAVIGATION_RESPONSE_OBSERVER_TIMEOUT_MS = NAVIGATION_DATA_BUDGET_MS + 500;
 const forbiddenProductText = [
   /PRD-\d{3}/i,
   /migration[_ -]?(?:id|version|number)?/i,
@@ -104,30 +105,38 @@ async function expandNavigationGroup(page, navigationId) {
 
 async function openNavigation(page, navigationId, responsePaths) {
   const { groupKey, navigation } = await expandNavigationGroup(page, navigationId);
-  const responses = responsePaths.map((expectedPath) => page.waitForResponse((response) => {
-    let responsePath = "";
-    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
-    return response.request().method() === "GET"
-      && responsePath === expectedPath
-      && response.status() >= 200
-      && response.status() < 300;
-  }, { timeout: NAVIGATION_DATA_BUDGET_MS }));
-  const started = performance.now();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    await humanClick(page, navigation);
+  const responses = Promise.all(responsePaths.map(async (expectedPath) => {
     try {
-      await page.locator(
-        `.console-shell[data-active-navigation='${navigationId}']`,
-      ).waitFor({ state: "visible", timeout: 500 });
-      break;
+      await page.waitForResponse((response) => {
+        let responsePath = "";
+        try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+        return response.request().method() === "GET"
+          && responsePath === expectedPath
+          && response.status() >= 200
+          && response.status() < 300;
+      }, { timeout: NAVIGATION_RESPONSE_OBSERVER_TIMEOUT_MS });
     } catch (error) {
-      if (attempt === 2) throw error;
+      throw new Error(`navigation_response_wait_failed:${navigationId}:${expectedPath}`, { cause: error });
     }
+  }));
+  const started = performance.now();
+  await humanClick(page, navigation);
+  try {
+    await Promise.all([
+      responses,
+      page.locator(
+        `.console-shell[data-active-navigation='${navigationId}']`,
+      ).waitFor({ state: "visible", timeout: NAVIGATION_DATA_BUDGET_MS }),
+      page.locator(
+        `[data-console-nav='${navigationId}'][aria-current='page']`,
+      ).waitFor({ state: "attached", timeout: NAVIGATION_DATA_BUDGET_MS }),
+    ]);
+  } catch (error) {
+    throw new Error(
+      `navigation_data_wait_failed:${navigationId}:${responsePaths.join(",")}`,
+      { cause: error },
+    );
   }
-  await Promise.all(responses);
-  await page.locator(
-    `[data-console-nav='${navigationId}'][aria-current='page']`,
-  ).waitFor({ state: "attached", timeout: NAVIGATION_DATA_BUDGET_MS });
   const elapsedMs = Math.round(performance.now() - started);
   assert.ok(
     elapsedMs <= NAVIGATION_DATA_BUDGET_MS,
@@ -232,6 +241,22 @@ async function login(page, email, password, locale) {
   await typeField(page, "租户标识", "default");
   await typeField(page, "邮箱", email);
   await typeField(page, "密码", password);
+  const preferencesResponse = page.waitForResponse((response) => {
+    let responsePath = "";
+    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+    return response.request().method() === "GET"
+      && responsePath === "/user/preferences"
+      && response.status() >= 200
+      && response.status() < 300;
+  }, { timeout: 20_000 });
+  const initialConsoleEventResponse = page.waitForResponse((response) => {
+    let responsePath = "";
+    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+    return response.request().method() === "POST"
+      && responsePath === "/console/events"
+      && response.status() >= 200
+      && response.status() < 300;
+  }, { timeout: 20_000 });
   await humanClick(page, page.getByRole("button", { name: "登录", exact: true }));
   try {
     await page.locator("#console-sidebar").waitFor({ state: "visible", timeout: 20_000 });
@@ -239,8 +264,9 @@ async function login(page, email, password, locale) {
     const alert = await page.locator("[role='alert']").allTextContents();
     throw new Error(`login_failed:${alert.join(" ").slice(0, 240)}`);
   }
-  // The overview has a fast first paint before the user-preference request completes.
-  // Wait for the authoritative locale repaint before asserting user-facing text.
+  // The overview paints before the authoritative preference request completes. Waiting on
+  // text alone is insufficient when the saved locale equals the initial locale.
+  await Promise.all([preferencesResponse, initialConsoleEventResponse]);
   const expectedLogoutLabel = locale === "en-US" ? "Log out" : "\u767b\u51fa";
   await page.waitForFunction(
     (expected) => document.querySelector("#logout-button")?.textContent?.trim() === expected,

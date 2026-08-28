@@ -304,7 +304,7 @@ def build_offline_bundle_archive(
     tenant_id: str,
     deployment_id: str,
     version_vector: Sequence[OfflineDomainVersion],
-    entries: Sequence[tuple[str, str, bytes]],
+    entries: Sequence[tuple[str, str, bytes | Path]],
     content_key: bytes,
     key_envelope: OfflineBundleKeyEnvelope,
     private_key: Ed25519PrivateKey,
@@ -322,69 +322,79 @@ def build_offline_bundle_archive(
         raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
     cipher = AESGCM(content_key)
     descriptors: list[OfflineBundleEntry] = []
-    ciphertexts: dict[str, bytes] = {}
     domain_sequences: dict[str, int] = {}
+    temporary: Path | None = None
     try:
-        for domain, media_type, plaintext in entries:
-            sequence = domain_sequences.get(domain, 0)
-            domain_sequences[domain] = sequence + 1
-            if (
-                domain not in OFFLINE_BUNDLE_DOMAINS
-                or type(plaintext) is not bytes
-                or not 1 <= len(plaintext) <= MAX_OFFLINE_ENTRY_BYTES
-            ):
-                raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
-            entry_id = f"obe_{uuid4().hex}"
-            nonce = os.urandom(12)
-            aad = _entry_aad(
-                checked_bundle_id,
-                direction,
-                workspace_id,
-                tenant_id,
-                deployment_id,
-                domain,
-                sequence,
-                entry_id,
-            )
-            ciphertext = cipher.encrypt(nonce, plaintext, aad)
-            descriptor = OfflineBundleEntry(
-                entry_id=entry_id,
-                domain=domain,
-                sequence=sequence,
-                media_type=media_type,
-                plaintext_sha256=_sha(plaintext),
-                ciphertext_sha256=_sha(ciphertext),
-                plaintext_size=len(plaintext),
-                ciphertext_size=len(ciphertext),
-                nonce=_b64(nonce),
-            )
-            descriptors.append(descriptor)
-            ciphertexts[entry_id] = ciphertext
-        descriptors.sort(key=lambda item: (item.domain, item.sequence, item.entry_id))
-        versions = tuple(sorted(version_vector, key=lambda item: item.domain))
-        envelope_bytes = canonical_json_bytes(key_envelope.model_dump(mode="json"))
-        manifest = OfflineBundleManifest(
-            bundle_id=checked_bundle_id,
-            direction=direction,
-            workspace_id=workspace_id,
-            tenant_id=tenant_id,
-            deployment_id=deployment_id,
-            producer_generation=max(item.generation for item in versions),
-            version_vector=versions,
-            entries=tuple(descriptors),
-            entry_merkle_root=_entry_merkle_root(tuple(descriptors)),
-            key_envelope_sha256=_sha(envelope_bytes),
-            kms_key_id_sha256=key_envelope.kms_key_id_sha256,
-            encryption_key_version=key_envelope.encryption_key_version,
-            created_at=_aware(created_at),
-            expires_at=_aware(expires_at),
-        )
-        signed = sign_offline_bundle_manifest(manifest, private_key=private_key, key_id=key_id)
         output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+        )
+        os.close(temporary_fd)
+        temporary = Path(temporary_name)
+        total_ciphertext_size = 0
         with zipfile.ZipFile(
-            temporary, "x", compression=zipfile.ZIP_STORED, allowZip64=True
+            temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True
         ) as archive:
+            for domain, media_type, source in entries:
+                sequence = domain_sequences.get(domain, 0)
+                domain_sequences[domain] = sequence + 1
+                if domain not in OFFLINE_BUNDLE_DOMAINS:
+                    raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+                plaintext = _read_offline_entry(source)
+                entry_id = f"obe_{uuid4().hex}"
+                nonce = os.urandom(12)
+                aad = _entry_aad(
+                    checked_bundle_id,
+                    direction,
+                    workspace_id,
+                    tenant_id,
+                    deployment_id,
+                    domain,
+                    sequence,
+                    entry_id,
+                )
+                ciphertext = cipher.encrypt(nonce, plaintext, aad)
+                total_ciphertext_size += len(ciphertext)
+                if total_ciphertext_size > MAX_OFFLINE_BUNDLE_BYTES:
+                    raise OfflineBundleContractError("edge_offline_bundle.manifest_invalid")
+                descriptor = OfflineBundleEntry(
+                    entry_id=entry_id,
+                    domain=domain,
+                    sequence=sequence,
+                    media_type=media_type,
+                    plaintext_sha256=_sha(plaintext),
+                    ciphertext_sha256=_sha(ciphertext),
+                    plaintext_size=len(plaintext),
+                    ciphertext_size=len(ciphertext),
+                    nonce=_b64(nonce),
+                )
+                descriptors.append(descriptor)
+                archive.writestr(
+                    _zip_info(f"entries/{descriptor.entry_id}.bin"),
+                    ciphertext,
+                )
+                del plaintext, ciphertext
+
+            descriptors.sort(key=lambda item: (item.domain, item.sequence, item.entry_id))
+            versions = tuple(sorted(version_vector, key=lambda item: item.domain))
+            envelope_bytes = canonical_json_bytes(key_envelope.model_dump(mode="json"))
+            manifest = OfflineBundleManifest(
+                bundle_id=checked_bundle_id,
+                direction=direction,
+                workspace_id=workspace_id,
+                tenant_id=tenant_id,
+                deployment_id=deployment_id,
+                producer_generation=max(item.generation for item in versions),
+                version_vector=versions,
+                entries=tuple(descriptors),
+                entry_merkle_root=_entry_merkle_root(tuple(descriptors)),
+                key_envelope_sha256=_sha(envelope_bytes),
+                kms_key_id_sha256=key_envelope.kms_key_id_sha256,
+                encryption_key_version=key_envelope.encryption_key_version,
+                created_at=_aware(created_at),
+                expires_at=_aware(expires_at),
+            )
+            signed = sign_offline_bundle_manifest(manifest, private_key=private_key, key_id=key_id)
             archive.writestr(
                 _zip_info("manifest.json"),
                 canonical_json_bytes(
@@ -394,22 +404,23 @@ def build_offline_bundle_archive(
                     }
                 ),
             )
-            for descriptor in descriptors:
-                archive.writestr(
-                    _zip_info(f"entries/{descriptor.entry_id}.bin"),
-                    ciphertexts[descriptor.entry_id],
-                )
-        os.replace(temporary, output)
+        if temporary.stat().st_size > MAX_OFFLINE_BUNDLE_BYTES:
+            raise OfflineBundleContractError("edge_offline_bundle.manifest_invalid")
         if os.name != "nt":
-            output.chmod(0o600)
+            temporary.chmod(0o600)
+        os.replace(temporary, output)
+        temporary = None
         return signed
     except OfflineBundleContractError:
         raise
     except (OSError, ValueError, zipfile.BadZipFile):
         raise OfflineBundleContractError("edge_offline_bundle.build_failed") from None
     finally:
-        for value in ciphertexts.values():
-            del value
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def verify_offline_bundle_archive(
@@ -868,6 +879,35 @@ def _entry_aad(
             "workspace_id": workspace_id,
         }
     )
+
+
+def _read_offline_entry(source: bytes | Path) -> bytes:
+    if type(source) is bytes:
+        value = source
+    elif isinstance(source, Path):
+        try:
+            if source.is_symlink():
+                raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+            with source.open("rb") as handle:
+                before = os.fstat(handle.fileno())
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or not 1 <= before.st_size <= MAX_OFFLINE_ENTRY_BYTES
+                ):
+                    raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+                value = handle.read(MAX_OFFLINE_ENTRY_BYTES + 1)
+                after = os.fstat(handle.fileno())
+            if before.st_size != after.st_size or len(value) != before.st_size:
+                raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+        except OfflineBundleContractError:
+            raise
+        except OSError:
+            raise OfflineBundleContractError("edge_offline_bundle.entry_invalid") from None
+    else:
+        raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+    if not 1 <= len(value) <= MAX_OFFLINE_ENTRY_BYTES:
+        raise OfflineBundleContractError("edge_offline_bundle.entry_invalid")
+    return value
 
 
 def _safe_archive_info(info: zipfile.ZipInfo) -> bool:

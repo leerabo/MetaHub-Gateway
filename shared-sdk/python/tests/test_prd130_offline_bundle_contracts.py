@@ -19,6 +19,9 @@ from metahub_shared.private_gateway import (
     reject_forbidden_offline_fields,
     verify_offline_bundle_archive,
 )
+from metahub_shared.private_gateway import (
+    offline_bundles as offline_bundle_module,
+)
 
 WORKSPACE_ID = "wsp_" + "1" * 32
 TENANT_ID = "11111111-1111-4111-8111-111111111111"
@@ -115,6 +118,130 @@ def test_bundle_encrypts_every_entry_and_verifies_to_atomic_staging(tmp_path) ->
     }
     assert verified.staging_path.name.startswith(f"verified-{signed.manifest.bundle_id}-")
     assert _verify(source, tmp_path / "staging").staging_path == verified.staging_path
+
+
+def test_bundle_streams_file_entries_before_writing_manifest(tmp_path, monkeypatch) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_bytes(b'{"generation":2}')
+    second.write_bytes(b'{"generation":1}')
+    events: list[tuple[str, str]] = []
+
+    class RecordingCipher:
+        def __init__(self, key: bytes) -> None:
+            assert key == CONTENT_KEY
+
+        def encrypt(self, nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
+            assert len(nonce) == 12 and aad
+            events.append(("encrypt", plaintext.decode("ascii")))
+            return b"x" * (len(plaintext) + 16)
+
+    class RecordingArchive:
+        def __init__(self, path, mode, *, compression, allowZip64) -> None:
+            assert mode == "w" and compression == zipfile.ZIP_STORED and allowZip64 is True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def writestr(self, info, value: bytes) -> None:
+            assert value
+            events.append(("write", info.filename))
+
+    monkeypatch.setattr(offline_bundle_module, "AESGCM", RecordingCipher)
+    monkeypatch.setattr(offline_bundle_module.zipfile, "ZipFile", RecordingArchive)
+    output = tmp_path / "streamed.mhb"
+    build_offline_bundle_archive(
+        output,
+        direction="cloud_to_edge",
+        workspace_id=WORKSPACE_ID,
+        tenant_id=TENANT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        version_vector=_versions(),
+        entries=(
+            ("desired_state", "application/json", first),
+            ("license", "application/json", second),
+        ),
+        content_key=CONTENT_KEY,
+        key_envelope=_envelope(),
+        private_key=KEY,
+        key_id=KEY_ID,
+        created_at=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+
+    assert output.exists()
+    assert [kind for kind, _ in events] == ["encrypt", "write", "encrypt", "write", "write"]
+    assert events[1][1].startswith("entries/")
+    assert events[3][1].startswith("entries/")
+    assert events[4] == ("write", "manifest.json")
+
+
+def test_bundle_file_entry_failure_removes_partial_archive(tmp_path) -> None:
+    valid = tmp_path / "valid.json"
+    empty = tmp_path / "empty.json"
+    valid.write_bytes(b'{"generation":2}')
+    empty.touch()
+    output = tmp_path / "partial.mhb"
+
+    with pytest.raises(OfflineBundleContractError, match="entry_invalid"):
+        build_offline_bundle_archive(
+            output,
+            direction="cloud_to_edge",
+            workspace_id=WORKSPACE_ID,
+            tenant_id=TENANT_ID,
+            deployment_id=DEPLOYMENT_ID,
+            version_vector=_versions(),
+            entries=(
+                ("desired_state", "application/json", valid),
+                ("license", "application/json", empty),
+            ),
+            content_key=CONTENT_KEY,
+            key_envelope=_envelope(),
+            private_key=KEY,
+            key_id=KEY_ID,
+            created_at=NOW,
+            expires_at=NOW + timedelta(days=1),
+        )
+
+    assert not output.exists()
+    assert not tuple(tmp_path.glob(".partial.mhb.*.tmp"))
+
+
+def test_bundle_rejects_actual_archive_above_media_limit(tmp_path, monkeypatch) -> None:
+    original_stat = offline_bundle_module.Path.stat
+
+    def oversized_archive_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path.name.startswith(".oversize.mhb.") and path.name.endswith(".tmp"):
+            fields = list(result)
+            fields[6] = offline_bundle_module.MAX_OFFLINE_BUNDLE_BYTES + 1
+            return offline_bundle_module.os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(offline_bundle_module.Path, "stat", oversized_archive_stat)
+    output = tmp_path / "oversize.mhb"
+    with pytest.raises(OfflineBundleContractError, match="manifest_invalid"):
+        build_offline_bundle_archive(
+            output,
+            direction="cloud_to_edge",
+            workspace_id=WORKSPACE_ID,
+            tenant_id=TENANT_ID,
+            deployment_id=DEPLOYMENT_ID,
+            version_vector=_versions(),
+            entries=(("desired_state", "application/json", b"{}"),),
+            content_key=CONTENT_KEY,
+            key_envelope=_envelope(),
+            private_key=KEY,
+            key_id=KEY_ID,
+            created_at=NOW,
+            expires_at=NOW + timedelta(days=1),
+        )
+
+    assert not output.exists()
+    assert not tuple(tmp_path.glob(".oversize.mhb.*.tmp"))
 
 
 def test_bundle_rejects_wrong_owner_expiry_and_corrupt_entry(tmp_path) -> None:

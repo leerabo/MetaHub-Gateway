@@ -34,6 +34,14 @@ function Add-Task {
   [pscustomobject]@{ Name = $Name; Process = $process; OutputPath = $OutputPath; ErrorPath = $errorPath }
 }
 
+function Wait-TaskProcess {
+  param([System.Diagnostics.Process]$Process)
+  while (-not $Process.WaitForExit(1000)) {
+    $Process.Refresh()
+  }
+  $Process.Refresh()
+}
+
 $tasks = @()
 if ($Group -in @("All", "Backend")) {
   $tasks += Add-Task "WB-API-BB-GR-SEC" $Python @(
@@ -69,6 +77,12 @@ if ($Group -in @("All", "Web")) {
     ) (Join-Path $artifactRoot ("browser-real-{0}-scale-{1}.out" -f $Browser, $Scale.Replace('.', '_')))
   }
   if ($RunBrowserMatrix) {
+    # Browser journeys use tight user-facing latency bounds. Finish the parallel
+    # contract lanes before starting the matrix so host contention is not
+    # misreported as a product latency failure.
+    foreach ($task in $tasks) {
+      Wait-TaskProcess -Process $task.Process
+    }
     foreach ($matrixBrowser in @("chromium", "edge", "firefox")) {
       foreach ($matrixScale in @("1", "1.25", "1.5")) {
         $env:METAHUB_QA_BROWSER = $matrixBrowser
@@ -77,8 +91,7 @@ if ($Group -in @("All", "Web")) {
         $matrixTask = Add-Task ("FLOW-real-{0}" -f $matrixSuffix) $Python @(
           (Join-Path $Root "scripts\quality\product_qa_browser_runtime.py")
         ) (Join-Path $artifactRoot ("browser-real-{0}.out" -f $matrixSuffix))
-        $matrixTask.Process.WaitForExit()
-        $matrixTask.Process.Refresh()
+        Wait-TaskProcess -Process $matrixTask.Process
         $tasks += $matrixTask
       }
     }
@@ -102,8 +115,7 @@ if ($RunPressure -and $Group -in @("All", "Performance")) {
 }
 
 foreach ($task in $tasks) {
-  $task.Process.WaitForExit()
-  $task.Process.Refresh()
+  Wait-TaskProcess -Process $task.Process
 }
 
 $results = @()

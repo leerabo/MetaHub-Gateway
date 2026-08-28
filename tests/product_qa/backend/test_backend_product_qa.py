@@ -38,7 +38,7 @@ def _build_app():
 
 @pytest.fixture(scope="module")
 def qa_database(tmp_path_factory: pytest.TempPathFactory):
-    """Create the isolated 66-migration product QA database once per run."""
+    """Create the isolated full-migration product QA database once per run."""
 
     database_url = _sqlite_url(tmp_path_factory.mktemp("product-qa") / "product-qa.db")
     names = (
@@ -148,10 +148,10 @@ async def test_black_box_tenant_update_uses_authenticated_tenant_not_request_pay
 
 
 @pytest.mark.anyio
-async def test_rbac_is_enforced_by_backend_after_successful_login(
+async def test_rbac_drift_fails_closed_before_session_issuance(
     qa_database: tuple[str, str],
 ) -> None:
-    """BB-03/GR-03: changing a user's role denies the protected HTTP resource."""
+    """BB-03/GR-03: partial legacy role drift cannot mint an inconsistent session."""
 
     database_url, _ = qa_database
     connection = connect_database(database_url)
@@ -161,15 +161,19 @@ async def test_rbac_is_enforced_by_backend_after_successful_login(
 
     transport = ASGITransport(app=_build_app())
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        token = await _login(client)
-        response = await client.get(
-            "/tenant/current",
-            headers={"Authorization": f"Bearer {token}", "X-Request-ID": "qa-rbac-denied"},
+        response = await client.post(
+            "/auth/login",
+            json={
+                "tenant_slug": "default",
+                "email": "admin@metahub.local",
+                "password": TEST_PASSWORD,
+            },
+            headers={"X-Request-ID": "qa-rbac-drift"},
         )
 
-    assert response.status_code == 403
-    assert response.json()["code"] == "auth.permission_denied"
-    assert response.json()["request_id"] == "qa-rbac-denied"
+    assert response.status_code == 503
+    assert response.json()["code"] == "rbac.unavailable"
+    assert response.json()["request_id"] == "qa-rbac-drift"
     assert response.json()["trace_id"]
 
 

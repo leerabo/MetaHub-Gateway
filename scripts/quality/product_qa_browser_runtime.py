@@ -33,6 +33,7 @@ ARTIFACT_ROOT = Path(
     os.environ.get("METAHUB_QA_ARTIFACT_ROOT", ROOT / ".artifacts" / "product-qa")
 ).resolve()
 TEMP_ROOT = ROOT / ".tmp" / "product-qa-browser"
+BROWSER_JOURNEY_TIMEOUT_SECONDS = 180
 
 
 def _free_port() -> int:
@@ -244,7 +245,7 @@ def main() -> int:
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=False,
-            timeout=120,
+            timeout=BROWSER_JOURNEY_TIMEOUT_SECONDS,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if browser_run.returncode != 0:

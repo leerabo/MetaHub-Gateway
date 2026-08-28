@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self
@@ -233,6 +233,14 @@ class LocalProviderConnectionTest:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedLocalSecretEnvelope:
+    """Immutable encrypted material and authenticated owner metadata only."""
+
+    owner: LocalSecretOwner
+    encrypted: EncryptedLocalSecret = field(repr=False)
+
+
 class LocalVersionLease:
     """Pins one accepted request to its selected immutable secret version."""
 
@@ -295,6 +303,7 @@ class LocalSecretStore:
         self._lock = threading.RLock()
         self._leases: dict[tuple[str, int], int] = {}
         self._draining: set[tuple[str, int]] = set()
+        self._envelope_cache: dict[str, _CachedLocalSecretEnvelope] = {}
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -367,6 +376,7 @@ class LocalSecretStore:
                 reference = self._reference(connection, reference_id)
                 self._event(connection, "edge.secret_reference_changed", reference, now=now)
                 connection.commit()
+                self._envelope_cache.pop(reference_id, None)
                 return reference
             except LocalSecretStoreError:
                 _rollback(connection)
@@ -388,51 +398,61 @@ class LocalSecretStore:
         workspace_id: str,
     ) -> LocalVersionLease:
         with self._lock:
-            connection = self._connect()
-            try:
-                row = connection.execute(
-                    """
-                    SELECT s.tenant_id,s.workspace_id,s.kind,s.provider_connection_id,
-                           s.active_version,v.*
-                    FROM local_secrets s JOIN local_secret_versions v
-                      ON v.reference_id=s.reference_id AND v.version=s.active_version
-                    WHERE s.reference_id=? AND s.deployment_id=? AND s.status<>'disabled'
-                    """,
-                    (reference_id, self._deployment_id),
-                ).fetchone()
-                if (
-                    row is None
-                    or row["tenant_id"] != tenant_id
-                    or row["workspace_id"] != workspace_id
-                    or row["status"] not in {"active", "draining"}
-                ):
-                    raise LocalSecretStoreError("local_secret.not_found")
-                version = int(row["active_version"])
-                key = (reference_id, version)
-                self._leases[key] = self._leases.get(key, 0) + 1
+            cached = self._envelope_cache.get(reference_id)
+            if cached is None:
+                connection = self._connect(read_only=True)
                 try:
-                    lease = decrypt_local_secret(
-                        self._envelope(row),
-                        owner=self._owner_from_rows(row, reference_id, version),
-                        keyring=self._keyring,
-                    )
-                except Exception:
-                    self._leases[key] -= 1
-                    if self._leases[key] == 0:
-                        del self._leases[key]
-                    raise LocalSecretStoreError("local_secret.unseal_failed") from None
-                return LocalVersionLease(
-                    reference_id=reference_id,
-                    version=version,
-                    lease=lease,
-                    release=self._release,
+                    row = connection.execute(
+                        """
+                        SELECT s.tenant_id,s.workspace_id,s.kind,s.provider_connection_id,
+                               s.active_version,v.*
+                        FROM local_secrets s JOIN local_secret_versions v
+                          ON v.reference_id=s.reference_id AND v.version=s.active_version
+                        WHERE s.reference_id=? AND s.deployment_id=? AND s.status<>'disabled'
+                        """,
+                        (reference_id, self._deployment_id),
+                    ).fetchone()
+                    if (
+                        row is None
+                        or row["tenant_id"] != tenant_id
+                        or row["workspace_id"] != workspace_id
+                        or row["status"] not in {"active", "draining"}
+                    ):
+                        raise LocalSecretStoreError("local_secret.not_found")
+                    version = int(row["active_version"])
+                    cached = self._cached_envelope(row, reference_id, version)
+                    self._envelope_cache[reference_id] = cached
+                except LocalSecretStoreError:
+                    raise
+                except sqlite3.Error:
+                    raise LocalSecretStoreError("local_secret.storage_unavailable") from None
+                finally:
+                    connection.close()
+            if (
+                cached.owner.tenant_id != tenant_id
+                or cached.owner.workspace_id != workspace_id
+            ):
+                raise LocalSecretStoreError("local_secret.not_found")
+            version = cached.owner.version
+            key = (reference_id, version)
+            self._leases[key] = self._leases.get(key, 0) + 1
+            try:
+                lease = decrypt_local_secret(
+                    cached.encrypted,
+                    owner=cached.owner,
+                    keyring=self._keyring,
                 )
-            except LocalSecretStoreError:
-                raise
-            except sqlite3.Error:
-                raise LocalSecretStoreError("local_secret.storage_unavailable") from None
-            finally:
-                connection.close()
+            except Exception:
+                self._leases[key] -= 1
+                if self._leases[key] == 0:
+                    del self._leases[key]
+                raise LocalSecretStoreError("local_secret.unseal_failed") from None
+            return LocalVersionLease(
+                reference_id=reference_id,
+                version=version,
+                lease=lease,
+                release=self._release,
+            )
 
     def rotate(
         self,
@@ -515,6 +535,7 @@ class LocalSecretStore:
             from_version=from_version,
             to_version=to_version,
             result=result,
+            candidate=_CachedLocalSecretEnvelope(owner=owner, encrypted=encrypted),
         )
 
     def test_connection(
@@ -580,6 +601,7 @@ class LocalSecretStore:
                 reference = self._reference(connection, reference_id)
                 self._event(connection, "edge.secret_reference_changed", reference, now=now)
                 connection.commit()
+                self._envelope_cache.pop(reference_id, None)
                 return reference
             except LocalSecretStoreError:
                 _rollback(connection)
@@ -717,6 +739,7 @@ class LocalSecretStore:
         from_version: int,
         to_version: int,
         result: ProviderTestResult,
+        candidate: _CachedLocalSecretEnvelope,
     ) -> SecretReference:
         now = self._time()
         with self._lock:
@@ -841,6 +864,8 @@ class LocalSecretStore:
                     now=now,
                 )
                 connection.commit()
+                if result.outcome == "succeeded":
+                    self._envelope_cache[reference_id] = candidate
                 if result.outcome == "succeeded" and draining:
                     self._draining.add((reference_id, from_version))
                 return reference
@@ -1269,6 +1294,7 @@ class LocalSecretStore:
                     os.fsync(stream.fileno())
                 os.replace(lkg_temporary, lkg)
                 os.replace(staging, self._path)
+                self._envelope_cache.clear()
                 self._initialize()
             except LocalSecretStoreError:
                 staging.unlink(missing_ok=True)
@@ -1769,6 +1795,14 @@ class LocalSecretStore:
             ciphertext=bytes(row["ciphertext"]),
         )
 
+    def _cached_envelope(
+        self, row: sqlite3.Row, reference_id: str, version: int
+    ) -> _CachedLocalSecretEnvelope:
+        return _CachedLocalSecretEnvelope(
+            owner=self._owner_from_rows(row, reference_id, version),
+            encrypted=self._envelope(row),
+        )
+
     def _event(
         self,
         connection: sqlite3.Connection,
@@ -1872,14 +1906,27 @@ class LocalSecretStore:
         finally:
             connection.close()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, *, read_only: bool = False) -> sqlite3.Connection:
         try:
-            connection = sqlite3.connect(self._path, timeout=5, isolation_level=None)
+            target: str | Path = self._path
+            connect_options: dict[str, object] = {}
+            if read_only:
+                target = f"{self._path.as_uri()}?mode=ro"
+                connect_options["uri"] = True
+            connection = sqlite3.connect(
+                target,
+                timeout=5,
+                isolation_level=None,
+                **connect_options,
+            )
             connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA trusted_schema=OFF")
+            if read_only:
+                connection.execute("PRAGMA query_only=ON")
+                return connection
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("PRAGMA secure_delete=ON")
-            connection.execute("PRAGMA trusted_schema=OFF")
             return connection
         except sqlite3.Error:
             raise LocalSecretStoreError("local_secret.storage_unavailable") from None

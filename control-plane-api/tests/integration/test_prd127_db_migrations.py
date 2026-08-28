@@ -244,7 +244,8 @@ def test_0119_down_guard_rejects_runtime_generation(
         connection.execute(
             """
             UPDATE edge_deployment_release_heads SET desired_generation=1,
-              revision=revision+1,updated_at='2026-08-28T12:00:01.000Z'
+              revision=revision+1,
+              updated_at=strftime('%Y-%m-%dT%H:%M:%fZ',updated_at,'+1 second')
             WHERE edge_deployment_id=?
             """,
             (EXISTING_DEPLOYMENT_ID,),

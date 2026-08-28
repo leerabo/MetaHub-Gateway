@@ -300,6 +300,12 @@ def test_delete_checks_every_runtime_and_recovery_reference(tmp_path, slot) -> N
 def test_cross_owner_access_cas_and_provider_exception_fail_closed(tmp_path) -> None:
     store = _store(tmp_path)
     reference = _create(store)
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ):
+        pass
     with pytest.raises(LocalSecretStoreError, match="not_found"):
         store.acquire(
             reference.reference_id,
@@ -330,6 +336,158 @@ def test_cross_owner_access_cas_and_provider_exception_fail_closed(tmp_path) -> 
     assert result.latency_bucket == "gte_2000ms"
 
 
+def test_encrypted_envelope_cache_is_lazy_and_avoids_repeat_database_reads(
+    tmp_path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    value = bytearray(range(1, 129))
+    reference = _create(store, value)
+    assert store._envelope_cache == {}
+
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ) as lease:
+        assert bytes(lease.view()) == bytes(value)
+
+    cached = store._envelope_cache[reference.reference_id]
+    assert cached.owner.reference_id == reference.reference_id
+    assert cached.owner.version == 1
+    assert cached.encrypted.ciphertext != bytes(value)
+    assert "encrypted=<" not in repr(cached)
+
+    def unexpected_connect(*, read_only: bool = False):
+        raise AssertionError(f"unexpected database read: {read_only=}")
+
+    monkeypatch.setattr(store, "_connect", unexpected_connect)
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ) as lease:
+        assert bytes(lease.view()) == bytes(value)
+
+
+def test_rotation_switches_cache_only_after_success(tmp_path) -> None:
+    store = _store(tmp_path)
+    first_value = bytearray(range(1, 65))
+    second_value = bytearray(reversed(range(1, 65)))
+    third_value = bytearray((item * 3) % 251 for item in range(1, 65))
+    reference = _create(store, first_value)
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ):
+        pass
+    first_cached = store._envelope_cache[reference.reference_id]
+
+    rotated = store.rotate(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+        plaintext=second_value,
+        tester=_success,
+        expected_revision=reference.revision,
+    )
+    second_cached = store._envelope_cache[reference.reference_id]
+    assert second_cached is not first_cached
+    assert second_cached.owner.version == 2
+
+    def failed(_secret: memoryview) -> ProviderTestResult:
+        return ProviderTestResult("authentication_failed", (), "100_499ms")
+
+    degraded = store.rotate(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+        plaintext=third_value,
+        tester=failed,
+        expected_revision=rotated.revision,
+    )
+    assert degraded.active_version == 2
+    assert store._envelope_cache[reference.reference_id] is second_cached
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ) as lease:
+        assert lease.version == 2
+        assert bytes(lease.view()) == bytes(second_value)
+
+
+def test_delete_invalidates_cached_envelope(tmp_path) -> None:
+    store = _store(tmp_path)
+    reference = _create(store)
+    with store.acquire(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+    ):
+        pass
+    assert reference.reference_id in store._envelope_cache
+
+    disabled = store.delete(
+        reference.reference_id,
+        tenant_id=reference.tenant_id,
+        workspace_id=reference.workspace_id,
+        expected_revision=reference.revision,
+    )
+    assert disabled.status == "disabled"
+    assert reference.reference_id not in store._envelope_cache
+    with pytest.raises(LocalSecretStoreError, match="not_found"):
+        store.acquire(
+            reference.reference_id,
+            tenant_id=reference.tenant_id,
+            workspace_id=reference.workspace_id,
+        )
+
+
+def test_restore_clears_cache_and_restart_loads_envelope_lazily(tmp_path) -> None:
+    source = _store(tmp_path / "source")
+    target = _store(tmp_path / "target")
+    source_value = bytearray((item * 7) % 251 for item in range(1, 129))
+    source_reference = _create(source, source_value)
+    decoy = _create(target, bytearray(reversed(range(1, 129))))
+    with target.acquire(
+        decoy.reference_id,
+        tenant_id=decoy.tenant_id,
+        workspace_id=decoy.workspace_id,
+    ):
+        pass
+    assert decoy.reference_id in target._envelope_cache
+
+    domains = source.backup_domains(
+        tenant_id=source_reference.tenant_id,
+        workspace_id=source_reference.workspace_id,
+    )
+    target.apply_backup_domains(
+        domains,
+        tenant_id=source_reference.tenant_id,
+        workspace_id=source_reference.workspace_id,
+        source_deployment_id=DEPLOYMENT_ID,
+        restore_id="lrj_" + "1" * 32,
+    )
+    assert target._envelope_cache == {}
+    with target.acquire(
+        source_reference.reference_id,
+        tenant_id=source_reference.tenant_id,
+        workspace_id=source_reference.workspace_id,
+    ) as lease:
+        assert bytes(lease.view()) == bytes(source_value)
+    assert source_reference.reference_id in target._envelope_cache
+
+    restarted = _store(tmp_path / "target")
+    assert restarted._envelope_cache == {}
+    with restarted.acquire(
+        source_reference.reference_id,
+        tenant_id=source_reference.tenant_id,
+        workspace_id=source_reference.workspace_id,
+    ) as lease:
+        assert bytes(lease.view()) == bytes(source_value)
+
+
 def test_local_unseal_p95_is_below_ten_milliseconds(tmp_path) -> None:
     store = _store(tmp_path)
     reference = _create(store, bytearray(range(1, 129)))
@@ -345,3 +503,15 @@ def test_local_unseal_p95_is_below_ten_milliseconds(tmp_path) -> None:
         elapsed.append((time.perf_counter() - started) * 1000)
     p95 = statistics.quantiles(elapsed, n=100, method="inclusive")[94]
     assert p95 < 10.0
+
+
+def test_local_unseal_connection_is_read_only_and_query_only(tmp_path) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    connection = store._connect(read_only=True)
+    try:
+        assert connection.execute("PRAGMA query_only").fetchone()[0] == 1
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute("DELETE FROM local_secrets")
+    finally:
+        connection.close()

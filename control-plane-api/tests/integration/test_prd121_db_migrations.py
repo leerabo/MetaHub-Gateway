@@ -313,7 +313,7 @@ def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database = tmp_path / "fresh.sqlite3"
     database_url = _url(database)
     try:
-        assert apply_migrations(database_url).applied[-1] == "0118"
+        assert apply_migrations(database_url).applied[-1] == "0122"
         _healthy(database_url)
     finally:
         database.unlink(missing_ok=True)

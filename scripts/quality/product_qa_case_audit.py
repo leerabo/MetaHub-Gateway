@@ -25,6 +25,8 @@ EXPECTED_COUNTS = {
     "SEC": 7,
     "FLOW": 10,
 }
+EXPECTED_APPLIED_MIGRATIONS = 122
+EXPECTED_LATEST_MIGRATION = "0122"
 SENSITIVE_JSON_KEYS = {
     "access_token",
     "authorization",
@@ -225,10 +227,10 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
     database_clean = all(
         report["database"]
         == {
-            "applied_migrations": 82,
+            "applied_migrations": EXPECTED_APPLIED_MIGRATIONS,
             "foreign_key_violations": 0,
             "integrity_check": "ok",
-            "latest_migration": "0082",
+            "latest_migration": EXPECTED_LATEST_MIGRATION,
         }
         for report in browser_reports
     )

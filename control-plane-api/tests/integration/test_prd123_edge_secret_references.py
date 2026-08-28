@@ -298,7 +298,7 @@ async def test_agent_sync_workspace_read_and_secret_zero_cloud_boundary(
 ) -> None:
     database = tmp_path / "prd123.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0118"
+    assert apply_migrations(database_url).applied[-1] == "0122"
     with monkeypatch.context() as seed_patch:
         seed_patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)
