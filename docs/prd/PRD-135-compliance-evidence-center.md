@@ -1,0 +1,72 @@
+# PRD-135 等保、个保与企业审计证据中心
+
+状态：设计冻结，尚未实现。依赖 PRD-034/058/081/109/117/134；范围以 Excel PRD-135 为准。
+
+## Excel 权威合同
+
+- API：`GET /platform/compliance/controls`、`POST /platform/compliance/evidence`、
+  `GET /workspaces/{id}/compliance-reports`、`POST /platform/compliance/exceptions`。
+- 对象：`ComplianceControl`、`ControlMapping`、`ComplianceEvidence`、`ComplianceException`、
+  `RemediationTask`、`ComplianceReport`。
+- 事件：`compliance.evidence_expiring`、`compliance.control_failed`、
+  `compliance.exception_approved`。
+- SLO：报告生成 < 10 分钟；过期检测 < 24 小时；关键控制失败 < 5 分钟告警。
+
+## 1. 产品闭环
+
+platform_compliance 维护版本化控制项库和等保、个保、数据安全法映射，指定 owner、适用范围、证据类型、采集器、
+有效期和验收规则。受信采集器提交 digest-bound 结构化证据，Control 验证来源、schema、owner、时间和 freshness，
+计算 fixed outcome；失败自动创建 remediation，例外经不同账号双人审批并到期。
+
+Workspace security_admin/auditor 只读取本空间裁剪报告和整改状态；报告明确区分 `implemented|partially_implemented|
+not_implemented|not_applicable|exception_active|evidence_stale`，不把控制证据等同认证证书，也不声明未取得的认证。
+敏感证据正文保留在分级对象域，普通报告只含摘要、hash、有效期和可解释结论。
+
+## 2. 0127 数据与证据状态
+
+- ComplianceControl/ControlMapping 为平台全局不可变版本，保存 framework/code/version、responsibility、required
+  evidence kinds 和 evaluation rule digest；新版本不覆盖历史报告。
+- ComplianceEvidence、ComplianceException、RemediationTask 和 ComplianceReport 全部带 Workspace/tenant 复合 owner；
+  Evidence 保存 control version、collector identity/version、artifact digest、classification、captured/valid-until、
+  schema/outcome 和 immutable receipt。平台级控制证据也必须关联专用受控 Workspace，不能创建无 owner 证据。
+- ComplianceException 绑定 control/evidence scope、fixed reason、compensating controls、requester/approver、
+  starts/expires、review generation；申请人不能自批。
+- RemediationTask 状态为 `open|in_progress|blocked|verified|closed`，绑定失败 control generation 和 owner；关闭需新证据。
+- ComplianceReport 绑定 Workspace、control set version、evidence high-watermark、生成器版本、summary digest 和 expiry；
+  证据变化使旧报告 stale，不原地改写。
+
+Down 在任一非种子控制版本、证据、例外、整改、报告或事件存在时拒绝。
+
+## 3. 授权、采集与 Console
+
+platform_compliance 管理控制、证据和报告；platform_security 可读安全控制摘要但不能自批自身例外；Workspace
+security_admin/auditor 只读本空间报告。跨 Workspace 同形 404；平台证据与租户证据分域，SupportGrant 不自动授予
+高分类证据正文。采集器使用 machine identity、固定 audience/scope、签名 envelope 和 replay guard，禁止任意文件路径、
+URL、命令或自由 JSON。
+
+Platform Console 展示控制覆盖、freshness、失败、例外、整改和证据来源；Workspace Console 展示本空间报告、差距和
+恢复动作。认证/法规文案来自版本化受审模板，页面不得把 `control_passed` 渲染为“已认证”。所有下载短 TTL、no-store、
+逐次审计，离页清理对象地址。
+
+## 4. 第一轮自审：证据可信度与措辞
+
+- P0：人工上传 PDF 即将控制标为通过无法证明来源。修正为受信 collector identity、schema、digest、freshness 和 review。
+- P0：控制通过自动显示“已通过等保认证”会产生虚假合规声明。修正为事实 outcome 与认证状态分离，认证只能引用
+  独立已验证证书事实。
+- P0：平台报告 join 全租户证据会泄漏客户安全状态。修正为 owner-qualified projection 和 Workspace-specific report。
+- P1：高分类证据 URL 出现在报告会绕过授权。修正为摘要引用，正文按分类短授权下载。
+
+## 5. 第二轮自审：时效、例外与整改
+
+- P0：进程内过期 timer 重启后不告警。修正为持久 deadline/watermark、lease fencing 和幂等 catch-up。
+- P0：例外只绑定 control code 会放行后续更严格版本。修正为 control version、scope、evidence generation 和 expiry 全绑定。
+- P1：新证据覆盖旧证据会失去审计链。修正为追加 evidence，current projection 只指向最新有效 generation。
+- P1：整改关闭不要求新验证会伪造恢复。修正为 verified 状态必须引用更新后通过的 evidence receipt。
+
+两轮均为修正后通过，无未关闭 P0/P1 设计问题。
+
+## 6. 专项验证计划与批次边界
+
+0126/0127 往返/down guard；控制版本/映射、采集器签名/replay、证据分类/owner/freshness；虚假认证文案负测试；
+跨租户报告；例外非自批/到期/撤权；整改闭环；collector/DB/object store/outbox 故障与恢复；10 分钟报告、24 小时过期、
+5 分钟告警；Platform/Workspace 三浏览器三缩放；敏感扫描和静止终态。完整 G6 留到 PRD-138 后。
