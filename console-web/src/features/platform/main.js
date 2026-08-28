@@ -131,6 +131,10 @@ import {
 } from "../../lib/edgeLicenses.js";
 import { listPlatformBackupStatuses } from "../../lib/edgeBackups.js";
 import {
+  decidePlatformOfflineBundle,
+  listPlatformOfflineBundles,
+} from "../../lib/edgeOfflineBundles.js";
+import {
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
@@ -301,6 +305,11 @@ if (root) {
       gatewayReleases: (input) => listPlatformGatewayReleases({ controlApiUrl, ...input }),
       edgeLicenses: (input) => listPlatformLicenses({ controlApiUrl, ...input }),
       edgeBackups: (input) => listPlatformBackupStatuses({ controlApiUrl, ...input }),
+      offlineBundles: (input) => listPlatformOfflineBundles({ controlApiUrl, ...input }),
+      decideOfflineBundle: (input) => decidePlatformOfflineBundle({
+        controlApiUrl,
+        ...input,
+      }),
       issueEdgeLicense: (input) => issuePlatformLicense({ controlApiUrl, ...input }),
       revokeEdgeLicense: (input) => revokePlatformLicense({ controlApiUrl, ...input }),
       fleetRollouts: (input) => listPlatformRollouts({ controlApiUrl, ...input }),

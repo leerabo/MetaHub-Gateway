@@ -172,6 +172,21 @@ from .models import (
     WorkspaceRegistrationCreateRequest,
     WorkspaceRegistrationResponse,
 )
+from .offline_bundle_models import (
+    OfflineBundleStateResponse,
+    PlatformOfflineBundleListResponse,
+    PlatformOfflineDecisionRequest,
+    PlatformOfflineDecisionResponse,
+    WorkspaceOfflineBundleRequest,
+    WorkspaceOfflineResolutionRequest,
+)
+from .offline_bundle_service import (
+    decide_platform_offline_request,
+    get_workspace_offline_state,
+    list_platform_offline_states,
+    request_workspace_offline_bundle,
+    request_workspace_offline_resolution,
+)
 from .secret_reference_service import (
     list_workspace_secret_references,
     synchronize_agent_secret_references,
@@ -541,9 +556,7 @@ async def post_edge_validation_report(
 ) -> EdgeValidationResponse:
     _reject_query(request)
     fingerprint = _prepare_agent(request, require_mtls=True)
-    report = _model(
-        await _strict_json(request, "edge.request_invalid"), DeploymentValidationReport
-    )
+    report = _model(await _strict_json(request, "edge.request_invalid"), DeploymentValidationReport)
     result = await _run(
         record_agent_validation,
         request.app.state.config,
@@ -676,9 +689,7 @@ async def get_edge_support_bundle(
 
 
 @router.get("/edge/installers", response_model=EdgeInstallerCatalogResponse)
-async def get_edge_installers(
-    request: Request, response: Response
-) -> EdgeInstallerCatalogResponse:
+async def get_edge_installers(request: Request, response: Response) -> EdgeInstallerCatalogResponse:
     _prepare_workspace(request, write=False)
     _reject_query(request)
     result = await _run(
@@ -725,9 +736,7 @@ async def get_edge_installer_artifact(
     response_model=EdgePreflightRecordResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def post_edge_preflight(
-    request: Request, response: Response
-) -> EdgePreflightRecordResponse:
+async def post_edge_preflight(request: Request, response: Response) -> EdgePreflightRecordResponse:
     _prepare_workspace(request, write=True)
     _reject_query(request)
     payload = _model(
@@ -754,9 +763,7 @@ async def post_edge_preflight(
     response_model=EdgeInstallationResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def post_edge_installation(
-    request: Request, response: Response
-) -> EdgeInstallationResponse:
+async def post_edge_installation(request: Request, response: Response) -> EdgeInstallationResponse:
     _prepare_workspace(request, write=True)
     _reject_query(request)
     payload = _model(
@@ -779,9 +786,7 @@ async def post_edge_installation(
     return result
 
 
-@router.patch(
-    "/edge/installations/{installation_id}", response_model=EdgeInstallationResponse
-)
+@router.patch("/edge/installations/{installation_id}", response_model=EdgeInstallationResponse)
 async def patch_edge_installation(
     installation_id: str, request: Request, response: Response
 ) -> EdgeInstallationResponse:
@@ -834,9 +839,7 @@ async def post_edge_secret_reference_sync(
 ) -> EdgeSecretSyncReceipt:
     _reject_query(request)
     fingerprint = _prepare_agent(request, require_mtls=True)
-    payload = _model(
-        await _strict_json(request, "edge.request_invalid"), EdgeSecretSyncBatch
-    )
+    payload = _model(await _strict_json(request, "edge.request_invalid"), EdgeSecretSyncBatch)
     result = await _run(
         synchronize_agent_secret_references,
         request.app.state.config,
@@ -1594,6 +1597,192 @@ def require_platform_edge_backup(request: Request) -> PlatformContext:
     return context
 
 
+def require_platform_edge_offline(request: Request) -> PlatformContext:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    context = authenticate_platform_session_context(
+        request.app.state.config,
+        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=csrf,
+    )
+    if not {
+        "platform.edge_offline_bundle.read",
+        "platform.edge_offline_bundle.manage",
+    }.intersection(context.permissions):
+        raise ApiError("platform.permission_denied")
+    return context
+
+
+@router.post(
+    "/edge/offline-bundles/export",
+    response_model=OfflineBundleStateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_offline_bundle_export(
+    request: Request, response: Response
+) -> OfflineBundleStateResponse:
+    return await _post_workspace_offline_bundle(request, response, operation="export")
+
+
+@router.post(
+    "/edge/offline-bundles/import",
+    response_model=OfflineBundleStateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_offline_bundle_import(
+    request: Request, response: Response
+) -> OfflineBundleStateResponse:
+    return await _post_workspace_offline_bundle(request, response, operation="import")
+
+
+async def _post_workspace_offline_bundle(
+    request: Request, response: Response, *, operation: str
+) -> OfflineBundleStateResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _json_model(
+        await _strict_json(request, "edge_offline_bundle.request_invalid"),
+        WorkspaceOfflineBundleRequest,
+        error_code="edge_offline_bundle.request_invalid",
+    )
+    result = await _run(
+        request_workspace_offline_bundle,
+        request.app.state.config,
+        operation,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_required_step_up_grant(request),
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_offline_bundle.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/offline-bundles/conflicts/{conflict_id}/resolutions",
+    response_model=OfflineBundleStateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_offline_conflict_resolution(
+    conflict_id: str, request: Request, response: Response
+) -> OfflineBundleStateResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _json_model(
+        await _strict_json(request, "edge_offline_bundle.request_invalid"),
+        WorkspaceOfflineResolutionRequest,
+        error_code="edge_offline_bundle.request_invalid",
+    )
+    result = await _run(
+        request_workspace_offline_resolution,
+        request.app.state.config,
+        conflict_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_required_step_up_grant(request),
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_offline_bundle.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/offline-bundles",
+    response_model=OfflineBundleStateResponse,
+)
+async def get_edge_offline_bundles(
+    deployment_id: str, request: Request, response: Response
+) -> OfflineBundleStateResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        get_workspace_offline_state,
+        request.app.state.config,
+        deployment_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/platform/edge/offline-bundles",
+    response_model=PlatformOfflineBundleListResponse,
+)
+async def get_platform_edge_offline_bundles(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_offline)],
+) -> PlatformOfflineBundleListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_offline_states,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/edge/offline-bundles/{offline_request_id}/decisions",
+    response_model=PlatformOfflineDecisionResponse,
+)
+async def post_platform_edge_offline_decision(
+    offline_request_id: str,
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_offline)],
+) -> PlatformOfflineDecisionResponse:
+    _reject_query(request)
+    payload = _json_model(
+        await _strict_json(request, "edge_offline_bundle.request_invalid"),
+        PlatformOfflineDecisionRequest,
+        error_code="edge_offline_bundle.request_invalid",
+    )
+    result = await _run(
+        decide_platform_offline_request,
+        request.app.state.config,
+        context,
+        offline_request_id,
+        payload,
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_offline_bundle.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
 @router.get(
     "/edge/deployments/{deployment_id}/backup-status",
     response_model=BackupStatusResponse,
@@ -1857,9 +2046,7 @@ async def post_platform_gateway_release(
         request.app.state.config,
         context,
         payload,
-        step_up_grant=(
-            None if payload.action == "submit" else _required_step_up_grant(request)
-        ),
+        step_up_grant=(None if payload.action == "submit" else _required_step_up_grant(request)),
         idempotency_key=_platform_idempotency_key(
             request, error_code="fleet.release_request_invalid"
         ),
@@ -2234,18 +2421,14 @@ def _required_step_up_grant(request: Request) -> str:
     return grant
 
 
-def _model(
-    payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"
-):
+def _model(payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"):
     try:
         return model_type.model_validate(payload)
     except ValueError:
         raise ApiError(error_code) from None
 
 
-def _json_model(
-    payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"
-):
+def _json_model(payload: dict[str, Any], model_type, *, error_code: str = "edge.request_invalid"):
     try:
         return model_type.model_validate_json(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -2263,9 +2446,11 @@ def _platform_model(payload: dict[str, Any], model_type):
 
 async def _strict_telemetry_json(request: Request) -> dict[str, Any]:
     content_types = _raw_headers(request, b"content-type")
-    if len(content_types) != 1 or re.fullmatch(
-        r"application/json(?:;\s*charset=utf-8)?", content_types[0], re.IGNORECASE
-    ) is None:
+    if (
+        len(content_types) != 1
+        or re.fullmatch(r"application/json(?:;\s*charset=utf-8)?", content_types[0], re.IGNORECASE)
+        is None
+    ):
         raise ApiError("edge.request_invalid")
     encodings = _raw_headers(request, b"content-encoding")
     if len(encodings) > 1:
@@ -2273,9 +2458,7 @@ async def _strict_telemetry_json(request: Request) -> dict[str, Any]:
     encoding = encodings[0].lower() if encodings else "identity"
     if encoding not in {"gzip", "identity"}:
         raise ApiError("edge.request_invalid")
-    maximum_body = (
-        _MAX_TELEMETRY_COMPRESSED_BYTES if encoding == "gzip" else _MAX_TELEMETRY_BYTES
-    )
+    maximum_body = _MAX_TELEMETRY_COMPRESSED_BYTES if encoding == "gzip" else _MAX_TELEMETRY_BYTES
     body = await _bounded_body(request, maximum_body)
     try:
         if encoding == "gzip":
@@ -2295,6 +2478,7 @@ async def _strict_telemetry_json(request: Request) -> dict[str, Any]:
             if not body:
                 raise ApiError("edge.request_invalid")
             decoded = body
+
         def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
             result: dict[str, Any] = {}
             for key, value in items:
@@ -2330,9 +2514,7 @@ async def _bounded_body(request: Request, maximum: int) -> bytes:
     return bytes(body)
 
 
-async def _read_support_bundle_upload(
-    request: Request, staged_path
-) -> SupportBundleUploadMetadata:
+async def _read_support_bundle_upload(request: Request, staged_path) -> SupportBundleUploadMetadata:
     content_types = _raw_headers(request, b"content-type")
     lengths = _raw_headers(request, b"content-length")
     if (
@@ -2458,9 +2640,7 @@ def _compatibility_query(request: Request) -> dict[str, str | None]:
     deployment_id = values.get("deployment_id")
     if release_id is not None and re.fullmatch(r"ger_[0-9a-f]{32}", release_id) is None:
         raise ApiError("fleet.compatibility_request_invalid")
-    if deployment_id is not None and re.fullmatch(
-        r"edp_[0-9a-f]{32}", deployment_id
-    ) is None:
+    if deployment_id is not None and re.fullmatch(r"edp_[0-9a-f]{32}", deployment_id) is None:
         raise ApiError("fleet.compatibility_request_invalid")
     return {"release_id": release_id, "deployment_id": deployment_id}
 

@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-129 - 私有Gateway备份、恢复与灾备演练` 已完成；当前下一条未完成项是
-  `PRD-130 - 隔离环境签名包异步管理与冲突合并`。
+- 新 `PRD-090` 至 `PRD-130 - 隔离环境签名包异步管理与冲突合并` 已完成；当前下一条未完成项是
+  `PRD-131 - 旧租户、直连与私有部署迁移切换向导`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-130 - 隔离环境签名包异步管理与冲突合并` 已完成：0122、绑定 owner/direction/version vector 的
+  Ed25519 manifest、逐 entry AEAD/hash/Merkle、严格介质验证与原子 apply、Workspace step-up 请求、Platform
+  非自批批准/拒绝、显式 cloud/local conflict resolution、`metahub bundle verify/apply` 和双域 Console 均已
+  交付。Python 聚焦 `17/17`、Console `7/7`、lint `388 files` 通过；双域 `1280x900`/`390x844` 浏览器验收
+  无页面溢出、控件交叠、禁止字段命中或浏览器错误。详见
+  [PRD-130 设计](docs/prd/PRD-130-isolated-environment-signed-bundle-conflict-reconciliation.md) 和
+  [PRD-130 测试记录](docs/testing/PRD-130-tests.md)。下一权威项为 PRD-131；PRD-130 独立提交后统一执行 G5。
 - `PRD-129 - 私有Gateway备份、恢复与灾备演练` 已完成：0121、用途分域签名 manifest、逐块 AEAD/Merkle、
   客户恢复密钥包裹、本地原子恢复 journal、替换节点 KEK 重包裹、持久云报告 outbox、Control/Agent API、
   非自批隔离演练和 Workspace/Platform 双域 Console 均已交付。Shared/Gateway `22/22`、Control/迁移/导航

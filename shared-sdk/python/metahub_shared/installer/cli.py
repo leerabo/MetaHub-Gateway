@@ -20,10 +20,13 @@ from metahub_shared.private_gateway import (
     EdgeLicenseStore,
     InstallerContractError,
     LicenseContractError,
+    OfflineBundleContractError,
+    OfflineBundleStateStore,
     PreflightReport,
     load_strict_json,
     verify_installer_release,
     verify_license_entitlement,
+    verify_offline_bundle_archive,
 )
 
 from .runtime import (
@@ -97,6 +100,17 @@ def _build_parser() -> _SafeArgumentParser:
     license_import.add_argument("--deployment-id", required=True)
     license_import.add_argument("--device-generation", type=int, required=True)
 
+    bundle_command = commands.add_parser("bundle")
+    bundle_actions = bundle_command.add_subparsers(
+        dest="bundle_action", required=True, parser_class=_SafeArgumentParser
+    )
+    bundle_verify = bundle_actions.add_parser("verify")
+    _offline_bundle_arguments(bundle_verify)
+    bundle_apply = bundle_actions.add_parser("apply")
+    _offline_bundle_arguments(bundle_apply)
+    bundle_apply.add_argument("--state-root", required=True)
+    bundle_apply.add_argument("--confirmation-stdin", action="store_true")
+
     uninstall = commands.add_parser("uninstall")
     uninstall.add_argument("--target-root", default="/opt/metahub")
     uninstall.add_argument("--installation-id", required=True)
@@ -117,6 +131,19 @@ def _release_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--schema-version", type=int, default=116)
     parser.add_argument("--agent-version", default="1.0.0")
     parser.add_argument("--control-version", default="1.0.0")
+
+
+def _offline_bundle_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--trust-store", required=True)
+    parser.add_argument("--staging-root", required=True)
+    parser.add_argument("--workspace-id", required=True)
+    parser.add_argument("--tenant-id", required=True)
+    parser.add_argument("--deployment-id", required=True)
+    parser.add_argument("--direction", required=True, choices=("cloud_to_edge", "edge_to_cloud"))
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--key-input")
+    source.add_argument("--key-stdin", action="store_true")
 
 
 def run_cli(
@@ -142,6 +169,8 @@ def run_cli(
         arguments = _build_parser().parse_args(list(argv) if argv is not None else None)
         if arguments.command == "license":
             return _import_license(arguments, input_stream, output_stream)
+        if arguments.command == "bundle":
+            return _offline_bundle(arguments, input_stream, output_stream, error_stream)
         if arguments.command in {"preflight", "install"}:
             verified = _verified_release(arguments)
         if arguments.command == "preflight":
@@ -238,6 +267,9 @@ def run_cli(
     except LicenseContractError as failure:
         _emit(error_stream, {"status": "error", "code": failure.code})
         return 4
+    except OfflineBundleContractError as failure:
+        _emit(error_stream, {"status": "error", "code": failure.code})
+        return 4
     except InstallerRuntimeError as failure:
         _emit(error_stream, {"status": "error", "code": failure.code})
         return 5
@@ -276,6 +308,15 @@ def _license_trusted_keys(path: Path) -> dict[str, bytes]:
     )
 
 
+def _offline_trusted_keys(path: Path) -> dict[str, bytes]:
+    return _purpose_trusted_keys(
+        path,
+        schema_version="metahub.edge-offline-trust/v1",
+        purpose="metahub.edge-offline-bundle.manifest/v1",
+        error_code="edge_offline_bundle.key_untrusted",
+    )
+
+
 def _purpose_trusted_keys(
     path: Path,
     *,
@@ -287,10 +328,7 @@ def _purpose_trusted_keys(
         value = load_strict_json(path, maximum_bytes=64 * 1024)
         if type(value) is not dict or set(value) != {"schema_version", "keys"}:
             raise ValueError
-        if (
-            value["schema_version"] != schema_version
-            or type(value["keys"]) is not list
-        ):
+        if value["schema_version"] != schema_version or type(value["keys"]) is not list:
             raise ValueError
         result: dict[str, bytes] = {}
         for item in value["keys"]:
@@ -366,6 +404,97 @@ def _import_license(
         },
     )
     return 0
+
+
+def _offline_bundle(
+    arguments: argparse.Namespace,
+    input_stream: TextIO,
+    output_stream: TextIO,
+    error_stream: TextIO,
+) -> int:
+    if arguments.bundle_action == "apply" and arguments.key_stdin:
+        raise CliFailure("installer.argument_invalid", 2)
+    key_document = (
+        _read_stdin_json(input_stream)
+        if arguments.key_stdin
+        else _read_private_json(Path(arguments.key_input))
+    )
+    content_key = _offline_content_key(key_document)
+    trusted_keys = _offline_trusted_keys(Path(arguments.trust_store))
+    verified = verify_offline_bundle_archive(
+        Path(arguments.input),
+        Path(arguments.staging_root),
+        trusted_keys=trusted_keys,
+        unwrap_key=lambda _envelope: content_key,
+        expected_workspace_id=arguments.workspace_id,
+        expected_tenant_id=arguments.tenant_id,
+        expected_deployment_id=arguments.deployment_id,
+        expected_direction=arguments.direction,
+        now=datetime.now(UTC),
+    )
+    manifest = verified.verified.signed.manifest
+    if arguments.bundle_action == "verify":
+        _emit(
+            output_stream,
+            {
+                "bundle_id": manifest.bundle_id,
+                "direction": manifest.direction,
+                "domains": [item.domain for item in manifest.version_vector],
+                "entry_count": len(manifest.entries),
+                "expires_at": _optional_time(manifest.expires_at),
+                "manifest_sha256": verified.verified.signed.manifest_sha256,
+                "producer_generation": manifest.producer_generation,
+                "status": "verified",
+            },
+        )
+        return 0
+    if not arguments.confirmation_stdin:
+        raise CliFailure("installer.confirmation_required", 2)
+    _read_action_confirmation(
+        input_stream,
+        error_stream,
+        f"APPLY {manifest.bundle_id} TO {manifest.deployment_id}",
+    )
+    store = OfflineBundleStateStore(
+        Path(arguments.state_root),
+        workspace_id=arguments.workspace_id,
+        tenant_id=arguments.tenant_id,
+        deployment_id=arguments.deployment_id,
+    )
+    result = store.apply(verified)
+    _emit(
+        output_stream,
+        {
+            "bundle_id": result.bundle_id,
+            "domains": list(result.domains),
+            "manifest_sha256": result.manifest_sha256,
+            "producer_generation": result.producer_generation,
+            "status": "applied" if result.changed else "not_modified",
+        },
+    )
+    return 0
+
+
+def _offline_content_key(value: object) -> bytes:
+    if (
+        type(value) is not dict
+        or set(value) != {"content_key", "schema_version"}
+        or value["schema_version"] != "metahub.edge-offline-media-key/v1"
+        or type(value["content_key"]) is not str
+        or "=" in value["content_key"]
+    ):
+        raise CliFailure("edge_offline_bundle.key_invalid", 4)
+    try:
+        decoded = base64.b64decode(
+            value["content_key"] + "=" * ((4 - len(value["content_key"]) % 4) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except ValueError:
+        raise CliFailure("edge_offline_bundle.key_invalid", 4) from None
+    if len(decoded) != 32:
+        raise CliFailure("edge_offline_bundle.key_invalid", 4)
+    return decoded
 
 
 def _preflight_report(path: Path) -> PreflightReport:

@@ -118,6 +118,10 @@ export const PERMISSIONS = Object.freeze({
   EDGE_BACKUP_CREATE: "edge.backup.create",
   EDGE_DRILL_MANAGE: "edge.drill.manage",
   EDGE_RESTORE_APPROVE: "edge.restore.approve",
+  // PRD-130 offline media read, transfer, and conflict resolution are independent grants.
+  EDGE_OFFLINE_BUNDLE_READ: "edge.offline_bundle.read",
+  EDGE_OFFLINE_BUNDLE_TRANSFER: "edge.offline_bundle.transfer",
+  EDGE_OFFLINE_CONFLICT_RESOLVE: "edge.offline_conflict.resolve",
   // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
   EDGE_TELEMETRY_READ: "edge.telemetry.read",
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",

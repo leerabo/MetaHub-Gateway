@@ -10,6 +10,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "edge-upgrades",
   "edge-licenses",
   "edge-backups",
+  "offline-bundles",
   "job-runtime",
   "feature-rollouts",
   "config-distribution",
@@ -102,6 +103,8 @@ export function createPlatformPageController({
     edgeLicenses: null,
     edgeLicenseIntent: null,
     edgeBackups: null,
+    offlineBundles: null,
+    offlineBundleIntent: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
     jobQueues: null,
@@ -198,7 +201,8 @@ export function createPlatformPageController({
     async refresh() {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
-        || state.edgeUpgradeIntent || state.edgeLicenseIntent)) return false;
+        || state.edgeUpgradeIntent || state.edgeLicenseIntent
+        || state.offlineBundleIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -224,13 +228,15 @@ export function createPlatformPageController({
     selectView(view) {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
-        || state.edgeUpgradeIntent || state.edgeLicenseIntent)) return false;
+        || state.edgeUpgradeIntent || state.edgeLicenseIntent
+        || state.offlineBundleIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "provider-catalog", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
+        "offline-bundles",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -274,6 +280,9 @@ export function createPlatformPageController({
           state.edgeLicenseIntent = null;
         } else if (state.view === "edge-backups") {
           state.edgeBackups = null;
+        } else if (state.view === "offline-bundles") {
+          state.offlineBundles = null;
+          state.offlineBundleIntent = null;
         }
         state.loading = false;
       }
@@ -312,6 +321,9 @@ export function createPlatformPageController({
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
       if (state.view === "edge-licenses" && !state.edgeLicenses) void loadEdgeLicenses();
       if (state.view === "edge-backups" && !state.edgeBackups) void loadEdgeBackups();
+      if (state.view === "offline-bundles" && !state.offlineBundles) {
+        void loadOfflineBundles();
+      }
     },
     async filterEdgeFleet(filters) {
       if (state.view !== "edge-fleet") return false;
@@ -340,6 +352,49 @@ export function createPlatformPageController({
     },
     async refreshEdgeBackups() {
       return loadEdgeBackups();
+    },
+    async refreshOfflineBundles() {
+      return loadOfflineBundles();
+    },
+    async decideOfflineBundle(input) {
+      if (state.view !== "offline-bundles" || state.loading
+        || input?.confirmed !== true
+        || typeof api.decideOfflineBundle !== "function"
+        || !currentPermissions().has("platform.edge_offline_bundle.manage")) return false;
+      const requestId = String(input.requestId ?? "");
+      const action = String(input.action ?? "");
+      const expectedRevision = Number(input.expectedRevision);
+      const reasonCode = String(input.reasonCode ?? "");
+      const fingerprint = JSON.stringify({ requestId, action, expectedRevision, reasonCode });
+      const idempotencyKey = state.offlineBundleIntent?.fingerprint === fingerprint
+        ? state.offlineBundleIntent.idempotencyKey : newIdempotencyKey();
+      state.offlineBundleIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const decision = await api.decideOfflineBundle({
+          requestId,
+          action,
+          expectedRevision,
+          reasonCode,
+          idempotencyKey,
+          signal: ticket.signal,
+        });
+        if (!currentOfflineBundleTicket(ticket)) return false;
+        state.offlineBundles = applyOfflineDecision(state.offlineBundles, decision);
+        state.offlineBundleIntent = null;
+        state.loading = false;
+        state.feedback = action === "approve" ? "离线交换请求已批准" : "离线交换请求已拒绝";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.offlineBundleIntent = null;
+        }
+        return fail(ticket, error);
+      }
     },
     async issueEdgeLicense(input) {
       if (state.view !== "edge-licenses" || input?.confirmed !== true
@@ -1821,6 +1876,7 @@ export function createPlatformPageController({
         fleetCompatibility: null,
         edgeLicenses: null,
         edgeBackups: null,
+        offlineBundles: null,
         jobQueues: null,
         featureFlags: null,
         configDistribution: null,
@@ -1838,7 +1894,7 @@ export function createPlatformPageController({
       };
       const tasks = [];
       const fleetOnly = new Set([
-        "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
+        "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups", "offline-bundles",
       ]).has(state.view);
       if (!fleetOnly && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
@@ -1931,6 +1987,13 @@ export function createPlatformPageController({
         && typeof api.edgeBackups === "function") {
         tasks.push(api.edgeBackups({ signal: ticket.signal }).then((value) => {
           next.edgeBackups = value;
+        }));
+      }
+      if (state.view === "offline-bundles"
+        && permissions.has("platform.edge_offline_bundle.read")
+        && typeof api.offlineBundles === "function") {
+        tasks.push(api.offlineBundles({ signal: ticket.signal }).then((value) => {
+          next.offlineBundles = value;
         }));
       }
       if (!fleetOnly && permissions.has("platform.job.read")
@@ -2096,6 +2159,10 @@ export function createPlatformPageController({
       if (!state.navigation.some((item) => item.id === "edge-backups")) {
         state.edgeBackups = null;
       }
+      if (!state.navigation.some((item) => item.id === "offline-bundles")) {
+        state.offlineBundles = null;
+        state.offlineBundleIntent = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -2234,6 +2301,26 @@ export function createPlatformPageController({
       const statuses = await api.edgeBackups({ signal: ticket.signal });
       if (!currentEdgeBackupTicket(ticket)) return false;
       state.edgeBackups = statuses;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadOfflineBundles() {
+    if (state.view !== "offline-bundles"
+      || !currentPermissions().has("platform.edge_offline_bundle.read")
+      || typeof api.offlineBundles !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const exchanges = await api.offlineBundles({ signal: ticket.signal });
+      if (!currentOfflineBundleTicket(ticket)) return false;
+      state.offlineBundles = exchanges;
       state.loading = false;
       render();
       return true;
@@ -3056,6 +3143,15 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-offline-decision-form]")) {
+        controller.decideOfflineBundle({
+          requestId: data.get("requestId"),
+          action: data.get("action"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-edge-release-submit-form]")) {
         controller.submitGatewayRelease({
           installerReleaseId: data.get("installerReleaseId"),
@@ -3419,6 +3515,7 @@ export function createPlatformPageController({
       if (action === "edge-upgrades-refresh") controller.refreshEdgeUpgrades();
       if (action === "edge-licenses-refresh") controller.refreshEdgeLicenses();
       if (action === "edge-backups-refresh") controller.refreshEdgeBackups();
+      if (action === "offline-bundles-refresh") controller.refreshOfflineBundles();
       if (action === "refund-approve") {
         controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
       }
@@ -3505,6 +3602,10 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "edge-backups"
       && currentPermissions().has("platform.edge_backup.read");
   }
+  function currentOfflineBundleTicket(ticket) {
+    return current(ticket) && state.view === "offline-bundles"
+      && currentPermissions().has("platform.edge_offline_bundle.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -3557,6 +3658,8 @@ export function createPlatformPageController({
     state.edgeLicenses = null;
     state.edgeLicenseIntent = null;
     state.edgeBackups = null;
+    state.offlineBundles = null;
+    state.offlineBundleIntent = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
     state.jobQueues = null;
@@ -3641,6 +3744,25 @@ function upsertLicense(response, license) {
       ...licenses.filter((item) => item.license_id !== license.license_id),
     ]),
   });
+}
+
+function applyOfflineDecision(response, decision) {
+  const items = response?.items ?? [];
+  let matched = false;
+  const nextItems = items.map((item) => {
+    const requests = item.state.requests.map((request) => {
+      if (request.request_id !== decision.request.request_id) return request;
+      matched = true;
+      return decision.request;
+    });
+    return Object.freeze({
+      ...item,
+      state: Object.freeze({ ...item.state, requests: Object.freeze(requests) }),
+    });
+  });
+  return matched
+    ? Object.freeze({ ...response, items: Object.freeze(nextItems) })
+    : response;
 }
 
 function normalizeNavigation(items) {

@@ -81,6 +81,20 @@ EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS = {
     ),
     "auditor": ("edge.backup.read",),
 }
+EDGE_OFFLINE_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": (
+        "edge.offline_bundle.read",
+        "edge.offline_bundle.transfer",
+        "edge.offline_conflict.resolve",
+    ),
+    "admin": ("edge.offline_bundle.read", "edge.offline_bundle.transfer"),
+    "security_admin": (
+        "edge.offline_bundle.read",
+        "edge.offline_bundle.transfer",
+        "edge.offline_conflict.resolve",
+    ),
+    "auditor": ("edge.offline_bundle.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -139,6 +153,24 @@ EDGE_BACKUP_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_backup.read", "platform.edge_drill.manage"),
     "platform_ops": ("platform.edge_backup.read", "platform.edge_drill.manage"),
     "platform_security": ("platform.edge_backup.read",),
+}
+EDGE_OFFLINE_PLATFORM_ROLE_PERMISSIONS = {
+    "platform_owner": (
+        "platform.edge_offline_bundle.manage",
+        "platform.edge_offline_bundle.read",
+    ),
+    "platform_ops": (
+        "platform.edge_offline_bundle.manage",
+        "platform.edge_offline_bundle.read",
+    ),
+    "platform_security": (
+        "platform.edge_offline_bundle.manage",
+        "platform.edge_offline_bundle.read",
+    ),
+    "release_manager": (
+        "platform.edge_offline_bundle.manage",
+        "platform.edge_offline_bundle.read",
+    ),
 }
 
 _LEGACY_ROLE_BY_WORKSPACE_ROLE = {
@@ -305,6 +337,17 @@ def load_verified_workspace_edge_permissions(
             unavailable_error_code=unavailable_error_code,
         )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_OFFLINE_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_offline_permission_extensions",
+            assignments_table="workspace_edge_offline_role_permissions",
+            introduced_migration="0122",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
     return tuple(sorted(permissions))
 
 
@@ -316,6 +359,17 @@ def load_verified_platform_edge_permissions(
 ) -> tuple[str, ...]:
     permissions: set[str] = set()
     for role_code in roles:
+        permissions.update(
+            _load_verified_permissions(
+                connection,
+                role_code=role_code,
+                expected_by_role=EDGE_OFFLINE_PLATFORM_ROLE_PERMISSIONS,
+                catalog_table="platform_edge_offline_permission_extensions",
+                assignments_table="platform_edge_offline_role_permissions",
+                introduced_migration="0122",
+                unavailable_error_code=unavailable_error_code,
+            )
+        )
         permissions.update(
             _load_verified_permissions(
                 connection,

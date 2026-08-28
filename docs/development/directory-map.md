@@ -2507,6 +2507,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   0121/API/Shared/Gateway/Console、双视口浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-130，G5 在
   PRD-130 独立提交后统一执行。
 
+## PRD-130 隔离环境签名包异步管理与冲突合并（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/offline_bundles.py` 与 `installer/cli.py`：owner/direction/version
+  vector 绑定的 canonical Ed25519 manifest、逐 entry AEAD/AAD/hash/Merkle、严格 archive/容量预算、私有
+  staging、原子 head/receipt、显式 conflict detection，以及 `metahub bundle verify/apply` 固定输出合同。
+- `control-plane-api/src/metahub_control/edge_management/offline_bundle_models.py`、`offline_bundle_service.py` 与
+  `routes.py`：Workspace step-up export/import/resolution、Platform 非自批 approve/reject、幂等 action、单调
+  cursor、不可变 conflict/resolution/event/outbox、严格 DTO、no-store 和双域权限边界。
+- `infra/migrations/0122_edge_offline_bundle_conflict_reconciliation.sql/.down.sql`：Workspace/Platform 权限、
+  bundle/request/transfer/cursor/conflict/resolution/event/outbox/action command、复合 owner、不可变/状态触发器、
+  tenant deletion manifest、完整性 guard 与业务事实 down guard。
+- `console-web/src/lib/edgeOfflineBundles.js`、Private Gateway 与 Platform 页面：独立双域 client/DTO/store，显示
+  异步方向、领域、transfer 水位、有效期、待审批、批准/拒绝、显式冲突和 resolution，不投影 signature、nonce、
+  key envelope、对象地址、storage path 或 Secret。
+- `docs/prd/PRD-130-isolated-environment-signed-bundle-conflict-reconciliation.md` 与
+  `docs/testing/PRD-130-tests.md`：保存两轮实施自审、0122/Shared/CLI/API/Console、双域双视口浏览器、敏感审计、
+  临时证据清理和批次门禁边界；下一权威项为 PRD-131，S5 实现已完成并在独立提交后执行 G5。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

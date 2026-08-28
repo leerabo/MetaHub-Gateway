@@ -126,6 +126,12 @@ _NAVIGATION = (
         "/platform.html#edge-backups",
     ),
     (
+        "platform.edge_offline_bundle.read",
+        "offline-bundles",
+        "Offline exchange",
+        "/platform.html#offline-bundles",
+    ),
+    (
         "platform.job.read",
         "job-runtime",
         "Job runtime",

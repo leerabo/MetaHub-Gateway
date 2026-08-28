@@ -1,4 +1,4 @@
-/** PRD-120..129 safe Edge backup, license, health, and lifecycle views. */
+/** PRD-120..130 safe Edge offline exchange, backup, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 import {
@@ -238,6 +238,7 @@ function renderDeployment(item, state, owner) {
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
       ${renderLicense(item, state, owner)}
+      ${renderOfflineExchange(item, state, owner)}
       ${renderBackupRecovery(item, state, owner)}
       ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
@@ -314,6 +315,62 @@ function licenseFeatureLabel(value) {
     policy_enforcement: "策略执行",
     telemetry_export: "遥测导出",
   })[value] ?? "未知";
+}
+
+function renderOfflineExchange(deployment, state, owner) {
+  if (!owner.canReadOfflineBundles) return "";
+  const exchange = state.offlineBundleStates?.[deployment.deployment_id] ?? null;
+  if (!exchange) {
+    return `<section class="private-gateway-offline" aria-label="离线介质交换">
+      <div class="private-gateway-state-empty" role="status">离线交换状态暂不可用</div>
+    </section>`;
+  }
+  const latest = exchange.bundles[0] ?? null;
+  const pending = exchange.requests.filter((item) => item.status === "pending_platform");
+  const unresolved = exchange.conflicts.filter((item) => item.resolution === null);
+  return `<section class="private-gateway-offline" aria-label="离线介质交换与冲突决策">
+    <header>
+      <div><h5>离线介质交换</h5><small>异步管理 · ${latest ? formatTime(latest.created_at) : "尚未交换"}</small></div>
+      <span class="private-gateway-state-status tone-${unresolved.length ? "failed" : pending.length ? "pending" : "applied"}">${unresolved.length ? `${integer(unresolved.length)} 项冲突` : pending.length ? `${integer(pending.length)} 项待审批` : "已收敛"}</span>
+    </header>
+    ${latest ? `<dl class="private-gateway-offline-facts">
+      ${fact("方向", offlineDirectionLabel(latest.direction))}
+      ${fact("领域", latest.domains.map(offlineDomainLabel).join(" / "))}
+      ${fact("Generation", integer(latest.producer_generation))}
+      ${fact("Transfer", `${offlineTransferLabel(latest.transfer_status)} · ${integer(latest.next_sequence)} / ${integer(latest.chunk_count)}`)}
+      ${fact("有效期", formatTime(latest.expires_at))}
+      ${fact("Manifest", latest.manifest_sha256.slice(0, 16))}
+    </dl>` : '<div class="private-gateway-state-empty">尚无介质交换记录</div>'}
+    ${pending.length ? `<div class="private-gateway-offline-requests"><h6>审批队列</h6>${pending.map((item) => `<div><span>${offlineOperationLabel(item.operation)}</span><code>${escapeHtml(item.request_id)}</code><time>${formatTime(item.requested_at)}</time></div>`).join("")}</div>` : ""}
+    ${exchange.conflicts.length ? `<div class="private-gateway-offline-conflicts"><h6>冲突与 resolution</h6>${exchange.conflicts.map((item) => `<div class="tone-${item.resolution ? "applied" : "failed"}"><span><strong>${offlineDomainLabel(item.domain)}</strong><small>Cloud g${integer(item.cloud_generation)} ${item.cloud_sha256.slice(0, 12)} · Local g${integer(item.local_generation)} ${item.local_sha256.slice(0, 12)}</small></span><span>${item.resolution ? offlineResolutionLabel(item.resolution) : owner.canResolveOfflineConflicts ? "待决策" : "等待授权决策"}</span></div>`).join("")}</div>` : ""}
+  </section>`;
+}
+
+function offlineDirectionLabel(value) {
+  return value === "cloud_to_edge" ? "Cloud → Edge" : "Edge → Cloud";
+}
+
+function offlineOperationLabel(value) {
+  return ({ export: "Cloud → Edge 导出", import: "Edge → Cloud 导入", resolve: "冲突 resolution" })[
+    value
+  ] ?? value;
+}
+
+function offlineDomainLabel(value) {
+  return ({ desired_state: "Desired State", license: "License", release: "Release",
+    status: "Status", usage: "Usage", audit: "Audit", validation: "Validation" })[
+    value
+  ] ?? value;
+}
+
+function offlineTransferLabel(value) {
+  return ({ prepared: "已准备", transferring: "传输中", verified: "已验证", applied: "已应用",
+    conflict: "冲突", failed: "失败" })[value] ?? value;
+}
+
+function offlineResolutionLabel(value) {
+  return ({ keep_cloud: "保留 Cloud", keep_local: "保留 Local",
+    supersede_with_new: "新版本取代" })[value] ?? value;
 }
 
 function renderBackupRecovery(deployment, state, owner) {

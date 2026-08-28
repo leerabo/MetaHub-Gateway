@@ -1,4 +1,4 @@
-/** PRD-120..129 owner-bound Edge backup, license, health, and lifecycle state. */
+/** PRD-120..130 owner-bound Edge offline exchange, backup, and lifecycle state. */
 
 import {
   authorizationFingerprint,
@@ -241,6 +241,14 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DRILL_MANAGE) : "";
   const restoreApproveIdentity = hasPermission(authContext, PERMISSIONS.EDGE_RESTORE_APPROVE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_RESTORE_APPROVE) : "";
+  const offlineReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_OFFLINE_BUNDLE_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_OFFLINE_BUNDLE_READ) : "";
+  const offlineTransferIdentity = hasPermission(
+    authContext, PERMISSIONS.EDGE_OFFLINE_BUNDLE_TRANSFER,
+  ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_OFFLINE_BUNDLE_TRANSFER) : "";
+  const offlineResolveIdentity = hasPermission(
+    authContext, PERMISSIONS.EDGE_OFFLINE_CONFLICT_RESOLVE,
+  ) ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_OFFLINE_CONFLICT_RESOLVE) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -295,6 +303,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     backupCreateIdentity,
     drillManageIdentity,
     restoreApproveIdentity,
+    offlineReadIdentity,
+    offlineTransferIdentity,
+    offlineResolveIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -330,6 +341,9 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canCreateBackups: Boolean(backupReadIdentity && backupCreateIdentity),
     canManageDrills: Boolean(backupReadIdentity && drillManageIdentity),
     canApproveRestores: Boolean(backupReadIdentity && restoreApproveIdentity),
+    canReadOfflineBundles: Boolean(offlineReadIdentity),
+    canTransferOfflineBundles: Boolean(offlineReadIdentity && offlineTransferIdentity),
+    canResolveOfflineConflicts: Boolean(offlineReadIdentity && offlineResolveIdentity),
   });
 }
 
@@ -353,6 +367,7 @@ export function createPrivateGatewayPageState({
   let upgradeStates = Object.freeze({});
   let licenseStates = Object.freeze({});
   let backupStates = Object.freeze({});
+  let offlineBundleStates = Object.freeze({});
   let localBackupStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
@@ -388,6 +403,9 @@ export function createPrivateGatewayPageState({
   let canCreateBackups = false;
   let canManageDrills = false;
   let canApproveRestores = false;
+  let canReadOfflineBundles = false;
+  let canTransferOfflineBundles = false;
+  let canResolveOfflineConflicts = false;
   let maintenanceIntent = null;
   let rollbackUpgradeIntent = null;
   let licenseRefreshIntent = null;
@@ -440,6 +458,11 @@ export function createPrivateGatewayPageState({
     canCreateBackups = owner.canCreateBackups === true && canReadBackups;
     canManageDrills = owner.canManageDrills === true && canReadBackups;
     canApproveRestores = owner.canApproveRestores === true && canReadBackups;
+    canReadOfflineBundles = owner.canReadOfflineBundles === true;
+    canTransferOfflineBundles = owner.canTransferOfflineBundles === true
+      && canReadOfflineBundles;
+    canResolveOfflineConflicts = owner.canResolveOfflineConflicts === true
+      && canReadOfflineBundles;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -456,6 +479,7 @@ export function createPrivateGatewayPageState({
       backupStates = Object.freeze({});
       localBackupStates = Object.freeze({});
     }
+    if (!canReadOfflineBundles) offlineBundleStates = Object.freeze({});
     return true;
   }
 
@@ -478,6 +502,7 @@ export function createPrivateGatewayPageState({
     upgradeStates = Object.freeze({});
     licenseStates = Object.freeze({});
     backupStates = Object.freeze({});
+    offlineBundleStates = Object.freeze({});
     localBackupStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
@@ -513,6 +538,9 @@ export function createPrivateGatewayPageState({
     canCreateBackups = false;
     canManageDrills = false;
     canApproveRestores = false;
+    canReadOfflineBundles = false;
+    canTransferOfflineBundles = false;
+    canResolveOfflineConflicts = false;
     maintenanceIntent = null;
     rollbackUpgradeIntent = null;
     licenseRefreshIntent = null;
@@ -566,6 +594,7 @@ export function createPrivateGatewayPageState({
     upgradeResponses = [],
     licenseResponses = [],
     backupResponses = [],
+    offlineBundleResponses = [],
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -589,7 +618,10 @@ export function createPrivateGatewayPageState({
       )
       || !validUpgradeResponses(upgradeResponses, response.deployments, canReadUpgrades)
       || !validLicenseResponses(licenseResponses, response.deployments, canReadLicenses)
-      || !validBackupResponses(backupResponses, response.deployments, canReadBackups)) {
+      || !validBackupResponses(backupResponses, response.deployments, canReadBackups)
+      || !validOfflineBundleResponses(
+        offlineBundleResponses, response.deployments, canReadOfflineBundles,
+      )) {
       return false;
     }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
@@ -624,6 +656,9 @@ export function createPrivateGatewayPageState({
       : Object.freeze({});
     backupStates = canReadBackups
       ? backupStateMap(response.deployments, backupResponses)
+      : Object.freeze({});
+    offlineBundleStates = canReadOfflineBundles
+      ? offlineBundleStateMap(response.deployments, offlineBundleResponses)
       : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
@@ -1937,6 +1972,7 @@ export function createPrivateGatewayPageState({
       upgradeStates,
       licenseStates,
       backupStates,
+      offlineBundleStates,
       localBackupStates,
       dialog,
       stateDialog,
@@ -1972,6 +2008,9 @@ export function createPrivateGatewayPageState({
       canCreateBackups,
       canManageDrills,
       canApproveRestores,
+      canReadOfflineBundles,
+      canTransferOfflineBundles,
+      canResolveOfflineConflicts,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -2070,6 +2109,7 @@ function ownerKeyFor(owner) {
     owner.licenseReadIdentity, owner.licenseRefreshIdentity, owner.licenseImportIdentity,
     owner.backupReadIdentity, owner.backupCreateIdentity, owner.drillManageIdentity,
     owner.restoreApproveIdentity,
+    owner.offlineReadIdentity, owner.offlineTransferIdentity, owner.offlineResolveIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -2197,6 +2237,33 @@ function backupStateMap(deployments, responses) {
   return Object.freeze(Object.fromEntries(responses.filter(
     (entry) => expected.has(entry.deploymentId),
   ).map((entry) => [entry.deploymentId, entry.response.status])));
+}
+
+function validOfflineBundleResponses(responses, deployments, required) {
+  if (!required) return Array.isArray(responses) && responses.length === 0;
+  if (!Array.isArray(responses) || responses.length !== deployments.length) return false;
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((entry) => {
+    const deploymentId = String(entry?.deploymentId ?? "");
+    const state = entry?.response;
+    if (!expected.has(deploymentId) || seen.has(deploymentId)
+      || state?.deployment_id !== deploymentId || state?.asynchronous_management !== true
+      || !Array.isArray(state.requests) || !Array.isArray(state.bundles)
+      || !Array.isArray(state.conflicts)
+      || state.requests.some((item) => item.deployment_id !== deploymentId)
+      || state.bundles.some((item) => item.deployment_id !== deploymentId)
+      || state.conflicts.some((item) => item.deployment_id !== deploymentId)) return false;
+    seen.add(deploymentId);
+    return true;
+  });
+}
+
+function offlineBundleStateMap(deployments, responses) {
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return Object.freeze(Object.fromEntries(responses.filter(
+    (entry) => expected.has(entry.deploymentId),
+  ).map((entry) => [entry.deploymentId, entry.response])));
 }
 
 function validBackupStatusSummary(value, deploymentId) {

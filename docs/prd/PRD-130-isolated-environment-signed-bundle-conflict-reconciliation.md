@@ -1,6 +1,6 @@
 # PRD-130 隔离环境签名包异步管理与冲突合并
 
-状态：设计冻结，尚未编码；计划迁移 0122。依赖 PRD-121..129，范围以 Excel PRD-130 为准。
+状态：已完成。迁移 0122、Shared SDK/CLI、Control API、Workspace/Platform Console 与冲突解决闭环均已交付；依赖 PRD-121..129，范围以 Excel PRD-130 为准。
 
 ## Excel 权威合同
 
@@ -42,6 +42,11 @@
 
 两轮均为修正后通过，无未关闭 P0/P1。
 
-## 6. 专项验证计划
+## 6. 两轮实施自审
 
-0122 迁移；错误目标/方向/签名/hash/过期/乱序/重复、路径穿越/符号链接/压缩炸弹；10GB 流式模拟与断点恢复；cloud/local 双向变更的全部 conflict/resolution；审批撤权；零 Secret/正文；三浏览器包/冲突页和 CLI；验证 SLO、每项冲突可追踪、临时 staging/进程/监听静止终态。PRD-130 独立提交后启动完整 G5 门禁。
+- 第一轮按介质、owner、签名和重放边界复核。归档只接受固定 `manifest.json` 与 `entries/<entry_id>.bin`，先校验 archive 结构、预算、owner、direction、有效期、manifest hash、Ed25519 签名和 key envelope 摘要，再逐 entry 验证 AEAD/AAD、ciphertext/plaintext hash 与 Merkle root；verified staging 使用私有目录和原子 rename。Workspace 请求、平台审批、事件和 Console 只保存或展示固定摘要，修正后的实现不暴露 nonce、wrapped key、对象地址或本地路径。
+- 第二轮按 version vector、双人审批和权限漂移复核。Edge-to-Cloud 导入仅在 base 与权威 head 同源时推进单调 cursor，双向前进创建不可变 conflict 且不更新权威 head；`keep_cloud|keep_local|supersede_with_new` 必须由 Workspace step-up 请求、不同平台操作员审批，并产生高于双方的签名 generation。Workspace、Platform 和 CLI 使用独立凭据/DTO，所有异常只返回固定错误码；修正后无未关闭 P0/P1。
+
+## 7. 专项验证记录
+
+0122 reversible migration、错误目标/方向/签名/hash/过期/重复、路径穿越/压缩输入、原子 staging/apply/replay、cloud/local 双向冲突与 resolution、审批/权限/凭据隔离、严格 DTO、零 Secret/正文和 CLI 均由 PRD-130 聚焦测试覆盖。Workspace 与 Platform 在 `1280x900`、`390x844` 真实浏览器完成异步水位、待审批、批准/拒绝和冲突投影验收，无页面溢出、控件交叠、禁止字段命中或浏览器错误。完整命令、结果、敏感审计和 `.tmp` 清理事实见 `docs/testing/PRD-130-tests.md`；PRD-130 独立提交后启动完整 G5 门禁。

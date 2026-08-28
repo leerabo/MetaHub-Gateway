@@ -273,6 +273,18 @@ REQUIRED_DOCS = {
         "PRD-130",
         "0121",
     ),
+    ROOT / "docs/prd/PRD-130-isolated-environment-signed-bundle-conflict-reconciliation.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0122",
+    ),
+    ROOT / "docs/testing/PRD-130-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-131",
+        "0122",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -936,10 +948,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 121
+        and migration_versions[-1] == 122
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0121 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0122 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1092,6 +1104,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0121_edge_backup_restore_dr_drill.down.sql"
         ).is_file(),
         "PRD-129 owns reversible migration 0121 with guarded backup rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0122_edge_offline_bundle_conflict_reconciliation.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0122_edge_offline_bundle_conflict_reconciliation.down.sql"
+        ).is_file(),
+        "PRD-130 owns reversible migration 0122 with guarded offline bundle rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

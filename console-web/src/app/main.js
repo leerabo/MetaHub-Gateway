@@ -569,6 +569,7 @@ import {
   getWorkspaceBackupStatus,
   mutateWorkspaceRestoreDrill,
 } from "../lib/edgeBackups.js";
+import { getWorkspaceOfflineBundleState } from "../lib/edgeOfflineBundles.js";
 import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
@@ -17668,7 +17669,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
     ]);
     const [
       desiredStates, telemetryStates, secretReferences, healthStates, upgradeStates,
-      licenseStates, backupStates,
+      licenseStates, backupStates, offlineBundleStates,
     ] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
@@ -17692,6 +17693,11 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       owner.canReadBackups
         ? loadPrivateGatewayBackupStates(result.deployments, operation.controller.signal)
         : Promise.resolve([]),
+      owner.canReadOfflineBundles
+        ? loadPrivateGatewayOfflineBundleStates(
+          result.deployments, operation.controller.signal,
+        )
+        : Promise.resolve([]),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -17707,6 +17713,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       upgradeStates,
       licenseStates,
       backupStates,
+      offlineBundleStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -17741,6 +17748,28 @@ async function loadPrivateGatewayBackupStates(deployments, signal) {
     { length: Math.min(4, deployments.length) },
     () => worker(),
   ));
+  return results;
+}
+
+async function loadPrivateGatewayOfflineBundleStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getWorkspaceOfflineBundleState({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = { deploymentId, response };
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(4, deployments.length) }, () => worker()),
+  );
   return results;
 }
 

@@ -1063,6 +1063,29 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   gap: 8px;
 }
 .platform-edge-license-table form select { width: 100%; min-width: 0; }
+.platform-offline-table { min-width: 0; }
+.platform-offline-table td > strong,
+.platform-offline-table td > small,
+.platform-offline-table td > span { display: block; overflow-wrap: anywhere; }
+.platform-offline-table td > small { margin-top: 4px; color: var(--muted); }
+.platform-offline-table form {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  text-align: left;
+}
+.platform-offline-table form label { min-width: 0; }
+.platform-offline-table form select,
+.platform-offline-table form button { width: 100%; min-width: 0; }
+.platform-offline-table form .platform-edge-confirm {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+}
+@media (min-width: 761px) {
+  .platform-offline-approvals .platform-offline-table th:last-child,
+  .platform-offline-approvals .platform-offline-table td:last-child { width: 280px; }
+}
 .platform-edge-upgrade-section {
   margin-top: 26px;
   padding-top: 22px;
@@ -1224,11 +1247,13 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-release-table,
   .platform-edge-license-table,
   .platform-edge-backup-table,
+  .platform-offline-table,
   .platform-edge-batch-table,
   .platform-edge-target-table { min-width: 0; }
   .platform-edge-release-table thead,
   .platform-edge-license-table thead,
   .platform-edge-backup-table thead,
+  .platform-offline-table thead,
   .platform-edge-batch-table thead,
   .platform-edge-target-table thead { display: none; }
   .platform-edge-release-table tbody,
@@ -1240,6 +1265,9 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-backup-table tbody,
   .platform-edge-backup-table tr,
   .platform-edge-backup-table td,
+  .platform-offline-table tbody,
+  .platform-offline-table tr,
+  .platform-offline-table td,
   .platform-edge-batch-table tbody,
   .platform-edge-batch-table tr,
   .platform-edge-batch-table td,
@@ -1249,17 +1277,21 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-release-table tr,
   .platform-edge-license-table tr,
   .platform-edge-backup-table tr,
+  .platform-offline-table tr,
   .platform-edge-batch-table tr,
   .platform-edge-target-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .platform-edge-release-table td,
   .platform-edge-license-table td,
   .platform-edge-backup-table td,
+  .platform-offline-table td,
   .platform-edge-batch-table td,
   .platform-edge-target-table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; text-align: left; }
   .platform-edge-release-table td::before,
   .platform-edge-license-table td::before,
   .platform-edge-backup-table td::before,
+  .platform-offline-table td::before,
   .platform-edge-batch-table td::before,
   .platform-edge-target-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-edge-release-actions { min-width: 0; }
+  .platform-offline-table form { min-width: 0; }
 }

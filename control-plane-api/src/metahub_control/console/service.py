@@ -1167,6 +1167,9 @@ def _visible_navigation_items(
         "edge.backup.read",
         "edge.drill.manage",
         "edge.restore.approve",
+        "edge.offline_bundle.read",
+        "edge.offline_bundle.transfer",
+        "edge.offline_conflict.resolve",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

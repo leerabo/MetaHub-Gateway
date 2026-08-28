@@ -50,7 +50,8 @@ export function renderPlatformWorkspace(container, state) {
   const permissions = new Set(context?.permissions ?? []);
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent || state.edgeLicenseIntent)
+      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent || state.edgeLicenseIntent
+      || state.offlineBundleIntent)
   );
   container.innerHTML = `
     <div class="platform-shell">
@@ -83,6 +84,7 @@ function renderView(state, permissions) {
   if (state.view === "edge-upgrades") return edgeUpgradesView(state, permissions);
   if (state.view === "edge-licenses") return edgeLicensesView(state, permissions);
   if (state.view === "edge-backups") return edgeBackupsView(state);
+  if (state.view === "offline-bundles") return offlineBundlesView(state, permissions);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1541,6 +1543,97 @@ function platformEdgeBackupRow(item) {
   </tr>`;
 }
 
+function offlineBundlesView(state, permissions) {
+  const items = state.offlineBundles?.items ?? [];
+  const pending = items.flatMap((item) => item.state.requests
+    .filter((request) => request.status === "pending_platform")
+    .map((request) => ({ item, request })));
+  const bundles = items.flatMap((item) => item.state.bundles
+    .map((bundle) => ({ item, bundle })));
+  const unresolved = items.reduce((total, item) => total + item.state.conflicts.filter(
+    (conflict) => conflict.resolution === null,
+  ).length, 0);
+  const canManage = permissions.has("platform.edge_offline_bundle.manage");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Air-gapped operations</p><h1>Offline exchange</h1></div>
+      <button type="button" class="platform-icon-button" data-platform-action="offline-bundles-refresh" title="刷新离线交换" aria-label="刷新离线交换"${state.loading ? " disabled" : ""}>↻</button>
+    </header>
+    <section class="platform-metrics" aria-label="Offline exchange summary">
+      ${metric("Pending approvals", pending.length, "dual control")}
+      ${metric("Unresolved conflicts", unresolved, "no last-write-wins")}
+      ${metric("Exchange records", bundles.length, `${number(items.length)} Deployments`)}
+    </section>
+    <section class="platform-band platform-offline-approvals">
+      <div class="platform-section-heading"><div><p>Dual control</p><h2>Approval queue</h2></div><span>${number(pending.length)} pending</span></div>
+      ${pending.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>Workspace / Deployment</th><th>Intent</th><th>Security summary</th><th>Decision</th></tr></thead><tbody>${pending.map(({ item, request }) => platformOfflineApprovalRow(item, request, canManage, state.loading)).join("")}</tbody></table></div>` : '<div class="platform-empty">No offline exchange requests are pending</div>'}
+    </section>
+    <section class="platform-band platform-offline-exchanges">
+      <div class="platform-section-heading"><div><p>Safe metadata only</p><h2>Exchange watermarks</h2></div><span>${number(bundles.length)} records</span></div>
+      ${bundles.length ? `<div class="platform-table-wrap"><table class="platform-offline-table"><thead><tr><th>Deployment</th><th>Direction / domains</th><th>Transfer</th><th>Manifest / expiry</th><th>Conflicts</th></tr></thead><tbody>${bundles.map(({ item, bundle }) => platformOfflineBundleRow(item, bundle)).join("")}</tbody></table></div>` : '<div class="platform-empty">No offline media exchanges have been recorded</div>'}
+    </section>`;
+}
+
+function platformOfflineApprovalRow(item, request, canManage, loading) {
+  const bundle = item.state.bundles.find(
+    (candidate) => candidate.bundle_id === request.target_bundle_id,
+  ) ?? null;
+  const disabled = loading ? " disabled" : "";
+  return `<tr>
+    <td data-label="Workspace / Deployment"><strong>${escapeHtml(shortReference(item.workspace_id))}</strong><small>${escapeHtml(shortReference(request.deployment_id))}</small></td>
+    <td data-label="Intent"><strong>${escapeHtml(platformOfflineOperationLabel(request.operation))}</strong><small>r${number(request.revision)} · ${formatTime(request.requested_at)}</small></td>
+    <td data-label="Security summary"><strong>${bundle ? `${escapeHtml(platformOfflineDirectionLabel(bundle.direction))} · ${bundle.domains.map(platformOfflineDomainLabel).join(" / ")}` : "Resolution package"}</strong><small>${bundle ? `${number(bundle.entry_count)} entries · ${formatBytes(bundle.encrypted_size_bytes)} · ${escapeHtml(bundle.manifest_sha256.slice(0, 16))}` : escapeHtml(shortReference(request.target_conflict_id ?? "-"))}</small></td>
+    <td data-label="Decision">${canManage ? `<form data-platform-offline-decision-form autocomplete="off">
+      <input type="hidden" name="requestId" value="${escapeAttribute(request.request_id)}">
+      <input type="hidden" name="expectedRevision" value="${number(request.revision)}">
+      <label><span>Decision</span><select name="action"${disabled}><option value="approve">Approve</option><option value="reject">Reject</option></select></label>
+      <label><span>Reason</span><select name="reasonCode"${disabled}><option value="dual_control_approved">Dual control approved</option><option value="security_review_rejected">Security review rejected</option></select></label>
+      <label class="platform-edge-confirm"><input type="checkbox" name="confirmed" required${disabled}><span>Confirm owner, direction, domains and expiry</span></label>
+      <button class="platform-primary" type="submit"${disabled}>Submit</button>
+    </form>` : "Read only"}</td>
+  </tr>`;
+}
+
+function platformOfflineBundleRow(item, bundle) {
+  const conflicts = item.state.conflicts.filter(
+    (conflict) => conflict.bundle_id === bundle.bundle_id,
+  );
+  const unresolved = conflicts.filter((conflict) => conflict.resolution === null).length;
+  return `<tr>
+    <td data-label="Deployment"><strong>${escapeHtml(shortReference(bundle.deployment_id))}</strong><small>${escapeHtml(shortReference(item.workspace_id))} · g${number(bundle.producer_generation)}</small></td>
+    <td data-label="Direction / domains"><strong>${escapeHtml(platformOfflineDirectionLabel(bundle.direction))}</strong><small>${bundle.domains.map(platformOfflineDomainLabel).join(" / ")}</small></td>
+    <td data-label="Transfer"><strong>${escapeHtml(platformOfflineTransferLabel(bundle.transfer_status))}</strong><small>${number(bundle.next_sequence)} / ${number(bundle.chunk_count)} chunks</small></td>
+    <td data-label="Manifest / expiry"><strong>${escapeHtml(bundle.manifest_sha256.slice(0, 16))}</strong><small>${formatTime(bundle.expires_at)}</small></td>
+    <td data-label="Conflicts"><strong>${unresolved ? `${number(unresolved)} unresolved` : "Clear"}</strong><small>${conflicts.map((conflict) => conflict.resolution ? platformOfflineResolutionLabel(conflict.resolution) : platformOfflineDomainLabel(conflict.domain)).join(" / ") || "-"}</small></td>
+  </tr>`;
+}
+
+function platformOfflineOperationLabel(value) {
+  return ({ export: "Cloud → Edge export", import: "Edge → Cloud import",
+    resolve: "Conflict resolution" })[value] ?? value;
+}
+
+function platformOfflineDirectionLabel(value) {
+  return value === "cloud_to_edge" ? "Cloud → Edge" : "Edge → Cloud";
+}
+
+function platformOfflineDomainLabel(value) {
+  return ({ desired_state: "Desired State", license: "License", release: "Release",
+    status: "Status", usage: "Usage", audit: "Audit", validation: "Validation" })[
+    value
+  ] ?? value;
+}
+
+function platformOfflineTransferLabel(value) {
+  return ({ prepared: "Prepared", transferring: "Transferring", verified: "Verified",
+    applied: "Applied", conflict: "Conflict", failed: "Failed" })[value] ?? value;
+}
+
+function platformOfflineResolutionLabel(value) {
+  return ({ keep_cloud: "Keep Cloud", keep_local: "Keep Local",
+    supersede_with_new: "Superseded" })[value] ?? value;
+}
+
 function platformBackupStatusLabel(value) {
   return ({ current: "RPO 正常", overdue: "RPO 逾期", failed: "最近失败", never: "尚无备份" })[
     value
@@ -1559,6 +1652,15 @@ function platformDuration(value) {
   if (value % 3_600 === 0) return `${value / 3_600} 小时`;
   if (value % 60 === 0) return `${value / 60} 分钟`;
   return `${value} 秒`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${Math.round(bytes)} B`;
 }
 
 function edgeLicenseRow(license, canRevoke, loading) {
@@ -2443,7 +2545,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
