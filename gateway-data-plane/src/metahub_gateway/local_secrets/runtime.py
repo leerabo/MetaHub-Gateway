@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from metahub_shared.runtime.config import AppConfig
@@ -11,6 +13,7 @@ from .auth import (
     LocalAdminSessionSigner,
     LocalManagementPolicy,
 )
+from .backups import LocalBackupSigningKeyStore, LocalBackupStore
 from .keystore import LocalKeyMaterialStore, build_key_protector
 from .provider_testing import LocalProviderTesterRegistry
 from .routes import install_local_api_error_handler
@@ -80,6 +83,38 @@ def install_local_secret_runtime(app: Any) -> None:
         uploader=uploader,
         ttl_seconds=config.edge_support_bundle_ttl_seconds,
     )
+    if config.kms_provider in {"aws", "test"}:
+        backup_root = Path(config.edge_backup_root).resolve()
+        backup_signing_key = LocalBackupSigningKeyStore(
+            backup_root / "backup-signing-key.json", protector
+        ).load_or_create()
+        public_key = backup_signing_key.public_key().public_bytes_raw()
+        kms_key_id = config.kms_key_id or f"test/{deployment_id}/edge-backup"
+        app.state.local_backup_store = LocalBackupStore(
+            backup_root / "restore-journal.sqlite3",
+            output_root=backup_root / "artifacts",
+            deployment_id=deployment_id,
+            schema_head="0121",
+            signing_key=backup_signing_key,
+            signing_key_id="edge-backup-" + hashlib.sha256(public_key).hexdigest()[:16],
+            kms_key_id=kms_key_id,
+            kms_key_version=1,
+            wrap_data_key=lambda value: protector.protect(
+                value, purpose="edge-backup-data-key"
+            ),
+            unwrap_data_key=lambda value: protector.unprotect(
+                value, purpose="edge-backup-data-key"
+            ),
+            domain_provider=lambda tenant_id, workspace_id: (
+                local_secret_store.backup_domains(
+                    tenant_id=tenant_id, workspace_id=workspace_id
+                )
+            ),
+            restore_applier=lambda domains, **owners: (
+                local_secret_store.apply_backup_domains(domains, **owners)
+            ),
+            customer_object_store_root=config.edge_backup_customer_object_store_root,
+        )
     install_local_api_error_handler(app)
 
 

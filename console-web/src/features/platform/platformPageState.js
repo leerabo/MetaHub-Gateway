@@ -9,6 +9,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "edge-fleet",
   "edge-upgrades",
   "edge-licenses",
+  "edge-backups",
   "job-runtime",
   "feature-rollouts",
   "config-distribution",
@@ -100,6 +101,7 @@ export function createPlatformPageController({
     edgeUpgradeIntent: null,
     edgeLicenses: null,
     edgeLicenseIntent: null,
+    edgeBackups: null,
     gatewayPlacement: null,
     gatewayPlacementIntent: null,
     jobQueues: null,
@@ -228,7 +230,7 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "provider-catalog", "edge-fleet", "edge-upgrades", "edge-licenses",
+        "provider-catalog", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -270,6 +272,8 @@ export function createPlatformPageController({
         } else if (state.view === "edge-licenses") {
           state.edgeLicenses = null;
           state.edgeLicenseIntent = null;
+        } else if (state.view === "edge-backups") {
+          state.edgeBackups = null;
         }
         state.loading = false;
       }
@@ -307,6 +311,7 @@ export function createPlatformPageController({
       if (state.view === "edge-upgrades"
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
       if (state.view === "edge-licenses" && !state.edgeLicenses) void loadEdgeLicenses();
+      if (state.view === "edge-backups" && !state.edgeBackups) void loadEdgeBackups();
     },
     async filterEdgeFleet(filters) {
       if (state.view !== "edge-fleet") return false;
@@ -332,6 +337,9 @@ export function createPlatformPageController({
     },
     async refreshEdgeLicenses() {
       return loadEdgeLicenses();
+    },
+    async refreshEdgeBackups() {
+      return loadEdgeBackups();
     },
     async issueEdgeLicense(input) {
       if (state.view !== "edge-licenses" || input?.confirmed !== true
@@ -1812,6 +1820,7 @@ export function createPlatformPageController({
         fleetRollouts: null,
         fleetCompatibility: null,
         edgeLicenses: null,
+        edgeBackups: null,
         jobQueues: null,
         featureFlags: null,
         configDistribution: null,
@@ -1828,7 +1837,9 @@ export function createPlatformPageController({
         workspaceEvents: null,
       };
       const tasks = [];
-      const fleetOnly = new Set(["edge-fleet", "edge-upgrades", "edge-licenses"]).has(state.view);
+      const fleetOnly = new Set([
+        "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
+      ]).has(state.view);
       if (!fleetOnly && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
       }
@@ -1913,6 +1924,13 @@ export function createPlatformPageController({
         && typeof api.edgeLicenses === "function") {
         tasks.push(api.edgeLicenses({ signal: ticket.signal }).then((value) => {
           next.edgeLicenses = value;
+        }));
+      }
+      if (state.view === "edge-backups"
+        && permissions.has("platform.edge_backup.read")
+        && typeof api.edgeBackups === "function") {
+        tasks.push(api.edgeBackups({ signal: ticket.signal }).then((value) => {
+          next.edgeBackups = value;
         }));
       }
       if (!fleetOnly && permissions.has("platform.job.read")
@@ -2075,6 +2093,9 @@ export function createPlatformPageController({
         state.edgeLicenses = null;
         state.edgeLicenseIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "edge-backups")) {
+        state.edgeBackups = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -2193,6 +2214,26 @@ export function createPlatformPageController({
       const licenses = await api.edgeLicenses({ signal: ticket.signal });
       if (!currentEdgeLicenseTicket(ticket)) return false;
       state.edgeLicenses = licenses;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadEdgeBackups() {
+    if (state.view !== "edge-backups"
+      || !currentPermissions().has("platform.edge_backup.read")
+      || typeof api.edgeBackups !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const statuses = await api.edgeBackups({ signal: ticket.signal });
+      if (!currentEdgeBackupTicket(ticket)) return false;
+      state.edgeBackups = statuses;
       state.loading = false;
       render();
       return true;
@@ -3377,6 +3418,7 @@ export function createPlatformPageController({
       if (action === "edge-fleet-previous") controller.previousEdgeFleetPage();
       if (action === "edge-upgrades-refresh") controller.refreshEdgeUpgrades();
       if (action === "edge-licenses-refresh") controller.refreshEdgeLicenses();
+      if (action === "edge-backups-refresh") controller.refreshEdgeBackups();
       if (action === "refund-approve") {
         controller.approveRefund(target.dataset.refundId, Number(target.dataset.revision));
       }
@@ -3459,6 +3501,10 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "edge-licenses"
       && currentPermissions().has("platform.edge_license.read");
   }
+  function currentEdgeBackupTicket(ticket) {
+    return current(ticket) && state.view === "edge-backups"
+      && currentPermissions().has("platform.edge_backup.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -3510,6 +3556,7 @@ export function createPlatformPageController({
     state.edgeUpgradeIntent = null;
     state.edgeLicenses = null;
     state.edgeLicenseIntent = null;
+    state.edgeBackups = null;
     state.gatewayPlacement = null;
     state.gatewayPlacementIntent = null;
     state.jobQueues = null;
@@ -3752,11 +3799,11 @@ function initialPlatformView() {
 }
 
 function replacePlatformHash(view) {
-  const location = globalThis.window?.location;
-  const history = globalThis.window?.history;
-  if (!location || typeof history?.replaceState !== "function") return;
+  const urlState = globalThis.window?.location;
+  const navigationHistory = globalThis.window?.history;
+  if (!urlState || typeof navigationHistory?.replaceState !== "function") return;
   const hash = `#${view}`;
-  if (location.hash !== hash) history.replaceState(null, "", hash);
+  if (urlState.hash !== hash) navigationHistory.replaceState(null, "", hash);
 }
 
 function isPlatformSessionFailure(error) {

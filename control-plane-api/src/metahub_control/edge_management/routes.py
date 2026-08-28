@@ -59,6 +59,22 @@ from metahub_control.workspace_access.constants import (
     WORKSPACE_SESSION_COOKIE,
 )
 
+from .backup_models import (
+    AgentBackupReportRequest,
+    AgentDrillReportRequest,
+    BackupReportResponse,
+    BackupStatusResponse,
+    PlatformBackupStatusListResponse,
+    RestoreDrillMutationRequest,
+    RestoreDrillResponse,
+)
+from .backup_service import (
+    get_workspace_backup_status,
+    list_platform_backup_statuses,
+    mutate_workspace_restore_drill,
+    report_agent_backup,
+    report_agent_restore_drill,
+)
 from .desired_state_service import (
     acknowledge_agent_desired_state,
     get_workspace_desired_state,
@@ -1552,6 +1568,170 @@ def require_platform_edge_license(request: Request) -> PlatformContext:
     }.intersection(context.permissions):
         raise ApiError("platform.permission_denied")
     return context
+
+
+def require_platform_edge_backup(request: Request) -> PlatformContext:
+    if (
+        _raw_headers(request, b"authorization")
+        or _raw_headers(request, b"x-edge-session")
+        or _cookie_values(request, WORKSPACE_SESSION_COOKIE)
+        or _cookie_values(request, SUPPORT_SESSION_COOKIE)
+    ):
+        raise ApiError("platform.credential_conflict")
+    csrf = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        _require_origin(request, "platform.origin_invalid")
+        csrf = _required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid")
+    context = authenticate_platform_session_context(
+        request.app.state.config,
+        _required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=csrf,
+    )
+    if not {"platform.edge_backup.read", "platform.edge_drill.manage"}.intersection(
+        context.permissions
+    ):
+        raise ApiError("platform.permission_denied")
+    return context
+
+
+@router.get(
+    "/edge/deployments/{deployment_id}/backup-status",
+    response_model=BackupStatusResponse,
+)
+async def get_edge_backup_status(
+    deployment_id: str, request: Request, response: Response
+) -> BackupStatusResponse:
+    _prepare_workspace(request, write=False)
+    _reject_query(request)
+    result = await _run(
+        get_workspace_backup_status,
+        request.app.state.config,
+        deployment_id,
+        session_token=_workspace_cookie(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.status.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/restore-drills",
+    response_model=RestoreDrillResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_restore_drill(
+    deployment_id: str, request: Request, response: Response
+) -> RestoreDrillResponse:
+    _prepare_workspace(request, write=True)
+    _reject_query(request)
+    payload = _model(
+        await _strict_json(request, "edge_backup.request_invalid"),
+        RestoreDrillMutationRequest,
+        error_code="edge_backup.request_invalid",
+    )
+    result = await _run(
+        mutate_workspace_restore_drill,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        session_token=_workspace_cookie(request),
+        csrf_token=_workspace_csrf(request),
+        step_up_grant=_required_step_up_grant(request),
+        idempotency_key=_platform_idempotency_key(
+            request, error_code="edge_backup.request_invalid"
+        ),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if payload.action == "approve" or result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.drill.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/backups/reports",
+    response_model=BackupReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_edge_backup_report(
+    deployment_id: str, request: Request, response: Response
+) -> BackupReportResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _json_model(
+        await _strict_json(request, "edge_backup.request_invalid"),
+        AgentBackupReportRequest,
+        error_code="edge_backup.request_invalid",
+    )
+    result = await _run(
+        report_agent_backup,
+        request.app.state.config,
+        deployment_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    _edge_private(response)
+    return result
+
+
+@router.post(
+    "/edge/deployments/{deployment_id}/restore-drills/{drill_id}/reports",
+    response_model=RestoreDrillResponse,
+)
+async def post_edge_restore_drill_report(
+    deployment_id: str, drill_id: str, request: Request, response: Response
+) -> RestoreDrillResponse:
+    _reject_query(request)
+    fingerprint = _prepare_agent(request, require_mtls=True)
+    payload = _json_model(
+        await _strict_json(request, "edge_backup.request_invalid"),
+        AgentDrillReportRequest,
+        error_code="edge_backup.request_invalid",
+    )
+    result = await _run(
+        report_agent_restore_drill,
+        request.app.state.config,
+        deployment_id,
+        drill_id,
+        payload,
+        verified_fingerprint=fingerprint,
+        edge_session_token=_edge_session(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{result.drill.revision}"'
+    _edge_private(response)
+    return result
+
+
+@router.get(
+    "/platform/edge/backups",
+    response_model=PlatformBackupStatusListResponse,
+)
+async def get_platform_edge_backups(
+    request: Request,
+    response: Response,
+    context: Annotated[PlatformContext, Depends(require_platform_edge_backup)],
+) -> PlatformBackupStatusListResponse:
+    _reject_query(request)
+    result = await _run(
+        list_platform_backup_statuses,
+        request.app.state.config,
+        context,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
 
 
 @router.post(

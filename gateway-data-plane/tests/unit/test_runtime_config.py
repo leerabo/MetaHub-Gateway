@@ -120,6 +120,15 @@ def _enable_policy_snapshot_sync(monkeypatch: pytest.MonkeyPatch) -> None:
         "METAHUB_INTERNAL_CONFIG_TOKEN",
         "unit-test-policy-snapshot-token-0123456789abcdef",
     )
+    monkeypatch.setenv(
+        "METAHUB_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET",
+        "unit-test-independent-support-bundle-secret-0123456789abcdef",
+    )
+    monkeypatch.setenv(
+        "METAHUB_DATABASE_URL",
+        "postgresql://db.internal/metahub?sslmode=require",
+    )
+    monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK", "false")
     monkeypatch.setenv("METAHUB_CONTROL_API_BASE_URL", "http://127.0.0.1:8001")
 
 
@@ -389,6 +398,7 @@ def test_local_secret_management_config_is_disabled_and_path_safe_by_default(
     dumped = str(config.model_dump())
     assert config.local_secret_database_path not in dumped
     assert config.local_secret_keystore_path not in dumped
+    assert config.edge_backup_root not in dumped
 
 
 def test_local_secret_management_config_requires_exact_local_boundary(
@@ -414,6 +424,19 @@ def test_local_secret_management_config_requires_exact_local_boundary(
 
     monkeypatch.setenv("METAHUB_LOCAL_SECRET_KEYSTORE_PATH", str(database_path))
     with pytest.raises(ConfigError, match="deployment boundary"):
+        load_app_config("gateway-data-plane")
+
+    monkeypatch.setenv("METAHUB_LOCAL_SECRET_KEYSTORE_PATH", str(keystore_path))
+    monkeypatch.setenv("METAHUB_EDGE_BACKUP_ROOT", str(database_path))
+    with pytest.raises(ConfigError, match="backup local and customer storage"):
+        load_app_config("gateway-data-plane")
+
+    backup_root = tmp_path / "backups"
+    monkeypatch.setenv("METAHUB_EDGE_BACKUP_ROOT", str(backup_root))
+    monkeypatch.setenv(
+        "METAHUB_EDGE_BACKUP_CUSTOMER_OBJECT_STORE_ROOT", str(backup_root)
+    )
+    with pytest.raises(ConfigError, match="backup local and customer storage"):
         load_app_config("gateway-data-plane")
 
 

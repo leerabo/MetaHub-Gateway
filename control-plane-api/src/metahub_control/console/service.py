@@ -1163,6 +1163,10 @@ def _visible_navigation_items(
         "edge.license.import",
         "edge.license.read",
         "edge.license.refresh",
+        "edge.backup.create",
+        "edge.backup.read",
+        "edge.drill.manage",
+        "edge.restore.approve",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

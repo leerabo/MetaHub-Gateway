@@ -120,6 +120,12 @@ _NAVIGATION = (
         "/platform.html#edge-licenses",
     ),
     (
+        "platform.edge_backup.read",
+        "edge-backups",
+        "Gateway backups",
+        "/platform.html#edge-backups",
+    ),
+    (
         "platform.job.read",
         "job-runtime",
         "Job runtime",

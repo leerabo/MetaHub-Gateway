@@ -129,6 +129,7 @@ import {
   listPlatformLicenses,
   revokePlatformLicense,
 } from "../../lib/edgeLicenses.js";
+import { listPlatformBackupStatuses } from "../../lib/edgeBackups.js";
 import {
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
@@ -299,6 +300,7 @@ if (root) {
       edgeFleet: (input) => listPlatformFleet({ controlApiUrl, ...input }),
       gatewayReleases: (input) => listPlatformGatewayReleases({ controlApiUrl, ...input }),
       edgeLicenses: (input) => listPlatformLicenses({ controlApiUrl, ...input }),
+      edgeBackups: (input) => listPlatformBackupStatuses({ controlApiUrl, ...input }),
       issueEdgeLicense: (input) => issuePlatformLicense({ controlApiUrl, ...input }),
       revokeEdgeLicense: (input) => revokePlatformLicense({ controlApiUrl, ...input }),
       fleetRollouts: (input) => listPlatformRollouts({ controlApiUrl, ...input }),

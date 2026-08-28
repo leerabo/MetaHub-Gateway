@@ -566,15 +566,21 @@ import {
   refreshWorkspaceLicense,
 } from "../lib/edgeLicenses.js";
 import {
+  getWorkspaceBackupStatus,
+  mutateWorkspaceRestoreDrill,
+} from "../lib/edgeBackups.js";
+import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
   clearLocalAdminSession,
   createLocalAdminSession,
+  createLocalBackup,
   createLocalSecret,
   deleteLocalAdminSession,
   deleteLocalSecret,
   previewLocalSupportBundle,
   rotateLocalSecret,
+  restoreLocalBackup,
   testLocalProviderConnection,
 } from "../lib/localSecretManagement.js";
 import {
@@ -7175,6 +7181,15 @@ function bindPrivateGatewayPageInteractions(consoleShellState) {
     async onLicenseRefresh(deploymentId) {
       return submitPrivateGatewayLicenseRefresh(deploymentId, consoleShellState);
     },
+    async onDrillMutation(input) {
+      return submitPrivateGatewayDrillMutation(input, consoleShellState);
+    },
+    async onLocalBackup(input) {
+      return submitPrivateGatewayLocalBackup(input, consoleShellState);
+    },
+    async onLocalRestore(input) {
+      return submitPrivateGatewayLocalRestore(input, consoleShellState);
+    },
     async onValidation(deploymentId, action) {
       return submitPrivateGatewayValidation(deploymentId, action, consoleShellState);
     },
@@ -7790,6 +7805,145 @@ async function submitPrivateGatewayLicenseRefresh(deploymentId, consoleShellStat
     }
   } finally {
     privateGatewayPageState.finishLicenseRefresh(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayDrillMutation(input, consoleShellState) {
+  const owner = currentPrivateGatewayOwner(consoleShellState);
+  const action = String(input?.action ?? "");
+  const operation = privateGatewayPageState.beginDrillMutation(
+    owner,
+    input,
+    createEdgeIdempotencyKey(`drill-${action}`),
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  let verificationCode = String(input?.verificationCode ?? "");
+  let webAuthnCredential = null;
+  let stepUpGrant = "";
+  try {
+    let challengeId;
+    if (input?.method === "webauthn") {
+      const challenge = await beginIdentityWebAuthnStepUp({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      });
+      if (!privateGatewayPageState.isDrillMutationCurrent(
+        operation, currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+      challengeId = challenge.challenge_id;
+      webAuthnCredential = await getWebAuthnAssertion(challenge.public_key_options);
+      if (!privateGatewayPageState.isDrillMutationCurrent(
+        operation, currentPrivateGatewayOwner(consoleShellState),
+      )) return null;
+    }
+    const actionCode = action === "request" ? "edge.drill.request" : "edge.restore.approve";
+    const stepUp = await createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      method: input?.method,
+      workspaceId: operation.workspaceId,
+      actionCode,
+      resourceType: action === "request" ? "edge_deployment" : "private_dr_drill",
+      resourceId: action === "request"
+        ? operation.deploymentId : operation.request.drillId,
+      code: verificationCode,
+      challengeId,
+      credential: webAuthnCredential,
+      signal: operation.controller.signal,
+    });
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = stepUp.grant;
+    if (!privateGatewayPageState.isDrillMutationCurrent(
+      operation, currentPrivateGatewayOwner(consoleShellState),
+    )) return null;
+    const result = await mutateWorkspaceRestoreDrill({
+      controlApiUrl: workspaceControlApiUrl,
+      deploymentId: operation.deploymentId,
+      ...operation.request,
+      stepUpGrant,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    stepUpGrant = "";
+    privateGatewayPageState.acceptDrillMutation(
+      operation, result, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectDrillMutation(
+        operation, error, currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    privateGatewayPageState.finishDrillMutation(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayLocalBackup(input, consoleShellState) {
+  const operation = privateGatewayPageState.beginLocalBackup(
+    currentPrivateGatewayOwner(consoleShellState), input,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await createLocalBackup({
+      deploymentId: operation.deploymentId,
+      ...operation.request,
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptLocalBackup(
+      operation, result, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectLocalBackup(
+        operation, error, currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishLocalBackup(operation);
+  }
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  return privateGatewayPageState.snapshot();
+}
+
+async function submitPrivateGatewayLocalRestore(input, consoleShellState) {
+  const operation = privateGatewayPageState.beginLocalRestore(
+    currentPrivateGatewayOwner(consoleShellState), input,
+  );
+  if (!operation) return null;
+  refreshSequence += 1;
+  renderCurrentPrivateGatewayPanel(consoleShellState);
+  try {
+    const result = await restoreLocalBackup({
+      deploymentId: operation.deploymentId,
+      ...operation.request,
+      signal: operation.controller.signal,
+    });
+    privateGatewayPageState.acceptLocalRestore(
+      operation, result, currentPrivateGatewayOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isPrivateGatewayAbortError(error)) {
+      privateGatewayPageState.rejectLocalRestore(
+        operation, error, currentPrivateGatewayOwner(consoleShellState),
+      );
+    }
+  } finally {
+    privateGatewayPageState.finishLocalRestore(operation);
   }
   renderCurrentPrivateGatewayPanel(consoleShellState);
   return privateGatewayPageState.snapshot();
@@ -17514,7 +17668,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
     ]);
     const [
       desiredStates, telemetryStates, secretReferences, healthStates, upgradeStates,
-      licenseStates,
+      licenseStates, backupStates,
     ] = await Promise.all([
       loadPrivateGatewayDesiredStates(result.deployments, operation.controller.signal),
       owner.canReadTelemetry || owner.canReadUsage
@@ -17535,6 +17689,9 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       owner.canReadLicenses
         ? loadPrivateGatewayLicenseStates(result.deployments, operation.controller.signal)
         : Promise.resolve([]),
+      owner.canReadBackups
+        ? loadPrivateGatewayBackupStates(result.deployments, operation.controller.signal)
+        : Promise.resolve([]),
     ]);
     if (refreshId !== refreshSequence) return null;
     privateGatewayPageState.acceptLoad(
@@ -17549,6 +17706,7 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
       healthStates,
       upgradeStates,
       licenseStates,
+      backupStates,
     );
     return privateGatewayPageState.snapshot();
   } catch (error) {
@@ -17561,6 +17719,29 @@ async function loadPrivateGatewaysState(consoleShellState, refreshId) {
   } finally {
     privateGatewayPageState.finishLoad(operation);
   }
+}
+
+async function loadPrivateGatewayBackupStates(deployments, signal) {
+  const results = new Array(deployments.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < deployments.length) {
+      const index = cursor;
+      cursor += 1;
+      const deploymentId = deployments[index].deployment_id;
+      const response = await getWorkspaceBackupStatus({
+        controlApiUrl: workspaceControlApiUrl,
+        deploymentId,
+        signal,
+      });
+      results[index] = Object.freeze({ deploymentId, response });
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(4, deployments.length) },
+    () => worker(),
+  ));
+  return results;
 }
 
 async function loadPrivateGatewayLicenseStates(deployments, signal) {

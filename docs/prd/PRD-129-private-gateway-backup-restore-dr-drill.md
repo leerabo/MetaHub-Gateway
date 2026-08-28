@@ -1,6 +1,6 @@
 # PRD-129 私有 Gateway 备份、恢复与灾备演练
 
-状态：设计冻结，尚未编码；计划迁移 0121。依赖 PRD-121..128，范围以 Excel PRD-129 为准。
+状态：已完成；迁移 0121、Control/Agent API、Shared SDK、本地备份/恢复、云报告 outbox 与双域 Console 已交付。依赖 PRD-121..128，范围以 Excel PRD-129 为准。
 
 ## Excel 权威合同
 
@@ -42,6 +42,14 @@
 
 两轮均为修正后通过，无未关闭 P0/P1。
 
-## 6. 专项验证计划
+## 6. 专项验证结果
 
-0121 云端/本地迁移；分块损坏/缺失/错误 key/owner/version、checkpoint 并发、崩溃恢复；真实替换节点重注册且旧身份吊销；配置/账本/审计/Secret 核对；Support 无正文；三浏览器备份/恢复向导；RPO/RTO 与季度 drill；云端/支持包/日志敏感 0、临时 restore target 和静止终态。
+0121 往返迁移与业务 down guard、用途分域签名、分块 AEAD/Merkle、缺失/损坏 chunk、错误 owner/key/time/schema、签名与信封篡改、持久恢复 journal、客户对象存储边界、Secret 恢复重包裹、云报告 outbox、双人演练审批、九项隔离恢复核验、严格 Workspace/Platform/本地 DTO 和双视口 Console 均由专项自动化覆盖。真实跨平台对象存储、三浏览器矩阵、完整 RPO/RTO 压测和批次安全/性能门禁留到 PRD-130 后统一执行 G5。
+
+## 7. 实施闭环
+
+- 0121 新增云端备份摘要/head、恢复 job/verification、DR drill、不可变事件/outbox、幂等动作、Workspace/Platform 权限和受业务事实保护的 down migration；云端 schema 不包含 chunk、envelope、对象 URL 或客户路径。
+- Shared SDK 使用独立 Ed25519 purpose、canonical manifest、逐块 AES-GCM AAD、Merkle root 和客户恢复密钥包裹；验签、owner、N/N-1 schema、时间、信封和全部 chunk 校验通过后才返回明文域。
+- Gateway 本地存储使用独立受保护签名密钥、加密 chunk/信封、原子 active slot、可恢复 restore journal、替换节点 KEK 重包裹和九项隔离 drill 证据；持久 outbox 只把固定摘要通过 mTLS Agent route 上报云端。
+- Control API 提供 Workspace 备份状态和非自批 restore drill、Agent 备份/演练报告、Platform 裁剪状态投影；owner、权限、step-up、ETag、幂等、generation 和完整验证集合均失败关闭。
+- Workspace Console 展示 RPO、最近成功、验证、generation、保留、存储和 drill 状态；Platform 只展示云端安全摘要。实施自审修正了本地错误码 exact-key 映射、畸形 drill 请求/响应状态映射和双域导航权限回归；两轮修正后无未关闭 P0/P1。

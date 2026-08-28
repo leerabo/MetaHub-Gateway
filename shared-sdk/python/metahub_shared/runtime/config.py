@@ -380,6 +380,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS": "http://localhost:5173",
     "METAHUB_LOCAL_MANAGEMENT_ALLOWED_CLIENT_CIDRS": "",
     "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK": "true",
+    "METAHUB_EDGE_BACKUP_ROOT": ".data/private-gateway/edge-backups",
+    "METAHUB_EDGE_BACKUP_CUSTOMER_OBJECT_STORE_ROOT": "",
     "METAHUB_EDGE_SUPPORT_BUNDLE_ROOT": ".data/private-gateway/support-bundles",
     "METAHUB_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET": (
         DEFAULT_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET
@@ -857,6 +859,12 @@ class AppConfig(BaseModel):
     )
     local_management_allowed_client_cidrs: list[str] = Field(default_factory=list)
     local_management_allow_loopback: bool = True
+    edge_backup_root: str = Field(
+        default=".data/private-gateway/edge-backups", exclude=True, repr=False
+    )
+    edge_backup_customer_object_store_root: str | None = Field(
+        default=None, exclude=True, repr=False
+    )
     # 导出配置带安全默认值，兼容测试直接构造 AppConfig，同时禁止无界任务和长期 BLOB。
     usage_export_enabled: bool = True
     usage_export_poll_interval_seconds: int = 2
@@ -2169,6 +2177,10 @@ def load_app_config(service_name: str) -> AppConfig:
     )
     local_secret_database_path = _value(values, "METAHUB_LOCAL_SECRET_DATABASE_PATH")
     local_secret_keystore_path = _value(values, "METAHUB_LOCAL_SECRET_KEYSTORE_PATH")
+    edge_backup_root = _value(values, "METAHUB_EDGE_BACKUP_ROOT")
+    edge_backup_customer_object_store_root = _optional_value(
+        values, "METAHUB_EDGE_BACKUP_CUSTOMER_OBJECT_STORE_ROOT"
+    )
     edge_support_bundle_root = _value(values, "METAHUB_EDGE_SUPPORT_BUNDLE_ROOT")
     edge_support_bundle_encryption_secret = (
         _optional_value(values, "METAHUB_EDGE_SUPPORT_BUNDLE_ENCRYPTION_SECRET")
@@ -2238,6 +2250,34 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion=(
                 "Configure an independent support-bundle root and a deployment-specific "
                 "encryption secret of at least 32 bytes."
+            ),
+        )
+
+    if service_name == "gateway-data-plane" and (
+        not edge_backup_root
+        or Path(edge_backup_root).resolve()
+        in {
+            Path(local_secret_database_path).resolve(),
+            Path(local_secret_keystore_path).resolve(),
+            Path(edge_support_bundle_root).resolve(),
+        }
+        or (
+            edge_backup_customer_object_store_root is not None
+            and Path(edge_backup_customer_object_store_root).resolve()
+            in {
+                Path(local_secret_database_path).resolve(),
+                Path(local_secret_keystore_path).resolve(),
+                Path(edge_support_bundle_root).resolve(),
+                Path(edge_backup_root).resolve(),
+            }
+        )
+    ):
+        raise ConfigError(
+            code="infra.config_invalid",
+            message="Edge backup local and customer storage boundaries are invalid.",
+            suggestion=(
+                "Configure distinct backup, customer object-store mount, Secret database, "
+                "key-store, and support-bundle paths."
             ),
         )
 
@@ -2810,6 +2850,8 @@ def load_app_config(service_name: str) -> AppConfig:
         local_management_allowed_origins=local_management_allowed_origins,
         local_management_allowed_client_cidrs=local_management_allowed_client_cidrs,
         local_management_allow_loopback=local_management_allow_loopback,
+        edge_backup_root=edge_backup_root,
+        edge_backup_customer_object_store_root=edge_backup_customer_object_store_root,
         usage_export_enabled=_boolean(values, "METAHUB_USAGE_EXPORT_ENABLED"),
         usage_export_poll_interval_seconds=_bounded_int(
             values, "METAHUB_USAGE_EXPORT_POLL_INTERVAL_SECONDS", minimum=1, maximum=60

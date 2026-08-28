@@ -1,4 +1,4 @@
-/** PRD-120..128 installer, license, health, support, and security binding. */
+/** PRD-120..129 installer, backup, license, health, support, and security binding. */
 
 export function clearPrivateGatewayDom(documentRef = globalThis.document) {
   const root = documentRef?.querySelector?.(".private-gateways-panel");
@@ -51,6 +51,86 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
     button.addEventListener("click", () => void callbacks.onLicenseRefresh?.(
       button.dataset.privateGatewayLicenseRefresh ?? "",
     ));
+  });
+  root.querySelectorAll("[data-private-gateway-backup-create]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      void callbacks.onLocalBackup?.({
+        deploymentId: String(data.get("deploymentId") ?? ""),
+        sourceGeneration: Number(data.get("sourceGeneration")),
+        retentionSeconds: Number(data.get("retentionDays")) * 86_400,
+        storageKind: String(data.get("storageKind") ?? ""),
+        confirmed: data.get("confirmed") === "on",
+      });
+    });
+  });
+  root.querySelectorAll("[data-private-gateway-local-restore]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      void callbacks.onLocalRestore?.({
+        deploymentId: String(data.get("deploymentId") ?? ""),
+        backupId: String(data.get("backupId") ?? ""),
+        targetSchemaHead: String(data.get("targetSchemaHead") ?? ""),
+        confirmedTarget: data.get("confirmedTarget") === "on",
+        confirmedScope: data.get("confirmedScope") === "on",
+        confirmedCheckpoint: data.get("confirmedCheckpoint") === "on",
+      });
+    });
+  });
+  root.querySelectorAll("[data-private-gateway-drill-mutation]").forEach((form) => {
+    const method = form.querySelector('select[name="method"]');
+    method?.addEventListener("change", () => {
+      const label = form.querySelector("[data-private-gateway-drill-code]");
+      const input = label?.querySelector("[data-private-gateway-sensitive]");
+      const webAuthn = method.value === "webauthn";
+      if (input) {
+        input.value = "";
+        input.disabled = webAuthn;
+        input.required = !webAuthn;
+      }
+      if (label) label.hidden = webAuthn;
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const input = form.querySelector("[data-private-gateway-sensitive]");
+      let verificationCode = String(input?.value ?? "").trim().toUpperCase();
+      if (input) input.value = "";
+      const methodValue = String(data.get("method") ?? "");
+      const validCode = methodValue === "webauthn"
+        || methodValue === "totp" && /^[0-9]{6}$/u.test(verificationCode)
+        || methodValue === "recovery_code"
+          && /^MHRC-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}$/u
+            .test(verificationCode);
+      const error = form.querySelector("[data-private-gateway-drill-error]");
+      if (!validCode || data.get("confirmed") !== "on") {
+        verificationCode = "";
+        if (error) error.textContent = "请确认隔离目标并完成有效的二次验证";
+        return;
+      }
+      if (error) error.textContent = "";
+      try {
+        await callbacks.onDrillMutation?.({
+          action: String(data.get("action") ?? ""),
+          deploymentId: String(data.get("deploymentId") ?? ""),
+          sourceBackupId: String(data.get("sourceBackupId") ?? ""),
+          drillId: String(data.get("drillId") ?? ""),
+          quarterCode: String(data.get("quarterCode") ?? ""),
+          rpoObjectiveSeconds: Number(data.get("rpoObjectiveSeconds")),
+          rtoObjectiveSeconds: Number(data.get("rtoObjectiveSeconds")),
+          isolatedTargetSha256: String(data.get("isolatedTargetSha256") ?? ""),
+          reasonCode: String(data.get("reasonCode") ?? ""),
+          method: methodValue,
+          verificationCode,
+          confirmed: true,
+        });
+      } finally {
+        verificationCode = "";
+        if (input) input.value = "";
+      }
+    });
   });
   root.querySelectorAll("[data-private-gateway-maintenance]").forEach((form) => {
     form.addEventListener("submit", (event) => {

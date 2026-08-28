@@ -4,6 +4,11 @@ const DEPLOYMENT_ID = /^edp_[0-9a-f]{32}$/u;
 const REFERENCE_ID = /^lsr_[0-9a-f]{32}$/u;
 const TEST_ID = /^lpt_[0-9a-f]{32}$/u;
 const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
+const BACKUP_ID = /^ebk_[0-9a-f]{32}$/u;
+const RESTORE_ID = /^lrj_[0-9a-f]{32}$/u;
+const DRILL_ID = /^pdd_[0-9a-f]{32}$/u;
+const RESTORE_JOB_ID = /^rst_[0-9a-f]{32}$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
 const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const SAFE_CODE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u;
@@ -259,6 +264,68 @@ export async function testLocalProviderConnection({
   });
 }
 
+export async function createLocalBackup({
+  deploymentId,
+  sourceGeneration,
+  retentionSeconds,
+  storageKind,
+  signal,
+} = {}) {
+  const session = requireSession(deploymentId);
+  const result = await localRequest(session.origin, "/local/backups", {
+    method: "POST",
+    body: JSON.stringify({
+      source_generation: integer(
+        sourceGeneration, 1, 2_147_483_647, "local_backup.request_invalid",
+      ),
+      retention_seconds: integer(
+        retentionSeconds, 3600, 31_536_000, "local_backup.request_invalid",
+      ),
+      storage_kind: choice(
+        storageKind, ["local", "customer_object_store"], "local_backup.request_invalid",
+      ),
+    }),
+    headers: { ...sessionHeaders(session), "Content-Type": "application/json" },
+    signal,
+    expectedStatus: 201,
+    networkCode: "local_backup.network_unavailable",
+    responseCode: "local_backup.response_invalid",
+  });
+  return validateLocalBackup(result.payload, session.owner);
+}
+
+export async function restoreLocalBackup({
+  deploymentId,
+  backupId,
+  targetSchemaHead,
+  drillContext = null,
+  signal,
+} = {}) {
+  const session = requireSession(deploymentId);
+  const body = {
+    backup_id: identifier(backupId, BACKUP_ID, "local_restore.request_invalid"),
+    target_schema_head: identifier(
+      targetSchemaHead, /^[0-9]{4}$/u, "local_restore.request_invalid",
+    ),
+  };
+  if (drillContext !== null) body.drill_context = validateLocalDrillInput(drillContext);
+  const result = await localRequest(session.origin, "/local/restores", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { ...sessionHeaders(session), "Content-Type": "application/json" },
+    signal,
+    expectedStatus: 200,
+    networkCode: "local_restore.network_unavailable",
+    responseCode: "local_restore.response_invalid",
+  });
+  const restored = validateLocalRestore(result.payload, session.owner);
+  if (restored.backup_id !== body.backup_id
+    || restored.target_schema_head !== body.target_schema_head) {
+    invalidResponse("local_restore.response_invalid");
+  }
+  return restored;
+}
+
 export async function previewLocalSupportBundle({
   deploymentId,
   collectorCodes = SUPPORT_BUNDLE_COLLECTOR_CODES,
@@ -354,9 +421,12 @@ async function localRequest(origin, path, options = {}) {
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
-    throw new LocalSecretApiError({ status: 0, code: "local_secret.network_unavailable" });
+    throw new LocalSecretApiError({
+      status: 0,
+      code: options.networkCode ?? "local_secret.network_unavailable",
+    });
   }
-  validateCacheBoundary(response);
+  validateCacheBoundary(response, options.responseCode);
   const bytes = await readBoundedBody(response);
   if (options.expectEmpty) {
     if (!response.ok || response.status !== options.expectedStatus || bytes.length !== 0) {
@@ -366,7 +436,9 @@ async function localRequest(origin, path, options = {}) {
   }
   const payload = parseJson(response, bytes);
   if (!response.ok) throw await responseError(response, bytes, payload);
-  if (response.status !== options.expectedStatus) invalidResponse("local_secret.response_invalid");
+  if (response.status !== options.expectedStatus) {
+    invalidResponse(options.responseCode ?? "local_secret.response_invalid");
+  }
   return Object.freeze({ payload, response });
 }
 
@@ -474,6 +546,87 @@ function validateReference(value, owner) {
     invalidResponse("local_secret.response_invalid");
   }
   return reference;
+}
+
+function validateLocalBackup(value, owner) {
+  const code = "local_backup.response_invalid";
+  exact(value, [
+    "backup_id", "deployment_id", "source_generation", "schema_head", "storage_kind",
+    "status", "manifest_sha256", "merkle_root", "kms_key_id_sha256", "chunk_count",
+    "encrypted_size_bytes", "created_at", "expires_at", "revision",
+  ], code);
+  const createdAt = safeTimestamp(value.created_at, code);
+  const expiresAt = safeTimestamp(value.expires_at, code);
+  if (Date.parse(expiresAt) <= Date.parse(createdAt)) invalidResponse(code);
+  const result = {
+    backup_id: identifier(value.backup_id, BACKUP_ID, code),
+    deployment_id: identifier(value.deployment_id, DEPLOYMENT_ID, code),
+    source_generation: integer(value.source_generation, 1, 2_147_483_647, code),
+    schema_head: identifier(value.schema_head, /^[0-9]{4}$/u, code),
+    storage_kind: choice(value.storage_kind, ["local", "customer_object_store"], code),
+    status: choice(value.status, ["ready", "deleted"], code),
+    manifest_sha256: identifier(value.manifest_sha256, SHA256, code),
+    merkle_root: identifier(value.merkle_root, SHA256, code),
+    kms_key_id_sha256: identifier(value.kms_key_id_sha256, SHA256, code),
+    chunk_count: integer(value.chunk_count, 4, 1_000_000, code),
+    encrypted_size_bytes: integer(value.encrypted_size_bytes, 1, Number.MAX_SAFE_INTEGER, code),
+    created_at: createdAt,
+    expires_at: expiresAt,
+    revision: integer(value.revision, 1, 2_147_483_647, code),
+  };
+  if (result.deployment_id !== owner.deploymentId) invalidResponse(code);
+  return Object.freeze(result);
+}
+
+function validateLocalRestore(value, owner) {
+  const code = "local_restore.response_invalid";
+  exact(value, [
+    "restore_id", "backup_id", "deployment_id", "target_schema_head", "status",
+    "failure_code", "revision", "created_at", "completed_at", "updated_at",
+  ], code);
+  const status = choice(
+    value.status, ["staging", "verified", "applying", "succeeded", "failed"], code,
+  );
+  const failureCode = value.failure_code === null ? null : safeCode(value.failure_code, code);
+  const completedAt = value.completed_at === null ? null : safeTimestamp(value.completed_at, code);
+  if ((status === "failed") !== Boolean(failureCode)
+    || (["succeeded", "failed"].includes(status)) !== Boolean(completedAt)) {
+    invalidResponse(code);
+  }
+  const result = {
+    restore_id: identifier(value.restore_id, RESTORE_ID, code),
+    backup_id: identifier(value.backup_id, BACKUP_ID, code),
+    deployment_id: identifier(value.deployment_id, DEPLOYMENT_ID, code),
+    target_schema_head: identifier(value.target_schema_head, /^[0-9]{4}$/u, code),
+    status,
+    failure_code: failureCode,
+    revision: integer(value.revision, 1, 2_147_483_647, code),
+    created_at: safeTimestamp(value.created_at, code),
+    completed_at: completedAt,
+    updated_at: safeTimestamp(value.updated_at, code),
+  };
+  if (result.deployment_id !== owner.deploymentId) invalidResponse(code);
+  return Object.freeze(result);
+}
+
+function validateLocalDrillInput(value) {
+  const code = "local_restore.request_invalid";
+  exact(value, [
+    "drill_id", "restore_job_id", "expected_revision", "source_backup_completed_at",
+    "device_reenrollment_evidence_sha256", "minimal_request_evidence_sha256",
+  ], code);
+  return {
+    drill_id: identifier(value.drill_id, DRILL_ID, code),
+    restore_job_id: identifier(value.restore_job_id, RESTORE_JOB_ID, code),
+    expected_revision: integer(value.expected_revision, 2, 2_147_483_647, code),
+    source_backup_completed_at: safeTimestamp(value.source_backup_completed_at, code),
+    device_reenrollment_evidence_sha256: identifier(
+      value.device_reenrollment_evidence_sha256, SHA256, code,
+    ),
+    minimal_request_evidence_sha256: identifier(
+      value.minimal_request_evidence_sha256, SHA256, code,
+    ),
+  };
 }
 
 function validateLocalSupportBundle(value, owner) {
@@ -764,18 +917,23 @@ function exact(value, keys, code) {
   const actual = plain(value) ? Object.keys(value).sort() : [];
   const expected = [...keys].sort();
   if (actual.length !== expected.length
-    || actual.some((key, index) => key !== expected[index])) invalidResponse(code);
+    || actual.some((key, index) => key !== expected[index])) invalidByCode(code);
 }
 function plain(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value)
     && Object.getPrototypeOf(value) === Object.prototype);
 }
-function validateCacheBoundary(response) {
+function validateCacheBoundary(response, code = "local_secret.response_invalid") {
   const directives = String(response.headers.get("Cache-Control") ?? "")
     .toLowerCase().split(",").map((item) => item.trim());
   if (!directives.includes("no-store") || !directives.includes("private")) {
-    invalidResponse("local_secret.response_invalid");
+    invalidResponse(code);
   }
+}
+function safeTimestamp(value, code) {
+  const text = String(value ?? "");
+  if (!text || text.length > 40 || !Number.isFinite(Date.parse(text))) invalidByCode(code);
+  return text;
 }
 function invalidRequest(code) { throw new LocalSecretApiError({ status: 422, code }); }
 function invalidResponse(code) { throw new LocalSecretApiError({ status: 502, code }); }

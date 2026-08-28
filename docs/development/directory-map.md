@@ -2490,6 +2490,23 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   自审、0120/API/Shared/Gateway/CLI/Console、浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-129，
   G5 在 PRD-130 后统一执行。
 
+## PRD-129 私有 Gateway 备份、恢复与灾备演练（已完成）
+
+- `shared-sdk/python/metahub_shared/private_gateway/backups.py`：用途分域 Ed25519 manifest、逐块 AES-GCM AAD、
+  Merkle root、客户恢复密钥包裹、严格 owner/time/schema/信封/chunk 校验和零化边界。
+- `gateway-data-plane/src/metahub_gateway/local_secrets/backups.py` 与 `backup_reporting.py`：客户本地不可变备份、
+  独立保护签名密钥、原子 active slot、持久 restore journal、替换节点 KEK 重包裹、隔离 drill 九项证据及 mTLS
+  云报告 outbox；本地管理 API 只返回安全摘要。
+- `control-plane-api/src/metahub_control/edge_management/backup_models.py`、`backup_service.py` 与 routes：Agent
+  backup/drill 报告、Workspace 备份状态和非自批演练、Platform 裁剪投影、严格 owner/step-up/ETag/幂等合同。
+- `infra/migrations/0121_edge_backup_restore_dr_drill.sql/.down.sql`：备份摘要/head、恢复 job/verification、DR drill、
+  事件/outbox、幂等动作、Workspace/Platform 权限、不变触发器、复合 owner、租户删除 manifest 和业务 down guard。
+- `console-web/src/lib/edgeBackups.js`、Private Gateway 与 Platform 页面：严格三域 client/DTO/store、RPO、最近成功、
+  验证、generation、保留、存储和 drill 状态；拒绝对象 URL、客户路径、chunk、envelope 或 Secret 进入 DOM/Storage。
+- `docs/prd/PRD-129-private-gateway-backup-restore-dr-drill.md` 与 `docs/testing/PRD-129-tests.md`：保存两轮实施自审、
+  0121/API/Shared/Gateway/Console、双视口浏览器、敏感审计和批次门禁边界；下一权威项为 PRD-130，G5 在
+  PRD-130 独立提交后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

@@ -1,4 +1,4 @@
-/** PRD-120..128 safe Edge identity, license, health, and lifecycle views. */
+/** PRD-120..129 safe Edge backup, license, health, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
 import {
@@ -13,6 +13,7 @@ const VALIDATION_CHECK_CODES = Object.freeze([
   "minimal_gateway_request", "usage_cost_failure_sync", "backup_readiness",
   "capacity_readiness", "performance_baseline",
 ]);
+const SHA256_TEXT = /^[0-9a-f]{64}$/u;
 
 export function renderPrivateGateways(state, authContext, consoleShellState) {
   const owner = privateGatewayPageOwner(authContext, consoleShellState);
@@ -237,6 +238,7 @@ function renderDeployment(item, state, owner) {
         ${fact("吊销水位", integer(item.revocation_generation))}
       </div>
       ${renderLicense(item, state, owner)}
+      ${renderBackupRecovery(item, state, owner)}
       ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderUpgrade(item, state, owner)}
@@ -312,6 +314,140 @@ function licenseFeatureLabel(value) {
     policy_enforcement: "策略执行",
     telemetry_export: "遥测导出",
   })[value] ?? "未知";
+}
+
+function renderBackupRecovery(deployment, state, owner) {
+  if (!owner.canReadBackups) return "";
+  const backup = state.backupStates?.[deployment.deployment_id] ?? null;
+  if (!backup) {
+    return `<section class="private-gateway-backup" aria-label="备份与灾备演练">
+      <div class="private-gateway-state-empty" role="status">备份状态暂不可用</div>
+    </section>`;
+  }
+  const latest = backup.latest_backup;
+  const local = state.localBackupStates?.[deployment.deployment_id] ?? {};
+  const completed = backup.recent_backups.filter(
+    (item) => item.status === "completed" && item.check_outcome === "verified",
+  );
+  const selectable = local.backup?.status === "ready"
+    && !completed.some((item) => item.backup_id === local.backup.backup_id)
+    ? [local.backup, ...completed] : completed;
+  const sessionReady = state.localSession?.deploymentId === deployment.deployment_id
+    && state.localSession.expiresAt > Math.floor(Date.now() / 1000);
+  const disabled = state.backupBusy || state.busy;
+  const tone = ({ current: "applied", overdue: "pending", failed: "failed", never: "not_observed" })[
+    backup.status
+  ] ?? "not_observed";
+  return `<section class="private-gateway-backup" aria-label="备份、恢复与灾备演练">
+    <header>
+      <div><h5>备份与恢复</h5><small>revision ${integer(backup.revision)} · ${formatTime(backup.updated_at)}</small></div>
+      <span class="private-gateway-state-status tone-${tone}">${backupStatusLabel(backup.status)}</span>
+    </header>
+    <dl class="private-gateway-backup-facts">
+      ${fact("RPO 目标", duration(backup.rpo_objective_seconds))}
+      ${fact("最近成功", formatTime(backup.last_success_at))}
+      ${fact("验证", backup.last_check_outcome === "verified" ? "通过" : backup.last_check_outcome === "failed" ? "失败" : "未验证")}
+      ${fact("Generation", integer(backup.latest_source_generation))}
+      ${fact("保留至", latest ? formatTime(latest.retention_until) : "-")}
+      ${fact("存储", latest ? backupStorageLabel(latest.storage_kind) : "-")}
+    </dl>
+    ${latest ? `<div class="private-gateway-backup-latest"><strong>${escapeHtml(latest.backup_id)}</strong><span>${escapeHtml(latest.schema_head)} · ${escapeHtml(latest.size_bucket)} · ${integer(latest.chunk_count)} chunks</span></div>` : ""}
+    ${owner.canCreateBackups && sessionReady ? renderLocalBackupForm(
+      deployment, backup, disabled,
+    ) : ""}
+    ${owner.canApproveRestores && sessionReady && selectable.length
+      ? renderLocalRestoreForm(deployment, selectable, local.restore, disabled) : ""}
+    ${owner.canManageDrills && completed.length
+      ? renderDrillRequestForm(deployment, completed, disabled) : ""}
+    ${renderDrillHistory(deployment, backup.recent_drills, owner, disabled)}
+  </section>`;
+}
+
+function renderLocalBackupForm(deployment, backup, disabled) {
+  return `<form class="private-gateway-backup-form" data-private-gateway-backup-create autocomplete="off">
+    <input type="hidden" name="deploymentId" value="${escapeAttribute(deployment.deployment_id)}">
+    <label><span>Source generation</span><input name="sourceGeneration" type="number" min="1" max="2147483647" value="${integer(Math.max(1, backup.latest_source_generation + 1))}" required${disabled ? " disabled" : ""}></label>
+    <label><span>保留天数</span><input name="retentionDays" type="number" min="1" max="365" value="30" required${disabled ? " disabled" : ""}></label>
+    <label><span>存储</span><select name="storageKind"${disabled ? " disabled" : ""}><option value="local">Gateway 本地</option><option value="customer_object_store">客户对象存储</option></select></label>
+    <label class="private-gateway-backup-check"><input name="confirmed" type="checkbox" required${disabled ? " disabled" : ""}><span>确认客户密钥与保留策略</span></label>
+    <button type="submit"${disabled ? " disabled" : ""}>创建备份</button>
+  </form>`;
+}
+
+function renderLocalRestoreForm(deployment, backups, restored, disabled) {
+  return `<form class="private-gateway-restore-form" data-private-gateway-local-restore autocomplete="off">
+    <input type="hidden" name="deploymentId" value="${escapeAttribute(deployment.deployment_id)}">
+    <header><div><strong>生产恢复</strong><small>${restored ? `${escapeHtml(restored.status)} · ${formatTime(restored.updated_at)}` : "staging 全量验证后原子切换"}</small></div></header>
+    <label><span>备份</span><select name="backupId"${disabled ? " disabled" : ""}>${backups.map((item) => `<option value="${escapeAttribute(item.backup_id)}">${escapeHtml(item.backup_id)} · ${escapeHtml(item.schema_head)}</option>`).join("")}</select></label>
+    <label><span>目标 Schema</span><input name="targetSchemaHead" pattern="[0-9]{4}" maxlength="4" value="0121" required${disabled ? " disabled" : ""}></label>
+    <fieldset><legend>恢复边界</legend>
+      <label><input name="confirmedTarget" type="checkbox" required${disabled ? " disabled" : ""}><span>目标为当前 Deployment</span></label>
+      <label><input name="confirmedScope" type="checkbox" required${disabled ? " disabled" : ""}><span>覆盖配置、账本、审计与 Secret 引用</span></label>
+      <label><input name="confirmedCheckpoint" type="checkbox" required${disabled ? " disabled" : ""}><span>保留可回退 active checkpoint</span></label>
+    </fieldset>
+    <button type="submit" class="danger"${disabled ? " disabled" : ""}>执行恢复</button>
+  </form>`;
+}
+
+function renderDrillRequestForm(deployment, backups, disabled) {
+  return `<form class="private-gateway-drill-form" data-private-gateway-drill-mutation autocomplete="off">
+    <input type="hidden" name="action" value="request">
+    <input type="hidden" name="deploymentId" value="${escapeAttribute(deployment.deployment_id)}">
+    <header><div><strong>隔离恢复演练</strong><small>production_untouched</small></div></header>
+    <label><span>源备份</span><select name="sourceBackupId"${disabled ? " disabled" : ""}>${backups.map((item) => `<option value="${escapeAttribute(item.backup_id)}">${escapeHtml(item.backup_id)} · ${formatTime(item.completed_at)}</option>`).join("")}</select></label>
+    <label><span>季度</span><input name="quarterCode" pattern="[0-9]{4}-Q[1-4]" value="${currentQuarter()}" required${disabled ? " disabled" : ""}></label>
+    <label><span>RPO</span><select name="rpoObjectiveSeconds"${disabled ? " disabled" : ""}><option value="86400">24 小时</option><option value="14400">4 小时</option><option value="3600">1 小时</option></select></label>
+    <label><span>RTO</span><select name="rtoObjectiveSeconds"${disabled ? " disabled" : ""}><option value="14400">4 小时</option><option value="3600">1 小时</option><option value="900">15 分钟</option></select></label>
+    <label class="private-gateway-backup-wide"><span>隔离目标 SHA-256</span><input name="isolatedTargetSha256" pattern="[0-9a-f]{64}" maxlength="64" required${disabled ? " disabled" : ""}></label>
+    <input type="hidden" name="reasonCode" value="quarterly_dr_drill">
+    ${renderDrillStepUp(disabled, "确认隔离目标、RPO/RTO 与生产不受触碰")}
+    <p data-private-gateway-drill-error role="alert"></p>
+    <button type="submit"${disabled ? " disabled" : ""}>申请演练</button>
+  </form>`;
+}
+
+function renderDrillHistory(deployment, drills, owner, disabled) {
+  if (!drills.length) return '<div class="private-gateway-backup-empty">尚无季度恢复演练</div>';
+  return `<div class="private-gateway-drill-list">${drills.map((drill) => `<div>
+    <div><strong>${escapeHtml(drill.quarter_code)}</strong><span class="private-gateway-state-status tone-${drillTone(drill)}">${drillStatusLabel(drill.status)}</span></div>
+    <dl>${fact("RPO", drill.actual_rpo_seconds === null ? duration(drill.rpo_objective_seconds) : `${duration(drill.actual_rpo_seconds)} / ${duration(drill.rpo_objective_seconds)}`)}${fact("RTO", drill.actual_rto_seconds === null ? duration(drill.rto_objective_seconds) : `${duration(drill.actual_rto_seconds)} / ${duration(drill.rto_objective_seconds)}`)}${fact("目标", shortHash(drill.isolated_target_sha256))}${fact("生产", drill.production_untouched ? "未触碰" : "异常")}</dl>
+    ${owner.canApproveRestores && drill.status === "requested"
+      && drill.requested_by_account_id !== owner.accountId
+      ? `<form class="private-gateway-drill-approve" data-private-gateway-drill-mutation autocomplete="off">
+          <input type="hidden" name="action" value="approve"><input type="hidden" name="deploymentId" value="${escapeAttribute(deployment.deployment_id)}"><input type="hidden" name="drillId" value="${escapeAttribute(drill.drill_id)}"><input type="hidden" name="reasonCode" value="isolated_restore_approved">
+          ${renderDrillStepUp(disabled, "确认非自批并批准隔离恢复")}
+          <p data-private-gateway-drill-error role="alert"></p>
+          <button type="submit"${disabled ? " disabled" : ""}>批准</button>
+        </form>` : ""}
+  </div>`).join("")}</div>`;
+}
+
+function renderDrillStepUp(disabled, confirmation) {
+  return `<label><span>验证方式</span><select name="method"${disabled ? " disabled" : ""}><option value="totp">TOTP</option><option value="webauthn">安全密钥</option><option value="recovery_code">恢复码</option></select></label>
+    <label data-private-gateway-drill-code><span>二次验证码</span><input type="password" name="verificationCode" inputmode="numeric" autocomplete="one-time-code" data-private-gateway-sensitive required${disabled ? " disabled" : ""}></label>
+    <label class="private-gateway-backup-check"><input name="confirmed" type="checkbox" required${disabled ? " disabled" : ""}><span>${escapeHtml(confirmation)}</span></label>`;
+}
+
+function backupStatusLabel(value) {
+  return ({ current: "RPO 正常", overdue: "RPO 逾期", failed: "最近失败", never: "尚无备份" })[
+    value
+  ] ?? "未知";
+}
+
+function backupStorageLabel(value) {
+  return value === "customer_object_store" ? "客户对象存储" : "Gateway 本地";
+}
+
+function drillStatusLabel(value) {
+  return ({ requested: "待审批", approved: "已批准", running: "进行中", succeeded: "通过", failed: "失败" })[
+    value
+  ] ?? "未知";
+}
+
+function drillTone(value) {
+  if (value.status === "succeeded" && value.objective_outcome === "met") return "applied";
+  if (value.status === "failed" || value.objective_outcome === "missed") return "failed";
+  return "pending";
 }
 
 function renderUpgrade(deployment, state, owner) {
@@ -900,6 +1036,21 @@ function telemetryStatus(value) { if (value.last_receipt_at === null) return "�
 function policyLabel(value) { return ({ minimal: "Minimal", operational: "Operational", billing: "Billing" })[value] ?? "-"; }
 function streamLabel(value) { return ({ health: "Health", operational: "Operational", usage: "Usage", failure: "Failure" })[value] ?? value; }
 function seconds(value) { return Number.isSafeInteger(value) ? `${value}s` : "-"; }
+function duration(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return "-";
+  if (value % 86_400 === 0) return `${value / 86_400} 天`;
+  if (value % 3_600 === 0) return `${value / 3_600} 小时`;
+  if (value % 60 === 0) return `${value / 60} 分钟`;
+  return `${value} 秒`;
+}
+function currentQuarter() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-Q${Math.floor(now.getUTCMonth() / 3) + 1}`;
+}
+function shortHash(value) {
+  const text = String(value ?? "");
+  return SHA256_TEXT.test(text) ? `${text.slice(0, 10)}…${text.slice(-6)}` : "-";
+}
 function micros(value, currency) { return Number.isSafeInteger(value) ? `${currency} ${(value / 1_000_000).toFixed(6)}` : "-"; }
 function stateActionLabel(value) { return ({ publish: "发布", approve: "批准", reject: "拒绝", rollback: "回滚" })[value] ?? "提交"; }
 function eventLabel(value) { return ({ "edge.registered": "设备注册", "edge.certificate_rotated": "证书轮换", "edge.revoked": "Deployment 吊销", "edge.authentication_failed": "认证失败" })[value] ?? value; }

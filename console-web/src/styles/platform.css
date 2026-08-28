@@ -1048,6 +1048,11 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-edge-license-issue .platform-edge-confirm,
 .platform-edge-license-issue form > button { grid-column: span 2; }
 .platform-edge-license-table { min-width: 1120px; }
+.platform-edge-backup-table { min-width: 980px; }
+.platform-edge-backup-table td > strong,
+.platform-edge-backup-table td > small,
+.platform-edge-backup-table td > span { display: block; overflow-wrap: anywhere; }
+.platform-edge-backup-table td > small { margin-top: 4px; color: var(--muted); }
 .platform-edge-license-table td > strong,
 .platform-edge-license-table td > small,
 .platform-edge-license-table td > span { display: block; overflow-wrap: anywhere; }
@@ -1218,10 +1223,12 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-release-actions .platform-edge-upgrade-check { grid-column: 1; }
   .platform-edge-release-table,
   .platform-edge-license-table,
+  .platform-edge-backup-table,
   .platform-edge-batch-table,
   .platform-edge-target-table { min-width: 0; }
   .platform-edge-release-table thead,
   .platform-edge-license-table thead,
+  .platform-edge-backup-table thead,
   .platform-edge-batch-table thead,
   .platform-edge-target-table thead { display: none; }
   .platform-edge-release-table tbody,
@@ -1230,6 +1237,9 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-license-table tbody,
   .platform-edge-license-table tr,
   .platform-edge-license-table td,
+  .platform-edge-backup-table tbody,
+  .platform-edge-backup-table tr,
+  .platform-edge-backup-table td,
   .platform-edge-batch-table tbody,
   .platform-edge-batch-table tr,
   .platform-edge-batch-table td,
@@ -1238,14 +1248,17 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-target-table td { display: block; width: 100%; }
   .platform-edge-release-table tr,
   .platform-edge-license-table tr,
+  .platform-edge-backup-table tr,
   .platform-edge-batch-table tr,
   .platform-edge-target-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .platform-edge-release-table td,
   .platform-edge-license-table td,
+  .platform-edge-backup-table td,
   .platform-edge-batch-table td,
   .platform-edge-target-table td { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 10px; padding: 6px 0; border: 0; text-align: left; }
   .platform-edge-release-table td::before,
   .platform-edge-license-table td::before,
+  .platform-edge-backup-table td::before,
   .platform-edge-batch-table td::before,
   .platform-edge-target-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
   .platform-edge-release-actions { min-width: 0; }

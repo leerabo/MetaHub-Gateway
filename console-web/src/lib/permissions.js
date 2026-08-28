@@ -113,6 +113,11 @@ export const PERMISSIONS = Object.freeze({
   EDGE_LICENSE_READ: "edge.license.read",
   EDGE_LICENSE_REFRESH: "edge.license.refresh",
   EDGE_LICENSE_IMPORT: "edge.license.import",
+  // PRD-129 backup creation, drill management, and restore approval remain independent.
+  EDGE_BACKUP_READ: "edge.backup.read",
+  EDGE_BACKUP_CREATE: "edge.backup.create",
+  EDGE_DRILL_MANAGE: "edge.drill.manage",
+  EDGE_RESTORE_APPROVE: "edge.restore.approve",
   // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
   EDGE_TELEMETRY_READ: "edge.telemetry.read",
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",

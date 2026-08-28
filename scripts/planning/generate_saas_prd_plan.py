@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx"
 PLAN_DATE = "2026-08-22"
 FIRST_PRD = 90
-COMPLETED_THROUGH_PRD = 128
+COMPLETED_THROUGH_PRD = 129
 
 
 def prd(

@@ -66,6 +66,21 @@ EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS = {
     "finance_admin": ("edge.license.read",),
     "auditor": ("edge.license.read",),
 }
+EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS = {
+    "owner": (
+        "edge.backup.create",
+        "edge.backup.read",
+        "edge.drill.manage",
+        "edge.restore.approve",
+    ),
+    "admin": ("edge.backup.create", "edge.backup.read", "edge.drill.manage"),
+    "security_admin": (
+        "edge.backup.read",
+        "edge.drill.manage",
+        "edge.restore.approve",
+    ),
+    "auditor": ("edge.backup.read",),
+}
 EDGE_PLATFORM_ROLE_PERMISSIONS = {
     "platform_owner": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
     "platform_ops": ("platform.edge_fleet.manage", "platform.edge_fleet.read"),
@@ -119,6 +134,11 @@ EDGE_LICENSE_PLATFORM_ROLE_PERMISSIONS = {
         "platform.edge_license.read",
         "platform.edge_license.revoke",
     ),
+}
+EDGE_BACKUP_PLATFORM_ROLE_PERMISSIONS = {
+    "platform_owner": ("platform.edge_backup.read", "platform.edge_drill.manage"),
+    "platform_ops": ("platform.edge_backup.read", "platform.edge_drill.manage"),
+    "platform_security": ("platform.edge_backup.read",),
 }
 
 _LEGACY_ROLE_BY_WORKSPACE_ROLE = {
@@ -274,6 +294,17 @@ def load_verified_workspace_edge_permissions(
             unavailable_error_code=unavailable_error_code,
         )
     )
+    permissions.update(
+        _load_verified_permissions(
+            connection,
+            role_code=role_code,
+            expected_by_role=EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS,
+            catalog_table="workspace_edge_backup_permission_extensions",
+            assignments_table="workspace_edge_backup_role_permissions",
+            introduced_migration="0121",
+            unavailable_error_code=unavailable_error_code,
+        )
+    )
     return tuple(sorted(permissions))
 
 
@@ -293,6 +324,17 @@ def load_verified_platform_edge_permissions(
                 catalog_table="platform_edge_permission_extensions",
                 assignments_table="platform_edge_role_permissions",
                 introduced_migration="0112",
+                unavailable_error_code=unavailable_error_code,
+            )
+        )
+        permissions.update(
+            _load_verified_permissions(
+                connection,
+                role_code=role_code,
+                expected_by_role=EDGE_BACKUP_PLATFORM_ROLE_PERMISSIONS,
+                catalog_table="platform_edge_backup_permission_extensions",
+                assignments_table="platform_edge_backup_role_permissions",
+                introduced_migration="0121",
                 unavailable_error_code=unavailable_error_code,
             )
         )
@@ -406,6 +448,8 @@ def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 
 __all__ = (
+    "EDGE_BACKUP_PLATFORM_ROLE_PERMISSIONS",
+    "EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_PLATFORM_ROLE_PERMISSIONS",
     "EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS",

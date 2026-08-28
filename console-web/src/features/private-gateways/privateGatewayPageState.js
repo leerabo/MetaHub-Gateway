@@ -1,4 +1,4 @@
-/** PRD-120..128 owner-bound Edge identity, license, health, and lifecycle state. */
+/** PRD-120..129 owner-bound Edge backup, license, health, and lifecycle state. */
 
 import {
   authorizationFingerprint,
@@ -19,6 +19,10 @@ const INSTALLATION_ID = /^ins_[0-9a-f]{32}$/u;
 const VALIDATION_RUN_ID = /^dvr_[0-9a-f]{32}$/u;
 const SUPPORT_BUNDLE_ID = /^esb_[0-9a-f]{32}$/u;
 const DIAGNOSTIC_GRANT_ID = /^dgr_[0-9a-f]{32}$/u;
+const BACKUP_ID = /^ebk_[0-9a-f]{32}$/u;
+const DRILL_ID = /^pdd_[0-9a-f]{32}$/u;
+const RESTORE_ID = /^lrj_[0-9a-f]{32}$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
 const OWNER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/u;
 const SAFE_LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$/u;
 const LOCAL_ORIGIN = /^https?:\/\/[A-Za-z0-9.:[\]-]{1,253}(?::[0-9]{1,5})?$/u;
@@ -70,6 +74,30 @@ const ERROR_MESSAGES = Object.freeze({
   "edge_license.unavailable": "License 服务暂不可用",
   "edge_license.network_unavailable": "License 服务暂不可达",
   "edge_license.request_failed": "License 请求未完成",
+  "edge_backup.permission_denied": "当前成员没有备份或灾备演练权限",
+  "edge_backup.request_invalid": "备份或灾备演练请求字段不合法",
+  "edge_backup.response_invalid": "备份状态响应合同不完整",
+  "edge_backup.not_found": "当前 Deployment 尚无可用备份",
+  "edge_backup.drill_not_found": "恢复演练不存在或不属于当前 Workspace",
+  "edge_backup.approval_conflict": "恢复演练必须由另一位授权成员审批",
+  "edge_backup.revision_conflict": "恢复演练状态已变化，请刷新后重试",
+  "edge_backup.idempotency_conflict": "该操作标识已用于另一恢复意图",
+  "edge_backup.state_conflict": "当前备份或演练状态不允许此操作",
+  "edge_backup.network_unavailable": "备份状态服务暂不可达",
+  "edge_backup.request_failed": "备份或灾备演练请求未完成",
+  "local_backup.request_invalid": "本地备份参数不合法",
+  "local_backup.response_invalid": "本地备份响应合同不完整",
+  "local_backup.network_unavailable": "本地备份服务暂不可达",
+  "local_backup.not_found": "本地备份不存在或不属于当前 Workspace",
+  "local_backup.storage_unavailable": "客户备份存储当前不可用",
+  "local_restore.request_invalid": "本地恢复参数不合法",
+  "local_restore.response_invalid": "本地恢复响应合同不完整",
+  "local_restore.network_unavailable": "本地恢复服务暂不可达",
+  "local_restore.not_found": "本地恢复记录不存在",
+  "local_restore.integrity_failed": "备份完整性验证失败，未触碰活动数据",
+  "local_restore.owner_mismatch": "备份 owner 与当前 Workspace 不一致",
+  "local_restore.schema_incompatible": "备份 Schema 与目标版本不兼容",
+  "local_restore.apply_failed": "恢复应用失败，活动数据保持不变",
   "edge.installer_not_found": "安装介质已下架或不可用",
   "edge.installer_integrity_failed": "安装介质完整性校验失败",
   "edge.preflight_invalid": "预检报告无效",
@@ -205,6 +233,14 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_LICENSE_REFRESH) : "";
   const licenseImportIdentity = hasPermission(authContext, PERMISSIONS.EDGE_LICENSE_IMPORT)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_LICENSE_IMPORT) : "";
+  const backupReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_BACKUP_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_BACKUP_READ) : "";
+  const backupCreateIdentity = hasPermission(authContext, PERMISSIONS.EDGE_BACKUP_CREATE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_BACKUP_CREATE) : "";
+  const drillManageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DRILL_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DRILL_MANAGE) : "";
+  const restoreApproveIdentity = hasPermission(authContext, PERMISSIONS.EDGE_RESTORE_APPROVE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_RESTORE_APPROVE) : "";
   const tenantId = mirroredTenantId(authContext);
   const accountId = mirroredAccountId(authContext);
   const role = String(authContext?.user?.role ?? "");
@@ -255,6 +291,10 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     licenseReadIdentity,
     licenseRefreshIdentity,
     licenseImportIdentity,
+    backupReadIdentity,
+    backupCreateIdentity,
+    drillManageIdentity,
+    restoreApproveIdentity,
     accountId,
     role,
     navigationOwner: JSON.stringify([
@@ -286,6 +326,10 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     canReadLicenses: Boolean(licenseReadIdentity),
     canRefreshLicenses: Boolean(licenseReadIdentity && licenseRefreshIdentity),
     canImportLicenses: Boolean(licenseReadIdentity && licenseImportIdentity),
+    canReadBackups: Boolean(backupReadIdentity),
+    canCreateBackups: Boolean(backupReadIdentity && backupCreateIdentity),
+    canManageDrills: Boolean(backupReadIdentity && drillManageIdentity),
+    canApproveRestores: Boolean(backupReadIdentity && restoreApproveIdentity),
   });
 }
 
@@ -308,6 +352,8 @@ export function createPrivateGatewayPageState({
   let healthStates = Object.freeze({});
   let upgradeStates = Object.freeze({});
   let licenseStates = Object.freeze({});
+  let backupStates = Object.freeze({});
+  let localBackupStates = Object.freeze({});
   let workspaceId = "";
   let dialog = closedDialog();
   let stateDialog = closedStateDialog();
@@ -338,19 +384,25 @@ export function createPrivateGatewayPageState({
   let canReadLicenses = false;
   let canRefreshLicenses = false;
   let canImportLicenses = false;
+  let canReadBackups = false;
+  let canCreateBackups = false;
+  let canManageDrills = false;
+  let canApproveRestores = false;
   let maintenanceIntent = null;
   let rollbackUpgradeIntent = null;
   let licenseRefreshIntent = null;
+  let drillMutationIntent = null;
   let generations = {
     load: 0, create: 0, revoke: 0, copy: 0, command: 0, policy: 0,
     localSession: 0, secret: 0, validation: 0, acceptance: 0, supportBundle: 0,
     diagnostic: 0, maintenance: 0, rollbackUpgrade: 0, refreshLicense: 0,
+    drillMutation: 0, localBackup: 0, localRestore: 0,
   };
   let operations = {
     load: null, create: null, revoke: null, copy: null, command: null, policy: null,
     localSession: null, secret: null, validation: null, acceptance: null,
     supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
-    refreshLicense: null,
+    refreshLicense: null, drillMutation: null, localBackup: null, localRestore: null,
   };
 
   function enter(owner) {
@@ -384,6 +436,10 @@ export function createPrivateGatewayPageState({
     canReadLicenses = owner.canReadLicenses === true;
     canRefreshLicenses = owner.canRefreshLicenses === true && canReadLicenses;
     canImportLicenses = owner.canImportLicenses === true && canReadLicenses;
+    canReadBackups = owner.canReadBackups === true;
+    canCreateBackups = owner.canCreateBackups === true && canReadBackups;
+    canManageDrills = owner.canManageDrills === true && canReadBackups;
+    canApproveRestores = owner.canApproveRestores === true && canReadBackups;
     if (!canManage && dialog.open) closeDialogInternal();
     if (!canManageSecrets) {
       secretDialog = closedSecretDialog();
@@ -396,6 +452,10 @@ export function createPrivateGatewayPageState({
     if (!canApproveDiagnostics) diagnosticDialog = closedDiagnosticDialog();
     if (!canReadUpgrades) upgradeStates = Object.freeze({});
     if (!canReadLicenses) licenseStates = Object.freeze({});
+    if (!canReadBackups) {
+      backupStates = Object.freeze({});
+      localBackupStates = Object.freeze({});
+    }
     return true;
   }
 
@@ -417,6 +477,8 @@ export function createPrivateGatewayPageState({
     healthStates = Object.freeze({});
     upgradeStates = Object.freeze({});
     licenseStates = Object.freeze({});
+    backupStates = Object.freeze({});
+    localBackupStates = Object.freeze({});
     workspaceId = "";
     dialog = closedDialog();
     stateDialog = closedStateDialog();
@@ -447,14 +509,19 @@ export function createPrivateGatewayPageState({
     canReadLicenses = false;
     canRefreshLicenses = false;
     canImportLicenses = false;
+    canReadBackups = false;
+    canCreateBackups = false;
+    canManageDrills = false;
+    canApproveRestores = false;
     maintenanceIntent = null;
     rollbackUpgradeIntent = null;
     licenseRefreshIntent = null;
+    drillMutationIntent = null;
     operations = {
       load: null, create: null, revoke: null, copy: null, command: null, policy: null,
       localSession: null, secret: null, validation: null, acceptance: null,
       supportBundle: null, diagnostic: null, maintenance: null, rollbackUpgrade: null,
-      refreshLicense: null,
+      refreshLicense: null, drillMutation: null, localBackup: null, localRestore: null,
     };
     generations = Object.fromEntries(
       Object.entries(generations).map(([lane, value]) => [lane, value + 1]),
@@ -498,6 +565,7 @@ export function createPrivateGatewayPageState({
     healthResponses = [],
     upgradeResponses = [],
     licenseResponses = [],
+    backupResponses = [],
   ) {
     if (!isLoadCurrent(operation, owner, refreshGeneration)
       || !validList(response)
@@ -520,7 +588,8 @@ export function createPrivateGatewayPageState({
         canReadDiagnostics,
       )
       || !validUpgradeResponses(upgradeResponses, response.deployments, canReadUpgrades)
-      || !validLicenseResponses(licenseResponses, response.deployments, canReadLicenses)) {
+      || !validLicenseResponses(licenseResponses, response.deployments, canReadLicenses)
+      || !validBackupResponses(backupResponses, response.deployments, canReadBackups)) {
       return false;
     }
     const ids = new Set(response.deployments.map((item) => item.workspace_id));
@@ -552,6 +621,9 @@ export function createPrivateGatewayPageState({
       : Object.freeze({});
     licenseStates = canReadLicenses
       ? licenseStateMap(response.deployments, licenseResponses)
+      : Object.freeze({});
+    backupStates = canReadBackups
+      ? backupStateMap(response.deployments, backupResponses)
       : Object.freeze({});
     workspaceId = ids.size === 1 ? [...ids][0] : "";
     listState = "ready";
@@ -1008,6 +1080,218 @@ export function createPrivateGatewayPageState({
 
   function finishLicenseRefresh(operation) {
     if (operations.refreshLicense === operation) operations.refreshLicense = null;
+  }
+
+  function beginDrillMutation(owner, input = {}, candidateIdempotencyKey = "") {
+    const deploymentId = String(input.deploymentId ?? "");
+    const action = String(input.action ?? "");
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const status = backupStates[deploymentId] ?? null;
+    if (!owns(owner) || !deployment || deployment.status !== "active" || !status || busy()) {
+      return null;
+    }
+    let request;
+    if (action === "request" && canManageDrills) {
+      const sourceBackupId = String(input.sourceBackupId ?? "");
+      const source = status.recent_backups?.find((item) => (
+        item.backup_id === sourceBackupId && item.status === "completed"
+          && item.check_outcome === "verified"
+      ));
+      if (!source
+        || !/^[0-9]{4}-Q[1-4]$/u.test(String(input.quarterCode ?? ""))
+        || !boundedInteger(input.rpoObjectiveSeconds, 900, 604_800)
+        || !boundedInteger(input.rtoObjectiveSeconds, 900, 604_800)
+        || !SHA256.test(String(input.isolatedTargetSha256 ?? ""))
+        || !/^[a-z][a-z0-9_.-]{1,79}$/u.test(String(input.reasonCode ?? ""))) return null;
+      request = Object.freeze({
+        action,
+        sourceBackupId,
+        quarterCode: String(input.quarterCode),
+        rpoObjectiveSeconds: input.rpoObjectiveSeconds,
+        rtoObjectiveSeconds: input.rtoObjectiveSeconds,
+        isolatedTargetSha256: String(input.isolatedTargetSha256),
+        reasonCode: String(input.reasonCode),
+      });
+    } else if (action === "approve" && canApproveRestores) {
+      const drillId = String(input.drillId ?? "");
+      const drill = status.recent_drills?.find((item) => item.drill_id === drillId);
+      if (!drill || drill.status !== "requested"
+        || drill.requested_by_account_id === owner.accountId
+        || !/^[a-z][a-z0-9_.-]{1,79}$/u.test(String(input.reasonCode ?? ""))) return null;
+      request = Object.freeze({
+        action,
+        drillId,
+        expectedRevision: drill.revision,
+        reasonCode: String(input.reasonCode),
+      });
+    } else {
+      return null;
+    }
+    const fingerprint = JSON.stringify({ deploymentId, ...request });
+    const idempotencyKey = drillMutationIntent?.fingerprint === fingerprint
+      ? drillMutationIntent.idempotencyKey : String(candidateIdempotencyKey ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u.test(idempotencyKey)) return null;
+    drillMutationIntent = Object.freeze({ fingerprint, idempotencyKey });
+    generations.drillMutation += 1;
+    const operation = ticket("drillMutation", {
+      controller: new AbortController(), deploymentId, workspaceId: deployment.workspace_id,
+      request, idempotencyKey,
+    });
+    operations.drillMutation = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptDrillMutation(operation, response, owner) {
+    const drill = response?.drill;
+    if (!current("drillMutation", operation, owner)
+      || response?.deployment_id !== operation.deploymentId
+      || !validDrillSummary(drill)
+      || (operation.request.action === "request"
+        && drill.source_backup_id !== operation.request.sourceBackupId)
+      || (operation.request.action === "approve"
+        && (drill.drill_id !== operation.request.drillId
+          || drill.revision <= operation.request.expectedRevision
+          || drill.status !== "approved"))) return false;
+    const currentStatus = backupStates[operation.deploymentId];
+    backupStates = Object.freeze({
+      ...backupStates,
+      [operation.deploymentId]: Object.freeze({
+        ...currentStatus,
+        recent_drills: Object.freeze([
+          drill,
+          ...(currentStatus.recent_drills ?? []).filter(
+            (item) => item.drill_id !== drill.drill_id,
+          ),
+        ].slice(0, 20)),
+      }),
+    });
+    drillMutationIntent = null;
+    feedback = Object.freeze({
+      kind: "success",
+      code: operation.request.action === "request"
+        ? "edge_backup.drill_requested" : "edge_backup.drill_approved",
+      requestId: safeChain(response.request_id),
+    });
+    return true;
+  }
+
+  function rejectDrillMutation(operation, error, owner) {
+    if (!current("drillMutation", operation, owner)) return false;
+    if (![0, 503].includes(Number(error?.status ?? -1))) drillMutationIntent = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishDrillMutation(operation) {
+    if (operations.drillMutation === operation) operations.drillMutation = null;
+  }
+
+  function isDrillMutationCurrent(operation, owner) {
+    return current("drillMutation", operation, owner);
+  }
+
+  function beginLocalBackup(owner, input = {}) {
+    const deploymentId = String(input.deploymentId ?? "");
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    if (!owns(owner) || !canCreateBackups || !deployment || deployment.status !== "active"
+      || !sessionActive(deploymentId)
+      || !boundedInteger(input.sourceGeneration, 1, 2_147_483_647)
+      || !boundedInteger(input.retentionSeconds, 3600, 31_536_000)
+      || !["local", "customer_object_store"].includes(input.storageKind)
+      || input.confirmed !== true || busy()) return null;
+    generations.localBackup += 1;
+    const operation = ticket("localBackup", {
+      controller: new AbortController(), deploymentId,
+      request: Object.freeze({
+        sourceGeneration: input.sourceGeneration,
+        retentionSeconds: input.retentionSeconds,
+        storageKind: input.storageKind,
+      }),
+    });
+    operations.localBackup = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptLocalBackup(operation, response, owner) {
+    if (!current("localBackup", operation, owner)
+      || !validLocalBackupSummary(response, operation.deploymentId)
+      || response.source_generation !== operation.request.sourceGeneration
+      || response.storage_kind !== operation.request.storageKind) return false;
+    const previous = localBackupStates[operation.deploymentId] ?? {};
+    localBackupStates = Object.freeze({
+      ...localBackupStates,
+      [operation.deploymentId]: Object.freeze({ ...previous, backup: response }),
+    });
+    feedback = Object.freeze({
+      kind: "success", code: "local_backup.created", requestId: "-",
+    });
+    return true;
+  }
+
+  function rejectLocalBackup(operation, error, owner) {
+    if (!current("localBackup", operation, owner)) return false;
+    if (error?.code === "local_admin.authentication_failed") localSession = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishLocalBackup(operation) {
+    if (operations.localBackup === operation) operations.localBackup = null;
+  }
+
+  function beginLocalRestore(owner, input = {}) {
+    const deploymentId = String(input.deploymentId ?? "");
+    const backupId = String(input.backupId ?? "");
+    const deployment = deployments.find((item) => item.deployment_id === deploymentId);
+    const local = localBackupStates[deploymentId]?.backup;
+    const cloud = backupStates[deploymentId]?.recent_backups?.find(
+      (item) => item.backup_id === backupId && item.status === "completed",
+    );
+    if (!owns(owner) || !canApproveRestores || !deployment
+      || deployment.status !== "active" || !sessionActive(deploymentId)
+      || !BACKUP_ID.test(backupId) || (local?.backup_id !== backupId && !cloud)
+      || !/^[0-9]{4}$/u.test(String(input.targetSchemaHead ?? ""))
+      || input.confirmedTarget !== true || input.confirmedScope !== true
+      || input.confirmedCheckpoint !== true || busy()) return null;
+    generations.localRestore += 1;
+    const operation = ticket("localRestore", {
+      controller: new AbortController(), deploymentId,
+      request: Object.freeze({ backupId, targetSchemaHead: String(input.targetSchemaHead) }),
+    });
+    operations.localRestore = operation;
+    feedback = null;
+    return operation;
+  }
+
+  function acceptLocalRestore(operation, response, owner) {
+    if (!current("localRestore", operation, owner)
+      || !validLocalRestoreSummary(response, operation.deploymentId)
+      || response.backup_id !== operation.request.backupId
+      || response.target_schema_head !== operation.request.targetSchemaHead) return false;
+    const previous = localBackupStates[operation.deploymentId] ?? {};
+    localBackupStates = Object.freeze({
+      ...localBackupStates,
+      [operation.deploymentId]: Object.freeze({ ...previous, restore: response }),
+    });
+    feedback = Object.freeze({
+      kind: response.status === "succeeded" ? "success" : "error",
+      code: response.status === "succeeded" ? "local_restore.completed" : response.failure_code,
+      requestId: "-",
+    });
+    return true;
+  }
+
+  function rejectLocalRestore(operation, error, owner) {
+    if (!current("localRestore", operation, owner)) return false;
+    if (error?.code === "local_admin.authentication_failed") localSession = null;
+    feedback = Object.freeze({ kind: "error", ...fixedError(error) });
+    return true;
+  }
+
+  function finishLocalRestore(operation) {
+    if (operations.localRestore === operation) operations.localRestore = null;
   }
 
   function beginUpgradeRollback(
@@ -1633,7 +1917,8 @@ export function createPrivateGatewayPageState({
         || operations.command || operations.policy || operations.localSession
         || operations.secret || operations.validation || operations.acceptance
         || operations.supportBundle || operations.diagnostic || operations.maintenance
-        || operations.rollbackUpgrade || operations.refreshLicense);
+        || operations.rollbackUpgrade || operations.refreshLicense
+        || operations.drillMutation || operations.localBackup || operations.localRestore);
   }
 
   function snapshot() {
@@ -1651,6 +1936,8 @@ export function createPrivateGatewayPageState({
       healthStates,
       upgradeStates,
       licenseStates,
+      backupStates,
+      localBackupStates,
       dialog,
       stateDialog,
       registration,
@@ -1681,6 +1968,10 @@ export function createPrivateGatewayPageState({
       canReadLicenses,
       canRefreshLicenses,
       canImportLicenses,
+      canReadBackups,
+      canCreateBackups,
+      canManageDrills,
+      canApproveRestores,
       revokingId: operations.revoke?.deploymentId ?? "",
       commandDeploymentId: operations.command?.deploymentId ?? "",
       busy: busy(),
@@ -1690,6 +1981,9 @@ export function createPrivateGatewayPageState({
       diagnosticBusy: Boolean(operations.diagnostic),
       upgradeBusy: Boolean(operations.maintenance || operations.rollbackUpgrade),
       licenseBusy: Boolean(operations.refreshLicense),
+      backupBusy: Boolean(
+        operations.drillMutation || operations.localBackup || operations.localRestore
+      ),
     });
   }
 
@@ -1711,7 +2005,8 @@ export function createPrivateGatewayPageState({
       || operations.command || operations.policy || operations.localSession
       || operations.secret || operations.validation || operations.acceptance
       || operations.supportBundle || operations.diagnostic || operations.maintenance
-      || operations.rollbackUpgrade || operations.refreshLicense);
+      || operations.rollbackUpgrade || operations.refreshLicense
+      || operations.drillMutation || operations.localBackup || operations.localRestore);
   }
 
   function sessionActive(deploymentId) {
@@ -1737,6 +2032,10 @@ export function createPrivateGatewayPageState({
     finishTelemetryPolicy,
     beginMaintenance, acceptMaintenance, rejectMaintenance, finishMaintenance,
     beginLicenseRefresh, acceptLicenseRefresh, rejectLicenseRefresh, finishLicenseRefresh,
+    beginDrillMutation, isDrillMutationCurrent, acceptDrillMutation,
+    rejectDrillMutation, finishDrillMutation,
+    beginLocalBackup, acceptLocalBackup, rejectLocalBackup, finishLocalBackup,
+    beginLocalRestore, acceptLocalRestore, rejectLocalRestore, finishLocalRestore,
     beginUpgradeRollback, isUpgradeRollbackCurrent, acceptUpgradeRollback,
     rejectUpgradeRollback, finishUpgradeRollback,
     beginValidation, acceptValidation, rejectValidation, finishValidation,
@@ -1769,6 +2068,8 @@ function ownerKeyFor(owner) {
     owner.diagnosticApproveIdentity,
     owner.upgradeReadIdentity, owner.upgradeManageIdentity, owner.rollbackManageIdentity,
     owner.licenseReadIdentity, owner.licenseRefreshIdentity, owner.licenseImportIdentity,
+    owner.backupReadIdentity, owner.backupCreateIdentity, owner.drillManageIdentity,
+    owner.restoreApproveIdentity,
     owner.navigationOwner,
   ]);
 }
@@ -1874,6 +2175,98 @@ function licenseStateMap(deployments, responses) {
   return Object.freeze(Object.fromEntries(responses.filter(
     (entry) => expected.has(entry.deploymentId),
   ).map((entry) => [entry.deploymentId, entry.response?.license ?? null])));
+}
+
+function validBackupResponses(responses, deployments, required) {
+  if (!required) return Array.isArray(responses) && responses.length === 0;
+  if (!Array.isArray(responses) || responses.length !== deployments.length) return false;
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  const seen = new Set();
+  return responses.every((entry) => {
+    const deploymentId = String(entry?.deploymentId ?? "");
+    const status = entry?.response?.status;
+    if (!expected.has(deploymentId) || seen.has(deploymentId)
+      || !validBackupStatusSummary(status, deploymentId)) return false;
+    seen.add(deploymentId);
+    return true;
+  });
+}
+
+function backupStateMap(deployments, responses) {
+  const expected = new Set(deployments.map((item) => item.deployment_id));
+  return Object.freeze(Object.fromEntries(responses.filter(
+    (entry) => expected.has(entry.deploymentId),
+  ).map((entry) => [entry.deploymentId, entry.response.status])));
+}
+
+function validBackupStatusSummary(value, deploymentId) {
+  return Boolean(value
+    && value.deployment_id === deploymentId
+    && ["never", "current", "overdue", "failed"].includes(value.status)
+    && boundedInteger(value.rpo_objective_seconds, 900, 604_800)
+    && boundedInteger(value.latest_source_generation, 0, 2_147_483_647)
+    && boundedInteger(value.revision, 1, Number.MAX_SAFE_INTEGER)
+    && Array.isArray(value.recent_backups)
+    && value.recent_backups.every(validBackupReport)
+    && Array.isArray(value.recent_drills)
+    && value.recent_drills.every(validDrillSummary)
+    && (value.latest_backup === null || validBackupReport(value.latest_backup)));
+}
+
+function validBackupReport(value) {
+  return Boolean(value
+    && BACKUP_ID.test(String(value.backup_id ?? ""))
+    && boundedInteger(value.source_generation, 1, 2_147_483_647)
+    && /^[0-9]{4}$/u.test(String(value.schema_head ?? ""))
+    && ["local", "customer_object_store"].includes(value.storage_kind)
+    && ["completed", "failed", "deleted"].includes(value.status)
+    && ["verified", "failed"].includes(value.check_outcome)
+    && boundedInteger(value.chunk_count, 0, 1_000_000));
+}
+
+function validDrillSummary(value) {
+  return Boolean(value
+    && DRILL_ID.test(String(value.drill_id ?? ""))
+    && BACKUP_ID.test(String(value.source_backup_id ?? ""))
+    && ["requested", "approved", "running", "succeeded", "failed"].includes(value.status)
+    && /^[0-9]{4}-Q[1-4]$/u.test(String(value.quarter_code ?? ""))
+    && boundedInteger(value.rpo_objective_seconds, 900, 604_800)
+    && boundedInteger(value.rto_objective_seconds, 900, 604_800)
+    && SHA256.test(String(value.isolated_target_sha256 ?? ""))
+    && value.production_untouched === true
+    && boundedInteger(value.revision, 1, Number.MAX_SAFE_INTEGER));
+}
+
+function validLocalBackupSummary(value, deploymentId) {
+  return Boolean(value
+    && BACKUP_ID.test(String(value.backup_id ?? ""))
+    && value.deployment_id === deploymentId
+    && value.status === "ready"
+    && boundedInteger(value.source_generation, 1, 2_147_483_647)
+    && /^[0-9]{4}$/u.test(String(value.schema_head ?? ""))
+    && ["local", "customer_object_store"].includes(value.storage_kind)
+    && SHA256.test(String(value.manifest_sha256 ?? ""))
+    && SHA256.test(String(value.merkle_root ?? ""))
+    && SHA256.test(String(value.kms_key_id_sha256 ?? ""))
+    && boundedInteger(value.chunk_count, 4, 1_000_000)
+    && boundedInteger(value.revision, 1, 2_147_483_647));
+}
+
+function validLocalRestoreSummary(value, deploymentId) {
+  return Boolean(value
+    && RESTORE_ID.test(String(value.restore_id ?? ""))
+    && BACKUP_ID.test(String(value.backup_id ?? ""))
+    && value.deployment_id === deploymentId
+    && /^[0-9]{4}$/u.test(String(value.target_schema_head ?? ""))
+    && ["succeeded", "failed"].includes(value.status)
+    && boundedInteger(value.revision, 1, 2_147_483_647)
+    && (value.status !== "failed" || /^[a-z][a-z0-9_.-]{1,79}$/u.test(
+      String(value.failure_code ?? ""),
+    )));
+}
+
+function boundedInteger(value, minimum, maximum) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 }
 
 function validValidationResponse(response, deploymentId) {

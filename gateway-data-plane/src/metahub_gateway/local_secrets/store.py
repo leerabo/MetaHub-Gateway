@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
+import os
+import shutil
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,8 +31,10 @@ from metahub_shared.private_gateway import (
     ProviderCapability,
     ProviderTestOutcome,
     SecretReference,
+    canonical_edge_json_bytes,
     decrypt_local_secret,
     encrypt_local_secret,
+    strict_json_object,
 )
 
 type ConsumerSlot = Literal["live", "staging", "lkg", "rollback", "backup"]
@@ -979,6 +984,388 @@ class LocalSecretStore:
         finally:
             connection.close()
 
+    def backup_domains(
+        self, *, tenant_id: str, workspace_id: str
+    ) -> dict[str, bytes]:
+        """Create one consistent portable snapshot without exporting the local KEK."""
+
+        with self._lock:
+            connection = self._connect()
+            leases: list[MutableSecretLease] = []
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    """
+                    SELECT secret.*,version.binding_digest,
+                      version.status AS version_status,version.ciphertext_format,
+                      version.kek_version,version.wrap_nonce,version.wrapped_data_key,
+                      version.value_nonce,version.ciphertext,
+                      version.created_at AS version_created_at,
+                      version.activated_at,version.drain_started_at,version.retired_at
+                    FROM local_secrets secret JOIN local_secret_versions version
+                      ON version.reference_id=secret.reference_id
+                     AND version.version=secret.active_version
+                    WHERE secret.deployment_id=? AND secret.tenant_id=?
+                      AND secret.workspace_id=? AND secret.status IN('active','degraded')
+                    ORDER BY secret.reference_id
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchall()
+                busy = connection.execute(
+                    """
+                    SELECT 1 FROM local_secrets WHERE deployment_id=? AND tenant_id=?
+                      AND workspace_id=? AND status='rotating' LIMIT 1
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchone()
+                if busy is not None or self._leases:
+                    raise LocalSecretStoreError("local_secret.backup_busy")
+                records: list[dict[str, object]] = []
+                references: list[dict[str, object]] = []
+                for row in rows:
+                    version = int(row["active_version"])
+                    lease = decrypt_local_secret(
+                        self._envelope(row),
+                        owner=self._owner_from_rows(row, str(row["reference_id"]), version),
+                        keyring=self._keyring,
+                    )
+                    leases.append(lease)
+                    reference = self._reference_from_row(row).model_dump(mode="json")
+                    created_at = str(row["created_at"])
+                    references.append({"reference": reference, "created_at": created_at})
+                    records.append(
+                        {
+                            "reference": reference,
+                            "created_at": created_at,
+                            "value_b64": _portable_b64(bytes(lease.view())),
+                        }
+                    )
+                event_rows = connection.execute(
+                    """
+                    SELECT * FROM local_secret_outbox
+                    WHERE reference_id IN(
+                      SELECT reference_id FROM local_secrets WHERE deployment_id=?
+                        AND tenant_id=? AND workspace_id=?)
+                    ORDER BY created_at,event_id
+                    """,
+                    (self._deployment_id, tenant_id, workspace_id),
+                ).fetchall()
+                events: list[dict[str, object]] = []
+                chain = bytes(32)
+                for row in event_rows:
+                    payload = json.loads(str(row["payload_json"]), object_pairs_hook=_unique_json)
+                    event = {
+                        "event_id": str(row["event_id"]),
+                        "event_type": str(row["event_type"]),
+                        "reference_id": str(row["reference_id"]),
+                        "payload": payload,
+                        "created_at": str(row["created_at"]),
+                        "delivered_at": row["delivered_at"],
+                    }
+                    encoded = canonical_edge_json_bytes(event, maximum=1_048_576)
+                    chain = hashlib.sha256(b"local-secret-audit\0" + chain + encoded).digest()
+                    events.append(event)
+                common = {
+                    "schema_version": "1",
+                    "deployment_id": self._deployment_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                }
+                snapshot = {
+                    "config_policy": canonical_edge_json_bytes(
+                        {**common, "references": references}, maximum=16_777_216
+                    ),
+                    "ledger_watermark": canonical_edge_json_bytes(
+                        {
+                            **common,
+                            "reference_count": len(records),
+                            "event_count": len(events),
+                            "latest_event_id": events[-1]["event_id"] if events else None,
+                            "audit_head_sha256": chain.hex(),
+                        }
+                    ),
+                    "audit_chain": canonical_edge_json_bytes(
+                        {**common, "events": events, "head_sha256": chain.hex()},
+                        maximum=64 * 1024 * 1024,
+                    ),
+                    "local_secrets": canonical_edge_json_bytes(
+                        {**common, "records": records}, maximum=64 * 1024 * 1024
+                    ),
+                }
+                connection.rollback()
+                return snapshot
+            except LocalSecretStoreError:
+                _rollback(connection)
+                raise
+            except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+                _rollback(connection)
+                raise LocalSecretStoreError("local_secret.backup_failed") from None
+            finally:
+                for lease in leases:
+                    lease.close()
+                connection.close()
+
+    def apply_backup_domains(
+        self,
+        domains: Mapping[str, bytes],
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        source_deployment_id: str,
+        restore_id: str,
+    ) -> None:
+        """Re-encrypt portable values with this node's KEK, then atomically replace."""
+
+        if source_deployment_id != self._deployment_id or set(domains) != {
+            "config_policy",
+            "ledger_watermark",
+            "audit_chain",
+            "local_secrets",
+        }:
+            raise LocalSecretStoreError("local_secret.restore_invalid")
+        try:
+            documents = {
+                code: strict_json_object(value, canonical=True, maximum=64 * 1024 * 1024)
+                for code, value in domains.items()
+            }
+            common = {
+                "schema_version": "1",
+                "deployment_id": self._deployment_id,
+                "tenant_id": tenant_id,
+                "workspace_id": workspace_id,
+            }
+            for document in documents.values():
+                if any(document.get(key) != value for key, value in common.items()):
+                    raise ValueError
+            config_document = documents["config_policy"]
+            secret_document = documents["local_secrets"]
+            audit_document = documents["audit_chain"]
+            ledger_document = documents["ledger_watermark"]
+            if set(config_document) != {*common, "references"} or set(secret_document) != {
+                *common,
+                "records",
+            } or set(audit_document) != {*common, "events", "head_sha256"} or set(
+                ledger_document
+            ) != {
+                *common,
+                "reference_count",
+                "event_count",
+                "latest_event_id",
+                "audit_head_sha256",
+            }:
+                raise ValueError
+            reference_entries = config_document["references"]
+            record_entries = secret_document["records"]
+            event_entries = audit_document["events"]
+            if (
+                type(reference_entries) is not list
+                or type(record_entries) is not list
+                or type(event_entries) is not list
+                or len(reference_entries) != len(record_entries)
+                or ledger_document["reference_count"] != len(record_entries)
+                or ledger_document["event_count"] != len(event_entries)
+                or ledger_document["audit_head_sha256"] != audit_document["head_sha256"]
+            ):
+                raise ValueError
+            checked_records: list[tuple[SecretReference, str, bytes]] = []
+            for reference_entry, record_entry in zip(
+                reference_entries, record_entries, strict=True
+            ):
+                if (
+                    type(reference_entry) is not dict
+                    or set(reference_entry) != {"reference", "created_at"}
+                    or type(record_entry) is not dict
+                    or set(record_entry) != {"reference", "created_at", "value_b64"}
+                    or reference_entry["reference"] != record_entry["reference"]
+                    or reference_entry["created_at"] != record_entry["created_at"]
+                ):
+                    raise ValueError
+                reference = SecretReference.model_validate(record_entry["reference"])
+                created_at = _portable_time(record_entry["created_at"])
+                value = _portable_unb64(record_entry["value_b64"])
+                if (
+                    reference.deployment_id != self._deployment_id
+                    or reference.tenant_id != tenant_id
+                    or reference.workspace_id != workspace_id
+                    or reference.status not in {"active", "degraded"}
+                    or reference.active_version is None
+                    or not 1 <= len(value) <= 65_536
+                ):
+                    raise ValueError
+                checked_records.append((reference, created_at, value))
+            checked_events = _validate_portable_events(
+                event_entries,
+                reference_ids={item[0].reference_id for item in checked_records},
+                expected_head=str(audit_document["head_sha256"]),
+            )
+            if (
+                ledger_document["latest_event_id"]
+                != (checked_events[-1]["event_id"] if checked_events else None)
+                or len({item[0].reference_id for item in checked_records})
+                != len(checked_records)
+            ):
+                raise ValueError
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise LocalSecretStoreError("local_secret.restore_invalid") from None
+
+        with self._lock:
+            if self._leases:
+                raise LocalSecretStoreError("local_secret.restore_busy")
+            staging = self._path.with_name(f".{self._path.name}.{restore_id}.staging")
+            lkg = self._path.with_name(f"{self._path.name}.restore-lkg")
+            lkg_temporary = self._path.with_name(f".{self._path.name}.{restore_id}.lkg")
+            for path in (staging, lkg_temporary):
+                if path.exists():
+                    raise LocalSecretStoreError("local_secret.restore_busy")
+            try:
+                source = self._connect()
+                destination = sqlite3.connect(staging, isolation_level=None)
+                try:
+                    source.execute("PRAGMA wal_checkpoint(FULL)")
+                    source.backup(destination)
+                finally:
+                    destination.close()
+                    source.close()
+                staging_connection = sqlite3.connect(staging, isolation_level=None)
+                try:
+                    staging_connection.execute("PRAGMA foreign_keys=OFF")
+                    staging_connection.executescript(
+                        """
+                        DROP TABLE IF EXISTS local_secret_consumers;
+                        DROP TABLE IF EXISTS local_provider_connection_tests;
+                        DROP TABLE IF EXISTS local_secret_rotations;
+                        DROP TABLE IF EXISTS local_secret_outbox;
+                        DROP TABLE IF EXISTS local_secret_versions;
+                        DROP TABLE IF EXISTS local_secrets;
+                        """
+                    )
+                finally:
+                    staging_connection.close()
+                staged = LocalSecretStore(
+                    staging,
+                    deployment_id=self._deployment_id,
+                    keyring=self._keyring,
+                    now=self._now,
+                )
+                staged._insert_portable_snapshot(checked_records, checked_events)
+                check = staged._connect()
+                try:
+                    if check.execute("PRAGMA foreign_key_check").fetchall() or (
+                        str(check.execute("PRAGMA integrity_check").fetchone()[0]) != "ok"
+                    ):
+                        raise LocalSecretStoreError("local_secret.restore_invalid")
+                    check.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    check.execute("PRAGMA journal_mode=DELETE")
+                finally:
+                    check.close()
+                active = self._connect()
+                try:
+                    active.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    active.execute("PRAGMA journal_mode=DELETE")
+                finally:
+                    active.close()
+                shutil.copy2(self._path, lkg_temporary)
+                with lkg_temporary.open("r+b") as stream:
+                    os.fsync(stream.fileno())
+                os.replace(lkg_temporary, lkg)
+                os.replace(staging, self._path)
+                self._initialize()
+            except LocalSecretStoreError:
+                staging.unlink(missing_ok=True)
+                lkg_temporary.unlink(missing_ok=True)
+                raise
+            except (OSError, sqlite3.Error, TypeError, ValueError):
+                staging.unlink(missing_ok=True)
+                lkg_temporary.unlink(missing_ok=True)
+                raise LocalSecretStoreError("local_secret.restore_failed") from None
+
+    def _insert_portable_snapshot(
+        self,
+        records: list[tuple[SecretReference, str, bytes]],
+        events: list[dict[str, object]],
+    ) -> None:
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for reference, created_at, plaintext in records:
+                assert reference.active_version is not None
+                binding_digest = _binding_digest(reference.provider_connection_id)
+                encrypted = encrypt_local_secret(
+                    plaintext,
+                    owner=self._owner(
+                        tenant_id=reference.tenant_id,
+                        workspace_id=reference.workspace_id,
+                        reference_id=reference.reference_id,
+                        version=reference.active_version,
+                        kind=reference.kind,
+                        binding_digest=binding_digest,
+                    ),
+                    keyring=self._keyring,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO local_secrets(
+                      reference_id,deployment_id,tenant_id,workspace_id,
+                      provider_connection_id,label,kind,status,revision,active_version,
+                      candidate_version,last_test_outcome,capabilities_json,rotated_at,
+                      created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?)
+                    """,
+                    (
+                        reference.reference_id,
+                        self._deployment_id,
+                        reference.tenant_id,
+                        reference.workspace_id,
+                        reference.provider_connection_id,
+                        reference.label,
+                        reference.kind,
+                        reference.status,
+                        reference.revision,
+                        reference.active_version,
+                        reference.last_test_outcome,
+                        _capabilities_json(tuple(reference.capabilities)),
+                        reference.rotated_at,
+                        created_at,
+                        reference.updated_at,
+                    ),
+                )
+                self._insert_version(
+                    connection,
+                    reference_id=reference.reference_id,
+                    version=reference.active_version,
+                    binding_digest=binding_digest,
+                    status="active",
+                    encrypted=encrypted,
+                    now=created_at,
+                    activated_at=reference.updated_at,
+                )
+            for event in events:
+                connection.execute(
+                    """
+                    INSERT INTO local_secret_outbox(
+                      event_id,event_type,reference_id,payload_json,created_at,
+                      delivery_batch_id,delivery_attempt_count,last_attempt_at,
+                      delivery_receipt_id,delivered_at)
+                    VALUES(?,?,?,?,?,NULL,0,NULL,NULL,NULL)
+                    """,
+                    (
+                        event["event_id"],
+                        event["event_type"],
+                        event["reference_id"],
+                        canonical_edge_json_bytes(event["payload"]).decode("utf-8"),
+                        event["created_at"],
+                    ),
+                )
+            connection.commit()
+        except sqlite3.IntegrityError:
+            _rollback(connection)
+            raise LocalSecretStoreError("local_secret.restore_invalid") from None
+        except sqlite3.Error:
+            _rollback(connection)
+            raise LocalSecretStoreError("local_secret.restore_failed") from None
+        finally:
+            connection.close()
+
     def next_sync_batch(self, *, limit: int = 64) -> EdgeSecretSyncBatch | None:
         """Claim the oldest safe outbox facts under one retry-stable batch ID."""
 
@@ -1505,6 +1892,109 @@ class LocalSecretStore:
             return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         except Exception:
             raise LocalSecretStoreError("local_secret.time_invalid") from None
+
+
+def _portable_b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _portable_unb64(value: object) -> bytes:
+    if type(value) is not str or not 2 <= len(value) <= 87_384 or "=" in value:
+        raise ValueError
+    decoded = base64.b64decode(
+        value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+    )
+    if _portable_b64(decoded) != value:
+        raise ValueError
+    return decoded
+
+
+def _portable_time(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or _time_text(parsed) != value:
+        raise ValueError
+    return value
+
+
+def _time_text(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _unique_json(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError
+        result[key] = value
+    return result
+
+
+def _validate_portable_events(
+    values: list[object], *, reference_ids: set[str], expected_head: str
+) -> list[dict[str, object]]:
+    if (
+        type(expected_head) is not str
+        or len(expected_head) != 64
+        or any(character not in "0123456789abcdef" for character in expected_head)
+    ):
+        raise ValueError
+    checked: list[dict[str, object]] = []
+    event_ids: set[str] = set()
+    chain = bytes(32)
+    previous: tuple[str, str] | None = None
+    for value in values:
+        if type(value) is not dict or set(value) != {
+            "event_id",
+            "event_type",
+            "reference_id",
+            "payload",
+            "created_at",
+            "delivered_at",
+        }:
+            raise ValueError
+        event_id = value["event_id"]
+        event_type = value["event_type"]
+        reference_id = value["reference_id"]
+        payload = value["payload"]
+        created_at = _portable_time(value["created_at"])
+        delivered_at = value["delivered_at"]
+        if delivered_at is not None:
+            _portable_time(delivered_at)
+        if (
+            type(event_id) is not str
+            or not event_id.startswith("lse_")
+            or len(event_id) != 36
+            or event_id in event_ids
+            or event_type
+            not in {
+                "edge.secret_reference_changed",
+                "edge.secret_rotation_failed",
+                "edge.provider_test_completed",
+            }
+            or type(reference_id) is not str
+            or reference_id not in reference_ids
+            or type(payload) is not dict
+            or (previous is not None and (created_at, event_id) < previous)
+        ):
+            raise ValueError
+        normalized = {
+            "event_id": event_id,
+            "event_type": event_type,
+            "reference_id": reference_id,
+            "payload": payload,
+            "created_at": created_at,
+            "delivered_at": delivered_at,
+        }
+        encoded = canonical_edge_json_bytes(normalized, maximum=1_048_576)
+        chain = hashlib.sha256(b"local-secret-audit\0" + chain + encoded).digest()
+        event_ids.add(event_id)
+        previous = (created_at, event_id)
+        checked.append(normalized)
+    if chain.hex() != expected_head:
+        raise ValueError
+    return checked
 
 
 def _binding_digest(provider_connection_id: str) -> str:

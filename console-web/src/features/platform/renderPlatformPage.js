@@ -82,6 +82,7 @@ function renderView(state, permissions) {
   if (state.view === "edge-fleet") return edgeFleetView(state, permissions);
   if (state.view === "edge-upgrades") return edgeUpgradesView(state, permissions);
   if (state.view === "edge-licenses") return edgeLicensesView(state, permissions);
+  if (state.view === "edge-backups") return edgeBackupsView(state);
   if (state.view === "job-runtime") return jobRuntimeView(state, permissions);
   if (state.view === "feature-rollouts") return featureRolloutsView(state, permissions);
   if (state.view === "config-distribution") return configDistributionView(state, permissions);
@@ -1503,6 +1504,63 @@ function edgeLicensesView(state, permissions) {
     </section>`;
 }
 
+function edgeBackupsView(state) {
+  const backups = state.edgeBackups?.statuses ?? [];
+  const current = backups.filter((item) => item.status === "current").length;
+  const attention = backups.filter((item) => ["overdue", "failed"].includes(item.status)).length;
+  const missed = backups.reduce((total, item) => total + item.recent_drills.filter(
+    (drill) => drill.objective_outcome === "missed",
+  ).length, 0);
+  return `
+    <header class="platform-page-heading">
+      <div><p>Private Gateway resilience</p><h1>Gateway backups</h1></div>
+      <button type="button" class="platform-icon-button" data-platform-action="edge-backups-refresh" title="刷新备份状态" aria-label="刷新备份状态"${state.loading ? " disabled" : ""}>↻</button>
+    </header>
+    <section class="platform-metrics" aria-label="Gateway backup summary">
+      ${metric("RPO current", current, `${number(backups.length)} 个 Deployment`)}
+      ${metric("Attention", attention, "逾期或最近失败")}
+      ${metric("Objective misses", missed, "季度隔离演练")}
+    </section>
+    <section class="platform-band platform-edge-backups">
+      <div class="platform-section-heading"><div><p>Cloud-safe metadata</p><h2>备份与演练摘要</h2></div><span>${number(backups.length)} 项</span></div>
+      ${state.loading && !state.edgeBackups ? '<div class="platform-empty" role="status">正在读取备份状态</div>' : backups.length ? `<div class="platform-table-wrap"><table class="platform-edge-backup-table"><thead><tr><th>Deployment</th><th>RPO</th><th>最近备份</th><th>验证 / 保留</th><th>季度演练</th></tr></thead><tbody>${backups.map(platformEdgeBackupRow).join("")}</tbody></table></div>` : '<div class="platform-empty">尚无 Gateway 备份状态</div>'}
+    </section>`;
+}
+
+function platformEdgeBackupRow(item) {
+  const backup = item.latest_backup;
+  const drill = item.recent_drills[0] ?? null;
+  const tone = item.status === "current" ? "healthy"
+    : item.status === "never" ? "unknown" : item.status === "overdue" ? "warning" : "critical";
+  return `<tr>
+    <td data-label="Deployment"><strong>${escapeHtml(shortReference(item.deployment_id))}</strong><small>generation ${number(item.latest_source_generation)} · r${number(item.revision)}</small></td>
+    <td data-label="RPO"><span class="platform-status tone-${tone}">${escapeHtml(platformBackupStatusLabel(item.status))}</span><small>${platformDuration(item.rpo_objective_seconds)} · ${formatOptionalTime(item.last_success_at)}</small></td>
+    <td data-label="最近备份"><strong>${backup ? escapeHtml(shortReference(backup.backup_id)) : "-"}</strong><small>${backup ? `${escapeHtml(backup.storage_kind)} · ${escapeHtml(backup.size_bucket)} · ${number(backup.chunk_count)} chunks` : "尚未上报"}</small></td>
+    <td data-label="验证 / 保留"><strong>${item.last_check_outcome === "verified" ? "通过" : item.last_check_outcome === "failed" ? "失败" : "未验证"}</strong><small>${backup ? formatTime(backup.retention_until) : "-"}</small></td>
+    <td data-label="季度演练"><strong>${drill ? `${escapeHtml(drill.quarter_code)} · ${escapeHtml(platformDrillStatusLabel(drill.status))}` : "尚无演练"}</strong><small>${drill ? `${drill.actual_rpo_seconds === null ? "RPO -" : `RPO ${platformDuration(drill.actual_rpo_seconds)}`} · ${drill.actual_rto_seconds === null ? "RTO -" : `RTO ${platformDuration(drill.actual_rto_seconds)}`} · ${drill.production_untouched ? "生产未触碰" : "异常"}` : "-"}</small></td>
+  </tr>`;
+}
+
+function platformBackupStatusLabel(value) {
+  return ({ current: "RPO 正常", overdue: "RPO 逾期", failed: "最近失败", never: "尚无备份" })[
+    value
+  ] ?? "未知";
+}
+
+function platformDrillStatusLabel(value) {
+  return ({ requested: "待审批", approved: "已批准", running: "进行中", succeeded: "通过", failed: "失败" })[
+    value
+  ] ?? "未知";
+}
+
+function platformDuration(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return "-";
+  if (value % 86_400 === 0) return `${value / 86_400} 天`;
+  if (value % 3_600 === 0) return `${value / 3_600} 小时`;
+  if (value % 60 === 0) return `${value / 60} 分钟`;
+  return `${value} 秒`;
+}
+
 function edgeLicenseRow(license, canRevoke, loading) {
   const usage = license.latest_usage;
   const ack = license.last_acknowledgement;
@@ -2385,7 +2443,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

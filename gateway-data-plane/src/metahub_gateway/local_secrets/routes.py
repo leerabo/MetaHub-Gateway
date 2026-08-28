@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from metahub_shared.private_gateway import (
     LOCAL_SECRET_MAX_BYTES,
     SUPPORT_BUNDLE_COLLECTOR_CODES,
+    canonical_edge_json_bytes,
     strict_json_object,
 )
 
@@ -22,6 +23,7 @@ from .auth import (
     LocalManagementPolicy,
     csrf_sha256,
 )
+from .backups import LocalBackupError, LocalBackupStore, LocalDrillContext
 from .store import LocalSecretStore, LocalSecretStoreError, ProviderTestResult
 from .support_bundles import LocalSupportBundleError, LocalSupportBundleStore
 
@@ -34,6 +36,7 @@ _DEPLOYMENT_ID = re.compile(r"^edp_[0-9a-f]{32}$")
 _LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()-]{0,79}$")
 _KINDS = frozenset({"api_key", "bearer_token", "basic_password", "oauth_client_secret"})
 _SUPPORT_BUNDLE_BODY_BYTES = 4_096
+_BACKUP_BODY_BYTES = 4_096
 _FORWARDED_HEADERS = frozenset(
     {
         b"forwarded",
@@ -292,6 +295,52 @@ async def cancel_local_support_bundle(bundle_id: str, request: Request) -> JSONR
         raise _support_bundle_api_error(exc) from None
 
 
+@router.post("/backups")
+async def create_local_backup(request: Request) -> JSONResponse:
+    claims = _authorize(request)
+    payload = await _backup_body(request, operation="create")
+    try:
+        summary = _backup_store(request).create(
+            tenant_id=claims.tenant_id,
+            workspace_id=claims.workspace_id,
+            account_id=claims.account_id,
+            source_generation=payload["source_generation"],  # type: ignore[arg-type]
+            retention_seconds=payload["retention_seconds"],  # type: ignore[arg-type]
+            storage_kind=payload["storage_kind"],  # type: ignore[arg-type]
+        )
+        return _json(summary.model_dump(mode="json"), 201)
+    except LocalBackupError as exc:
+        raise _backup_api_error(exc) from None
+
+
+@router.post("/restores")
+async def restore_local_backup(request: Request) -> JSONResponse:
+    claims = _authorize(request)
+    payload = await _backup_body(request, operation="restore")
+    try:
+        drill_payload = payload.get("drill_context")
+        drill_context = (
+            None
+            if drill_payload is None
+            else LocalDrillContext.model_validate_json(
+                canonical_edge_json_bytes(drill_payload, maximum=_BACKUP_BODY_BYTES)
+            )
+        )
+        summary = _backup_store(request).restore(
+            payload["backup_id"],  # type: ignore[arg-type]
+            tenant_id=claims.tenant_id,
+            workspace_id=claims.workspace_id,
+            account_id=claims.account_id,
+            target_schema_head=payload["target_schema_head"],  # type: ignore[arg-type]
+            drill_context=drill_context,
+        )
+        return _json(summary.model_dump(mode="json"), 200)
+    except (TypeError, ValueError):
+        raise _api_error("local_restore.request_invalid", 422) from None
+    except LocalBackupError as exc:
+        raise _backup_api_error(exc) from None
+
+
 def _authorize(request: Request) -> LocalAdminClaims:
     _authorize_boundary(request)
     if len(_raw_headers(request, b"cookie")) != 1:
@@ -427,6 +476,72 @@ async def _support_bundle_body(request: Request) -> tuple[str, ...]:
     return tuple(codes)
 
 
+async def _backup_body(
+    request: Request, *, operation: str
+) -> dict[str, object]:
+    error_prefix = "local_backup" if operation == "create" else "local_restore"
+    if request.headers.get("content-type", "").partition(";")[0].lower() != (
+        "application/json"
+    ):
+        raise _api_error("local_backup.content_type_invalid", 415)
+    if request.headers.get("content-encoding") is not None:
+        raise _api_error(f"{error_prefix}.request_invalid", 422)
+    content_lengths = _raw_headers(request, b"content-length")
+    if len(content_lengths) > 1:
+        raise _api_error(f"{error_prefix}.request_invalid", 422)
+    if content_lengths:
+        try:
+            length_text = content_lengths[0].decode("ascii")
+            length = int(length_text)
+        except (UnicodeDecodeError, ValueError):
+            raise _api_error(f"{error_prefix}.request_invalid", 422) from None
+        if str(length) != length_text or not 1 <= length <= _BACKUP_BODY_BYTES:
+            raise _api_error(f"{error_prefix}.request_invalid", 422)
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > _BACKUP_BODY_BYTES:
+                raise _api_error(f"{error_prefix}.request_invalid", 422)
+        try:
+            payload = strict_json_object(
+                bytes(body), canonical=False, maximum=_BACKUP_BODY_BYTES
+            )
+        except ValueError:
+            raise _api_error(f"{error_prefix}.request_invalid", 422) from None
+    finally:
+        _zero(body)
+    if operation == "create":
+        if set(payload) != {"source_generation", "retention_seconds", "storage_kind"}:
+            raise _api_error("local_backup.request_invalid", 422)
+        if (
+            type(payload["source_generation"]) is not int
+            or not 1 <= payload["source_generation"] <= 2_147_483_647
+            or type(payload["retention_seconds"]) is not int
+            or not 3600 <= payload["retention_seconds"] <= 31_536_000
+            or payload["storage_kind"] not in {"local", "customer_object_store"}
+        ):
+            raise _api_error("local_backup.request_invalid", 422)
+    elif operation == "restore":
+        if set(payload) not in (
+            {"backup_id", "target_schema_head"},
+            {"backup_id", "target_schema_head", "drill_context"},
+        ) or (
+            type(payload["backup_id"]) is not str
+            or re.fullmatch(r"ebk_[0-9a-f]{32}", payload["backup_id"]) is None
+            or type(payload["target_schema_head"]) is not str
+            or re.fullmatch(r"[0-9]{4}", payload["target_schema_head"]) is None
+            or (
+                "drill_context" in payload
+                and type(payload["drill_context"]) is not dict
+            )
+        ):
+            raise _api_error("local_restore.request_invalid", 422)
+    else:
+        raise _api_error("local_backup.request_invalid", 422)
+    return payload
+
+
 def _tester(
     request: Request, provider_connection_id: str
 ) -> Callable[[memoryview], ProviderTestResult]:
@@ -499,6 +614,13 @@ def _support_bundle_store(request: Request) -> LocalSupportBundleStore:
     return value
 
 
+def _backup_store(request: Request) -> LocalBackupStore:
+    value = getattr(request.app.state, "local_backup_store", None)
+    if type(value) is not LocalBackupStore:
+        raise _api_error("local_backup.unavailable", 503)
+    return value
+
+
 def _signer(request: Request) -> LocalAdminSessionSigner:
     value = getattr(request.app.state, "local_admin_session_signer", None)
     if type(value) is not LocalAdminSessionSigner:
@@ -558,6 +680,22 @@ def _support_bundle_api_error(error: LocalSupportBundleError) -> _LocalApiError:
         "local_support_bundle.request_invalid": 422,
         "local_support_bundle.sensitive_detected": 422,
         "local_support_bundle.size_exceeded": 422,
+    }.get(error.code, 503)
+    return _api_error(error.code, status)
+
+
+def _backup_api_error(error: LocalBackupError) -> _LocalApiError:
+    status = {
+        "local_backup.not_found": 404,
+        "local_restore.not_found": 404,
+        "local_restore.backup_unavailable": 409,
+        "local_backup.request_invalid": 422,
+        "local_restore.request_invalid": 422,
+        "local_restore.owner_mismatch": 403,
+        "local_restore.schema_incompatible": 409,
+        "local_restore.expired": 410,
+        "local_restore.state_conflict": 409,
+        "local_backup.storage_conflict": 409,
     }.get(error.code, 503)
     return _api_error(error.code, status)
 

@@ -8,6 +8,17 @@ from .auth import (
     LocalManagementPolicy,
     csrf_sha256,
 )
+from .backup_reporting import LocalBackupReportUploader, LocalBackupReportUploadError
+from .backups import (
+    LocalBackupError,
+    LocalBackupSigningKeyStore,
+    LocalBackupStore,
+    LocalBackupSummary,
+    LocalCloudReport,
+    LocalDrillContext,
+    LocalRestoreSummary,
+    RestoreApplier,
+)
 from .keystore import (
     AwsKmsProtector,
     LocalKeyMaterial,
@@ -39,6 +50,16 @@ from .support_bundles import (
 from .sync import LocalSecretSyncError, LocalSecretSyncUploader
 
 __all__ = (
+    "LocalBackupError",
+    "LocalBackupReportUploadError",
+    "LocalBackupReportUploader",
+    "LocalBackupSigningKeyStore",
+    "LocalBackupStore",
+    "LocalBackupSummary",
+    "LocalCloudReport",
+    "LocalDrillContext",
+    "LocalRestoreSummary",
+    "RestoreApplier",
     "ConsumerSlot",
     "AwsKmsProtector",
     "LatencyBucket",
