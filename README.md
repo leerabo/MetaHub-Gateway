@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-130 - 隔离环境签名包异步管理与冲突合并` 已完成；当前下一条未完成项是
-  `PRD-131 - 旧租户、直连与私有部署迁移切换向导`。
+- 新 `PRD-090` 至 `PRD-131 - 旧租户、直连与私有部署迁移切换向导` 已完成；当前下一条未完成项是
+  `PRD-132 - 客户工单、SLA与安全诊断协作`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-131 - 旧租户、直连与私有部署迁移切换向导` 已完成：0123、固定 owner-qualified 来源适配器、
+  只读 assessment/差异摘要、版本化 plan/run、Workspace/Support JIT 权限、持久 checkpoint、可恢复
+  cutover/rollback 和 Migration Center 均已交付。后端聚焦 `6/6`、Console `5/5`、导航/权限回归
+  `21/21`、Ruff 与 lint `393 files` 通过。详见
+  [PRD-131 设计](docs/prd/PRD-131-legacy-tenant-direct-private-migration-cutover.md) 和
+  [PRD-131 测试记录](docs/testing/PRD-131-tests.md)。下一权威项为 PRD-132；完整 G6 留到 PRD-138 后。
 - `PRD-130 - 隔离环境签名包异步管理与冲突合并` 已完成：0122、绑定 owner/direction/version vector 的
   Ed25519 manifest、逐 entry AEAD/hash/Merkle、严格介质验证与原子 apply、Workspace step-up 请求、Platform
   非自批批准/拒绝、显式 cloud/local conflict resolution、`metahub bundle verify/apply` 和双域 Console 均已

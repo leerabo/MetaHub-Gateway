@@ -293,6 +293,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         42,
     ),
     NavigationDefinition(
+        "migration-operations",
+        "迁移中心",
+        "配置",
+        "migration-operations",
+        ("migration.read",),
+        "评估旧租户、直连配置与私有部署，并执行可恢复的切换或回退。",
+        "先创建只读评估，关闭全部阻断差异后再安排切换窗口。",
+        46,
+    ),
+    NavigationDefinition(
         "adapter-specs",
         "Adapter 规范",
         "配置",
@@ -834,9 +844,7 @@ def get_console_navigation(
 
     connection = _connect(config)
     try:
-        role_permissions = _load_navigation_role_permissions(
-            connection, context.user.tenant_id
-        )
+        role_permissions = _load_navigation_role_permissions(connection, context.user.tenant_id)
         items = _visible_navigation_items(
             context.permission_codes,
             role_permissions_by_role=role_permissions,
@@ -858,8 +866,7 @@ def get_console_navigation(
                 sorted({*response_permissions, *context.extension_permission_codes})
             )
             response_fingerprint = (
-                context.extension_authorization_fingerprint
-                or context.authorization_fingerprint
+                context.extension_authorization_fingerprint or context.authorization_fingerprint
             )
         return ConsoleNavigationResponse(
             navigation_items=items,
@@ -997,9 +1004,8 @@ def record_console_event(
         or payload.path != canonical_path
         or set(safe_payload) != allowed_payload_keys
         or safe_payload.get("hash") != canonical_hash
-        or safe_payload.get("source") not in (
-            ROLE_DASHBOARD_EVENT_SOURCES if is_role_dashboard_event else EVENT_SOURCES
-        )
+        or safe_payload.get("source")
+        not in (ROLE_DASHBOARD_EVENT_SOURCES if is_role_dashboard_event else EVENT_SOURCES)
         or safe_payload.get("viewport_class") not in VIEWPORT_CLASSES
         or (
             is_role_dashboard_event
@@ -1170,6 +1176,8 @@ def _visible_navigation_items(
         "edge.offline_bundle.read",
         "edge.offline_bundle.transfer",
         "edge.offline_conflict.resolve",
+        "migration.manage",
+        "migration.read",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (
@@ -1178,9 +1186,7 @@ def _visible_navigation_items(
     ):
         raise ApiError("rbac.matrix_integrity_failed")
     role_matrix = (
-        ROLE_GRANTABLE_PERMISSIONS
-        if role_permissions_by_role is None
-        else role_permissions_by_role
+        ROLE_GRANTABLE_PERMISSIONS if role_permissions_by_role is None else role_permissions_by_role
     )
     # 导航只信任本次数据库权限快照；异常时必须失败关闭并拒绝恢复受限页面。
     if set(role_matrix) != set(ROLE_CODES):

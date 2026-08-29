@@ -1,6 +1,6 @@
 # PRD-131 旧租户、直连与私有部署迁移切换向导
 
-状态：设计冻结，尚未实现。依赖 PRD-090..130、PRD-040/062/089；范围以 Excel PRD-131 为准。
+状态：已完成。依赖 PRD-090..130、PRD-040/062/089；范围以 Excel PRD-131 为准。
 
 ## Excel 权威合同
 
@@ -76,3 +76,7 @@ Workspace owner/admin 拥有 `migration.read/manage`；developer 只读公开差
 dry-run 零写；backfill/dual-read/freeze/cutover/observe/rollback 主异常流；worker 崩溃、租约接管、迟到结果、
 账本/审计/Edge 水位；Workspace/SupportGrant 动态撤权；真实 API/三浏览器/三缩放；代理/断网、Windows/Linux、
 SQLite/PostgreSQL、N/N-1；敏感审计与静止终态。开发期只跑本条受影响测试，完整 G6 留到 PRD-138 后。
+
+实现已交付 0123、Workspace/Support JIT API、严格 DTO、固定来源适配器、持久切换/回退事实和 Migration
+Center；聚焦迁移/API、Console、必要导航权限回归和静态检查通过。真实数据库矩阵、FLOW、浏览器、性能、
+安全、兼容性和 72 小时长稳仍按批次规则留到 PRD-138 后统一执行，不能由本条专项结果替代。

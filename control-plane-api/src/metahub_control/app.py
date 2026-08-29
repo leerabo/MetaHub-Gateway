@@ -72,6 +72,7 @@ from .local_endpoints import router as local_endpoints_router
 from .machine_identity import router as machine_identity_router
 from .mcp_governance import install_mcp_scheduler
 from .mcp_governance import router as mcp_governance_router
+from .migration_operations.routes import router as migration_operations_router
 from .model_aliases.routes import router as model_aliases_router
 from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
@@ -292,6 +293,7 @@ app.include_router(edge_management_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
+app.include_router(migration_operations_router)
 app.include_router(business_verification_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)

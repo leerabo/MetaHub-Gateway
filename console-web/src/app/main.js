@@ -160,6 +160,17 @@ import {
 } from "../features/private-gateways/privateGatewayPageState.js";
 import { renderPrivateGateways } from "../features/private-gateways/renderPrivateGateways.js";
 import {
+  bindMigrationOperationInteractions,
+  clearMigrationOperationDom,
+} from "../features/migration-operations/bindMigrationOperations.js";
+import {
+  createMigrationOperationPageState,
+  isMigrationOperationAbortError,
+  migrationOperationPageOwner,
+  migrationOperationReadIdentitySnapshot,
+} from "../features/migration-operations/migrationOperationPageState.js";
+import { renderMigrationOperations } from "../features/migration-operations/renderMigrationOperations.js";
+import {
   createProductAnalyticsPageState,
   isProductAnalyticsAbortError,
   productAnalyticsPageOwner,
@@ -570,6 +581,14 @@ import {
   mutateWorkspaceRestoreDrill,
 } from "../lib/edgeBackups.js";
 import { getWorkspaceOfflineBundleState } from "../lib/edgeOfflineBundles.js";
+import {
+  createMigrationAssessment,
+  createMigrationIdempotencyKey,
+  createMigrationRun,
+  cutoverMigrationRun,
+  getMigrationDifferences,
+  rollbackMigrationRun,
+} from "../lib/migrationOperations.js";
 import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
@@ -996,6 +1015,10 @@ const privateGatewayPageState = createPrivateGatewayPageState({
     else clearLocalAdminSession();
   },
 });
+// PRD-131 assessment, differences, run, and step-up dialog facts never leave this owner closure.
+const migrationOperationPageState = createMigrationOperationPageState({
+  clearDom: clearMigrationOperationDom,
+});
 // PAGE-117 只持有当前授权 tenant 的七阶段聚合；DOM 清理先于 Abort 回调发生。
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
@@ -1179,6 +1202,9 @@ if (app && globalThis.window) {
       if (nextItemId !== "private-gateways") {
         privateGatewayPageState.clear();
       }
+      if (nextItemId !== "migration-operations") {
+        migrationOperationPageState.clear();
+      }
       if (nextItemId !== "growth-analytics") {
         // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
         productAnalyticsPageState.clear();
@@ -1256,6 +1282,7 @@ if (app && globalThis.window) {
       mcpToolPageState.clear();
       localEndpointPageState.clear();
       privateGatewayPageState.clear();
+      migrationOperationPageState.clear();
       productAnalyticsPageState.clear();
       customerHealthPageState.clear();
       partnerPortalPageState.clear();
@@ -1387,6 +1414,7 @@ async function start() {
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
+    clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1490,6 +1518,7 @@ function handleConsoleWorkspaceContextInvalidation() {
   consoleSidebarController?.abort();
   consoleSidebarController = null;
   privateGatewayPageState.clear();
+  migrationOperationPageState.clear();
   void refresh();
 }
 
@@ -1552,6 +1581,7 @@ async function performRefresh(options = {}) {
     clearMcpToolStateOnIdentityChange(authSession.context, context);
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
+    clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1827,6 +1857,15 @@ async function performRefresh(options = {}) {
     isBackgroundRefresh
     && privateGatewayPageState.blocksShellDomReplacement()
     && privateGatewayPageState.enter(currentPrivateGatewayOwner(consoleShellState))
+  ) {
+    return;
+  }
+  if (consoleShellState?.activeNavigationItemId !== "migration-operations") {
+    migrationOperationPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && migrationOperationPageState.blocksShellDomReplacement()
+    && migrationOperationPageState.enter(currentMigrationOperationOwner(consoleShellState))
   ) {
     return;
   }
@@ -2660,6 +2699,11 @@ async function loadAndRenderActiveNavigation({
     case "private-gateways":
       await load("privateGatewaysState", () => loadPrivateGatewaysState(consoleShellState, refreshId));
       break;
+    case "migration-operations":
+      await load("migrationOperationsState", () => loadMigrationOperationsState(
+        consoleShellState, refreshId,
+      ));
+      break;
     case "output-safety":
     case "request-logs":
       await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
@@ -2831,6 +2875,7 @@ function renderLogin(error, requestId) {
   mcpToolPageState.clear();
   localEndpointPageState.clear();
   privateGatewayPageState.clear();
+  migrationOperationPageState.clear();
   productAnalyticsPageState.clear();
   customerHealthPageState.clear();
   partnerPortalPageState.clear();
@@ -3227,6 +3272,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     mcpToolPageState.clear();
     localEndpointPageState.clear();
     privateGatewayPageState.clear();
+    migrationOperationPageState.clear();
     productAnalyticsPageState.clear();
     customerHealthPageState.clear();
     partnerPortalPageState.clear();
@@ -5603,6 +5649,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindMcpToolsPageInteractions(consoleShellState);
   bindLocalEndpointsPageInteractions(consoleShellState);
   bindPrivateGatewayPageInteractions(consoleShellState);
+  bindMigrationOperationPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
@@ -8666,6 +8713,300 @@ function bindBatchJobsPageInteractions(consoleShellState) {
       return submitBatchCancellation(batchJobId, consoleShellState);
     },
   });
+}
+
+function currentMigrationOperationOwner(consoleShellState) {
+  const owner = migrationOperationPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "migration-operations" ? owner : null;
+}
+
+async function loadMigrationOperationsState(consoleShellState, refreshId) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !migrationOperationPageState.enter(owner)) {
+    return null;
+  }
+  return migrationOperationPageState.snapshot();
+}
+
+function renderCurrentMigrationOperationPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".migration-operations-panel");
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!panel || !owner || !migrationOperationPageState.enter(owner)) return false;
+  const html = renderMigrationOperations(
+    migrationOperationPageState.snapshot(), authSession.context, consoleShellState,
+  );
+  if (!html) {
+    migrationOperationPageState.clear();
+    return false;
+  }
+  panel.innerHTML = html;
+  bindMigrationOperationPageInteractions(consoleShellState);
+  return true;
+}
+
+function bindMigrationOperationPageInteractions(consoleShellState) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner || !migrationOperationPageState.enter(owner)) return false;
+  return bindMigrationOperationInteractions({
+    onAssessment: (input) => submitMigrationAssessment(input, consoleShellState),
+    onRun: (input) => submitMigrationRun(input, consoleShellState),
+    onRefreshDifferences: () => refreshMigrationDifferences(consoleShellState),
+    onOpenTransition(action) {
+      if (migrationOperationPageState.openTransition(
+        currentMigrationOperationOwner(consoleShellState), action,
+      )) renderCurrentMigrationOperationPanel(consoleShellState);
+    },
+    onCloseTransition() {
+      if (migrationOperationPageState.closeTransition(
+        currentMigrationOperationOwner(consoleShellState),
+      )) renderCurrentMigrationOperationPanel(consoleShellState);
+    },
+    onTransition: (input) => submitMigrationTransition(input, consoleShellState),
+  });
+}
+
+async function submitMigrationAssessment(input, consoleShellState) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner?.canManage || !migrationOperationPageState.enter(owner)) return null;
+  const commandIntent = {
+    sourceKind: String(input?.sourceKind ?? ""),
+    manifestVersion: String(input?.manifestVersion ?? ""),
+    sourceManifestSha256: String(input?.sourceManifestSha256 ?? ""),
+    domains: Array.isArray(input?.domains) ? [...input.domains].map(String).sort() : [],
+    reasonCode: String(input?.reasonCode ?? ""),
+    confirmed: input?.confirmed === true,
+  };
+  const idempotencyKey = migrationOperationPageState.idempotencyKey(
+    owner, "assessment", commandIntent, () => createMigrationIdempotencyKey("assessment"),
+  );
+  if (!idempotencyKey) return null;
+  const operation = migrationOperationPageState.beginAssessment(owner);
+  if (!operation) return null;
+  renderCurrentMigrationOperationPanel(consoleShellState);
+  let accepted = false;
+  try {
+    const result = await createMigrationAssessment({
+      controlApiUrl: workspaceControlApiUrl,
+      ...commandIntent,
+      idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    accepted = migrationOperationPageState.acceptAssessment(
+      operation, result, currentMigrationOperationOwner(consoleShellState),
+    );
+    if (accepted) migrationOperationPageState.completeIntent(
+      currentMigrationOperationOwner(consoleShellState), "assessment",
+    );
+  } catch (error) {
+    if (!isMigrationOperationAbortError(error)) {
+      migrationOperationPageState.reject(
+        operation, error, currentMigrationOperationOwner(consoleShellState),
+      );
+    }
+  } finally {
+    migrationOperationPageState.finish(operation);
+    renderCurrentMigrationOperationPanel(consoleShellState);
+  }
+  if (accepted) await refreshMigrationDifferences(consoleShellState);
+  return migrationOperationPageState.snapshot();
+}
+
+async function refreshMigrationDifferences(consoleShellState) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner || !migrationOperationPageState.enter(owner)) return null;
+  const snapshot = migrationOperationPageState.snapshot();
+  const migrationId = snapshot.run?.run_id ?? snapshot.assessment?.assessment_id;
+  const operation = migrationOperationPageState.beginDifferences(owner, migrationId);
+  if (!operation) return snapshot;
+  renderCurrentMigrationOperationPanel(consoleShellState);
+  try {
+    const result = await getMigrationDifferences({
+      controlApiUrl: workspaceControlApiUrl,
+      migrationId: operation.migrationId,
+      signal: operation.controller.signal,
+    });
+    migrationOperationPageState.acceptDifferences(
+      operation, result, currentMigrationOperationOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isMigrationOperationAbortError(error)) {
+      migrationOperationPageState.reject(
+        operation, error, currentMigrationOperationOwner(consoleShellState),
+      );
+    }
+  } finally {
+    migrationOperationPageState.finish(operation);
+    renderCurrentMigrationOperationPanel(consoleShellState);
+  }
+  return migrationOperationPageState.snapshot();
+}
+
+async function submitMigrationRun(input, consoleShellState) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner?.canManage || !migrationOperationPageState.enter(owner)) return null;
+  const snapshot = migrationOperationPageState.snapshot();
+  const commandIntent = {
+    assessmentId: String(snapshot.assessment?.assessment_id ?? ""),
+    assessmentRevision: Number(snapshot.assessment?.revision ?? 0),
+    reasonCode: String(input?.reasonCode ?? ""),
+    confirmed: input?.confirmed === true,
+  };
+  const idempotencyKey = migrationOperationPageState.idempotencyKey(
+    owner, "run", commandIntent, () => createMigrationIdempotencyKey("run"),
+  );
+  if (!idempotencyKey) return null;
+  const operation = migrationOperationPageState.beginRun(owner);
+  if (!operation) return null;
+  renderCurrentMigrationOperationPanel(consoleShellState);
+  let accepted = false;
+  try {
+    const result = await createMigrationRun({
+      controlApiUrl: workspaceControlApiUrl,
+      assessmentId: operation.assessmentId,
+      expectedAssessmentRevision: operation.assessmentRevision,
+      reasonCode: commandIntent.reasonCode,
+      confirmed: commandIntent.confirmed,
+      idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    accepted = migrationOperationPageState.acceptRun(
+      operation, result, currentMigrationOperationOwner(consoleShellState),
+    );
+    if (accepted) migrationOperationPageState.completeIntent(
+      currentMigrationOperationOwner(consoleShellState), "run",
+    );
+  } catch (error) {
+    if (!isMigrationOperationAbortError(error)) {
+      migrationOperationPageState.reject(
+        operation, error, currentMigrationOperationOwner(consoleShellState),
+      );
+    }
+  } finally {
+    migrationOperationPageState.finish(operation);
+    renderCurrentMigrationOperationPanel(consoleShellState);
+  }
+  if (accepted) await refreshMigrationDifferences(consoleShellState);
+  return migrationOperationPageState.snapshot();
+}
+
+async function submitMigrationTransition(input, consoleShellState) {
+  const owner = currentMigrationOperationOwner(consoleShellState);
+  if (!owner?.canManage || !migrationOperationPageState.enter(owner)) return null;
+  const action = String(input?.action ?? "");
+  const reasonCode = String(input?.reasonCode ?? "");
+  const method = String(input?.method ?? "");
+  const confirmed = input?.confirmed === true;
+  let verificationCode = String(input?.verificationCode ?? "");
+  try { if (input && "verificationCode" in input) input.verificationCode = ""; } catch {
+    // A frozen caller object remains confined to this call; the local copy is still wiped below.
+  }
+  if (!confirmed) {
+    verificationCode = "";
+    return null;
+  }
+  const transitionState = migrationOperationPageState.snapshot();
+  const commandIntent = {
+    action,
+    reasonCode,
+    runId: String(transitionState.run?.run_id ?? ""),
+    revision: Number(transitionState.run?.revision ?? 0),
+  };
+  let idempotencyKey;
+  try {
+    idempotencyKey = migrationOperationPageState.idempotencyKey(
+      owner,
+      "transition",
+      commandIntent,
+      () => createMigrationIdempotencyKey(action || "transition"),
+    );
+  } catch {
+    verificationCode = "";
+    return null;
+  }
+  const operation = migrationOperationPageState.beginTransition(owner, {
+    action,
+    reasonCode,
+    idempotencyKey,
+  });
+  idempotencyKey = "";
+  if (!operation) {
+    verificationCode = "";
+    return null;
+  }
+  renderCurrentMigrationOperationPanel(consoleShellState);
+  let webAuthnCredential = null;
+  let stepUpGrant = "";
+  let accepted = false;
+  try {
+    let challengeId;
+    if (method === "webauthn") {
+      const challenge = await beginIdentityWebAuthnStepUp({
+        controlApiUrl: workspaceControlApiUrl,
+        signal: operation.controller.signal,
+      });
+      if (!migrationOperationPageState.isCurrent(
+        operation, currentMigrationOperationOwner(consoleShellState),
+      )) return null;
+      challengeId = challenge.challenge_id;
+      webAuthnCredential = await getWebAuthnAssertion(challenge.public_key_options);
+      if (!migrationOperationPageState.isCurrent(
+        operation, currentMigrationOperationOwner(consoleShellState),
+      )) return null;
+    }
+    const stepUp = await createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      method,
+      workspaceId: operation.workspaceId,
+      actionCode: `migration.${operation.action}.execute`,
+      resourceType: "migration_run",
+      resourceId: operation.runId,
+      code: verificationCode,
+      challengeId,
+      credential: webAuthnCredential,
+      signal: operation.controller.signal,
+    });
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = stepUp.grant;
+    if (!migrationOperationPageState.isCurrent(
+      operation, currentMigrationOperationOwner(consoleShellState),
+    )) return null;
+    const transition = operation.action === "cutover" ? cutoverMigrationRun : rollbackMigrationRun;
+    const result = await transition({
+      controlApiUrl: workspaceControlApiUrl,
+      runId: operation.runId,
+      expectedRevision: operation.revision,
+      reasonCode: operation.reasonCode,
+      confirmed: true,
+      stepUpGrant,
+      idempotencyKey: operation.idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    stepUpGrant = "";
+    accepted = migrationOperationPageState.acceptTransition(
+      operation, result, currentMigrationOperationOwner(consoleShellState),
+    );
+    if (accepted) migrationOperationPageState.completeIntent(
+      currentMigrationOperationOwner(consoleShellState), "transition",
+    );
+  } catch (error) {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    if (!isMigrationOperationAbortError(error)) {
+      migrationOperationPageState.reject(
+        operation, error, currentMigrationOperationOwner(consoleShellState),
+      );
+    }
+  } finally {
+    verificationCode = "";
+    webAuthnCredential = null;
+    stepUpGrant = "";
+    migrationOperationPageState.finish(operation);
+    renderCurrentMigrationOperationPanel(consoleShellState);
+  }
+  if (accepted) await refreshMigrationDifferences(consoleShellState);
+  return migrationOperationPageState.snapshot();
 }
 
 function currentTenantDataLifecycleOwner(consoleShellState, mode = "read") {
@@ -12371,6 +12712,9 @@ async function switchConsoleNavigation(button, consoleShellState) {
   }
   if (itemId !== "private-gateways") {
     privateGatewayPageState.clear();
+  }
+  if (itemId !== "migration-operations") {
+    migrationOperationPageState.clear();
   }
   if (itemId !== "growth-analytics") {
     // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
@@ -19710,6 +20054,14 @@ function clearLocalEndpointStateOnIdentityChange(previous, current) {
 function clearPrivateGatewayStateOnIdentityChange(previous, current) {
   if (privateGatewayReadIdentitySnapshot(previous) !== privateGatewayReadIdentitySnapshot(current)) {
     privateGatewayPageState.clear();
+  }
+}
+
+/** Destroy PRD-131 assessment and cutover facts on any migration.read owner drift. */
+function clearMigrationOperationStateOnIdentityChange(previous, current) {
+  if (migrationOperationReadIdentitySnapshot(previous)
+    !== migrationOperationReadIdentitySnapshot(current)) {
+    migrationOperationPageState.clear();
   }
 }
 

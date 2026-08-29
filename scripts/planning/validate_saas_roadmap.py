@@ -285,6 +285,18 @@ REQUIRED_DOCS = {
         "PRD-131",
         "0122",
     ),
+    ROOT / "docs/prd/PRD-131-legacy-tenant-direct-private-migration-cutover.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0123",
+    ),
+    ROOT / "docs/testing/PRD-131-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-132",
+        "0123",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -320,6 +332,8 @@ SECRET_PATTERNS = {
     "bearer_token": re.compile(r"Bearer\s+[A-Za-z0-9._-]{24,}", re.IGNORECASE),
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
+
+POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations"})
 
 ROLE_ALIAS_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:ops|security|support|billing|finance|verification_reviewer)(?![A-Za-z0-9_])"
@@ -406,7 +420,7 @@ def _xlsx_package_is_safe(path: Path) -> bool:
     )
 
 
-def _source_navigation_ids() -> list[str]:
+def _console_navigation_ids() -> list[str]:
     tree = ast.parse(CONSOLE_SERVICE.read_text(encoding="utf-8"))
     assignment = next(
         node
@@ -417,6 +431,14 @@ def _source_navigation_ids() -> list[str]:
     )
     assert isinstance(assignment.value, ast.Tuple)
     return [str(ast.literal_eval(element.args[0])) for element in assignment.value.elts]
+
+
+def _source_navigation_ids() -> list[str]:
+    return [
+        item
+        for item in _console_navigation_ids()
+        if item not in POST_NAVIGATION_BASELINE_IDS
+    ]
 
 
 def validate(*, expected_next: str | None = None) -> ValidationReport:
@@ -788,8 +810,14 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         "平台可见角色", "现有API/数据/Scheduler证据", "承接PRD", "切换验收边界",
     }
     report.check(required_navigation_fields <= set(navigation_headers), "navigation disposition has required fields")
+    console_navigation_ids = _console_navigation_ids()
     source_navigation_ids = _source_navigation_ids()
     disposition_ids = [str(row.get("navigation_id")) for row in navigation_rows]
+    report.check(
+        POST_NAVIGATION_BASELINE_IDS <= set(console_navigation_ids)
+        and not (POST_NAVIGATION_BASELINE_IDS & set(source_navigation_ids)),
+        "post-baseline PRD-131 navigation remains explicit without rewriting the 64-item inventory",
+    )
     report.check(
         len(source_navigation_ids) == 64
         and len(disposition_ids) == 64
@@ -948,10 +976,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 122
+        and migration_versions[-1] == 123
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0122 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0123 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1115,6 +1143,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0122_edge_offline_bundle_conflict_reconciliation.down.sql"
         ).is_file(),
         "PRD-130 owns reversible migration 0122 with guarded offline bundle rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0123_customer_migration_cutover_operations.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0123_customer_migration_cutover_operations.down.sql"
+        ).is_file(),
+        "PRD-131 owns reversible migration 0123 with guarded customer migration rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

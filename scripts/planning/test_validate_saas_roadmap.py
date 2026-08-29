@@ -33,7 +33,13 @@ def test_cycle_detector_accepts_backward_dag_and_rejects_cycle() -> None:
     assert not VALIDATOR._is_acyclic({90: {91}, 91: {90}})
 
 
-def test_repository_roadmap_baseline_passes_after_prd130_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-131")
+def test_prd131_navigation_does_not_rewrite_the_frozen_inventory() -> None:
+    assert "migration-operations" in VALIDATOR._console_navigation_ids()
+    assert "migration-operations" not in VALIDATOR._source_navigation_ids()
+    assert len(VALIDATOR._source_navigation_ids()) == 64
+
+
+def test_repository_roadmap_baseline_passes_after_prd131_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-132")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-131"
+    assert report.next_prd == "PRD-132"

@@ -28,6 +28,9 @@ from metahub_control.identity.service import (
     normalize_global_email,
     valid_opaque_value,
 )
+from metahub_control.migration_operations.permissions import (
+    load_verified_workspace_migration_permissions,
+)
 
 from .edge_permissions import load_verified_workspace_edge_permissions
 from .models import (
@@ -171,8 +174,7 @@ class WorkspaceSessionContext:
                 permission_codes=legacy_permissions,
                 permission_revision=self.permission_revision,
                 authorization_fingerprint=(
-                    self.legacy_authorization_fingerprint
-                    or self.authorization_fingerprint
+                    self.legacy_authorization_fingerprint or self.authorization_fingerprint
                 ),
             ),
             tenant=AuthTenant(
@@ -342,9 +344,7 @@ def switch_workspace(
             identity.current_session.expires_at,
         )
         if enterprise_grant is not None:
-            absolute_expires = min(
-                absolute_expires, _parse_time(enterprise_grant["expires_at"])
-            )
+            absolute_expires = min(absolute_expires, _parse_time(enterprise_grant["expires_at"]))
         connection.execute(
             """
             INSERT INTO workspace_sessions(
@@ -642,10 +642,12 @@ def workspace_actor_authorization_probe_in_transaction(
     granted = {str(item["granted_permission_code"]) for item in role_rows}
     if granted != set(permission_codes):
         raise ApiError("workspace_session.permission_denied")
-    governance, machine_identity, provider_catalog, edge = _workspace_extension_permissions(
-        connection,
-        role_code=str(row["role_code"]),
-        require_catalogs=True,
+    governance, machine_identity, provider_catalog, edge, migration = (
+        _workspace_extension_permissions(
+            connection,
+            role_code=str(row["role_code"]),
+            require_catalogs=True,
+        )
     )
     legacy_fingerprint = authorization_fingerprint(
         tenant_id=tenant_id,
@@ -668,6 +670,7 @@ def workspace_actor_authorization_probe_in_transaction(
             machine_identity_permissions=machine_identity,
             provider_catalog_permissions=provider_catalog,
             edge_permissions=edge,
+            migration_permissions=migration,
         ),
     )
 
@@ -1906,8 +1909,7 @@ def _switch_target(
         "AND EXISTS(SELECT 1 FROM workspace_operational_states operational "
         "WHERE operational.workspace_id=member.workspace_id "
         "AND operational.tenant_id=member.tenant_id AND operational.status='active')"
-        if require_operational_state
-        or _table_exists(connection, "workspace_operational_states")
+        if require_operational_state or _table_exists(connection, "workspace_operational_states")
         else ""
     )
     row = connection.execute(
@@ -1951,15 +1953,24 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
     )
-    governance, machine_identity, provider_catalog, edge = _workspace_extension_permissions(
-        connection,
-        role_code=str(row["role_code"]),
+    governance, machine_identity, provider_catalog, edge, migration = (
+        _workspace_extension_permissions(
+            connection,
+            role_code=str(row["role_code"]),
+        )
     )
-    if not governance and not machine_identity and not provider_catalog and not edge:
+    if not any((governance, machine_identity, provider_catalog, edge, migration)):
         return legacy
     permissions = tuple(
         sorted(
-            {*legacy.permission_codes, *governance, *machine_identity, *provider_catalog, *edge}
+            {
+                *legacy.permission_codes,
+                *governance,
+                *machine_identity,
+                *provider_catalog,
+                *edge,
+                *migration,
+            }
         )
     )
     fingerprint = _workspace_authorization_fingerprint(
@@ -1969,6 +1980,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         machine_identity_permissions=machine_identity,
         provider_catalog_permissions=provider_catalog,
         edge_permissions=edge,
+        migration_permissions=migration,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -1984,20 +1996,29 @@ def _workspace_extension_permissions(
     *,
     role_code: str,
     require_catalogs: bool = False,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
     if require_catalogs:
-        governance, machine_identity, provider_catalog = (
-            _required_workspace_extension_permissions(
-                connection,
-                role_code=role_code,
-            )
+        governance, machine_identity, provider_catalog = _required_workspace_extension_permissions(
+            connection,
+            role_code=role_code,
         )
         edge = load_verified_workspace_edge_permissions(
             connection,
             role_code=role_code,
             unavailable_error_code="workspace_session.unavailable",
         )
-        return governance, machine_identity, provider_catalog, edge
+        migration = load_verified_workspace_migration_permissions(
+            connection,
+            role_code=role_code,
+            unavailable_error_code="workspace_session.unavailable",
+        )
+        return governance, machine_identity, provider_catalog, edge, migration
     has_extension = _table_exists(connection, "workspace_governance_role_permissions")
     has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
     if has_extension != has_catalog:
@@ -2015,12 +2036,8 @@ def _workspace_extension_permissions(
         expected=governance_expected,
         available=has_extension,
     )
-    has_machine_catalog = _table_exists(
-        connection, "workspace_machine_permission_extensions"
-    )
-    has_machine_assignments = _table_exists(
-        connection, "workspace_machine_role_permissions"
-    )
+    has_machine_catalog = _table_exists(connection, "workspace_machine_permission_extensions")
+    has_machine_assignments = _table_exists(connection, "workspace_machine_role_permissions")
     if has_machine_catalog != has_machine_assignments:
         raise ApiError("workspace_session.unavailable")
     machine_expected = {
@@ -2046,7 +2063,12 @@ def _workspace_extension_permissions(
         role_code=role_code,
         unavailable_error_code="workspace_session.unavailable",
     )
-    return governance, machine_identity, provider_catalog, edge
+    migration = load_verified_workspace_migration_permissions(
+        connection,
+        role_code=role_code,
+        unavailable_error_code="workspace_session.unavailable",
+    )
+    return governance, machine_identity, provider_catalog, edge, migration
 
 
 def _required_workspace_extension_permissions(
@@ -2145,6 +2167,7 @@ def _workspace_authorization_fingerprint(
     machine_identity_permissions: tuple[str, ...],
     provider_catalog_permissions: tuple[str, ...],
     edge_permissions: tuple[str, ...],
+    migration_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2155,6 +2178,7 @@ def _workspace_authorization_fingerprint(
                 "machine_identity_permissions": machine_identity_permissions,
                 "provider_catalog_permissions": provider_catalog_permissions,
                 "edge_permissions": edge_permissions,
+                "migration_permissions": migration_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

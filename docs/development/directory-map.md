@@ -2525,6 +2525,21 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   `docs/testing/PRD-130-tests.md`：保存两轮实施自审、0122/Shared/CLI/API/Console、双域双视口浏览器、敏感审计、
   临时证据清理和批次门禁边界；下一权威项为 PRD-131，S5 实现已完成并在独立提交后执行 G5。
 
+## PRD-131 旧租户、直连与私有部署迁移切换向导（已完成）
+
+- `control-plane-api/src/metahub_control/migration_operations/`：固定 owner-qualified 适配器、只读 assessment、
+  严格差异摘要、版本化 plan/run、持久 checkpoint、原子 cutover、补偿 rollback、幂等命令、事件/outbox 和
+  Workspace/Support JIT 鉴权；Support 只能读取 grant 限定的差异摘要。
+- `infra/migrations/0123_customer_migration_cutover_operations.sql/.down.sql`：迁移权限、适配器、assessment、
+  plan/run/difference/checkpoint/rollback/head、事件/outbox/action/support audit、复合 owner、不变与状态触发器、
+  tenant deletion manifest、完整性 guard 和业务事实 down guard。
+- `console-web/src/lib/migrationOperations.js` 与 `src/features/migration-operations/`：Cookie-only 严格 client、
+  exact DTO、owner/generation/Abort 隔离，以及评估、差异、计划、运行、检查点、切换与回退页面；MFA 码和
+  step-up grant 不进入页面状态或持久存储。
+- `docs/prd/PRD-131-legacy-tenant-direct-private-migration-cutover.md` 与 `docs/testing/PRD-131-tests.md`：保存
+  两轮自审、0123/API/Console、必要导航权限回归、静态检查、敏感审计、临时证据清理和批次门禁边界；下一
+  权威项为 PRD-132，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

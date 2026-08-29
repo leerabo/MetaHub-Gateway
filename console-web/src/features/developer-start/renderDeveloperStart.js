@@ -24,6 +24,7 @@ import { renderBatchJobs } from "../batch-jobs/renderBatchJobs.js";
 import { renderMcpTools } from "../mcp-tools/renderMcpTools.js";
 import { renderLocalEndpoints } from "../local-models/renderLocalEndpoints.js";
 import { renderPrivateGateways } from "../private-gateways/renderPrivateGateways.js";
+import { renderMigrationOperations } from "../migration-operations/renderMigrationOperations.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import {
@@ -514,6 +515,12 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "private-gateways":
       return renderPrivateGatewaysSection(
         options.privateGatewaysState,
+        options.authContext,
+        options.consoleShellState,
+      );
+    case "migration-operations":
+      return renderMigrationOperationsSection(
+        options.migrationOperationsState,
         options.authContext,
         options.consoleShellState,
       );
@@ -1019,6 +1026,14 @@ function renderPrivateGatewaysSection(state, authContext, consoleShellState) {
   const html = renderPrivateGateways(state, authContext, consoleShellState);
   return html
     ? `<section class="panel private-gateways-panel" aria-labelledby="private-gateways-title">${html}</section>`
+    : "";
+}
+
+/** Render PRD-131 only for the exact backend-authorized migration.read owner. */
+function renderMigrationOperationsSection(state, authContext, consoleShellState) {
+  const html = renderMigrationOperations(state, authContext, consoleShellState);
+  return html
+    ? `<section class="panel migration-operations-panel" aria-labelledby="migration-operations-title">${html}</section>`
     : "";
 }
 
