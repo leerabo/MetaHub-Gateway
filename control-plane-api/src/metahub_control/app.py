@@ -41,6 +41,8 @@ from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
 from .customer_health import install_customer_health_scheduler
 from .customer_health import router as customer_health_router
+from .customer_support.routes import router as customer_support_router
+from .customer_support.scheduler import install_customer_support_scheduler
 from .dashboard.routes import router as dashboard_router
 from .data_governance import install_data_governance_scheduler
 from .data_governance import router as data_governance_router
@@ -294,6 +296,7 @@ app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(migration_operations_router)
+app.include_router(customer_support_router)
 app.include_router(business_verification_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
@@ -384,6 +387,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_usage_export_scheduler,
             install_cost_anomaly_scheduler,
             install_customer_health_scheduler,
+            install_customer_support_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

@@ -233,6 +233,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_capacity_role_permissions",
     "platform_data_governance_role_permissions",
     "platform_provider_catalog_role_permissions",
+    "platform_customer_support_role_permissions",
 )
 
 
@@ -801,11 +802,9 @@ def get_platform_navigation(
                 item_id == "observability"
                 and "platform.observability.security_read" in permission_set
             )
-            or (
-                item_id == "capacity"
-                and "platform.unit_economics.read" in permission_set
-            )
+            or (item_id == "capacity" and "platform.unit_economics.read" in permission_set)
             or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
+            or (item_id == "support" and "platform.support.ticket.read" in permission_set)
         )
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
@@ -2513,6 +2512,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_provider_catalog_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if "platform_customer_support_role_permissions" in extension_tables:
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_customer_support_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

@@ -171,6 +171,17 @@ import {
 } from "../features/migration-operations/migrationOperationPageState.js";
 import { renderMigrationOperations } from "../features/migration-operations/renderMigrationOperations.js";
 import {
+  bindSupportTicketInteractions,
+  clearSupportTicketDom,
+} from "../features/support-tickets/bindSupportTickets.js";
+import {
+  createSupportTicketPageState,
+  isSupportTicketAbortError,
+  supportTicketPageOwner,
+  supportTicketReadIdentitySnapshot,
+} from "../features/support-tickets/supportTicketPageState.js";
+import { renderSupportTickets } from "../features/support-tickets/renderSupportTickets.js";
+import {
   createProductAnalyticsPageState,
   isProductAnalyticsAbortError,
   productAnalyticsPageOwner,
@@ -589,6 +600,14 @@ import {
   getMigrationDifferences,
   rollbackMigrationRun,
 } from "../lib/migrationOperations.js";
+import {
+  attachSupportFile,
+  createSupportIdempotencyKey,
+  createSupportTicket,
+  escalateSupportTicket,
+  listSupportTickets,
+  patchSupportTicket,
+} from "../lib/customerSupport.js";
 import {
   approveLocalSupportBundle,
   cancelLocalSupportBundle,
@@ -1019,6 +1038,10 @@ const privateGatewayPageState = createPrivateGatewayPageState({
 const migrationOperationPageState = createMigrationOperationPageState({
   clearDom: clearMigrationOperationDom,
 });
+// PRD-132 subjects, messages, file references, SLA facts, and tickets belong only to this live Workspace owner.
+const supportTicketPageState = createSupportTicketPageState({
+  clearDom: clearSupportTicketDom,
+});
 // PAGE-117 只持有当前授权 tenant 的七阶段聚合；DOM 清理先于 Abort 回调发生。
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
@@ -1205,6 +1228,9 @@ if (app && globalThis.window) {
       if (nextItemId !== "migration-operations") {
         migrationOperationPageState.clear();
       }
+      if (nextItemId !== "support-tickets") {
+        supportTicketPageState.clear();
+      }
       if (nextItemId !== "growth-analytics") {
         // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
         productAnalyticsPageState.clear();
@@ -1283,6 +1309,7 @@ if (app && globalThis.window) {
       localEndpointPageState.clear();
       privateGatewayPageState.clear();
       migrationOperationPageState.clear();
+      supportTicketPageState.clear();
       productAnalyticsPageState.clear();
       customerHealthPageState.clear();
       partnerPortalPageState.clear();
@@ -1415,6 +1442,7 @@ async function start() {
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
+    clearSupportTicketStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1519,6 +1547,7 @@ function handleConsoleWorkspaceContextInvalidation() {
   consoleSidebarController = null;
   privateGatewayPageState.clear();
   migrationOperationPageState.clear();
+  supportTicketPageState.clear();
   void refresh();
 }
 
@@ -1582,6 +1611,7 @@ async function performRefresh(options = {}) {
     clearLocalEndpointStateOnIdentityChange(authSession.context, context);
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
+    clearSupportTicketStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
@@ -1866,6 +1896,15 @@ async function performRefresh(options = {}) {
     isBackgroundRefresh
     && migrationOperationPageState.blocksShellDomReplacement()
     && migrationOperationPageState.enter(currentMigrationOperationOwner(consoleShellState))
+  ) {
+    return;
+  }
+  if (consoleShellState?.activeNavigationItemId !== "support-tickets") {
+    supportTicketPageState.clear();
+  } else if (
+    isBackgroundRefresh
+    && supportTicketPageState.blocksShellDomReplacement()
+    && supportTicketPageState.enter(currentSupportTicketOwner(consoleShellState))
   ) {
     return;
   }
@@ -2704,6 +2743,11 @@ async function loadAndRenderActiveNavigation({
         consoleShellState, refreshId,
       ));
       break;
+    case "support-tickets":
+      await load("supportTicketsState", () => loadSupportTicketsState(
+        consoleShellState, refreshId,
+      ));
+      break;
     case "output-safety":
     case "request-logs":
       await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
@@ -2876,6 +2920,7 @@ function renderLogin(error, requestId) {
   localEndpointPageState.clear();
   privateGatewayPageState.clear();
   migrationOperationPageState.clear();
+  supportTicketPageState.clear();
   productAnalyticsPageState.clear();
   customerHealthPageState.clear();
   partnerPortalPageState.clear();
@@ -3273,6 +3318,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     localEndpointPageState.clear();
     privateGatewayPageState.clear();
     migrationOperationPageState.clear();
+    supportTicketPageState.clear();
     productAnalyticsPageState.clear();
     customerHealthPageState.clear();
     partnerPortalPageState.clear();
@@ -5650,6 +5696,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindLocalEndpointsPageInteractions(consoleShellState);
   bindPrivateGatewayPageInteractions(consoleShellState);
   bindMigrationOperationPageInteractions(consoleShellState);
+  bindSupportTicketPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
   bindPlanManagementPageInteractions(consoleShellState);
@@ -9007,6 +9054,235 @@ async function submitMigrationTransition(input, consoleShellState) {
   }
   if (accepted) await refreshMigrationDifferences(consoleShellState);
   return migrationOperationPageState.snapshot();
+}
+
+function currentSupportTicketOwner(consoleShellState) {
+  const owner = supportTicketPageOwner(authSession.context, consoleShellState);
+  return owner && readActiveNavigationHash() === "support-tickets" ? owner : null;
+}
+
+async function loadSupportTicketsState(consoleShellState, refreshId = refreshSequence) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if (!owner || refreshId !== refreshSequence || !supportTicketPageState.enter(owner)) return null;
+  const operation = supportTicketPageState.beginList(owner);
+  if (!operation) return supportTicketPageState.snapshot();
+  try {
+    const filters = supportTicketPageState.snapshot().filters;
+    const result = await listSupportTickets({
+      controlApiUrl: workspaceControlApiUrl,
+      actorDomain: "workspace",
+      status: filters.status,
+      severity: filters.severity,
+      signal: operation.controller.signal,
+    });
+    if (refreshId !== refreshSequence) return null;
+    supportTicketPageState.acceptList(
+      operation, result, currentSupportTicketOwner(consoleShellState),
+    );
+  } catch (error) {
+    if (!isSupportTicketAbortError(error)) {
+      supportTicketPageState.reject(
+        operation, error, currentSupportTicketOwner(consoleShellState),
+      );
+    }
+  } finally {
+    supportTicketPageState.finish(operation);
+  }
+  return supportTicketPageState.snapshot();
+}
+
+function renderCurrentSupportTicketPanel(consoleShellState) {
+  const panel = globalThis.document?.querySelector?.(".support-tickets-panel");
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if (!panel || !owner || !supportTicketPageState.enter(owner)) return false;
+  const html = renderSupportTickets(
+    supportTicketPageState.snapshot(), authSession.context, consoleShellState,
+  );
+  if (!html) {
+    supportTicketPageState.clear();
+    return false;
+  }
+  clearSupportTicketDom(globalThis.document);
+  panel.innerHTML = html;
+  bindSupportTicketPageInteractions(consoleShellState);
+  return true;
+}
+
+function bindSupportTicketPageInteractions(consoleShellState) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if (!owner || !supportTicketPageState.enter(owner)) return false;
+  return bindSupportTicketInteractions({
+    onFilter: async (filters) => {
+      const currentOwner = currentSupportTicketOwner(consoleShellState);
+      if (!supportTicketPageState.setFilters(currentOwner, filters)) return false;
+      renderCurrentSupportTicketPanel(consoleShellState);
+      await loadSupportTicketsState(consoleShellState);
+      return renderCurrentSupportTicketPanel(consoleShellState);
+    },
+    onRefresh: async () => {
+      await loadSupportTicketsState(consoleShellState);
+      return renderCurrentSupportTicketPanel(consoleShellState);
+    },
+    onSelect: (ticketId) => {
+      const selected = supportTicketPageState.select(
+        currentSupportTicketOwner(consoleShellState), ticketId,
+      );
+      if (selected) renderCurrentSupportTicketPanel(consoleShellState);
+      return selected;
+    },
+    onCreate: (input) => submitSupportTicketCreate(input, consoleShellState),
+    onPatch: (input, action) => submitSupportTicketPatch(input, action, consoleShellState),
+    onAttachment: (input) => submitSupportTicketAttachment(input, consoleShellState),
+    onEscalation: (input) => submitSupportTicketEscalation(input, consoleShellState),
+  });
+}
+
+async function submitSupportTicketCreate(input, consoleShellState) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if (!owner?.canCreate || !supportTicketPageState.enter(owner)) return null;
+  const intent = {
+    category: String(input?.category ?? ""), severity: String(input?.severity ?? ""),
+    subject: String(input?.subject ?? ""), message: String(input?.message ?? ""),
+    relatedKind: String(input?.relatedKind ?? "none"),
+    relatedReference: input?.relatedReference === null ? null : String(input?.relatedReference ?? ""),
+  };
+  const scope = "create";
+  const idempotencyKey = supportTicketPageState.idempotencyKey(
+    owner, scope, intent, () => createSupportIdempotencyKey(scope),
+  );
+  const operation = supportTicketPageState.beginMutation(owner, { scope });
+  if (!operation || !idempotencyKey) return null;
+  renderCurrentSupportTicketPanel(consoleShellState);
+  try {
+    const result = await createSupportTicket({
+      controlApiUrl: workspaceControlApiUrl, ...intent, idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    if (supportTicketPageState.acceptTicket(
+      operation, result, currentSupportTicketOwner(consoleShellState), "support.ticket_created",
+    )) supportTicketPageState.completeIntent(currentSupportTicketOwner(consoleShellState), scope);
+  } catch (error) {
+    if (!isSupportTicketAbortError(error)) supportTicketPageState.reject(
+      operation, error, currentSupportTicketOwner(consoleShellState),
+    );
+  } finally {
+    supportTicketPageState.finish(operation);
+    renderCurrentSupportTicketPanel(consoleShellState);
+  }
+  return supportTicketPageState.snapshot();
+}
+
+async function submitSupportTicketPatch(input, action, consoleShellState) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if ((!owner?.canCreate && !owner?.canManage) || !supportTicketPageState.enter(owner)) return null;
+  const intent = {
+    ticketId: String(input?.ticketId ?? ""),
+    expectedRevision: Number(input?.expectedRevision),
+    changes: input?.changes ?? {},
+  };
+  const scope = `patch-${String(action ?? "update")}-${intent.ticketId}`;
+  const idempotencyKey = supportTicketPageState.idempotencyKey(
+    owner, scope, intent, () => createSupportIdempotencyKey("patch"),
+  );
+  const operation = supportTicketPageState.beginMutation(owner, {
+    scope, ticketId: intent.ticketId,
+  });
+  if (!operation || !idempotencyKey) return null;
+  renderCurrentSupportTicketPanel(consoleShellState);
+  try {
+    const result = await patchSupportTicket({
+      controlApiUrl: workspaceControlApiUrl,
+      actorDomain: "workspace",
+      ...intent,
+      idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    if (supportTicketPageState.acceptTicket(
+      operation, result, currentSupportTicketOwner(consoleShellState), "support.ticket_updated",
+    )) supportTicketPageState.completeIntent(currentSupportTicketOwner(consoleShellState), scope);
+  } catch (error) {
+    if (!isSupportTicketAbortError(error)) supportTicketPageState.reject(
+      operation, error, currentSupportTicketOwner(consoleShellState),
+    );
+  } finally {
+    supportTicketPageState.finish(operation);
+    renderCurrentSupportTicketPanel(consoleShellState);
+  }
+  return supportTicketPageState.snapshot();
+}
+
+async function submitSupportTicketAttachment(input, consoleShellState) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if (!owner?.canCreate || input?.confirmed !== true || !supportTicketPageState.enter(owner)) return null;
+  const intent = {
+    ticketId: String(input.ticketId ?? ""), expectedRevision: Number(input.expectedRevision),
+    fileId: String(input.fileId ?? ""), intentCode: String(input.intentCode ?? ""),
+  };
+  const scope = `attachment-${intent.ticketId}`;
+  const idempotencyKey = supportTicketPageState.idempotencyKey(
+    owner, scope, intent, () => createSupportIdempotencyKey("attachment"),
+  );
+  const operation = supportTicketPageState.beginMutation(owner, {
+    scope, ticketId: intent.ticketId,
+  });
+  if (!operation || !idempotencyKey) return null;
+  renderCurrentSupportTicketPanel(consoleShellState);
+  try {
+    const result = await attachSupportFile({
+      controlApiUrl: workspaceControlApiUrl, ...intent, idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    if (supportTicketPageState.acceptAttachment(
+      operation, result, currentSupportTicketOwner(consoleShellState),
+    )) supportTicketPageState.completeIntent(currentSupportTicketOwner(consoleShellState), scope);
+  } catch (error) {
+    if (!isSupportTicketAbortError(error)) supportTicketPageState.reject(
+      operation, error, currentSupportTicketOwner(consoleShellState),
+    );
+  } finally {
+    supportTicketPageState.finish(operation);
+    renderCurrentSupportTicketPanel(consoleShellState);
+  }
+  return supportTicketPageState.snapshot();
+}
+
+async function submitSupportTicketEscalation(input, consoleShellState) {
+  const owner = currentSupportTicketOwner(consoleShellState);
+  if ((!owner?.canCreate && !owner?.canManage) || input?.confirmed !== true
+    || !supportTicketPageState.enter(owner)) return null;
+  const intent = {
+    ticketId: String(input.ticketId ?? ""), expectedRevision: Number(input.expectedRevision),
+    reasonCode: String(input.reasonCode ?? ""),
+  };
+  const scope = `escalation-${intent.ticketId}`;
+  const idempotencyKey = supportTicketPageState.idempotencyKey(
+    owner, scope, intent, () => createSupportIdempotencyKey("escalation"),
+  );
+  const operation = supportTicketPageState.beginMutation(owner, {
+    scope, ticketId: intent.ticketId,
+  });
+  if (!operation || !idempotencyKey) return null;
+  renderCurrentSupportTicketPanel(consoleShellState);
+  try {
+    const result = await escalateSupportTicket({
+      controlApiUrl: workspaceControlApiUrl,
+      actorDomain: "workspace",
+      ...intent,
+      idempotencyKey,
+      signal: operation.controller.signal,
+    });
+    if (supportTicketPageState.acceptEscalation(
+      operation, result, currentSupportTicketOwner(consoleShellState),
+    )) supportTicketPageState.completeIntent(currentSupportTicketOwner(consoleShellState), scope);
+  } catch (error) {
+    if (!isSupportTicketAbortError(error)) supportTicketPageState.reject(
+      operation, error, currentSupportTicketOwner(consoleShellState),
+    );
+  } finally {
+    supportTicketPageState.finish(operation);
+    renderCurrentSupportTicketPanel(consoleShellState);
+  }
+  return supportTicketPageState.snapshot();
 }
 
 function currentTenantDataLifecycleOwner(consoleShellState, mode = "read") {
@@ -12715,6 +12991,9 @@ async function switchConsoleNavigation(button, consoleShellState) {
   }
   if (itemId !== "migration-operations") {
     migrationOperationPageState.clear();
+  }
+  if (itemId !== "support-tickets") {
+    supportTicketPageState.clear();
   }
   if (itemId !== "growth-analytics") {
     // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
@@ -20062,6 +20341,13 @@ function clearMigrationOperationStateOnIdentityChange(previous, current) {
   if (migrationOperationReadIdentitySnapshot(previous)
     !== migrationOperationReadIdentitySnapshot(current)) {
     migrationOperationPageState.clear();
+  }
+}
+
+/** Destroy PRD-132 subjects, messages, attachment facts, and requests on any support read owner drift. */
+function clearSupportTicketStateOnIdentityChange(previous, current) {
+  if (supportTicketReadIdentitySnapshot(previous) !== supportTicketReadIdentitySnapshot(current)) {
+    supportTicketPageState.clear();
   }
 }
 

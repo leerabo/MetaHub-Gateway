@@ -2540,6 +2540,23 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   两轮自审、0123/API/Console、必要导航权限回归、静态检查、敏感审计、临时证据清理和批次门禁边界；下一
   权威项为 PRD-132，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
 
+## PRD-132 客户工单、SLA 与安全诊断协作（已完成）
+
+- `control-plane-api/src/metahub_control/customer_support/`：Workspace/Platform 双域工单 API、严格 DTO、客户
+  消息与内部备注分域加密、附件隔离扫描、持久 SLA clock/升级、满意度、幂等动作、事件/outbox 和 scheduler；
+  诊断详情仍由独立 SupportGrant/JIT 控制。
+- `shared-sdk/python/metahub_shared/customer_support/crypto.py`：按 Workspace、ticket、message、visibility 和
+  purpose 绑定 AAD 的正文加密信封，不向普通 DTO 投影密文、对象地址或本地路径。
+- `infra/migrations/0124_customer_support_ticket_sla_diagnostics.sql/.down.sql`：双域权限、ticket/message/
+  attachment/scan job/SLA clock/event/escalation/survey/event/outbox/action/scheduler、复合 owner、不变与状态触发器、
+  tenant deletion manifest、完整性 guard 和业务事实 down guard。
+- `console-web/src/lib/customerSupport.js` 与 `src/features/support-tickets/`：Cookie-only 严格双域 client、
+  exact DTO、owner/epoch/Abort 隔离，以及列表、消息、附件扫描、SLA、升级、解决/重开和满意度页面；Platform
+  队列只显示裁剪投影与内部协作，离页、登出和权限漂移销毁正文与草稿。
+- `docs/prd/PRD-132-customer-ticket-sla-secure-diagnostics.md` 与 `docs/testing/PRD-132-tests.md`：保存两轮
+  自审、0124/API/Console、必要导航权限回归、静态检查、敏感审计、临时证据清理和批次门禁边界；下一权威项
+  为 PRD-133，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

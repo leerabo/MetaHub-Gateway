@@ -105,6 +105,9 @@ EVENT_TYPE_BY_NAVIGATION = {
     "billing-disputes": "console.page_viewed",
     # PAGE-114 访问事件只记录外壳元数据，不携带 Endpoint、Token、Schema、参数或结果。
     "mcp-tools": "console.page_viewed",
+    # PRD-132 page events carry only the Console shell envelope; subjects, messages,
+    # file IDs, and SLA facts never enter this event.
+    "support-tickets": "console.page_viewed",
 }
 # 页面来源与视口只接受前端状态机声明的固定枚举，其他文本一律不进入审计表。
 EVENT_SOURCES = {"sidebar", "direct_hash"}
@@ -301,6 +304,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "评估旧租户、直连配置与私有部署，并执行可恢复的切换或回退。",
         "先创建只读评估，关闭全部阻断差异后再安排切换窗口。",
         46,
+    ),
+    NavigationDefinition(
+        "support-tickets",
+        "客户支持",
+        "支持",
+        "support-tickets",
+        ("support.ticket.read",),
+        "查看本 Workspace 工单、SLA、隔离附件与升级状态。",
+        "当前没有可见工单；具备创建权限时可提交新的支持请求。",
+        48,
     ),
     NavigationDefinition(
         "adapter-specs",
@@ -1178,6 +1191,9 @@ def _visible_navigation_items(
         "edge.offline_conflict.resolve",
         "migration.manage",
         "migration.read",
+        "support.ticket.create",
+        "support.ticket.manage",
+        "support.ticket.read",
     }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (

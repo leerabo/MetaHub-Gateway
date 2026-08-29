@@ -2194,16 +2194,95 @@ function eventTimeline(events) {
 
 function supportView(state, permissions) {
   const grants = state.grants?.grants ?? [];
+  const tickets = state.supportTickets?.items ?? [];
+  const selected = tickets.find((item) => item.ticket_id === state.selectedSupportTicketId)
+    ?? tickets[0] ?? null;
   return `
-    <header class="platform-page-heading"><div><p>Controlled Support</p><h1>支持授权</h1></div><span>${grants.length} 条记录</span></header>
-    ${permissions.has("platform.support.request") ? supportForms(permissions) : ""}
+    <header class="platform-page-heading"><div><p>Customer support</p><h1>支持授权与协作</h1></div><span>${tickets.length} 个工单 · ${grants.length} 条授权</span></header>
+    ${permissions.has("platform.support.ticket.read") ? platformSupportTicketQueue(state, tickets, selected, permissions) : ""}
+    ${permissions.has("platform.support.request") ? supportForms(permissions, selected?.workspace_id) : ""}
     ${state.diagnostics ? diagnostics(state.diagnostics) : ""}
-    <section class="platform-band"><div class="platform-table-wrap"><table><thead><tr><th>Workspace</th><th>状态</th><th>待审批</th><th>到期</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${grants.map((grant) => grantRow(grant, permissions)).join("") || emptyRow("暂无支持授权")}</tbody></table></div></section>`;
+    <section class="platform-band"><div class="platform-section-heading"><div><p>JIT grants</p><h2>诊断访问授权</h2></div><span>${grants.length} 条</span></div><div class="platform-table-wrap"><table><thead><tr><th>Workspace</th><th>状态</th><th>待审批</th><th>到期</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${grants.map((grant) => grantRow(grant, permissions)).join("") || emptyRow("暂无支持授权")}</tbody></table></div></section>`;
 }
 
-function supportForms(permissions) {
+function platformSupportTicketQueue(state, tickets, selected, permissions) {
+  return `<section class="platform-band platform-support-tickets">
+    <div class="platform-section-heading"><div><p>Prioritized queue</p><h2>客户工单队列</h2></div><span>${tickets.filter((item) => item.severity === "p1").length} 个 P1</span></div>
+    <form class="platform-support-ticket-filter" data-platform-support-ticket-filter-form>
+      <label><span>状态</span><select name="status">${supportOptions(state.supportTicketFilters?.status, [["", "全部"], ["open", "待受理"], ["triaged", "已分诊"], ["waiting_customer", "待客户"], ["waiting_platform", "待平台"], ["resolved", "已解决"], ["closed", "已关闭"]])}</select></label>
+      <label><span>优先级</span><select name="severity">${supportOptions(state.supportTicketFilters?.severity, [["", "全部"], ["p1", "P1"], ["p2", "P2"], ["p3", "P3"], ["p4", "P4"]])}</select></label>
+      <label><span>Workspace</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(state.supportTicketFilters?.workspaceId ?? "")}" /></label>
+      <button type="submit">筛选</button>
+    </form>
+    <div class="platform-support-ticket-layout">
+      <div class="platform-support-ticket-list" role="list" aria-label="支持工单">
+        ${tickets.map((ticket) => platformSupportTicketButton(ticket, selected?.ticket_id)).join("") || '<p class="platform-empty">当前筛选下没有工单</p>'}
+      </div>
+      <div class="platform-support-ticket-detail">${selected ? platformSupportTicketDetail(selected, permissions) : '<p class="platform-empty">选择工单查看协作详情</p>'}</div>
+    </div>
+  </section>`;
+}
+
+function platformSupportTicketButton(ticket, selectedId) {
+  return `<button type="button" role="listitem" data-platform-action="support-ticket-select" data-ticket-id="${escapeAttribute(ticket.ticket_id)}" class="${ticket.ticket_id === selectedId ? "is-active" : ""}">
+    <span><b data-severity="${escapeAttribute(ticket.severity)}">${escapeHtml(ticket.severity.toUpperCase())}</b><strong>${escapeHtml(ticket.subject)}</strong></span>
+    <small>${escapeHtml(ticket.workspace_id)} · ${escapeHtml(supportStatusLabel(ticket.status))}</small>
+    <time>${formatTime(ticket.updated_at)}</time>
+  </button>`;
+}
+
+function platformSupportTicketDetail(ticket, permissions) {
+  const canManage = permissions.has("platform.support.ticket.manage");
+  const canManageSla = permissions.has("platform.support.sla.manage");
+  return `<article>
+    <header><div><span>${escapeHtml(ticket.severity.toUpperCase())} · ${escapeHtml(ticket.category)}</span><h3>${escapeHtml(ticket.subject)}</h3><code>${escapeHtml(ticket.ticket_id)}</code></div>${status(ticket.status)}</header>
+    <dl class="platform-support-sla${ticket.sla.state === "running" && Date.parse(ticket.sla.risk_at) <= Date.now() ? " is-risk" : ""}">
+      <div><dt>SLA</dt><dd>${escapeHtml(ticket.sla.state)}</dd></div><div><dt>风险阈值</dt><dd>${formatTime(ticket.sla.risk_at)}</dd></div><div><dt>解决时限</dt><dd>${formatTime(ticket.sla.resolution_deadline_at)}</dd></div><div><dt>升级</dt><dd>${number(ticket.sla.escalation_generation)} / ${number(ticket.sla.generation)}</dd></div>
+    </dl>
+    <section class="platform-support-section"><div class="platform-section-heading"><h4>协作时间线</h4><span>${ticket.messages.length} 条</span></div>
+      <ol class="platform-support-timeline">${ticket.messages.map(platformSupportMessage).join("") || '<li class="platform-empty">暂无消息</li>'}</ol>
+      ${canManage && ticket.status !== "closed" ? platformSupportMessageForm(ticket) : ""}
+    </section>
+    <section class="platform-support-section"><div class="platform-section-heading"><h4>安全诊断附件</h4><span>${ticket.attachments.length} 个</span></div>
+      <div class="platform-support-attachments">${ticket.attachments.map((item) => `<div data-status="${escapeAttribute(item.status)}"><strong>${escapeHtml(supportAttachmentLabel(item.status))}</strong><span>${escapeHtml(item.intent_code)} · ${escapeHtml(item.media_type)}</span><small>${number(item.size_bytes)} bytes · ${escapeHtml(item.scan_outcome ?? "pending")}</small></div>`).join("") || '<p class="platform-empty">暂无诊断附件</p>'}</div>
+    </section>
+    <section class="platform-support-section"><div class="platform-section-heading"><h4>升级记录</h4><span>${ticket.escalations.length} 次</span></div>
+      <ol class="platform-support-escalations">${ticket.escalations.map((item) => `<li><strong>${escapeHtml(item.source_code)}</strong><span>${escapeHtml(item.reason_code)} · ${escapeHtml(item.status)}</span><time>${formatTime(item.created_at)}</time></li>`).join("") || '<li class="platform-empty">暂无升级</li>'}</ol>
+      ${canManage && !["resolved", "closed"].includes(ticket.status) ? platformSupportEscalationForm(ticket) : ""}
+    </section>
+    ${canManage ? platformSupportWorkflowForms(ticket, canManageSla) : '<p class="platform-restricted">当前为只读支持队列</p>'}
+  </article>`;
+}
+
+function platformSupportMessage(item) {
+  return `<li class="${item.visibility === "internal" ? "is-internal" : ""}"><div><strong>${item.visibility === "internal" ? "内部备注" : item.author_domain === "customer" ? "客户" : "平台支持"}</strong><time>${formatTime(item.created_at)}</time></div><p>${escapeHtml(item.body)}</p></li>`;
+}
+
+function platformSupportMessageForm(ticket) {
+  return `<form class="platform-support-message-form" data-platform-support-message-form autocomplete="off"><input name="ticketId" type="hidden" value="${escapeAttribute(ticket.ticket_id)}" /><input name="revision" type="hidden" value="${number(ticket.revision)}" /><label><span>可见性</span><select name="visibility"><option value="customer">客户可见回复</option><option value="internal">内部备注</option></select></label><label><span>消息</span><textarea name="message" minlength="1" maxlength="8000" rows="3" required></textarea></label><button class="platform-primary" type="submit">发送</button></form>`;
+}
+
+function platformSupportWorkflowForms(ticket, canManageSla) {
+  return `<section class="platform-support-operations">
+    <form data-platform-support-workflow-form autocomplete="off"><h4>流程与分派</h4><input name="ticketId" type="hidden" value="${escapeAttribute(ticket.ticket_id)}" /><input name="revision" type="hidden" value="${number(ticket.revision)}" /><label><span>状态</span><select name="status">${supportOptions(ticket.status, [["open", "待受理"], ["triaged", "已分诊"], ["waiting_customer", "待客户"], ["waiting_platform", "待平台"], ["resolved", "已解决"], ["closed", "已关闭"]])}</select></label><label><span>处理人 Operator ID</span><input name="assigneeOperatorId" pattern="pto_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(ticket.assignee_operator_id ?? "")}" /></label><button type="submit">保存流程</button></form>
+    ${canManageSla ? `<form data-platform-support-sla-form><h4>SLA 时钟</h4><input name="ticketId" type="hidden" value="${escapeAttribute(ticket.ticket_id)}" /><input name="revision" type="hidden" value="${number(ticket.revision)}" /><label><span>动作</span><select name="slaAction"><option value="pause_policy">策略暂停</option><option value="resume">恢复计时</option></select></label><label><span>原因</span><select name="reasonCode"><option value="approved_maintenance">批准维护</option><option value="external_dependency">外部依赖</option><option value="support_resume">恢复处理</option></select></label><button type="submit">更新 SLA</button></form>` : ""}
+  </section>`;
+}
+
+function platformSupportEscalationForm(ticket) {
+  return `<form class="platform-support-escalation-form" data-platform-support-escalation-form><input name="ticketId" type="hidden" value="${escapeAttribute(ticket.ticket_id)}" /><input name="revision" type="hidden" value="${number(ticket.revision)}" /><label><span>升级原因</span><select name="reasonCode"><option value="platform_manual_review">人工升级</option><option value="security_impact">安全影响</option><option value="sla_intervention">SLA 干预</option></select></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认升级</span></label><button type="submit">升级工单</button></form>`;
+}
+
+function supportOptions(selected, options) {
+  return options.map(([value, label]) => `<option value="${escapeAttribute(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+}
+
+function supportStatusLabel(value) { return ({ open: "待受理", triaged: "已分诊", waiting_customer: "待客户", waiting_platform: "待平台", resolved: "已解决", closed: "已关闭" })[value] ?? value; }
+function supportAttachmentLabel(value) { return ({ quarantined: "隔离扫描中", available: "扫描通过", rejected: "已拒绝", scan_timeout: "扫描超时" })[value] ?? value; }
+
+function supportForms(permissions, workspaceId = "") {
   return `<section class="platform-band platform-form-split">
-    <form data-support-grant-form autocomplete="off"><div class="platform-section-heading"><div><p>JIT Grant</p><h2>申请诊断访问</h2></div></div><label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label><label><span>原因代码</span><select name="reasonCode"><option value="workspace_diagnostics">Workspace diagnostics</option><option value="incident_response">Incident response</option></select></label><label><span>时限</span><input name="durationMinutes" type="number" min="1" max="30" value="15" required /></label><button class="platform-primary" type="submit">提交申请</button></form>
+    <form data-support-grant-form autocomplete="off"><div class="platform-section-heading"><div><p>JIT Grant</p><h2>申请诊断访问</h2></div></div><label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" value="${escapeAttribute(workspaceId)}" required /></label><label><span>原因代码</span><select name="reasonCode"><option value="workspace_diagnostics">Workspace diagnostics</option><option value="incident_response">Incident response</option></select></label><label><span>时限</span><input name="durationMinutes" type="number" min="1" max="30" value="15" required /></label><button class="platform-primary" type="submit">提交申请</button></form>
     ${permissions.has("platform.break_glass.use") ? `<form data-break-glass-form autocomplete="off"><div class="platform-section-heading"><div><p>Emergency</p><h2>Break-glass</h2></div></div><label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required /></label><label><span>原因代码</span><select name="reasonCode"><option value="incident_containment">Incident containment</option><option value="service_recovery">Service recovery</option></select></label><label><span>动态验证码</span><input name="totpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><label class="platform-check"><input name="confirmed" type="checkbox" required /><span>确认启动紧急访问</span></label><button class="platform-danger" type="submit">启动 Break-glass</button></form>` : ""}
   </section>`;
 }

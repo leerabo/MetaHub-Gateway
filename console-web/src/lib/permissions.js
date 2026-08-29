@@ -124,6 +124,10 @@ export const PERMISSIONS = Object.freeze({
   EDGE_OFFLINE_CONFLICT_RESOLVE: "edge.offline_conflict.resolve",
   MIGRATION_READ: "migration.read",
   MIGRATION_MANAGE: "migration.manage",
+  // PRD-132 ticket read/create/manage are independent Workspace capabilities.
+  SUPPORT_TICKET_READ: "support.ticket.read",
+  SUPPORT_TICKET_CREATE: "support.ticket.create",
+  SUPPORT_TICKET_MANAGE: "support.ticket.manage",
   // PRD-122 遥测状态、策略和账务聚合分别授权，不能从 Deployment 权限推导。
   EDGE_TELEMETRY_READ: "edge.telemetry.read",
   EDGE_TELEMETRY_MANAGE: "edge.telemetry.manage",

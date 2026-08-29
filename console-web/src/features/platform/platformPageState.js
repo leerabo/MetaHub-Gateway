@@ -144,6 +144,10 @@ export function createPlatformPageController({
     grants: null,
     audit: null,
     diagnostics: null,
+    supportTickets: null,
+    supportTicketFilters: { status: "", severity: "", workspaceId: "" },
+    selectedSupportTicketId: null,
+    supportTicketIntent: null,
     workspaces: null,
     workspaceFilters: {},
     workspaceCursor: null,
@@ -202,7 +206,7 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
-        || state.offlineBundleIntent)) return false;
+        || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const ticket = begin();
       state.loading = true;
       state.error = null;
@@ -229,14 +233,14 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
-        || state.offlineBundleIntent)) return false;
+        || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : "overview";
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "provider-catalog", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
-        "offline-bundles",
+        "offline-bundles", "support",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -283,6 +287,10 @@ export function createPlatformPageController({
         } else if (state.view === "offline-bundles") {
           state.offlineBundles = null;
           state.offlineBundleIntent = null;
+        } else if (state.view === "support") {
+          state.supportTickets = null;
+          state.selectedSupportTicketId = null;
+          state.supportTicketIntent = null;
         }
         state.loading = false;
       }
@@ -323,6 +331,93 @@ export function createPlatformPageController({
       if (state.view === "edge-backups" && !state.edgeBackups) void loadEdgeBackups();
       if (state.view === "offline-bundles" && !state.offlineBundles) {
         void loadOfflineBundles();
+      }
+      if (state.view === "support" && !state.supportTickets) void loadSupportTickets();
+    },
+    async filterSupportTickets(filters = {}) {
+      if (state.view !== "support") return false;
+      state.supportTicketFilters = {
+        status: String(filters.status ?? ""),
+        severity: String(filters.severity ?? ""),
+        workspaceId: String(filters.workspaceId ?? "").trim(),
+      };
+      return loadSupportTickets();
+    },
+    selectSupportTicket(ticketId) {
+      if (state.view !== "support"
+        || !state.supportTickets?.items?.some((item) => item.ticket_id === ticketId)) return false;
+      state.selectedSupportTicketId = ticketId;
+      state.feedback = null;
+      render();
+      return true;
+    },
+    async mutateSupportTicket(input = {}) {
+      if (state.view !== "support" || state.loading
+        || !currentPermissions().has("platform.support.ticket.manage")
+        || typeof api.patchSupportTicket !== "function") return false;
+      const ticketId = String(input.ticketId ?? "");
+      const expectedRevision = Number(input.expectedRevision);
+      const changes = input.changes;
+      const fingerprint = JSON.stringify({ ticketId, expectedRevision, changes });
+      const idempotencyKey = state.supportTicketIntent?.fingerprint === fingerprint
+        ? state.supportTicketIntent.idempotencyKey
+        : (api.supportIdempotencyKey?.("patch") ?? newIdempotencyKey());
+      state.supportTicketIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const result = await api.patchSupportTicket({
+          ticketId, expectedRevision, changes, idempotencyKey, signal: ticket.signal,
+        });
+        if (!currentSupportTicket(ticket)) return false;
+        state.supportTickets = upsertSupportTicket(state.supportTickets, result.ticket);
+        state.selectedSupportTicketId = result.ticket.ticket_id;
+        state.supportTicketIntent = null;
+        state.loading = false;
+        state.feedback = input.feedback ?? "工单已更新。";
+        render();
+        return true;
+      } catch (error) {
+        if (![0, 503].includes(Number(error?.status))) state.supportTicketIntent = null;
+        return fail(ticket, error);
+      }
+    },
+    async escalateSupportTicket(input = {}) {
+      if (state.view !== "support" || state.loading || input.confirmed !== true
+        || !currentPermissions().has("platform.support.ticket.manage")
+        || typeof api.escalateSupportTicket !== "function") return false;
+      const intent = {
+        ticketId: String(input.ticketId ?? ""),
+        expectedRevision: Number(input.expectedRevision),
+        reasonCode: String(input.reasonCode ?? ""),
+      };
+      const fingerprint = JSON.stringify(intent);
+      const idempotencyKey = state.supportTicketIntent?.fingerprint === fingerprint
+        ? state.supportTicketIntent.idempotencyKey
+        : (api.supportIdempotencyKey?.("escalation") ?? newIdempotencyKey());
+      state.supportTicketIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      try {
+        const result = await api.escalateSupportTicket({
+          ...intent, idempotencyKey, signal: ticket.signal,
+        });
+        if (!currentSupportTicket(ticket)) return false;
+        state.supportTickets = appendSupportEscalation(
+          state.supportTickets, intent.ticketId, result,
+        );
+        state.supportTicketIntent = null;
+        state.loading = false;
+        state.feedback = "工单已升级。";
+        render();
+        return true;
+      } catch (error) {
+        if (![0, 503].includes(Number(error?.status))) state.supportTicketIntent = null;
+        return fail(ticket, error);
       }
     },
     async filterEdgeFleet(filters) {
@@ -1886,6 +1981,7 @@ export function createPlatformPageController({
         unitEconomics: null,
         residencyEvidence: null,
         grants: null,
+        supportTickets: null,
         audit: null,
         workspaces: null,
         workspaceDetail: null,
@@ -2085,6 +2181,15 @@ export function createPlatformPageController({
           || permissions.has("platform.support.approve"))) {
         tasks.push(api.grants({ signal: ticket.signal }).then((value) => { next.grants = value; }));
       }
+      if (state.view === "support" && permissions.has("platform.support.ticket.read")
+        && typeof api.supportTickets === "function") {
+        tasks.push(api.supportTickets({
+          status: state.supportTicketFilters.status,
+          severity: state.supportTicketFilters.severity,
+          workspaceId: state.supportTicketFilters.workspaceId,
+          signal: ticket.signal,
+        }).then((value) => { next.supportTickets = value; }));
+      }
       if (!fleetOnly && permissions.has("platform.audit.read")) {
         tasks.push(api.audit({ signal: ticket.signal }).then((value) => { next.audit = value; }));
       }
@@ -2110,6 +2215,11 @@ export function createPlatformPageController({
       await Promise.all(tasks);
       if (!current(ticket)) return false;
       Object.assign(state, next);
+      if (state.supportTickets) {
+        state.selectedSupportTicketId = state.supportTickets.items.some(
+          (item) => item.ticket_id === state.selectedSupportTicketId,
+        ) ? state.selectedSupportTicketId : state.supportTickets.items[0]?.ticket_id ?? null;
+      }
       if (!state.navigation.some((item) => item.id === "feature-rollouts")) {
         state.featureCommandIntent = null;
       }
@@ -2163,6 +2273,11 @@ export function createPlatformPageController({
         state.offlineBundles = null;
         state.offlineBundleIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "support")) {
+        state.supportTickets = null;
+        state.selectedSupportTicketId = null;
+        state.supportTicketIntent = null;
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -2186,6 +2301,33 @@ export function createPlatformPageController({
       });
       if (!current(ticket)) return false;
       state.workspaces = workspaces;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadSupportTickets() {
+    if (state.view !== "support" || typeof api.supportTickets !== "function"
+      || !currentPermissions().has("platform.support.ticket.read")) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const response = await api.supportTickets({
+        status: state.supportTicketFilters.status,
+        severity: state.supportTicketFilters.severity,
+        workspaceId: state.supportTicketFilters.workspaceId,
+        signal: ticket.signal,
+      });
+      if (!currentSupportTicket(ticket)) return false;
+      state.supportTickets = response;
+      state.selectedSupportTicketId = response.items.some(
+        (item) => item.ticket_id === state.selectedSupportTicketId,
+      ) ? state.selectedSupportTicketId : response.items[0]?.ticket_id ?? null;
       state.loading = false;
       render();
       return true;
@@ -3467,6 +3609,53 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-support-ticket-filter-form]")) {
+        controller.filterSupportTickets({
+          status: data.get("status"),
+          severity: data.get("severity"),
+          workspaceId: data.get("workspaceId"),
+        });
+      }
+      if (form.matches("[data-platform-support-message-form]")) {
+        const message = String(data.get("message") ?? "").trim();
+        form.querySelectorAll("textarea").forEach((node) => { node.value = ""; });
+        controller.mutateSupportTicket({
+          ticketId: data.get("ticketId"),
+          expectedRevision: Number(data.get("revision")),
+          changes: {
+            message,
+            message_visibility: data.get("visibility"),
+          },
+          feedback: data.get("visibility") === "internal" ? "内部备注已保存。" : "客户回复已发送。",
+        });
+      }
+      if (form.matches("[data-platform-support-workflow-form]")) {
+        const changes = { status: data.get("status") };
+        const assignee = String(data.get("assigneeOperatorId") ?? "").trim();
+        if (assignee) changes.assignee_operator_id = assignee;
+        controller.mutateSupportTicket({
+          ticketId: data.get("ticketId"),
+          expectedRevision: Number(data.get("revision")),
+          changes,
+          feedback: "工单流程状态已更新。",
+        });
+      }
+      if (form.matches("[data-platform-support-sla-form]")) {
+        controller.mutateSupportTicket({
+          ticketId: data.get("ticketId"),
+          expectedRevision: Number(data.get("revision")),
+          changes: { sla_action: data.get("slaAction"), reason_code: data.get("reasonCode") },
+          feedback: "SLA 时钟已更新。",
+        });
+      }
+      if (form.matches("[data-platform-support-escalation-form]")) {
+        controller.escalateSupportTicket({
+          ticketId: data.get("ticketId"),
+          expectedRevision: Number(data.get("revision")),
+          reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-support-grant-form]")) controller.createGrant({ workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), durationMinutes: data.get("durationMinutes") });
       if (form.matches("[data-break-glass-form]")) {
         const input = { workspaceId: data.get("workspaceId"), reasonCode: data.get("reasonCode"), totpCode: data.get("totpCode") };
@@ -3500,6 +3689,9 @@ export function createPlatformPageController({
       if (action === "refresh") controller.refresh();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
+      if (action === "support-ticket-select") {
+        controller.selectSupportTicket(target.dataset.ticketId);
+      }
       if (action === "prepare-revoke") controller.prepareRevoke(target.dataset.grantId);
       if (action === "cancel-confirm") controller.cancelConfirmation();
       if (action === "confirm-revoke") controller.confirmRevoke(target.dataset.grantId);
@@ -3586,6 +3778,10 @@ export function createPlatformPageController({
     return { generation, signal: request.signal };
   }
   function current(ticket) { return ticket.generation === generation && !ticket.signal.aborted; }
+  function currentSupportTicket(ticket) {
+    return current(ticket) && state.view === "support"
+      && currentPermissions().has("platform.support.ticket.read");
+  }
   function currentEdgeFleetTicket(ticket) {
     return current(ticket) && state.view === "edge-fleet"
       && currentPermissions().has("platform.edge_fleet.read");
@@ -3697,6 +3893,10 @@ export function createPlatformPageController({
     state.backup = null;
     state.backupIntent = null;
     state.grants = null;
+    state.supportTickets = null;
+    state.supportTicketFilters = { status: "", severity: "", workspaceId: "" };
+    state.selectedSupportTicketId = null;
+    state.supportTicketIntent = null;
     state.audit = null;
     state.diagnostics = null;
     state.workspaces = null;
@@ -3711,6 +3911,26 @@ export function createPlatformPageController({
     clearProtectedFacts();
   }
   return controller;
+}
+
+function upsertSupportTicket(response, ticket) {
+  const items = [...(response?.items ?? [])];
+  const index = items.findIndex((item) => item.ticket_id === ticket.ticket_id);
+  if (index < 0) items.unshift(ticket); else items[index] = ticket;
+  return Object.freeze({ ...(response ?? {}), items: Object.freeze(items) });
+}
+
+function appendSupportEscalation(response, ticketId, result) {
+  const current = response?.items?.find((item) => item.ticket_id === ticketId);
+  if (!current) return response;
+  return upsertSupportTicket(response, Object.freeze({
+    ...current,
+    revision: result.ticket_revision,
+    escalations: Object.freeze([
+      ...current.escalations.filter((item) => item.escalation_id !== result.escalation.escalation_id),
+      result.escalation,
+    ]),
+  }));
 }
 
 function upsertRelease(response, release) {
@@ -3929,13 +4149,14 @@ function replacePlatformHash(view) {
 }
 
 function isPlatformSessionFailure(error) {
-  return error instanceof PlatformApiError
-    && error.status === 401
-    && /^platform\.session_(?:required|invalid|expired|revoked)$/u.test(error.code);
+  return Number(error?.status) === 401
+    && /^(?:platform\.session_(?:required|invalid|expired|revoked)|workspace_session\.(?:required|credential_conflict))$/u.test(String(error?.code ?? ""));
 }
 
 function safeError(error) {
-  if (error instanceof PlatformApiError) {
+  if (error instanceof PlatformApiError || (
+    error && typeof error.code === "string" && Number.isFinite(Number(error.status))
+  )) {
     return {
       message: error.message,
       requestId: error.requestId,

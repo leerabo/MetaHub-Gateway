@@ -1295,3 +1295,84 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-edge-release-actions { min-width: 0; }
   .platform-offline-table form { min-width: 0; }
 }
+
+/* PRD-132 reuses the Platform support view for the prioritized queue and JIT entry. */
+.platform-support-ticket-filter { display: grid; grid-template-columns: repeat(2,minmax(130px,.6fr)) minmax(210px,1fr) auto; align-items: end; gap: 10px; margin-bottom: 18px; }
+.platform-support-ticket-filter input,
+.platform-support-ticket-filter select,
+.platform-support-ticket-filter button,
+.platform-support-message-form textarea,
+.platform-support-message-form select,
+.platform-support-message-form button,
+.platform-support-operations input,
+.platform-support-operations select,
+.platform-support-operations button,
+.platform-support-escalation-form select,
+.platform-support-escalation-form button { width: 100%; min-width: 0; min-height: 38px; border: 1px solid #bdc7bf; border-radius: 4px; background: #fff; color: var(--ink); padding: 7px 9px; letter-spacing: 0; }
+.platform-support-ticket-filter button,
+.platform-support-message-form button,
+.platform-support-operations button,
+.platform-support-escalation-form button { cursor: pointer; font-weight: 700; }
+.platform-support-message-form button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
+.platform-support-ticket-layout { display: grid; grid-template-columns: minmax(250px,330px) minmax(0,1fr); min-height: 560px; border-block: 1px solid var(--line); }
+.platform-support-ticket-list { min-width: 0; border-right: 1px solid var(--line); padding-right: 12px; }
+.platform-support-ticket-list > button { width: 100%; display: grid; gap: 7px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); padding: 13px 9px; text-align: left; cursor: pointer; }
+.platform-support-ticket-list > button.is-active { border-left: 3px solid var(--green); background: var(--green-soft); }
+.platform-support-ticket-list > button > span { display: flex; align-items: flex-start; gap: 8px; }
+.platform-support-ticket-list b { flex: 0 0 auto; border-radius: 3px; background: #edf0ed; padding: 3px 5px; font-size: 10px; }
+.platform-support-ticket-list b[data-severity="p1"] { background: var(--red-soft); color: var(--red); }
+.platform-support-ticket-list strong { min-width: 0; overflow-wrap: anywhere; }
+.platform-support-ticket-list small,
+.platform-support-ticket-list time { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.platform-support-ticket-detail { min-width: 0; padding: 18px 0 0 22px; }
+.platform-support-ticket-detail > article > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.platform-support-ticket-detail h3,
+.platform-support-ticket-detail h4 { margin: 0; letter-spacing: 0; }
+.platform-support-ticket-detail h3 { margin: 4px 0; font-size: 18px; overflow-wrap: anywhere; }
+.platform-support-ticket-detail header span,
+.platform-support-ticket-detail header code { color: var(--muted); font-size: 11px; }
+.platform-support-sla { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); margin: 0; border-bottom: 1px solid var(--line); }
+.platform-support-sla > div { min-width: 0; padding: 13px 8px 13px 0; }
+.platform-support-sla dt { color: var(--muted); font-size: 10px; }
+.platform-support-sla dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+.platform-support-sla.is-risk { border-left: 3px solid var(--red); background: #fff8f7; padding-left: 10px; }
+.platform-support-section { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.platform-support-section .platform-section-heading { margin-bottom: 10px; }
+.platform-support-timeline,
+.platform-support-escalations { margin: 0; padding: 0; list-style: none; }
+.platform-support-timeline li { padding: 11px 0; border-bottom: 1px solid #e8ece8; }
+.platform-support-timeline li.is-internal { border-left: 3px solid var(--amber); background: var(--amber-soft); padding-inline: 10px; }
+.platform-support-timeline li > div { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; }
+.platform-support-timeline p { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.platform-support-message-form { display: grid; grid-template-columns: minmax(130px,.35fr) minmax(0,1fr) auto; align-items: end; gap: 10px; margin-top: 12px; }
+.platform-support-message-form textarea { min-height: 80px; resize: vertical; }
+.platform-support-attachments { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; background: var(--line); }
+.platform-support-attachments > div { min-width: 0; display: grid; gap: 4px; background: #fff; padding: 11px; }
+.platform-support-attachments span,
+.platform-support-attachments small { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.platform-support-attachments [data-status="scan_timeout"] { border-left: 3px solid var(--amber); }
+.platform-support-attachments [data-status="rejected"] { border-left: 3px solid var(--red); }
+.platform-support-escalations li { display: grid; grid-template-columns: minmax(100px,.5fr) minmax(0,1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid #e8ece8; font-size: 11px; }
+.platform-support-escalations span,
+.platform-support-escalations time { color: var(--muted); }
+.platform-support-escalation-form { display: grid; grid-template-columns: minmax(180px,1fr) auto auto; align-items: end; gap: 10px; margin-top: 12px; }
+.platform-support-operations { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; padding-top: 18px; }
+.platform-support-operations form { min-width: 0; display: grid; align-content: start; gap: 10px; }
+.platform-support-operations form + form { border-left: 1px solid var(--line); padding-left: 24px; }
+.platform-support-operations h4 { margin-bottom: 2px; }
+
+@media (max-width: 900px) {
+  .platform-support-ticket-layout { grid-template-columns: minmax(0,1fr); }
+  .platform-support-ticket-list { max-height: 300px; overflow: auto; border-right: 0; border-bottom: 1px solid var(--line); padding-right: 0; }
+  .platform-support-ticket-detail { padding-left: 0; }
+}
+@media (max-width: 600px) {
+  .platform-support-ticket-filter,
+  .platform-support-message-form,
+  .platform-support-escalation-form,
+  .platform-support-operations { grid-template-columns: minmax(0,1fr); }
+  .platform-support-sla,
+  .platform-support-attachments { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .platform-support-operations form + form { border-top: 1px solid var(--line); border-left: 0; padding-top: 18px; padding-left: 0; }
+  .platform-support-escalations li { grid-template-columns: minmax(0,1fr); }
+}

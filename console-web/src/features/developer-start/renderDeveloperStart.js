@@ -25,6 +25,7 @@ import { renderMcpTools } from "../mcp-tools/renderMcpTools.js";
 import { renderLocalEndpoints } from "../local-models/renderLocalEndpoints.js";
 import { renderPrivateGateways } from "../private-gateways/renderPrivateGateways.js";
 import { renderMigrationOperations } from "../migration-operations/renderMigrationOperations.js";
+import { renderSupportTickets } from "../support-tickets/renderSupportTickets.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
 import {
@@ -521,6 +522,12 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "migration-operations":
       return renderMigrationOperationsSection(
         options.migrationOperationsState,
+        options.authContext,
+        options.consoleShellState,
+      );
+    case "support-tickets":
+      return renderSupportTicketsSection(
+        options.supportTicketsState,
         options.authContext,
         options.consoleShellState,
       );
@@ -1034,6 +1041,14 @@ function renderMigrationOperationsSection(state, authContext, consoleShellState)
   const html = renderMigrationOperations(state, authContext, consoleShellState);
   return html
     ? `<section class="panel migration-operations-panel" aria-labelledby="migration-operations-title">${html}</section>`
+    : "";
+}
+
+/** Render PRD-132 only for the exact backend-authorized support.ticket.read owner. */
+function renderSupportTicketsSection(state, authContext, consoleShellState) {
+  const html = renderSupportTickets(state, authContext, consoleShellState);
+  return html
+    ? `<section class="panel support-tickets-panel" aria-labelledby="support-tickets-title">${html}</section>`
     : "";
 }
 

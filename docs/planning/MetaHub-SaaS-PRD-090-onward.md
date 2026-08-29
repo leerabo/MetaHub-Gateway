@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**PRD-090..131 已完成，当前下一项为 PRD-132**
+状态：**PRD-090..132 已完成，当前下一项为 PRD-133**
 
 基线日期：2026-08-20
 
@@ -126,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构基线至 PRD-131 旧租户、直连与私有部署迁移切换向导已完成；S5/G5 已关闭，S6 已建立 0123、固定 owner-qualified 来源适配器、只读差异摘要、Workspace/JIT 权限、持久 checkpoint、可恢复 cutover/rollback 和 Migration Center；权威下一项为 PRD-132。完整 G6 数据库、集成、FLOW、浏览器、性能、安全、兼容性和 72 小时长稳在 PRD-138 后统一执行，并且只能形成 release candidate，不能公开 GA。
+1. PRD-090 架构基线至 PRD-132 客户工单、SLA 与安全诊断协作已完成；S5/G5 已关闭，S6 已建立 0123/0124、可恢复客户迁移、加密工单正文、附件隔离扫描、持久 SLA/升级和 Workspace/Platform 双域支持协作；权威下一项为 PRD-133。完整 G6 数据库、集成、FLOW、浏览器、性能、安全、兼容性和 72 小时长稳在 PRD-138 后统一执行，并且只能形成 release candidate，不能公开 GA。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。

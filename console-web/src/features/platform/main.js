@@ -139,6 +139,12 @@ import {
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
 } from "../../lib/identity.js";
+import {
+  createSupportIdempotencyKey,
+  escalateSupportTicket,
+  listSupportTickets,
+  patchSupportTicket,
+} from "../../lib/customerSupport.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -178,6 +184,16 @@ if (root) {
       revokeGrant: (input) => revokeSupportGrant({ controlApiUrl, ...input }),
       supportSession: (input) => createSupportSession({ controlApiUrl, ...input }),
       diagnostics: (input) => getSupportDiagnostics({ controlApiUrl, ...input }),
+      supportTickets: (input) => listSupportTickets({
+        controlApiUrl, actorDomain: "platform", ...input,
+      }),
+      patchSupportTicket: (input) => patchSupportTicket({
+        controlApiUrl, actorDomain: "platform", ...input,
+      }),
+      escalateSupportTicket: (input) => escalateSupportTicket({
+        controlApiUrl, actorDomain: "platform", ...input,
+      }),
+      supportIdempotencyKey: (scope) => createSupportIdempotencyKey(scope),
       breakGlass: (input) => createBreakGlassSession({ controlApiUrl, ...input }),
       audit: (input) => listPlatformAudit({ controlApiUrl, ...input }),
       billingSummary: (input) => listPlatformBillingSummary({ controlApiUrl, ...input }),

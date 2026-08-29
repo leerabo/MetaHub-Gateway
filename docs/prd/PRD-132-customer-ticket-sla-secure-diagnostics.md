@@ -1,6 +1,6 @@
 # PRD-132 客户工单、SLA 与安全诊断协作
 
-状态：设计冻结，尚未实现。依赖 PRD-095/105/109/112/125/126；范围以 Excel PRD-132 为准。
+状态：已完成。依赖 PRD-095/105/109/112/125/126；范围以 Excel PRD-132 为准。
 
 ## Excel 权威合同
 
@@ -69,3 +69,8 @@ POST/PATCH 使用 CSRF、Idempotency-Key、If-Match、严格字段、no-store �
 附件路径穿越、压缩、恶意内容、超时和重复上传；SLA pause/resume/risk/escalation、重启接管和迟到 worker；
 SupportGrant 缺失/过期/撤销；通知/outbox；列表和 5 分钟升级 SLO；真实 Workspace/Platform 浏览器、三缩放、
 键盘/焦点、敏感扫描和静止终态。完整 G6 留到 PRD-138 后统一执行。
+
+实现已交付 0124、Workspace/Platform Cookie-only API、严格 DTO、客户消息与内部备注分域加密、附件隔离扫描、
+持久 SLA clock/升级、满意度和双域 Console；聚焦迁移/API、Console、必要导航权限回归和静态检查通过。真实
+数据库矩阵、FLOW、浏览器、性能、安全、兼容性和 72 小时长稳仍按批次规则留到 PRD-138 后统一执行，不能由
+本条专项结果替代。

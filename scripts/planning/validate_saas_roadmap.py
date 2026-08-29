@@ -297,6 +297,18 @@ REQUIRED_DOCS = {
         "PRD-132",
         "0123",
     ),
+    ROOT / "docs/prd/PRD-132-customer-ticket-sla-secure-diagnostics.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0124",
+    ),
+    ROOT / "docs/testing/PRD-132-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-133",
+        "0124",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -333,7 +345,7 @@ SECRET_PATTERNS = {
     "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
 
-POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations"})
+POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations", "support-tickets"})
 
 ROLE_ALIAS_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:ops|security|support|billing|finance|verification_reviewer)(?![A-Za-z0-9_])"
@@ -976,10 +988,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 123
+        and migration_versions[-1] == 124
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0123 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0124 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1154,6 +1166,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0123_customer_migration_cutover_operations.down.sql"
         ).is_file(),
         "PRD-131 owns reversible migration 0123 with guarded customer migration rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0124_customer_support_ticket_sla_diagnostics.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0124_customer_support_ticket_sla_diagnostics.down.sql"
+        ).is_file(),
+        "PRD-132 owns reversible migration 0124 with guarded customer support rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)
