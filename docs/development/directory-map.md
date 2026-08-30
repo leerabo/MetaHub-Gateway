@@ -2557,6 +2557,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   自审、0124/API/Console、必要导航权限回归、静态检查、敏感审计、临时证据清理和批次门禁边界；下一权威项
   为 PRD-133，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
 
+## PRD-133 公共控制面 API、SDK 版本与废弃策略（已完成）
+
+- `control-plane-api/src/metahub_control/developer_contracts/`：Developer Bearer 与 Platform Cookie 双域路由、
+  strict DTO、显式 public registry、兼容 diff、双人批准、SDK 撤回、90 天废弃、持久 sunset scheduler、
+  幂等命令、事件/outbox 和外部 Ed25519/KMS 签名边界。
+- `shared-sdk/python/metahub_shared/developer_contracts/registry.py`：canonical public contract、Webhook exact
+  schema、breaking-change 分类、Python/JavaScript 可复现 SDK ZIP、manifest、SBOM/provenance 摘要和签名载荷。
+- `infra/migrations/0125_public_api_sdk_lifecycle.sql/.down.sql`：API version/snapshot、SDK release、签名公钥、
+  deprecation、Webhook schema、下载审计、事件/outbox、幂等命令、scheduler、平台权限、不变触发器和业务
+  down guard。
+- `console-web/src/lib/developerContracts.js` 与 `src/features/developer-contracts/`：严格双凭据域 client/DTO，
+  API Docs 内版本/changelog/schema/SDK，Platform Releases 内 build/diff/smoke/批准/撤回；下载逐项验证 header、
+  receipt、SHA-256 与 Ed25519，签名原文只在内存参与验签，不进入 DOM 或 Storage。
+- `docs/api/developer-contracts.md`、`docs/prd/PRD-133-public-control-api-sdk-version-deprecation.md` 与
+  `docs/testing/PRD-133-tests.md`：保存公开合同、两轮自审、0125/Shared/API/Console、必要权限导航回归、
+  静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-134，完整 G6 在 PRD-138 后统一执行且只能形成
+  release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

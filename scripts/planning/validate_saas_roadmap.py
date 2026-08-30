@@ -309,6 +309,18 @@ REQUIRED_DOCS = {
         "PRD-133",
         "0124",
     ),
+    ROOT / "docs/prd/PRD-133-public-control-api-sdk-version-deprecation.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0125",
+    ),
+    ROOT / "docs/testing/PRD-133-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-134",
+        "0125",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -988,10 +1000,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 124
+        and migration_versions[-1] == 125
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0124 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0125 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1177,6 +1189,17 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0124_customer_support_ticket_sla_diagnostics.down.sql"
         ).is_file(),
         "PRD-132 owns reversible migration 0124 with guarded customer support rollback",
+    )
+    report.check(
+        (
+            ROOT
+            / "infra/migrations/0125_public_api_sdk_lifecycle.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0125_public_api_sdk_lifecycle.down.sql"
+        ).is_file(),
+        "PRD-133 owns reversible migration 0125 with guarded public contract rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

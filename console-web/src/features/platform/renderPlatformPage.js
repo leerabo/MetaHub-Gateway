@@ -50,7 +50,8 @@ export function renderPlatformWorkspace(container, state) {
   const permissions = new Set(context?.permissions ?? []);
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
-      || state.providerCatalogPublishIntent || state.edgeUpgradeIntent || state.edgeLicenseIntent
+      || state.providerCatalogPublishIntent || state.developerContractIntent
+      || state.edgeUpgradeIntent || state.edgeLicenseIntent
       || state.offlineBundleIntent)
   );
   container.innerHTML = `
@@ -103,6 +104,7 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
+  if (state.view === "releases") return developerContractsView(state, permissions);
   return domainPlaceholderView(state);
 }
 
@@ -2538,6 +2540,160 @@ function platformPlanRow(version) {
     <td data-label="试用">${number(version.trial_days)} 天</td>
     <td data-label="权益"><strong>${number(entitlements.workspace_seats)} 席位 · ${number(entitlements.gateway_requests_per_month)} 次/月</strong><small>${number(entitlements.model_aliases)} 别名 · ${number(entitlements.retention_days)} 天留存${entitlements.priority_support ? " · 优先支持" : ""}</small></td>
   </tr>`;
+}
+
+function developerContractsView(state, permissions) {
+  const workspace = state.developerContracts;
+  const versions = workspace?.versions ?? [];
+  const releases = workspace?.sdk_releases ?? [];
+  const notices = workspace?.deprecations ?? [];
+  const canManage = permissions.has("platform.developer_contract.manage");
+  const canApprove = permissions.has("platform.developer_contract.approve");
+  const published = versions.filter((item) => item.status === "published");
+  const pending = versions.filter((item) => item.status === "pending_approval");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Public API release control</p><h1>Contracts and SDKs</h1></div>
+      <span>${canManage ? "Release management" : "Read only"}</span>
+    </header>
+    <section class="platform-metrics" aria-label="Developer contract release summary">
+      ${metric("API versions", versions.length, `${pending.length} pending approval`)}
+      ${metric("Signed SDKs", releases.filter((item) => item.status === "published").length, `${releases.length} immutable builds`)}
+      ${metric("Deprecations", notices.filter((item) => !new Set(["sunset", "withdrawn"]).has(item.status)).length, `${notices.length} retained notices`)}
+    </section>
+    ${workspace ? "" : `<section class="platform-band"><p class="platform-empty">Contract workspace is loading.</p></section>`}
+    ${canManage ? developerContractBuildForm(state.loading) : ""}
+    <section class="platform-band platform-developer-contract-versions">
+      <div class="platform-section-heading"><div><p>Canonical diff and approval</p><h2>API versions</h2></div><span>${number(versions.length)} versions</span></div>
+      ${versions.length ? developerContractVersionTable(versions, canApprove, state.loading) : '<p class="platform-empty">No contract builds.</p>'}
+    </section>
+    <section class="platform-band platform-developer-contract-sdks">
+      <div class="platform-section-heading"><div><p>Reproducible artifact proof</p><h2>SDK releases</h2></div><span>${number(releases.length)} artifacts</span></div>
+      ${releases.length ? developerContractSdkTable(releases, canManage, state.loading) : '<p class="platform-empty">No SDK builds.</p>'}
+    </section>
+    <section class="platform-band platform-developer-contract-deprecations">
+      <div class="platform-section-heading"><div><p>Notice and adoption gates</p><h2>Deprecation lifecycle</h2></div><span>${number(notices.length)} notices</span></div>
+      ${canManage && published.length >= 2 ? developerDeprecationCreateForm(published, state.loading) : ""}
+      ${notices.length ? developerDeprecationTable(notices, canManage, canApprove, state.loading) : '<p class="platform-empty">No deprecation notices.</p>'}
+    </section>`;
+}
+
+function developerContractBuildForm(loading) {
+  const disabled = loading ? " disabled" : "";
+  return `
+    <section class="platform-band platform-developer-contract-build">
+      <div class="platform-section-heading"><div><p>Reproducible build</p><h2>Build release candidate</h2></div></div>
+      <form data-platform-developer-contract-build-form class="platform-developer-contract-form">
+        <label><span>API version</span><input name="apiVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
+        <label><span>Python SDK</span><input name="pythonSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
+        <label><span>JavaScript SDK</span><input name="javascriptSdkVersion" inputmode="decimal" placeholder="1.2.0" pattern="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)" required${disabled} /></label>
+        <label><span>Producer revision</span><input name="producerRevision" type="number" min="1" step="1" value="1" required${disabled} /></label>
+        <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm canonical registry build</span></label>
+        <button class="platform-primary" type="submit"${disabled}>Build</button>
+      </form>
+    </section>`;
+}
+
+function developerContractVersionTable(versions, canApprove, loading) {
+  return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
+    <thead><tr><th>Version</th><th>State</th><th>Compatibility</th><th>Contract proof</th><th>Approval</th></tr></thead>
+    <tbody>${versions.map((item) => `<tr>
+      <td data-label="Version"><strong>${escapeHtml(item.version)}</strong><small>registry r${number(item.registry_revision)} · state r${number(item.revision)}</small></td>
+      <td data-label="State">${status(item.status)}<small>${formatTime(item.published_at ?? item.created_at)}</small></td>
+      <td data-label="Compatibility"><strong>${escapeHtml(item.compatibility_outcome)}</strong><small>${escapeHtml(item.breaking_reasons.join(", ") || "No breaking changes")}</small></td>
+      <td data-label="Contract proof"><code>${escapeHtml(shortHash(item.contract_sha256))}</code><small>baseline ${escapeHtml(shortHash(item.compatibility_baseline_sha256))}</small></td>
+      <td data-label="Approval">${item.status === "pending_approval" && canApprove ? developerContractApproveForm(item, loading) : '<span class="platform-restricted">No action</span>'}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function developerContractApproveForm(item, loading) {
+  const disabled = loading ? " disabled" : "";
+  return `<form data-platform-developer-contract-approve-form class="platform-developer-contract-inline-form">
+    <input name="apiVersionId" type="hidden" value="${escapeAttribute(item.api_version_id)}" />
+    <input name="expectedRevision" type="hidden" value="${number(item.revision)}" />
+    <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Independent approval</span></label>
+    <button class="platform-primary" type="submit"${disabled}>Approve</button>
+  </form>`;
+}
+
+function developerContractSdkTable(releases, canManage, loading) {
+  return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
+    <thead><tr><th>SDK</th><th>Contract</th><th>Smoke</th><th>Signature summary</th><th>Action</th></tr></thead>
+    <tbody>${releases.map((item) => `<tr>
+      <td data-label="SDK"><strong>${escapeHtml(developerLanguage(item.language))} ${escapeHtml(item.sdk_version)}</strong><small>${escapeHtml(item.runtime_version)} · ${status(item.status)}</small></td>
+      <td data-label="Contract"><span>API ${escapeHtml(item.api_version)}</span><small><code>${escapeHtml(shortHash(item.contract_sha256))}</code></small></td>
+      <td data-label="Smoke"><strong>Windows ${escapeHtml(item.smoke_matrix.windows)}</strong><small>Linux ${escapeHtml(item.smoke_matrix.linux)} · N/N-1</small></td>
+      <td data-label="Signature summary"><code>${escapeHtml(shortHash(item.signature_sha256))}</code><small>receipt ${escapeHtml(shortHash(item.artifact_receipt_sha256))} · ${escapeHtml(item.signing_key_id ?? "pending")}</small></td>
+      <td data-label="Action">${item.status === "published" && canManage ? developerSdkWithdrawForm(item, loading) : '<span class="platform-restricted">No action</span>'}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function developerSdkWithdrawForm(item, loading) {
+  const disabled = loading ? " disabled" : "";
+  return `<form data-platform-developer-sdk-withdraw-form class="platform-developer-contract-inline-form">
+    <input name="sdkReleaseId" type="hidden" value="${escapeAttribute(item.sdk_release_id)}" />
+    <input name="expectedRevision" type="hidden" value="${number(item.revision)}" />
+    <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm withdrawal</span></label>
+    <button type="submit"${disabled}>Withdraw</button>
+  </form>`;
+}
+
+function developerDeprecationCreateForm(versions, loading) {
+  const disabled = loading ? " disabled" : "";
+  const options = versions.map((item) => `<option value="${escapeAttribute(item.api_version_id)}">${escapeHtml(item.version)}</option>`).join("");
+  return `<form data-platform-developer-deprecation-create-form class="platform-developer-deprecation-form">
+    <label><span>Deprecated API</span><select name="apiVersionId" required${disabled}>${options}</select></label>
+    <label><span>Replacement API</span><select name="replacementApiVersionId" required${disabled}>${options}</select></label>
+    <label><span>Migration guide</span><input name="migrationGuideCode" value="api-migration-guide" pattern="[a-z0-9][a-z0-9._-]{2,79}" required${disabled} /></label>
+    <label><span>Notice days</span><input name="minimumNoticeDays" type="number" min="90" max="730" value="90" required${disabled} /></label>
+    <label><span>Sunset at</span><input name="sunsetAt" type="datetime-local" required${disabled} /></label>
+    <label class="platform-developer-contract-operations"><span>Affected public operations</span><textarea name="affectedOperations" rows="3" placeholder="developer.api_versions.list" required${disabled}></textarea></label>
+    <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm notice draft</span></label>
+    <button type="submit"${disabled}>Create notice</button>
+  </form>`;
+}
+
+function developerDeprecationTable(notices, canManage, canApprove, loading) {
+  return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
+    <thead><tr><th>Migration</th><th>Notice</th><th>Watermarks</th><th>Deadline</th><th>Action</th></tr></thead>
+    <tbody>${notices.map((item) => `<tr>
+      <td data-label="Migration"><strong>${escapeHtml(item.api_version)} to ${escapeHtml(item.replacement_api_version)}</strong><small><code>${escapeHtml(item.migration_guide_code)}</code></small></td>
+      <td data-label="Notice">${status(item.status)}<small>${number(item.minimum_notice_days)} days · ${number(item.affected_operations.length)} operations</small></td>
+      <td data-label="Watermarks"><span>notifications ${number(item.notification_watermark)}</span><small>adoption ${number(item.adoption_watermark)}</small></td>
+      <td data-label="Deadline">${formatTime(item.sunset_at)}<small>revision ${number(item.revision)}</small></td>
+      <td data-label="Action">${developerDeprecationActions(item, canManage, canApprove, loading)}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function developerDeprecationActions(item, canManage, canApprove, loading) {
+  const actions = [];
+  if (item.status === "draft" && canApprove) actions.push(["announce", "Announce"]);
+  if (new Set(["announced", "sunset_scheduled"]).has(item.status) && canManage) {
+    actions.push(["withdraw", "Withdraw"]);
+  }
+  if (item.status === "sunset_scheduled" && canApprove) actions.push(["sunset", "Sunset"]);
+  if (!actions.length) return '<span class="platform-restricted">No action</span>';
+  return `<div class="platform-developer-contract-actions">${actions.map(([action, label]) => {
+    const disabled = loading ? " disabled" : "";
+    const gates = action === "sunset" ? `
+      <label><span>Notifications</span><input name="notificationWatermark" type="number" min="1" required${disabled} /></label>
+      <label><span>Adoption</span><input name="adoptionWatermark" type="number" min="0" required${disabled} /></label>` : "";
+    return `<form data-platform-developer-deprecation-action-form class="platform-developer-contract-inline-form">
+      <input name="noticeId" type="hidden" value="${escapeAttribute(item.deprecation_notice_id)}" />
+      <input name="expectedRevision" type="hidden" value="${number(item.revision)}" />
+      <input name="action" type="hidden" value="${escapeAttribute(action)}" />
+      ${gates}
+      <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm ${escapeHtml(action)}</span></label>
+      <button type="submit"${disabled}>${escapeHtml(label)}</button>
+    </form>`;
+  }).join("")}</div>`;
+}
+
+function developerLanguage(value) {
+  return value === "javascript" ? "JavaScript" : value === "python" ? "Python" : value;
 }
 
 function domainPlaceholderView(state) {

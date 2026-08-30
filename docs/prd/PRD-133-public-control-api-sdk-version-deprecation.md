@@ -1,6 +1,6 @@
 # PRD-133 公共控制面 API、SDK 版本与废弃策略
 
-状态：设计冻结，尚未实现。依赖 PRD-038/039/042/057/118；范围以 Excel PRD-133 为准。
+状态：已完成。依赖 PRD-038/039/042/057/118；范围以 Excel PRD-133 为准。
 
 ## Excel 权威合同
 
@@ -68,3 +68,9 @@ developer/owner/admin 按现有 `developer_portal.read` 只读；release_manager
 SDK reproducible build、签名、SBOM、Windows/Linux smoke 和 N/N-1；90 天 notice、通知故障、撤回和 scheduler 重启；
 动态发布撤权；Developer/Platform 三浏览器三缩放；p95 < 300ms；制品/示例/日志敏感扫描和静止终态。
 完整 G6 留到 PRD-138 后统一执行。
+
+实现已交付 0125、显式 public registry、canonical compatibility diff、Python/JavaScript 可复现 SDK、
+Ed25519/KMS 签名与浏览器下载验签、不可变 receipt、双人发布、90 天废弃与持久 sunset gate、事件/outbox、
+Developer API Docs 和 Platform Releases 工作台。聚焦迁移/API/Shared/Console、必要权限导航回归和静态检查通过；
+真实数据库矩阵、FLOW、三浏览器、性能、安全、兼容性和 72 小时长稳仍按批次规则留到 PRD-138 后统一执行，
+不能由本条专项结果替代。

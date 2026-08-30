@@ -47,6 +47,8 @@ from .dashboard.routes import router as dashboard_router
 from .data_governance import install_data_governance_scheduler
 from .data_governance import router as data_governance_router
 from .debug_console.routes import router as debug_console_router
+from .developer_contracts import install_developer_contract_scheduler
+from .developer_contracts import router as developer_contracts_router
 from .developer_portal.routes import router as developer_portal_router
 from .disaster_recovery import router as disaster_recovery_router
 from .dlp.routes import router as dlp_router
@@ -160,6 +162,8 @@ app = create_service_app(
         "X-Policy-Candidate-ETag",
         "X-MetaHub-Audit-Export-ID",
         "X-MetaHub-Audit-Export-Row-Count",
+        "Digest",
+        "X-Artifact-Receipt-SHA256",
         # 文件安全 CSV 已返回 nosniff；浏览器必须能读取该头并执行下载合同验收。
         "X-Content-Type-Options",
         # PAGE-107 在跨端口 Console 中执行 exact 私有响应门禁，需要读取 CORS
@@ -327,6 +331,7 @@ app.include_router(config_router)
 app.include_router(config_distribution_router)
 app.include_router(config_transfer_router)
 app.include_router(debug_console_router)
+app.include_router(developer_contracts_router)
 app.include_router(developer_portal_router)
 app.include_router(dlp_router)
 app.include_router(environments_router)
@@ -388,6 +393,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_cost_anomaly_scheduler,
             install_customer_health_scheduler,
             install_customer_support_scheduler,
+            install_developer_contract_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

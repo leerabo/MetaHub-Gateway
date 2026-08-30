@@ -145,6 +145,14 @@ import {
   listSupportTickets,
   patchSupportTicket,
 } from "../../lib/customerSupport.js";
+import {
+  approvePlatformDeveloperContract,
+  buildPlatformDeveloperContract,
+  createPlatformDeprecation,
+  getPlatformDeveloperContracts,
+  mutatePlatformDeprecation,
+  withdrawPlatformSdk,
+} from "../../lib/developerContracts.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -322,6 +330,20 @@ if (root) {
       edgeLicenses: (input) => listPlatformLicenses({ controlApiUrl, ...input }),
       edgeBackups: (input) => listPlatformBackupStatuses({ controlApiUrl, ...input }),
       offlineBundles: (input) => listPlatformOfflineBundles({ controlApiUrl, ...input }),
+      developerContracts: (input) => getPlatformDeveloperContracts({ controlApiUrl, ...input }),
+      buildDeveloperContract: (input) => buildPlatformDeveloperContract({
+        controlApiUrl, ...input,
+      }),
+      approveDeveloperContract: (input) => approvePlatformDeveloperContract({
+        controlApiUrl, ...input,
+      }),
+      createDeveloperDeprecation: (input) => createPlatformDeprecation({
+        controlApiUrl, ...input,
+      }),
+      mutateDeveloperDeprecation: (input) => mutatePlatformDeprecation({
+        controlApiUrl, ...input,
+      }),
+      withdrawDeveloperSdk: (input) => withdrawPlatformSdk({ controlApiUrl, ...input }),
       decideOfflineBundle: (input) => decidePlatformOfflineBundle({
         controlApiUrl,
         ...input,

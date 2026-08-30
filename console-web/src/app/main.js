@@ -379,6 +379,10 @@ import {
   readAuthSession,
   saveAuthSession,
 } from "../lib/auth.js";
+import {
+  downloadDeveloperSdk,
+  getDeveloperContractWorkspace,
+} from "../lib/developerContracts.js";
 import { listAdapterSpecs } from "../lib/adapterSpecs.js";
 import {
   getAdapterContractRun,
@@ -987,6 +991,8 @@ let errorMapDialogKeydownHandler = null;
 let errorMapBodyOverflow = null;
 // 每次刷新分配递增序号；较早刷新即使更晚返回，也不能覆盖用户已经切换的新页面。
 let refreshSequence = 0;
+let developerContractDownloadController = null;
+let developerContractDownloadMetadata = new Map();
 let consoleWorkspaceContextChannel = null;
 // 登录使用独立代次；页面替换、重复提交或新 Session 建立都会淘汰更早的凭据请求回调。
 let loginGeneration = 0;
@@ -2802,6 +2808,14 @@ async function loadAndRenderActiveNavigation({
         loadEnvironmentState(), loadModelAliasesState(),
       ]);
       break;
+    case "api-docs":
+      if (hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) {
+        state.developerContractState = await getDeveloperContractWorkspace({
+          controlApiUrl,
+          token: authSession.token,
+        });
+      }
+      break;
     case "enterprise-chat":
       await loadEnterpriseChatState(consoleShellState);
       state.enterpriseChatState = enterpriseChatPageState.snapshot();
@@ -2842,6 +2856,12 @@ async function loadAndRenderActiveNavigation({
   }
 
   if (!authSession.token || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;
+
+  developerContractDownloadMetadata = activeNavigationId === "api-docs"
+    ? new Map((state.developerContractState?.sdk_releases ?? []).map((release) => [
+      release.sdk_release_id, release,
+    ]))
+    : new Map();
 
   const brandingState = state.brandingState ?? brandingPageState.snapshot();
   renderDeveloperStart(app, {
@@ -2890,6 +2910,8 @@ async function loadAndRenderActiveNavigation({
 function renderLogin(error, requestId) {
   // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
   loginGeneration += 1;
+  clearDeveloperContractDownload();
+  developerContractDownloadMetadata = new Map();
   clearPublicBrandingPreview();
   const loginBrandingGeneration = publicBrandingGeneration;
   // 登录态变化等同于离开调试页，必须取消旧流并使尚未返回的回调失效。
@@ -3157,6 +3179,7 @@ async function copyInvitationSecret(
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 function bindAuthenticatedEvents(consoleShellState) {
+  bindDeveloperContractDownloads(consoleShellState);
   // PAGE-120 设置写入只在精确 branding owner 下绑定；隐藏按钮不能替代后端 RBAC。
   bindBrandingSettingsInteractions(document, {
     onSave: (input) => runBrandingMutation(consoleShellState, input),
@@ -3289,6 +3312,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     // 退出登录前先关闭可能携带当前租户 Virtual Key 的活动连接，不能等待登出 API 返回。
     gatewayDebugLifecycle.leave();
     gatewayDebugState = {};
+    clearDeveloperContractDownload();
+    developerContractDownloadMetadata = new Map();
     // 注销请求发出前清除企业 Chat，不能等待后端撤销 Session 后再处理浏览器正文。
     clearEnterpriseChatSessionState();
     // 注销请求发出前同步清空模板正文、变量草稿和所有请求 lane。
@@ -11342,6 +11367,91 @@ function authErrorMessage(error) {
       : error.message;
   }
   return "无法连接控制面认证接口。";
+}
+
+/** Download a signed SDK only while the API docs navigation owner remains current. */
+function bindDeveloperContractDownloads(consoleShellState) {
+  if (consoleShellState?.activeNavigationItemId !== "api-docs"
+    || !hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) {
+    clearDeveloperContractDownload();
+    developerContractDownloadMetadata = new Map();
+    return;
+  }
+  for (const button of document.querySelectorAll("[data-developer-sdk-download]")) {
+    button.addEventListener("click", async () => {
+      const token = authSession.token;
+      if (!token || button.disabled) return;
+      const release = developerContractDownloadMetadata.get(button.dataset.sdkReleaseId);
+      if (!release
+        || release.language !== button.dataset.language
+        || release.sdk_version !== button.dataset.sdkVersion
+        || release.artifact_sha256 !== button.dataset.artifactSha256
+        || release.artifact_receipt_sha256 !== button.dataset.artifactReceiptSha256) return;
+      const owner = Object.freeze({ token, generation: refreshSequence });
+      clearDeveloperContractDownload();
+      const downloadController = new AbortController();
+      developerContractDownloadController = downloadController;
+      const feedback = document.querySelector("[data-developer-contract-feedback]");
+      const current = () => owner.token === authSession.token
+        && owner.generation === refreshSequence
+        && developerContractDownloadController === downloadController
+        && !downloadController.signal.aborted
+        && button.isConnected
+        && hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ);
+      button.disabled = true;
+      if (feedback) feedback.textContent = "正在验证 SDK 制品...";
+      try {
+        const result = await downloadDeveloperSdk({
+          controlApiUrl,
+          token,
+          language: button.dataset.language,
+          sdkVersion: button.dataset.sdkVersion,
+          contractSha256: release.contract_sha256,
+          artifactSha256: button.dataset.artifactSha256,
+          artifactReceiptSha256: button.dataset.artifactReceiptSha256,
+          signatureB64: release.signature_b64,
+          signatureSha256: release.signature_sha256,
+          publicKeyB64: release.public_key_b64,
+          signal: downloadController.signal,
+        });
+        if (!current()) return;
+        const objectUrl = globalThis.URL.createObjectURL(result.blob);
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = result.filename;
+        link.hidden = true;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        globalThis.setTimeout(() => globalThis.URL.revokeObjectURL(objectUrl), 0);
+        developerContractDownloadController = null;
+        button.disabled = false;
+        if (feedback) feedback.textContent = `已验证并下载 ${result.filename}`;
+      } catch (error) {
+        if (!current()) return;
+        developerContractDownloadController = null;
+        if (error instanceof AuthApiError && error.status === 401) {
+          clearAuthSession();
+          authSession = { token: null, context: null };
+          renderLogin(authErrorMessage(error), error.requestId);
+          return;
+        }
+        if (error instanceof AuthApiError && error.status === 403) {
+          await refresh();
+          return;
+        }
+        button.disabled = false;
+        if (feedback) {
+          feedback.textContent = `${authErrorMessage(error)} request_id: ${error?.requestId ?? "-"}`;
+        }
+      }
+    });
+  }
+}
+
+function clearDeveloperContractDownload() {
+  developerContractDownloadController?.abort();
+  developerContractDownloadController = null;
 }
 
 /**

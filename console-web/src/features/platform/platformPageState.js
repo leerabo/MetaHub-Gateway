@@ -69,6 +69,8 @@ export function createPlatformPageController({
     plans: null,
     providerCatalog: null,
     providerCatalogPublishIntent: null,
+    developerContracts: null,
+    developerContractIntent: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -205,6 +207,7 @@ export function createPlatformPageController({
     async refresh() {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
+        || state.developerContractIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const ticket = begin();
@@ -232,6 +235,7 @@ export function createPlatformPageController({
     selectView(view) {
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
+        || state.developerContractIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
@@ -239,7 +243,7 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "provider-catalog", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
+        "provider-catalog", "releases", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
         "offline-bundles", "support",
       ]).has(state.view)
         && nextView !== state.view) {
@@ -266,6 +270,9 @@ export function createPlatformPageController({
           state.riskDecisionIntent = null;
         } else if (state.view === "provider-catalog") {
           state.providerCatalogPublishIntent = null;
+        } else if (state.view === "releases") {
+          state.developerContracts = null;
+          state.developerContractIntent = null;
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -324,6 +331,9 @@ export function createPlatformPageController({
       if (state.view === "provider-catalog" && !state.providerCatalog) {
         void loadProviderCatalog();
       }
+      if (state.view === "releases" && !state.developerContracts) {
+        void loadDeveloperContracts();
+      }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
       if (state.view === "edge-upgrades"
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
@@ -333,6 +343,67 @@ export function createPlatformPageController({
         void loadOfflineBundles();
       }
       if (state.view === "support" && !state.supportTickets) void loadSupportTickets();
+    },
+    async buildDeveloperContract(input = {}) {
+      if (!currentPermissions().has("platform.developer_contract.manage")
+        || input.confirmed !== true) return false;
+      return developerContractWrite(
+        "contract.build",
+        input,
+        (idempotencyKey, signal) => api.buildDeveloperContract({
+          ...input, idempotencyKey, signal,
+        }),
+        "Contract build is ready for independent approval.",
+      );
+    },
+    async approveDeveloperContract(input = {}) {
+      if (!currentPermissions().has("platform.developer_contract.approve")
+        || input.confirmed !== true) return false;
+      return developerContractWrite(
+        "contract.approve",
+        input,
+        (idempotencyKey, signal) => api.approveDeveloperContract({
+          ...input, idempotencyKey, signal,
+        }),
+        "Contract and signed SDK releases are published.",
+      );
+    },
+    async createDeveloperDeprecation(input = {}) {
+      if (!currentPermissions().has("platform.developer_contract.manage")
+        || input.confirmed !== true) return false;
+      return developerContractWrite(
+        "deprecation.create",
+        input,
+        (idempotencyKey, signal) => api.createDeveloperDeprecation({
+          ...input, idempotencyKey, signal,
+        }),
+        "Deprecation notice is ready for independent announcement.",
+      );
+    },
+    async mutateDeveloperDeprecation(input = {}) {
+      const permission = new Set(["announce", "sunset"]).has(input.action)
+        ? "platform.developer_contract.approve" : "platform.developer_contract.manage";
+      if (!currentPermissions().has(permission) || input.confirmed !== true) return false;
+      return developerContractWrite(
+        `deprecation.${input.action}`,
+        input,
+        (idempotencyKey, signal) => api.mutateDeveloperDeprecation({
+          ...input, idempotencyKey, signal,
+        }),
+        `Deprecation ${input.action} recorded.`,
+      );
+    },
+    async withdrawDeveloperSdk(input = {}) {
+      if (!currentPermissions().has("platform.developer_contract.manage")
+        || input.confirmed !== true) return false;
+      return developerContractWrite(
+        "sdk.withdraw",
+        input,
+        (idempotencyKey, signal) => api.withdrawDeveloperSdk({
+          ...input, idempotencyKey, signal,
+        }),
+        "SDK release withdrawn; immutable history is retained.",
+      );
     },
     async filterSupportTickets(filters = {}) {
       if (state.view !== "support") return false;
@@ -1959,6 +2030,7 @@ export function createPlatformPageController({
         operators: null,
         plans: null,
         providerCatalog: null,
+        developerContracts: null,
         billing: null,
         refunds: null,
         verification: null,
@@ -2003,6 +2075,13 @@ export function createPlatformPageController({
         && typeof api.providerCatalog === "function") {
         tasks.push(api.providerCatalog({ signal: ticket.signal }).then((value) => {
           next.providerCatalog = value;
+        }));
+      }
+      if (state.view === "releases"
+        && permissions.has("platform.developer_contract.read")
+        && typeof api.developerContracts === "function") {
+        tasks.push(api.developerContracts({ signal: ticket.signal }).then((value) => {
+          next.developerContracts = value;
         }));
       }
       if (!fleetOnly && permissions.has("platform.billing.read")
@@ -2246,6 +2325,10 @@ export function createPlatformPageController({
       if (!state.navigation.some((item) => item.id === "provider-catalog")) {
         state.providerCatalog = null;
         state.providerCatalogPublishIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "releases")) {
+        state.developerContracts = null;
+        state.developerContractIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "edge-fleet")) {
         state.edgeFleet = null;
@@ -2700,6 +2783,63 @@ export function createPlatformPageController({
       render();
       return true;
     } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadDeveloperContracts() {
+    if (state.view !== "releases"
+      || !currentPermissions().has("platform.developer_contract.read")
+      || typeof api.developerContracts !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const workspace = await api.developerContracts({ signal: ticket.signal });
+      if (!currentDeveloperContractTicket(ticket)) return false;
+      state.developerContracts = workspace;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function developerContractWrite(kind, input, operation, message) {
+    if (state.view !== "releases" || state.loading
+      || typeof operation !== "function" || typeof api.developerContracts !== "function") {
+      return false;
+    }
+    const fingerprint = JSON.stringify([kind, input]);
+    const idempotencyKey = state.developerContractIntent?.fingerprint === fingerprint
+      ? state.developerContractIntent.idempotencyKey : newIdempotencyKey();
+    state.developerContractIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await operation(idempotencyKey, ticket.signal);
+      if (!currentDeveloperContractTicket(ticket)) return false;
+      const workspace = await api.developerContracts({ signal: ticket.signal });
+      if (!currentDeveloperContractTicket(ticket)) return false;
+      state.developerContracts = workspace;
+      state.developerContractIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 403 && current(ticket)) {
+        state.developerContractIntent = null;
+        await controller.refresh();
+        return false;
+      }
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.developerContractIntent = null;
+      }
       return fail(ticket, error);
     }
   }
@@ -3173,6 +3313,54 @@ export function createPlatformPageController({
           keyId: data.get("keyId"),
           signature: data.get("signature"),
           reasonCode: data.get("reasonCode"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-developer-contract-build-form]")) {
+        controller.buildDeveloperContract({
+          apiVersion: data.get("apiVersion"),
+          pythonSdkVersion: data.get("pythonSdkVersion"),
+          javascriptSdkVersion: data.get("javascriptSdkVersion"),
+          producerRevision: Number(data.get("producerRevision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-developer-contract-approve-form]")) {
+        controller.approveDeveloperContract({
+          apiVersionId: data.get("apiVersionId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-developer-deprecation-create-form]")) {
+        controller.createDeveloperDeprecation({
+          apiVersionId: data.get("apiVersionId"),
+          replacementApiVersionId: data.get("replacementApiVersionId"),
+          affectedOperations: String(data.get("affectedOperations") ?? "")
+            .split(/[,\n]/u).map((item) => item.trim()).filter(Boolean),
+          migrationGuideCode: data.get("migrationGuideCode"),
+          minimumNoticeDays: Number(data.get("minimumNoticeDays")),
+          sunsetAt: data.get("sunsetAt"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-developer-deprecation-action-form]")) {
+        const notification = data.get("notificationWatermark");
+        const adoption = data.get("adoptionWatermark");
+        controller.mutateDeveloperDeprecation({
+          noticeId: data.get("noticeId"),
+          action: data.get("action"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          notificationWatermark: notification === null || notification === ""
+            ? null : Number(notification),
+          adoptionWatermark: adoption === null || adoption === "" ? null : Number(adoption),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-developer-sdk-withdraw-form]")) {
+        controller.withdrawDeveloperSdk({
+          sdkReleaseId: data.get("sdkReleaseId"),
+          expectedRevision: Number(data.get("expectedRevision")),
           confirmed: data.get("confirmed") === "on",
         });
       }
@@ -3802,6 +3990,10 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "offline-bundles"
       && currentPermissions().has("platform.edge_offline_bundle.read");
   }
+  function currentDeveloperContractTicket(ticket) {
+    return current(ticket) && state.view === "releases"
+      && currentPermissions().has("platform.developer_contract.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -3820,6 +4012,8 @@ export function createPlatformPageController({
     state.plans = null;
     state.providerCatalog = null;
     state.providerCatalogPublishIntent = null;
+    state.developerContracts = null;
+    state.developerContractIntent = null;
     state.billing = null;
     state.billingStatus = "";
     state.billingCursor = null;

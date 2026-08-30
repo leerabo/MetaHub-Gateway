@@ -15,6 +15,66 @@
     Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
 }
 
+/* PRD-133 public contract registry within the existing API docs surface. */
+.developer-contracts-panel { display: grid; gap: 0; overflow: hidden; }
+.developer-contracts-heading,
+.developer-contracts-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.developer-contracts-heading { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.developer-contracts-heading p,
+.developer-contracts-section-heading p { margin: 0 0 5px; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.developer-contracts-heading h2,
+.developer-contracts-section-heading h3 { margin: 0; letter-spacing: 0; }
+.developer-contracts-state,
+.developer-contracts-status { display: inline-flex; align-items: center; min-height: 26px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; }
+.developer-contracts-status.is-published,
+.developer-contracts-status.is-sdk-released,
+.developer-contracts-status.is-webhook-schema-published { border-color: color-mix(in srgb, #16794a 45%, var(--line)); color: #16794a; }
+.developer-contracts-status.is-deprecated,
+.developer-contracts-status.is-api-deprecated,
+.developer-contracts-status.is-api-sunset-scheduled { border-color: color-mix(in srgb, #b15f00 48%, var(--line)); color: #995200; }
+.developer-contracts-feedback { min-height: 20px; margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+.developer-contracts-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.developer-contracts-summary > div { display: grid; gap: 6px; min-width: 0; padding: 20px 18px 20px 0; }
+.developer-contracts-summary > div + div { padding-left: 18px; border-left: 1px solid var(--line); }
+.developer-contracts-summary span { color: var(--muted); font-size: 12px; }
+.developer-contracts-summary strong { font-size: 26px; letter-spacing: 0; }
+.developer-contracts-band { min-width: 0; padding: 24px 0; border-bottom: 1px solid var(--line); }
+.developer-contracts-band:last-child { padding-bottom: 0; border-bottom: 0; }
+.developer-contracts-table-wrap { max-width: 100%; margin-top: 14px; overflow-x: auto; }
+.developer-contracts-table-wrap table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.developer-contracts-table-wrap th,
+.developer-contracts-table-wrap td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.developer-contracts-table-wrap th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.developer-contracts-table-wrap td { font-size: 13px; }
+.developer-contracts-table-wrap td strong,
+.developer-contracts-table-wrap td small { display: block; }
+.developer-contracts-table-wrap td small { margin-top: 5px; color: var(--muted); }
+.developer-contracts-table-wrap code,
+.developer-contracts-guide code { font-size: 12px; overflow-wrap: anywhere; }
+.developer-contract-download { min-height: 34px; border-radius: 4px; }
+.developer-contracts-changelog { display: grid; gap: 0; margin: 14px 0 0; padding: 0; list-style: none; }
+.developer-contracts-changelog li { display: grid; gap: 7px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.developer-contracts-changelog li:last-child { border-bottom: 0; }
+.developer-contracts-changelog li > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.developer-contracts-changelog p,
+.developer-contracts-changelog small,
+.developer-contracts-guide,
+.developer-contracts-empty { margin: 0; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .developer-contracts-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .developer-contracts-summary > div:nth-child(3) { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
+  .developer-contracts-summary > div:nth-child(4) { border-top: 1px solid var(--line); }
+}
+
+@media (max-width: 420px) {
+  .developer-contracts-heading { align-items: stretch; flex-direction: column; }
+  .developer-contracts-state { align-self: flex-start; }
+  .developer-contracts-summary { grid-template-columns: 1fr; }
+  .developer-contracts-summary > div,
+  .developer-contracts-summary > div + div { padding: 15px 0; border-top: 1px solid var(--line); border-left: 0; }
+}
+
 /* PRD-120 private Gateway device identity workspace. */
 .private-gateway-workspace { display: grid; gap: 18px; min-width: 0; }
 .private-gateway-toolbar,

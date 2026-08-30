@@ -16,6 +16,38 @@
   --blue: #245f9a;
 }
 
+/* PRD-133 public contract release workspace. */
+.platform-developer-contract-form,
+.platform-developer-deprecation-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+.platform-developer-contract-form label,
+.platform-developer-deprecation-form label,
+.platform-developer-contract-inline-form label { min-width: 0; }
+.platform-developer-contract-form .platform-check,
+.platform-developer-deprecation-form .platform-check { align-self: end; }
+.platform-developer-contract-form button,
+.platform-developer-deprecation-form > button { align-self: end; min-height: 40px; }
+.platform-developer-contract-operations { grid-column: span 2; }
+.platform-developer-contract-table { min-width: 940px; }
+.platform-developer-contract-table td strong,
+.platform-developer-contract-table td small { display: block; }
+.platform-developer-contract-table td small { margin-top: 5px; color: var(--muted); }
+.platform-developer-contract-table code { overflow-wrap: anywhere; }
+.platform-developer-contract-inline-form { display: grid; gap: 8px; min-width: 142px; }
+.platform-developer-contract-inline-form .platform-check { align-items: flex-start; }
+.platform-developer-contract-inline-form button { justify-self: start; min-height: 34px; }
+.platform-developer-contract-actions { display: grid; gap: 12px; }
+
+@media (max-width: 1000px) {
+  .platform-developer-contract-form,
+  .platform-developer-deprecation-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .platform-developer-contract-form,
+  .platform-developer-deprecation-form { grid-template-columns: 1fr; }
+  .platform-developer-contract-operations { grid-column: auto; }
+}
+
 /* PRD-119 Provider Catalog publication stays isolated from tenant Provider controls. */
 .platform-provider-catalog-head dl {
   display: grid;

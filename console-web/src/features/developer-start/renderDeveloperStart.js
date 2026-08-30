@@ -77,6 +77,7 @@ import {
   renderConsoleShell,
 } from "../console-shell/renderConsoleShell.js";
 import { renderDeveloperQuickstart } from "../developer-quickstart/renderDeveloperQuickstart.js";
+import { renderDeveloperContracts } from "../developer-contracts/renderDeveloperContracts.js";
 import { renderSdkExamples } from "../python-sdk-examples/renderPythonSdkExamples.js";
 import { buildMigrationGuide, renderMigrationGuide } from "../migration-guide/renderMigrationGuide.js";
 import {
@@ -719,6 +720,9 @@ function renderApiDocsContent(options) {
         suggestion: "Check the API path and method.",
       })}
     </section>
+    ${hasPermission(options.authContext, PERMISSIONS.DEVELOPER_PORTAL_READ)
+    ? renderDeveloperContracts(options.developerContractState)
+    : ""}
   `;
 }
 

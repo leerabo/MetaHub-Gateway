@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-132 - 客户工单、SLA与安全诊断协作` 已完成；当前下一条未完成项是
-  `PRD-133 - 公共Control API与SDK版本弃用治理`。
+- 新 `PRD-090` 至 `PRD-133 - 公共Control API与SDK版本弃用治理` 已完成；当前下一条未完成项是
+  `PRD-134 - 全局账号隐私、同意与数据主体请求`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-133 - 公共Control API与SDK版本弃用治理` 已完成：0125、显式 public registry、canonical
+  compatibility diff、Python/JavaScript 可复现 SDK、Ed25519/KMS 签名与浏览器下载验签、双人发布、
+  90 天废弃与持久 sunset gate、Developer API Docs 和 Platform Releases 工作台均已交付。Shared `5/5`、
+  API `1/1`、迁移 `3/3`、Console 专项 `6/6`、关联回归 `47/47`、lint `401 files` 和 Ruff 通过。详见
+  [PRD-133 设计](docs/prd/PRD-133-public-control-api-sdk-version-deprecation.md)、
+  [API 合同](docs/api/developer-contracts.md) 和 [PRD-133 测试记录](docs/testing/PRD-133-tests.md)。下一权威项为
+  PRD-134；完整 G6 留到 PRD-138 后。
 - `PRD-132 - 客户工单、SLA与安全诊断协作` 已完成：0124、加密客户消息与内部备注、附件隔离扫描、
   持久 SLA clock/升级、满意度、Workspace/Platform 双域 API 和 Console 均已交付。后端聚焦 `6/6`、
   Console `5/5`、相邻导航 `3/3`、Ruff 与 lint `398 files` 通过。详见
