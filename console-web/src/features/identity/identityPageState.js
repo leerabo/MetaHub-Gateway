@@ -1,6 +1,7 @@
 // 账号安全状态机统一管理 Workspace 授权、企业认证敏感值清理和过期请求取消。
 import { IdentityApiError } from "../../lib/identity.js";
 import { PlatformApiError } from "../../lib/platform.js";
+import { PrivacyApiError } from "../../lib/privacyCenter.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import { consumePaymentClientToken } from "../../lib/paymentCommerce.js";
 import {
@@ -110,6 +111,11 @@ export function createIdentityPageController({
   let dataGovernanceDraft = null;
   let dataGovernanceSimulationFingerprint = null;
   let dataGovernanceIntent = null;
+  let privacyPreferences = null;
+  let privacyRequests = null;
+  let privacyBusy = false;
+  let privacyError = null;
+  let privacyIntents = new Map();
   let machineIdentity = null;
   let machineIdentityBusy = false;
   let machineIdentityError = null;
@@ -1296,6 +1302,230 @@ export function createIdentityPageController({
         grant = "";
         input.code = "";
         scrubSensitiveInputs();
+      }
+    },
+    async refreshPrivacy() {
+      if (!workspacePrivacyReadAllowed() || typeof api.privacyPreferences !== "function"
+        || typeof api.privacyRequests !== "function") return false;
+      const ticket = beginRequest();
+      privacyBusy = true;
+      privacyError = null;
+      renderSecurity();
+      return loadPrivacy(ticket, "隐私中心已刷新。");
+    },
+    async savePrivacyPreferences(input = {}) {
+      if (!workspacePrivacyManageAllowed() || privacyBusy || !privacyPreferences?.preference
+        || typeof api.updatePrivacyPreferences !== "function") return false;
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      const request = {
+        expectedRevision: privacyPreferences.preference.revision,
+        analyticsEnabled: input.analyticsEnabled === true,
+        productUpdatesEnabled: input.productUpdatesEnabled === true,
+        modelImprovementEnabled: input.modelImprovementEnabled === true,
+        termsVersion: input.termsVersion,
+        locale: input.locale,
+      };
+      const fingerprint = JSON.stringify(request);
+      const previous = privacyIntents.get("preference.update");
+      const idempotencyKey = previous?.fingerprint === fingerprint
+        ? previous.idempotencyKey : newIdempotencyKey();
+      privacyIntents.set("preference.update", { fingerprint, idempotencyKey });
+      const ticket = beginRequest();
+      privacyBusy = true;
+      privacyError = null;
+      renderSecurity({ feedback: "正在保存隐私偏好…" });
+      try {
+        const result = await queueWrite(() => api.updatePrivacyPreferences({
+          ...request, idempotencyKey, signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        privacyPreferences = result;
+        privacyIntents.delete("preference.update");
+        privacyBusy = false;
+        renderSecurity({ feedback: "隐私偏好已保存。" });
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        privacyBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          privacyIntents.delete("preference.update");
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (![0, 503].includes(Number(error?.status))) privacyIntents.delete("preference.update");
+        privacyError = safePageError(error);
+        renderSecurity();
+        return false;
+      }
+    },
+    async createPrivacyRequest(input = {}) {
+      if (!workspacePrivacyCreateAllowed() || privacyBusy || input.confirmed !== true
+        || typeof api.createPrivacyRequest !== "function") {
+        scrubSensitiveInputs();
+        return false;
+      }
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      const requestKind = String(input.requestKind ?? "");
+      if (!new Set(["export", "rectify", "erase"]).has(requestKind)) return false;
+      const fingerprint = JSON.stringify({ ownerWorkspaceId, requestKind });
+      const previous = privacyIntents.get("request.create");
+      const idempotencyKey = previous?.fingerprint === fingerprint
+        ? previous.idempotencyKey : newIdempotencyKey();
+      privacyIntents.set("request.create", { fingerprint, idempotencyKey });
+      const ticket = beginRequest();
+      privacyBusy = true;
+      privacyError = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在验证身份并提交隐私请求…" });
+      let grant = "";
+      try {
+        grant = await privacyStepUp(ticket, input, "privacy.dsr.create", ownerWorkspaceId);
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        const result = await queueWrite(() => api.createPrivacyRequest({
+          requestKind, stepUpGrant: grant, idempotencyKey, signal: ticket.signal,
+        }));
+        grant = "";
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        privacyIntents.delete("request.create");
+        privacyRequests = upsertPrivacyRequest(privacyRequests, result.request);
+        privacyBusy = false;
+        renderSecurity({ feedback: "数据主体请求已提交。" });
+        return true;
+      } catch (error) {
+        grant = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        privacyBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          privacyIntents.delete("request.create");
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (![0, 503].includes(Number(error?.status))) privacyIntents.delete("request.create");
+        privacyError = safePageError(error);
+        renderSecurity();
+        return false;
+      } finally {
+        grant = "";
+        input.stepUpCode = "";
+        scrubSensitiveInputs();
+      }
+    },
+    async cancelPrivacyRequest(input = {}) {
+      if (!workspacePrivacyCancelAllowed() || privacyBusy || input.confirmed !== true
+        || typeof api.cancelPrivacyRequest !== "function") {
+        scrubSensitiveInputs();
+        return false;
+      }
+      const item = privacyRequests?.items?.find(
+        (candidate) => candidate.data_subject_request_id === input.requestId,
+      );
+      if (!item || !new Set(["received", "identity_verified", "collecting"]).has(item.status)
+        || item.revision !== Number(input.revision)) return false;
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      const fingerprint = JSON.stringify({ requestId: item.data_subject_request_id, revision: item.revision });
+      const intentKey = `request.cancel:${item.data_subject_request_id}`;
+      const previous = privacyIntents.get(intentKey);
+      const idempotencyKey = previous?.fingerprint === fingerprint
+        ? previous.idempotencyKey : newIdempotencyKey();
+      privacyIntents.set(intentKey, { fingerprint, idempotencyKey });
+      const ticket = beginRequest();
+      privacyBusy = true;
+      privacyError = null;
+      scrubSensitiveInputs();
+      renderSecurity({ feedback: "正在验证身份并取消请求…" });
+      let grant = "";
+      try {
+        grant = await privacyStepUp(
+          ticket, input, "privacy.dsr.cancel", item.data_subject_request_id,
+        );
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        const result = await queueWrite(() => api.cancelPrivacyRequest({
+          dataSubjectRequestId: item.data_subject_request_id,
+          expectedRevision: item.revision,
+          stepUpGrant: grant,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        grant = "";
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        privacyIntents.delete(intentKey);
+        privacyRequests = upsertPrivacyRequest(privacyRequests, result.request);
+        privacyBusy = false;
+        renderSecurity({ feedback: "数据主体请求已取消。" });
+        return true;
+      } catch (error) {
+        grant = "";
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        privacyBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          privacyIntents.delete(intentKey);
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (![0, 503].includes(Number(error?.status))) privacyIntents.delete(intentKey);
+        privacyError = safePageError(error);
+        renderSecurity();
+        return false;
+      } finally {
+        grant = "";
+        input.stepUpCode = "";
+        scrubSensitiveInputs();
+      }
+    },
+    async downloadPrivacyExport(requestId) {
+      const item = privacyRequests?.items?.find(
+        (candidate) => candidate.data_subject_request_id === requestId,
+      );
+      if (!workspacePrivacyReadAllowed() || privacyBusy || item?.status !== "ready"
+        || item.identity_export?.status !== "ready"
+        || typeof api.issuePrivacyExportReceipt !== "function"
+        || typeof api.downloadPrivacyExport !== "function") return false;
+      const ownerWorkspaceId = workspaceContext.workspace_id;
+      const intentKey = `export.receipt:${item.data_subject_request_id}`;
+      const fingerprint = JSON.stringify({
+        requestId: item.data_subject_request_id,
+        exportRevision: item.identity_export.revision,
+      });
+      const previous = privacyIntents.get(intentKey);
+      const idempotencyKey = previous?.fingerprint === fingerprint
+        ? previous.idempotencyKey : newIdempotencyKey();
+      privacyIntents.set(intentKey, { fingerprint, idempotencyKey });
+      const ticket = beginRequest();
+      privacyBusy = true;
+      privacyError = null;
+      renderSecurity({ feedback: "正在准备一次性隐私导出…" });
+      let receipt = "";
+      let issued = null;
+      try {
+        issued = await queueWrite(() => api.issuePrivacyExportReceipt({
+          dataSubjectRequestId: item.data_subject_request_id,
+          expectedRevision: item.identity_export.revision,
+          idempotencyKey,
+          signal: ticket.signal,
+        }));
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        receipt = issued.receipt;
+        await api.downloadPrivacyExport({
+          identityExport: item.identity_export,
+          receipt,
+          signal: ticket.signal,
+        });
+        receipt = "";
+        issued.receipt = "";
+        if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+        privacyIntents.delete(intentKey);
+        return loadPrivacy(ticket, "隐私导出已安全下载。");
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        privacyBusy = false;
+        if (isWorkspaceAuthorizationDrift(error)) {
+          privacyIntents.delete(intentKey);
+          return handleWorkspaceActionError(error, "空间权限已变化。", ticket);
+        }
+        if (![0, 503].includes(Number(error?.status))) privacyIntents.delete(intentKey);
+        privacyError = safePageError(error);
+        renderSecurity();
+        return false;
+      } finally {
+        receipt = "";
+        if (issued) issued.receipt = "";
       }
     },
     async refreshDataGovernance() {
@@ -2698,6 +2928,31 @@ export function createIdentityPageController({
     );
   }
 
+  function workspacePrivacyReadAllowed() {
+    return workspacePermissionAllowed("privacy.preference.read")
+      && workspacePermissionAllowed("privacy.dsr.read");
+  }
+
+  function workspacePrivacyManageAllowed() {
+    return workspacePermissionAllowed("privacy.preference.manage");
+  }
+
+  function workspacePrivacyCreateAllowed() {
+    return workspacePermissionAllowed("privacy.dsr.create");
+  }
+
+  function workspacePrivacyCancelAllowed() {
+    return workspacePermissionAllowed("privacy.dsr.cancel");
+  }
+
+  function workspacePermissionAllowed(permission) {
+    return Boolean(
+      workspaceContext
+      && Array.isArray(workspaceContext.permission_codes)
+      && workspaceContext.permission_codes.includes(permission),
+    );
+  }
+
   function workspaceLegalHoldReadAllowed() {
     return Boolean(
       workspaceContext
@@ -2907,6 +3162,105 @@ export function createIdentityPageController({
       if (render) renderSecurity();
       return false;
     }
+  }
+
+  async function loadPrivacy(ticket, feedback = "", { render = true } = {}) {
+    if (!workspacePrivacyReadAllowed() || typeof api.privacyPreferences !== "function"
+      || typeof api.privacyRequests !== "function") {
+      privacyPreferences = null;
+      privacyRequests = null;
+      privacyBusy = false;
+      privacyError = null;
+      privacyIntents = new Map();
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    privacyBusy = true;
+    try {
+      const [preferences, requests] = await Promise.all([
+        api.privacyPreferences({ signal: ticket.signal }),
+        api.privacyRequests({ limit: 50, signal: ticket.signal }),
+      ]);
+      if (!isCurrent(ticket)) return false;
+      if (preferences.preference.workspace_id !== workspaceContext?.workspace_id
+        || requests.items.some((item) => item.workspace_id !== workspaceContext?.workspace_id)) {
+        throw new IdentityApiError({
+          code: "privacy.owner_mismatch",
+          message: "隐私投影与当前空间不一致。",
+        });
+      }
+      privacyPreferences = preferences;
+      privacyRequests = requests;
+      privacyBusy = false;
+      privacyError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      privacyPreferences = null;
+      privacyRequests = null;
+      privacyBusy = false;
+      privacyError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function privacyStepUp(ticket, input, actionCode, resourceId) {
+    if (typeof api.stepUp !== "function") {
+      throw new IdentityApiError({
+        code: "identity.step_up_required",
+        message: "当前操作需要一次性身份验证。",
+      });
+    }
+    const method = String(input.stepUpMethod ?? "totp");
+    let credential = null;
+    let challengeId;
+    try {
+      if (method === "webauthn") {
+        if (typeof api.beginWebAuthnStepUp !== "function"
+          || typeof api.getWebAuthnAssertion !== "function") {
+          throw new IdentityApiError({
+            code: "identity.webauthn_unavailable",
+            message: "当前浏览器无法使用安全密钥。",
+          });
+        }
+        const challenge = await api.beginWebAuthnStepUp({ signal: ticket.signal });
+        if (!isCurrent(ticket)) return "";
+        challengeId = challenge.challenge_id;
+        credential = await api.getWebAuthnAssertion({
+          publicKeyOptions: challenge.public_key_options,
+        });
+        if (!isCurrent(ticket)) return "";
+      }
+      const result = await queueWrite(() => api.stepUp({
+        method,
+        workspaceId: workspaceContext.workspace_id,
+        actionCode,
+        resourceType: "privacy_request",
+        resourceId,
+        code: input.stepUpCode,
+        challengeId,
+        credential,
+        signal: ticket.signal,
+      }));
+      credential = null;
+      return result.grant;
+    } finally {
+      credential = null;
+      input.stepUpCode = "";
+    }
+  }
+
+  function upsertPrivacyRequest(response, item) {
+    const items = Array.isArray(response?.items) ? response.items : [];
+    return {
+      ...(response ?? { request_id: "-", trace_id: "-" }),
+      items: [item, ...items.filter(
+        (candidate) => candidate.data_subject_request_id !== item.data_subject_request_id,
+      )].slice(0, 50),
+    };
   }
 
   async function loadMachineIdentity(ticket, feedback = "", { render = true } = {}) {
@@ -3503,6 +3857,7 @@ export function createIdentityPageController({
         loadScimDirectory(ticket, "", { render: false }),
         loadConditionalAccess(ticket, "", { render: false }),
         loadDataGovernance(ticket, "", { render: false }),
+        loadPrivacy(ticket, "", { render: false }),
         loadMachineIdentity(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
@@ -3648,6 +4003,14 @@ export function createIdentityPageController({
       dataGovernanceCanManage: workspaceGovernanceManageAllowed(),
       legalHoldVisible: workspaceLegalHoldReadAllowed(),
       legalHoldCanManage: workspaceLegalHoldManageAllowed(),
+      privacyPreferences,
+      privacyRequests,
+      privacyBusy,
+      privacyError,
+      privacyVisible: workspacePrivacyReadAllowed(),
+      privacyCanManage: workspacePrivacyManageAllowed(),
+      privacyCanCreate: workspacePrivacyCreateAllowed(),
+      privacyCanCancel: workspacePrivacyCancelAllowed(),
       machineIdentity,
       machineIdentityBusy,
       machineIdentityError,
@@ -3754,6 +4117,11 @@ export function createIdentityPageController({
     dataGovernanceDraft = null;
     dataGovernanceSimulationFingerprint = null;
     dataGovernanceIntent = null;
+    privacyPreferences = null;
+    privacyRequests = null;
+    privacyBusy = false;
+    privacyError = null;
+    privacyIntents = new Map();
     machineIdentity = null;
     machineIdentityBusy = false;
     machineIdentityError = null;
@@ -3959,6 +4327,41 @@ export function createIdentityPageController({
         scrubFormSecrets(form);
         await controller.saveConditionalAccess(input);
         input.code = "";
+      } else if (form?.matches?.("[data-privacy-preference-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        await controller.savePrivacyPreferences({
+          analyticsEnabled: fields.get("analyticsEnabled") === "on",
+          productUpdatesEnabled: fields.get("productUpdatesEnabled") === "on",
+          modelImprovementEnabled: fields.get("modelImprovementEnabled") === "on",
+          termsVersion: fields.get("termsVersion"),
+          locale: fields.get("locale"),
+        });
+      } else if (form?.matches?.("[data-privacy-request-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          requestKind: fields.get("requestKind"),
+          stepUpMethod: fields.get("stepUpMethod"),
+          stepUpCode: fields.get("stepUpCode"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubFormSecrets(form);
+        await controller.createPrivacyRequest(input);
+        input.stepUpCode = "";
+      } else if (form?.matches?.("[data-privacy-cancel-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        const input = {
+          requestId: fields.get("requestId"),
+          revision: Number(fields.get("revision")),
+          stepUpMethod: fields.get("stepUpMethod"),
+          stepUpCode: fields.get("stepUpCode"),
+          confirmed: fields.get("confirmed") === "on",
+        };
+        scrubFormSecrets(form);
+        await controller.cancelPrivacyRequest(input);
+        input.stepUpCode = "";
       } else if (form?.matches?.("[data-data-governance-policy-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -4215,6 +4618,10 @@ export function createIdentityPageController({
         await controller.simulateConditionalAccess();
       } else if (button.dataset.identityAction === "refresh-data-governance") {
         await controller.refreshDataGovernance();
+      } else if (button.dataset.identityAction === "refresh-privacy") {
+        await controller.refreshPrivacy();
+      } else if (button.dataset.identityAction === "download-privacy-export") {
+        await controller.downloadPrivacyExport(button.dataset.privacyRequestId);
       } else if (button.dataset.identityAction === "refresh-machine-identity") {
         await controller.refreshMachineIdentity();
       } else if (button.dataset.identityAction === "create-oauth-client") {
@@ -4487,7 +4894,8 @@ function normalizeSessions(list, currentSession) {
 }
 
 function safePageError(error) {
-  if (error instanceof IdentityApiError || error instanceof PlatformApiError) {
+  if (error instanceof IdentityApiError || error instanceof PlatformApiError
+    || error instanceof PrivacyApiError) {
     return { message: error.message, requestId: error.requestId };
   }
   return { message: "账号请求未完成，请稍后重试。", requestId: "-" };
@@ -4502,7 +4910,8 @@ function isWorkspaceSessionMissing(error) {
 }
 
 function isWorkspaceAuthorizationDrift(error) {
-  return error instanceof IdentityApiError && new Set([401, 403]).has(error.status);
+  return (error instanceof IdentityApiError || error instanceof PrivacyApiError)
+    && new Set([401, 403]).has(error.status);
 }
 
 function isOnboardingRevisionDrift(error) {

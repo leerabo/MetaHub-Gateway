@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-133 - 公共Control API与SDK版本弃用治理` 已完成；当前下一条未完成项是
-  `PRD-134 - 全局账号隐私、同意与数据主体请求`。
+- 新 `PRD-090` 至 `PRD-134 - 全局账号隐私、同意与数据主体请求` 已完成；当前下一条未完成项是
+  `PRD-135 - 合规控制与证据中心`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-134 - 全局账号隐私、同意与数据主体请求` 已完成：0126、Global+Workspace 双会话本人鉴权、
+  ConsentRecord/偏好 CAS、七 owner DSR、Legal Hold/retention 决定、AES-GCM IdentityExport、确定性 HMAC
+  一次性回执、持久 scheduler fencing、Identity 隐私中心和 Platform 最小队列均已交付。API `3/3`、迁移
+  `3/3`、Console `7/7`、关联回归 `69/69`、lint `404 files` 和 Ruff 通过。详见
+  [PRD-134 设计](docs/prd/PRD-134-global-account-privacy-consent-data-subject-request.md) 和
+  [PRD-134 测试记录](docs/testing/PRD-134-tests.md)。下一权威项为 PRD-135；完整 G6 留到 PRD-138 后。
 - `PRD-133 - 公共Control API与SDK版本弃用治理` 已完成：0125、显式 public registry、canonical
   compatibility diff、Python/JavaScript 可复现 SDK、Ed25519/KMS 签名与浏览器下载验签、双人发布、
   90 天废弃与持久 sunset gate、Developer API Docs 和 Platform Releases 工作台均已交付。Shared `5/5`、

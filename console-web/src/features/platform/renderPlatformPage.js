@@ -100,6 +100,7 @@ function renderView(state, permissions) {
   if (state.view === "support") return supportView(state, permissions);
   if (state.view === "audit") return auditView(state);
   if (state.view === "billing") return billingView(state, permissions);
+  if (state.view === "privacy") return privacyView(state);
   if (state.view === "compliance") return complianceView(state, permissions);
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
@@ -2696,6 +2697,63 @@ function developerLanguage(value) {
   return value === "javascript" ? "JavaScript" : value === "python" ? "Python" : value;
 }
 
+function privacyView(state) {
+  const items = Array.isArray(state.privacyQueue?.items) ? state.privacyQueue.items : [];
+  const active = items.filter((item) => new Set([
+    "received", "identity_verified", "collecting", "reviewing", "ready",
+  ]).has(item.status));
+  const warnings = active.filter((item) => item.warning_sent).length;
+  const overdue = active.filter((item) => Date.parse(item.deadline_at) < Date.now()).length;
+  return `
+    <header class="platform-page-heading">
+      <div><p>Privacy operations</p><h1>隐私请求队列</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="privacy-refresh"
+        title="刷新隐私请求队列" aria-label="刷新隐私请求队列" ${state.loading ? "disabled" : ""}>&#8635;</button>
+    </header>
+    <section class="platform-metrics platform-privacy-metrics" aria-label="隐私请求队列摘要">
+      ${metric("Active", active.length, "open requests")}
+      ${metric("Deadline warning", warnings, "warning dispatched")}
+      ${metric("Overdue", overdue, "past legal deadline")}
+      ${metric("Queue", items.length, "minimal projections")}
+    </section>
+    <section class="platform-band platform-privacy-queue">
+      <div class="platform-section-heading"><div><p>Minimal processing view</p><h2>分域处理进度</h2></div><span>${number(items.length)} 项</span></div>
+      <div class="platform-table-wrap"><table class="platform-privacy-table">
+        <thead><tr><th>请求</th><th>状态</th><th>期限</th><th>分域进度</th><th>法律结果</th></tr></thead>
+        <tbody>${items.map(privacyQueueRow).join("") || emptyRow("当前没有隐私请求", 5)}</tbody>
+      </table></div>
+    </section>
+  `;
+}
+
+function privacyQueueRow(item) {
+  const completed = item.domain_progress.filter((entry) => entry.status === "completed").length;
+  const failed = item.domain_progress.filter((entry) => entry.status === "failed").length;
+  const legal = item.legal_outcomes.length
+    ? [...new Set(item.legal_outcomes)].map((outcome) => status(outcome)).join("")
+    : '<span class="platform-restricted">无</span>';
+  return `<tr>
+    <td data-label="请求"><strong><code>${escapeHtml(item.request_code)}</code></strong><small>${escapeHtml(privacyKindLabel(item.request_kind))}</small></td>
+    <td data-label="状态">${status(item.status)}${item.warning_sent ? '<small class="platform-privacy-warning">Deadline warning</small>' : ""}</td>
+    <td data-label="期限"><strong>${formatTime(item.deadline_at)}</strong><small>收到 ${formatTime(item.received_at)}</small></td>
+    <td data-label="分域进度"><strong>${number(completed)} / ${number(item.domain_progress.length)}</strong><small>${failed ? `${number(failed)} failed` : privacyActiveDomains(item.domain_progress)}</small></td>
+    <td data-label="法律结果"><div class="platform-privacy-outcomes">${legal}</div></td>
+  </tr>`;
+}
+
+function privacyActiveDomains(items) {
+  const active = items.filter((item) => new Set(["pending", "running"]).has(item.status));
+  return active.length ? active.map((item) => privacyOwnerLabel(item.owner_domain)).join(" · ") : "all terminal";
+}
+
+function privacyKindLabel(value) {
+  return ({ export: "数据导出", rectify: "数据更正", erase: "数据删除" })[value] ?? value;
+}
+
+function privacyOwnerLabel(value) {
+  return ({ identity: "Identity", membership: "Membership", audit: "Audit", billing: "Billing", support: "Support", edge: "Edge", data_governance: "Governance" })[value] ?? value;
+}
+
 function domainPlaceholderView(state) {
   const item = (state.navigation ?? []).find((candidate) => candidate.id === state.view);
   return `
@@ -2780,7 +2838,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤", privacy: "◌" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }

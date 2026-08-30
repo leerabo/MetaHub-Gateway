@@ -153,6 +153,7 @@ import {
   mutatePlatformDeprecation,
   withdrawPlatformSdk,
 } from "../../lib/developerContracts.js";
+import { listPlatformPrivacyQueue } from "../../lib/privacyCenter.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -204,6 +205,7 @@ if (root) {
       supportIdempotencyKey: (scope) => createSupportIdempotencyKey(scope),
       breakGlass: (input) => createBreakGlassSession({ controlApiUrl, ...input }),
       audit: (input) => listPlatformAudit({ controlApiUrl, ...input }),
+      privacyQueue: (input) => listPlatformPrivacyQueue({ controlApiUrl, ...input }),
       billingSummary: (input) => listPlatformBillingSummary({ controlApiUrl, ...input }),
       createBillingAdjustment: (input) => createPlatformBillingAdjustment({
         controlApiUrl,

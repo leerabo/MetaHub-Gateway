@@ -1,6 +1,6 @@
 # PRD-134 全局账号隐私、同意与数据主体请求
 
-状态：设计冻结，尚未实现。依赖 PRD-089/091/092/105/117；范围以 Excel PRD-134 为准。
+状态：已完成。依赖 PRD-089/091/092/105/117；范围以 Excel PRD-134 为准。
 
 ## Excel 权威合同
 
@@ -70,3 +70,21 @@ domain progress 和 fixed legal outcome。Workspace owner 只从协调命令处�
 export 字段、大小、加密、一次下载和超时；erase/anonymize/retain、Legal Hold、retention generation、部分拒绝；
 worker 崩溃/接管/取消/迟到响应；法定 deadline 告警、p95；Identity/Platform 三浏览器三缩放；敏感审计与静止终态。
 完整 G6 留到 PRD-138 后统一执行。
+
+## 7. 实施结论
+
+- 0126 已扩展全局 ConsentRecord，并新增 Workspace/tenant/account 复合 owner 的偏好、DSR、七域 owner job、
+  加密 IdentityExport、不可变删除决定/保留例外、事件/outbox、幂等命令和持久 scheduler fencing。
+- Identity 路由严格同时恢复 GlobalSession 与 WorkspaceSession；写操作使用 Global CSRF/Origin，DSR 创建与取消
+  分别消费绑定当前 Workspace/请求的 one-shot step-up grant。Platform 队列只接受独立 PlatformSession 和
+  `platform_privacy` 权限，不返回账号、Workspace、email 或导出正文。
+- 导出使用 owner 字段白名单、AES-GCM owner-qualified AAD、24 小时制品 TTL 和 5 分钟一次性回执；回执由
+  export revision 与 Idempotency-Key 确定性派生，只保存 HMAC，下载只从请求头接收并在成功后原子消费。
+  data-governance owner 不把 Legal Hold、retention generation 或 Workspace 级统计写入导出正文。
+- Identity 页面交付偏好、同意历史、请求创建/取消、七域进度、决定/例外和一次性下载；Platform 页面交付
+  pseudonymous 队列。两端均使用 strict DTO、epoch/Abort/Workspace owner 防漂移，并在离页、换空间、失败和
+  `finally` 中清除 step-up 与回执。
+
+实施后的两轮复核均已关闭 P0/P1：第一轮复核主体、凭据域、导出白名单和 Platform 最小投影；第二轮复核
+CAS/幂等、owner job 与 scheduler 租约接管、Legal Hold generation、取消时序、回执重放和迟到响应清理。
+专项结果、敏感审计与批次门禁边界见 `docs/testing/PRD-134-tests.md`；下一权威项为 PRD-135。

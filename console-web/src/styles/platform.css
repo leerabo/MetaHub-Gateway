@@ -1408,3 +1408,75 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-support-operations form + form { border-top: 1px solid var(--line); border-left: 0; padding-top: 18px; padding-left: 0; }
   .platform-support-escalations li { grid-template-columns: minmax(0,1fr); }
 }
+
+/* PRD-134 exposes only pseudonymous queue facts to platform privacy operators. */
+.platform-privacy-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.platform-privacy-table {
+  min-width: 820px;
+  table-layout: auto;
+}
+
+.platform-privacy-table th:first-child { width: 18%; }
+.platform-privacy-table th:nth-child(2) { width: 14%; }
+.platform-privacy-table th:nth-child(3) { width: 18%; }
+.platform-privacy-table th:nth-child(4) { width: 30%; }
+.platform-privacy-table th:last-child,
+.platform-privacy-table td:last-child { width: 20%; text-align: left; }
+
+.platform-privacy-table code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.platform-privacy-warning {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.platform-privacy-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 5px;
+}
+
+@media (max-width: 760px) {
+  .platform-privacy-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .platform-privacy-metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .platform-privacy-metrics > div:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+
+  .platform-privacy-table { min-width: 0; }
+  .platform-privacy-table thead { display: none; }
+  .platform-privacy-table tbody,
+  .platform-privacy-table tr,
+  .platform-privacy-table td { display: block; width: 100%; }
+  .platform-privacy-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-privacy-table td,
+  .platform-privacy-table td:last-child {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+    border: 0;
+    padding: 6px 0;
+    text-align: left;
+  }
+  .platform-privacy-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+}

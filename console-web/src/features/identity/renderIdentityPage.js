@@ -1,4 +1,6 @@
 // 账号安全渲染层只展示后端脱敏投影，企业认证表单可见性不构成服务端授权。
+import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
+
 export function renderIdentityLoginPage(container, options = {}) {
   if (!container) return;
   container.innerHTML = `
@@ -234,6 +236,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderMembershipSection(state)}
         ${renderConditionalAccessSection(state)}
         ${renderDataGovernanceSection(state)}
+        ${renderPrivacyCenter(state)}
         ${renderEnterpriseIdentitySection(state)}
         ${renderScimDirectorySection(state)}
         ${renderMachineIdentitySection(state)}

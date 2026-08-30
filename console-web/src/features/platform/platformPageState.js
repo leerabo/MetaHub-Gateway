@@ -145,6 +145,7 @@ export function createPlatformPageController({
     backupIntent: null,
     grants: null,
     audit: null,
+    privacyQueue: null,
     diagnostics: null,
     supportTickets: null,
     supportTicketFilters: { status: "", severity: "", workspaceId: "" },
@@ -244,7 +245,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "provider-catalog", "releases", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
-        "offline-bundles", "support",
+        "offline-bundles", "support", "privacy",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -298,6 +299,8 @@ export function createPlatformPageController({
           state.supportTickets = null;
           state.selectedSupportTicketId = null;
           state.supportTicketIntent = null;
+        } else if (state.view === "privacy") {
+          state.privacyQueue = null;
         }
         state.loading = false;
       }
@@ -343,6 +346,11 @@ export function createPlatformPageController({
         void loadOfflineBundles();
       }
       if (state.view === "support" && !state.supportTickets) void loadSupportTickets();
+      if (state.view === "privacy" && !state.privacyQueue) void loadPrivacyQueue();
+    },
+    async refreshPrivacyQueue() {
+      if (state.view !== "privacy") return false;
+      return loadPrivacyQueue();
     },
     async buildDeveloperContract(input = {}) {
       if (!currentPermissions().has("platform.developer_contract.manage")
@@ -2055,6 +2063,7 @@ export function createPlatformPageController({
         grants: null,
         supportTickets: null,
         audit: null,
+        privacyQueue: null,
         workspaces: null,
         workspaceDetail: null,
         workspaceHealth: null,
@@ -2272,6 +2281,12 @@ export function createPlatformPageController({
       if (!fleetOnly && permissions.has("platform.audit.read")) {
         tasks.push(api.audit({ signal: ticket.signal }).then((value) => { next.audit = value; }));
       }
+      if (state.view === "privacy" && permissions.has("platform.privacy.read")
+        && typeof api.privacyQueue === "function") {
+        tasks.push(api.privacyQueue({ limit: 100, signal: ticket.signal }).then((value) => {
+          next.privacyQueue = value;
+        }));
+      }
       if (!fleetOnly && hasWorkspaceRead(permissions)) {
         tasks.push(api.workspaces({
           filters: state.workspaceFilters,
@@ -2361,6 +2376,7 @@ export function createPlatformPageController({
         state.selectedSupportTicketId = null;
         state.supportTicketIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "privacy")) state.privacyQueue = null;
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -2881,6 +2897,26 @@ export function createPlatformPageController({
       });
       if (!current(ticket)) return false;
       state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadPrivacyQueue() {
+    if (state.view !== "privacy" || !currentPermissions().has("platform.privacy.read")
+      || typeof api.privacyQueue !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const result = await api.privacyQueue({ limit: 100, signal: ticket.signal });
+      if (!current(ticket) || state.view !== "privacy") return false;
+      state.privacyQueue = result;
+      state.loading = false;
+      state.feedback = "隐私请求队列已刷新。";
       render();
       return true;
     } catch (error) {
@@ -3875,6 +3911,7 @@ export function createPlatformPageController({
       }
       const action = target.dataset.platformAction;
       if (action === "refresh") controller.refresh();
+      if (action === "privacy-refresh") controller.refreshPrivacyQueue();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -4092,6 +4129,7 @@ export function createPlatformPageController({
     state.selectedSupportTicketId = null;
     state.supportTicketIntent = null;
     state.audit = null;
+    state.privacyQueue = null;
     state.diagnostics = null;
     state.workspaces = null;
     state.workspaceFilters = {};

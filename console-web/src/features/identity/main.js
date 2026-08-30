@@ -111,6 +111,16 @@ import {
   rotateWorkspaceServiceAccountCredential,
 } from "../../lib/machineIdentity.js";
 import { completeRiskChallenge } from "../../lib/riskControls.js";
+import {
+  cancelDataSubjectRequest,
+  createDataSubjectRequest,
+  downloadPrivacyExport,
+  getPrivacyPreferences,
+  issuePrivacyExportReceipt,
+  listDataSubjectRequests,
+  savePrivacyExport,
+  updatePrivacyPreferences,
+} from "../../lib/privacyCenter.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -253,6 +263,17 @@ if (root) {
       }),
       createLegalHold: (input) => createWorkspaceLegalHold({ controlApiUrl, ...input }),
       releaseLegalHold: (input) => releaseWorkspaceLegalHold({ controlApiUrl, ...input }),
+      privacyPreferences: (input) => getPrivacyPreferences({ controlApiUrl, ...input }),
+      updatePrivacyPreferences: (input) => updatePrivacyPreferences({ controlApiUrl, ...input }),
+      privacyRequests: (input) => listDataSubjectRequests({ controlApiUrl, ...input }),
+      createPrivacyRequest: (input) => createDataSubjectRequest({ controlApiUrl, ...input }),
+      cancelPrivacyRequest: (input) => cancelDataSubjectRequest({ controlApiUrl, ...input }),
+      issuePrivacyExportReceipt: (input) => issuePrivacyExportReceipt({ controlApiUrl, ...input }),
+      downloadPrivacyExport: async (input) => {
+        const result = await downloadPrivacyExport({ controlApiUrl, ...input });
+        savePrivacyExport(result);
+        return result;
+      },
       machineIdentity: (input) => listWorkspaceServiceAccounts({ controlApiUrl, ...input }),
       createServiceAccount: (input) => createWorkspaceServiceAccount({ controlApiUrl, ...input }),
       createOAuthClient: (input) => createWorkspaceOAuthClient({ controlApiUrl, ...input }),

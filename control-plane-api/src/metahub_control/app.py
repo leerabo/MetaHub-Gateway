@@ -103,6 +103,8 @@ from .platform_jobs import router as platform_jobs_router
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
+from .privacy_center import install_privacy_scheduler
+from .privacy_center import router as privacy_center_router
 from .product_analytics import install_product_event_scheduler
 from .product_analytics import router as product_analytics_router
 from .projects.routes import router as projects_router
@@ -155,6 +157,7 @@ app = create_service_app(
         "X-CSRF-Token",
         "X-MetaHub-Invoice-Download-Token",
         "X-Step-Up-Grant",
+        "X-Privacy-Export-Receipt",
     ),
     cors_allow_credentials=True,
     extra_cors_expose_headers=(
@@ -164,6 +167,7 @@ app = create_service_app(
         "X-MetaHub-Audit-Export-Row-Count",
         "Digest",
         "X-Artifact-Receipt-SHA256",
+        "Content-Disposition",
         # 文件安全 CSV 已返回 nosniff；浏览器必须能读取该头并执行下载合同验收。
         "X-Content-Type-Options",
         # PAGE-107 在跨端口 Console 中执行 exact 私有响应门禁，需要读取 CORS
@@ -228,6 +232,9 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/scim/v2/Groups/")
         or request.url.path == "/platform/bootstrap"
         or request.url.path.startswith("/platform/")
+        or request.url.path.startswith("/identity/privacy-")
+        or request.url.path.startswith("/identity/data-subject-requests")
+        or request.url.path.startswith("/identity/exports/")
         or request.url.path.startswith("/risk/")
         or request.url.path.startswith("/support/")
         or request.url.path.startswith("/workspace/support-grants/")
@@ -294,6 +301,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(identity_router)
+app.include_router(privacy_center_router)
 app.include_router(enterprise_identity_router)
 app.include_router(edge_management_router)
 app.include_router(workspaces_router)
@@ -394,6 +402,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_customer_health_scheduler,
             install_customer_support_scheduler,
             install_developer_contract_scheduler,
+            install_privacy_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

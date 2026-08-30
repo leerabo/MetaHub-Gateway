@@ -2575,6 +2575,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-134，完整 G6 在 PRD-138 后统一执行且只能形成
   release candidate。
 
+## PRD-134 全局账号隐私、同意与数据主体请求（已完成）
+
+- `control-plane-api/src/metahub_control/privacy_center/`：Global+Workspace 双会话路由、strict DTO、偏好 CAS、
+  DSR 创建/取消/查询、七 owner adapter job、Legal Hold/retention 决定、AES-GCM IdentityExport、确定性
+  HMAC 一次性回执、Platform 最小队列和持久 scheduler lease/fencing。
+- `control-plane-api/src/metahub_control/workspace_access/privacy_permissions.py`：完整验证 0126 privacy 权限目录
+  与角色矩阵，目录缺失、部分应用或篡改时失败关闭；WorkspaceSession 投影继续由后端动态鉴权。
+- `infra/migrations/0126_global_account_privacy_dsr.sql/.down.sql`：ConsentRecord 兼容扩展、偏好/DSR/owner job/
+  export/decision/exception/event/outbox/action/scheduler、七 adapter manifest、Workspace/Platform 权限、不变与状态
+  触发器、tenant deletion manifest 扩展和业务事实 down guard。
+- `console-web/src/lib/privacyCenter.js`、`src/features/identity/renderPrivacyCenter.js` 与 Identity/Platform 页面：
+  strict 双域 client/DTO、偏好与 DSR 工作流、step-up、分域进度、例外、一次下载和 pseudonymous Platform
+  队列；回执不进入 URL/DOM/Storage，换空间、离页、失败和迟到响应均清除敏感状态。
+- `docs/prd/PRD-134-global-account-privacy-consent-data-subject-request.md` 与
+  `docs/testing/PRD-134-tests.md`：保存两轮自审、0126/API/Console、必要 Identity/Platform/Workspace 回归、
+  静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-135，完整 G6 在 PRD-138 后统一执行且只能形成
+  release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：
