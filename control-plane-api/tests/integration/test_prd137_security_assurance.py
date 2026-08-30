@@ -29,6 +29,7 @@ from metahub_control.security_assurance.routes import router as assurance_router
 from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
 from metahub_control.workspace_access.service import WorkspaceSessionContext
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -90,7 +91,7 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd137-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0129"
+    assert "0129" in apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -418,6 +419,33 @@ async def _create(
         headers=_platform_headers(token, key),
         json=_assessment_body(runtime.workspace_id),
     )
+
+
+@pytest.mark.anyio
+async def test_get_assessment_supports_reused_request_connection(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _app(monkeypatch, runtime, _passed_runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await _create(
+            client,
+            runtime,
+            token=PLATFORM_A_TOKEN,
+            key="prd137-reused-connection-0001",
+        )
+    assert created.status_code == 201, created.text
+    assessment_id = created.json()["assessment"]["security_assessment_id"]
+
+    with database_request_scope(reuse_connections=True):
+        response = service.get_security_assessment(
+            runtime.config,
+            assessment_id,
+            platform_session_token=PLATFORM_A_TOKEN,
+            request_id="req_prd137_reused_connection",
+            trace_id="trc_prd137_reused_connection",
+        )
+
+    assert response.assessment.security_assessment_id == assessment_id
 
 
 @pytest.mark.anyio

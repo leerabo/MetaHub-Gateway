@@ -1506,9 +1506,7 @@ def _finding_id(value: str) -> None:
 
 
 def _connect(config):
-    connection = connect_database(config.database_url)
-    connection.row_factory = sqlite3.Row
-    return connection
+    return connect_database(config.database_url)
 
 
 def _rollback(connection) -> None:
