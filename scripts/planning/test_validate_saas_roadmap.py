@@ -15,16 +15,18 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 def test_dependency_extraction_only_accepts_explicit_prd_references() -> None:
-    assert VALIDATOR._explicit_dependencies(
-        "PRD-090..105、PRD-040/062/089"
-    ) == {40, 62, 89, 90, 105}
+    assert VALIDATOR._explicit_dependencies("PRD-090..105、PRD-040/062/089") == {
+        40,
+        62,
+        89,
+        90,
+        105,
+    }
 
 
 def test_roadmap_sequence_has_no_fixed_upper_limit() -> None:
     assert VALIDATOR._continuous_prd_ids(["PRD-090", "PRD-091", "PRD-092"])
-    assert VALIDATOR._continuous_prd_ids(
-        [f"PRD-{number:03d}" for number in range(90, 141)]
-    )
+    assert VALIDATOR._continuous_prd_ids([f"PRD-{number:03d}" for number in range(90, 141)])
     assert not VALIDATOR._continuous_prd_ids(["PRD-090", "PRD-092"])
 
 
@@ -41,7 +43,7 @@ def test_post_baseline_navigation_does_not_rewrite_the_frozen_inventory() -> Non
     assert len(VALIDATOR._source_navigation_ids()) == 64
 
 
-def test_repository_roadmap_baseline_passes_after_prd134_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-135")
+def test_repository_roadmap_baseline_passes_after_prd135_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-136")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-135"
+    assert report.next_prd == "PRD-136"

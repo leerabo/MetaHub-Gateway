@@ -15,7 +15,7 @@ class _StrictModel(BaseModel):
 class ServiceAccountCreateRequest(_StrictModel):
     name: str = Field(min_length=2, max_length=80)
     display_name: str = Field(min_length=2, max_length=120)
-    scope_template: Literal["provider_reader", "observability_reader"]
+    scope_template: Literal["provider_reader", "observability_reader", "compliance_collector"]
     scopes: list[str] = Field(min_length=1, max_length=8)
     token_ttl_seconds: int = Field(ge=60, le=3600)
     ip_allowlist: list[str] = Field(default_factory=list, max_length=16)
@@ -47,7 +47,7 @@ class ServiceAccountSummary(_StrictModel):
     name: str
     display_name: str
     status: Literal["active", "disabled", "revoked"]
-    scope_template: Literal["provider_reader", "observability_reader"]
+    scope_template: Literal["provider_reader", "observability_reader", "compliance_collector"]
     scopes: list[str]
     token_ttl_seconds: int
     ip_allowlist: list[str]

@@ -2,6 +2,7 @@
 import { IdentityApiError } from "../../lib/identity.js";
 import { PlatformApiError } from "../../lib/platform.js";
 import { PrivacyApiError } from "../../lib/privacyCenter.js";
+import { ComplianceApiError } from "../../lib/complianceCenter.js";
 import { buildInvitationAcceptLink } from "../../lib/invitations.js";
 import { consumePaymentClientToken } from "../../lib/paymentCommerce.js";
 import {
@@ -116,6 +117,9 @@ export function createIdentityPageController({
   let privacyBusy = false;
   let privacyError = null;
   let privacyIntents = new Map();
+  let complianceReports = null;
+  let complianceBusy = false;
+  let complianceError = null;
   let machineIdentity = null;
   let machineIdentityBusy = false;
   let machineIdentityError = null;
@@ -1312,6 +1316,16 @@ export function createIdentityPageController({
       privacyError = null;
       renderSecurity();
       return loadPrivacy(ticket, "隐私中心已刷新。");
+    },
+    async refreshComplianceReports() {
+      if (!workspaceComplianceReadAllowed() || typeof api.complianceReports !== "function") {
+        return false;
+      }
+      const ticket = beginRequest();
+      complianceBusy = true;
+      complianceError = null;
+      renderSecurity();
+      return loadComplianceReports(ticket, "控制事实报告已刷新。");
     },
     async savePrivacyPreferences(input = {}) {
       if (!workspacePrivacyManageAllowed() || privacyBusy || !privacyPreferences?.preference
@@ -2945,6 +2959,10 @@ export function createIdentityPageController({
     return workspacePermissionAllowed("privacy.dsr.cancel");
   }
 
+  function workspaceComplianceReadAllowed() {
+    return workspacePermissionAllowed("compliance.report.read");
+  }
+
   function workspacePermissionAllowed(permission) {
     return Boolean(
       workspaceContext
@@ -3202,6 +3220,38 @@ export function createIdentityPageController({
       privacyRequests = null;
       privacyBusy = false;
       privacyError = safePageError(error);
+      if (render) renderSecurity();
+      return false;
+    }
+  }
+
+  async function loadComplianceReports(ticket, feedback = "", { render = true } = {}) {
+    if (!workspaceComplianceReadAllowed() || typeof api.complianceReports !== "function") {
+      complianceReports = null;
+      complianceBusy = false;
+      complianceError = null;
+      if (render) renderSecurity({ feedback });
+      return false;
+    }
+    const ownerWorkspaceId = workspaceContext.workspace_id;
+    complianceBusy = true;
+    try {
+      const reports = await api.complianceReports({
+        workspaceId: ownerWorkspaceId,
+        signal: ticket.signal,
+      });
+      if (!isCurrent(ticket) || workspaceContext?.workspace_id !== ownerWorkspaceId) return false;
+      complianceReports = reports;
+      complianceBusy = false;
+      complianceError = null;
+      if (render) renderSecurity({ feedback });
+      return true;
+    } catch (error) {
+      if (!isCurrent(ticket) || isAbort(error)) return false;
+      if (isWorkspaceAuthorizationDrift(error)) throw error;
+      complianceReports = null;
+      complianceBusy = false;
+      complianceError = safePageError(error);
       if (render) renderSecurity();
       return false;
     }
@@ -3858,6 +3908,7 @@ export function createIdentityPageController({
         loadConditionalAccess(ticket, "", { render: false }),
         loadDataGovernance(ticket, "", { render: false }),
         loadPrivacy(ticket, "", { render: false }),
+        loadComplianceReports(ticket, "", { render: false }),
         loadMachineIdentity(ticket, "", { render: false }),
         loadNotificationCenter(ticket, { render: false }),
       ]);
@@ -4011,6 +4062,10 @@ export function createIdentityPageController({
       privacyCanManage: workspacePrivacyManageAllowed(),
       privacyCanCreate: workspacePrivacyCreateAllowed(),
       privacyCanCancel: workspacePrivacyCancelAllowed(),
+      complianceReports,
+      complianceBusy,
+      complianceError,
+      complianceVisible: workspaceComplianceReadAllowed(),
       machineIdentity,
       machineIdentityBusy,
       machineIdentityError,
@@ -4122,6 +4177,9 @@ export function createIdentityPageController({
     privacyBusy = false;
     privacyError = null;
     privacyIntents = new Map();
+    complianceReports = null;
+    complianceBusy = false;
+    complianceError = null;
     machineIdentity = null;
     machineIdentityBusy = false;
     machineIdentityError = null;
@@ -4502,7 +4560,9 @@ export function createIdentityPageController({
           scopeTemplate,
           scopes: scopeTemplate === "provider_reader"
             ? ["provider.read"]
-            : scopeTemplate === "observability_reader" ? ["request_log.read"] : [],
+            : scopeTemplate === "observability_reader"
+              ? ["request_log.read"]
+              : scopeTemplate === "compliance_collector" ? ["compliance.collect"] : [],
           tokenTtlSeconds: Number(fields.get("tokenTtlSeconds")),
           ipAllowlist,
           mtlsFingerprintSha256: fields.get("mtlsFingerprint") || null,
@@ -4620,6 +4680,8 @@ export function createIdentityPageController({
         await controller.refreshDataGovernance();
       } else if (button.dataset.identityAction === "refresh-privacy") {
         await controller.refreshPrivacy();
+      } else if (button.dataset.identityAction === "refresh-compliance") {
+        await controller.refreshComplianceReports();
       } else if (button.dataset.identityAction === "download-privacy-export") {
         await controller.downloadPrivacyExport(button.dataset.privacyRequestId);
       } else if (button.dataset.identityAction === "refresh-machine-identity") {
@@ -4895,7 +4957,7 @@ function normalizeSessions(list, currentSession) {
 
 function safePageError(error) {
   if (error instanceof IdentityApiError || error instanceof PlatformApiError
-    || error instanceof PrivacyApiError) {
+    || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
     return { message: error.message, requestId: error.requestId };
   }
   return { message: "账号请求未完成，请稍后重试。", requestId: "-" };
@@ -4910,7 +4972,8 @@ function isWorkspaceSessionMissing(error) {
 }
 
 function isWorkspaceAuthorizationDrift(error) {
-  return (error instanceof IdentityApiError || error instanceof PrivacyApiError)
+  return (error instanceof IdentityApiError || error instanceof PrivacyApiError
+    || error instanceof ComplianceApiError)
     && new Set([401, 403]).has(error.status);
 }
 

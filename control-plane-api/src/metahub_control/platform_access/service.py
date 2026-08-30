@@ -235,6 +235,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_provider_catalog_role_permissions",
     "platform_customer_support_role_permissions",
     "platform_developer_contract_role_permissions",
+    "platform_compliance_role_permissions",
 )
 
 
@@ -799,10 +800,7 @@ def get_platform_navigation(
             for permission, item_id, label, href in _NAVIGATION
             if permission in permission_set
             or (item_id == "billing" and "platform.catalog.read" in permission_set)
-            or (
-                item_id == "releases"
-                and "platform.developer_contract.read" in permission_set
-            )
+            or (item_id == "releases" and "platform.developer_contract.read" in permission_set)
             or (
                 item_id == "observability"
                 and "platform.observability.security_read" in permission_set
@@ -2537,6 +2535,16 @@ def _authority(
             SELECT extension.permission_code
             FROM platform_operator_role_bindings binding
             JOIN platform_developer_contract_role_permissions extension
+              ON extension.role_code=binding.role_code
+            WHERE binding.operator_id=? AND binding.status='active'
+            """
+        )
+    if "platform_compliance_role_permissions" in extension_tables:
+        extension_queries.append(
+            """
+            SELECT extension.permission_code
+            FROM platform_operator_role_bindings binding
+            JOIN platform_compliance_role_permissions extension
               ON extension.role_code=binding.role_code
             WHERE binding.operator_id=? AND binding.status='active'
             """

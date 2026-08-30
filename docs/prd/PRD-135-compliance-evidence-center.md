@@ -1,6 +1,6 @@
 # PRD-135 等保、个保与企业审计证据中心
 
-状态：设计冻结，尚未实现。依赖 PRD-034/058/081/109/117/134；范围以 Excel PRD-135 为准。
+状态：已完成。依赖 PRD-034/058/081/109/117/134；范围以 Excel PRD-135 为准。
 
 ## Excel 权威合同
 
@@ -70,3 +70,22 @@ Platform Console 展示控制覆盖、freshness、失败、例外、整改和证
 0126/0127 往返/down guard；控制版本/映射、采集器签名/replay、证据分类/owner/freshness；虚假认证文案负测试；
 跨租户报告；例外非自批/到期/撤权；整改闭环；collector/DB/object store/outbox 故障与恢复；10 分钟报告、24 小时过期、
 5 分钟告警；Platform/Workspace 三浏览器三缩放；敏感扫描和静止终态。完整 G6 留到 PRD-138 后。
+
+## 7. 实施结论
+
+0127 已交付版本化控制与法规映射、owner-qualified 证据/例外/整改/报告、不可变事件与 outbox、重放保护、
+持久 scheduler lease/fencing，以及 `compliance_collector` 机器身份模板和 `compliance.collect` 封闭 scope。
+Control API 只接受受信机器身份提交的签名结构化 envelope，不接收任意路径、URL、命令或自由 JSON；
+Workspace 与 Platform Console 只显示控制事实、证据 freshness、差距、例外和整改，不生成外部认证声明。
+
+第一轮实施自审复核 owner、证据来源、字段投影和措辞边界。迁移同时扩展 machine audit 闭集、动态权限目录和
+tenant deletion manifest；报告 DTO 排除证据正文、对象地址、本地路径和 collector 密钥材料；Platform/Workspace
+查询均重新验证复合 owner 和当前权限。修正后无未关闭 P0/P1。
+
+第二轮实施自审复核 replay、幂等、例外非自批、freshness、scheduler 接管与历史热路径。证据 envelope 将
+route、owner、control version、collector identity/version、artifact digest、captured/valid-until 和 outcome
+共同纳入签名与 replay guard；失败自动生成整改，例外绑定固定 generation 并要求不同账号审批。复核发现将
+所有机器路由切到完整扩展权限快照会改变既有 provider/observability 热路径，已恢复其轻量授权探针，仅
+`compliance.collect` 使用完整扩展权限校验。修正后无未关闭 P0/P1，两轮实施自审均通过。
+
+专项结果、敏感审计与批次门禁边界见 `docs/testing/PRD-135-tests.md`；下一权威项为 PRD-136。

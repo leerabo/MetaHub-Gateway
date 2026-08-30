@@ -2326,10 +2326,95 @@ function billingView(state, permissions) {
 }
 
 function complianceView(state, permissions) {
+  const response = state.complianceControls;
+  const controls = Array.isArray(response?.controls) ? response.controls : [];
+  const gaps = controls.filter((item) => new Set([
+    "partially_implemented", "not_implemented", "evidence_stale",
+  ]).has(item.report_outcome)).length;
+  const failures = controls.filter((item) => Number(item.evidence?.failed_count ?? 0) > 0).length;
+  const stale = controls.filter((item) => item.evidence?.freshness === "expired"
+    || item.report_outcome === "evidence_stale").length;
   return `
-    <header class="platform-page-heading"><div><p>Tax governance</p><h1>合规复核</h1></div><span>账务与合规双域</span></header>
+    <header class="platform-page-heading">
+      <div><p>Compliance evidence</p><h1>合规复核</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="compliance-refresh"
+        title="刷新控制证据" aria-label="刷新控制证据" ${state.loading ? "disabled" : ""}>&#8635;</button>
+    </header>
+    <p class="platform-compliance-disclaimer">仅展示控制与证据事实，不代表外部认证结论。</p>
+    <section class="platform-metrics platform-compliance-metrics" aria-label="控制证据摘要">
+      ${metric("Controls", controls.length, response?.control_set_version ?? "not loaded")}
+      ${metric("Gaps", gaps, "partial, missing or stale")}
+      ${metric("Failures", failures, "failed samples")}
+      ${metric("Stale", stale, "expired evidence")}
+    </section>
+    <section class="platform-band platform-compliance-controls">
+      <div class="platform-section-heading"><div><p>Owner-qualified projection</p><h2>控制覆盖与恢复状态</h2></div><span>${response?.workspace_id ? shortWorkspace(response.workspace_id) : "控制目录"}</span></div>
+      <form class="platform-compliance-filter" data-platform-compliance-filter-form autocomplete="off">
+        <label><span>Workspace ID</span><input name="workspaceId" value="${escapeAttribute(state.complianceWorkspaceId ?? "")}" pattern="wsp_[0-9a-f]{32}" placeholder="留空查看控制目录" /></label>
+        <button type="submit" ${state.loading ? "disabled" : ""}>筛选</button>
+      </form>
+      <div class="platform-table-wrap"><table class="platform-compliance-table">
+        <thead><tr><th>控制与映射</th><th>结论</th><th>证据与时效</th><th>例外</th><th>整改</th></tr></thead>
+        <tbody>${controls.map(complianceControlRow).join("") || emptyRow(state.loading ? "正在读取控制事实" : "暂无控制事实", 5)}</tbody>
+      </table></div>
+    </section>
     ${platformInvoiceReconciliation(state, permissions)}
   `;
+}
+
+function complianceControlRow(item) {
+  const control = item.control;
+  return `<tr>
+    <td data-label="控制与映射"><strong>${escapeHtml(control.title)}</strong><code>${escapeHtml(control.control_code)} · v${number(control.control_version)}</code><small>${escapeHtml(complianceMappings(control.mappings))}</small></td>
+    <td data-label="结论">${complianceOutcome(item.report_outcome)}<small>${escapeHtml(item.explanation_code ?? "目录事实")}</small></td>
+    <td data-label="证据与时效">${complianceEvidence(item.evidence)}</td>
+    <td data-label="例外">${complianceException(item.exception)}</td>
+    <td data-label="整改">${complianceRemediation(item.remediation)}</td>
+  </tr>`;
+}
+
+function complianceMappings(items) {
+  return Array.isArray(items) && items.length
+    ? items.map((item) => `${item.framework_code} ${item.clause_code}`).join(" · ")
+    : "无框架映射";
+}
+
+function complianceOutcome(value) {
+  if (value === null || value === undefined) {
+    return '<span class="platform-status">目录范围</span>';
+  }
+  const label = ({
+    implemented: "已实施",
+    partially_implemented: "部分实施",
+    not_implemented: "未实施",
+    not_applicable: "不适用",
+    exception_active: "有效例外",
+    evidence_stale: "证据过期",
+  })[value] ?? value;
+  const kind = value === "implemented" || value === "not_applicable"
+    ? "is-ok"
+    : value === "exception_active" || value === "partially_implemented"
+      ? "is-warn" : "is-danger";
+  return `<span class="platform-status ${kind}">${escapeHtml(label)}</span>`;
+}
+
+function complianceEvidence(evidence) {
+  if (!evidence) return '<span class="platform-restricted">无 Workspace 证据</span>';
+  return `<strong>${escapeHtml(statusLabel(evidence.outcome))} · ${escapeHtml(statusLabel(evidence.freshness))}</strong>
+    <small>${number(evidence.failed_count)} / ${number(evidence.sample_count)} 失败样本</small>
+    <small>${escapeHtml(evidence.collector_version)} · ${escapeHtml(shortReference(evidence.collector_service_account_id))}</small>
+    <small>${escapeHtml(evidence.classification)} · ${shortHash(evidence.artifact_sha256)}</small>
+    <small>有效至 ${formatTime(evidence.valid_until)}</small>`;
+}
+
+function complianceException(exception) {
+  if (!exception) return '<span class="platform-restricted">无</span>';
+  return `${status(exception.status)}<small>${escapeHtml(exception.reason_code)}</small><small>${escapeHtml(exception.compensating_controls.join(" · "))}</small><small>到期 ${formatTime(exception.expires_at)}</small>`;
+}
+
+function complianceRemediation(remediation) {
+  if (!remediation) return '<span class="platform-restricted">无</span>';
+  return `${status(remediation.status)}<small>${escapeHtml(remediation.owner_code)}</small><small>${escapeHtml(shortReference(remediation.remediation_task_id))}</small><small>期限 ${formatTime(remediation.due_at)}</small>`;
 }
 
 function platformBillingCycles(state, permissions) {

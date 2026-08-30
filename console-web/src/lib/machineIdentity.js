@@ -15,6 +15,7 @@ const SAFE_TEXT = /^[^\u0000-\u001f\u007f]+$/u;
 const SCOPE_TEMPLATES = Object.freeze({
   provider_reader: Object.freeze(["provider.read"]),
   observability_reader: Object.freeze(["request_log.read"]),
+  compliance_collector: Object.freeze(["compliance.collect"]),
 });
 const ERROR_MESSAGES = Object.freeze({
   "workspace_session.required": "需要有效的空间会话。",

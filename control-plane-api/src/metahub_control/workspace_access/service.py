@@ -35,6 +35,7 @@ from metahub_control.migration_operations.permissions import (
     load_verified_workspace_migration_permissions,
 )
 
+from .compliance_permissions import load_verified_workspace_compliance_permissions
 from .edge_permissions import load_verified_workspace_edge_permissions
 from .models import (
     IdentityWorkspaceListResponse,
@@ -646,12 +647,19 @@ def workspace_actor_authorization_probe_in_transaction(
     granted = {str(item["granted_permission_code"]) for item in role_rows}
     if granted != set(permission_codes):
         raise ApiError("workspace_session.permission_denied")
-    governance, machine_identity, provider_catalog, edge, migration, customer_support, privacy = (
-        _workspace_extension_permissions(
-            connection,
-            role_code=str(row["role_code"]),
-            require_catalogs=True,
-        )
+    (
+        governance,
+        machine_identity,
+        provider_catalog,
+        edge,
+        migration,
+        customer_support,
+        privacy,
+        compliance,
+    ) = _workspace_extension_permissions(
+        connection,
+        role_code=str(row["role_code"]),
+        require_catalogs=True,
     )
     legacy_fingerprint = authorization_fingerprint(
         tenant_id=tenant_id,
@@ -677,6 +685,7 @@ def workspace_actor_authorization_probe_in_transaction(
             migration_permissions=migration,
             customer_support_permissions=customer_support,
             privacy_permissions=privacy,
+            compliance_permissions=compliance,
         ),
     )
 
@@ -1959,14 +1968,30 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         permission_codes=("console.basic.read",),
         unavailable_error_code="workspace_session.unavailable",
     )
-    governance, machine_identity, provider_catalog, edge, migration, customer_support, privacy = (
-        _workspace_extension_permissions(
-            connection,
-            role_code=str(row["role_code"]),
-        )
+    (
+        governance,
+        machine_identity,
+        provider_catalog,
+        edge,
+        migration,
+        customer_support,
+        privacy,
+        compliance,
+    ) = _workspace_extension_permissions(
+        connection,
+        role_code=str(row["role_code"]),
     )
     if not any(
-        (governance, machine_identity, provider_catalog, edge, migration, customer_support, privacy)
+        (
+            governance,
+            machine_identity,
+            provider_catalog,
+            edge,
+            migration,
+            customer_support,
+            privacy,
+            compliance,
+        )
     ):
         return legacy
     permissions = tuple(
@@ -1980,6 +2005,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
                 *migration,
                 *customer_support,
                 *privacy,
+                *compliance,
             }
         )
     )
@@ -1993,6 +2019,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         migration_permissions=migration,
         customer_support_permissions=customer_support,
         privacy_permissions=privacy,
+        compliance_permissions=compliance,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -2009,6 +2036,7 @@ def _workspace_extension_permissions(
     role_code: str,
     require_catalogs: bool = False,
 ) -> tuple[
+    tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
@@ -2042,6 +2070,11 @@ def _workspace_extension_permissions(
             role_code=role_code,
             unavailable_error_code="workspace_session.unavailable",
         )
+        compliance = load_verified_workspace_compliance_permissions(
+            connection,
+            role_code=role_code,
+            unavailable_error_code="workspace_session.unavailable",
+        )
         return (
             governance,
             machine_identity,
@@ -2050,6 +2083,7 @@ def _workspace_extension_permissions(
             migration,
             customer_support,
             privacy,
+            compliance,
         )
     has_extension = _table_exists(connection, "workspace_governance_role_permissions")
     has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
@@ -2110,6 +2144,11 @@ def _workspace_extension_permissions(
         role_code=role_code,
         unavailable_error_code="workspace_session.unavailable",
     )
+    compliance = load_verified_workspace_compliance_permissions(
+        connection,
+        role_code=role_code,
+        unavailable_error_code="workspace_session.unavailable",
+    )
     return (
         governance,
         machine_identity,
@@ -2118,6 +2157,7 @@ def _workspace_extension_permissions(
         migration,
         customer_support,
         privacy,
+        compliance,
     )
 
 
@@ -2220,6 +2260,7 @@ def _workspace_authorization_fingerprint(
     migration_permissions: tuple[str, ...],
     customer_support_permissions: tuple[str, ...],
     privacy_permissions: tuple[str, ...],
+    compliance_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2233,6 +2274,7 @@ def _workspace_authorization_fingerprint(
                 "migration_permissions": migration_permissions,
                 "customer_support_permissions": customer_support_permissions,
                 "privacy_permissions": privacy_permissions,
+                "compliance_permissions": compliance_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

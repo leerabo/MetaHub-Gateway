@@ -333,6 +333,18 @@ REQUIRED_DOCS = {
         "PRD-135",
         "0126",
     ),
+    ROOT / "docs/prd/PRD-135-compliance-evidence-center.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0127",
+    ),
+    ROOT / "docs/testing/PRD-135-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-136",
+        "0127",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -1012,10 +1024,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 126
+        and migration_versions[-1] == 127
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0126 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0127 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1217,6 +1229,11 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0126_global_account_privacy_dsr.sql").is_file()
         and (ROOT / "infra/migrations/0126_global_account_privacy_dsr.down.sql").is_file(),
         "PRD-134 owns reversible migration 0126 with guarded privacy fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0127_compliance_evidence_center.sql").is_file()
+        and (ROOT / "infra/migrations/0127_compliance_evidence_center.down.sql").is_file(),
+        "PRD-135 owns reversible migration 0127 with guarded compliance fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

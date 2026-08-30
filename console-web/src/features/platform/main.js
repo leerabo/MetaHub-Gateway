@@ -154,6 +154,7 @@ import {
   withdrawPlatformSdk,
 } from "../../lib/developerContracts.js";
 import { listPlatformPrivacyQueue } from "../../lib/privacyCenter.js";
+import { listPlatformComplianceControls } from "../../lib/complianceCenter.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 const root = globalThis.document?.querySelector("#platform-app");
@@ -206,6 +207,9 @@ if (root) {
       breakGlass: (input) => createBreakGlassSession({ controlApiUrl, ...input }),
       audit: (input) => listPlatformAudit({ controlApiUrl, ...input }),
       privacyQueue: (input) => listPlatformPrivacyQueue({ controlApiUrl, ...input }),
+      complianceControls: (input) => listPlatformComplianceControls({
+        controlApiUrl, ...input,
+      }),
       billingSummary: (input) => listPlatformBillingSummary({ controlApiUrl, ...input }),
       createBillingAdjustment: (input) => createPlatformBillingAdjustment({
         controlApiUrl,

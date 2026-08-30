@@ -133,6 +133,32 @@ test("PRD-118 client rejects response extension and cross-Workspace projection",
   );
 });
 
+test("PRD-135 compliance collector template binds its closed machine scope", async () => {
+  globalThis.document = { cookie: "__Host-metahub-workspace-csrf=workspace-csrf" };
+  const calls = installFetch(() => jsonResponse(machineAccountResponse()));
+  await createWorkspaceServiceAccount({
+    controlApiUrl: CONTROL_URL,
+    workspaceId: WORKSPACE_ID,
+    name: "compliance-collector",
+    displayName: "Compliance collector",
+    scopeTemplate: "compliance_collector",
+    scopes: ["compliance.collect"],
+    tokenTtlSeconds: 900,
+    ipAllowlist: [],
+    mtlsFingerprintSha256: null,
+    idempotencyKey: "compliance-collector-create-0001",
+  });
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    name: "compliance-collector",
+    display_name: "Compliance collector",
+    scope_template: "compliance_collector",
+    scopes: ["compliance.collect"],
+    token_ttl_seconds: 900,
+    ip_allowlist: [],
+    mtls_fingerprint_sha256: null,
+  });
+});
+
 test("PRD-118 renderer projects exact read/manage permissions and no Platform entrance", () => {
   const root = createRoot();
   renderIdentitySecurityPage(root, identityState({

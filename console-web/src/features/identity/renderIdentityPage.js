@@ -1,5 +1,6 @@
 // 账号安全渲染层只展示后端脱敏投影，企业认证表单可见性不构成服务端授权。
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
+import { renderComplianceCenter } from "./renderComplianceCenter.js";
 
 export function renderIdentityLoginPage(container, options = {}) {
   if (!container) return;
@@ -237,6 +238,7 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderConditionalAccessSection(state)}
         ${renderDataGovernanceSection(state)}
         ${renderPrivacyCenter(state)}
+        ${renderComplianceCenter(state)}
         ${renderEnterpriseIdentitySection(state)}
         ${renderScimDirectorySection(state)}
         ${renderMachineIdentitySection(state)}
@@ -2038,6 +2040,7 @@ function renderMachineAccountForm(busy) {
       <label><span>Scope 模板</span><select name="scopeTemplate" required>
         <option value="provider_reader">Provider 只读</option>
         <option value="observability_reader">请求日志只读</option>
+        <option value="compliance_collector">合规证据采集</option>
       </select></label>
       <label><span>Token TTL</span><select name="tokenTtlSeconds" required>
         <option value="300">5 分钟</option><option value="900" selected>15 分钟</option>
@@ -2085,7 +2088,11 @@ function renderMachineCredentialDialog(credential) {
 }
 
 function machineScopeTemplateLabel(value) {
-  return ({ provider_reader: "Provider 读取", observability_reader: "可观测性读取" })[value]
+  return ({
+    provider_reader: "Provider 读取",
+    observability_reader: "可观测性读取",
+    compliance_collector: "合规证据采集",
+  })[value]
     ?? "机器只读";
 }
 

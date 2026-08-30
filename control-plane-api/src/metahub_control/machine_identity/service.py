@@ -52,6 +52,7 @@ _READ_ROLES = frozenset({"owner", "security_admin", "developer"})
 _TEMPLATE_SCOPES = {
     "provider_reader": ("provider.read",),
     "observability_reader": ("request_log.read",),
+    "compliance_collector": ("compliance.collect",),
 }
 _MACHINE_ROUTES = {
     ("GET", "/providers"): ("provider.read", "machine.provider_listed", "provider_collection"),
@@ -59,6 +60,11 @@ _MACHINE_ROUTES = {
         "request_log.read",
         "machine.request_log_listed",
         "request_log_collection",
+    ),
+    ("POST", "/platform/compliance/evidence"): (
+        "compliance.collect",
+        "machine.compliance_evidence_submitted",
+        "compliance_evidence_collection",
     ),
 }
 _AUDIENCE = "metahub-control"
@@ -739,9 +745,8 @@ def revoke_service_account(
             request_sha256=request_sha256,
         )
         if replay is not None:
-            if (
-                account["status"] != "revoked"
-                or int(account["revision"]) != int(replay["result_revision"])
+            if account["status"] != "revoked" or int(account["revision"]) != int(
+                replay["result_revision"]
             ):
                 raise ApiError("machine_identity.conflict")
             result = ServiceAccountResponse(
@@ -924,9 +929,7 @@ def issue_access_token(
         ).fetchall()
         supplied_digest = _secret_digest(config, "client-secret", client_secret)
         matches = [
-            row
-            for row in rows
-            if hmac.compare_digest(str(row["secret_hash"]), supplied_digest)
+            row for row in rows if hmac.compare_digest(str(row["secret_hash"]), supplied_digest)
         ]
         if len(matches) != 1:
             _record_token_failure(connection, client_key, now)
@@ -939,10 +942,7 @@ def issue_access_token(
             or _expired(row["credential_expires_at"], now)
             or (
                 row["credential_status"] == "grace"
-                and (
-                    row["grace_expires_at"] is None
-                    or _expired(row["grace_expires_at"], now)
-                )
+                and (row["grace_expires_at"] is None or _expired(row["grace_expires_at"], now))
             )
         ):
             _record_token_failure(connection, client_key, now)
@@ -1196,10 +1196,7 @@ def authenticate_machine_request(
             or int(row["constraint_generation"]) != int(row["account_constraint_generation"])
             or (
                 row["credential_status"] == "grace"
-                and (
-                    row["grace_expires_at"] is None
-                    or _expired(row["grace_expires_at"], now)
-                )
+                and (row["grace_expires_at"] is None or _expired(row["grace_expires_at"], now))
             )
             or row["credential_status"] not in {"active", "grace"}
         ):
@@ -1214,13 +1211,21 @@ def authenticate_machine_request(
         ):
             denied()
         try:
-            operator = workspace_actor_authorization_probe_in_transaction(
-                connection,
-                account_id=str(row["created_by_account_id"]),
-                workspace_id=str(row["workspace_id"]),
-                tenant_id=str(row["tenant_id"]),
-                permission_codes=scopes,
-            )
+            if "compliance.collect" in scopes:
+                operator = workspace_actor_permissions_in_transaction(
+                    connection,
+                    account_id=str(row["created_by_account_id"]),
+                    workspace_id=str(row["workspace_id"]),
+                    tenant_id=str(row["tenant_id"]),
+                )
+            else:
+                operator = workspace_actor_authorization_probe_in_transaction(
+                    connection,
+                    account_id=str(row["created_by_account_id"]),
+                    workspace_id=str(row["workspace_id"]),
+                    tenant_id=str(row["tenant_id"]),
+                    permission_codes=scopes,
+                )
         except ApiError:
             denied()
         if (
@@ -1347,6 +1352,22 @@ def _verify_machine_catalog(connection: sqlite3.Connection) -> None:
             "active",
         ),
     }
+    migration_row = connection.execute(
+        "SELECT MAX(version) version FROM schema_migrations WHERE status='applied'"
+    ).fetchone()
+    if migration_row is None or migration_row["version"] is None:
+        raise ApiError("machine_identity.unavailable")
+    if str(migration_row["version"]) >= "0127":
+        expected.add(
+            (
+                "compliance.collect",
+                "compliance_collector",
+                "POST",
+                "/platform/compliance/evidence",
+                1,
+                "active",
+            )
+        )
     if actual != expected:
         raise ApiError("machine_identity.unavailable")
 
@@ -1420,21 +1441,16 @@ def _service_account_summary(
         last_used_at=(
             _parse_time(row["last_used_at"]) if row["last_used_at"] is not None else None
         ),
-        revoked_at=(
-            _parse_time(row["revoked_at"]) if row["revoked_at"] is not None else None
-        ),
+        revoked_at=(_parse_time(row["revoked_at"]) if row["revoked_at"] is not None else None),
         created_at=_parse_time(row["created_at"]),
         updated_at=_parse_time(row["updated_at"]),
         oauth_client=_oauth_client_summary(connection, client) if client is not None else None,
     )
 
 
-def _oauth_client_summary(
-    connection: sqlite3.Connection, row: sqlite3.Row
-) -> OAuthClientSummary:
+def _oauth_client_summary(connection: sqlite3.Connection, row: sqlite3.Row) -> OAuthClientSummary:
     credential = connection.execute(
-        "SELECT * FROM client_credentials WHERE oauth_client_id=? "
-        "ORDER BY generation DESC LIMIT 1",
+        "SELECT * FROM client_credentials WHERE oauth_client_id=? ORDER BY generation DESC LIMIT 1",
         (row["oauth_client_id"],),
     ).fetchone()
     return OAuthClientSummary(
@@ -1736,22 +1752,20 @@ def _outbox(
     )
 
 
-def _require_token_guard(
-    connection: sqlite3.Connection, client_key: str, now: datetime
-) -> None:
+def _require_token_guard(connection: sqlite3.Connection, client_key: str, now: datetime) -> None:
     row = connection.execute(
         "SELECT blocked_until FROM oauth_token_attempt_guards WHERE client_key_sha256=?",
         (client_key,),
     ).fetchone()
-    if row is not None and row["blocked_until"] is not None and not _expired(
-        row["blocked_until"], now
+    if (
+        row is not None
+        and row["blocked_until"] is not None
+        and not _expired(row["blocked_until"], now)
     ):
         raise ApiError("oauth.rate_limited")
 
 
-def _record_token_failure(
-    connection: sqlite3.Connection, client_key: str, now: datetime
-) -> None:
+def _record_token_failure(connection: sqlite3.Connection, client_key: str, now: datetime) -> None:
     row = connection.execute(
         "SELECT * FROM oauth_token_attempt_guards WHERE client_key_sha256=?",
         (client_key,),
@@ -1852,7 +1866,10 @@ def _token_scopes(values: tuple[str, ...]) -> tuple[str, ...]:
     if not values or len(values) > 8 or len(values) != len(set(values)):
         raise ApiError("oauth.invalid_scope")
     normalized = tuple(sorted(values))
-    if any(value not in {"provider.read", "request_log.read"} for value in normalized):
+    if any(
+        value not in {"provider.read", "request_log.read", "compliance.collect"}
+        for value in normalized
+    ):
         raise ApiError("oauth.invalid_scope")
     return normalized
 
@@ -1931,9 +1948,7 @@ def _request_digest(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("ascii")).hexdigest()
 
 
-def _valid_idempotency(
-    value: str, *, error_code: str = "machine_identity.request_invalid"
-) -> None:
+def _valid_idempotency(value: str, *, error_code: str = "machine_identity.request_invalid") -> None:
     if _IDEMPOTENCY_RE.fullmatch(value or "") is None:
         raise ApiError(error_code)
 

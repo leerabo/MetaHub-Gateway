@@ -44,6 +44,7 @@ from starlette.requests import Request
 ORIGIN = "http://localhost:5173"
 WORKSPACE_TOKEN = "w" * 43
 WORKSPACE_CSRF = "c" * 43
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 
 
 def _url(path: Path) -> str:
@@ -74,9 +75,15 @@ def _config(database_url: str) -> AppConfig:
 
 @pytest.fixture(scope="module")
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    database = tmp_path_factory.mktemp("prd118-base") / "base.sqlite3"
+    root = tmp_path_factory.mktemp("prd118-base")
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 113:
+            shutil.copy2(source, migrations / source.name)
+    database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0113"
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0113"
     apply_seed_data(database_url)
     return database
 
@@ -296,9 +303,10 @@ async def test_machine_identity_full_lifecycle_and_allowlist(
         )
         assert listed.status_code == 200, listed.text
         assert "client_secret" not in listed.text
-        assert listed.json()["service_accounts"][0]["oauth_client"][
-            "credential_prefix"
-        ] == client_secret[:12]
+        assert (
+            listed.json()["service_accounts"][0]["oauth_client"]["credential_prefix"]
+            == client_secret[:12]
+        )
 
         token_response = await client.post(
             "/oauth/token",
@@ -374,11 +382,14 @@ async def test_machine_identity_full_lifecycle_and_allowlist(
         assert revoked.status_code == 200, revoked.text
         assert revoked.json()["service_account"]["status"] == "revoked"
         assert await _status(client, "/providers", machine_headers) == 401
-        assert await _status(
-            client,
-            "/providers",
-            {"Authorization": f"Bearer {rotated_token}"},
-        ) == 401
+        assert (
+            await _status(
+                client,
+                "/providers",
+                {"Authorization": f"Bearer {rotated_token}"},
+            )
+            == 401
+        )
         assert time.perf_counter() - revoke_started < 2.0
 
     with connect_database(database_url) as connection:
@@ -387,12 +398,16 @@ async def test_machine_identity_full_lifecycle_and_allowlist(
         assert rotated_secret not in dump
         assert access_token not in dump
         assert rotated_token not in dump
-        assert connection.execute(
-            "SELECT COUNT(*) FROM machine_identity_event_outbox"
-        ).fetchone()[0] == 3
-        assert connection.execute(
-            "SELECT COUNT(*) FROM machine_identity_audits WHERE subject_type='service_account'"
-        ).fetchone()[0] >= 4
+        assert (
+            connection.execute("SELECT COUNT(*) FROM machine_identity_event_outbox").fetchone()[0]
+            == 3
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM machine_identity_audits WHERE subject_type='service_account'"
+            ).fetchone()[0]
+            >= 4
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -427,9 +442,7 @@ async def test_all_machine_writes_replay_without_persisting_plaintext(
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         missing_headers = _workspace_headers()
         missing_headers.pop("Idempotency-Key")
-        missing = await client.post(
-            "/service-accounts", headers=missing_headers, json=account_body
-        )
+        missing = await client.post("/service-accounts", headers=missing_headers, json=account_body)
         assert missing.status_code == 422
         assert missing.json()["code"] == "machine_identity.request_invalid"
 
@@ -527,21 +540,15 @@ async def test_all_machine_writes_replay_without_persisting_plaintext(
             ),
         )
         assert revoked_first.status_code == revoked_replay.status_code == 200
-        assert revoked_replay.json()["service_account"] == revoked_first.json()[
-            "service_account"
-        ]
+        assert revoked_replay.json()["service_account"] == revoked_first.json()["service_account"]
 
     with connect_database(config.database_url) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM machine_identity_commands"
-        ).fetchone()[0] == 5
-        assert connection.execute(
-            "SELECT COUNT(*) FROM service_accounts"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute("SELECT COUNT(*) FROM machine_identity_commands").fetchone()[0] == 5
+        )
+        assert connection.execute("SELECT COUNT(*) FROM service_accounts").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM access_token_grants"
-        ).fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM access_token_grants").fetchone()[0] == 1
         dump = "\n".join(connection.iterdump())
         for plaintext in (
             *keys.values(),
@@ -622,8 +629,7 @@ async def test_oauth_transport_and_observability_scope_are_fail_closed(
                 "Idempotency-Key": "prd118-strict-form-token-0001",
             },
             content=(
-                b"grant_type=client_credentials&audience=metahub-control&"
-                b"scope=request_log.read"
+                b"grant_type=client_credentials&audience=metahub-control&scope=request_log.read"
             ),
         )
         assert token.status_code == 200, token.text
@@ -826,14 +832,20 @@ async def test_concurrent_revoke_has_one_cas_winner(
     assert sorted(outcomes) == ["machine_identity.revision_conflict", "success"]
 
     with connect_database(config.database_url) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM machine_identity_event_outbox "
-            "WHERE event_type='service_account.revoked'"
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM machine_identity_audits "
-            "WHERE action_code='service_account.revoked' AND outcome='success'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM machine_identity_event_outbox "
+                "WHERE event_type='service_account.revoked'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM machine_identity_audits "
+                "WHERE action_code='service_account.revoked' AND outcome='success'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 @pytest.mark.anyio

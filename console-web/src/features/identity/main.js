@@ -121,6 +121,7 @@ import {
   savePrivacyExport,
   updatePrivacyPreferences,
 } from "../../lib/privacyCenter.js";
+import { listWorkspaceComplianceReports } from "../../lib/complianceCenter.js";
 import { createIdentityPageController } from "./identityPageState.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
@@ -266,6 +267,9 @@ if (root) {
       privacyPreferences: (input) => getPrivacyPreferences({ controlApiUrl, ...input }),
       updatePrivacyPreferences: (input) => updatePrivacyPreferences({ controlApiUrl, ...input }),
       privacyRequests: (input) => listDataSubjectRequests({ controlApiUrl, ...input }),
+      complianceReports: (input) => listWorkspaceComplianceReports({
+        controlApiUrl, ...input,
+      }),
       createPrivacyRequest: (input) => createDataSubjectRequest({ controlApiUrl, ...input }),
       cancelPrivacyRequest: (input) => cancelDataSubjectRequest({ controlApiUrl, ...input }),
       issuePrivacyExportReceipt: (input) => issuePrivacyExportReceipt({ controlApiUrl, ...input }),

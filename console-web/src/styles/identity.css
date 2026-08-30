@@ -1226,6 +1226,139 @@ a {
   }
 }
 
+/* PRD-135 keeps Workspace compliance reports read-only and owner-bound. */
+.identity-compliance {
+  min-width: 0;
+  border-top: 1px solid var(--identity-line);
+  padding-top: 20px;
+}
+
+.identity-compliance button:focus-visible,
+.identity-compliance summary:focus-visible {
+  outline: 3px solid rgba(8, 120, 111, 0.25);
+  outline-offset: 2px;
+}
+
+.identity-compliance-disclaimer {
+  margin: 0 0 14px;
+  border-left: 3px solid #a56d00;
+  background: #fff8e8;
+  color: #5c460d;
+  padding: 10px 12px;
+  font-size: .78rem;
+}
+
+.identity-compliance-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--identity-line);
+}
+
+.identity-compliance-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border-left: 1px solid var(--identity-line);
+  padding: 14px 16px;
+}
+
+.identity-compliance-summary > div:first-child { border-left: 0; }
+.identity-compliance-summary span,
+.identity-compliance-meta dt,
+.identity-compliance-item dt { color: var(--identity-muted); font-size: .72rem; }
+.identity-compliance-summary strong { overflow-wrap: anywhere; font-size: 1.1rem; }
+
+.identity-compliance-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border-bottom: 1px solid var(--identity-line);
+}
+
+.identity-compliance-meta > div { min-width: 0; padding: 11px 16px 11px 0; }
+.identity-compliance-meta dd { margin: 4px 0 0; overflow-wrap: anywhere; font-weight: 700; }
+
+.identity-compliance-items { margin-top: 22px; }
+.identity-compliance-items .identity-section-heading h3 { margin: 0; font-size: 1rem; }
+
+.identity-compliance-item {
+  min-width: 0;
+  border-top: 1px solid var(--identity-line);
+  padding: 16px 0;
+}
+
+.identity-compliance-item > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.identity-compliance-item > header > div { display: grid; min-width: 0; gap: 4px; }
+.identity-compliance-item code { color: var(--identity-muted); overflow-wrap: anywhere; font-size: .73rem; }
+.identity-compliance-item dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0 0;
+  background: #f6f8f6;
+}
+.identity-compliance-item dl > div { min-width: 0; padding: 10px; }
+.identity-compliance-item dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: .78rem; font-weight: 700; }
+
+.identity-compliance-outcome {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  border-radius: 4px;
+  background: #edf0ed;
+  color: #4e5951;
+  padding: 2px 7px;
+  font-size: .72rem;
+}
+.identity-compliance-outcome.is-ok { background: #e7f4f1; color: var(--identity-accent-dark); }
+.identity-compliance-outcome.is-warn { background: #fff8e8; color: #805600; }
+.identity-compliance-outcome.is-danger { background: #fff0ee; color: var(--identity-danger); }
+
+.identity-compliance-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  margin-top: 10px;
+  border-left: 3px solid var(--identity-accent);
+  background: #f1f8f6;
+  padding: 9px 11px;
+  color: #3e4955;
+  font-size: .76rem;
+}
+
+.identity-compliance-history { margin-top: 12px; border-block: 1px solid var(--identity-line); }
+.identity-compliance-history summary { display: flex; justify-content: space-between; padding: 12px 0; cursor: pointer; font-weight: 700; }
+.identity-compliance-history > div {
+  display: grid;
+  grid-template-columns: minmax(90px, .4fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  border-top: 1px solid var(--identity-line);
+  padding: 10px 0;
+  font-size: .78rem;
+}
+
+@media (max-width: 760px) {
+  .identity-compliance-summary,
+  .identity-compliance-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .identity-compliance-summary > div:nth-child(3) { border-left: 0; }
+  .identity-compliance-summary > div:nth-child(n + 3) { border-top: 1px solid var(--identity-line); }
+}
+
+@media (max-width: 520px) {
+  .identity-compliance-summary,
+  .identity-compliance-meta,
+  .identity-compliance-item dl,
+  .identity-compliance-history > div { grid-template-columns: minmax(0, 1fr); }
+  .identity-compliance-summary > div { border-top: 1px solid var(--identity-line); border-left: 0; }
+  .identity-compliance-summary > div:first-child { border-top: 0; }
+  .identity-compliance-item > header { align-items: stretch; flex-direction: column; }
+}
+
 .identity-sr-only {
   position: absolute;
   width: 1px;

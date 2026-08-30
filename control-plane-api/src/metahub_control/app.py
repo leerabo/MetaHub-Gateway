@@ -33,6 +33,8 @@ from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
 from .business_verification import router as business_verification_router
 from .capacity_management import router as capacity_management_router
+from .compliance_center import install_compliance_scheduler
+from .compliance_center import router as compliance_center_router
 from .config.routes import router as config_router
 from .config_distribution import router as config_distribution_router
 from .config_transfer.routes import router as config_transfer_router
@@ -253,6 +255,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             or "/sso" in request.url.path
             or "/scim-" in request.url.path
             or request.url.path.endswith("/enterprise-identity")
+            or request.url.path.endswith("/compliance-reports")
         )
         or request.url.path == "/workspaces/current/onboarding"
         or request.url.path.startswith("/workspaces/current/onboarding/")
@@ -302,6 +305,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(privacy_center_router)
+app.include_router(compliance_center_router)
 app.include_router(enterprise_identity_router)
 app.include_router(edge_management_router)
 app.include_router(workspaces_router)
@@ -403,6 +407,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_customer_support_scheduler,
             install_developer_contract_scheduler,
             install_privacy_scheduler,
+            install_compliance_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

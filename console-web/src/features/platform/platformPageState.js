@@ -146,6 +146,8 @@ export function createPlatformPageController({
     grants: null,
     audit: null,
     privacyQueue: null,
+    complianceControls: null,
+    complianceWorkspaceId: "",
     diagnostics: null,
     supportTickets: null,
     supportTicketFilters: { status: "", severity: "", workspaceId: "" },
@@ -246,6 +248,7 @@ export function createPlatformPageController({
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "provider-catalog", "releases", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
+        "compliance",
       ]).has(state.view)
         && nextView !== state.view) {
         generation += 1;
@@ -301,6 +304,8 @@ export function createPlatformPageController({
           state.supportTicketIntent = null;
         } else if (state.view === "privacy") {
           state.privacyQueue = null;
+        } else if (state.view === "compliance") {
+          state.complianceControls = null;
         }
         state.loading = false;
       }
@@ -347,10 +352,24 @@ export function createPlatformPageController({
       }
       if (state.view === "support" && !state.supportTickets) void loadSupportTickets();
       if (state.view === "privacy" && !state.privacyQueue) void loadPrivacyQueue();
+      if (state.view === "compliance" && !state.complianceControls) {
+        void loadComplianceControls();
+      }
     },
     async refreshPrivacyQueue() {
       if (state.view !== "privacy") return false;
       return loadPrivacyQueue();
+    },
+    async refreshComplianceControls() {
+      if (state.view !== "compliance") return false;
+      return loadComplianceControls("合规控制事实已刷新。");
+    },
+    async filterComplianceControls(workspaceId = "") {
+      const normalized = String(workspaceId ?? "").trim();
+      if (normalized && !/^wsp_[0-9a-f]{32}$/u.test(normalized)) return false;
+      state.complianceWorkspaceId = normalized;
+      state.complianceControls = null;
+      return loadComplianceControls();
     },
     async buildDeveloperContract(input = {}) {
       if (!currentPermissions().has("platform.developer_contract.manage")
@@ -2064,6 +2083,7 @@ export function createPlatformPageController({
         supportTickets: null,
         audit: null,
         privacyQueue: null,
+        complianceControls: null,
         workspaces: null,
         workspaceDetail: null,
         workspaceHealth: null,
@@ -2287,6 +2307,13 @@ export function createPlatformPageController({
           next.privacyQueue = value;
         }));
       }
+      if (state.view === "compliance" && permissions.has("platform.compliance.read")
+        && typeof api.complianceControls === "function") {
+        tasks.push(api.complianceControls({
+          workspaceId: state.complianceWorkspaceId,
+          signal: ticket.signal,
+        }).then((value) => { next.complianceControls = value; }));
+      }
       if (!fleetOnly && hasWorkspaceRead(permissions)) {
         tasks.push(api.workspaces({
           filters: state.workspaceFilters,
@@ -2377,6 +2404,10 @@ export function createPlatformPageController({
         state.supportTicketIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "privacy")) state.privacyQueue = null;
+      if (!state.navigation.some((item) => item.id === "compliance")) {
+        state.complianceControls = null;
+        state.complianceWorkspaceId = "";
+      }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
       state.loading = false;
       state.error = null;
@@ -2917,6 +2948,34 @@ export function createPlatformPageController({
       state.privacyQueue = result;
       state.loading = false;
       state.feedback = "隐私请求队列已刷新。";
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function loadComplianceControls(feedback = "") {
+    if (state.view !== "compliance"
+      || !currentPermissions().has("platform.compliance.read")
+      || typeof api.complianceControls !== "function") {
+      state.complianceControls = null;
+      return false;
+    }
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const result = await api.complianceControls({
+        workspaceId: state.complianceWorkspaceId,
+        signal: ticket.signal,
+      });
+      if (!current(ticket) || state.view !== "compliance"
+        || !currentPermissions().has("platform.compliance.read")) return false;
+      state.complianceControls = result;
+      state.loading = false;
+      state.feedback = feedback || null;
       render();
       return true;
     } catch (error) {
@@ -3822,6 +3881,9 @@ export function createPlatformPageController({
           outcome: data.get("outcome"),
         });
       }
+      if (form.matches("[data-platform-compliance-filter-form]")) {
+        controller.filterComplianceControls(data.get("workspaceId"));
+      }
       if (form.matches("[data-platform-risk-decision-form]")) {
         controller.decideRiskCase({
           caseId: data.get("caseId"),
@@ -3912,6 +3974,7 @@ export function createPlatformPageController({
       const action = target.dataset.platformAction;
       if (action === "refresh") controller.refresh();
       if (action === "privacy-refresh") controller.refreshPrivacyQueue();
+      if (action === "compliance-refresh") controller.refreshComplianceControls();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -4130,6 +4193,8 @@ export function createPlatformPageController({
     state.supportTicketIntent = null;
     state.audit = null;
     state.privacyQueue = null;
+    state.complianceControls = null;
+    state.complianceWorkspaceId = "";
     state.diagnostics = null;
     state.workspaces = null;
     state.workspaceFilters = {};

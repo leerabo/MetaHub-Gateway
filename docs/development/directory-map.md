@@ -2593,6 +2593,24 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-135，完整 G6 在 PRD-138 后统一执行且只能形成
   release candidate。
 
+## PRD-135 合规控制与证据中心（已完成）
+
+- `control-plane-api/src/metahub_control/compliance_center/`：Platform 控制查询、受信 machine evidence、
+  例外双人审批、Workspace 报告、失败整改、freshness 事件、幂等 action/outbox 和持久 scheduler fencing；
+  signed envelope 绑定 owner/control/collector/artifact/time/outcome，并以 replay guard 失败关闭。
+- `control-plane-api/src/metahub_control/workspace_access/compliance_permissions.py`：完整验证 0127 Workspace
+  合规权限目录和角色矩阵，目录缺失、部分应用或篡改时失败关闭；仅 `compliance.collect` 的机器授权读取
+  完整扩展权限，既有 provider/observability 保持轻量探针。
+- `infra/migrations/0127_compliance_evidence_center.sql/.down.sql`：控制/法规映射、证据、例外、整改、报告/
+  item、事件/outbox/action、collector replay、scheduler、Workspace/Platform 权限、machine scope/audit catalog、
+  tenant deletion manifest、不变触发器、完整性 guard 和业务事实 down guard。
+- `console-web/src/lib/complianceCenter.js`、`src/features/identity/renderComplianceCenter.js` 与 Identity/Platform
+  页面：strict owner-qualified DTO、Workspace 报告、Platform 过滤/控制事实、freshness、来源、例外与整改；
+  不接收证据正文或认证覆盖，换空间、登出、权限漂移和迟到响应均清理状态。
+- `docs/prd/PRD-135-compliance-evidence-center.md` 与 `docs/testing/PRD-135-tests.md`：保存两轮实施自审、
+  0127/API/Machine/Console、必要回归、历史性能残差、静态检查、敏感审计和批次门禁边界；下一权威项为
+  PRD-136，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：
