@@ -804,9 +804,13 @@ test("PRD-073 main lifecycle and narrow CSS freeze cleanup, permissions and no h
   assert.match(shellSource, /case "file-security":/);
   assert.match(permissionsSource, /FILE_SECURITY_SCAN: "file\.security\.scan"/);
   assert.match(clientSource, /link\.remove\?\.\(\);[\s\S]*revokeObjectURL\(objectUrl\)/);
-  assert.match(css, /\.file-security-layout\s*\{[\s\S]*grid-template-columns:/);
-  assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.file-security-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
-  assert.match(css, /\.file-security-finding-row:not\(\.is-head\) > \[data-label\]::before/);
-  assert.doesNotMatch(css.match(/@media \(max-width: 720px\)[\s\S]*?\n}\n\n\/\* PAGE-093/)?.[0] ?? "", /overflow-x:\s*auto/);
+  const fileSecurityStart = css.indexOf(".file-security-panel");
+  const fileSecurityEnd = css.indexOf("/* PAGE-093", fileSecurityStart);
+  assert.ok(fileSecurityStart >= 0 && fileSecurityEnd > fileSecurityStart);
+  const fileSecurityCss = css.slice(fileSecurityStart, fileSecurityEnd);
+  assert.match(fileSecurityCss, /\.file-security-layout\s*\{[\s\S]*grid-template-columns:/);
+  assert.match(fileSecurityCss, /@media \(max-width: 720px\)[\s\S]*\.file-security-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(fileSecurityCss, /\.file-security-finding-row:not\(\.is-head\) > \[data-label\]::before/);
+  assert.doesNotMatch(fileSecurityCss, /overflow-x:\s*auto/);
   assert.equal((css.match(/{/g) ?? []).length, (css.match(/}/g) ?? []).length);
 });

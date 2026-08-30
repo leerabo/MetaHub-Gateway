@@ -82,6 +82,9 @@ def _prepare_database(database_url: str, passwords: dict[str, str]) -> dict[str,
 
     connection = connect_database(database_url)
     try:
+        journal_mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+        if journal_mode != "wal":
+            raise RuntimeError("product_qa_database_journal_invalid")
         for role, email, display_name in (
             ("developer", "qa-developer@example.invalid", "QA Developer"),
             ("viewer", "qa-viewer@example.invalid", "QA Viewer"),
@@ -135,6 +138,7 @@ def _prepare_database(database_url: str, passwords: dict[str, str]) -> dict[str,
         "latest_migration": migration.applied[-1] if migration.applied else None,
         "integrity_check": integrity,
         "foreign_key_violations": foreign_key_violations,
+        "journal_mode": journal_mode,
     }
 
 
@@ -169,6 +173,7 @@ def main() -> int:
             "METAHUB_ALLOWED_ORIGINS": f"http://127.0.0.1:{console_port}",
             "METAHUB_CONTROL_API_BASE_URL": f"http://127.0.0.1:{control_port}",
             "METAHUB_GATEWAY_API_BASE_URL": f"http://127.0.0.1:{gateway_port}",
+            "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "false",
             "METAHUB_PROVIDER_HEALTH_ENABLED": "false",
             "METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED": "false",
             "METAHUB_PROVIDER_ERROR_MAP_SYNC_ENABLED": "false",

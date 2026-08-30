@@ -148,13 +148,53 @@ export function renderDeveloperStart(container, options) {
     : renderAuthorizationUnavailable();
 
   // PRD-018 起由统一 shell 承载导航和主内容区；业务面板仍保持原有渲染函数，降低权限与表单回归面。
-  container.innerHTML = renderConsoleShell({
+  const shellHtml = renderConsoleShell({
     authContext: options.authContext,
     consoleShellState: options.consoleShellState,
     contentHtml,
     i18n: options.i18n,
     branding: options.branding,
   });
+  if (
+    options.preserveConsoleSidebar === true
+    && renderConsoleContentPreservingSidebar(container, shellHtml, activeItem.id)
+  ) {
+    return;
+  }
+  container.innerHTML = shellHtml;
+}
+
+/**
+ * Active-page hydration must not replace a sidebar that the user may already be
+ * pointing at. The topbar and main content can be refreshed independently while
+ * the current accordion, scroll position, focus, and pointer targets stay stable.
+ */
+function renderConsoleContentPreservingSidebar(container, shellHtml, activeItemId) {
+  if (typeof container?.querySelector !== "function" || !container.ownerDocument?.createElement) {
+    return false;
+  }
+  const currentTopbar = container.querySelector(".console-topbar");
+  const currentShell = container.querySelector(".console-shell");
+  const currentMain = currentShell?.querySelector(".console-main");
+  if (!currentTopbar || !currentShell || !currentMain) {
+    return false;
+  }
+  // A different active item means a newer navigation already owns the DOM.
+  // Treat the render as handled so stale data cannot replace that newer page.
+  if (currentShell.dataset.activeNavigation !== activeItemId) {
+    return true;
+  }
+  const template = container.ownerDocument.createElement("template");
+  template.innerHTML = shellHtml.trim();
+  const nextTopbar = template.content.querySelector(".console-topbar");
+  const nextShell = template.content.querySelector(".console-shell");
+  const nextMain = nextShell?.querySelector(".console-main");
+  if (!nextTopbar || !nextShell || !nextMain || nextShell.dataset.activeNavigation !== activeItemId) {
+    return false;
+  }
+  currentTopbar.replaceWith(nextTopbar);
+  currentMain.replaceWith(nextMain);
+  return true;
 }
 
 /**

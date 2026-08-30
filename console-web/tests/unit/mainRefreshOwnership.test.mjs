@@ -149,11 +149,13 @@ test("navigation click hydrates only a backend-visible target before deferred te
   const renderIndex = navigation.indexOf("renderDeveloperStart(app", visibilityIndex);
   const bindIndex = navigation.indexOf("bindAuthenticatedEvents(authorizedProjectedState);", renderIndex);
   const hydrateIndex = navigation.indexOf("await loadAndRenderActiveNavigation({", bindIndex);
+  const preserveSidebarIndex = navigation.indexOf("preserveConsoleSidebar: true", hydrateIndex);
   const sideEffectIndex = navigation.indexOf("scheduleConsoleNavigationSideEffects({", hydrateIndex);
 
   assert.ok(transitionIndex >= 0 && transitionIndex < authorizedItemIndex);
   assert.ok(authorizedItemIndex < visibilityIndex && visibilityIndex < renderIndex);
-  assert.ok(renderIndex < bindIndex && bindIndex < hydrateIndex && hydrateIndex < sideEffectIndex);
+  assert.ok(renderIndex < bindIndex && bindIndex < hydrateIndex);
+  assert.ok(hydrateIndex < preserveSidebarIndex && preserveSidebarIndex < sideEffectIndex);
   assert.doesNotMatch(navigation.slice(bindIndex, hydrateIndex), /getCurrentUser|loadConsoleShellState|refresh\(\)/);
   assert.match(source, /clearTimeout\(consoleNavigationSideEffectTimer\)/);
   assert.match(source, /CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000/);
@@ -164,6 +166,34 @@ test("navigation click hydrates only a backend-visible target before deferred te
   );
   assert.ok(sideEffects.indexOf("await updateConsolePreferences") < sideEffects.indexOf("await recordConsolePageView"));
   assert.match(sideEffects, /if \(!navigationOwnerCurrent\(\)\) return;/);
+});
+
+
+test("active-page hydration preserves interactive sidebar DOM and refreshes handlers in place", async () => {
+  const mainSource = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const renderSource = await readFile(
+    new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url),
+    "utf8",
+  );
+  const dispatcher = sourceSection(
+    mainSource,
+    "async function loadAndRenderActiveNavigation({",
+    "function renderLogin(",
+  );
+  const binder = sourceSection(
+    mainSource,
+    "function bindAuthenticatedEvents(consoleShellState)",
+    "async function switchConsoleNavigation",
+  );
+
+  assert.match(dispatcher, /preserveConsoleSidebar = false/);
+  assert.match(dispatcher, /renderDeveloperStart\(app, \{[\s\S]*preserveConsoleSidebar,[\s\S]*\.\.\.state,/);
+  assert.match(renderSource, /renderConsoleContentPreservingSidebar\(container, shellHtml, activeItem\.id\)/);
+  assert.match(renderSource, /currentTopbar\.replaceWith\(nextTopbar\);[\s\S]*currentMain\.replaceWith\(nextMain\);/);
+  assert.doesNotMatch(renderSource, /currentSidebar\.replaceWith/);
+  assert.match(binder, /navigationButton\.onclick = async/);
+  assert.match(binder, /groupToggle\.onclick =/);
+  assert.match(binder, /sidebarToggle\.onclick = async/);
 });
 
 

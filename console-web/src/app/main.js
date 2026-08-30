@@ -2547,6 +2547,7 @@ async function loadAndRenderActiveNavigation({
   fastRoleDashboardState,
   isBackgroundRefresh,
   refreshOwnerCurrent,
+  preserveConsoleSidebar = false,
 }) {
   const activeNavigationId = consoleShellState.activeNavigationItemId;
   const state = {};
@@ -2902,6 +2903,7 @@ async function loadAndRenderActiveNavigation({
     enterpriseChatState: enterpriseChatPageState.snapshot(),
     adminAssistantState: adminAssistantPageState.snapshot(),
     invitationState: invitationPageState.snapshot(),
+    preserveConsoleSidebar,
     ...state,
   });
   if (activeNavigationId === "enterprise-chat") {
@@ -3421,21 +3423,21 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   for (const navigationButton of document.querySelectorAll("[data-console-nav]")) {
-    navigationButton.addEventListener("click", async () => {
+    navigationButton.onclick = async () => {
       await switchConsoleNavigation(navigationButton, consoleShellState);
-    });
+    };
   }
 
   for (const groupToggle of document.querySelectorAll("[data-sidebar-group-toggle]")) {
-    groupToggle.addEventListener("click", () => {
+    groupToggle.onclick = () => {
       toggleConsoleSidebarGroup(groupToggle, consoleShellState);
-    });
+    };
   }
 
   const sidebarToggle = document.querySelector("[data-sidebar-toggle]");
-  sidebarToggle?.addEventListener("click", async () => {
+  if (sidebarToggle) sidebarToggle.onclick = async () => {
     await toggleConsoleSidebar(sidebarToggle, consoleShellState);
-  });
+  };
 
   const languageSettingsForm = document.querySelector("#language-settings-form");
   languageSettingsForm?.addEventListener("submit", async (event) => {
@@ -13314,6 +13316,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
       fastRoleDashboardState: null,
       isBackgroundRefresh: false,
       refreshOwnerCurrent: navigationOwnerCurrent,
+      preserveConsoleSidebar: true,
     });
     if (!navigationOwnerCurrent()) {
       return;

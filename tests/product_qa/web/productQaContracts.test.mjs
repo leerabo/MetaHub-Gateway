@@ -8,6 +8,7 @@ import { renderLoginPage } from "../../../console-web/src/features/auth/renderLo
 
 const UI_SOURCE = new URL("../../../console-web/src/features/console-shell/renderConsoleShell.js", import.meta.url);
 const CSS_SOURCE = new URL("../../../console-web/src/styles/main.css", import.meta.url);
+const BROWSER_RUNTIME_SOURCE = new URL("../../../scripts/quality/product_qa_browser_runtime.py", import.meta.url);
 
 function shell(preferences = {}) {
   return renderConsoleShell({
@@ -93,4 +94,14 @@ test("UI-04 source does not promote roadmap or implementation markers in shell r
   assert.doesNotMatch(source, /sqlite_master|\.db\b/i);
   assert.match(source, /request_id/);
   assert.match(source, /escapeHtml\(/);
+});
+
+test("FLOW-01/PERF-01 isolated browser runtime disables unrelated background schedulers", async () => {
+  const source = await readFile(BROWSER_RUNTIME_SOURCE, "utf8");
+  assert.match(source, /PRAGMA journal_mode=WAL/);
+  assert.match(source, /"journal_mode": journal_mode/);
+  assert.match(source, /"METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "false"/);
+  assert.match(source, /"METAHUB_PROVIDER_HEALTH_ENABLED": "false"/);
+  assert.match(source, /"METAHUB_POLICY_SNAPSHOT_SYNC_ENABLED": "false"/);
+  assert.match(source, /"METAHUB_PROVIDER_ERROR_MAP_SYNC_ENABLED": "false"/);
 });

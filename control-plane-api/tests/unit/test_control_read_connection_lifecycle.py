@@ -141,3 +141,15 @@ def test_local_launcher_disables_optional_schedulers_without_changing_production
     from metahub_shared.runtime.config import DEFAULT_CONFIG
 
     assert DEFAULT_CONFIG["METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED"] == "true"
+
+
+def test_control_read_middleware_uses_the_bounded_idle_connection_pool():
+    app_source = (
+        __import__("pathlib").Path(__file__).parents[2]
+        / "src"
+        / "metahub_control"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'if request.method in {"GET", "HEAD"}' in app_source
+    assert "database_request_scope(reuse_connections=True)" in app_source

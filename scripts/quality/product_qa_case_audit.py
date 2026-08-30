@@ -25,8 +25,8 @@ EXPECTED_COUNTS = {
     "SEC": 7,
     "FLOW": 10,
 }
-EXPECTED_APPLIED_MIGRATIONS = 122
-EXPECTED_LATEST_MIGRATION = "0122"
+EXPECTED_APPLIED_MIGRATIONS = 130
+EXPECTED_LATEST_MIGRATION = "0130"
 SENSITIVE_JSON_KEYS = {
     "access_token",
     "authorization",
@@ -230,6 +230,7 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
             "applied_migrations": EXPECTED_APPLIED_MIGRATIONS,
             "foreign_key_violations": 0,
             "integrity_check": "ok",
+            "journal_mode": "wal",
             "latest_migration": EXPECTED_LATEST_MIGRATION,
         }
         for report in browser_reports

@@ -189,11 +189,11 @@ app = create_service_app(
 async def response_cache_private_cache_boundary(request: Request, call_next):
     """让 Response Cache 的认证、校验与业务错误和成功响应共享 no-store/private。"""
 
-    # Control GETs commonly authenticate and then read through a separate service.
-    # Reuse one handle for that request only; writes keep their existing ownership.
-    reusable_machine_read = request.url.path in {"/providers", "/request-logs"}
+    # Control reads commonly authenticate and then query through a separate service.
+    # Keep one request-owned handle and return its reset physical connection to the
+    # bounded idle pool; writes retain their existing connection ownership.
     scope = (
-        database_request_scope(reuse_connections=reusable_machine_read)
+        database_request_scope(reuse_connections=True)
         if request.method in {"GET", "HEAD"}
         else nullcontext()
     )
