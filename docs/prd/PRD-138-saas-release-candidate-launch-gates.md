@@ -1,6 +1,8 @@
 # PRD-138 SaaS 发布候选、核心迁移波次与全产品门禁
 
-状态：设计冻结，尚未实现。依赖 PRD-090..137；范围以 Excel PRD-138 为准。本条只生成 RC，不标记公开 GA。
+状态：已完成。依赖 PRD-090..137；范围以 Excel PRD-138 为准。0130、固定门禁注册表、签名证据、
+独立会签、四波执行、独立回滚复验、RC 评审和 Platform Launch Gates Console 已交付。本条只能形成
+`release_candidate`，公开 GA 必须等待 PRD-139..147 分域迁移和 PRD-148 最终门禁。
 
 ## Excel 权威合同
 
@@ -10,70 +12,103 @@
   `PostLaunchReview`。
 - 事件：`launch.gate_failed`、`launch.wave_started`、`launch.wave_completed`、
   `launch.rolled_back`。
-- SLO：Control 99.9%、Gateway 99.95%；关键页面 p75 < 1.5s；连续 72 小时无 P0/P1。
+- SLO：Control 99.9%、Gateway 99.95%、关键页面 p75 < 1.5 秒、连续 72 小时无 P0/P1。
+- 边界：产品、SRE、安全、测试、财务和法务是会签 actor kind，不新增可混用的租户角色；
+  platform_owner 只能在全部会签后执行；任何单一账号都不能绕过 P0 门禁。
 
-## 1. 产品闭环与非 GA 边界
+## 1. 产品闭环与非目标
 
-系统从已签 verifier 导入 WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW、migration、灾备、支付、Edge、
-隐私、合规、供应链和隔离验证证据，为固定 candidate digest 计算 gate。产品、SRE、安全、测试、财务、法务分别以
-actor kind 会签；actor kind 映射现有 platform permission，不新增角色，同一账号不能满足多个独立会签。
+release_manager 以代码树、迁移集、公开合同集、测试清单、20 个 owner-qualified 制品和四个波次计划创建
+不可变候选。platform_verification 通过固定 verifier 提交签名证据；产品、SRE、安全、测试、财务和法务
+分别使用独立账号会签。全部证据新鲜、全部签署权限仍有效后，独立 platform_owner 才能顺序执行内部、
+个人试点、企业试点和云管私有试点。每波必须完成观察窗口并提交健康水位；失败可退回唯一前一检查点，
+且由不同账号复验。四波结束后的评审结论只能是 `release_candidate`。
 
-全部 gate、证据 freshness、72 小时长稳和会签通过后，platform_owner 只能启动
-`internal -> personal_pilot -> enterprise_pilot -> managed_private_pilot` 四波。每波绑定明确 cohort、feature flag、
-迁移 plan、观测窗口、support staffing、财务/法务 checkpoint 和 rollback plan；异常自动暂停并可回退上一已验证波次。
-完成后状态只能是 `release_candidate`。PRD-139 起的存量 Console 分域迁移和 PRD-148 最终门禁完成前，API、数据库、
-文档和 Console 都不能出现 `general_availability` 成功事实。
+本条不执行公开 GA，不替代 PRD-139..147 的存量控制台分域迁移，不允许手工声明测试通过，不保存测试正文、
+客户正文、凭据或对象 URL，也不扩张 Workspace 数据访问边界。功能开关、Runbook、支持排班、对账、法务、
+灾备、支付、Edge 和长稳只以签名 digest/receipt 进入治理事实。
 
-## 2. 0130 gate、证据、会签与波次
+## 2. 0130 数据、owner 与恢复边界
 
-- LaunchGate 是平台全局版本化定义，保存 required verifier/code、threshold、freshness、blocking severity 和 policy digest；
-  运行时不能编辑当前 candidate 的要求。
-- LaunchEvidence、LaunchRollback 和 PostLaunchReview 带验证/试点 `workspace_id/tenant_id` 复合 owner。
-  Evidence 绑定 gate、candidate digest、verifier identity/version/signature、artifact URI digest、started/finished、
-  exact outcome/metrics、environment/provenance 和 expiry；平台全局 gate 使用专用验证 Workspace，不能提交无 owner
-  evidence。原始凭据、日志正文、本地路径或可变 URL 不保存。
-- LaunchWave 保存 kind、cohort manifest digest、feature flag generation、migration/rollback plan、status、observation deadline、
-  health watermark 和 owner；cohort 关联不授予平台新的 Workspace 读取权限。
-- GoNoGoDecision 追加保存 actor kind、account、role/permission revision、candidate/gate generation、decision/reason code 和签名；
-  同账号多角色不能重复占位，申请/执行者不能自批。
-- LaunchRollback 绑定目标 Workspace、触发 gate/metric、from/to wave、checkpoint、job receipt 和验证结果；
-  PostLaunchReview 绑定试点 Workspace，保存固定摘要、action items 和 RC conclusion，不能产生 GA 状态。
+- `launch_gate_policies` 固定保存 WB/API/BB/GR/PERF/WEB/UI/UCD/COMP/SEC/FLOW、迁移、灾备、支付、
+  Edge、隐私、合规、供应链、租户隔离和 72 小时长稳共 20 个 active v1 policy；注册表和角色映射不可变。
+- `launch_candidates` 保存代码/迁移/合同/制品/测试/policy-set digest、generation、状态、申请人 revision、
+  CAS revision 和时间；相同 canonical candidate 不能重复创建，新 generation 会使旧 collecting/signing/ready/RC
+  事实进入 stale，但不删除历史。
+- `launch_candidate_artifacts`、`launch_evidence` 和 `launch_waves` 都保存 Workspace/tenant 复合 owner；
+  artifact、gate、owner 和 digest 形成复合外键，禁止同形 ID 或跨 owner 拼接。
+- `launch_go_no_go_decisions` 对 candidate + actor kind 和 candidate + operator 双唯一；保存 operator revision、
+  permission、decision digest 和用途隔离 HMAC 摘要，不保存 step-up 或签名密钥。
+- `launch_rollbacks`、`post_launch_reviews`、`launch_events/outbox`、`launch_action_commands` 和
+  `launch_scheduler_state` 保存回滚复验、RC 评审、事件、幂等和 freshness 水位；所有状态变化保持审计事实。
+- Down 只允许在没有候选、证据、决策、波次、回滚、评审、事件、outbox、action 或 scheduler 业务水位时执行；
+  0130 回退后恢复 0129 的权限和 tenant-deletion manifest 完整性边界。
 
-Down 在任何 evidence、decision、wave、rollback、review 或事件存在时拒绝；候选历史不可删除。
+## 3. 精确 API、签名证据与幂等
 
-## 3. 证据接入、权限与 Platform Console
+四条 Platform Cookie API 构成闭集。Bearer、WorkspaceSession、SupportSession、重复 Cookie、query、未知字段和
+非预期 body 全部拒绝；写操作同时要求 exact Origin/CSRF、一次性 step-up、`Idempotency-Key` 和 quoted
+`If-Match`。幂等键只保存 SHA-256 并绑定 operator + action + canonical request；同键异体冲突。
 
-evidence endpoint 只接受 verifier-signed envelope 和已注册 artifact digest；人工用户不能直接填写 passed/metric，也不能
-上传任意文件替代正式证据。candidate composite digest 覆盖 code tree、migration checksums、public contracts、release
-artifacts、test manifest 和 gate policy；任一输入变化提升 generation，全部旧 evidence/decision 立即 stale。
+证据 envelope 精确覆盖 candidate/policy/gate、Workspace/tenant、artifact、verifier/version、outcome、指标、
+environment/provenance digest 和 UTC 时间窗。签名在事务外由固定 verifier 验证，写入前重新恢复账号、权限、
+candidate revision、owner 和 gate generation；签名明文只在请求生命周期存在，数据库只保存摘要。普通门禁
+最长 72 小时，长稳门禁必须覆盖 72..96 小时；缺 verifier、失败、过期、未来时间或 policy 漂移均失败关闭。
 
-产品/SRE/安全/测试/财务/法务 actor kind 分别映射受控现有平台 permission；platform_owner 只有当前 generation 全部
-通过后可启动或回滚。Console 以密集 gate 表、证据 freshness、会签、四波状态、SLO、阻断项和恢复操作为主；不提供
-override 按钮，不展示 tenant 明细、Secret、原始日志或对象地址。所有写 step-up、CAS、幂等、no-store 并逐请求恢复权限。
+## 4. 会签、动态撤权与职责分离
 
-## 4. 第一轮自审：门禁真实性与不可绕过
+权限扩展保持现有角色，不创建新角色：release_manager 创建；platform_verification 提交证据并签 test；
+platform_owner、platform_ops、platform_security、platform_billing、platform_compliance 分别签 product、sre、
+security、finance、legal。候选申请人不能会签；六个 actor kind 必须由六个不同账号完成。
 
-- P0：人工把 gate 改为 passed 会让单人发布。修正为 verifier-signed evidence、固定 policy 和无 override 状态机。
-- P0：platform_owner 同时充当全部会签人会破坏独立性。修正为 actor account 唯一约束，角色只映射可签 actor kind。
-- P0：LaunchEvidence 引用可变文件会在会签后替换。修正为 digest、signature、verifier provenance 和 immutable receipt。
-- P1：试点 cohort 查询让平台读取租户数据。修正为 tenant-qualified manifest digest 和执行命令，launch projection 只见状态。
+第六个签名写入后、候选进入 ready 前，服务重新验证 20 份证据的新鲜度、policy-set digest、六个 operator 的
+当前 status/revision/role permission。每次 start/resume/complete/review 都重复该验证，因此撤权、角色变化、
+证据过期或注册表漂移不能依靠旧页面状态放行。执行者必须不同于申请人和六个签署人。
 
-## 5. 第二轮自审：陈旧证据、长稳与回滚
+## 5. 四波状态机、回滚与 RC 终态
 
-- P0：代码/migration/合同变化仍沿用旧会签会发布未验证输入。修正为 composite candidate digest 和全量 stale 传播。
-- P0：72 小时长稳与其他压力/测试重叠会产生不可归因结果。修正为独占基线、完整时间戳/错误样本、最大采样间隔和
-  系统负载证据；任何 5xx/P0/P1 或证据缺口失败。
-- P0：自动回滚只切 feature flag 不恢复迁移/Edge 状态。修正为波次 checkpoint、持久 rollback job、领域补偿和复验。
-- P1：完成四波后直接写 GA 会越过 PRD-139..148。修正为数据库 CHECK 只允许 `release_candidate`，GA 状态不在本迁移中。
+四波顺序固定为 `internal -> personal_pilot -> enterprise_pilot -> managed_private_pilot`。后波只能在前波
+completed 后开始；start 生成观察截止时间，pause 不放宽门禁，resume 重新计算完整观察窗口，complete 必须在
+截止时间后携带健康水位 digest。第四波完成后进入 review_pending，评审要求四波均 completed、当前会签仍有效，
+并写入 summary/action-items digest。
 
-两轮均为修正后通过，无未关闭 P0/P1 设计问题。
+回滚只能从当前波退到唯一前一检查点；请求绑定 trigger、checkpoint 和 job receipt digest，并把受影响波次置为
+rolled_back。复验账号必须不同于回滚申请人，也不能是该候选此前的波次执行者或评审执行者。复验 passed 才形成
+rolled_back 和 `launch.rolled_back`；复验 failed 使候选失败关闭。任何路径均不存在公开 GA 状态或动作。
 
-## 6. 专项验证与 G6
+## 6. Scheduler、事件与 Console
 
-0129/0130 往返/down guard；verifier 签名/owner/freshness/失败/跳过/敏感证据；candidate digest 变化和全 stale；
-六 actor kind 独立会签、动态撤权、非自批；四波启动/暂停/恢复/回滚和 cohort 隔离；WB/API/BB/GR/PERF/WEB/UI/
-UCD/COMP/SEC/FLOW 全组；10 万迁移、工单 SLA、SDK N/N-1、隐私/合规/供应链/隔离、灾备/支付/Edge；三浏览器
-三缩放、Windows/Linux、SQLite/PostgreSQL、代理/断网；Control/Gateway/页面 SLO；独占 72 小时长稳；数据库、
-outbox/queue、进程、端口、临时目录静止终态和敏感/禁止文件命中 0。
+持久 scheduler 使用 30 秒 lease、随机 token 摘要、generation/revision 和事务锁；它把活动候选中过期证据变为
+failed、生成 `launch.gate_failed`，并有界处理 outbox。租约由同一事务获取、处理和释放，崩溃后可按持久水位接管。
 
-任一证据缺失、失败、跳过、陈旧或含敏感明文，G6 失败。通过只生成 RC；公开 GA 必须由 PRD-148 关闭。
+Platform Launch Gates Console 由后端权限投影决定导航和动作，展示 20 个 gate、裁剪后的 digest/metric/freshness、
+六类签署、四波、回滚和 RC 评审。客户端严格校验响应字段、owner、ID、状态和 gate registry；Abort/ticket/revision
+阻止迟到响应。TOTP、step-up grant 和 evidence signature 不进入 Storage/URL/DOM，表单结束、失败或撤权后清空。
+候选创建的 step-up Workspace 与后端一致，按 gate code 排序选择确定 owner，避免多 Workspace 输入顺序漂移。
+
+## 7. 第一轮自审：门禁真实性、权限与 owner
+
+- P0：只统计六个签名而不在最终签名时恢复旧签署人的当前权限，会短暂显示伪 ready。修正为第六签名事务内
+  重新验证全部证据、policy 和六个 operator revision/permission，失败时连同新签名原子回滚。
+- P0：回滚只禁止申请人自验，曾执行波次的另一账号仍可复验自身执行结果。修正为查询 candidate action 事实，
+  所有 wave/review executor 都不能成为 rollback verifier。
+- P1：Console 以 artifact 输入首项申请 step-up，而后端以排序后的 gate owner 消费，多 Workspace 时会不一致。
+  修正为前后端都按 gate code 选择确定 owner，并增加不同 Workspace 的回归断言。
+- P1：请求若接受任意 verifier、URL 或测试正文会把治理面变成伪证据入口。实现保持固定 20 policy、固定 verifier、
+  canonical envelope 和 digest-only DTO，缺 verifier 失败关闭。
+
+第一轮修正后无未关闭 P0/P1。
+
+## 8. 第二轮自审：并发、撤权、回滚与隐私
+
+- P0：旧 revision、过期证据或 policy 漂移在波次中复用会绕过最新门禁。确认 start/resume/complete/review 均在
+  同一写事务内重新验证证据、签署权限、candidate revision 和当前 policy-set。
+- P0：并行波次、跳波或任意回滚目标会破坏可恢复性。确认固定 sequence、前波 completed、单 active candidate、
+  quoted revision 和 `_PREVIOUS_WAVE` 唯一目标共同失败关闭。
+- P1：签名、TOTP、step-up、对象 URL 或原始证据进入日志/DTO/Storage 会泄漏。确认服务只保存签名/dataset digest，
+  Console 敏感输入生命周期有 finally 清空，测试与浏览器审计无敏感投影。
+- P1：scheduler 接管若无持久状态会重复事件。确认 lease/revision、水位、事件唯一键和 outbox action 均持久化，
+  SQLite 写事务串行化接管；完整跨数据库/故障矩阵留到批次 G6。
+
+第二轮修正后无未关闭 P0/P1。专项结果、真实浏览器记录和敏感审计见
+`docs/testing/PRD-138-tests.md`；下一权威项为 PRD-139。

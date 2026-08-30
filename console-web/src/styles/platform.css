@@ -1368,6 +1368,249 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-offline-table form { min-width: 0; }
 }
 
+/* PRD-138 keeps gate truth, independent signatures, waves, rollback, and RC review together. */
+.platform-launch-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.platform-launch-boundary {
+  border: 1px solid var(--blue);
+  border-radius: 4px;
+  color: var(--blue);
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.platform-launch-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.platform-launch .platform-band { min-width: 0; }
+.platform-launch details > summary {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 750;
+}
+.platform-launch details > summary small { color: var(--muted); font-size: 11px; font-weight: 500; }
+
+.platform-launch form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.platform-launch form > label,
+.platform-launch-input-grid label,
+.platform-launch-wave-plan label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.platform-launch form label > span,
+.platform-launch-input-grid label > span,
+.platform-launch-wave-plan label > span,
+.platform-launch fieldset > legend {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.platform-launch input,
+.platform-launch select,
+.platform-launch button {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  padding: 7px 9px;
+  letter-spacing: 0;
+}
+
+.platform-launch button { cursor: pointer; font-weight: 750; }
+.platform-launch button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
+.platform-launch button.platform-danger { border-color: var(--red); background: var(--red); color: #fff; }
+.platform-launch :disabled { cursor: not-allowed; opacity: .52; }
+.platform-launch .platform-check {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+.platform-launch .platform-check input { width: 16px; min-height: 16px; padding: 0; }
+
+.platform-launch-create > summary { border-bottom: 1px solid var(--line); padding-bottom: 11px; }
+.platform-launch-create > form > fieldset,
+.platform-launch-create > form > .platform-launch-input-grid { grid-column: 1 / -1; }
+.platform-launch-input-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 10px;
+}
+.platform-launch fieldset {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px;
+}
+.platform-launch fieldset > legend { padding: 0 5px; }
+.platform-launch-artifact-head,
+.platform-launch-artifact-row {
+  display: grid;
+  grid-template-columns: minmax(130px, .7fr) minmax(220px, 1fr) minmax(260px, 1.3fr);
+  align-items: center;
+  gap: 8px;
+}
+.platform-launch-artifact-head { border-bottom: 1px solid var(--line); padding: 4px 0 8px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.platform-launch-artifact-row { border-bottom: 1px solid var(--line); padding: 7px 0; }
+.platform-launch-artifact-row:last-child { border-bottom: 0; }
+.platform-launch-artifact-row strong { font-size: 11px; }
+.platform-launch-wave-set { display: grid; gap: 12px; }
+.platform-launch-wave-plan { min-width: 0; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.platform-launch-wave-plan:last-child { border-bottom: 0; padding-bottom: 0; }
+.platform-launch-wave-plan h3 { margin: 0 0 8px; font-size: 12px; }
+.platform-launch-wave-plan > div { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 9px; }
+
+.platform-launch-candidate dl,
+.platform-launch-decision-grid section > dl,
+.platform-launch-wave-row > dl,
+.platform-launch-rollback-list section > dl,
+.platform-launch-review > dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+.platform-launch-candidate dl > div,
+.platform-launch-decision-grid dl > div,
+.platform-launch-wave-row > dl > div,
+.platform-launch-rollback-list dl > div,
+.platform-launch-review > dl > div { min-width: 0; padding: 10px 10px 10px 0; }
+.platform-launch dt { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.platform-launch dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 11px; font-weight: 700; }
+.platform-launch code { font-size: 10px; overflow-wrap: anywhere; }
+
+.platform-launch-gate-table { min-width: 900px; table-layout: fixed; }
+.platform-launch-gate-table th:first-child { width: 19%; }
+.platform-launch-gate-table th:nth-child(2) { width: 24%; }
+.platform-launch-gate-table th:nth-child(3) { width: 18%; }
+.platform-launch-gate-table th:nth-child(4) { width: 23%; }
+.platform-launch-gate-table th:last-child { width: 16%; }
+.platform-launch-gate-table td { vertical-align: top; }
+.platform-launch-gate-table td strong,
+.platform-launch-gate-table td small,
+.platform-launch-gate-table td code { display: block; overflow-wrap: anywhere; }
+.platform-launch-gate-table td small { margin-top: 5px; color: var(--muted); font-size: 10px; }
+.platform-launch-gate-table .platform-status + .platform-status { margin-left: 4px; }
+
+.platform-launch-evidence-forms,
+.platform-launch-rollback-requests { display: grid; margin-top: 14px; border-top: 1px solid var(--line); }
+.platform-launch-evidence-forms > details,
+.platform-launch-rollback-requests > details { border-bottom: 1px solid var(--line); padding: 8px 0; }
+
+.platform-launch-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+.platform-launch-decision-grid > section { min-width: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 12px; }
+.platform-launch-decision-grid > section:nth-child(3n) { border-right: 0; }
+.platform-launch-decision-grid header,
+.platform-launch-rollback-list header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.platform-launch-decision-grid header div,
+.platform-launch-rollback-list header div { min-width: 0; }
+.platform-launch-decision-grid header strong,
+.platform-launch-decision-grid header small,
+.platform-launch-rollback-list header strong,
+.platform-launch-rollback-list header small { display: block; overflow-wrap: anywhere; }
+.platform-launch-decision-grid header small,
+.platform-launch-rollback-list header small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.platform-launch-decision-grid form { grid-template-columns: minmax(0, 1fr); }
+
+.platform-launch-wave-list { display: grid; border-top: 1px solid var(--line); }
+.platform-launch-wave-row { min-width: 0; border-bottom: 1px solid var(--line); padding: 13px 0; }
+.platform-launch-wave-row > header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.platform-launch-wave-row > header > span:first-child { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 11px; font-weight: 800; }
+.platform-launch-wave-row > header strong,
+.platform-launch-wave-row > header small { display: block; }
+.platform-launch-wave-row > header small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.platform-launch-wave-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.platform-launch-wave-actions > details { min-width: 220px; flex: 1 1 260px; }
+.platform-launch-wave-actions form { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+
+.platform-launch-rollback-list { display: grid; border-top: 1px solid var(--line); }
+.platform-launch-rollback-list > section { min-width: 0; border-bottom: 1px solid var(--line); padding: 13px 0; }
+.platform-launch-rollback-list form,
+.platform-launch-review form { border-top: 1px solid var(--line); padding-top: 11px; }
+
+@media (max-width: 1000px) {
+  .platform-launch-input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-launch-decision-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-launch-decision-grid > section:nth-child(3n) { border-right: 1px solid var(--line); }
+  .platform-launch-decision-grid > section:nth-child(2n) { border-right: 0; }
+}
+
+@media (max-width: 760px) {
+  .platform-launch-metrics,
+  .platform-launch-candidate dl,
+  .platform-launch-decision-grid section > dl,
+  .platform-launch-wave-row > dl,
+  .platform-launch-rollback-list section > dl,
+  .platform-launch-review > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-launch-metrics > div:nth-child(2) { border-right: 0; }
+  .platform-launch-metrics > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .platform-launch form,
+  .platform-launch-wave-plan > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-launch-artifact-head { display: none; }
+  .platform-launch-artifact-row { grid-template-columns: minmax(100px, .6fr) minmax(0, 1fr); }
+  .platform-launch-artifact-row input:last-child { grid-column: 2; }
+  .platform-launch-gate-table { min-width: 0; }
+  .platform-launch-gate-table thead { display: none; }
+  .platform-launch-gate-table tbody,
+  .platform-launch-gate-table tr { display: block; width: 100%; }
+  .platform-launch-gate-table tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .platform-launch-gate-table td {
+    display: grid;
+    grid-template-columns: 100px minmax(0, 1fr);
+    gap: 9px;
+    width: 100%;
+    border: 0;
+    padding: 5px 0;
+  }
+  .platform-launch-gate-table td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+}
+
+@media (max-width: 560px) {
+  .platform-launch-heading-actions { align-items: flex-end; flex-direction: column; }
+  .platform-launch-input-grid,
+  .platform-launch form,
+  .platform-launch-wave-plan > div,
+  .platform-launch-decision-grid,
+  .platform-launch-wave-actions form { grid-template-columns: minmax(0, 1fr); }
+  .platform-launch-decision-grid > section,
+  .platform-launch-decision-grid > section:nth-child(3n) { border-right: 0; }
+  .platform-launch-artifact-row { grid-template-columns: minmax(0, 1fr); }
+  .platform-launch-artifact-row input:last-child { grid-column: auto; }
+  .platform-launch button { width: 100%; }
+}
+
 /* PRD-132 reuses the Platform support view for the prioritized queue and JIT entry. */
 .platform-support-ticket-filter { display: grid; grid-template-columns: repeat(2,minmax(130px,.6fr)) minmax(210px,1fr) auto; align-items: end; gap: 10px; margin-bottom: 18px; }
 .platform-support-ticket-filter input,

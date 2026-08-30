@@ -2643,6 +2643,22 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   保存两轮实施自审、0129/API/Console、静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-138，完整 G6
   在其独立提交后统一执行且只能形成 release candidate。
 
+## PRD-138 SaaS 发布候选、核心迁移波次与全产品门禁（已完成）
+
+- `control-plane-api/src/metahub_control/launch_governance/`：精确四路由 Platform API、20 个固定 gate policy、
+  canonical candidate/evidence digest、外部签名 verifier、六账号 Go/No-Go、动态权限复核、四波观察、独立回滚
+  复验、RC-only 评审、幂等 action、event/outbox 和持久 scheduler；缺证据、撤权、过期、跳波或 owner 漂移均
+  失败关闭。
+- `infra/migrations/0130_saas_release_candidate_launch_gates.sql/.down.sql`：Platform launch 权限扩展、gate/
+  candidate/artifact/evidence/decision/wave/rollback/review/event/outbox/action/scheduler、Workspace/tenant 复合 owner、
+  不变约束、tenant-deletion manifest 和业务事实 down guard。
+- `console-web/src/lib/launchGovernance.js`、`src/features/launch-gates/renderLaunchGates.js` 与 Platform 页面：
+  Cookie-only strict client/DTO、20 gate、六签署、四波、回滚和 RC 评审投影；step-up/CAS/幂等、Abort/ticket/
+  revision 和动态撤权防护；签名、TOTP、原始证据、对象 URL 和租户内部字段不进入 Storage/URL/DOM。
+- `docs/prd/PRD-138-saas-release-candidate-launch-gates.md` 与 `docs/testing/PRD-138-tests.md`：保存两轮实施
+  自审、0130/API/Console/Browser、关联回归、静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-139。
+  S6 完整 G6 在本条独立提交后统一执行，并且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-137 - 租户隔离持续验证与安全攻防` 已完成；当前下一条未完成项是
-  `PRD-138 - SaaS发布候选、核心迁移波次与全产品门禁`。
+- 新 `PRD-090` 至 `PRD-138 - SaaS发布候选、核心迁移波次与全产品门禁` 已完成；当前下一条未完成项是
+  `PRD-139 - 渠道伙伴、代理商与客户归属管理`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-138 - SaaS发布候选、核心迁移波次与全产品门禁` 已完成：0130、20 个固定签名 gate、六账号
+  Go/No-Go 会签、动态撤权、内部/个人/企业/云管私有四波观察、唯一前波回滚与独立复验、持久 scheduler/
+  event/outbox，以及 Platform Launch Gates 工作台均已交付。Migration `4/4`、后端 API/服务 `7/7`、Console
+  `5/5`、关联回归 `24/24`、lint `414 files`、Ruff 和真实 Desktop/Mobile Browser 通过。详见
+  [PRD-138 设计](docs/prd/PRD-138-saas-release-candidate-launch-gates.md) 和
+  [PRD-138 测试记录](docs/testing/PRD-138-tests.md)。下一权威项为 PRD-139；S6 完整 G6 在本条独立提交后
+  统一执行，结论仍只能是 release candidate。
 - `PRD-137 - 租户隔离持续验证与安全攻防` 已完成：0129、签名版本化 profile、10 个固定 owner-registry
   场景、隔离 runner lease/fencing、缺失或撤权失败关闭、不可变 finding、独立 remediation 复验、Workspace
   owner/security_admin 双批与 Platform review 风险接受，以及 Platform Security Assurance 工作台均已交付。

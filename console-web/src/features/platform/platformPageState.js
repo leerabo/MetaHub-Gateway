@@ -1,6 +1,7 @@
 // 平台页面状态机负责取消过期请求、权限裁剪和幂等意图；敏感认证值只由 HttpOnly Cookie 承载。
 import { PlatformApiError } from "../../lib/platform.js";
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
@@ -20,6 +21,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "capacity",
   "data-residency",
   "security-assurance",
+  "launch-gates",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -75,6 +77,8 @@ export function createPlatformPageController({
     securityAssurance: null,
     securityAssuranceLookup: "",
     securityAssuranceIntent: null,
+    launchGovernance: null,
+    launchIntent: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -215,7 +219,7 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
-        || state.securityAssuranceIntent
+        || state.securityAssuranceIntent || state.launchIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const ticket = begin();
@@ -244,7 +248,7 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
-        || state.securityAssuranceIntent
+        || state.securityAssuranceIntent || state.launchIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
@@ -252,7 +256,7 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "security-assurance", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
+        "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -288,6 +292,9 @@ export function createPlatformPageController({
           state.securityAssurance = null;
           state.securityAssuranceLookup = "";
           state.securityAssuranceIntent = null;
+        } else if (state.view === "launch-gates") {
+          state.launchGovernance = null;
+          state.launchIntent = null;
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -352,6 +359,13 @@ export function createPlatformPageController({
       }
       if (state.view === "releases" && !state.developerContracts) {
         void loadDeveloperContracts();
+      }
+      if (state.view === "security-assurance" && state.securityAssuranceLookup
+        && !state.securityAssurance) {
+        void loadSecurityAssurance(state.securityAssuranceLookup);
+      }
+      if (state.view === "launch-gates" && !state.launchGovernance) {
+        void loadLaunchGates();
       }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
       if (state.view === "edge-upgrades"
@@ -599,6 +613,244 @@ export function createPlatformPageController({
         verificationCode = "";
         stepUpGrant = "";
       }
+    },
+    async refreshLaunchGates() {
+      return loadLaunchGates();
+    },
+    async createLaunchCandidate(input = {}) {
+      const artifacts = Array.isArray(input.artifacts) ? input.artifacts.map((item) => ({
+        gate_code: String(item.gate_code ?? ""),
+        workspace_id: String(item.workspace_id ?? "").trim(),
+        artifact_sha256: String(item.artifact_sha256 ?? "").trim(),
+      })) : [];
+      const waves = Array.isArray(input.waves) ? input.waves.map((item) => ({
+        wave_kind: String(item.wave_kind ?? ""),
+        workspace_id: String(item.workspace_id ?? "").trim(),
+        cohort_manifest_sha256: String(item.cohort_manifest_sha256 ?? "").trim(),
+        feature_flag_generation: Number(item.feature_flag_generation),
+        migration_plan_sha256: String(item.migration_plan_sha256 ?? "").trim(),
+        rollback_plan_sha256: String(item.rollback_plan_sha256 ?? "").trim(),
+        observation_seconds: Number(item.observation_seconds),
+      })) : [];
+      const command = {
+        codeTreeSha256: String(input.codeTreeSha256 ?? "").trim(),
+        migrationSetSha256: String(input.migrationSetSha256 ?? "").trim(),
+        contractSetSha256: String(input.contractSetSha256 ?? "").trim(),
+        testManifestSha256: String(input.testManifestSha256 ?? "").trim(),
+        artifacts,
+        waves,
+        confirmed: input.confirmed === true,
+      };
+      const stepUpOwner = [...artifacts].sort((left, right) => (
+        left.gate_code < right.gate_code ? -1 : left.gate_code > right.gate_code ? 1 : 0
+      ))[0]?.workspace_id;
+      return launchWrite({
+        permission: "platform.launch.create",
+        apiMethod: "createLaunchCandidate",
+        actionCode: "platform.launch.create",
+        resourceType: "workspace",
+        resourceId: stepUpOwner,
+        operation: "candidate.create",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.createLaunchCandidate({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "Release candidate created; all evidence is pending.",
+      });
+    },
+    async submitLaunchEvidence(input = {}) {
+      const candidate = currentLaunchCandidate();
+      if (!candidate || input.launchCandidateId !== candidate.launch_candidate_id) return false;
+      const command = {
+        launchGateId: String(input.launchGateId ?? ""),
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        workspaceId: String(input.workspaceId ?? "").trim(),
+        artifactSha256: String(input.artifactSha256 ?? "").trim(),
+        verifierCode: String(input.verifierCode ?? ""),
+        outcome: String(input.outcome ?? ""),
+        metricValue: input.metricValue === null ? null : Number(input.metricValue),
+        metricUnit: input.metricUnit === null ? null : String(input.metricUnit ?? "").trim(),
+        environmentSha256: String(input.environmentSha256 ?? "").trim(),
+        provenanceSha256: String(input.provenanceSha256 ?? "").trim(),
+        startedAt: String(input.startedAt ?? ""),
+        finishedAt: String(input.finishedAt ?? ""),
+        confirmed: input.confirmed === true,
+      };
+      let signature = String(input.signature ?? "");
+      try {
+        return await launchWrite({
+          permission: "platform.launch.evidence.submit",
+          apiMethod: "submitLaunchEvidence",
+          actionCode: "platform.launch.evidence.submit",
+          resourceType: "launch_gate",
+          resourceId: command.launchGateId,
+          operation: "evidence.submit",
+          command,
+          method: input.method,
+          verificationCode: input.verificationCode,
+          invoke: (stepUpGrant, idempotencyKey, signal) => api.submitLaunchEvidence({
+            ...command, signature, stepUpGrant, idempotencyKey, signal,
+          }),
+          message: "Signed launch evidence accepted.",
+        });
+      } finally {
+        signature = "";
+      }
+    },
+    async decideLaunchCandidate(input = {}) {
+      const candidate = currentLaunchCandidate();
+      const actorKind = String(input.actorKind ?? "");
+      if (!candidate || input.launchCandidateId !== candidate.launch_candidate_id) return false;
+      const command = {
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        actorKind,
+        approved: input.approved === true,
+        reasonCode: String(input.reasonCode ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return launchWrite({
+        permission: `platform.launch.sign.${actorKind}`,
+        apiMethod: "decideLaunchCandidate",
+        actionCode: `platform.launch.sign.${actorKind}`,
+        resourceType: "launch_candidate",
+        resourceId: candidate.launch_candidate_id,
+        operation: `decision.${actorKind}`,
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.decideLaunchCandidate({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: `${actorKind} decision recorded.`,
+      });
+    },
+    async commandLaunchWave(input = {}) {
+      const candidate = currentLaunchCandidate();
+      const waveKind = String(input.waveKind ?? "");
+      const wave = candidate?.waves.find((item) => item.wave_kind === waveKind);
+      if (!candidate || !wave || input.launchCandidateId !== candidate.launch_candidate_id) {
+        return false;
+      }
+      const command = {
+        operation: String(input.operation ?? ""),
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        waveKind,
+        healthWatermarkSha256: input.healthWatermarkSha256 === undefined
+          ? undefined : String(input.healthWatermarkSha256 ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return launchWrite({
+        permission: "platform.launch.execute",
+        apiMethod: "commandLaunchWave",
+        actionCode: "platform.launch.execute",
+        resourceType: "launch_wave",
+        resourceId: wave.launch_wave_id,
+        operation: command.operation,
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.commandLaunchWave({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: `${waveKind} wave updated.`,
+      });
+    },
+    async reviewLaunchCandidate(input = {}) {
+      const candidate = currentLaunchCandidate();
+      if (!candidate || input.launchCandidateId !== candidate.launch_candidate_id) return false;
+      const command = {
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        summarySha256: String(input.summarySha256 ?? "").trim(),
+        actionItemsSha256: String(input.actionItemsSha256 ?? "").trim(),
+        conclusion: "release_candidate",
+        confirmed: input.confirmed === true,
+      };
+      return launchWrite({
+        permission: "platform.launch.execute",
+        apiMethod: "reviewLaunchCandidate",
+        actionCode: "platform.launch.execute",
+        resourceType: "launch_candidate",
+        resourceId: candidate.launch_candidate_id,
+        operation: "candidate.review",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.reviewLaunchCandidate({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "Post-launch review closed as release candidate.",
+      });
+    },
+    async requestLaunchRollback(input = {}) {
+      const candidate = currentLaunchCandidate();
+      const fromWaveKind = String(input.fromWaveKind ?? "");
+      const wave = candidate?.waves.find((item) => item.wave_kind === fromWaveKind);
+      if (!candidate || !wave || input.launchCandidateId !== candidate.launch_candidate_id) {
+        return false;
+      }
+      const command = {
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        fromWaveKind,
+        toWaveKind: String(input.toWaveKind ?? ""),
+        triggerCode: String(input.triggerCode ?? ""),
+        triggerSha256: String(input.triggerSha256 ?? "").trim(),
+        checkpointSha256: String(input.checkpointSha256 ?? "").trim(),
+        jobReceiptSha256: String(input.jobReceiptSha256 ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return launchWrite({
+        permission: "platform.launch.rollback",
+        apiMethod: "requestLaunchRollback",
+        actionCode: "platform.launch.rollback",
+        resourceType: "launch_wave",
+        resourceId: wave.launch_wave_id,
+        operation: "rollback.request",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.requestLaunchRollback({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "Rollback job recorded; independent verification is pending.",
+      });
+    },
+    async verifyLaunchRollback(input = {}) {
+      const candidate = currentLaunchCandidate();
+      const rollbackId = String(input.launchRollbackId ?? "");
+      const rollback = candidate?.rollbacks.find((item) => item.launch_rollback_id === rollbackId);
+      if (!candidate || !rollback || input.launchCandidateId !== candidate.launch_candidate_id) {
+        return false;
+      }
+      const command = {
+        launchCandidateId: candidate.launch_candidate_id,
+        expectedRevision: Number(input.expectedRevision),
+        launchRollbackId: rollbackId,
+        outcome: String(input.outcome ?? ""),
+        verificationSha256: String(input.verificationSha256 ?? "").trim(),
+        confirmed: input.confirmed === true,
+      };
+      return launchWrite({
+        permission: "platform.launch.rollback",
+        apiMethod: "verifyLaunchRollback",
+        actionCode: "platform.launch.rollback",
+        resourceType: "launch_rollback",
+        resourceId: rollbackId,
+        operation: "rollback.verify",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.verifyLaunchRollback({
+          ...command, stepUpGrant, idempotencyKey, signal,
+        }),
+        message: "Rollback verification recorded.",
+      });
     },
     async filterSupportTickets(filters = {}) {
       if (state.view !== "support") return false;
@@ -2227,6 +2479,7 @@ export function createPlatformPageController({
         providerCatalog: null,
         developerContracts: null,
         securityAssurance: null,
+        launchGovernance: null,
         billing: null,
         refunds: null,
         verification: null,
@@ -2289,6 +2542,12 @@ export function createPlatformPageController({
           assessmentId: state.securityAssuranceLookup,
           signal: ticket.signal,
         }).then((value) => { next.securityAssurance = value.assessment; }));
+      }
+      if (state.view === "launch-gates" && permissions.has("platform.launch.read")
+        && typeof api.launchGates === "function") {
+        tasks.push(api.launchGates({ signal: ticket.signal }).then((value) => {
+          next.launchGovernance = value;
+        }));
       }
       if (!fleetOnly && permissions.has("platform.billing.read")
         && typeof api.billingSummary === "function") {
@@ -2553,6 +2812,10 @@ export function createPlatformPageController({
         state.securityAssurance = null;
         state.securityAssuranceLookup = "";
         state.securityAssuranceIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "launch-gates")) {
+        state.launchGovernance = null;
+        state.launchIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "edge-fleet")) {
         state.edgeFleet = null;
@@ -3092,6 +3355,119 @@ export function createPlatformPageController({
     } catch (error) {
       return fail(ticket, error);
     }
+  }
+
+  async function loadLaunchGates() {
+    if (state.view !== "launch-gates" || !currentPermissions().has("platform.launch.read")
+      || typeof api.launchGates !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      state.launchGovernance = await api.launchGates({ signal: ticket.signal });
+      if (!currentLaunchTicket(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function launchWrite({
+    permission,
+    apiMethod,
+    actionCode,
+    resourceType,
+    resourceId,
+    operation,
+    command,
+    method,
+    verificationCode: rawVerificationCode,
+    invoke,
+    message,
+  }) {
+    const checkedMethod = String(method ?? "totp");
+    if (state.view !== "launch-gates" || command.confirmed !== true
+      || !currentPermissions().has(permission) || typeof api[apiMethod] !== "function"
+      || typeof resourceId !== "string" || resourceId.length < 4
+      || !new Set(["totp", "webauthn"]).has(checkedMethod)) return false;
+    const fingerprint = JSON.stringify([operation, command, checkedMethod]);
+    const idempotencyKey = state.launchIntent?.fingerprint === fingerprint
+      ? state.launchIntent.idempotencyKey : newIdempotencyKey();
+    state.launchIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    let verificationCode = String(rawVerificationCode ?? "");
+    let stepUpGrant = "";
+    try {
+      stepUpGrant = await createLaunchStepUp({
+        method: checkedMethod,
+        verificationCode,
+        actionCode,
+        resourceType,
+        resourceId,
+        ticket,
+      });
+      verificationCode = "";
+      if (!stepUpGrant || !currentLaunchTicket(ticket)) return false;
+      const response = await invoke(stepUpGrant, idempotencyKey, ticket.signal);
+      stepUpGrant = "";
+      if (!currentLaunchTicket(ticket)) return false;
+      state.launchGovernance = {
+        ...(state.launchGovernance ?? { gates: [] }),
+        candidate: response.candidate,
+      };
+      state.launchIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 403 && current(ticket)) {
+        state.launchIntent = null;
+        await controller.refresh();
+        return false;
+      }
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.launchIntent = null;
+      }
+      return fail(ticket, error);
+    } finally {
+      verificationCode = "";
+      stepUpGrant = "";
+    }
+  }
+
+  async function createLaunchStepUp({
+    method, verificationCode, actionCode, resourceType, resourceId, ticket,
+  }) {
+    let challengeId;
+    let credential = null;
+    if (method === "webauthn") {
+      if (typeof api.beginIdentityStepUp !== "function"
+        || typeof api.getWebAuthnAssertion !== "function") return "";
+      const challenge = await api.beginIdentityStepUp({ signal: ticket.signal });
+      if (!currentLaunchTicket(ticket)) return "";
+      challengeId = challenge.challenge_id;
+      credential = await api.getWebAuthnAssertion(challenge.public_key_options);
+      if (!currentLaunchTicket(ticket)) return "";
+    }
+    const response = await api.createIdentityStepUpGrant({
+      method,
+      actionCode,
+      resourceType,
+      resourceId,
+      code: verificationCode,
+      challengeId,
+      credential,
+      signal: ticket.signal,
+    });
+    credential = null;
+    return currentLaunchTicket(ticket) ? String(response.grant ?? "") : "";
   }
 
   async function createAssuranceStepUp({
@@ -3742,6 +4118,133 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-launch-create-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.createLaunchCandidate({
+          codeTreeSha256: data.get("codeTreeSha256"),
+          migrationSetSha256: data.get("migrationSetSha256"),
+          contractSetSha256: data.get("contractSetSha256"),
+          testManifestSha256: data.get("testManifestSha256"),
+          artifacts: LAUNCH_GATE_CODES.map((gateCode) => ({
+            gate_code: gateCode,
+            workspace_id: data.get(`artifactWorkspace:${gateCode}`),
+            artifact_sha256: data.get(`artifactSha256:${gateCode}`),
+          })),
+          waves: LAUNCH_WAVES.map((waveKind) => ({
+            wave_kind: waveKind,
+            workspace_id: data.get(`waveWorkspace:${waveKind}`),
+            cohort_manifest_sha256: data.get(`cohortSha256:${waveKind}`),
+            feature_flag_generation: Number(data.get(`featureGeneration:${waveKind}`)),
+            migration_plan_sha256: data.get(`migrationSha256:${waveKind}`),
+            rollback_plan_sha256: data.get(`rollbackSha256:${waveKind}`),
+            observation_seconds: Number(data.get(`observationSeconds:${waveKind}`)),
+          })),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-evidence-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        const signature = String(data.get("signature") ?? "");
+        const metricValue = String(data.get("metricValue") ?? "").trim();
+        const metricUnit = String(data.get("metricUnit") ?? "").trim();
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.submitLaunchEvidence({
+          launchGateId: data.get("launchGateId"),
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          workspaceId: data.get("workspaceId"),
+          artifactSha256: data.get("artifactSha256"),
+          verifierCode: data.get("verifierCode"),
+          outcome: data.get("outcome"),
+          metricValue: metricValue ? Number(metricValue) : null,
+          metricUnit: metricUnit || null,
+          environmentSha256: data.get("environmentSha256"),
+          provenanceSha256: data.get("provenanceSha256"),
+          startedAt: localTimestamp(data.get("startedAt")),
+          finishedAt: localTimestamp(data.get("finishedAt")),
+          signature,
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-decision-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.decideLaunchCandidate({
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          actorKind: data.get("actorKind"),
+          approved: data.get("approved") === "true",
+          reasonCode: data.get("reasonCode"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-wave-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        const operation = String(data.get("operation") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.commandLaunchWave({
+          operation,
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          waveKind: data.get("waveKind"),
+          healthWatermarkSha256: operation === "complete_wave"
+            ? data.get("healthWatermarkSha256") : undefined,
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-review-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.reviewLaunchCandidate({
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          summarySha256: data.get("summarySha256"),
+          actionItemsSha256: data.get("actionItemsSha256"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-rollback-request-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.requestLaunchRollback({
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          fromWaveKind: data.get("fromWaveKind"),
+          toWaveKind: data.get("toWaveKind"),
+          triggerCode: data.get("triggerCode"),
+          triggerSha256: data.get("triggerSha256"),
+          checkpointSha256: data.get("checkpointSha256"),
+          jobReceiptSha256: data.get("jobReceiptSha256"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-launch-rollback-verify-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.verifyLaunchRollback({
+          launchCandidateId: data.get("launchCandidateId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          launchRollbackId: data.get("launchRollbackId"),
+          outcome: data.get("outcome"),
+          verificationSha256: data.get("verificationSha256"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
@@ -4259,6 +4762,7 @@ export function createPlatformPageController({
       if (action === "privacy-refresh") controller.refreshPrivacyQueue();
       if (action === "compliance-refresh") controller.refreshComplianceControls();
       if (action === "assurance-refresh") controller.refreshSecurityAssessment();
+      if (action === "launch-refresh") controller.refreshLaunchGates();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -4394,12 +4898,17 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "security-assurance"
       && currentPermissions().has("platform.assurance.read");
   }
+  function currentLaunchTicket(ticket) {
+    return current(ticket) && state.view === "launch-gates"
+      && currentPermissions().has("platform.launch.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
   }
   function scrubSensitive() { root.querySelectorAll('input[type="password"], input[name="totpCode"], [data-platform-sensitive]').forEach((node) => { node.value = ""; }); }
   function currentWorkspace() { return state.workspaceDetail?.workspace ?? null; }
+  function currentLaunchCandidate() { return state.launchGovernance?.candidate ?? null; }
   function clearWorkspaceDetail() {
     state.selectedWorkspaceId = null;
     state.workspaceDetail = null;
@@ -4417,6 +4926,8 @@ export function createPlatformPageController({
     state.securityAssurance = null;
     state.securityAssuranceLookup = "";
     state.securityAssuranceIntent = null;
+    state.launchGovernance = null;
+    state.launchIntent = null;
     state.billing = null;
     state.billingStatus = "";
     state.billingCursor = null;

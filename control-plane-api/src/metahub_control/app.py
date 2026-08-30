@@ -74,6 +74,8 @@ from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
 from .invoice_reconciliation import install_invoice_reconciliation_scheduler
 from .invoice_reconciliation import router as invoice_reconciliation_router
+from .launch_governance import install_launch_governance_scheduler
+from .launch_governance import router as launch_governance_router
 from .local_endpoints import router as local_endpoints_router
 from .machine_identity import router as machine_identity_router
 from .mcp_governance import install_mcp_scheduler
@@ -312,6 +314,7 @@ app.include_router(privacy_center_router)
 app.include_router(compliance_center_router)
 app.include_router(supply_chain_security_router)
 app.include_router(security_assurance_router)
+app.include_router(launch_governance_router)
 app.include_router(enterprise_identity_router)
 app.include_router(edge_management_router)
 app.include_router(workspaces_router)
@@ -416,6 +419,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_compliance_scheduler,
             install_supply_chain_scheduler,
             install_security_assurance_scheduler,
+            install_launch_governance_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

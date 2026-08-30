@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**PRD-090..137 已完成，当前下一项为 PRD-138**
+状态：**PRD-090..138 已完成，当前下一项为 PRD-139**
 
 基线日期：2026-08-20
 
@@ -126,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构基线至 PRD-137 租户隔离持续验证与安全攻防已完成；S5/G5 已关闭，S6 已建立 0123..0129、可恢复客户迁移、双域支持协作、公共合同、Global+Workspace 隐私中心、七域 DSR、加密一次性导出、合规证据、SBOM/provenance/attestation、漏洞门禁、时限例外、PatchRelease 回滚，以及固定场景隔离 runner、finding/remediation/risk acceptance 闭环；权威下一项为 PRD-138。完整 G6 数据库、集成、FLOW、浏览器、性能、安全、兼容性和 72 小时长稳在 PRD-138 独立提交后统一执行，并且只能形成 release candidate，不能公开 GA。
+1. PRD-090 架构基线至 PRD-138 SaaS 发布候选、核心迁移波次与全产品门禁已完成；S5/G5 已关闭，S6 已建立 0123..0130、可恢复客户迁移、双域支持协作、公共合同、Global+Workspace 隐私中心、七域 DSR、加密一次性导出、合规证据、SBOM/provenance/attestation、漏洞门禁、固定场景隔离 runner、20 个签名发布门禁、六账号会签、四波观察和独立回滚复验；权威下一项为 PRD-139。完整 G6 数据库、集成、FLOW、浏览器、性能、安全、兼容性和 72 小时长稳在 PRD-138 独立提交后统一执行，并且只能形成 release candidate，不能公开 GA。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。

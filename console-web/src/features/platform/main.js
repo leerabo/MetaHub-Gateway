@@ -164,6 +164,16 @@ import {
   getSecurityAssessment,
   startSecurityAssessment,
 } from "../../lib/securityAssurance.js";
+import {
+  commandLaunchWave,
+  createLaunchCandidate,
+  decideLaunchCandidate,
+  getLaunchGates,
+  requestLaunchRollback,
+  reviewLaunchCandidate,
+  submitLaunchEvidence,
+  verifyLaunchRollback,
+} from "../../lib/launchGovernance.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
@@ -377,6 +387,14 @@ if (root) {
       securityAssessment: (input) => getSecurityAssessment({ controlApiUrl, ...input }),
       startSecurityAssessment: (input) => startSecurityAssessment({ controlApiUrl, ...input }),
       securityRemediation: (input) => applySecurityRemediation({ controlApiUrl, ...input }),
+      launchGates: (input) => getLaunchGates({ controlApiUrl, ...input }),
+      createLaunchCandidate: (input) => createLaunchCandidate({ controlApiUrl, ...input }),
+      submitLaunchEvidence: (input) => submitLaunchEvidence({ controlApiUrl, ...input }),
+      decideLaunchCandidate: (input) => decideLaunchCandidate({ controlApiUrl, ...input }),
+      commandLaunchWave: (input) => commandLaunchWave({ controlApiUrl, ...input }),
+      reviewLaunchCandidate: (input) => reviewLaunchCandidate({ controlApiUrl, ...input }),
+      requestLaunchRollback: (input) => requestLaunchRollback({ controlApiUrl, ...input }),
+      verifyLaunchRollback: (input) => verifyLaunchRollback({ controlApiUrl, ...input }),
       decideOfflineBundle: (input) => decidePlatformOfflineBundle({
         controlApiUrl,
         ...input,

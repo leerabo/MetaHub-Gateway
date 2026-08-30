@@ -369,6 +369,20 @@ REQUIRED_DOCS = {
         "PRD-138",
         "0129",
     ),
+    ROOT / "docs/prd/PRD-138-saas-release-candidate-launch-gates.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0130",
+        "release_candidate",
+    ),
+    ROOT / "docs/testing/PRD-138-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-139",
+        "0130",
+        "release_candidate",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -1048,10 +1062,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 129
+        and migration_versions[-1] == 130
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0129 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0130 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1270,6 +1284,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             ROOT / "infra/migrations/0129_tenant_isolation_security_assurance.down.sql"
         ).is_file(),
         "PRD-137 owns reversible migration 0129 with guarded assurance-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0130_saas_release_candidate_launch_gates.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0130_saas_release_candidate_launch_gates.down.sql"
+        ).is_file(),
+        "PRD-138 owns reversible migration 0130 with guarded launch-governance rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

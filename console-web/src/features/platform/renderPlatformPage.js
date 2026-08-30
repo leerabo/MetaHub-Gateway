@@ -1,5 +1,6 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -51,7 +52,7 @@ export function renderPlatformWorkspace(container, state) {
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
       || state.providerCatalogPublishIntent || state.developerContractIntent
-      || state.securityAssuranceIntent
+      || state.securityAssuranceIntent || state.launchIntent
       || state.edgeUpgradeIntent || state.edgeLicenseIntent
       || state.offlineBundleIntent)
   );
@@ -96,6 +97,7 @@ function renderView(state, permissions) {
   if (state.view === "capacity") return capacityView(state, permissions);
   if (state.view === "data-residency") return dataResidencyView(state);
   if (state.view === "security-assurance") return securityAssuranceView(state, permissions);
+  if (state.view === "launch-gates") return renderLaunchGates(state, permissions);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -3163,7 +3165,7 @@ function scanStateLabel(value) {
 function meterLabel(value) { return ({ api_requests: "API 请求", input_tokens: "输入 Token", output_tokens: "输出 Token", total_tokens: "总 Token" })[value] ?? statusLabel(value); }
 function actionLabel(value) { return String(value).replaceAll("_", " ").replaceAll(".", " / "); }
 function kindLabel(value) { return value === "organization" ? "Organization" : value === "personal" ? "Personal" : value; }
-function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤", privacy: "◌" })[view] ?? "·"; }
+function navSymbol(view) { return ({ overview: "⌂", infrastructure: "▤", gateway: "↗", "edge-fleet": "▦", "edge-backups": "↺", "offline-bundles": "⇄", observability: "⌁", "disaster-recovery": "↺", "status-incidents": "◉", capacity: "▥", "data-residency": "⊙", "security-assurance": "◈", "launch-gates": "✓", "abuse-risk": "!", operators: "◎", workspaces: "▦", support: "◇", audit: "≡", billing: "¤", privacy: "◌" })[view] ?? "·"; }
 function infrastructureKindLabel(value) { return ({ database_cluster: "DatabaseCluster", cache_cluster: "CacheCluster", object_store: "ObjectStore", key_ring: "KeyRing" })[value] ?? statusLabel(value); }
 function shortHash(value) { const text = String(value ?? ""); return text.length === 64 ? `${text.slice(0, 12)}…${text.slice(-8)}` : "-"; }
 function emptyRow(label, columns = 5) { return `<tr><td colspan="${number(columns)}" class="platform-empty">${escapeHtml(label)}</td></tr>`; }
