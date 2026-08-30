@@ -155,7 +155,23 @@ import {
 } from "../../lib/developerContracts.js";
 import { listPlatformPrivacyQueue } from "../../lib/privacyCenter.js";
 import { listPlatformComplianceControls } from "../../lib/complianceCenter.js";
+import {
+  applyPlatformSecurityException,
+  getPlatformSupplyChainSecurity,
+} from "../../lib/supplyChainSecurity.js";
 import { createPlatformPageController } from "./platformPageState.js";
+
+async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
+  const contracts = await getPlatformDeveloperContracts({ controlApiUrl, signal });
+  const supplyChain = await getPlatformSupplyChainSecurity({
+    controlApiUrl,
+    releaseIds: contracts.sdk_releases
+      .filter((item) => item.status === "published")
+      .map((item) => item.sdk_release_id),
+    signal,
+  });
+  return Object.freeze({ ...contracts, supply_chain: supplyChain });
+}
 
 const root = globalThis.document?.querySelector("#platform-app");
 if (root) {
@@ -336,7 +352,7 @@ if (root) {
       edgeLicenses: (input) => listPlatformLicenses({ controlApiUrl, ...input }),
       edgeBackups: (input) => listPlatformBackupStatuses({ controlApiUrl, ...input }),
       offlineBundles: (input) => listPlatformOfflineBundles({ controlApiUrl, ...input }),
-      developerContracts: (input) => getPlatformDeveloperContracts({ controlApiUrl, ...input }),
+      developerContracts: (input) => getPlatformReleaseWorkspace({ controlApiUrl, ...input }),
       buildDeveloperContract: (input) => buildPlatformDeveloperContract({
         controlApiUrl, ...input,
       }),
@@ -350,6 +366,9 @@ if (root) {
         controlApiUrl, ...input,
       }),
       withdrawDeveloperSdk: (input) => withdrawPlatformSdk({ controlApiUrl, ...input }),
+      supplyChainException: (input) => applyPlatformSecurityException({
+        controlApiUrl, ...input,
+      }),
       decideOfflineBundle: (input) => decidePlatformOfflineBundle({
         controlApiUrl,
         ...input,

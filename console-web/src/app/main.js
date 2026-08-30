@@ -383,6 +383,7 @@ import {
   downloadDeveloperSdk,
   getDeveloperContractWorkspace,
 } from "../lib/developerContracts.js";
+import { getDeveloperSupplyChainSecurity } from "../lib/supplyChainSecurity.js";
 import { listAdapterSpecs } from "../lib/adapterSpecs.js";
 import {
   getAdapterContractRun,
@@ -992,6 +993,7 @@ let errorMapBodyOverflow = null;
 // 每次刷新分配递增序号；较早刷新即使更晚返回，也不能覆盖用户已经切换的新页面。
 let refreshSequence = 0;
 let developerContractDownloadController = null;
+let developerContractSecurityController = null;
 let developerContractDownloadMetadata = new Map();
 let consoleWorkspaceContextChannel = null;
 // 登录使用独立代次；页面替换、重复提交或新 Session 建立都会淘汰更早的凭据请求回调。
@@ -1573,6 +1575,7 @@ export function closeConsoleWorkspaceContextInvalidation() {
  */
 async function performRefresh(options = {}) {
   const refreshId = ++refreshSequence;
+  clearDeveloperContractSecurityLoad();
   providersLoadController?.abort();
   providersLoadController = null;
   const isBackgroundRefresh = nextRefreshIsBackground;
@@ -2810,10 +2813,28 @@ async function loadAndRenderActiveNavigation({
       break;
     case "api-docs":
       if (hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) {
-        state.developerContractState = await getDeveloperContractWorkspace({
+        const token = authSession.token;
+        const controller = new AbortController();
+        developerContractSecurityController = controller;
+        const contracts = await getDeveloperContractWorkspace({
           controlApiUrl,
-          token: authSession.token,
+          token,
+          signal: controller.signal,
         });
+        const supplyChain = await getDeveloperSupplyChainSecurity({
+          controlApiUrl,
+          token,
+          releaseIds: contracts.sdk_releases
+            .filter((item) => item.status === "published")
+            .map((item) => item.sdk_release_id),
+          signal: controller.signal,
+        });
+        if (developerContractSecurityController !== controller
+          || controller.signal.aborted || token !== authSession.token
+          || refreshId !== refreshSequence || !refreshOwnerCurrent()
+          || consoleShellState.activeNavigationItemId !== "api-docs") break;
+        developerContractSecurityController = null;
+        state.developerContractState = Object.freeze({ ...contracts, supply_chain: supplyChain });
       }
       break;
     case "enterprise-chat":
@@ -2859,7 +2880,10 @@ async function loadAndRenderActiveNavigation({
 
   developerContractDownloadMetadata = activeNavigationId === "api-docs"
     ? new Map((state.developerContractState?.sdk_releases ?? []).map((release) => [
-      release.sdk_release_id, release,
+      release.sdk_release_id, Object.freeze({
+        ...release,
+        supply_chain: state.developerContractState?.supply_chain?.[release.sdk_release_id] ?? null,
+      }),
     ]))
     : new Map();
 
@@ -2911,6 +2935,7 @@ function renderLogin(error, requestId) {
   // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
   loginGeneration += 1;
   clearDeveloperContractDownload();
+  clearDeveloperContractSecurityLoad();
   developerContractDownloadMetadata = new Map();
   clearPublicBrandingPreview();
   const loginBrandingGeneration = publicBrandingGeneration;
@@ -3313,6 +3338,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     gatewayDebugLifecycle.leave();
     gatewayDebugState = {};
     clearDeveloperContractDownload();
+    clearDeveloperContractSecurityLoad();
     developerContractDownloadMetadata = new Map();
     // 注销请求发出前清除企业 Chat，不能等待后端撤销 Session 后再处理浏览器正文。
     clearEnterpriseChatSessionState();
@@ -11447,11 +11473,38 @@ function bindDeveloperContractDownloads(consoleShellState) {
       }
     });
   }
+  for (const button of document.querySelectorAll("[data-developer-security-download]")) {
+    button.addEventListener("click", () => {
+      const release = developerContractDownloadMetadata.get(button.dataset.sdkReleaseId);
+      const evidence = release?.supply_chain;
+      if (!release || evidence?.status !== "ready" || !button.isConnected
+        || !authSession.token || consoleShellState.activeNavigationItemId !== "api-docs"
+        || !hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) return;
+      const blob = new Blob([JSON.stringify({
+        report: evidence.report,
+        provenance: evidence.provenance,
+      }, null, 2)], { type: "application/json" });
+      const objectUrl = globalThis.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `metahub-${release.language}-${release.sdk_version}-security-report.json`;
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      globalThis.setTimeout(() => globalThis.URL.revokeObjectURL(objectUrl), 0);
+    });
+  }
 }
 
 function clearDeveloperContractDownload() {
   developerContractDownloadController?.abort();
   developerContractDownloadController = null;
+}
+
+function clearDeveloperContractSecurityLoad() {
+  developerContractSecurityController?.abort();
+  developerContractSecurityController = null;
 }
 
 /**

@@ -2611,6 +2611,21 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   0127/API/Machine/Console、必要回归、历史性能残差、静态检查、敏感审计和批次门禁边界；下一权威项为
   PRD-136，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
 
+## PRD-136 SBOM、制品签名、漏洞与发布证明（已完成）
+
+- `control-plane-api/src/metahub_control/supply_chain_security/`：从已批准 release 构建不可变 SBOM、
+  provenance 和用途隔离 Ed25519 attestation 链；固定 feed/scanner 追加 finding generation，高危/关键漏洞
+  默认阻断，Workspace 例外要求 platform_security 与不同 release_manager 双人审批并按 digest/scope/expiry 绑定。
+- `infra/migrations/0128_supply_chain_security_provenance.sql/.down.sql`：SBOM/signature/provenance/finding、
+  SecurityException、PatchRelease、事件/outbox/action、扫描代际和权限目录；全局制品事实与 Workspace/tenant
+  复合 owner 分离，密钥撤销、不可变约束、业务事实 down guard 和 0127 权限回退均有显式边界。
+- `console-web/src/lib/supplyChainSecurity.js` 与 Developer/Platform Releases 页面：strict DTO、客户端
+  Ed25519 验签、公开安全报告 JSON 下载、gate/SBOM/provenance/漏洞 SLA/例外/patch 展示；Bearer/Cookie
+  分域，Abort、owner/epoch 与动态撤权阻止迟到或越权状态复用。
+- `docs/prd/PRD-136-sbom-artifact-signing-vulnerability-provenance.md` 与 `docs/testing/PRD-136-tests.md`：
+  保存两轮实施自审、0128/API/Console、PRD-133 相邻回归、静态检查、敏感审计和批次门禁边界；下一权威项为
+  PRD-137，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

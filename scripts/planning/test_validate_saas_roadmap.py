@@ -43,7 +43,7 @@ def test_post_baseline_navigation_does_not_rewrite_the_frozen_inventory() -> Non
     assert len(VALIDATOR._source_navigation_ids()) == 64
 
 
-def test_repository_roadmap_baseline_passes_after_prd135_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-136")
+def test_repository_roadmap_baseline_passes_after_prd136_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-137")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-136"
+    assert report.next_prd == "PRD-137"

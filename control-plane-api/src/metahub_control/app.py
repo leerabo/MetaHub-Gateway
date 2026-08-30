@@ -131,6 +131,8 @@ from .saas_billing import install_saas_billing_scheduler
 from .saas_billing import router as saas_billing_router
 from .security_events import install_security_event_scheduler
 from .session_risks import router as session_risks_router
+from .supply_chain_security import install_supply_chain_scheduler
+from .supply_chain_security import router as supply_chain_security_router
 from .tenant_data import install_tenant_data_scheduler
 from .tenant_data.routes import router as tenant_data_router
 from .tenants.routes import router as tenant_router
@@ -306,6 +308,7 @@ app.include_router(auth_router)
 app.include_router(identity_router)
 app.include_router(privacy_center_router)
 app.include_router(compliance_center_router)
+app.include_router(supply_chain_security_router)
 app.include_router(enterprise_identity_router)
 app.include_router(edge_management_router)
 app.include_router(workspaces_router)
@@ -408,6 +411,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_developer_contract_scheduler,
             install_privacy_scheduler,
             install_compliance_scheduler,
+            install_supply_chain_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
             install_provider_error_map_scheduler,

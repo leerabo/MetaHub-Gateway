@@ -432,6 +432,21 @@ export function createPlatformPageController({
         "SDK release withdrawn; immutable history is retained.",
       );
     },
+    async applySupplyChainException(input = {}) {
+      const permission = input.operation === "approve"
+        ? "platform.supply_chain.approve" : "platform.supply_chain.exception";
+      if (!currentPermissions().has(permission) || input.confirmed !== true
+        || typeof api.supplyChainException !== "function") return false;
+      return developerContractWrite(
+        `supply_chain.exception.${input.operation}`,
+        input,
+        (idempotencyKey, signal) => api.supplyChainException({
+          ...input, idempotencyKey, signal,
+        }),
+        input.operation === "approve"
+          ? "Security exception approved." : "Security exception requested.",
+      );
+    },
     async filterSupportTickets(filters = {}) {
       if (state.view !== "support") return false;
       state.supportTicketFilters = {
@@ -3456,6 +3471,23 @@ export function createPlatformPageController({
         controller.withdrawDeveloperSdk({
           sdkReleaseId: data.get("sdkReleaseId"),
           expectedRevision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-supply-chain-exception-form]")) {
+        const operation = data.get("operation");
+        controller.applySupplyChainException({
+          operation,
+          findingId: data.get("findingId"),
+          workspaceId: operation === "request" ? data.get("workspaceId") : undefined,
+          reasonCode: operation === "request" ? data.get("reasonCode") : undefined,
+          compensatingControls: operation === "request" ? data.getAll("controls") : undefined,
+          startsAt: operation === "request" ? localTimestamp(data.get("startsAt")) : undefined,
+          expiresAt: operation === "request" ? localTimestamp(data.get("expiresAt")) : undefined,
+          securityExceptionId: operation === "approve"
+            ? data.get("securityExceptionId") : undefined,
+          expectedRevision: operation === "approve"
+            ? Number(data.get("expectedRevision")) : undefined,
           confirmed: data.get("confirmed") === "on",
         });
       }

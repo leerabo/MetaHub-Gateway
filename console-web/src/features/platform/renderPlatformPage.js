@@ -2633,6 +2633,7 @@ function developerContractsView(state, permissions) {
   const versions = workspace?.versions ?? [];
   const releases = workspace?.sdk_releases ?? [];
   const notices = workspace?.deprecations ?? [];
+  const supplyChain = workspace?.supply_chain ?? {};
   const canManage = permissions.has("platform.developer_contract.manage");
   const canApprove = permissions.has("platform.developer_contract.approve");
   const published = versions.filter((item) => item.status === "published");
@@ -2646,6 +2647,7 @@ function developerContractsView(state, permissions) {
       ${metric("API versions", versions.length, `${pending.length} pending approval`)}
       ${metric("Signed SDKs", releases.filter((item) => item.status === "published").length, `${releases.length} immutable builds`)}
       ${metric("Deprecations", notices.filter((item) => !new Set(["sunset", "withdrawn"]).has(item.status)).length, `${notices.length} retained notices`)}
+      ${metric("Security gates", releases.filter((item) => supplyChain[item.sdk_release_id]?.report?.gate_outcome === "passed").length, `${releases.filter((item) => item.status === "published").length} published artifacts`)}
     </section>
     ${workspace ? "" : `<section class="platform-band"><p class="platform-empty">Contract workspace is loading.</p></section>`}
     ${canManage ? developerContractBuildForm(state.loading) : ""}
@@ -2655,7 +2657,11 @@ function developerContractsView(state, permissions) {
     </section>
     <section class="platform-band platform-developer-contract-sdks">
       <div class="platform-section-heading"><div><p>Reproducible artifact proof</p><h2>SDK releases</h2></div><span>${number(releases.length)} artifacts</span></div>
-      ${releases.length ? developerContractSdkTable(releases, canManage, state.loading) : '<p class="platform-empty">No SDK builds.</p>'}
+      ${releases.length ? developerContractSdkTable(releases, canManage, state.loading, supplyChain) : '<p class="platform-empty">No SDK builds.</p>'}
+    </section>
+    <section class="platform-band platform-supply-chain">
+      <div class="platform-section-heading"><div><p>SBOM / attestation / provenance</p><h2>Release security gates</h2></div><span>${number(Object.keys(supplyChain).length)} reports</span></div>
+      ${platformSupplyChainEvidence(releases, supplyChain, permissions, state.loading)}
     </section>
     <section class="platform-band platform-developer-contract-deprecations">
       <div class="platform-section-heading"><div><p>Notice and adoption gates</p><h2>Deprecation lifecycle</h2></div><span>${number(notices.length)} notices</span></div>
@@ -2703,17 +2709,93 @@ function developerContractApproveForm(item, loading) {
   </form>`;
 }
 
-function developerContractSdkTable(releases, canManage, loading) {
+function developerContractSdkTable(releases, canManage, loading, supplyChain) {
   return `<div class="platform-table-wrap"><table class="platform-developer-contract-table">
-    <thead><tr><th>SDK</th><th>Contract</th><th>Smoke</th><th>Signature summary</th><th>Action</th></tr></thead>
+    <thead><tr><th>SDK</th><th>Contract</th><th>Smoke</th><th>Signature summary</th><th>Security gate</th><th>Action</th></tr></thead>
     <tbody>${releases.map((item) => `<tr>
       <td data-label="SDK"><strong>${escapeHtml(developerLanguage(item.language))} ${escapeHtml(item.sdk_version)}</strong><small>${escapeHtml(item.runtime_version)} · ${status(item.status)}</small></td>
       <td data-label="Contract"><span>API ${escapeHtml(item.api_version)}</span><small><code>${escapeHtml(shortHash(item.contract_sha256))}</code></small></td>
       <td data-label="Smoke"><strong>Windows ${escapeHtml(item.smoke_matrix.windows)}</strong><small>Linux ${escapeHtml(item.smoke_matrix.linux)} · N/N-1</small></td>
       <td data-label="Signature summary"><code>${escapeHtml(shortHash(item.signature_sha256))}</code><small>receipt ${escapeHtml(shortHash(item.artifact_receipt_sha256))} · ${escapeHtml(item.signing_key_id ?? "pending")}</small></td>
+      <td data-label="Security gate">${platformSupplyChainCell(item, supplyChain[item.sdk_release_id])}</td>
       <td data-label="Action">${item.status === "published" && canManage ? developerSdkWithdrawForm(item, loading) : '<span class="platform-restricted">No action</span>'}</td>
     </tr>`).join("")}</tbody>
   </table></div>`;
+}
+
+function platformSupplyChainCell(release, evidence) {
+  if (release.status !== "published") return status("pending");
+  if (!evidence || evidence.status === "missing") {
+    return `${status("proof_missing")}<small>Install blocked</small>`;
+  }
+  return `${status(evidence.report.gate_outcome)}<small>${number(evidence.report.blocking_finding_count)} blocking</small>`;
+}
+
+function platformSupplyChainEvidence(releases, supplyChain, permissions, loading) {
+  const published = releases.filter((item) => item.status === "published");
+  if (!published.length) return '<p class="platform-empty">No published artifacts.</p>';
+  const canRequest = permissions.has("platform.supply_chain.exception");
+  const canApprove = permissions.has("platform.supply_chain.approve");
+  return `<div class="platform-supply-chain-list">${published.map((release) => {
+    const evidence = supplyChain[release.sdk_release_id];
+    if (!evidence || evidence.status === "missing") {
+      return `<article class="platform-supply-chain-release is-blocked">
+        <header><div><strong>${escapeHtml(developerLanguage(release.language))} ${escapeHtml(release.sdk_version)}</strong><small>${escapeHtml(shortHash(release.artifact_sha256))}</small></div>${status("proof_missing")}</header>
+        <p class="platform-empty">No attestation is available; installation remains blocked.</p>
+      </article>`;
+    }
+    const report = evidence.report;
+    const provenance = evidence.provenance;
+    return `<article class="platform-supply-chain-release is-${escapeAttribute(report.gate_outcome)}">
+      <header><div><strong>${escapeHtml(developerLanguage(report.language))} ${escapeHtml(report.sdk_version)}</strong><small>${escapeHtml(shortHash(report.artifact_sha256))} · ${formatTime(report.generated_at)}</small></div>${status(report.gate_outcome)}</header>
+      <dl>
+        <div><dt>SBOM</dt><dd>${escapeHtml(report.sbom.format)} ${escapeHtml(report.sbom.format_version)} · ${number(report.sbom.component_count)} components</dd></div>
+        <div><dt>Attestation</dt><dd>${escapeHtml(report.signature.verification_outcome)} / client ${escapeHtml(report.signature.client_verification_outcome)}</dd></div>
+        <div><dt>Provenance</dt><dd>${provenance.builder_verified ? "verified" : "unverified"} · ${provenance.reproducible ? "reproducible" : "not reproducible"}</dd></div>
+        <div><dt>Gate</dt><dd>${number(report.blocking_finding_count)} blocking findings</dd></div>
+      </dl>
+      ${report.vulnerabilities.length ? `<div class="platform-supply-chain-findings">${report.vulnerabilities.map((item) => platformSupplyChainFinding(item, canRequest, canApprove, loading)).join("")}</div>` : '<p class="platform-empty">No active findings.</p>'}
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function platformSupplyChainFinding(item, canRequest, canApprove, loading) {
+  const disabled = loading ? " disabled" : "";
+  const exceptions = item.exceptions.map((entry) => `<li>
+    <span>${status(entry.status)} ${escapeHtml(entry.reason_code)}</span>
+    <small>${escapeHtml(shortWorkspace(entry.workspace_id))} · expires ${formatTime(entry.expires_at)} · r${number(entry.revision)}</small>
+    ${entry.status === "pending" && canApprove ? `<form data-platform-supply-chain-exception-form class="platform-supply-chain-inline-form">
+      <input name="operation" type="hidden" value="approve" />
+      <input name="findingId" type="hidden" value="${escapeAttribute(item.vulnerability_finding_id)}" />
+      <input name="securityExceptionId" type="hidden" value="${escapeAttribute(entry.security_exception_id)}" />
+      <input name="expectedRevision" type="hidden" value="${number(entry.revision)}" />
+      <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Independent approval</span></label>
+      <button type="submit"${disabled}>Approve</button>
+    </form>` : ""}
+  </li>`).join("") || '<li><span class="platform-restricted">No exception</span></li>';
+  const patches = item.patch_releases.map((entry) => `<li>
+    <span>${status(entry.status)} ${escapeHtml(shortWorkspace(entry.workspace_id))}</span>
+    <small>fixed ${escapeHtml(shortHash(entry.fixed_artifact_sha256))} · rollback ${escapeHtml(shortHash(entry.rollback_artifact_sha256))} · cloud/edge N/N-1 passed</small>
+  </li>`).join("") || '<li><span class="platform-restricted">No patch release</span></li>';
+  const requestForm = canRequest ? `<details class="platform-supply-chain-command">
+    <summary>Request exception</summary>
+    <form data-platform-supply-chain-exception-form autocomplete="off">
+      <input name="operation" type="hidden" value="request" />
+      <input name="findingId" type="hidden" value="${escapeAttribute(item.vulnerability_finding_id)}" />
+      <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" required${disabled} /></label>
+      <label><span>Reason</span><select name="reasonCode" required${disabled}><option value="vendor_fix_pending">Vendor fix pending</option><option value="mitigated_exposure">Mitigated exposure</option><option value="emergency_continuity">Emergency continuity</option></select></label>
+      <fieldset><legend>Compensating controls</legend><label class="platform-check"><input name="controls" type="checkbox" value="network_isolation"${disabled} /><span>Network isolation</span></label><label class="platform-check"><input name="controls" type="checkbox" value="runtime_detection"${disabled} /><span>Runtime detection</span></label><label class="platform-check"><input name="controls" type="checkbox" value="feature_disablement"${disabled} /><span>Feature disablement</span></label></fieldset>
+      <label><span>Starts at</span><input name="startsAt" type="datetime-local" required${disabled} /></label>
+      <label><span>Expires at</span><input name="expiresAt" type="datetime-local" required${disabled} /></label>
+      <label class="platform-check"><input name="confirmed" type="checkbox" required${disabled} /><span>Confirm bounded scope</span></label>
+      <button type="submit"${disabled}>Request</button>
+    </form>
+  </details>` : "";
+  return `<section class="platform-supply-chain-finding">
+    <header><div><strong>${escapeHtml(item.advisory_code)}</strong><small>generation ${number(item.evaluation_generation)} · SLA ${formatTime(item.sla_deadline_at)}</small></div>${status(item.severity)}</header>
+    <div class="platform-supply-chain-related"><div><h3>Exceptions</h3><ul>${exceptions}</ul></div><div><h3>Patches</h3><ul>${patches}</ul></div></div>
+    ${requestForm}
+  </section>`;
 }
 
 function developerSdkWithdrawForm(item, loading) {

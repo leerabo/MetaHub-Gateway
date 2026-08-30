@@ -32,6 +32,15 @@ from metahub_control.platform_access.service import (
     PlatformContext,
     authenticate_platform_session_in_transaction,
 )
+from metahub_control.supply_chain_security.crypto import (
+    AttestationSigner,
+    sign_attestation_payload,
+)
+from metahub_control.supply_chain_security.service import (
+    attestation_payload_for_sdk,
+    record_release_attestation_in_transaction,
+    supply_chain_schema_available,
+)
 
 from .crypto import ContractSigner, ExternalSignature, sign_release_payload, unpadded_b64
 from .models import (
@@ -524,6 +533,7 @@ def approve_contract_release(
     request_id: str,
     trace_id: str,
     external_signer: ContractSigner | None = None,
+    supply_chain_signer: AttestationSigner | None = None,
 ) -> ContractBuildResponse:
     _require_id(api_version_id, "apv_")
     request_hash = _request_hash(payload)
@@ -557,6 +567,18 @@ def approve_contract_release(
         )
         for row in preflight["sdk_rows"]
     }
+    supply_chain_signatures = (
+        {
+            str(row["sdk_release_id"]): sign_attestation_payload(
+                config,
+                attestation_payload_for_sdk(row),
+                external_signer=supply_chain_signer,
+            )
+            for row in preflight["sdk_rows"]
+        }
+        if supply_chain_schema_available(config)
+        else {}
+    )
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -641,6 +663,18 @@ def approve_contract_release(
                     sdk_row["sdk_release_id"],
                 ),
             )
+            attestation_signature = supply_chain_signatures.get(str(sdk_row["sdk_release_id"]))
+            if supply_chain_signatures and attestation_signature is None:
+                raise ApiError("supply_chain.attestation_conflict")
+            if attestation_signature is not None:
+                record_release_attestation_in_transaction(
+                    connection,
+                    sdk_row,
+                    attestation_signature,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    now=now,
+                )
             _event(
                 connection,
                 "sdk.released",

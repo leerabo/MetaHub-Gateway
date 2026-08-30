@@ -257,6 +257,7 @@ async def platform_contract_approve(
         request_id=_request_id(request),
         trace_id=_trace_id(request),
         external_signer=getattr(request.app.state, "developer_contract_signer", None),
+        supply_chain_signer=getattr(request.app.state, "supply_chain_signer", None),
     )
     _private(response)
     return result

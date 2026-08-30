@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-135 - 合规控制与证据中心` 已完成；当前下一条未完成项是
-  `PRD-136 - SBOM、制品签名、漏洞与发布证明`。
+- 新 `PRD-090` 至 `PRD-136 - SBOM、制品签名、漏洞与发布证明` 已完成；当前下一条未完成项是
+  `PRD-137 - 租户隔离持续验证与安全攻防`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-136 - SBOM、制品签名、漏洞与发布证明` 已完成：0128、CycloneDX/SPDX SBOM、SLSA 式
+  provenance、用途隔离 Ed25519 attestation、固定 feed/scanner 漏洞代际、默认高危/关键发布阻断、
+  Workspace 时限例外双人审批、PatchRelease/回滚/N/N-1 兼容门禁，以及 Developer/Platform 安全报告
+  与客户端验签均已交付。后端迁移/API `5/5`、Console 与 PRD-133 回归 `11/11`、lint `409 files`
+  和 Ruff 通过。详见 [PRD-136 设计](docs/prd/PRD-136-sbom-artifact-signing-vulnerability-provenance.md)
+  和 [PRD-136 测试记录](docs/testing/PRD-136-tests.md)。下一权威项为 PRD-137；完整 G6 留到 PRD-138 后。
 - `PRD-135 - 合规控制与证据中心` 已完成：0127、版本化控制/法规映射、受信 machine evidence、
   签名 envelope/replay guard、例外非自批、整改闭环、Workspace 报告、持久 scheduler fencing、Platform
   控制视图和 Identity 报告视图均已交付。后端迁移/API `6/6`、Console 与必要回归 `44/44`、既有
