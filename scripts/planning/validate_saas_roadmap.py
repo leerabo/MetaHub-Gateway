@@ -357,6 +357,18 @@ REQUIRED_DOCS = {
         "PRD-137",
         "0128",
     ),
+    ROOT / "docs/prd/PRD-137-tenant-isolation-continuous-security-validation.md": (
+        "状态：已完成",
+        "第一轮自审",
+        "第二轮自审",
+        "0129",
+    ),
+    ROOT / "docs/testing/PRD-137-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-138",
+        "0129",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -1036,10 +1048,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 128
+        and migration_versions[-1] == 129
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0128 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0129 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1251,6 +1263,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
         (ROOT / "infra/migrations/0128_supply_chain_security_provenance.sql").is_file()
         and (ROOT / "infra/migrations/0128_supply_chain_security_provenance.down.sql").is_file(),
         "PRD-136 owns reversible migration 0128 with guarded supply-chain fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0129_tenant_isolation_security_assurance.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0129_tenant_isolation_security_assurance.down.sql"
+        ).is_file(),
+        "PRD-137 owns reversible migration 0129 with guarded assurance-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

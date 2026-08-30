@@ -1521,6 +1521,206 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   }
 }
 
+/* PRD-137 keeps fixed-profile execution and cropped assurance evidence in one work surface. */
+.platform-assurance-lookup form {
+  display: grid;
+  grid-template-columns: minmax(260px, 560px) auto;
+  align-items: end;
+  gap: 9px;
+}
+
+.platform-assurance-lookup label,
+.platform-assurance-start form > label,
+.platform-assurance-remediation-form label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.platform-assurance-lookup label > span,
+.platform-assurance-start form > label > span,
+.platform-assurance-remediation-form label > span,
+.platform-assurance-profiles legend {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.platform-assurance-lookup input,
+.platform-assurance-lookup button,
+.platform-assurance-start input,
+.platform-assurance-start select,
+.platform-assurance-start button,
+.platform-assurance-remediation-form input,
+.platform-assurance-remediation-form select,
+.platform-assurance-remediation-form button {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
+  letter-spacing: 0;
+}
+
+.platform-assurance-lookup button,
+.platform-assurance-start button,
+.platform-assurance-remediation-form button { cursor: pointer; font-weight: 700; }
+.platform-assurance-start button.platform-primary { border-color: var(--green); background: var(--green); color: #fff; }
+.platform-assurance-lookup button:disabled,
+.platform-assurance-start :disabled,
+.platform-assurance-remediation-form :disabled { cursor: not-allowed; opacity: .55; }
+
+.platform-assurance-start form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+
+.platform-assurance-profiles {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+.platform-assurance-profiles legend { padding: 0 4px; }
+.platform-assurance-profiles label,
+.platform-assurance-confirm,
+.platform-assurance-remediation-form .platform-check {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.platform-assurance-profiles input,
+.platform-assurance-confirm input,
+.platform-assurance-remediation-form .platform-check input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+.platform-assurance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.platform-assurance-summary dl,
+.platform-assurance-finding dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.platform-assurance-summary dl > div,
+.platform-assurance-finding dl > div { min-width: 0; padding: 11px 12px 11px 0; }
+.platform-assurance-summary dt,
+.platform-assurance-finding dt { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.platform-assurance-summary dd,
+.platform-assurance-finding dd { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+.platform-assurance-summary code,
+.platform-assurance-finding code { overflow-wrap: anywhere; font-size: 10px; }
+
+.platform-assurance-runs table { min-width: 1040px; table-layout: fixed; }
+.platform-assurance-runs th:first-child { width: 19%; }
+.platform-assurance-runs th:nth-child(2) { width: 17%; }
+.platform-assurance-runs th:nth-child(3) { width: 18%; }
+.platform-assurance-runs th:nth-child(4) { width: 12%; }
+.platform-assurance-runs th:nth-child(5) { width: 11%; }
+.platform-assurance-runs th:last-child { width: 23%; }
+.platform-assurance-runs td { vertical-align: top; }
+.platform-assurance-runs td strong,
+.platform-assurance-runs td small,
+.platform-assurance-runs td code { display: block; overflow-wrap: anywhere; }
+.platform-assurance-runs td small { margin-top: 5px; color: var(--muted); font-size: 10px; }
+
+.platform-assurance-finding-list { display: grid; gap: 12px; }
+.platform-assurance-finding {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  padding: 14px;
+}
+
+.platform-assurance-finding.is-p0 { border-left-color: var(--red); }
+.platform-assurance-finding.is-p1 { border-left-color: var(--amber); }
+.platform-assurance-finding.is-p2 { border-left-color: #356da5; }
+.platform-assurance-finding.is-p3 { border-left-color: var(--green); }
+.platform-assurance-finding > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.platform-assurance-finding > header > div { min-width: 0; }
+.platform-assurance-finding > header small { display: block; margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
+.platform-assurance-finding > header .platform-status + .platform-status { margin-left: 5px; }
+.platform-assurance-finding .is-overdue { color: var(--red); }
+
+.platform-assurance-related {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  border-block: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.platform-assurance-related h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0; }
+.platform-assurance-related ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.platform-assurance-related li { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 11px; }
+.platform-assurance-related li small { color: var(--muted); }
+
+.platform-assurance-remediation-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .platform-assurance-start form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-assurance-remediation-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .platform-assurance-lookup form,
+  .platform-assurance-start form,
+  .platform-assurance-remediation-form,
+  .platform-assurance-related { grid-template-columns: minmax(0, 1fr); }
+  .platform-assurance-metrics,
+  .platform-assurance-summary dl,
+  .platform-assurance-finding dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-assurance-metrics > div:nth-child(2) { border-right: 0; }
+  .platform-assurance-metrics > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .platform-assurance-runs table { min-width: 0; }
+  .platform-assurance-runs thead { display: none; }
+  .platform-assurance-runs tbody,
+  .platform-assurance-runs tr { display: block; width: 100%; }
+  .platform-assurance-runs tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-assurance-runs td {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+    border: 0;
+    padding: 6px 0;
+  }
+  .platform-assurance-runs td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .platform-assurance-finding > header { display: grid; }
+}
+
 /* PRD-135 renders owner-qualified control facts without certification claims. */
 .platform-compliance-disclaimer {
   margin: 0;

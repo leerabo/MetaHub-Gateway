@@ -51,6 +51,7 @@ export function renderPlatformWorkspace(container, state) {
   const disasterRecoveryBusy = Boolean(
     state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
       || state.providerCatalogPublishIntent || state.developerContractIntent
+      || state.securityAssuranceIntent
       || state.edgeUpgradeIntent || state.edgeLicenseIntent
       || state.offlineBundleIntent)
   );
@@ -94,6 +95,7 @@ function renderView(state, permissions) {
   if (state.view === "status-incidents") return statusIncidentsView(state, permissions);
   if (state.view === "capacity") return capacityView(state, permissions);
   if (state.view === "data-residency") return dataResidencyView(state);
+  if (state.view === "security-assurance") return securityAssuranceView(state, permissions);
   if (state.view === "abuse-risk") return abuseRiskView(state, permissions);
   if (state.view === "operators") return operatorsView(state, permissions);
   if (state.view === "workspaces") return workspacesView(state, permissions);
@@ -2626,6 +2628,162 @@ function platformPlanRow(version) {
     <td data-label="试用">${number(version.trial_days)} 天</td>
     <td data-label="权益"><strong>${number(entitlements.workspace_seats)} 席位 · ${number(entitlements.gateway_requests_per_month)} 次/月</strong><small>${number(entitlements.model_aliases)} 别名 · ${number(entitlements.retention_days)} 天留存${entitlements.priority_support ? " · 优先支持" : ""}</small></td>
   </tr>`;
+}
+
+function securityAssuranceView(state, permissions) {
+  const assessment = state.securityAssurance ?? null;
+  const runs = assessment?.runs ?? [];
+  const findings = assessment?.findings ?? [];
+  const failed = runs.filter((item) => item.outcome !== "passed").length;
+  const open = findings.filter((item) => item.status !== "closed").length;
+  const cleaned = runs.filter((item) => item.cleanup_receipt_sha256).length;
+  const canRun = permissions.has("platform.assurance.run");
+  const canRemediate = permissions.has("platform.assurance.remediate");
+  return `
+    <header class="platform-page-heading">
+      <div><p>Fixed profile / owner-qualified evidence</p><h1>Security assurance</h1></div>
+      ${assessment ? `<button class="platform-icon-button" type="button"
+        data-platform-action="assurance-refresh" title="Refresh assessment"
+        aria-label="Refresh assessment" ${state.loading ? "disabled" : ""}>&#8635;</button>` : ""}
+    </header>
+    <section class="platform-band platform-assurance-lookup">
+      <div class="platform-section-heading"><div><p>Immutable assessment ID</p><h2>Assessment lookup</h2></div></div>
+      <form data-platform-assurance-lookup-form autocomplete="off">
+        <label><span>Assessment ID</span><input name="assessmentId"
+          value="${escapeAttribute(state.securityAssuranceLookup ?? "")}"
+          pattern="sas_[0-9a-f]{32}" maxlength="36" required /></label>
+        <button type="submit" ${state.loading ? "disabled" : ""}>Lookup</button>
+      </form>
+    </section>
+    ${canRun ? securityAssuranceStartForm(state.loading) : ""}
+    ${assessment ? `
+      <section class="platform-metrics platform-assurance-metrics" aria-label="Assessment summary">
+        ${metric("Generation", assessment.generation, assessment.profile_code.replaceAll("_", " "))}
+        ${metric("Scenarios", runs.length, `${number(failed)} non-passing`)}
+        ${metric("Open findings", open, `${number(findings.length)} total`)}
+        ${metric("Cleanup receipts", cleaned, `${number(runs.length)} scenario runs`)}
+      </section>
+      ${securityAssessmentSummary(assessment)}
+      ${securityAssuranceRuns(runs)}
+      ${securityAssuranceFindings(findings, canRemediate, state.loading)}
+    ` : '<section class="platform-band platform-domain-empty"><strong>No assessment selected</strong></section>'}
+  `;
+}
+
+function securityAssuranceStartForm(loading) {
+  const disabled = loading ? " disabled" : "";
+  return `<section class="platform-band platform-assurance-start">
+    <div class="platform-section-heading"><div><p>Signed scenario registry</p><h2>Start assessment</h2></div><span>Profile v1</span></div>
+    <form data-platform-assurance-start-form autocomplete="off">
+      <label><span>Workspace ID</span><input name="workspaceId" pattern="wsp_[0-9a-f]{32}" maxlength="36" required${disabled} /></label>
+      <fieldset class="platform-assurance-profiles"><legend>Profile</legend>
+        <label><input type="radio" name="profileCode" value="incremental_release" checked${disabled} /><span>Incremental release</span></label>
+        <label><input type="radio" name="profileCode" value="quarterly_full"${disabled} /><span>Quarterly full</span></label>
+      </fieldset>
+      ${assuranceDigestInput("codeTreeSha256", "Code tree SHA-256", disabled)}
+      ${assuranceDigestInput("migrationSetSha256", "Migration set SHA-256", disabled)}
+      ${assuranceDigestInput("contractSetSha256", "Contract set SHA-256", disabled)}
+      ${assuranceDigestInput("artifactSha256", "Artifact SHA-256", disabled)}
+      ${assuranceStepUpFields(disabled)}
+      <label class="platform-check platform-assurance-confirm"><input type="checkbox" name="confirmed" required${disabled} /><span>Confirm signed profile execution</span></label>
+      <button class="platform-primary" type="submit"${disabled}>Start assessment</button>
+    </form>
+  </section>`;
+}
+
+function assuranceDigestInput(name, label, disabled) {
+  return `<label><span>${escapeHtml(label)}</span><input name="${escapeAttribute(name)}"
+    pattern="[0-9a-f]{64}" minlength="64" maxlength="64" spellcheck="false" required${disabled} /></label>`;
+}
+
+function assuranceStepUpFields(disabled) {
+  return `<label><span>Step-up method</span><select name="method"${disabled}>
+      <option value="totp">Authenticator code</option><option value="webauthn">Security key</option>
+    </select></label>
+    <label data-platform-step-up-code><span>Verification code</span><input name="verificationCode"
+      type="password" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"
+      maxlength="6" data-platform-sensitive required${disabled} /></label>`;
+}
+
+function securityAssessmentSummary(assessment) {
+  return `<section class="platform-band platform-assurance-summary">
+    <div class="platform-section-heading"><div><p>${escapeHtml(assessment.security_assessment_id)}</p><h2>Assessment state</h2></div>${status(assessment.status)}</div>
+    <dl>
+      <div><dt>Workspace</dt><dd><code>${escapeHtml(assessment.workspace_id)}</code></dd></div>
+      <div><dt>Profile</dt><dd>${escapeHtml(assessment.profile_code.replaceAll("_", " "))} v${number(assessment.profile_version)}</dd></div>
+      <div><dt>Requested</dt><dd>${formatTime(assessment.requested_at)}</dd></div>
+      <div><dt>Finished</dt><dd>${assessment.finished_at ? formatTime(assessment.finished_at) : "Pending"}</dd></div>
+      <div><dt>Profile proof</dt><dd><code>${escapeHtml(shortHash(assessment.profile_signature_sha256))}</code></dd></div>
+      <div><dt>Scope proof</dt><dd><code>${escapeHtml(shortHash(assessment.scope_sha256))}</code></dd></div>
+      <div><dt>Environment receipt</dt><dd><code>${escapeHtml(shortHash(assessment.environment_receipt_sha256))}</code></dd></div>
+      <div><dt>Summary proof</dt><dd><code>${escapeHtml(shortHash(assessment.summary_sha256))}</code></dd></div>
+    </dl>
+  </section>`;
+}
+
+function securityAssuranceRuns(runs) {
+  return `<section class="platform-band platform-assurance-runs">
+    <div class="platform-section-heading"><div><p>Owner registry v1</p><h2>Scenario runs</h2></div><span>${number(runs.length)} runs</span></div>
+    <div class="platform-table-wrap"><table>
+      <thead><tr><th>Scenario</th><th>Owner / target</th><th>Contract</th><th>Outcome</th><th>Duration</th><th>Evidence / cleanup</th></tr></thead>
+      <tbody>${runs.map((item) => `<tr>
+        <td data-label="Scenario"><strong>${escapeHtml(item.scenario_code.replaceAll("_", " "))}</strong><small>${escapeHtml(item.weakness_code)}</small></td>
+        <td data-label="Owner / target"><strong>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</strong><small>${escapeHtml(item.target_kind.replaceAll("_", " "))}</small></td>
+        <td data-label="Contract"><code>${escapeHtml(item.contract_code)}</code></td>
+        <td data-label="Outcome">${status(item.outcome)}</td>
+        <td data-label="Duration">${number(item.duration_ms)} ms</td>
+        <td data-label="Evidence / cleanup"><code>${escapeHtml(shortHash(item.evidence_sha256))}</code><small>cleanup ${escapeHtml(shortHash(item.cleanup_receipt_sha256))}</small></td>
+      </tr>`).join("") || emptyRow("No scenario runs", 6)}</tbody>
+    </table></div>
+  </section>`;
+}
+
+function securityAssuranceFindings(findings, canRemediate, loading) {
+  return `<section class="platform-band platform-assurance-findings">
+    <div class="platform-section-heading"><div><p>Immutable evidence references</p><h2>Findings and remediation</h2></div><span>${number(findings.length)} findings</span></div>
+    <div class="platform-assurance-finding-list">
+      ${findings.map((item) => securityAssuranceFinding(item, canRemediate, loading)).join("")
+        || '<p class="platform-empty">No findings.</p>'}
+    </div>
+  </section>`;
+}
+
+function securityAssuranceFinding(item, canRemediate, loading) {
+  const proposed = [...item.remediations].reverse().find((entry) => entry.outcome === "proposed");
+  const overdue = item.status !== "closed" && Date.parse(item.sla_deadline_at) < Date.now();
+  const history = item.remediations.length
+    ? item.remediations.map((entry) => `<li><strong>${escapeHtml(entry.outcome.replaceAll("_", " "))}</strong><code>${escapeHtml(shortHash(entry.change_sha256))}</code><small>${formatTime(entry.verified_at ?? entry.created_at)}</small></li>`).join("")
+    : '<li><span>No remediation history</span></li>';
+  const risks = item.risk_acceptances.length
+    ? item.risk_acceptances.map((entry) => `<li>${status(entry.status)}<code>${escapeHtml(shortHash(entry.scope_sha256))}</code><small>expires ${formatTime(entry.expires_at)}</small></li>`).join("")
+    : '<li><span>No risk acceptance</span></li>';
+  return `<article class="platform-assurance-finding is-${escapeAttribute(item.severity)}">
+    <header><div><strong>${escapeHtml(item.weakness_code.replaceAll("_", " "))}</strong><small>${escapeHtml(item.pen_test_finding_id)} · ${escapeHtml(item.contract_code)}</small></div><div>${status(item.severity)}${status(item.status)}</div></header>
+    <dl><div><dt>Owner</dt><dd>${escapeHtml(item.owner_kind.replaceAll("_", " "))}</dd></div>
+      <div><dt>SLA</dt><dd class="${overdue ? "is-overdue" : ""}">${formatTime(item.sla_deadline_at)}</dd></div>
+      <div><dt>Evidence</dt><dd><code>${escapeHtml(shortHash(item.evidence_sha256))}</code></dd></div>
+      <div><dt>Revision</dt><dd>${number(item.revision)}</dd></div></dl>
+    <div class="platform-assurance-related"><div><h3>Remediation history</h3><ul>${history}</ul></div><div><h3>Risk acceptance</h3><ul>${risks}</ul></div></div>
+    ${canRemediate && new Set(["open", "risk_accepted"]).has(item.status)
+      ? securityRemediationForm(item, "propose", null, loading) : ""}
+    ${canRemediate && item.status === "remediation_pending" && proposed
+      ? securityRemediationForm(item, "verify", proposed, loading) : ""}
+  </article>`;
+}
+
+function securityRemediationForm(finding, operation, proposal, loading) {
+  const disabled = loading ? " disabled" : "";
+  return `<form data-platform-assurance-remediation-form autocomplete="off">
+    <input type="hidden" name="operation" value="${escapeAttribute(operation)}" />
+    <input type="hidden" name="findingId" value="${escapeAttribute(finding.pen_test_finding_id)}" />
+    <input type="hidden" name="expectedRevision" value="${number(finding.revision)}" />
+    ${operation === "propose" ? assuranceDigestInput("changeSha256", "Change SHA-256", disabled)
+      : `<input type="hidden" name="remediationId" value="${escapeAttribute(proposal.remediation_id)}" />
+        <label><span>Verification assessment ID</span><input name="verificationAssessmentId" pattern="sas_[0-9a-f]{32}" maxlength="36" required${disabled} /></label>`}
+    ${assuranceStepUpFields(disabled)}
+    <label class="platform-check"><input type="checkbox" name="confirmed" required${disabled} /><span>Confirm ${escapeHtml(operation)}</span></label>
+    <button type="submit"${disabled}>${operation === "propose" ? "Propose remediation" : "Verify with new generation"}</button>
+  </form>`;
 }
 
 function developerContractsView(state, permissions) {

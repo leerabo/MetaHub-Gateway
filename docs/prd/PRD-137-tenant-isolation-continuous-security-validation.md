@@ -1,6 +1,8 @@
 # PRD-137 租户隔离持续验证与安全攻防
 
-状态：设计冻结，尚未实现。依赖 PRD-090..136；范围以 Excel PRD-137 为准。
+状态：已完成。依赖 PRD-090..136；范围以 Excel PRD-137 为准。0129、固定隔离 runner、
+finding/remediation/risk acceptance 闭环、Platform Console 与专项验证均已交付；完整 G6 留到
+PRD-138 独立提交后统一执行。
 
 ## Excel 权威合同
 

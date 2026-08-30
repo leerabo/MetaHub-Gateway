@@ -159,6 +159,11 @@ import {
   applyPlatformSecurityException,
   getPlatformSupplyChainSecurity,
 } from "../../lib/supplyChainSecurity.js";
+import {
+  applySecurityRemediation,
+  getSecurityAssessment,
+  startSecurityAssessment,
+} from "../../lib/securityAssurance.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
@@ -369,6 +374,9 @@ if (root) {
       supplyChainException: (input) => applyPlatformSecurityException({
         controlApiUrl, ...input,
       }),
+      securityAssessment: (input) => getSecurityAssessment({ controlApiUrl, ...input }),
+      startSecurityAssessment: (input) => startSecurityAssessment({ controlApiUrl, ...input }),
+      securityRemediation: (input) => applySecurityRemediation({ controlApiUrl, ...input }),
       decideOfflineBundle: (input) => decidePlatformOfflineBundle({
         controlApiUrl,
         ...input,

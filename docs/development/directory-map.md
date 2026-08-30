@@ -2626,6 +2626,23 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   保存两轮实施自审、0128/API/Console、PRD-133 相邻回归、静态检查、敏感审计和批次门禁边界；下一权威项为
   PRD-137，完整 G6 在 PRD-138 后统一执行且只能形成 release candidate。
 
+## PRD-137 租户隔离持续验证与安全攻防（已完成）
+
+- `control-plane-api/src/metahub_control/security_assurance/`：严格三路由 Platform API、签名版本化 profile、
+  固定 owner-registry 场景、隔离 runner lease/fencing、assessment/run/finding/remediation、内部风险接受双批、
+  exact cleanup、幂等 action、事件/outbox 和持久 scheduler；缺失 runner、撤权、迟到或 owner 漂移均失败关闭。
+- `control-plane-api/src/metahub_control/workspace_access/assurance_permissions.py`：完整验证 0129 Workspace
+  assurance 权限目录与角色矩阵，目录缺失、部分应用或篡改时失败关闭；Platform 权限扩展同样逐请求恢复 revision。
+- `infra/migrations/0129_tenant_isolation_security_assurance.sql/.down.sql`：assessment/run/finding/remediation/
+  risk acceptance、runner lease、cleanup journal、事件/outbox/action、Workspace/Platform 权限、复合 owner 外键、
+  不变约束、完整性 guard 和业务事实 down guard。
+- `console-web/src/lib/securityAssurance.js` 与 Platform Security Assurance 页面：Cookie-only strict client/DTO、
+  profile/coverage/run/finding/SLA/remediation/cleanup 投影、step-up/CAS/幂等写入、Abort/epoch/revision 防护；
+  exploit、凭据、内部 endpoint、原始响应和客户标识不进入 DOM 或 Storage。
+- `docs/prd/PRD-137-tenant-isolation-continuous-security-validation.md` 与 `docs/testing/PRD-137-tests.md`：
+  保存两轮实施自审、0129/API/Console、静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-138，完整 G6
+  在其独立提交后统一执行且只能形成 release candidate。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

@@ -19,6 +19,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "status-incidents",
   "capacity",
   "data-residency",
+  "security-assurance",
   "abuse-risk",
   "operators",
   "workspaces",
@@ -71,6 +72,9 @@ export function createPlatformPageController({
     providerCatalogPublishIntent: null,
     developerContracts: null,
     developerContractIntent: null,
+    securityAssurance: null,
+    securityAssuranceLookup: "",
+    securityAssuranceIntent: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -211,6 +215,7 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
+        || state.securityAssuranceIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const ticket = begin();
@@ -239,6 +244,7 @@ export function createPlatformPageController({
       if (state.loading && (state.disasterRecoveryIntent || state.statusIncidentIntent
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
+        || state.securityAssuranceIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
@@ -246,7 +252,8 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "provider-catalog", "releases", "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups",
+        "security-assurance", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
+        "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
       ]).has(state.view)
@@ -277,6 +284,10 @@ export function createPlatformPageController({
         } else if (state.view === "releases") {
           state.developerContracts = null;
           state.developerContractIntent = null;
+        } else if (state.view === "security-assurance") {
+          state.securityAssurance = null;
+          state.securityAssuranceLookup = "";
+          state.securityAssuranceIntent = null;
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -446,6 +457,148 @@ export function createPlatformPageController({
         input.operation === "approve"
           ? "Security exception approved." : "Security exception requested.",
       );
+    },
+    async lookupSecurityAssessment(assessmentId) {
+      const normalized = String(assessmentId ?? "").trim();
+      if (state.view !== "security-assurance"
+        || !/^sas_[0-9a-f]{32}$/u.test(normalized)) return false;
+      state.securityAssuranceLookup = normalized;
+      return loadSecurityAssurance(normalized);
+    },
+    async refreshSecurityAssessment() {
+      const assessmentId = state.securityAssurance?.security_assessment_id
+        ?? state.securityAssuranceLookup;
+      return assessmentId ? loadSecurityAssurance(assessmentId) : false;
+    },
+    async startSecurityAssessment(input = {}) {
+      const profileCode = String(input.profileCode ?? "");
+      const method = String(input.method ?? "totp");
+      if (state.view !== "security-assurance" || input.confirmed !== true
+        || !currentPermissions().has("platform.assurance.run")
+        || typeof api.startSecurityAssessment !== "function"
+        || typeof api.createIdentityStepUpGrant !== "function"
+        || !new Set(["incremental_release", "quarterly_full"]).has(profileCode)) return false;
+      const command = {
+        workspaceId: String(input.workspaceId ?? "").trim(),
+        profileCode,
+        profileVersion: 1,
+        codeTreeSha256: String(input.codeTreeSha256 ?? "").trim(),
+        migrationSetSha256: String(input.migrationSetSha256 ?? "").trim(),
+        contractSetSha256: String(input.contractSetSha256 ?? "").trim(),
+        artifactSha256: String(input.artifactSha256 ?? "").trim(),
+        confirmed: true,
+      };
+      const fingerprint = JSON.stringify(["assessment.start", command, method]);
+      const idempotencyKey = state.securityAssuranceIntent?.fingerprint === fingerprint
+        ? state.securityAssuranceIntent.idempotencyKey : newIdempotencyKey();
+      state.securityAssuranceIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      let verificationCode = String(input.verificationCode ?? "");
+      let stepUpGrant = "";
+      try {
+        stepUpGrant = await createAssuranceStepUp({
+          method,
+          verificationCode,
+          actionCode: "platform.assurance.run",
+          resourceType: "security_assurance_profile",
+          resourceId: profileCode,
+          ticket,
+        });
+        verificationCode = "";
+        if (!stepUpGrant || !currentAssuranceTicket(ticket)) return false;
+        const response = await api.startSecurityAssessment({
+          ...command, stepUpGrant, idempotencyKey, signal: ticket.signal,
+        });
+        stepUpGrant = "";
+        if (!currentAssuranceTicket(ticket)) return false;
+        state.securityAssurance = response.assessment;
+        state.securityAssuranceLookup = response.assessment.security_assessment_id;
+        state.securityAssuranceIntent = null;
+        state.loading = false;
+        state.feedback = response.assessment.status === "passed"
+          ? "Security assessment passed." : "Security assessment completed with findings.";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.securityAssuranceIntent = null;
+        }
+        return fail(ticket, error);
+      } finally {
+        verificationCode = "";
+        stepUpGrant = "";
+      }
+    },
+    async remediateSecurityFinding(input = {}) {
+      const method = String(input.method ?? "totp");
+      const operation = String(input.operation ?? "");
+      const findingId = String(input.findingId ?? "");
+      if (state.view !== "security-assurance" || input.confirmed !== true
+        || !currentPermissions().has("platform.assurance.remediate")
+        || typeof api.securityRemediation !== "function"
+        || typeof api.createIdentityStepUpGrant !== "function"
+        || !new Set(["propose", "verify"]).has(operation)) return false;
+      const command = {
+        findingId,
+        operation,
+        expectedRevision: Number(input.expectedRevision),
+        changeSha256: operation === "propose" ? String(input.changeSha256 ?? "").trim() : undefined,
+        remediationId: operation === "verify" ? String(input.remediationId ?? "") : undefined,
+        verificationAssessmentId: operation === "verify"
+          ? String(input.verificationAssessmentId ?? "").trim() : undefined,
+        confirmed: true,
+      };
+      const fingerprint = JSON.stringify(["finding.remediate", command, method]);
+      const idempotencyKey = state.securityAssuranceIntent?.fingerprint === fingerprint
+        ? state.securityAssuranceIntent.idempotencyKey : newIdempotencyKey();
+      state.securityAssuranceIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      render();
+      let verificationCode = String(input.verificationCode ?? "");
+      let stepUpGrant = "";
+      try {
+        stepUpGrant = await createAssuranceStepUp({
+          method,
+          verificationCode,
+          actionCode: "platform.assurance.remediate",
+          resourceType: "pen_test_finding",
+          resourceId: findingId,
+          ticket,
+        });
+        verificationCode = "";
+        if (!stepUpGrant || !currentAssuranceTicket(ticket)) return false;
+        await api.securityRemediation({
+          ...command, stepUpGrant, idempotencyKey, signal: ticket.signal,
+        });
+        stepUpGrant = "";
+        if (!currentAssuranceTicket(ticket)) return false;
+        const refreshed = await api.securityAssessment({
+          assessmentId: state.securityAssurance.security_assessment_id,
+          signal: ticket.signal,
+        });
+        if (!currentAssuranceTicket(ticket)) return false;
+        state.securityAssurance = refreshed.assessment;
+        state.securityAssuranceIntent = null;
+        state.loading = false;
+        state.feedback = operation === "propose"
+          ? "Remediation is ready for independent verification."
+          : "Verification result recorded.";
+        render();
+        return true;
+      } catch (error) {
+        if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+          state.securityAssuranceIntent = null;
+        }
+        return fail(ticket, error);
+      } finally {
+        verificationCode = "";
+        stepUpGrant = "";
+      }
     },
     async filterSupportTickets(filters = {}) {
       if (state.view !== "support") return false;
@@ -2073,6 +2226,7 @@ export function createPlatformPageController({
         plans: null,
         providerCatalog: null,
         developerContracts: null,
+        securityAssurance: null,
         billing: null,
         refunds: null,
         verification: null,
@@ -2127,6 +2281,14 @@ export function createPlatformPageController({
         tasks.push(api.developerContracts({ signal: ticket.signal }).then((value) => {
           next.developerContracts = value;
         }));
+      }
+      if (state.view === "security-assurance" && state.securityAssuranceLookup
+        && permissions.has("platform.assurance.read")
+        && typeof api.securityAssessment === "function") {
+        tasks.push(api.securityAssessment({
+          assessmentId: state.securityAssuranceLookup,
+          signal: ticket.signal,
+        }).then((value) => { next.securityAssurance = value.assessment; }));
       }
       if (!fleetOnly && permissions.has("platform.billing.read")
         && typeof api.billingSummary === "function") {
@@ -2386,6 +2548,11 @@ export function createPlatformPageController({
       if (!state.navigation.some((item) => item.id === "releases")) {
         state.developerContracts = null;
         state.developerContractIntent = null;
+      }
+      if (!state.navigation.some((item) => item.id === "security-assurance")) {
+        state.securityAssurance = null;
+        state.securityAssuranceLookup = "";
+        state.securityAssuranceIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "edge-fleet")) {
         state.edgeFleet = null;
@@ -2904,6 +3071,55 @@ export function createPlatformPageController({
       }
       return fail(ticket, error);
     }
+  }
+
+  async function loadSecurityAssurance(assessmentId) {
+    if (state.view !== "security-assurance"
+      || !currentPermissions().has("platform.assurance.read")
+      || typeof api.securityAssessment !== "function") return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      const response = await api.securityAssessment({ assessmentId, signal: ticket.signal });
+      if (!currentAssuranceTicket(ticket)) return false;
+      state.securityAssurance = response.assessment;
+      state.securityAssuranceLookup = response.assessment.security_assessment_id;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      return fail(ticket, error);
+    }
+  }
+
+  async function createAssuranceStepUp({
+    method, verificationCode, actionCode, resourceType, resourceId, ticket,
+  }) {
+    let challengeId;
+    let credential = null;
+    if (method === "webauthn") {
+      if (typeof api.beginIdentityStepUp !== "function"
+        || typeof api.getWebAuthnAssertion !== "function") return "";
+      const challenge = await api.beginIdentityStepUp({ signal: ticket.signal });
+      if (!currentAssuranceTicket(ticket)) return "";
+      challengeId = challenge.challenge_id;
+      credential = await api.getWebAuthnAssertion(challenge.public_key_options);
+      if (!currentAssuranceTicket(ticket)) return "";
+    }
+    const response = await api.createIdentityStepUpGrant({
+      method,
+      actionCode,
+      resourceType,
+      resourceId,
+      code: verificationCode,
+      challengeId,
+      credential,
+      signal: ticket.signal,
+    });
+    credential = null;
+    return currentAssuranceTicket(ticket) ? String(response.grant ?? "") : "";
   }
 
   async function loadProviderCatalog() {
@@ -3491,6 +3707,41 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-assurance-lookup-form]")) {
+        controller.lookupSecurityAssessment(data.get("assessmentId"));
+      }
+      if (form.matches("[data-platform-assurance-start-form]")) {
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.startSecurityAssessment({
+          workspaceId: data.get("workspaceId"),
+          profileCode: data.get("profileCode"),
+          codeTreeSha256: data.get("codeTreeSha256"),
+          migrationSetSha256: data.get("migrationSetSha256"),
+          contractSetSha256: data.get("contractSetSha256"),
+          artifactSha256: data.get("artifactSha256"),
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-assurance-remediation-form]")) {
+        const operation = data.get("operation");
+        const verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.remediateSecurityFinding({
+          operation,
+          findingId: data.get("findingId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          changeSha256: operation === "propose" ? data.get("changeSha256") : undefined,
+          remediationId: operation === "verify" ? data.get("remediationId") : undefined,
+          verificationAssessmentId: operation === "verify"
+            ? data.get("verificationAssessmentId") : undefined,
+          method: data.get("method"),
+          verificationCode,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
@@ -4007,6 +4258,7 @@ export function createPlatformPageController({
       if (action === "refresh") controller.refresh();
       if (action === "privacy-refresh") controller.refreshPrivacyQueue();
       if (action === "compliance-refresh") controller.refreshComplianceControls();
+      if (action === "assurance-refresh") controller.refreshSecurityAssessment();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -4088,6 +4340,18 @@ export function createPlatformPageController({
         }
         if (code) code.hidden = webAuthn;
       }
+      if (select?.matches?.('[data-platform-assurance-start-form] select[name="method"], '
+        + '[data-platform-assurance-remediation-form] select[name="method"]')) {
+        const code = select.form?.querySelector?.("[data-platform-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
     });
   }
 
@@ -4126,6 +4390,10 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "releases"
       && currentPermissions().has("platform.developer_contract.read");
   }
+  function currentAssuranceTicket(ticket) {
+    return current(ticket) && state.view === "security-assurance"
+      && currentPermissions().has("platform.assurance.read");
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -4146,6 +4414,9 @@ export function createPlatformPageController({
     state.providerCatalogPublishIntent = null;
     state.developerContracts = null;
     state.developerContractIntent = null;
+    state.securityAssurance = null;
+    state.securityAssuranceLookup = "";
+    state.securityAssuranceIntent = null;
     state.billing = null;
     state.billingStatus = "";
     state.billingCursor = null;

@@ -35,6 +35,7 @@ from metahub_control.migration_operations.permissions import (
     load_verified_workspace_migration_permissions,
 )
 
+from .assurance_permissions import load_verified_workspace_assurance_permissions
 from .compliance_permissions import load_verified_workspace_compliance_permissions
 from .edge_permissions import load_verified_workspace_edge_permissions
 from .models import (
@@ -656,6 +657,7 @@ def workspace_actor_authorization_probe_in_transaction(
         customer_support,
         privacy,
         compliance,
+        assurance,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -686,6 +688,7 @@ def workspace_actor_authorization_probe_in_transaction(
             customer_support_permissions=customer_support,
             privacy_permissions=privacy,
             compliance_permissions=compliance,
+            assurance_permissions=assurance,
         ),
     )
 
@@ -1977,6 +1980,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         customer_support,
         privacy,
         compliance,
+        assurance,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -1991,6 +1995,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
             customer_support,
             privacy,
             compliance,
+            assurance,
         )
     ):
         return legacy
@@ -2006,6 +2011,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
                 *customer_support,
                 *privacy,
                 *compliance,
+                *assurance,
             }
         )
     )
@@ -2020,6 +2026,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         customer_support_permissions=customer_support,
         privacy_permissions=privacy,
         compliance_permissions=compliance,
+        assurance_permissions=assurance,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -2036,6 +2043,7 @@ def _workspace_extension_permissions(
     role_code: str,
     require_catalogs: bool = False,
 ) -> tuple[
+    tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
@@ -2075,6 +2083,11 @@ def _workspace_extension_permissions(
             role_code=role_code,
             unavailable_error_code="workspace_session.unavailable",
         )
+        assurance = load_verified_workspace_assurance_permissions(
+            connection,
+            role_code=role_code,
+            unavailable_error_code="workspace_session.unavailable",
+        )
         return (
             governance,
             machine_identity,
@@ -2084,6 +2097,7 @@ def _workspace_extension_permissions(
             customer_support,
             privacy,
             compliance,
+            assurance,
         )
     has_extension = _table_exists(connection, "workspace_governance_role_permissions")
     has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
@@ -2149,6 +2163,11 @@ def _workspace_extension_permissions(
         role_code=role_code,
         unavailable_error_code="workspace_session.unavailable",
     )
+    assurance = load_verified_workspace_assurance_permissions(
+        connection,
+        role_code=role_code,
+        unavailable_error_code="workspace_session.unavailable",
+    )
     return (
         governance,
         machine_identity,
@@ -2158,6 +2177,7 @@ def _workspace_extension_permissions(
         customer_support,
         privacy,
         compliance,
+        assurance,
     )
 
 
@@ -2261,6 +2281,7 @@ def _workspace_authorization_fingerprint(
     customer_support_permissions: tuple[str, ...],
     privacy_permissions: tuple[str, ...],
     compliance_permissions: tuple[str, ...],
+    assurance_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2275,6 +2296,7 @@ def _workspace_authorization_fingerprint(
                 "customer_support_permissions": customer_support_permissions,
                 "privacy_permissions": privacy_permissions,
                 "compliance_permissions": compliance_permissions,
+                "assurance_permissions": assurance_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),
