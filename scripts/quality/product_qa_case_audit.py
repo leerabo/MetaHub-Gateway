@@ -27,6 +27,7 @@ EXPECTED_COUNTS = {
 }
 EXPECTED_APPLIED_MIGRATIONS = 130
 EXPECTED_LATEST_MIGRATION = "0130"
+MINIMUM_WEB_TESTS = 16
 SENSITIVE_JSON_KEYS = {
     "access_token",
     "authorization",
@@ -187,6 +188,18 @@ def _sensitive_key_count(value: Any) -> int:
     return 0
 
 
+def _node_test_output_clean(output: str, *, minimum_tests: int) -> bool:
+    counters = {
+        name: re.search(rf"\b{name}\s+(\d+)\b", output)
+        for name in ("pass", "fail", "skipped", "todo")
+    }
+    return (
+        all(match is not None for match in counters.values())
+        and int(counters["pass"].group(1)) >= minimum_tests
+        and all(int(counters[name].group(1)) == 0 for name in ("fail", "skipped", "todo"))
+    )
+
+
 def _plan_cases() -> dict[str, str]:
     rows = re.findall(
         r"^\| ((?:WB|API|BB|GR|PERF|WEB|UI|UCD|COMP|SEC|FLOW)-\d{2}) \| ([^|]+) \|",
@@ -236,12 +249,7 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
         for report in browser_reports
     )
     web_output = (evidence_dir / "web.out").read_text(encoding="utf-8", errors="replace")
-    web_clean = (
-        "pass 16" in web_output
-        and "fail 0" in web_output
-        and "skipped 0" in web_output
-        and "todo 0" in web_output
-    )
+    web_clean = _node_test_output_clean(web_output, minimum_tests=MINIMUM_WEB_TESTS)
     json_paths = [*evidence_dir.glob("*.json"), long_stability_path]
     sensitive_clean = all(
         _sensitive_key_count(_json(path)) == 0 for path in json_paths
