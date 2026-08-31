@@ -191,19 +191,24 @@ prefetch、直接 hash、迟到响应和旧 API，不只是侧栏文本。
 
 Excel PRD-147 写有 23 个后台循环，但当前 `app.py` 在
 `control_background_schedulers_enabled` 下注册 39 个 legacy scheduler，此外还有始终注册的 status
-publication 和按 gateway placement 注册的 snapshot scheduler。实现以源码事实为准：39 个受开关
-管理的上下文全部进入固定注册表，两个外围上下文也通过同一 supervisor 获得唯一执行权，不能在
-多 Web 副本中各自启动无限循环。
+publication 和按 gateway placement 注册的 snapshot scheduler。这 41 个 baseline slot 必须逐项盘点，
+但不能在 S7 合并后继续全部启动：PRD-140/141/142 一对一替换三个 slot，PRD-143 二合一，PRD-144
+六合一，PRD-139 原位接管 partner-portal，PRD-145 新增 console-experience，PRD-146 扩展同一 context。
+最终 active installer manifest 为 36 项，41 -> 36 的一对一/合并/新增映射必须零重复、零缺失。
 
-0139 为每个 scheduler code 持久化 owner domain、enabled、lease owner、lease deadline、fencing
-generation/token digest、last started/completed/error、业务 watermark 和 revision。启动时 supervisor
-只装配注册表中允许的 context；每轮工作前原子获取/续租并传递 fencing generation，状态写入、
-event/outbox 和 watermark 更新都验证同一 fence。失租实例停止提交；接管实例从持久水位继续。
-关闭按逆序释放 lease；崩溃依赖 deadline 接管，不清空队列或重置游标。
+0139 为 36 个 final installer 内每个独立 queue contract 持久化 owner domain、enabled、lease owner、
+lease deadline、fencing generation/token digest、last started/completed/error、业务 watermark 和 revision；
+installer 数量不等于 queue/worker 数量。`platform-job-runtime` 作为第 37 个 cluster context，保留现有
+per-job lease 并叠加 registry fence。启动时 supervisor 只装配固定 manifest 中允许的 context；每轮工作前
+按 `(queue_code, partition_code)` 原子获取/续租，状态写入、event/outbox 和 watermark 更新都验证同一 fence。
+失租实例停止提交；接管实例从持久水位继续。关闭按逆序释放 lease；崩溃依赖 deadline 接管，不清空队列
+或重置游标。`risk-fact-sink` 和 `control-telemetry` 是每副本本地有界缓冲，进入运行面 inventory 和
+容量/关闭审计，但不能做成 leader-only 集群单例。
 
-G7 至少用两个 app replica 证明：每个 scheduler code 同时只有一个 leader；过期 leader 的迟到提交
-被 fence；接管不重复 event/outbox；39+2 注册项无遗漏；禁用项不启动；现有 platform job worker
-lease、各业务 scheduler lease 和审计水位均保真。
+G7 至少用两个 app replica 证明：每个 queue partition 同时只有一个 leader，不同 partition 可公平并行；
+过期 leader 的迟到提交被 fence；接管不重复 event/outbox；41 个 baseline slot 到 36 个 final installer
+映射无遗漏；第 37 个 platform-job context、全部内部 queue contract、禁用项、既有业务 lease 和审计水位
+均保真；每副本只有一个无业务写权的 lease coordinator，两个 per-replica buffer 独立排空且关闭有界。
 
 ## 7. 前端分域与交互合同
 
@@ -237,8 +242,9 @@ lease、各业务 scheduler lease 和审计水位均保真。
 
 ### 第二轮：并发、Scheduler、回滚与证据真实性
 
-- P0：按 Excel 过期的“23 个循环”实现会漏掉当前 39 个受开关 scheduler。修正为源码注册表
-  39 项全覆盖，并让 status/snapshot 两个外围 context 使用同一 leader/fence 机制。
+- P0：按 Excel 过期的“23 个循环”实现会漏掉当前 39 个受开关 scheduler；把全部旧 context 继续启动又会
+  违反 S7 的二合一/六合一合同。修正为 41 个 baseline slot 全覆盖并 exact 映射到 36 个 final installer，
+  第 37 个 platform-job context 和每个内部 queue contract 另行注册。
 - P0：只给 supervisor 一个进程内锁无法阻止多 Web replica 重复消费。修正为数据库持久 lease、
   generation/token fence、逐次提交校验和可接管 watermark；失租旧 worker 的迟到写失败关闭。
 - P0：rollback 若重新启用旧 route 或 dual-write，会恢复已撤销的跨域能力。修正为 rollback 只
@@ -246,8 +252,9 @@ lease、各业务 scheduler lease 和审计水位均保真。
 - P0：只比行数无法发现 owner、金额或投影漂移。修正为逐表 canonical hash、FK、outbox、审计、
   scheduler 水位和抽样复算共同匹配，任何差异阻断 cutover。
 - P1：现有产品 QA 固定 0130 和企业 admin/developer/viewer 浏览器矩阵，不能证明 G7。修正为完成
-  S7 后把基线推进到 0139，并新增 Platform、Partner、Support、旧入口归零、64 导航和 39+2
-  Scheduler lease/fence 证据；旧 97 用例只作为必要回归，不能单独宣称 G7。
+  S7 后把基线推进到 0139，并新增 Platform、Partner、Support、旧入口归零、64 导航、41 -> 36 installer
+  映射、第 37 个 platform-job、全部 queue partition、单 coordinator 与两个本地有界数据运行面证据；旧 97 用例只作为必要
+  回归，不能单独宣称 G7。
 - P1：在 PRD 开发中重复全套测试会污染批次节奏和长稳。修正为逐 PRD 只跑受影响单元/API
   冒烟；PRD-147 后一次性跑统一数据库、集成、FLOW、浏览器、性能、安全、兼容和回归。
 
@@ -261,5 +268,6 @@ lease、各业务 scheduler lease 和审计水位均保真。
 G7 必须统一证明：0130..0139 fresh/逐级/往返/down guard；64 项 Excel 导航和 2 项后增导航均有
 唯一处置；平台运营/品牌/Provider 工程/商业账务分域；所有历史行数/hash/outbox/Scheduler/审计
 水位保真；企业旧入口、DOM、预取和 API 为零；Platform/Workspace/Partner/Support/Device 五域
-负载矩阵失败关闭；39+2 scheduler 唯一 leader 和 fencing；三浏览器三缩放真实流程；各 Excel
+负载矩阵失败关闭；41 -> 36 installer 映射、第 37 个 platform-job、逐 queue partition leader/fencing 和
+单 coordinator 与两个本地有界数据运行面；三浏览器三缩放真实流程；各 Excel
 SLO；敏感与禁止文件审计为零。通过后才允许开始 PRD-148 和 G8/GA 终验。
