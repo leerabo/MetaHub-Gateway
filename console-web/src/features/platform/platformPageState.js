@@ -2,6 +2,7 @@
 import { PlatformApiError } from "../../lib/platform.js";
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
+import { createPlatformCustomerSuccessController } from "../platform-customer-success/platformCustomerSuccessController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
@@ -42,7 +43,6 @@ const PLATFORM_NAVIGATION_IDS = new Set([
 const WORKSPACE_READ_PERMISSIONS = new Set([
   "platform.workspace.directory.read",
   "platform.billing.read",
-  "platform.customer_success.read",
   "platform.workspace.risk.manage",
 ]);
 const WORKSPACE_FILTER_KEYS = new Set([
@@ -89,6 +89,7 @@ export function createPlatformPageController({
     channelIssuedReferral: null,
     channelLatestLead: null,
     channelLatestAttribution: null,
+    customerSuccess: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -185,6 +186,27 @@ export function createPlatformPageController({
     pendingAction: null,
   };
 
+  const customerSuccessController = createPlatformCustomerSuccessController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.customerSuccess = snapshot;
+      if (state.session && state.view === "customer-success" && !state.loading) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && state.view === "customer-success") void controller.refresh();
+      });
+    },
+  });
+  state.customerSuccess = customerSuccessController.snapshot();
+
   const controller = {
     async mount() {
       bind();
@@ -269,7 +291,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
-        "channels",
+        "channels", "customer-success",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -310,6 +332,8 @@ export function createPlatformPageController({
           state.launchIntent = null;
         } else if (state.view === "channels") {
           clearChannelFacts();
+        } else if (state.view === "customer-success") {
+          customerSuccessController.leave();
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -385,6 +409,15 @@ export function createPlatformPageController({
       if (state.view === "channels" && !state.channels && !state.channelStatements) {
         void loadChannelManagement();
       }
+      if (state.view === "customer-success") {
+        const entered = customerSuccessController.enter(
+          state.session?.context,
+          state.navigation,
+        );
+        if (entered && !customerSuccessController.snapshot().directory) {
+          void customerSuccessController.loadDirectory();
+        }
+      }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
       if (state.view === "edge-upgrades"
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
@@ -398,6 +431,47 @@ export function createPlatformPageController({
       if (state.view === "compliance" && !state.complianceControls) {
         void loadComplianceControls();
       }
+    },
+    async refreshCustomerSuccess() {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.loadDirectory();
+    },
+    async filterCustomerSuccess(filters = {}) {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.configureDirectory(compactObject(filters));
+    },
+    selectCustomerSuccessAccount(accountId) {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.selectAccount(accountId);
+    },
+    selectCustomerSuccessTab(tab) {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.selectTab(tab);
+    },
+    async loadCustomerSuccessContacts() {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.loadContacts();
+    },
+    hideCustomerSuccessContacts() {
+      if (state.view !== "customer-success") return false;
+      customerSuccessController.hideContacts();
+      return true;
+    },
+    async nextCustomerSuccessPage() {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.nextPage();
+    },
+    async previousCustomerSuccessPage() {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.previousPage();
+    },
+    async applyCustomerSuccessPlan(command) {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.applyPlan(command);
+    },
+    async applyCustomerSuccessTask(command, stepUp = null) {
+      if (state.view !== "customer-success") return false;
+      return customerSuccessController.applyTask(command, stepUp);
     },
     async refreshChannels() {
       if (state.view !== "channels") return false;
@@ -3120,9 +3194,16 @@ export function createPlatformPageController({
         state.complianceWorkspaceId = "";
       }
       if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
+      const customerSuccessActive = state.view === "customer-success"
+        && state.navigation.some((item) => item.id === "customer-success")
+        && customerSuccessController.enter(state.session?.context, state.navigation);
+      if (!customerSuccessActive) customerSuccessController.leave();
       state.loading = false;
       state.error = null;
       render();
+      if (customerSuccessActive && !customerSuccessController.snapshot().directory) {
+        void customerSuccessController.loadDirectory();
+      }
       return true;
     } catch (error) {
       return fail(ticket, error);
@@ -4429,6 +4510,97 @@ export function createPlatformPageController({
       event.preventDefault();
       const data = new FormData(form);
       if (form.matches("[data-platform-session-form]")) controller.openSession(data.get("totpCode"));
+      if (form.matches("[data-platform-customer-filter-form]")) {
+        controller.filterCustomerSuccess({
+          customer_account_id: data.get("customerAccountId"),
+          region: data.get("region"),
+          operational_status: data.get("operationalStatus"),
+          activation: data.get("activation"),
+          adoption: data.get("adoption"),
+          health_risk: data.get("healthRisk"),
+        });
+      }
+      if (form.matches("[data-platform-customer-plan-create-form]")) {
+        controller.applyCustomerSuccessPlan({
+          operation: "create",
+          customer_account_id: data.get("customerAccountId"),
+          expected_revision: 0,
+          objective_code: data.get("objectiveCode"),
+          starts_on: data.get("startsOn"),
+          ends_on: data.get("endsOn"),
+          target_health_bps: Number(data.get("targetHealthBps")),
+          target_activation_steps: Number(data.get("targetActivationSteps")),
+          target_adoption_bps: Number(data.get("targetAdoptionBps")),
+          source_health_sequence: Number(data.get("sourceHealthSequence")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-customer-plan-command-form]")) {
+        controller.applyCustomerSuccessPlan({
+          operation: data.get("operation"),
+          customer_account_id: data.get("customerAccountId"),
+          customer_success_plan_id: data.get("planId"),
+          expected_revision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-customer-task-create-form]")) {
+        controller.applyCustomerSuccessTask({
+          operation: "create_one",
+          customer_account_id: data.get("customerAccountId"),
+          customer_success_plan_id: data.get("planId") || null,
+          renewal_opportunity_id: null,
+          task_type: data.get("taskType"),
+          priority: data.get("priority"),
+          reason_code: data.get("reasonCode"),
+          assignee_operator_id: data.get("assigneeOperatorId"),
+          due_at: localTimestamp(data.get("dueAt")),
+          required: data.get("required") === "on",
+          expected_revision: 0,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-customer-task-command-form]")) {
+        const targetStatus = String(data.get("targetStatus") ?? "");
+        controller.applyCustomerSuccessTask({
+          operation: "transition_one",
+          customer_task_id: data.get("taskId"),
+          target_status: targetStatus,
+          reason_code: `task.${targetStatus}`,
+          expected_revision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-customer-batch-prepare-form]")) {
+        controller.applyCustomerSuccessTask({
+          operation: "prepare_batch",
+          customer_account_ids: String(data.get("accountIds") ?? "")
+            .split(/[\s,]+/u).map((item) => item.trim()).filter(Boolean),
+          task_type: data.get("taskType"),
+          priority: data.get("priority"),
+          reason_code: data.get("reasonCode"),
+          assignee_operator_id: data.get("assigneeOperatorId"),
+          due_at: localTimestamp(data.get("dueAt")),
+          expected_revision: 0,
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
+      if (form.matches("[data-platform-customer-batch-approve-form]")) {
+        let verificationCode = String(data.get("verificationCode") ?? "");
+        form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+        controller.applyCustomerSuccessTask({
+          operation: "approve_batch",
+          customer_task_batch_id: data.get("batchId"),
+          decision: data.get("decision"),
+          reason_code: data.get("reasonCode"),
+          expected_revision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        }, {
+          method: data.get("method"),
+          verificationCode,
+        });
+        verificationCode = "";
+      }
       if (form.matches("[data-platform-channel-filter-form]")) {
         controller.filterChannels({
           status: data.get("status"),
@@ -5307,6 +5479,17 @@ export function createPlatformPageController({
       }
       const action = target.dataset.platformAction;
       if (action === "refresh") controller.refresh();
+      if (target.dataset.platformCustomerSelect) {
+        controller.selectCustomerSuccessAccount(target.dataset.platformCustomerSelect);
+      }
+      if (target.dataset.platformCustomerTab) {
+        controller.selectCustomerSuccessTab(target.dataset.platformCustomerTab);
+      }
+      if (action === "customer-refresh") controller.refreshCustomerSuccess();
+      if (action === "customer-contacts") controller.loadCustomerSuccessContacts();
+      if (action === "customer-contacts-close") controller.hideCustomerSuccessContacts();
+      if (action === "customer-next") controller.nextCustomerSuccessPage();
+      if (action === "customer-previous") controller.previousCustomerSuccessPage();
       if (action === "privacy-refresh") controller.refreshPrivacyQueue();
       if (action === "compliance-refresh") controller.refreshComplianceControls();
       if (action === "assurance-refresh") controller.refreshSecurityAssessment();
@@ -5367,6 +5550,17 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
+      if (select?.matches?.('[data-platform-customer-batch-approve-form] select[name="method"]')) {
+        const code = select.form?.querySelector?.("[data-platform-customer-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
       if (select?.matches?.('[data-platform-notification-template-form] select[name="eventType"]')) {
         const output = select.form?.querySelector?.("[data-template-parameters]");
         if (output) {
@@ -5514,6 +5708,7 @@ export function createPlatformPageController({
   }
   function clearProtectedFacts() {
     state.navigation = [];
+    customerSuccessController.leave();
     state.operators = null;
     state.plans = null;
     state.providerCatalog = null;
@@ -5800,6 +5995,10 @@ function optionalNumber(value) {
 
 function commaList(value) {
   return [...new Set(String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
+}
+
+function compactObject(value) {
+  return Object.fromEntries(Object.entries(value ?? {}).filter(([, item]) => String(item ?? "").trim()));
 }
 
 function lineList(value) {

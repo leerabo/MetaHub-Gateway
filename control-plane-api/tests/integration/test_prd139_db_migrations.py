@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import shutil
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from metahub_control.auth import service as auth_service
 from metahub_control.auth.service import authenticate_bearer, login_admin
 from metahub_control.partner_portal.commission import (
     claim_next_commission_cursor,
@@ -28,6 +30,7 @@ from metahub_shared.db import (
     rollback_last_migration,
 )
 from metahub_shared.db.errors import DbError
+from metahub_shared.runtime import rbac_snapshot
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
@@ -70,6 +73,54 @@ def _healthy(database_url: str) -> None:
     with closing(connect_database(database_url)) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@contextmanager
+def _legacy_rbac_catalog(database_url: str):
+    with closing(connect_database(database_url)) as connection:
+        permission_rows = connection.execute(
+            "SELECT permission_code,catalog_revision FROM rbac_permission_templates"
+        ).fetchall()
+        role_rows = connection.execute(
+            "SELECT role_code,permission_code FROM rbac_role_permission_templates"
+        ).fetchall()
+    permission_codes = frozenset(str(row["permission_code"]) for row in permission_rows)
+    role_permissions: dict[str, set[str]] = {}
+    for row in role_rows:
+        role_permissions.setdefault(str(row["role_code"]), set()).add(
+            str(row["permission_code"])
+        )
+    role_codes = frozenset(role_permissions)
+    grantable = {
+        role: frozenset(codes) for role, codes in role_permissions.items()
+    }
+    catalog_revisions = {int(row["catalog_revision"]) for row in permission_rows}
+    assert len(catalog_revisions) == 1
+    catalog_revision = next(iter(catalog_revisions))
+
+    def canonical(values):
+        normalized = list(values)
+        if len(normalized) != len(set(normalized)) or any(
+            type(code) is not str or code not in permission_codes for code in normalized
+        ):
+            raise ValueError("rbac.permission_code_invalid")
+        return tuple(sorted(normalized))
+
+    def matrix_sha256(values):
+        payload = json.dumps(
+            canonical(values), ensure_ascii=True, separators=(",", ":")
+        ).encode("ascii")
+        return hashlib.sha256(payload).hexdigest()
+
+    with pytest.MonkeyPatch.context() as patch:
+        for module in (auth_service, rbac_snapshot):
+            patch.setattr(module, "PERMISSION_CODES", permission_codes)
+            patch.setattr(module, "ROLE_CODES", role_codes)
+            patch.setattr(module, "ROLE_GRANTABLE_PERMISSIONS", grantable)
+            patch.setattr(module, "CATALOG_REVISION", catalog_revision)
+            patch.setattr(module, "canonical_permission_codes", canonical)
+            patch.setattr(module, "permission_matrix_sha256", matrix_sha256)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -248,45 +299,46 @@ def _seed_legacy(database_url: str, tenant_id: str) -> dict[str, int]:
     config = _config(database_url)
     with closing(connect_database(database_url)) as connection:
         _insert_project(connection, tenant_id)
-    login = login_admin(
-        config,
-        tenant_slug="default",
-        email="admin@metahub.local",
-        password=PASSWORD,
-        request_id="req_prd139_legacy_login",
-        trace_id="trc_prd139_legacy_login",
-        user_agent="pytest",
-        client_host="127.0.0.1",
-    )
-    context = authenticate_bearer(config, f"Bearer {login.access_token}")
-    partner = create_partner(
-        config,
-        context,
-        CreatePartnerRequest(
-            partner_code="prd139.channel",
-            display_name="PRD-139 Channel",
-            portal_name="Legacy Partner",
-            brand_primary_color="#176B5B",
-            support_text=None,
-        ),
-        idempotency_key="prd139-partner-legacy",
-        request_id="req_prd139_partner",
-        trace_id="trc_prd139_partner",
-        now=STAMP_DT,
-    )
-    customer = create_partner_customer(
-        config,
-        context,
-        CreatePartnerCustomerRequest(
-            project_id=PROJECT_ID,
-            customer_code="legacy.customer",
-            display_name="Legacy Customer",
-        ),
-        idempotency_key="prd139-customer-legacy",
-        request_id="req_prd139_customer",
-        trace_id="trc_prd139_customer",
-        now=STAMP_DT,
-    )
+    with _legacy_rbac_catalog(database_url):
+        login = login_admin(
+            config,
+            tenant_slug="default",
+            email="admin@metahub.local",
+            password=PASSWORD,
+            request_id="req_prd139_legacy_login",
+            trace_id="trc_prd139_legacy_login",
+            user_agent="pytest",
+            client_host="127.0.0.1",
+        )
+        context = authenticate_bearer(config, f"Bearer {login.access_token}")
+        partner = create_partner(
+            config,
+            context,
+            CreatePartnerRequest(
+                partner_code="prd139.channel",
+                display_name="PRD-139 Channel",
+                portal_name="Legacy Partner",
+                brand_primary_color="#176B5B",
+                support_text=None,
+            ),
+            idempotency_key="prd139-partner-legacy",
+            request_id="req_prd139_partner",
+            trace_id="trc_prd139_partner",
+            now=STAMP_DT,
+        )
+        customer = create_partner_customer(
+            config,
+            context,
+            CreatePartnerCustomerRequest(
+                project_id=PROJECT_ID,
+                customer_code="legacy.customer",
+                display_name="Legacy Customer",
+            ),
+            idempotency_key="prd139-customer-legacy",
+            request_id="req_prd139_customer",
+            trace_id="trc_prd139_customer",
+            now=STAMP_DT,
+        )
     with closing(connect_database(database_url)) as connection:
         _insert_usage_charge(connection, tenant_id)
     claim = claim_next_commission_cursor(
@@ -400,5 +452,5 @@ def test_legacy_six_table_backfill_hash_fence_and_down_guard(
 
 def test_fresh_schema_installs_prd139_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0131"
+    assert apply_migrations(database_url).applied[-1] == "0132"
     _healthy(database_url)

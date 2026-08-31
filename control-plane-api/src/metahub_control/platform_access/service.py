@@ -257,6 +257,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_security_assurance_role_permissions",
     "platform_launch_role_permissions",
     "platform_channel_role_permissions",
+    "platform_customer_success_role_permissions",
 )
 
 
@@ -815,21 +816,7 @@ def get_platform_navigation(
     try:
         connection.execute("BEGIN")
         context = _authenticate_platform(connection, config, session_token, touch=True)
-        permission_set = set(context.permissions)
-        items = tuple(
-            PlatformNavigationItem(id=item_id, label=label, href=href)
-            for permission, item_id, label, href in _NAVIGATION
-            if permission in permission_set
-            or (item_id == "billing" and "platform.catalog.read" in permission_set)
-            or (item_id == "releases" and "platform.developer_contract.read" in permission_set)
-            or (
-                item_id == "observability"
-                and "platform.observability.security_read" in permission_set
-            )
-            or (item_id == "capacity" and "platform.unit_economics.read" in permission_set)
-            or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
-            or (item_id == "support" and "platform.support.ticket.read" in permission_set)
-        )
+        items = _navigation_items(set(context.permissions))
         connection.commit()
         return PlatformNavigationResponse(items=items, request_id=request_id, trace_id=trace_id)
     except ApiError as exc:
@@ -840,6 +827,26 @@ def get_platform_navigation(
         raise ApiError("platform.unavailable") from None
     finally:
         connection.close()
+
+
+def _navigation_items(permission_set: set[str]) -> tuple[PlatformNavigationItem, ...]:
+    customer_success_reads = {
+        "platform.customer_success.support_read",
+        "platform.customer_success.finance_read",
+        "platform.customer_success.renewal.read",
+    }
+    return tuple(
+        PlatformNavigationItem(id=item_id, label=label, href=href)
+        for permission, item_id, label, href in _NAVIGATION
+        if permission in permission_set
+        or (item_id == "billing" and "platform.catalog.read" in permission_set)
+        or (item_id == "releases" and "platform.developer_contract.read" in permission_set)
+        or (item_id == "observability" and "platform.observability.security_read" in permission_set)
+        or (item_id == "capacity" and "platform.unit_economics.read" in permission_set)
+        or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
+        or (item_id == "support" and "platform.support.ticket.read" in permission_set)
+        or (item_id == "customer-success" and bool(customer_success_reads & permission_set))
+    )
 
 
 def create_support_grant(

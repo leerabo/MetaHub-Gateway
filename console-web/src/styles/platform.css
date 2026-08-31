@@ -1369,6 +1369,244 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-offline-table form { min-width: 0; }
 }
 
+/* PRD-140 customer-success workbench */
+[data-platform-customer-success-root] { min-width: 0; }
+.platform-customer-success-heading > span { max-width: 360px; text-align: right; }
+.platform-customer-directory { padding-bottom: 0; }
+.platform-customer-filter {
+  grid-template-columns: minmax(190px, 1.35fr) repeat(5, minmax(125px, 1fr)) auto;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.platform-customer-filter label,
+.platform-customer-command label,
+.platform-customer-batch label { min-width: 0; }
+.platform-customer-filter input,
+.platform-customer-filter select,
+.platform-customer-command input,
+.platform-customer-command select,
+.platform-customer-command textarea,
+.platform-customer-batch input,
+.platform-customer-batch select { width: 100%; min-width: 0; }
+.platform-customer-layout {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(360px, .82fr) minmax(480px, 1.18fr);
+}
+.platform-customer-list {
+  min-width: 0;
+  padding: 16px 18px 20px 0;
+  border-right: 1px solid var(--line);
+}
+.platform-customer-row {
+  display: grid;
+  width: 100%;
+  min-height: 70px;
+  grid-template-columns: minmax(145px, 1.6fr) repeat(4, minmax(66px, .72fr));
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.platform-customer-row:last-of-type { border-bottom: 1px solid var(--line); }
+.platform-customer-row:hover { background: #f4f7f4; }
+.platform-customer-row.is-selected {
+  box-shadow: inset 3px 0 0 var(--green);
+  background: #edf4ef;
+}
+.platform-customer-row > span { min-width: 0; }
+.platform-customer-row strong,
+.platform-customer-row small { display: block; overflow-wrap: anywhere; }
+.platform-customer-row small { color: var(--muted); font-size: 10px; }
+.platform-customer-row strong { margin-top: 4px; font-size: 11px; }
+.platform-customer-identity strong { margin-top: 0; font-size: 13px; }
+.platform-customer-detail { min-width: 0; padding: 18px 0 24px 22px; }
+.platform-customer-detail-head {
+  display: flex;
+  min-height: 72px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.platform-customer-detail-head > div:first-child { min-width: 0; }
+.platform-customer-detail-head p,
+.platform-customer-detail-head h2,
+.platform-customer-detail-head small { margin: 0; overflow-wrap: anywhere; }
+.platform-customer-detail-head p { color: var(--green); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+.platform-customer-detail-head h2 { margin-top: 5px; font-size: 20px; }
+.platform-customer-detail-head small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.platform-customer-detail-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.platform-customer-detail-actions button,
+.platform-customer-inline-actions button,
+.platform-customer-tabs button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+.platform-customer-detail-actions button:last-child { width: 36px; padding: 0; font-size: 18px; }
+.platform-customer-facts,
+.platform-customer-records article dl,
+.platform-customer-contact-list dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.platform-customer-facts > div,
+.platform-customer-records article dl > div,
+.platform-customer-contact-list dl > div { min-width: 0; padding: 10px; }
+.platform-customer-facts > div + div,
+.platform-customer-records article dl > div + div,
+.platform-customer-contact-list dl > div + div { border-left: 1px solid var(--line); }
+.platform-customer-facts dt,
+.platform-customer-records dt,
+.platform-customer-contact-list dt { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.platform-customer-facts dd,
+.platform-customer-records dd,
+.platform-customer-contact-list dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 11px; font-weight: 700; }
+.platform-customer-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(70px, 1fr));
+  gap: 4px;
+  margin: 18px 0 14px;
+}
+.platform-customer-tabs button { min-width: 0; padding: 7px 8px; font-size: 11px; }
+.platform-customer-tabs button[aria-selected="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+.platform-customer-tab-panel { min-width: 0; min-height: 310px; }
+.platform-customer-health { display: grid; min-width: 0; grid-template-columns: 145px minmax(0, 1fr); gap: 18px; }
+.platform-customer-health-score { padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
+.platform-customer-health-score > strong { display: inline-block; margin-top: 18px; font-size: 34px; }
+.platform-customer-health-score > small { color: var(--muted); }
+.platform-customer-health-score p { margin: 12px 0 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.platform-customer-health-factors { display: grid; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.platform-customer-health-factors > div { min-width: 0; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.platform-customer-health-factors span,
+.platform-customer-health-factors strong,
+.platform-customer-health-factors small { display: block; overflow-wrap: anywhere; }
+.platform-customer-health-factors span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.platform-customer-health-factors strong { margin-top: 6px; font-size: 18px; }
+.platform-customer-health-factors small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.platform-customer-codes { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.platform-customer-codes > span { color: var(--muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+.platform-customer-codes code { overflow-wrap: anywhere; }
+.platform-customer-records { display: grid; min-width: 0; gap: 18px; }
+.platform-customer-record-list { display: grid; gap: 10px; }
+.platform-customer-records article,
+.platform-customer-contact-list > div { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.platform-customer-records article > header,
+.platform-customer-contact-list header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; }
+.platform-customer-records article strong,
+.platform-customer-records article small { display: block; overflow-wrap: anywhere; }
+.platform-customer-records article small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.platform-customer-inline-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.platform-customer-inline-actions form { margin: 0; }
+.platform-customer-inline-actions button { padding: 6px 10px; }
+.platform-customer-command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.platform-customer-command,
+.platform-customer-batch form {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7f8f7;
+}
+.platform-customer-command h3 { grid-column: 1 / -1; margin: 0 0 2px; font-size: 12px; }
+.platform-customer-command-wide { grid-column: 1 / -1; }
+.platform-customer-command textarea { resize: vertical; }
+.platform-customer-command .platform-check,
+.platform-customer-batch .platform-check { display: flex; align-items: center; gap: 7px; }
+.platform-customer-command .platform-check input,
+.platform-customer-batch .platform-check input { width: 16px; min-height: 16px; }
+.platform-customer-renewal-table,
+.platform-customer-qbr-table { width: 100%; min-width: 0; table-layout: fixed; }
+.platform-customer-qbr-table small { display: block; margin-top: 4px; color: var(--muted); }
+.platform-customer-contacts { margin-top: 20px; }
+.platform-customer-contacts .platform-section-heading button { width: 34px; height: 34px; border: 0; background: transparent; font-size: 24px; cursor: pointer; }
+.platform-customer-contact-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.platform-customer-batch { margin-top: 20px; }
+.platform-customer-batch form { grid-template-columns: repeat(5, minmax(120px, 1fr)); }
+
+@media (max-width: 1180px) {
+  .platform-customer-filter { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .platform-customer-layout { grid-template-columns: minmax(300px, .72fr) minmax(440px, 1.28fr); }
+  .platform-customer-row { grid-template-columns: minmax(125px, 1.5fr) repeat(2, minmax(60px, .7fr)); }
+  .platform-customer-row > span:nth-child(4),
+  .platform-customer-row > span:nth-child(5) { display: none; }
+  .platform-customer-command-grid { grid-template-columns: minmax(0, 1fr); }
+  .platform-customer-batch form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .platform-customer-layout { grid-template-columns: minmax(0, 1fr); }
+  .platform-customer-list { padding-right: 0; border-right: 0; }
+  .platform-customer-detail { padding-left: 0; border-top: 1px solid var(--line); }
+  .platform-customer-row { grid-template-columns: minmax(160px, 1.5fr) repeat(4, minmax(62px, .7fr)); }
+  .platform-customer-row > span:nth-child(4),
+  .platform-customer-row > span:nth-child(5) { display: block; }
+  .platform-customer-batch form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .platform-customer-success-heading { display: block; }
+  .platform-customer-success-heading > span { display: block; max-width: none; margin-top: 8px; text-align: left; }
+  .platform-customer-filter,
+  .platform-customer-command,
+  .platform-customer-batch form { grid-template-columns: minmax(0, 1fr); }
+  .platform-customer-row { grid-template-columns: minmax(0, 1fr) repeat(2, minmax(58px, .55fr)); }
+  .platform-customer-row > span:nth-child(4),
+  .platform-customer-row > span:nth-child(5) { display: none; }
+  .platform-customer-detail-head { display: grid; }
+  .platform-customer-facts,
+  .platform-customer-records article dl,
+  .platform-customer-contact-list dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-customer-facts > div:nth-child(3),
+  .platform-customer-records article dl > div:nth-child(3),
+  .platform-customer-contact-list dl > div:nth-child(3) { border-left: 0; }
+  .platform-customer-facts > div:nth-child(n + 3),
+  .platform-customer-records article dl > div:nth-child(n + 3),
+  .platform-customer-contact-list dl > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .platform-customer-tabs { grid-template-columns: repeat(5, minmax(58px, 1fr)); overflow-x: auto; }
+  .platform-customer-health { grid-template-columns: minmax(0, 1fr); }
+  .platform-customer-health-factors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-customer-codes { grid-column: auto; }
+  .platform-customer-contact-list { grid-template-columns: minmax(0, 1fr); }
+  .platform-customer-renewal-table,
+  .platform-customer-qbr-table { min-width: 0; }
+  .platform-customer-renewal-table thead,
+  .platform-customer-qbr-table thead { display: none; }
+  .platform-customer-renewal-table tbody,
+  .platform-customer-renewal-table tr,
+  .platform-customer-qbr-table tbody,
+  .platform-customer-qbr-table tr { display: block; width: 100%; }
+  .platform-customer-renewal-table tr,
+  .platform-customer-qbr-table tr { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .platform-customer-renewal-table td,
+  .platform-customer-qbr-table td { display: flex; width: 100%; justify-content: space-between; gap: 12px; padding: 7px 0; border: 0; text-align: right; overflow-wrap: anywhere; }
+  .platform-customer-renewal-table td::before,
+  .platform-customer-qbr-table td::before { content: attr(data-label); color: var(--muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+}
+
+@media (max-width: 390px) {
+  .platform-customer-row { grid-template-columns: minmax(0, 1fr) 72px; }
+  .platform-customer-row > span:nth-child(3) { display: none; }
+  .platform-customer-tabs { grid-template-columns: repeat(5, 68px); }
+  .platform-customer-health-factors { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* PRD-138 keeps gate truth, independent signatures, waves, rollback, and RC review together. */
 .platform-launch-heading-actions {
   display: flex;

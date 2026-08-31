@@ -383,6 +383,30 @@ REQUIRED_DOCS = {
         "0130",
         "release_candidate",
     ),
+    ROOT / "docs/prd/PRD-139-channel-partner-attribution-management.md": (
+        "状态：已完成",
+        "第一轮：",
+        "第二轮：",
+        "0131",
+    ),
+    ROOT / "docs/testing/PRD-139-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-140",
+        "0131",
+    ),
+    ROOT / "docs/prd/PRD-140-saas-platform-customer-success-renewal.md": (
+        "状态：已完成",
+        "第一轮：",
+        "第二轮：",
+        "0132",
+    ),
+    ROOT / "docs/testing/PRD-140-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-141",
+        "0132",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -1062,10 +1086,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 130
+        and migration_versions[-1] == 132
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0130 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0132 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1291,6 +1315,20 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             ROOT / "infra/migrations/0130_saas_release_candidate_launch_gates.down.sql"
         ).is_file(),
         "PRD-138 owns reversible migration 0130 with guarded launch-governance rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0131_channel_partner_attribution_management.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0131_channel_partner_attribution_management.down.sql"
+        ).is_file(),
+        "PRD-139 owns reversible migration 0131 with guarded channel-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0132_platform_customer_success_renewal.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0132_platform_customer_success_renewal.down.sql"
+        ).is_file(),
+        "PRD-140 owns reversible migration 0132 with guarded customer-success rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-139 - 渠道伙伴、代理商与客户归属管理` 已完成；当前下一条未完成项是
-  `PRD-140 - SaaS平台客户管理、健康与续费协同`。
+- 新 `PRD-090` 至 `PRD-140 - SaaS平台客户管理、健康与续费协同` 已完成；当前下一条未完成项是
+  `PRD-141 - SaaS平台增长漏斗、活动与转化归因`。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,12 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- `PRD-140 - SaaS平台客户管理、健康与续费协同` 已完成：0132、客户运营安全投影、客户目录、可解释
+  健康、成功计划、跟进任务与批量审批、续费管道、QBR 摘要、五个固定 Platform API 和独立 Customer
+  Success 工作台均已交付；旧企业 `customer-health` 导航、DOM、预取和生产路由已卸载。Migration `8/8`、
+  受影响 Backend/SDK `64/64`、Console `41/41`、lint `429 files`、Ruff/compile 和三档 Browser 验收通过。
+  详见 [PRD-140 设计](docs/prd/PRD-140-saas-platform-customer-success-renewal.md) 和
+  [PRD-140 测试记录](docs/testing/PRD-140-tests.md)。下一权威项为 PRD-141，完整 G7 留到 PRD-147 后统一执行。
 - `PRD-139 - 渠道伙伴、代理商与客户归属管理` 已完成：0131、渠道伙伴/成员/ReferralCode/商机、独立
   Workspace 归属审批、CommissionRule snapshot、ChannelStatement、legacy PRD-087 回填与 fence、六个固定
   Platform/Partner 路由、Platform Channels 工作台和独立 Partner 壳层均已交付。Migration/API `7/7`、

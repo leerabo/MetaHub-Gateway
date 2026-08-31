@@ -25,31 +25,33 @@ test("PAGE-118 freezes 390, 1280, and 1440 viewport evidence contracts", () => {
   assert.ok(SCREENSHOTS.every((name) => /^page-118-[a-z0-9-]+\.png$/.test(name)));
 });
 
-test("main wires an independent owner with zero unauthorized prefetch and complete identity cleanup", async () => {
-  const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(main, /createCustomerHealthPageState\(\{[\s\S]*?\.customer-health-panel/);
-  assert.match(main, /pagehide[\s\S]*customerHealthPageState\.clear\(\)/);
-  assert.match(main, /function renderLogin[\s\S]*customerHealthPageState\.clear\(\)/);
-  assert.match(main, /logoutButton[\s\S]*customerHealthPageState\.clear\(\)/);
-  assert.match(main, /clearCustomerHealthStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(main, /activeNavigationItemId !== "customer-health"[\s\S]*customerHealthPageState\.clear\(\)/);
-  assert.match(main, /if \(!owner \|\| refreshId !== refreshSequence \|\| !customerHealthPageState\.enter\(owner\)\) return null/);
-  assert.match(main, /getCustomerHealth\(\{[\s\S]{0,400}tenantId: owner\.tenantId[\s\S]{0,400}signal: operation\.controller\.signal/);
-  assert.doesNotMatch(main, /getCustomerHealth\(\{[\s\S]{0,500}(query|fromTime|toTime|actor|budgetState|usageState)/);
+test("PRD-140 cutover removes legacy main wiring and gives Platform an independent owner", async () => {
+  const [main, platformMain, platformState] = await Promise.all([
+    readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/platform/main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/platform/platformPageState.js", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(main, /customerHealth|customer-health|\/customer-health/);
+  assert.match(platformMain, /from "\.\.\/\.\.\/lib\/platformCustomerSuccess\.js"/);
+  assert.match(platformMain, /customerAccounts: \(input\) => listPlatformCustomerAccounts/);
+  assert.match(platformMain, /customerHealth: \(input\) => getPlatformCustomerHealth/);
+  assert.match(platformState, /createPlatformCustomerSuccessController\(\{/);
+  assert.match(platformState, /state\.view === "customer-success"[\s\S]{0,300}customerSuccessController\.enter/);
+  assert.match(platformState, /function clearProtectedFacts\(\) \{[\s\S]{0,150}customerSuccessController\.leave\(\)/);
 });
 
-test("late 200, 401, 403, and 503 are gated before authentication or page state can change", async () => {
-  const [main, pageState] = await Promise.all([
-    readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
+test("legacy and Platform owners both gate late results before protected state can change", async () => {
+  const [pageState, platformStore, platformController] = await Promise.all([
     readFile(new URL("../../src/features/customer-health/customerHealthPageState.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/platform-customer-success/platformCustomerSuccessStore.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/platform-customer-success/platformCustomerSuccessController.js", import.meta.url), "utf8"),
   ]);
-  assert.match(main, /refreshId !== refreshSequence[\s\S]{0,300}!customerHealthPageState\.isCurrent/);
-  assert.match(main, /!customerHealthPageState\.isCurrent[\s\S]{0,300}handleCustomerHealthAuthenticationFailure/);
-  assert.match(main, /handleCustomerHealthAuthenticationFailure[\s\S]*error\.status === 401[\s\S]*clearAuthSession/);
-  assert.match(main, /handleCustomerHealthAuthenticationFailure[\s\S]*error\.status === 403[\s\S]*refresh\(\)/);
-  assert.match(main, /customerHealthPageState\.reject\(operation, error, currentOwner, refreshId\)/);
   assert.match(pageState, /operation === ticket[\s\S]*ticket\.generation === generation[\s\S]*!ticket\.controller\.signal\.aborted/);
   assert.match(pageState, /try \{[\s\S]*clearDom\(\)[\s\S]*finally \{[\s\S]*pending\?\.controller\.abort\(\)/);
+  assert.match(platformStore, /requests\.get\(ticket\.lane\) === ticket[\s\S]{0,250}ticket\.epoch === epoch[\s\S]{0,250}ticket\.owner === owner[\s\S]{0,250}!ticket\.controller\.signal\.aborted/);
+  assert.match(platformStore, /function leave\(\) \{[\s\S]{0,250}clearRequests\(\)[\s\S]{0,250}owner = ""[\s\S]{0,250}state = initialState\(\)/);
+  assert.match(platformController, /if \(!store\.reject\(ticket, error\)\) return false;[\s\S]{0,300}error\.status === 401[\s\S]{0,200}leave\(\)[\s\S]{0,200}onSessionInvalid\(error\)/);
+  assert.match(platformController, /error\.status === 403[\s\S]{0,200}onPermissionRevoked\(error\)/);
 });
 
 test("strict client freezes the six-factor DTO and never composes source-domain APIs", async () => {

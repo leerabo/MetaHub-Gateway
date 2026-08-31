@@ -113,13 +113,6 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "read",
     ),
     PermissionDefinition(
-        "customer_health.read",
-        "analytics",
-        "读取客户健康评分",
-        "读取当前租户确定性客户健康评分、聚合信号与可解释建议。",
-        "read",
-    ),
-    PermissionDefinition(
         "branding.read",
         "branding",
         "读取白标配置",
@@ -872,7 +865,6 @@ _OPS = {
     "console.basic.read",
     "dashboard.read",
     "product_analytics.read",
-    "customer_health.read",
     "environment.read",
     "environment.write",
     "project.read",

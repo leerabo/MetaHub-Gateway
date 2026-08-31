@@ -43,8 +43,6 @@ from .config_transfer.routes import router as config_transfer_router
 from .console.routes import router as console_router
 from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
-from .customer_health import install_customer_health_scheduler
-from .customer_health import router as customer_health_router
 from .customer_support.routes import router as customer_support_router
 from .customer_support.scheduler import install_customer_support_scheduler
 from .dashboard.routes import router as dashboard_router
@@ -99,6 +97,8 @@ from .plan_billing import router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
 from .platform_billing import install_platform_billing_scheduler
 from .platform_billing import router as platform_billing_router
+from .platform_customer_success import install_platform_customer_success_scheduler
+from .platform_customer_success import router as platform_customer_success_router
 from .platform_gateway import install_gateway_snapshot_scheduler
 from .platform_gateway import router as platform_gateway_router
 from .platform_infrastructure import router as platform_infrastructure_router
@@ -208,7 +208,6 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
             "/plans",
             "/quota-buckets",
             "/quota-adjustments",
-            "/customer-health",
             "/product-analytics/funnel",
         }
         or request.url.path == "/billing-disputes"
@@ -329,6 +328,7 @@ app.include_router(disaster_recovery_router)
 app.include_router(public_status_router)
 app.include_router(capacity_management_router)
 app.include_router(channel_management_router)
+app.include_router(platform_customer_success_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -344,7 +344,6 @@ app.include_router(adapter_specs_router)
 app.include_router(audit_router)
 app.include_router(console_router)
 app.include_router(cost_anomalies_router)
-app.include_router(customer_health_router)
 app.include_router(dashboard_router)
 app.include_router(data_governance_router)
 app.include_router(config_router)
@@ -410,7 +409,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_provider_health_scheduler,
             install_usage_export_scheduler,
             install_cost_anomaly_scheduler,
-            install_customer_health_scheduler,
+            install_platform_customer_success_scheduler,
             install_customer_support_scheduler,
             install_developer_contract_scheduler,
             install_privacy_scheduler,

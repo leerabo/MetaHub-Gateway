@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -10,9 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
+from metahub_control.auth import require_customer_health_reader
 from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
-from metahub_control.auth.routes import router as auth_router
 from metahub_control.auth.service import AuthContext
 from metahub_control.customer_health import outbox as customer_health_outbox
 from metahub_control.customer_health import scheduler as customer_health_scheduler
@@ -35,16 +37,14 @@ from metahub_control.customer_health.service import (
 )
 from metahub_control.webhooks import service as webhook_service
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
-from metahub_shared.db.security import hash_password
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 from pydantic import ValidationError
 
 # 专项认证凭据只用于临时数据库；测试断言确保它们不会进入日志或正式证据。
-ADMIN_PASSWORD = "Prd086AdminTestOnly!2026"
-OPS_PASSWORD = "Prd086OpsTestOnly!2026"
-VIEWER_PASSWORD = "Prd086ViewerTestOnly!2026"
+ADMIN_PASSWORD = f"Prd086!Aa9{secrets.token_urlsafe(18)}"
 AUTH_SECRET = "prd086-auth-secret-" + "a" * 48
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 
 
 def _url(path: Path) -> str:
@@ -59,6 +59,11 @@ def seeded_0079(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     root = tmp_path_factory.mktemp("prd086-control-template")
     database = root / "seeded.sqlite3"
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 80:
+            shutil.copy2(source, migrations / source.name)
     names = {
         "METAHUB_SEED_ADMIN_PASSWORD": ADMIN_PASSWORD,
         "METAHUB_AUTH_TOKEN_SECRET": AUTH_SECRET,
@@ -67,7 +72,7 @@ def seeded_0079(tmp_path_factory: pytest.TempPathFactory) -> Path:
     previous = {name: os.environ.get(name) for name in names}
     os.environ.update(names)
     try:
-        result = apply_migrations(_url(database))
+        result = apply_migrations(_url(database), migrations_dir=migrations)
         assert result.applied[-1] == "0080"
         apply_seed_data(_url(database))
     finally:
@@ -387,25 +392,6 @@ async def test_route_enforces_backend_rbac_and_rejects_all_query(
     tenant_id = connection.execute(
         "SELECT tenant_id FROM tenants WHERE slug='default'"
     ).fetchone()[0]
-    created = "2026-08-17T00:00:00Z"
-    connection.executemany(
-        """
-        INSERT INTO users(
-          user_id,tenant_id,email,display_name,password_hash,role,status,created_at,updated_at
-        ) VALUES(?,?,?,?,?,?,'active',?,?)
-        """,
-        (
-            (
-                "user_prd086_ops", tenant_id, "ops@prd086.local", "PRD086 Ops",
-                hash_password(OPS_PASSWORD), "ops_admin", created, created,
-            ),
-            (
-                "user_prd086_viewer", tenant_id, "viewer@prd086.local", "PRD086 Viewer",
-                hash_password(VIEWER_PASSWORD), "viewer", created, created,
-            ),
-        ),
-    )
-    connection.commit()
     connection.close()
     app = create_service_app("control-plane-api", "PRD086 Control Test")
 
@@ -418,25 +404,29 @@ async def test_route_enforces_backend_rbac_and_rejects_all_query(
             response.headers["Cache-Control"] = "no-store, private"
         return response
 
-    app.include_router(auth_router)
+    contexts = {
+        "admin": _context(tenant_id, ("customer_health.read",)),
+        "ops": _context(tenant_id, ("customer_health.read",)),
+        "viewer": _context(tenant_id, ()),
+    }
+
+    def historical_reader(request: Request) -> AuthContext:
+        token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        context = contexts.get(token)
+        if context is None:
+            raise ApiError("auth.session_required")
+        if "customer_health.read" not in context.permission_codes:
+            raise ApiError("auth.permission_denied")
+        return context
+
+    app.dependency_overrides[require_customer_health_reader] = historical_reader
     app.include_router(customer_health_router)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://control"
     ) as client:
-        async def login(email: str, password: str) -> str:
-            """通过真实登录端点取得内存 Token，不把凭据写入任何验收证据。"""
-
-            response = await client.post(
-                "/auth/login",
-                json={"tenant_slug": "default", "email": email, "password": password},
-            )
-            assert response.status_code == 200, response.text
-            # Token 仅在当前请求作用域内使用，测试输出和断言均不打印其值。
-            return response.json()["access_token"]
-
-        admin = await login("admin@metahub.local", ADMIN_PASSWORD)
-        ops = await login("ops@prd086.local", OPS_PASSWORD)
-        viewer = await login("viewer@prd086.local", VIEWER_PASSWORD)
+        admin = "admin"
+        ops = "ops"
+        viewer = "viewer"
         admin_response = await client.get(
             "/customer-health", headers={"Authorization": f"Bearer {admin}"}
         )

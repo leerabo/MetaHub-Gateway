@@ -2,6 +2,7 @@
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import { renderChannelManagement } from "../channels/renderChannelManagement.js";
+import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -112,6 +113,13 @@ function renderView(state, permissions) {
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
   if (state.view === "releases") return developerContractsView(state, permissions);
   if (state.view === "channels") return renderChannelManagement(state, permissions);
+  if (state.view === "customer-success") {
+    return renderPlatformCustomerSuccess(
+      state.customerSuccess,
+      permissions,
+      state.session?.context,
+    );
+  }
   return domainPlaceholderView(state);
 }
 

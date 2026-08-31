@@ -18,8 +18,6 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
-from metahub_control.customer_health import service as customer_health_service
-
 from .models import PlatformResponseModel
 from .service import (
     PlatformContext,
@@ -85,9 +83,11 @@ SELECT state.workspace_id,state.tenant_id,state.status operational_status,
   COALESCE(organization.name,personal.display_label) display_name,
   organization.slug_normalized,region.region_code,region.residency_policy_version,
   data_state.lifecycle_status,
-  health.source_score_id,health.source_sequence,health.score_band,
-  health.risk_level health_risk_level,health.risk_tags_json health_risk_tags_json,
-  health.source_projection_sha256,health.source_evaluated_at,
+  customer_account.customer_account_id health_customer_account_id,
+  health.customer_health_snapshot_id source_score_id,health.source_sequence,
+  health.risk_level score_band,health.risk_level health_risk_level,
+  health.projection_sha256 source_projection_sha256,
+  health_snapshot.evaluated_at source_evaluated_at,
   (SELECT COUNT(*) FROM workspace_memberships member
     WHERE member.workspace_id=state.workspace_id AND member.status='active') member_count,
   (SELECT COUNT(*) FROM workspace_sessions session
@@ -121,7 +121,17 @@ LEFT JOIN workspace_regions region ON region.workspace_id=state.workspace_id
 LEFT JOIN organization_profiles organization ON organization.workspace_id=state.workspace_id
 LEFT JOIN personal_profiles personal ON personal.workspace_id=state.workspace_id
 LEFT JOIN tenant_data_states data_state ON data_state.tenant_id=state.tenant_id
-LEFT JOIN workspace_health_projections health ON health.workspace_id=state.workspace_id
+LEFT JOIN platform_customer_account_projections customer_account
+  ON customer_account.workspace_id=state.workspace_id
+ AND customer_account.tenant_id=state.tenant_id
+LEFT JOIN platform_customer_health_heads health
+  ON health.customer_account_id=customer_account.customer_account_id
+ AND health.workspace_id=state.workspace_id AND health.tenant_id=state.tenant_id
+LEFT JOIN platform_customer_health_snapshots health_snapshot
+  ON health_snapshot.customer_health_snapshot_id=health.customer_health_snapshot_id
+ AND health_snapshot.customer_account_id=health.customer_account_id
+ AND health_snapshot.workspace_id=health.workspace_id
+ AND health_snapshot.tenant_id=health.tenant_id
 """
 
 
@@ -1112,20 +1122,30 @@ def _health(
     if row["source_score_id"] is None:
         return WorkspaceHealthSummary(status="not_ready")
     source = connection.execute(
-        "SELECT * FROM customer_health_scores WHERE tenant_id=? AND customer_health_score_id=?",
-        (row["tenant_id"], row["source_score_id"]),
+        """SELECT * FROM platform_customer_health_snapshots
+            WHERE customer_account_id=? AND workspace_id=? AND tenant_id=?
+              AND customer_health_snapshot_id=?""",
+        (
+            row["health_customer_account_id"],
+            row["workspace_id"],
+            row["tenant_id"],
+            row["source_score_id"],
+        ),
     ).fetchone()
     try:
         if source is None:
             raise ValueError
-        _source_snapshot, projection = customer_health_service._validated_row(source)
-        source_tags = tuple(json.loads(row["health_risk_tags_json"]))
-        evaluated = _parse_time(row["source_evaluated_at"])
+        source_tags = tuple(
+            code
+            for code in _SOURCE_HEALTH_TAGS
+            if int(source[code]) == 1
+        )
+        evaluated = _parse_time(source["evaluated_at"])
         if (
-            row["source_projection_sha256"] != projection.health_projection_sha256
-            or row["score_band"] != projection.risk_level
-            or row["health_risk_level"] != projection.risk_level
-            or source_tags != projection.risk_tags
+            int(row["source_sequence"]) != int(source["customer_health_snapshot_sequence"])
+            or row["source_projection_sha256"] != source["health_projection_sha256"]
+            or row["score_band"] != source["risk_level"]
+            or row["health_risk_level"] != source["risk_level"]
             or evaluated > now
         ):
             raise ValueError
@@ -1137,9 +1157,9 @@ def _health(
     )
     return WorkspaceHealthSummary(
         status="stale" if evaluated < now - timedelta(hours=2) else "fresh",
-        score_band=projection.risk_level,
-        risk_level=projection.risk_level,
-        risk_tags=projection.risk_tags if can_view_tags else None,
+        score_band=source["risk_level"],
+        risk_level=source["risk_level"],
+        risk_tags=source_tags if can_view_tags else None,
         evaluated_at=evaluated,
     )
 
@@ -1207,9 +1227,9 @@ def _append_filters(
     if "health_status" in filters:
         now = _db_time(_utcnow())
         predicates.append(
-            "CASE WHEN health.workspace_id IS NULL THEN 'not_ready' "
-            "WHEN unixepoch(health.source_evaluated_at)>unixepoch(?) THEN 'unavailable' "
-            "WHEN unixepoch(?)-unixepoch(health.source_evaluated_at)>7200 THEN 'stale' "
+            "CASE WHEN health.customer_account_id IS NULL THEN 'not_ready' "
+            "WHEN unixepoch(health_snapshot.evaluated_at)>unixepoch(?) THEN 'unavailable' "
+            "WHEN unixepoch(?)-unixepoch(health_snapshot.evaluated_at)>7200 THEN 'stale' "
             "ELSE 'fresh' END=?"
         )
         parameters.extend((now, now, filters["health_status"]))

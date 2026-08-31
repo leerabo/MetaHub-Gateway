@@ -188,13 +188,6 @@ import {
   productAnalyticsReadIdentitySnapshot,
 } from "../features/product-analytics/productAnalyticsPageState.js";
 import { renderProductAnalytics } from "../features/product-analytics/renderProductAnalytics.js";
-import {
-  createCustomerHealthPageState,
-  customerHealthPageOwner,
-  customerHealthReadIdentitySnapshot,
-  isCustomerHealthAbortError,
-} from "../features/customer-health/customerHealthPageState.js";
-import { renderCustomerHealth } from "../features/customer-health/renderCustomerHealth.js";
 import { renderBrandingSettings } from "../features/branding/renderBrandingSettings.js";
 import { bindBrandingSettingsInteractions, clearBrandingSettingsDom } from "../features/branding/bindBrandingSettings.js";
 import {
@@ -633,7 +626,6 @@ import {
   getWebAuthnAssertion,
 } from "../lib/identity.js";
 import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
-import { getCustomerHealth } from "../lib/customerHealth.js";
 import {
   getBranding,
   getBrandingLogo,
@@ -1054,10 +1046,6 @@ const supportTicketPageState = createSupportTicketPageState({
 const productAnalyticsPageState = createProductAnalyticsPageState({
   clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
 });
-// PAGE-118 keeps only the current authorized tenant score; it never shares PAGE-117 request ownership.
-const customerHealthPageState = createCustomerHealthPageState({
-  clearDom: () => globalThis.document?.querySelector?.(".customer-health-panel")?.replaceChildren(),
-});
 // PAGE-119 owns branding, customer/commission aggregates, dialogs, and attachment lanes independently.
 const partnerPortalPageState = createPartnerPortalPageState({
   clearDom: () => clearPartnerPortalDom(globalThis.document),
@@ -1243,10 +1231,6 @@ if (app && globalThis.window) {
         // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
         productAnalyticsPageState.clear();
       }
-      if (nextItemId !== "customer-health") {
-        // PAGE-118 score and GET owner are destroyed synchronously at the hash boundary.
-        customerHealthPageState.clear();
-      }
       if (nextItemId !== "partner-portal") {
         // PAGE-119 clears visible branding and all private lanes before navigation work can complete.
         partnerPortalPageState.clear();
@@ -1319,7 +1303,6 @@ if (app && globalThis.window) {
       migrationOperationPageState.clear();
       supportTicketPageState.clear();
       productAnalyticsPageState.clear();
-      customerHealthPageState.clear();
       partnerPortalPageState.clear();
       brandingPageState.clear();
       experimentPageState.clear();
@@ -1452,7 +1435,6 @@ async function start() {
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
-    clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
@@ -1622,7 +1604,6 @@ async function performRefresh(options = {}) {
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
     clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
-    clearCustomerHealthStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
@@ -1920,10 +1901,6 @@ async function performRefresh(options = {}) {
   // PAGE-117 只属于后端确认的独立 capability 导航；撤权、换租户或离页立即销毁聚合与 GET。
   if (consoleShellState?.activeNavigationItemId !== "growth-analytics") {
     productAnalyticsPageState.clear();
-  }
-  // PAGE-118 is owned only by the backend-confirmed customer-health navigation and exact read capability.
-  if (consoleShellState?.activeNavigationItemId !== "customer-health") {
-    customerHealthPageState.clear();
   }
   // PAGE-119 exists only while the exact backend navigation owner and live read permission remain current.
   if (consoleShellState?.activeNavigationItemId !== "partner-portal") {
@@ -2254,7 +2231,6 @@ async function performRefresh(options = {}) {
     mcpToolsState,
     localEndpointsState,
     productAnalyticsState,
-    customerHealthState,
   ] = await Promise.all([
     loadFinOpsState(consoleShellState, refreshId),
     loadCostAnomaliesState(consoleShellState, refreshId),
@@ -2270,7 +2246,6 @@ async function performRefresh(options = {}) {
     loadMcpToolsState(consoleShellState, refreshId),
     loadLocalEndpointsState(consoleShellState, refreshId),
     loadProductAnalyticsState(consoleShellState, refreshId),
-    loadCustomerHealthState(consoleShellState, refreshId),
   ]);
   if (!authSession.token) {
     return;
@@ -2480,7 +2455,6 @@ async function performRefresh(options = {}) {
     mcpToolsState,
     localEndpointsState,
     productAnalyticsState,
-    customerHealthState,
     // PRD-139 moved partner access to the isolated Partner shell. Keep the
     // legacy renderer inert until its source is removed with PRD-147.
     partnerPortalState: null,
@@ -2783,9 +2757,6 @@ async function loadAndRenderActiveNavigation({
     case "growth-analytics":
       await load("productAnalyticsState", () => loadProductAnalyticsState(consoleShellState, refreshId));
       break;
-    case "customer-health":
-      await load("customerHealthState", () => loadCustomerHealthState(consoleShellState, refreshId));
-      break;
     case "branding":
       if (!shellMetadataPromise) await load("brandingState", () => loadBrandingState(refreshId));
       break;
@@ -2968,7 +2939,6 @@ function renderLogin(error, requestId) {
   migrationOperationPageState.clear();
   supportTicketPageState.clear();
   productAnalyticsPageState.clear();
-  customerHealthPageState.clear();
   partnerPortalPageState.clear();
   brandingPageState.clear();
   experimentPageState.clear();
@@ -3370,7 +3340,6 @@ function bindAuthenticatedEvents(consoleShellState) {
     migrationOperationPageState.clear();
     supportTicketPageState.clear();
     productAnalyticsPageState.clear();
-    customerHealthPageState.clear();
     partnerPortalPageState.clear();
     brandingPageState.clear();
     experimentPageState.clear();
@@ -3496,7 +3465,6 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
   bindProductAnalyticsInteractions(consoleShellState);
-  bindCustomerHealthInteractions(consoleShellState);
   bindPartnerPortalPageInteractions(consoleShellState);
   bindRoleDashboardInteractions(consoleShellState);
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
@@ -8401,63 +8369,6 @@ function handleProductAnalyticsAuthenticationFailure(error) {
   return false;
 }
 
-/** 从实时权限、后端导航和当前 hash 构造 PAGE-118 owner，任一不一致即失败关闭。 */
-function currentCustomerHealthOwner(consoleShellState) {
-  const owner = customerHealthPageOwner(authSession.context, consoleShellState);
-  return owner && readActiveNavigationHash() === "customer-health" ? owner : null;
-}
-
-/** 手动刷新后只重绘 PAGE-118；owner 已失效时保持面板为空且不接纳旧数据。 */
-function renderCurrentCustomerHealthPanel(consoleShellState) {
-  const panel = globalThis.document?.querySelector?.(".customer-health-panel");
-  const owner = currentCustomerHealthOwner(consoleShellState);
-  if (!panel || !owner || !customerHealthPageState.enter(owner)) return false;
-  panel.innerHTML = renderCustomerHealth(
-    customerHealthPageState.snapshot(),
-    authSession.context,
-    consoleShellState,
-    currentI18n,
-  );
-  bindCustomerHealthInteractions(consoleShellState);
-  return true;
-}
-
-/** PAGE-118 只绑定一次手动刷新命令，每次点击创建新的全局刷新代次。 */
-function bindCustomerHealthInteractions(consoleShellState) {
-  const owner = currentCustomerHealthOwner(consoleShellState);
-  if (!owner || !customerHealthPageState.enter(owner)) return false;
-  const button = globalThis.document?.querySelector?.("[data-customer-health-refresh]");
-  button?.addEventListener("click", async () => {
-    const generation = ++refreshSequence;
-    const pending = loadCustomerHealthState(consoleShellState, generation);
-    renderCurrentCustomerHealthPanel(consoleShellState);
-    const state = await pending;
-    if (state) renderCurrentCustomerHealthPanel(consoleShellState);
-  }, { once: true });
-  return Boolean(button);
-}
-
-/** 仅在调用方已证明 PAGE-118 票据仍有效时处理认证错误，迟到错误不得改变 Session。 */
-function handleCustomerHealthAuthenticationFailure(error) {
-  // 非认证错误留给页面固定错误投影，不能触发退出登录或权限刷新。
-  if (!(error instanceof AuthApiError)) return false;
-  // 当前 401 清空客户健康数据和登录态，防止失效 Session 继续发起控制面请求。
-  if (error.status === 401) {
-    customerHealthPageState.clear();
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error.requestId);
-    return true;
-  }
-  // 当前 403 清空页面并重新读取后端权限导航，前端不自行恢复入口。
-  if (error.status === 403) {
-    customerHealthPageState.clear();
-    globalThis.window?.setTimeout?.(() => void refresh(), 0);
-    return true;
-  }
-  return false;
-}
-
 /** Build PAGE-119 owner only from the exact live RBAC/navigation snapshot and current hash. */
 function currentPartnerPortalOwner(consoleShellState) {
   const owner = partnerPortalPageOwner(authSession.context, consoleShellState);
@@ -13160,10 +13071,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "growth-analytics") {
     // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
     productAnalyticsPageState.clear();
-  }
-  if (itemId !== "customer-health") {
-    // Destroy the PAGE-118 ticket before the navigation preference request can race it.
-    customerHealthPageState.clear();
   }
   if (itemId !== "partner-portal") {
     // PAGE-119 attachment/object state and branding are destroyed before the navigation preference request.
@@ -18723,40 +18630,6 @@ async function loadProductAnalyticsState(consoleShellState, refreshId) {
   }
 }
 
-/** 读取 PAGE-118 评分，并丢弃 owner 或刷新代次已过期的全部响应。 */
-async function loadCustomerHealthState(consoleShellState, refreshId) {
-  const owner = currentCustomerHealthOwner(consoleShellState);
-  if (!owner || refreshId !== refreshSequence || !customerHealthPageState.enter(owner)) return null;
-  const operation = customerHealthPageState.beginLoad(owner, refreshId);
-  // 没有有效票据或 Token 时不得向控制面发起客户健康请求。
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await getCustomerHealth({
-      controlApiUrl,
-      token: authSession.token,
-      tenantId: owner.tenantId,
-      signal: operation.controller.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const currentOwner = currentCustomerHealthOwner(consoleShellState);
-    customerHealthPageState.accept(operation, result, currentOwner, refreshId);
-    return customerHealthPageState.snapshot();
-  } catch (error) {
-    const currentOwner = currentCustomerHealthOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !customerHealthPageState.isCurrent(operation, currentOwner, refreshId)
-      || isCustomerHealthAbortError(error)
-    ) return null;
-    // 只有当前 401/403 能改变认证状态；当前 422/503 仅形成脱敏页面错误。
-    if (handleCustomerHealthAuthenticationFailure(error)) return null;
-    customerHealthPageState.reject(operation, error, currentOwner, refreshId);
-    return customerHealthPageState.snapshot();
-  } finally {
-    customerHealthPageState.finish(operation);
-  }
-}
-
 /** Load PAGE-119 profile first, then its independent project/customer/commission lanes. */
 async function loadPartnerPortalState(consoleShellState, refreshId) {
   const owner = currentPartnerPortalOwner(consoleShellState);
@@ -20519,13 +20392,6 @@ function clearProductAnalyticsStateOnIdentityChange(previous, current) {
   // 读取身份快照变化代表 owner 边界变化，必须同步清空旧租户 DOM 并触发 Abort。
   if (productAnalyticsReadIdentitySnapshot(previous) !== productAnalyticsReadIdentitySnapshot(current)) {
     productAnalyticsPageState.clear();
-  }
-}
-
-/** Destroy PAGE-118 data when tenant, user, Session, role, revision, permission set, or fingerprint changes. */
-function clearCustomerHealthStateOnIdentityChange(previous, current) {
-  if (customerHealthReadIdentitySnapshot(previous) !== customerHealthReadIdentitySnapshot(current)) {
-    customerHealthPageState.clear();
   }
 }
 

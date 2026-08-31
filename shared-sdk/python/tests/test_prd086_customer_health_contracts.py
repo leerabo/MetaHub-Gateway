@@ -64,47 +64,29 @@ def _build(payload: dict[str, object], **changes: object):
     return build_webhook_event(**values)
 
 
-def test_prd086_rbac_revision_and_default_roles_are_exact() -> None:
-    """确认 revision 21 只向 admin 与 ops_admin 默认增加客户健康读取。"""
+def test_prd140_retires_prd086_tenant_permission() -> None:
+    """PRD-140 切换后，企业目录和全部默认角色都不再暴露旧健康读取。"""
 
-    permission = PERMISSION_BY_CODE["customer_health.read"]
     assert CATALOG_REVISION >= 21
-    assert len(PERMISSION_CATALOG) >= 90
-    assert (
-        permission.category,
-        permission.name,
-        permission.description,
-        permission.risk_level,
-    ) == (
-        "analytics",
-        "读取客户健康评分",
-        "读取当前租户确定性客户健康评分、聚合信号与可解释建议。",
-        "read",
-    )
-    assert "customer_health.read" in ROLE_GRANTABLE_PERMISSIONS["admin"]
-    assert "customer_health.read" in ROLE_GRANTABLE_PERMISSIONS["ops_admin"]
-    for role in ("developer", "viewer", "finance_admin", "security_admin"):
+    assert len(PERMISSION_CATALOG) >= 89
+    assert "customer_health.read" not in PERMISSION_BY_CODE
+    for role in ROLE_GRANTABLE_PERMISSIONS:
         assert "customer_health.read" not in ROLE_GRANTABLE_PERMISSIONS[role]
 
 
-def test_prd086_role_matrix_hashes_are_exact() -> None:
-    """确认 revision 21 六个固定角色矩阵摘要没有静默漂移。"""
+def test_prd140_contracted_role_matrix_hashes_are_exact() -> None:
+    """确认移除旧权限后的六个完整角色矩阵摘要没有静默漂移。"""
 
     assert {
-        role: permission_matrix_sha256(
-            permission
-            for permission in permissions
-            if not permission.startswith("partner_")
-            and not permission.startswith("branding.")
-        )
+        role: permission_matrix_sha256(permissions)
         for role, permissions in ROLE_GRANTABLE_PERMISSIONS.items()
     } == {
-        "admin": "49c3be24e085e091cc3c3bf3b8411ed6a783486050d484edec112ed63bee8de5",
-        "developer": "ee1bc616db2e67a2ddf1e984b938c92033ed3d486ea0b9f52300c2579dc943b1",
-        "viewer": "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9",
-        "finance_admin": "86b64ca3b997f5fa252f027ecf07430e677252e6d2c17677b72ac049130cba8c",
-        "security_admin": "aeb4d6b081dce8ed36c6513b567aba4be395816c5a5ad2f1d939527a50ad14df",
-        "ops_admin": "1f8c90dfb94af73874a8ef3e5470991d36bd7533940adbdbfcbb0e9c6a878783",
+        "admin": "9af89117d6e3eb365c9c90f61778d0fe7408d03a50a6cd32a0d6eb4e61e772fb",
+        "developer": "888796e8f30b282353452e012ba5132476a59ffb2509eded4cb44d8e8de5b686",
+        "viewer": "be55018029cd884b139e7e919a0f7052a94c8ca1ae5120fcb499e1b8754837af",
+        "finance_admin": "843de9cd51726438ebf668ab413a126b31c429a26b7ee306a394bca4435764fc",
+        "security_admin": "7bece4007f6bb8affcfa72d1db73ddc12b71d4bb85f874ad440736e63e596dbb",
+        "ops_admin": "71c49cf7d47d0a5092eb50c3727cb93a1409f2f1fe3359d47e477c2f6eefdc6b",
     }
 
 

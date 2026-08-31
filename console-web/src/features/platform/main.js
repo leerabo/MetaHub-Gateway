@@ -182,6 +182,13 @@ import {
   registerChannelLead,
   requestChannelAttribution,
 } from "../../lib/channelManagement.js";
+import {
+  applyPlatformCustomerSuccessPlan,
+  applyPlatformCustomerTask,
+  getPlatformCustomerHealth,
+  listPlatformCustomerAccounts,
+  listPlatformRenewalPipeline,
+} from "../../lib/platformCustomerSuccess.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
@@ -208,6 +215,11 @@ if (root) {
       session: (input) => getPlatformSession({ controlApiUrl, ...input }),
       openSession: (input) => openPlatformSession({ controlApiUrl, ...input }),
       navigation: (input) => getPlatformNavigation({ controlApiUrl, ...input }),
+      customerAccounts: (input) => listPlatformCustomerAccounts({ controlApiUrl, ...input }),
+      customerHealth: (input) => getPlatformCustomerHealth({ controlApiUrl, ...input }),
+      customerPlan: (input) => applyPlatformCustomerSuccessPlan({ controlApiUrl, ...input }),
+      customerTask: (input) => applyPlatformCustomerTask({ controlApiUrl, ...input }),
+      customerRenewals: (input) => listPlatformRenewalPipeline({ controlApiUrl, ...input }),
       workspaces: (input) => listPlatformWorkspaces({ controlApiUrl, ...input }),
       workspace: (input) => getPlatformWorkspace({ controlApiUrl, ...input }),
       workspaceHealth: (input) => getPlatformWorkspaceHealth({ controlApiUrl, ...input }),

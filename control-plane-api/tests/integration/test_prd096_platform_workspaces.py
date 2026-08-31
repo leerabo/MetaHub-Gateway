@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import shutil
 import struct
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 from metahub_control.auth.routes import router as auth_router
-from metahub_control.customer_health.service import SourceSnapshot, materialize_customer_health
+from metahub_control.customer_health.service import SourceSnapshot
 from metahub_control.identity import service as identity_service
 from metahub_control.identity.delivery import (
     clear_test_identity_challenges,
@@ -26,6 +27,7 @@ from metahub_control.platform_access import service as platform_service
 from metahub_control.platform_access import workspace_service
 from metahub_control.platform_access.constants import PLATFORM_CSRF_COOKIE
 from metahub_control.platform_access.routes import router as platform_router
+from metahub_control.platform_customer_success import projection as customer_success_projection
 from metahub_control.workspace_access.routes import router as workspace_access_router
 from metahub_control.workspaces.routes import router as workspaces_router
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
@@ -33,8 +35,8 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 
 ORIGIN = "http://localhost:5173"
 ADMIN_EMAIL = "admin@metahub.local"
-ADMIN_PASSWORD = "LocalAdmin!2026"
-RECOVERY_SECRET = "offline-bootstrap-recovery-secret-0123456789abcdef"
+ADMIN_PASSWORD = f"Aa9!{secrets.token_urlsafe(24)}"
+RECOVERY_SECRET = secrets.token_urlsafe(32)
 GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 
 
@@ -42,7 +44,7 @@ GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd096-api-migrated") / "platform-workspaces.sqlite3"
     result = apply_migrations(f"sqlite:///{database.as_posix()}")
-    assert "0088" in result.applied
+    assert result.applied[-1] == "0132"
     return database
 
 
@@ -165,7 +167,7 @@ async def _register_platform_operator(
     role: str,
 ) -> AsyncClient:
     client = AsyncClient(transport=transport, base_url="https://testserver")
-    password = "PlatformRole!2026"
+    password = f"Aa9!{secrets.token_urlsafe(24)}"
     started = await client.post(
         "/identity/registrations",
         json={
@@ -590,23 +592,29 @@ async def test_health_projection_fresh_stale_and_bad_source_fail_closed(
                 activation_stage_count=7,
                 evaluated_at=evaluated.isoformat().replace("+00:00", "Z"),
             )
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                UPDATE customer_health_scheduler_tenants
-                SET status='leased',generation=generation+1,lease_owner_id='prd096-test',
-                  lease_token=?,lease_expires_at=?,last_error_code=NULL,updated_at=?
-                WHERE tenant_id=? AND status='pending'
-                """,
-                (
-                    "a" * 64,
-                    (evaluated + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
-                    evaluated.isoformat().replace("+00:00", "Z"),
-                    tenant_id,
-                ),
+            monkeypatch.setattr(
+                customer_success_projection,
+                "collect_source_snapshot",
+                lambda *_args, **_kwargs: source,
             )
-            score_id, inserted, _outbox_created = materialize_customer_health(connection, source)
-            assert inserted is True
+            monkeypatch.setattr(
+                customer_success_projection,
+                "_support_counts",
+                lambda *_args, **_kwargs: (0, 0, 0, 0, 0, 0),
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            assert customer_success_projection.reconcile_accounts(
+                connection, now=evaluated
+            ) >= 1
+            account_id = connection.execute(
+                """SELECT customer_account_id FROM platform_customer_account_projections
+                    WHERE workspace_id=? AND tenant_id=?""",
+                (workspace_id, tenant_id),
+            ).fetchone()[0]
+            score_id = customer_success_projection.materialize_health_v2(
+                connection, account_id, now=evaluated
+            )
+            assert score_id is not None
             connection.commit()
         finally:
             connection.close()
@@ -625,10 +633,10 @@ async def test_health_projection_fresh_stale_and_bad_source_fail_closed(
 
         connection = connect_database(database_url)
         try:
-            connection.execute("DROP TRIGGER trg_customer_health_scores_update_prd086")
+            connection.execute("DROP TRIGGER trg_platform_customer_health_update_prd140")
             connection.execute(
-                "UPDATE customer_health_scores SET health_projection_sha256=? "
-                "WHERE customer_health_score_id=?",
+                "UPDATE platform_customer_health_snapshots SET health_projection_sha256=? "
+                "WHERE customer_health_snapshot_id=?",
                 ("f" * 64, score_id),
             )
             connection.commit()
