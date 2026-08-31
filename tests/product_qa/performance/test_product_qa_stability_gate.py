@@ -24,6 +24,7 @@ def test_stability_config_has_short_and_long_profiles_without_credentials() -> N
     assert config["profiles"]["short_stability"]["duration_seconds"] < 60
     assert config["profiles"]["long_stability"]["duration_seconds"] == 14400
     assert config["profiles"]["long_stability"]["request_interval_seconds"] == 0.5
+    assert config["profiles"]["long_stability"]["observation_bucket_seconds"] == 10
     assert config["profiles"]["long_stability"]["requests"] >= 100_000
     assert config["profiles"]["long_stability"]["maximum_observation_gap_seconds"] <= 10
     assert all("@" not in target and "?" not in target for target in config["targets"])

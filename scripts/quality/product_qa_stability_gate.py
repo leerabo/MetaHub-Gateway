@@ -94,6 +94,7 @@ def run_gate(
             duration_seconds=float(profile["duration_seconds"]),
             timeout_seconds=float(profile["timeout_seconds"]),
             request_interval_seconds=float(profile.get("request_interval_seconds", 0)),
+            observation_bucket_seconds=float(profile.get("observation_bucket_seconds", 0)),
         )
     observed_seconds = float(result["wall_seconds"])
     passed = (
@@ -114,10 +115,20 @@ def run_gate(
         "requests": result["requests"],
         "successes": result["successes"],
         "errors": result["errors"],
+        "error_counts": result["error_counts"],
+        "system_error_counts": result["system_error_counts"],
         "throughput_rps": result["throughput_rps"],
         "max_observation_gap_seconds": result["max_observation_gap_seconds"],
         "sleep_prevention_active": sleep_prevention_active,
         "targets": result["targets"],
+        **(
+            {
+                "observation_bucket_seconds": result["observation_bucket_seconds"],
+                "time_buckets": result["time_buckets"],
+            }
+            if "time_buckets" in result
+            else {}
+        ),
     }
 
 

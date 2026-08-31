@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 import threading
 import time
@@ -47,6 +48,8 @@ class Sample:
     elapsed_ms: float
     status_code: int | None
     error_kind: str | None
+    observed_offset_seconds: float = 0.0
+    system_error_code: str | None = None
 
 
 def _safe_target(raw: str) -> Target:
@@ -75,7 +78,102 @@ def _percentile(values: list[float], percentile: float) -> float | None:
     return round(ordered[position], 3)
 
 
-def summarize(samples: list[Sample], *, wall_seconds: float) -> dict[str, Any]:
+def _snake_case_type_name(exception: BaseException) -> str:
+    """Return a stable exception class label without retaining its message."""
+
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", type(exception).__name__).lower()
+
+
+def _classify_http_error(exception: httpx.HTTPError) -> tuple[str, str | None]:
+    """Classify an HTTPX failure using only safe type and numeric OS facts."""
+
+    system_error_code: str | None = None
+    current: BaseException | None = exception
+    visited: set[int] = set()
+    for _ in range(8):
+        if current is None or id(current) in visited:
+            break
+        visited.add(id(current))
+        if isinstance(current, OSError):
+            winerror = getattr(current, "winerror", None)
+            errno = getattr(current, "errno", None)
+            if isinstance(winerror, int):
+                system_error_code = f"winerror_{winerror}"
+                break
+            if isinstance(errno, int):
+                system_error_code = f"errno_{errno}"
+                break
+        current = current.__cause__ or current.__context__
+    return _snake_case_type_name(exception), system_error_code
+
+
+def _sample_succeeded(sample: Sample) -> bool:
+    return (
+        sample.error_kind is None
+        and sample.status_code is not None
+        and 200 <= sample.status_code < 300
+    )
+
+
+def _sample_error_kind(sample: Sample) -> str | None:
+    if sample.error_kind:
+        return sample.error_kind
+    if sample.status_code is not None and not 200 <= sample.status_code < 300:
+        return f"http_status_{sample.status_code}"
+    return None
+
+
+def _time_buckets(samples: list[Sample], *, bucket_seconds: float) -> list[dict[str, Any]]:
+    """Aggregate chronology without retaining per-request details."""
+
+    buckets: dict[int, list[Sample]] = {}
+    for sample in samples:
+        bucket_index = max(0, int(sample.observed_offset_seconds // bucket_seconds))
+        buckets.setdefault(bucket_index, []).append(sample)
+
+    result: list[dict[str, Any]] = []
+    for bucket_index in sorted(buckets):
+        bucket_samples = buckets[bucket_index]
+        errors = [sample for sample in bucket_samples if not _sample_succeeded(sample)]
+        target_counts: dict[str, dict[str, int]] = {}
+        for sample in bucket_samples:
+            target = target_counts.setdefault(sample.target, {"requests": 0, "errors": 0})
+            target["requests"] += 1
+            if not _sample_succeeded(sample):
+                target["errors"] += 1
+        result.append(
+            {
+                "start_offset_seconds": round(bucket_index * bucket_seconds, 3),
+                "requests": len(bucket_samples),
+                "successes": len(bucket_samples) - len(errors),
+                "errors": len(errors),
+                "error_counts": dict(
+                    sorted(
+                        Counter(
+                            error_kind
+                            for sample in errors
+                            if (error_kind := _sample_error_kind(sample)) is not None
+                        ).items()
+                    )
+                ),
+                "system_error_counts": dict(
+                    sorted(
+                        Counter(
+                            sample.system_error_code
+                            for sample in errors
+                            if sample.system_error_code
+                        ).items()
+                    )
+                ),
+                "targets": dict(sorted(target_counts.items())),
+            }
+        )
+    return result
+
+
+def summarize(
+    samples: list[Sample], *, wall_seconds: float, observation_bucket_seconds: float = 0.0
+) -> dict[str, Any]:
     """Return a redacted, JSON-serializable aggregate report."""
 
     by_target: dict[str, list[Sample]] = {}
@@ -88,11 +186,18 @@ def summarize(samples: list[Sample], *, wall_seconds: float) -> dict[str, Any]:
         status_counts = Counter(
             str(sample.status_code) for sample in target_samples if sample.status_code is not None
         )
-        error_counts = Counter(sample.error_kind for sample in target_samples if sample.error_kind)
+        error_counts = Counter(
+            error_kind
+            for sample in target_samples
+            if (error_kind := _sample_error_kind(sample)) is not None
+        )
+        system_error_counts = Counter(
+            sample.system_error_code for sample in target_samples if sample.system_error_code
+        )
         success_count = sum(
             1
             for sample in target_samples
-            if sample.status_code is not None and 200 <= sample.status_code < 300
+            if _sample_succeeded(sample)
         )
         targets.append(
             {
@@ -102,6 +207,7 @@ def summarize(samples: list[Sample], *, wall_seconds: float) -> dict[str, Any]:
                 "errors": len(target_samples) - success_count,
                 "status_counts": dict(sorted(status_counts.items())),
                 "error_counts": dict(sorted(error_counts.items())),
+                "system_error_counts": dict(sorted(system_error_counts.items())),
                 "latency_ms": {
                     "min": round(min(latencies), 3) if latencies else None,
                     "p50": _percentile(latencies, 0.50),
@@ -113,16 +219,38 @@ def summarize(samples: list[Sample], *, wall_seconds: float) -> dict[str, Any]:
         )
     total = len(samples)
     successes = sum(item["successes"] for item in targets)
-    return {
+    report = {
         "schema": "metahub.product-qa.performance.v1",
         "mode": "loopback-read-only-http",
         "wall_seconds": round(wall_seconds, 3),
         "requests": total,
         "successes": successes,
         "errors": total - successes,
+        "error_counts": dict(
+            sorted(
+                Counter(
+                    error_kind
+                    for sample in samples
+                    if (error_kind := _sample_error_kind(sample)) is not None
+                ).items()
+            )
+        ),
+        "system_error_counts": dict(
+            sorted(
+                Counter(
+                    sample.system_error_code for sample in samples if sample.system_error_code
+                ).items()
+            )
+        ),
         "throughput_rps": round(total / wall_seconds, 3) if wall_seconds else 0.0,
         "targets": targets,
     }
+    if observation_bucket_seconds > 0:
+        report["observation_bucket_seconds"] = observation_bucket_seconds
+        report["time_buckets"] = _time_buckets(
+            samples, bucket_seconds=observation_bucket_seconds
+        )
+    return report
 
 
 def run_loopback_smoke(
@@ -133,6 +261,7 @@ def run_loopback_smoke(
     duration_seconds: float,
     timeout_seconds: float,
     request_interval_seconds: float = 0.0,
+    observation_bucket_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """Cycle validated targets with bounded concurrency and no response-body reads."""
 
@@ -142,6 +271,7 @@ def run_loopback_smoke(
         or duration_seconds < 0
         or timeout_seconds <= 0
         or request_interval_seconds < 0
+        or observation_bucket_seconds < 0
     ):
         raise ValueError("requests/concurrency must be positive; duration must be non-negative")
     if not targets:
@@ -178,20 +308,27 @@ def run_loopback_smoke(
                         elapsed_ms=(time.perf_counter() - observation_started) * 1000,
                         status_code=response.status_code,
                         error_kind=None,
+                        observed_offset_seconds=time.perf_counter() - started,
                     )
-                except httpx.TimeoutException:
+                except httpx.TimeoutException as exc:
+                    error_kind, system_error_code = _classify_http_error(exc)
                     sample = Sample(
                         target.name,
                         (time.perf_counter() - observation_started) * 1000,
                         None,
-                        "timeout",
+                        error_kind,
+                        time.perf_counter() - started,
+                        system_error_code,
                     )
-                except httpx.HTTPError:
+                except httpx.HTTPError as exc:
+                    error_kind, system_error_code = _classify_http_error(exc)
                     sample = Sample(
                         target.name,
                         (time.perf_counter() - observation_started) * 1000,
                         None,
-                        "http_error",
+                        error_kind,
+                        time.perf_counter() - started,
+                        system_error_code,
                     )
                 observation_completed = time.perf_counter()
                 with sample_lock:
@@ -213,7 +350,11 @@ def run_loopback_smoke(
         start_gate.set()
         for future in futures:
             future.result()
-    report = summarize(samples, wall_seconds=time.perf_counter() - started)
+    report = summarize(
+        samples,
+        wall_seconds=time.perf_counter() - started,
+        observation_bucket_seconds=observation_bucket_seconds,
+    )
     report["max_observation_gap_seconds"] = round(max_observation_gap_seconds, 3)
     return report
 

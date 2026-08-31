@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from metahub_control.app import app as control_app
@@ -17,7 +18,13 @@ from metahub_shared.db.connection import (
     database_request_scope,
 )
 
-from scripts.quality.product_qa_performance import Sample, Target, _safe_target, summarize
+from scripts.quality.product_qa_performance import (
+    Sample,
+    Target,
+    _classify_http_error,
+    _safe_target,
+    summarize,
+)
 
 
 async def _asgi_health_samples(app, *, target: str, count: int = 12) -> list[Sample]:
@@ -92,6 +99,32 @@ def test_perf_report_is_aggregate_and_does_not_retain_response_bodies() -> None:
     assert report["errors"] == 1
     assert "response" not in serialized.lower()
     assert report["targets"][0]["status_counts"] == {"200": 1}
+
+
+def test_perf_diagnostics_keep_only_safe_error_classes_codes_and_time_buckets() -> None:
+    system_error = OSError("message must not be retained")
+    system_error.winerror = 10061  # type: ignore[attr-defined]
+    http_error = httpx.ConnectError("url and message must not be retained")
+    http_error.__cause__ = system_error
+
+    error_kind, system_error_code = _classify_http_error(http_error)
+    report = summarize(
+        [
+            Sample("control", 2.0, 200, None, 1.0),
+            Sample("control", 4.0, None, error_kind, 12.0, system_error_code),
+            Sample("control", 3.0, 503, None, 15.0),
+        ],
+        wall_seconds=20.0,
+        observation_bucket_seconds=10.0,
+    )
+
+    assert report["errors"] == 2
+    assert report["error_counts"] == {"connect_error": 1, "http_status_503": 1}
+    assert report["system_error_counts"] == {"winerror_10061": 1}
+    assert report["time_buckets"][1]["errors"] == 2
+    serialized = repr(report)
+    assert "message must not be retained" not in serialized
+    assert "url and message must not be retained" not in serialized
 
 
 def test_perf_runner_rejects_non_loopback_or_credential_targets() -> None:

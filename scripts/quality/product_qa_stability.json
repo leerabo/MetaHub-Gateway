@@ -12,6 +12,7 @@
       "duration_seconds": 8,
       "timeout_seconds": 3,
       "request_interval_seconds": 0,
+      "observation_bucket_seconds": 1,
       "minimum_observed_seconds": 7,
       "maximum_observation_gap_seconds": 10
     },
@@ -21,6 +22,7 @@
       "duration_seconds": 14400,
       "timeout_seconds": 5,
       "request_interval_seconds": 0.5,
+      "observation_bucket_seconds": 10,
       "minimum_observed_seconds": 14000,
       "maximum_observation_gap_seconds": 10
     }
