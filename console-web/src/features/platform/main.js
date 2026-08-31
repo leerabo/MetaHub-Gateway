@@ -174,6 +174,14 @@ import {
   submitLaunchEvidence,
   verifyLaunchRollback,
 } from "../../lib/launchGovernance.js";
+import {
+  approveChannelAttribution,
+  commandChannelPartner,
+  listChannelPartners,
+  listChannelStatements,
+  registerChannelLead,
+  requestChannelAttribution,
+} from "../../lib/channelManagement.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
@@ -395,6 +403,18 @@ if (root) {
       reviewLaunchCandidate: (input) => reviewLaunchCandidate({ controlApiUrl, ...input }),
       requestLaunchRollback: (input) => requestLaunchRollback({ controlApiUrl, ...input }),
       verifyLaunchRollback: (input) => verifyLaunchRollback({ controlApiUrl, ...input }),
+      channelPartners: (input) => listChannelPartners({ controlApiUrl, ...input }),
+      channelStatements: (input) => listChannelStatements({ controlApiUrl, ...input }),
+      commandChannelPartner: (input) => commandChannelPartner({ controlApiUrl, ...input }),
+      registerChannelLead: (input) => registerChannelLead({ controlApiUrl, ...input }),
+      requestChannelAttribution: (input) => requestChannelAttribution({
+        controlApiUrl,
+        ...input,
+      }),
+      approveChannelAttribution: (input) => approveChannelAttribution({
+        controlApiUrl,
+        ...input,
+      }),
       decideOfflineBundle: (input) => decidePlatformOfflineBundle({
         controlApiUrl,
         ...input,

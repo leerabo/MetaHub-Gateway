@@ -79,6 +79,16 @@ export function createPlatformPageController({
     securityAssuranceIntent: null,
     launchGovernance: null,
     launchIntent: null,
+    channels: null,
+    channelFilters: { status: "", tierCode: "", regionScope: "" },
+    channelOffset: 0,
+    channelStatements: null,
+    channelStatementFilters: { partnerId: "", currency: "" },
+    channelStatementOffset: 0,
+    channelIntent: null,
+    channelIssuedReferral: null,
+    channelLatestLead: null,
+    channelLatestAttribution: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -220,6 +230,7 @@ export function createPlatformPageController({
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
         || state.securityAssuranceIntent || state.launchIntent
+        || state.channelIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const ticket = begin();
@@ -249,6 +260,7 @@ export function createPlatformPageController({
         || state.capacityIntent || state.providerCatalogPublishIntent
         || state.developerContractIntent
         || state.securityAssuranceIntent || state.launchIntent
+        || state.channelIntent
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
@@ -257,6 +269,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
+        "channels",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -295,6 +308,8 @@ export function createPlatformPageController({
         } else if (state.view === "launch-gates") {
           state.launchGovernance = null;
           state.launchIntent = null;
+        } else if (state.view === "channels") {
+          clearChannelFacts();
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -367,6 +382,9 @@ export function createPlatformPageController({
       if (state.view === "launch-gates" && !state.launchGovernance) {
         void loadLaunchGates();
       }
+      if (state.view === "channels" && !state.channels && !state.channelStatements) {
+        void loadChannelManagement();
+      }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
       if (state.view === "edge-upgrades"
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
@@ -380,6 +398,226 @@ export function createPlatformPageController({
       if (state.view === "compliance" && !state.complianceControls) {
         void loadComplianceControls();
       }
+    },
+    async refreshChannels() {
+      if (state.view !== "channels") return false;
+      return loadChannelManagement();
+    },
+    async filterChannels(filters = {}) {
+      if (state.view !== "channels") return false;
+      state.channelFilters = {
+        status: String(filters.status ?? ""),
+        tierCode: String(filters.tierCode ?? ""),
+        regionScope: String(filters.regionScope ?? ""),
+      };
+      state.channelOffset = 0;
+      state.channels = null;
+      return loadChannelManagement();
+    },
+    async nextChannelPage() {
+      const response = state.channels;
+      if (state.view !== "channels" || !response
+        || response.offset + response.limit >= response.total) return false;
+      state.channelOffset = response.offset + response.limit;
+      return loadChannelManagement();
+    },
+    async previousChannelPage() {
+      const response = state.channels;
+      if (state.view !== "channels" || !response || response.offset === 0) return false;
+      state.channelOffset = Math.max(0, response.offset - response.limit);
+      return loadChannelManagement();
+    },
+    async filterChannelStatements(filters = {}) {
+      if (state.view !== "channels") return false;
+      state.channelStatementFilters = {
+        partnerId: String(filters.partnerId ?? "").trim(),
+        currency: String(filters.currency ?? ""),
+      };
+      state.channelStatementOffset = 0;
+      state.channelStatements = null;
+      return loadChannelManagement();
+    },
+    async nextChannelStatementPage() {
+      const response = state.channelStatements;
+      if (state.view !== "channels" || !response
+        || response.offset + response.limit >= response.total) return false;
+      state.channelStatementOffset = response.offset + response.limit;
+      return loadChannelManagement();
+    },
+    async previousChannelStatementPage() {
+      const response = state.channelStatements;
+      if (state.view !== "channels" || !response || response.offset === 0) return false;
+      state.channelStatementOffset = Math.max(0, response.offset - response.limit);
+      return loadChannelManagement();
+    },
+    dismissChannelReferral() {
+      state.channelIssuedReferral = null;
+      render();
+      return true;
+    },
+    async createChannelPartner(input = {}) {
+      const command = {
+        operation: "create",
+        owner_workspace_id: input.ownerWorkspaceId,
+        owner_account_id: input.ownerAccountId,
+        partner_code: input.partnerCode,
+        display_name: input.displayName,
+        tier_code: input.tierCode,
+        region_scope: input.regionScope,
+        contract_sha256: input.contractSha256,
+        confirmed: input.confirmed === true,
+      };
+      return channelWrite({
+        permission: "platform.channel.manage",
+        apiMethod: "commandChannelPartner",
+        operation: "partner.create",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        actionCode: "channel.partner.create",
+        resourceType: "workspace",
+        resourceId: input.ownerWorkspaceId,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.commandChannelPartner({
+          command, expectedRevision: 0, stepUpGrant, idempotencyKey, signal,
+        }),
+        accept: (response) => {
+          state.channelIssuedReferral = response.issued_referral_code;
+        },
+        message: "Channel partner created.",
+      });
+    },
+    async updateChannelPartner(input = {}) {
+      const command = {
+        operation: "update",
+        channel_partner_id: input.partnerId,
+        expected_revision: Number(input.expectedRevision),
+        display_name: input.displayName,
+        tier_code: input.tierCode,
+        region_scope: input.regionScope,
+        status: input.status,
+        confirmed: input.confirmed === true,
+      };
+      return channelPartnerWrite(input, command, "partner.update", "Channel partner updated.");
+    },
+    async upsertChannelMembership(input = {}) {
+      const command = {
+        operation: "upsert_membership",
+        channel_partner_id: input.partnerId,
+        expected_revision: Number(input.expectedRevision),
+        account_id: input.accountId,
+        role_code: input.roleCode,
+        confirmed: input.confirmed === true,
+      };
+      return channelPartnerWrite(input, command, "membership.upsert", "Membership updated.");
+    },
+    async revokeChannelMembership(input = {}) {
+      const command = {
+        operation: "revoke_membership",
+        channel_partner_id: input.partnerId,
+        expected_revision: Number(input.expectedRevision),
+        channel_membership_id: input.membershipId,
+        confirmed: input.confirmed === true,
+      };
+      return channelPartnerWrite(input, command, "membership.revoke", "Membership revoked.");
+    },
+    async rotateChannelReferral(input = {}) {
+      const command = {
+        operation: "rotate_referral_code",
+        channel_partner_id: input.partnerId,
+        expected_revision: Number(input.expectedRevision),
+        referral_code: input.referralCode,
+        expires_at: input.expiresAt || null,
+        usage_limit: input.usageLimit === null ? null : Number(input.usageLimit),
+        confirmed: input.confirmed === true,
+      };
+      return channelPartnerWrite(input, command, "referral.rotate", "Referral code rotated.",
+        (response) => { state.channelIssuedReferral = response.issued_referral_code; });
+    },
+    async registerChannelLead(input = {}) {
+      const command = {
+        channel_partner_id: input.partnerId,
+        expected_revision: Number(input.expectedRevision),
+        lead_code: input.leadCode,
+        referral_code: null,
+        region_code: input.regionCode,
+        contact_email: input.contactEmail || null,
+        contact_phone: input.contactPhone || null,
+        source_sha256: input.sourceSha256,
+        candidate_workspace_id: input.candidateWorkspaceId || null,
+        confirmed: input.confirmed === true,
+      };
+      return channelWrite({
+        permission: "platform.channel.lead.register",
+        apiMethod: "registerChannelLead",
+        operation: "lead.register",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        actionCode: "channel.lead.register",
+        resourceType: "channel_partner",
+        resourceId: input.partnerId,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.registerChannelLead({
+          command, stepUpGrant, idempotencyKey, signal,
+        }),
+        accept: (response) => { state.channelLatestLead = response.lead; },
+        message: "Lead registered.",
+      });
+    },
+    async requestWorkspaceAttribution(input = {}) {
+      const command = {
+        channel_partner_id: input.partnerId,
+        target_workspace_id: input.targetWorkspaceId,
+        channel_lead_id: input.leadId || null,
+        channel_commission_rule_snapshot_id: input.ruleId,
+        reason_code: input.reasonCode,
+        expected_attribution_revision: Number(input.expectedRevision),
+        starts_at: input.startsAt,
+        confirmed: input.confirmed === true,
+      };
+      return channelWrite({
+        permission: "platform.channel.attribution.request",
+        apiMethod: "requestChannelAttribution",
+        operation: "attribution.request",
+        command,
+        method: input.method,
+        verificationCode: input.verificationCode,
+        actionCode: "channel.attribution.request",
+        resourceType: "workspace",
+        resourceId: input.targetWorkspaceId,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.requestChannelAttribution({
+          command, stepUpGrant, idempotencyKey, signal,
+        }),
+        accept: (response) => { state.channelLatestAttribution = response.attribution; },
+        message: "Attribution approval requested.",
+      });
+    },
+    async approveWorkspaceAttribution(input = {}) {
+      const command = {
+        expected_revision: Number(input.expectedRevision),
+        decision: input.decision,
+        reason_code: input.reasonCode,
+        confirmed: input.confirmed === true,
+      };
+      return channelWrite({
+        permission: "platform.channel.attribution.approve",
+        apiMethod: "approveChannelAttribution",
+        operation: `attribution.${String(input.decision ?? "")}`,
+        command: { attribution_id: input.attributionId, ...command },
+        method: input.method,
+        verificationCode: input.verificationCode,
+        actionCode: "channel.attribution.approve",
+        resourceType: "workspace_attribution",
+        resourceId: input.attributionId,
+        invoke: (stepUpGrant, idempotencyKey, signal) => api.approveChannelAttribution({
+          attributionId: input.attributionId,
+          command,
+          stepUpGrant,
+          idempotencyKey,
+          signal,
+        }),
+        accept: (response) => { state.channelLatestAttribution = response.attribution; },
+        message: input.decision === "approved" ? "Attribution approved." : "Attribution rejected.",
+      });
     },
     async refreshPrivacyQueue() {
       if (state.view !== "privacy") return false;
@@ -2460,9 +2698,15 @@ export function createPlatformPageController({
         signal,
       }));
     },
+    snapshot() {
+      return Object.freeze({ ...state });
+    },
     destroy() {
       generation += 1;
       request?.abort();
+      request = null;
+      scrubSensitive();
+      clearPlatformSession();
       root.replaceChildren();
     },
   };
@@ -2480,6 +2724,8 @@ export function createPlatformPageController({
         developerContracts: null,
         securityAssurance: null,
         launchGovernance: null,
+        channels: null,
+        channelStatements: null,
         billing: null,
         refunds: null,
         verification: null,
@@ -2548,6 +2794,25 @@ export function createPlatformPageController({
         tasks.push(api.launchGates({ signal: ticket.signal }).then((value) => {
           next.launchGovernance = value;
         }));
+      }
+      if (state.view === "channels" && permissions.has("platform.channel.read")
+        && typeof api.channelPartners === "function") {
+        tasks.push(api.channelPartners({
+          ...state.channelFilters,
+          offset: state.channelOffset,
+          limit: 50,
+          signal: ticket.signal,
+        }).then((value) => { next.channels = value; }));
+      }
+      if (state.view === "channels" && permissions.has("platform.channel.statement.read")
+        && typeof api.channelStatements === "function") {
+        tasks.push(api.channelStatements({
+          channelPartnerId: state.channelStatementFilters.partnerId,
+          currency: state.channelStatementFilters.currency,
+          offset: state.channelStatementOffset,
+          limit: 50,
+          signal: ticket.signal,
+        }).then((value) => { next.channelStatements = value; }));
       }
       if (!fleetOnly && permissions.has("platform.billing.read")
         && typeof api.billingSummary === "function") {
@@ -2817,6 +3082,7 @@ export function createPlatformPageController({
         state.launchGovernance = null;
         state.launchIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "channels")) clearChannelFacts();
       if (!state.navigation.some((item) => item.id === "edge-fleet")) {
         state.edgeFleet = null;
         state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -3373,6 +3639,180 @@ export function createPlatformPageController({
     } catch (error) {
       return fail(ticket, error);
     }
+  }
+
+  async function loadChannelManagement() {
+    if (state.view !== "channels") return false;
+    const permissions = currentPermissions();
+    if (!permissions.has("platform.channel.read")
+      && !permissions.has("platform.channel.statement.read")) return false;
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    try {
+      await readChannelFacts(ticket);
+      if (!currentChannelTicket(ticket)) return false;
+      state.loading = false;
+      render();
+      return true;
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 403 && current(ticket)) {
+        state.channelIntent = null;
+        await controller.refresh();
+        return false;
+      }
+      return fail(ticket, error);
+    }
+  }
+
+  async function readChannelFacts(ticket) {
+    const permissions = currentPermissions();
+    const next = { channels: null, channelStatements: null };
+    const tasks = [];
+    if (permissions.has("platform.channel.read")
+      && typeof api.channelPartners === "function") {
+      tasks.push(api.channelPartners({
+        ...state.channelFilters,
+        offset: state.channelOffset,
+        limit: 50,
+        signal: ticket.signal,
+      }).then((value) => { next.channels = value; }));
+    }
+    if (permissions.has("platform.channel.statement.read")
+      && typeof api.channelStatements === "function") {
+      tasks.push(api.channelStatements({
+        channelPartnerId: state.channelStatementFilters.partnerId,
+        currency: state.channelStatementFilters.currency,
+        offset: state.channelStatementOffset,
+        limit: 50,
+        signal: ticket.signal,
+      }).then((value) => { next.channelStatements = value; }));
+    }
+    await Promise.all(tasks);
+    if (!currentChannelTicket(ticket)) return false;
+    state.channels = next.channels;
+    state.channelStatements = next.channelStatements;
+    return true;
+  }
+
+  async function channelPartnerWrite(input, command, operation, message, accept = () => {}) {
+    return channelWrite({
+      permission: "platform.channel.manage",
+      apiMethod: "commandChannelPartner",
+      operation,
+      command,
+      method: input.method,
+      verificationCode: input.verificationCode,
+      actionCode: `channel.${operation}`,
+      resourceType: "channel_partner",
+      resourceId: input.partnerId,
+      invoke: (stepUpGrant, idempotencyKey, signal) => api.commandChannelPartner({
+        command,
+        expectedRevision: Number(input.expectedRevision),
+        stepUpGrant,
+        idempotencyKey,
+        signal,
+      }),
+      accept,
+      message,
+    });
+  }
+
+  async function channelWrite({
+    permission,
+    apiMethod,
+    operation,
+    command,
+    method,
+    verificationCode: rawVerificationCode,
+    actionCode,
+    resourceType,
+    resourceId,
+    invoke,
+    accept,
+    message,
+  }) {
+    const checkedMethod = String(method ?? "totp");
+    if (state.view !== "channels" || command.confirmed !== true
+      || !currentPermissions().has(permission) || typeof api[apiMethod] !== "function"
+      || typeof api.createIdentityStepUpGrant !== "function"
+      || typeof resourceId !== "string" || resourceId.length < 4
+      || !new Set(["totp", "webauthn"]).has(checkedMethod)
+      || (checkedMethod === "webauthn" && (typeof api.beginIdentityStepUp !== "function"
+        || typeof api.getWebAuthnAssertion !== "function"))) return false;
+    const fingerprint = await channelCommandFingerprint(operation, command, checkedMethod);
+    const idempotencyKey = state.channelIntent?.fingerprint === fingerprint
+      ? state.channelIntent.idempotencyKey : newIdempotencyKey();
+    state.channelIntent = { fingerprint, idempotencyKey };
+    const ticket = begin();
+    state.loading = true;
+    state.error = null;
+    render();
+    let verificationCode = String(rawVerificationCode ?? "");
+    let stepUpGrant = "";
+    try {
+      stepUpGrant = await createChannelStepUp({
+        method: checkedMethod,
+        verificationCode,
+        actionCode,
+        resourceType,
+        resourceId,
+        ticket,
+      });
+      verificationCode = "";
+      if (!stepUpGrant || !currentChannelTicket(ticket)) return false;
+      const response = await invoke(stepUpGrant, idempotencyKey, ticket.signal);
+      stepUpGrant = "";
+      if (!currentChannelTicket(ticket)) return false;
+      accept(response);
+      await readChannelFacts(ticket);
+      if (!currentChannelTicket(ticket)) return false;
+      state.channelIntent = null;
+      state.loading = false;
+      state.feedback = message;
+      render();
+      return true;
+    } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 403 && current(ticket)) {
+        state.channelIntent = null;
+        await controller.refresh();
+        return false;
+      }
+      if (!(error instanceof PlatformApiError) || ![0, 503].includes(error.status)) {
+        state.channelIntent = null;
+      }
+      return fail(ticket, error);
+    } finally {
+      verificationCode = "";
+      stepUpGrant = "";
+    }
+  }
+
+  async function createChannelStepUp({
+    method, verificationCode, actionCode, resourceType, resourceId, ticket,
+  }) {
+    let challengeId;
+    let credential = null;
+    if (method === "webauthn") {
+      const challenge = await api.beginIdentityStepUp({ signal: ticket.signal });
+      if (!currentChannelTicket(ticket)) return "";
+      challengeId = challenge.challenge_id;
+      credential = await api.getWebAuthnAssertion(challenge.public_key_options);
+      if (!currentChannelTicket(ticket)) return "";
+    }
+    const response = await api.createIdentityStepUpGrant({
+      method,
+      actionCode,
+      resourceType,
+      resourceId,
+      code: verificationCode,
+      challengeId,
+      credential,
+      signal: ticket.signal,
+    });
+    credential = null;
+    return currentChannelTicket(ticket) ? String(response.grant ?? "") : "";
   }
 
   async function launchWrite({
@@ -3989,6 +4429,114 @@ export function createPlatformPageController({
       event.preventDefault();
       const data = new FormData(form);
       if (form.matches("[data-platform-session-form]")) controller.openSession(data.get("totpCode"));
+      if (form.matches("[data-platform-channel-filter-form]")) {
+        controller.filterChannels({
+          status: data.get("status"),
+          tierCode: data.get("tierCode"),
+          regionScope: data.get("regionScope"),
+        });
+      }
+      if (form.matches("[data-platform-channel-statement-filter-form]")) {
+        controller.filterChannelStatements({
+          partnerId: data.get("partnerId"),
+          currency: data.get("currency"),
+        });
+      }
+      if (form.matches("[data-platform-channel-partner-create-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.createChannelPartner({
+          ownerWorkspaceId: data.get("ownerWorkspaceId"),
+          ownerAccountId: data.get("ownerAccountId"),
+          partnerCode: data.get("partnerCode"),
+          displayName: data.get("displayName"),
+          tierCode: data.get("tierCode"),
+          regionScope: data.get("regionScope"),
+          contractSha256: data.get("contractSha256"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-partner-update-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.updateChannelPartner({
+          partnerId: data.get("partnerId"),
+          expectedRevision: data.get("expectedRevision"),
+          displayName: data.get("displayName"),
+          tierCode: data.get("tierCode"),
+          regionScope: data.get("regionScope"),
+          status: data.get("status"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-membership-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.upsertChannelMembership({
+          partnerId: data.get("partnerId"),
+          expectedRevision: data.get("expectedRevision"),
+          accountId: data.get("accountId"),
+          roleCode: data.get("roleCode"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-membership-revoke-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.revokeChannelMembership({
+          partnerId: data.get("partnerId"),
+          expectedRevision: data.get("expectedRevision"),
+          membershipId: data.get("membershipId"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-referral-form]")) {
+        const referralCode = String(data.get("referralCode") ?? "");
+        const secure = takeChannelStepUp(form, data);
+        controller.rotateChannelReferral({
+          partnerId: data.get("partnerId"),
+          expectedRevision: data.get("expectedRevision"),
+          referralCode,
+          usageLimit: data.get("usageLimit"),
+          expiresAt: data.get("expiresAt") ? localTimestamp(data.get("expiresAt")) : null,
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-lead-form]")) {
+        const contactEmail = String(data.get("contactEmail") ?? "");
+        const contactPhone = String(data.get("contactPhone") ?? "");
+        const secure = takeChannelStepUp(form, data);
+        controller.registerChannelLead({
+          partnerId: data.get("partnerId"),
+          expectedRevision: data.get("expectedRevision"),
+          leadCode: data.get("leadCode"),
+          regionCode: data.get("regionCode"),
+          contactEmail,
+          contactPhone,
+          sourceSha256: data.get("sourceSha256"),
+          candidateWorkspaceId: data.get("candidateWorkspaceId"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-attribution-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.requestWorkspaceAttribution({
+          partnerId: data.get("partnerId"),
+          targetWorkspaceId: data.get("targetWorkspaceId"),
+          leadId: data.get("leadId"),
+          ruleId: data.get("ruleId"),
+          expectedRevision: data.get("expectedRevision"),
+          startsAt: localTimestamp(data.get("startsAt")),
+          reasonCode: data.get("reasonCode"),
+          ...secure,
+        });
+      }
+      if (form.matches("[data-platform-channel-approval-form]")) {
+        const secure = takeChannelStepUp(form, data);
+        controller.approveWorkspaceAttribution({
+          attributionId: data.get("attributionId"),
+          expectedRevision: data.get("expectedRevision"),
+          decision: data.get("decision"),
+          reasonCode: data.get("reasonCode"),
+          ...secure,
+        });
+      }
       if (form.matches("[data-operator-form]")) controller.createOperator(data.get("accountId"), data.getAll("roles"));
       if (form.matches("[data-platform-plan-form]")) {
         controller.createPlan({
@@ -4763,6 +5311,12 @@ export function createPlatformPageController({
       if (action === "compliance-refresh") controller.refreshComplianceControls();
       if (action === "assurance-refresh") controller.refreshSecurityAssessment();
       if (action === "launch-refresh") controller.refreshLaunchGates();
+      if (action === "channels-refresh") controller.refreshChannels();
+      if (action === "channel-next") controller.nextChannelPage();
+      if (action === "channel-previous") controller.previousChannelPage();
+      if (action === "channel-statement-next") controller.nextChannelStatementPage();
+      if (action === "channel-statement-previous") controller.previousChannelStatementPage();
+      if (action === "channel-referral-dismiss") controller.dismissChannelReferral();
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -4856,6 +5410,31 @@ export function createPlatformPageController({
         }
         if (code) code.hidden = webAuthn;
       }
+      if (select?.matches?.("[data-channel-step-up-method]")) {
+        const code = select.form?.querySelector?.("[data-platform-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
+      if (select?.matches?.("[data-channel-partner-select]")) {
+        const revision = select.selectedOptions?.[0]?.dataset.channelPartnerRevision ?? "";
+        const revisionTarget = select.form?.querySelector?.("[data-channel-partner-revision-target]");
+        if (revisionTarget) revisionTarget.value = revision;
+        const ruleSelect = select.form?.querySelector?.("[data-channel-rule-select]");
+        if (ruleSelect) {
+          let first = null;
+          for (const option of ruleSelect.options) {
+            option.disabled = option.dataset.channelPartnerId !== select.value;
+            if (!option.disabled && !first) first = option;
+          }
+          if (first) ruleSelect.value = first.value;
+        }
+      }
     });
   }
 
@@ -4902,6 +5481,12 @@ export function createPlatformPageController({
     return current(ticket) && state.view === "launch-gates"
       && currentPermissions().has("platform.launch.read");
   }
+  function currentChannelTicket(ticket) {
+    const permissions = currentPermissions();
+    return current(ticket) && state.view === "channels"
+      && (permissions.has("platform.channel.read")
+        || permissions.has("platform.channel.statement.read"));
+  }
   function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
@@ -4914,6 +5499,18 @@ export function createPlatformPageController({
     state.workspaceDetail = null;
     state.workspaceHealth = null;
     state.workspaceEvents = null;
+  }
+  function clearChannelFacts() {
+    state.channels = null;
+    state.channelFilters = { status: "", tierCode: "", regionScope: "" };
+    state.channelOffset = 0;
+    state.channelStatements = null;
+    state.channelStatementFilters = { partnerId: "", currency: "" };
+    state.channelStatementOffset = 0;
+    state.channelIntent = null;
+    state.channelIssuedReferral = null;
+    state.channelLatestLead = null;
+    state.channelLatestAttribution = null;
   }
   function clearProtectedFacts() {
     state.navigation = [];
@@ -4928,6 +5525,7 @@ export function createPlatformPageController({
     state.securityAssuranceIntent = null;
     state.launchGovernance = null;
     state.launchIntent = null;
+    clearChannelFacts();
     state.billing = null;
     state.billingStatus = "";
     state.billingCursor = null;
@@ -5213,6 +5811,16 @@ function localTimestamp(value) {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : "";
 }
 
+function takeChannelStepUp(form, data) {
+  const verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+  return {
+    method: String(data.get("method") ?? "totp"),
+    verificationCode,
+    confirmed: data.get("confirmed") === "on",
+  };
+}
+
 function normalizeRefundStatus(value) {
   const text = String(value ?? "");
   return new Set(["requested", "processing", "succeeded", "failed", "rejected"]).has(text)
@@ -5234,6 +5842,14 @@ function billingAdjustmentTarget(billing, targetKey) {
   const meter = cycle?.meters?.find((item) => item.meter_code === meterCode);
   if (!cycle || cycle.status === "open" || !meter?.summary_sha256) return null;
   return { cycle, meter };
+}
+
+async function channelCommandFingerprint(operation, command, method) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new TypeError("secure channel intent hashing is unavailable");
+  const bytes = new TextEncoder().encode(JSON.stringify([operation, command, method]));
+  const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+  return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function defaultIdempotencyKey() {

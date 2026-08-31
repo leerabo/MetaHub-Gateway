@@ -6,6 +6,7 @@
   --ink: #172019;
   --muted: #667068;
   --line: #d7ddd6;
+  --line-strong: #b8c2ba;
   --paper: #ffffff;
   --green: #176b4d;
   --green-soft: #e7f2ec;
@@ -1762,6 +1763,213 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
     font-weight: 700;
     text-transform: uppercase;
   }
+}
+
+/* PRD-139 Platform Channels keeps directory, attribution, and settlement facts separated. */
+[data-platform-channels-root] .platform-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.platform-channel-issued,
+.platform-channel-recent {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+}
+
+.platform-channel-issued { color: #754400; }
+.platform-channel-issued > div,
+.platform-channel-recent { flex-wrap: wrap; }
+.platform-channel-issued strong,
+.platform-channel-issued code { display: block; overflow-wrap: anywhere; }
+.platform-channel-issued code { margin-top: 5px; font-size: 12px; }
+.platform-channel-issued button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.platform-channel-recent {
+  justify-content: flex-start;
+  color: var(--muted);
+  font-size: 12px;
+}
+.platform-channel-recent span + span { padding-left: 16px; border-left: 1px solid var(--line); }
+.platform-channel-recent strong { color: var(--ink); }
+
+.platform-channel-directory .platform-filter-form,
+.platform-channel-statements .platform-filter-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.platform-channel-statements .platform-filter-form {
+  grid-template-columns: minmax(230px, 2fr) minmax(130px, 1fr) auto;
+}
+
+.platform-channel-list { display: grid; gap: 14px; }
+.platform-channel-partner {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: 6px;
+  background: var(--paper);
+  padding: 16px;
+}
+.platform-channel-partner > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.platform-channel-partner > header > div { min-width: 0; }
+.platform-channel-partner > header strong,
+.platform-channel-partner > header small { display: block; overflow-wrap: anywhere; }
+.platform-channel-partner > header small { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.platform-channel-partner > header .platform-status + span {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.platform-channel-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 16px 0 0;
+  border-block: 1px solid var(--line);
+}
+.platform-channel-facts > div { min-width: 0; padding: 12px 12px 12px 0; }
+.platform-channel-facts > div + div { padding-left: 12px; border-left: 1px solid var(--line); }
+.platform-channel-facts dt { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.platform-channel-facts dd { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+.platform-channel-facts code { font-size: 10px; }
+
+.platform-channel-subgrid,
+.platform-channel-intake {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.platform-channel-subgrid { padding: 16px 0; }
+.platform-channel-subgrid h3,
+.platform-channel-controls h3 { margin: 0 0 10px; font-size: 12px; }
+.platform-channel-rule,
+.platform-channel-member { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 11px; }
+.platform-channel-rule span,
+.platform-channel-member small { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+.platform-channel-revoke { display: flex; align-items: end; gap: 7px; }
+.platform-channel-revoke label { font-size: 10px; }
+.platform-channel-revoke button { width: 32px; height: 32px; border: 0; border-radius: 4px; background: var(--red); color: #fff; cursor: pointer; }
+
+.platform-channel-partner details { border-top: 1px solid var(--line); padding-top: 12px; }
+.platform-channel-partner summary { cursor: pointer; font-size: 12px; font-weight: 750; }
+.platform-channel-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  padding-top: 16px;
+}
+.platform-channel-controls form,
+.platform-channel-create form,
+.platform-channel-intake form {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  align-items: end;
+  gap: 10px;
+}
+.platform-channel-controls h3 { grid-column: 1 / -1; }
+.platform-channel-create form { grid-template-columns: repeat(4, minmax(145px, 1fr)); }
+.platform-channel-hash { grid-column: span 2; }
+.platform-channel-intake > .platform-band { padding-top: 26px; }
+.platform-channel-intake .platform-section-heading { min-height: 42px; }
+[data-platform-channel-write-form] .platform-check {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+[data-platform-channel-write-form] .platform-check input { width: 16px; min-height: 16px; padding: 0; }
+[data-platform-channel-write-form] input,
+[data-platform-channel-write-form] select { width: 100%; min-width: 0; }
+[data-platform-channel-write-form] input[readonly] { background: #f0f3ef; color: var(--muted); }
+
+.platform-channel-approvals table,
+.platform-channel-statements table { min-width: 940px; table-layout: fixed; }
+.platform-channel-approvals td,
+.platform-channel-statements td { vertical-align: top; }
+.platform-channel-approvals td strong,
+.platform-channel-approvals td small,
+.platform-channel-statements td strong,
+.platform-channel-statements td small,
+.platform-channel-statements td code { display: block; overflow-wrap: anywhere; }
+.platform-channel-approvals td small,
+.platform-channel-statements td small { margin-top: 5px; color: var(--muted); font-size: 10px; }
+.platform-channel-approvals th:last-child,
+.platform-channel-approvals td:last-child { width: 38%; }
+.platform-channel-approvals form { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(105px, 1fr)); gap: 8px; align-items: end; }
+.platform-channel-compact { font-size: 10px; }
+
+@media (max-width: 1050px) {
+  .platform-channel-controls { grid-template-columns: minmax(0, 1fr); }
+  .platform-channel-create form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  [data-platform-channels-root] .platform-metrics,
+  .platform-channel-facts,
+  .platform-channel-subgrid,
+  .platform-channel-intake,
+  .platform-channel-controls form,
+  .platform-channel-create form,
+  .platform-channel-intake form,
+  .platform-channel-directory .platform-filter-form,
+  .platform-channel-statements .platform-filter-form { grid-template-columns: minmax(0, 1fr); }
+  [data-platform-channels-root] .platform-metrics > div:nth-child(2) { border-right: 0; }
+  [data-platform-channels-root] .platform-metrics > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .platform-channel-partner > header { display: grid; }
+  .platform-channel-facts > div,
+  .platform-channel-facts > div + div { padding: 10px 0; border-top: 1px solid var(--line); border-left: 0; }
+  .platform-channel-hash,
+  .platform-channel-controls h3 { grid-column: auto; }
+  .platform-channel-recent span + span { width: 100%; padding: 8px 0 0; border-top: 1px solid var(--line); border-left: 0; }
+  .platform-channel-approvals table,
+  .platform-channel-statements table { min-width: 0; }
+  .platform-channel-approvals thead,
+  .platform-channel-statements thead { display: none; }
+  .platform-channel-approvals tbody,
+  .platform-channel-approvals tr,
+  .platform-channel-statements tbody,
+  .platform-channel-statements tr { display: block; width: 100%; }
+  .platform-channel-approvals tr,
+  .platform-channel-statements tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .platform-channel-approvals td,
+  .platform-channel-statements td {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+    border: 0;
+    padding: 7px 0;
+  }
+  .platform-channel-approvals td::before,
+  .platform-channel-statements td::before { content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .platform-channel-approvals td:last-child { width: 100%; }
+  .platform-channel-approvals form { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 }
 
 /* PRD-137 keeps fixed-profile execution and cropped assurance evidence in one work surface. */

@@ -1,6 +1,6 @@
 # PRD-139 渠道伙伴、代理商与客户归属管理
 
-状态：设计冻结，等待 G6 通过后编码。依赖 PRD-087/095/096/098/099/102..105/132/138，
+状态：已完成。G6 已通过；依赖 PRD-087/095/096/098/099/102..105/132/138，
 批次边界见 `S7-platform-operations-console-domain-batch-design.md`。本条只交付 0131、渠道平台工作台、
 独立伙伴只读入口和旧 PRD-087 事实迁移，不提前实现 PRD-140..148。
 
@@ -206,4 +206,5 @@ route switch 和旧 DOM；G7 对 Navigation/DOM/prefetch/API 做最终零命中�
 - P1：permission 表继续复制条件分支会漏掉新增权限或加载未知表。修正为固定 allowlist tuple + 固定 SQL
   模板，0131 权限表显式登记并纳入 authority fingerprint。
 
-第二轮修正后无未关闭 P0/P1。G6 未通过前，本设计不授权创建 0131 或业务代码。
+第二轮修正后无未关闭 P0/P1。0131、六个固定路由、Platform Channels 和独立 Partner 壳层均已按本设计
+实现并通过聚焦迁移、API、Console、浏览器、静态与敏感审计；独立结论见 `docs/testing/PRD-139-tests.md`。

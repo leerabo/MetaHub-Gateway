@@ -2255,7 +2255,6 @@ async function performRefresh(options = {}) {
     localEndpointsState,
     productAnalyticsState,
     customerHealthState,
-    partnerPortalState,
   ] = await Promise.all([
     loadFinOpsState(consoleShellState, refreshId),
     loadCostAnomaliesState(consoleShellState, refreshId),
@@ -2272,7 +2271,6 @@ async function performRefresh(options = {}) {
     loadLocalEndpointsState(consoleShellState, refreshId),
     loadProductAnalyticsState(consoleShellState, refreshId),
     loadCustomerHealthState(consoleShellState, refreshId),
-    loadPartnerPortalState(consoleShellState, refreshId),
   ]);
   if (!authSession.token) {
     return;
@@ -2483,7 +2481,9 @@ async function performRefresh(options = {}) {
     localEndpointsState,
     productAnalyticsState,
     customerHealthState,
-    partnerPortalState,
+    // PRD-139 moved partner access to the isolated Partner shell. Keep the
+    // legacy renderer inert until its source is removed with PRD-147.
+    partnerPortalState: null,
     brandingState,
     branding: brandingDisplayFromSnapshot(brandingState),
     experimentsState,
@@ -2785,9 +2785,6 @@ async function loadAndRenderActiveNavigation({
       break;
     case "customer-health":
       await load("customerHealthState", () => loadCustomerHealthState(consoleShellState, refreshId));
-      break;
-    case "partner-portal":
-      await load("partnerPortalState", () => loadPartnerPortalState(consoleShellState, refreshId));
       break;
     case "branding":
       if (!shellMetadataPromise) await load("brandingState", () => loadBrandingState(refreshId));

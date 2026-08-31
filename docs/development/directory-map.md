@@ -2659,6 +2659,25 @@ TC-0177/0178 共同确认过 PRD-089；该历史登记已由上方 PRD-089 数�
   自审、0130/API/Console/Browser、关联回归、静态检查、敏感审计和批次门禁边界；下一权威项为 PRD-139。
   S6 完整 G6 在本条独立提交后统一执行，并且只能形成 release candidate。
 
+## PRD-139 渠道伙伴、代理商与客户归属管理（已完成）
+
+- `control-plane-api/src/metahub_control/channel_management/`：六个固定 Platform/Partner 路由、strict DTO、
+  Cookie/CSRF/Origin/step-up/CAS/幂等边界、伙伴/成员/ReferralCode/商机、初始单批与替换双批归属、statement
+  投影、动态撤权和持久 scheduler lease/fencing；Partner 读取只恢复 GlobalSession + 当前 ChannelMembership。
+- `infra/migrations/0131_channel_partner_attribution_management.sql/.down.sql`：ChannelPartner/Membership、
+  ReferralCode、RegisteredLead、AttributionChange/approval、WorkspaceAttribution、CommissionRule snapshot、
+  ChannelStatement/line、legacy mapping/cursor、command/event/outbox/scheduler、复合 owner、write guard 与业务
+  事实 down guard；旧 PRD-087 六表回填保持逐 source hash、金额和水位可对账。
+- `control-plane-api/src/metahub_control/app.py`、`platform_access/service.py` 与共享错误目录：挂载新路由、卸载
+  外部 `/partners/*`、固定 S7 权限 allowlist、Channels 导航和预期 4xx 错误合同；billing 只获得 statement read。
+- `console-web/src/lib/channelManagement.js`、`src/features/channels/` 与 Platform 页面：六路由 strict client、
+  capability 裁剪、step-up、稳定幂等、quoted CAS、Abort/epoch/revision 和敏感 intent SHA-256；Workspace 不再
+  调用旧 Partner loader。`partner.html`、`src/lib/partnerChannel.js` 与 `src/features/partner/` 是不导入
+  Workspace/Platform/Support client 的独立只读壳层。
+- `docs/prd/PRD-139-channel-partner-attribution-management.md` 与 `docs/testing/PRD-139-tests.md`：保存两轮
+  设计/实施自审、0131/API/Console/Browser、静态检查、敏感与禁止文件审计以及 G7 边界；下一权威项为
+  PRD-140，完整 G7 在 PRD-147 独立提交后统一执行。
+
 ## MVP 非目标
 
 以下能力不得拖慢 M0/M1：

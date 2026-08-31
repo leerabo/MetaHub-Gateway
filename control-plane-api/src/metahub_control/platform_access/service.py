@@ -207,7 +207,12 @@ _NAVIGATION = (
     ("platform.privacy.read", "privacy", "Privacy", "/platform.html#privacy"),
     ("platform.release.read", "releases", "Releases", "/platform.html#releases"),
     ("platform.provider.read", "providers", "Provider engineering", "/platform.html#providers"),
-    ("platform.channel.read", "channels", "Channels", "/platform.html#channels"),
+    (
+        "platform.channel.statement.read",
+        "channels",
+        "Channels",
+        "/platform.html#channels",
+    ),
     (
         "platform.customer_success.read",
         "customer-success",
@@ -251,6 +256,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_supply_chain_role_permissions",
     "platform_security_assurance_role_permissions",
     "platform_launch_role_permissions",
+    "platform_channel_role_permissions",
 )
 
 
@@ -2373,227 +2379,16 @@ def _authority(
             _PERMISSION_EXTENSION_TABLES,
         ).fetchall()
     }
-    extension_queries: list[str] = []
-    if "platform_role_permission_extensions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_role_permission_extensions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_billing_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_billing_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_infrastructure_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_infrastructure_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_gateway_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_gateway_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_verification_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_verification_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_notification_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_notification_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_job_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_job_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_feature_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_feature_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_config_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_config_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_observability_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_observability_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_risk_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_risk_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_dr_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_dr_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_status_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_status_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_capacity_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_capacity_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_data_governance_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_data_governance_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_provider_catalog_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_provider_catalog_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_customer_support_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_customer_support_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_developer_contract_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_developer_contract_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_compliance_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_compliance_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_supply_chain_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_supply_chain_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_security_assurance_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_security_assurance_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
-    if "platform_launch_role_permissions" in extension_tables:
-        extension_queries.append(
-            """
-            SELECT extension.permission_code
-            FROM platform_operator_role_bindings binding
-            JOIN platform_launch_role_permissions extension
-              ON extension.role_code=binding.role_code
-            WHERE binding.operator_id=? AND binding.status='active'
-            """
-        )
+    extension_queries = [
+        f"""
+        SELECT extension.permission_code
+        FROM platform_operator_role_bindings binding
+        JOIN {table_name} extension ON extension.role_code=binding.role_code
+        WHERE binding.operator_id=? AND binding.status='active'
+        """
+        for table_name in _PERMISSION_EXTENSION_TABLES
+        if table_name in extension_tables
+    ]
     extension = "".join(f"\nUNION\n{query}" for query in extension_queries)
     parameters: tuple[object, ...] = tuple([operator_id, *([operator_id] * len(extension_queries))])
     base_permissions = tuple(

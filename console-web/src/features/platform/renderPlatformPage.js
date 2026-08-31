@@ -1,6 +1,7 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
+import { renderChannelManagement } from "../channels/renderChannelManagement.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -110,6 +111,7 @@ function renderView(state, permissions) {
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
   if (state.view === "releases") return developerContractsView(state, permissions);
+  if (state.view === "channels") return renderChannelManagement(state, permissions);
   return domainPlaceholderView(state);
 }
 

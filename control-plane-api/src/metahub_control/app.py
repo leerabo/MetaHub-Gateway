@@ -33,6 +33,8 @@ from .branding.scheduler import install_branding_scheduler
 from .budgets.routes import router as budgets_router
 from .business_verification import router as business_verification_router
 from .capacity_management import router as capacity_management_router
+from .channel_management import install_channel_scheduler
+from .channel_management import router as channel_management_router
 from .compliance_center import install_compliance_scheduler
 from .compliance_center import router as compliance_center_router
 from .config.routes import router as config_router
@@ -89,8 +91,6 @@ from .notifications import install_notification_scheduler
 from .notifications import router as notifications_router
 from .observability import install_observability_scheduler
 from .observability import router as observability_router
-from .partner_portal import install_partner_portal_scheduler
-from .partner_portal import router as partner_portal_router
 from .payment_commerce import install_payment_commerce_scheduler
 from .payment_commerce import router as payment_commerce_router
 from .permissions.routes import router as permissions_router
@@ -218,8 +218,6 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path == "/notification-preferences"
         or request.url.path == "/local-endpoints"
         or request.url.path.startswith("/local-endpoints/")
-        or request.url.path == "/partners"
-        or request.url.path.startswith("/partners/")
         or request.url.path == "/branding"
         or request.url.path.startswith("/branding/")
         or request.url.path
@@ -330,6 +328,7 @@ app.include_router(risk_controls_router)
 app.include_router(disaster_recovery_router)
 app.include_router(public_status_router)
 app.include_router(capacity_management_router)
+app.include_router(channel_management_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -388,7 +387,6 @@ app.include_router(model_quality_scores_router)
 app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
-app.include_router(partner_portal_router)
 app.include_router(branding_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
@@ -439,7 +437,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_notification_scheduler,
             install_observability_scheduler,
             install_risk_scheduler,
-            install_partner_portal_scheduler,
+            install_channel_scheduler,
             install_branding_scheduler,
             install_billing_dispute_scheduler,
             install_security_event_scheduler,
