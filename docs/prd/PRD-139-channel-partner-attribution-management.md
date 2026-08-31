@@ -75,7 +75,7 @@ ChannelMembership 只有 `partner_owner`、`partner_operations`、`partner_finan
   envelope ciphertext/lookup digest、source digest、revision 和 owner-qualified 可选候选 Workspace。
 - `workspace_attributions`：伙伴 owner、目标 Workspace owner、active rule snapshot、开始/结束时间、状态和
   revision；同一目标 Workspace 同时最多一个 active attribution。
-- `attribution_changes` 与 `attribution_change_approvals`：before/after owner、reason code、requester、
+- `AttributionChange` 对应 `attribution_changes` 与 `attribution_change_approvals`：before/after owner、reason code、requester、
   required approvals、当前 generation、CAS revision 和独立审批事实。申请人与审批人、两个审批人均不同。
 - `channel_commission_rule_snapshots`：合同 digest、tier/region、币种、bps、有效期和 immutable version；
   attribution 和 statement line 都引用精确 snapshot，禁止修改历史金额口径。
