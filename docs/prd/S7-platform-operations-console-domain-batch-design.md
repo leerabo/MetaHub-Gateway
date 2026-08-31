@@ -71,7 +71,8 @@ Scheduler。G6 失败时只允许完成设计，不开始 S7 migration 或业务
 - PRD-146：`GET /workspace/navigation` 是后端权限投影，绑定 Membership revision、合同版本和
   entitlement；前端隐藏不是权限边界。单组展开、直接 URL、偏好和任务首页都不能扩大权限。
 - PRD-147：切换只在来源/目标行数、hash、FK、outbox、审计、scheduler 水位和负载矩阵全部匹配
-  时 CAS 推进。旧路由返回稳定 retired 合同，不代理新写入；回滚仅恢复兼容读。
+  时 CAS 推进。旧路由从外部 router 卸载并统一返回普通 404；tombstone 只作为内部迁移事实，
+  不形成可调用兼容 API。回滚仅恢复内部兼容读。
 
 `platform_access.service._authority` 在增加 S7 权限表前改为遍历固定的
 `_PERMISSION_EXTENSION_TABLES` 白名单并用固定 SQL 模板加载，不扫描或拼接任意 schema 表名。
@@ -225,8 +226,8 @@ lease、各业务 scheduler lease 和审计水位均保真。
   GlobalSession + ChannelMembership，固定 `/partner` 白名单，企业和 Platform API 全部拒绝。
 - P0：平台客户目录若包含联系人正文、工单正文或请求内容，会形成批量越权读取面。修正为精确
   安全字段、不可逆摘要和 owner-qualified reference；详细诊断仍走 SupportGrant。
-- P0：只改侧栏会让旧 hash、DOM、prefetch 和 API 继续可达。修正为 PRD-147 tombstone 合同和
-  静态源码/运行时双审计，企业旧入口四层同时归零。
+- P0：只改侧栏会让旧 hash、DOM、prefetch 和 API 继续可达。修正为 PRD-147 内部 tombstone
+  事实、外部 router 卸载和静态源码/运行时双审计，企业旧入口四层同时归零。
 - P1：当前 Workspace exclusion 隐藏了五个 Excel 要求保留/拆分的入口。修正为 PRD-146 恢复
   `providers/local-models/provider-health/error-maps/billing-disputes` 的企业裁剪合同。
 - P1：直接复制现有 permission loader 的条件分支会扩大漏表和 SQL 拼接风险。修正为先抽取固定
@@ -241,7 +242,7 @@ lease、各业务 scheduler lease 和审计水位均保真。
 - P0：只给 supervisor 一个进程内锁无法阻止多 Web replica 重复消费。修正为数据库持久 lease、
   generation/token fence、逐次提交校验和可接管 watermark；失租旧 worker 的迟到写失败关闭。
 - P0：rollback 若重新启用旧 route 或 dual-write，会恢复已撤销的跨域能力。修正为 rollback 只
-  切兼容读并执行补偿 job，永不恢复旧权限、DOM、prefetch 或 API。
+  切内部兼容读并执行补偿 job，永不重新挂载旧权限、route、DOM、prefetch 或 API。
 - P0：只比行数无法发现 owner、金额或投影漂移。修正为逐表 canonical hash、FK、outbox、审计、
   scheduler 水位和抽样复算共同匹配，任何差异阻断 cutover。
 - P1：现有产品 QA 固定 0130 和企业 admin/developer/viewer 浏览器矩阵，不能证明 G7。修正为完成
