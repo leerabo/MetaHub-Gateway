@@ -1,6 +1,6 @@
 # PRD-142 平台、渠道与私有 Gateway 品牌分域
 
-状态：设计冻结，等待 G6 通过后编码。依赖 PRD-088/093/095/098/120/121/123/139；批次边界见
+状态：已完成。依赖 PRD-088/093/095/098/120/121/123/139；批次边界见
 `S7-platform-operations-console-domain-batch-design.md`。本条只交付 0134、三种品牌 owner、域名验证、资产发布、
 私有 Gateway 品牌 LKG、四组 Excel API 和旧品牌迁移，不提前实现 PRD-143..148。
 

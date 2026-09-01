@@ -34,7 +34,7 @@ test("main owns PAGE-119 independently and clears identity, navigation, login, l
   assert.match(main, /activeNavigationItemId !== "partner-portal"[\s\S]*partnerPortalPageState\.clear\(\)/);
   assert.match(main, /itemId !== "partner-portal"[\s\S]*partnerPortalPageState\.clear\(\)/);
   assert.match(main, /loadPartnerPortalState\(consoleShellState, refreshId\)/);
-  assert.match(main, /partnerPortalState,/);
+  assert.match(main, /partnerPortalState: null,/);
 });
 
 test("owner and seven lanes drop late responses before authentication handling", async () => {

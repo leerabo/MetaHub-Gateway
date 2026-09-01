@@ -58,8 +58,6 @@ import { renderRequestExplanationPanel } from "../request-explanations/renderReq
 import { renderRequestFeedbackSummaryPanel } from "../request-feedback/renderRequestFeedback.js";
 import { renderCustomerHealth } from "../customer-health/renderCustomerHealth.js";
 import { renderPartnerPortal } from "../partner-portal/renderPartnerPortal.js";
-import { brandingPageOwner } from "../branding/brandingPageState.js";
-import { renderBrandingSettings } from "../branding/renderBrandingSettings.js";
 import { renderSystemStatusPanel } from "../system-status/renderSystemStatusPanel.js";
 import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
 import { renderTenantDataLifecycle } from "../tenant-data-lifecycle/renderTenantDataLifecycle.js";
@@ -621,14 +619,6 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-119 only renders the backend-authorized partner owner and strict aggregate DTOs.
       return renderPartnerPortalSection(
         options.partnerPortalState,
-        options.authContext,
-        options.consoleShellState,
-        options.i18n,
-      );
-    case "branding":
-      // PAGE-120 白标配置与 PAGE-119 伙伴门户分离；Logo 和全局 CSS 不从伙伴资料派生。
-      return renderBrandingSettingsSection(
-        options.brandingState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
@@ -1330,15 +1320,6 @@ function renderPartnerPortalSection(state, authContext, consoleShellState, i18n)
         ${html}
       </section>
     `
-    : "";
-}
-
-/** PAGE-120 只在完整认证与导航 owner 下渲染设置面板，不能由隐藏按钮承担授权。 */
-function renderBrandingSettingsSection(state, authContext, consoleShellState, i18n) {
-  const owner = brandingPageOwner(authContext, consoleShellState);
-  const html = renderBrandingSettings(state, owner, i18n);
-  return html
-    ? `<section class="panel branding-settings-shell" aria-labelledby="branding-settings-title">${html}</section>`
     : "";
 }
 

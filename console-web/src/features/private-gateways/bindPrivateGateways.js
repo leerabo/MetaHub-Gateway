@@ -35,6 +35,11 @@ export function bindPrivateGatewayInteractions(callbacks = {}) {
       void callbacks.onRevoke?.(deploymentId, reason);
     });
   });
+  root.querySelectorAll("[data-private-gateway-brand]").forEach((button) => {
+    button.addEventListener("click", () => void callbacks.onBrandSelect?.(
+      button.dataset.privateGatewayBrand ?? "",
+    ));
+  });
   root.querySelectorAll("[data-private-gateway-state-open]").forEach((button) => {
     button.addEventListener("click", () => void callbacks.onStateOpen?.(
       button.dataset.deploymentId ?? "",

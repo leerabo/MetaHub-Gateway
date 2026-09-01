@@ -1,5 +1,3 @@
-import { safeBrandingLogoUrl } from "../../lib/branding.js";
-
 // 默认导航定义控制控制台骨架的兜底菜单，后端返回的角色化导航仍是最终入口来源。
 const DEFAULT_NAVIGATION = [
   {
@@ -90,13 +88,18 @@ export function renderConsoleShell({
   `;
 }
 
-/** 渲染已由客户端 Blob 校验的 Logo；默认几何标记不受租户输入影响。 */
+/** Render only the strict content-addressed path from the Host-scoped public brand. */
 function renderBrandMark(branding) {
-  const logoUrl = safeBrandingLogoUrl(branding?.logoUrl);
+  const logoUrl = safePublicBrandAssetPath(branding?.logoUrl);
   if (logoUrl && branding?.logoPresent === true) {
     return `<div class="brand-mark brand-mark-image"><img class="brand-logo" src="${escapeAttribute(logoUrl)}" alt="${escapeAttribute(branding.product_name ?? "")}"></div>`;
   }
   return `<div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>`;
+}
+
+function safePublicBrandAssetPath(value) {
+  const path = String(value ?? "");
+  return /^\/branding\/public\/assets\/bas_[0-9a-f]{32}$/u.test(path) ? path : "";
 }
 
 function brandingText(value, fallback) {

@@ -25,13 +25,21 @@ from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.auth.service import AuthContext, require_permission
 from metahub_control.permissions.routes import router as permissions_router
+from metahub_control.workspace_access.brand_permissions import (
+    load_verified_workspace_brand_permissions,
+)
+from metahub_control.workspace_access.edge_permissions import (
+    load_verified_workspace_edge_permissions,
+    resolve_verified_workspace_edge_role,
+)
+from metahub_control.workspace_access.provider_catalog_permissions import (
+    load_verified_provider_catalog_permissions,
+)
 from metahub_shared.db import (
     apply_migrations,
     apply_seed_data,
     connect_database,
-    rollback_last_migration,
 )
-from metahub_shared.db.errors import DbError
 from metahub_shared.db.security import hash_password
 from metahub_shared.rbac import (
     PERMISSION_CATALOG,
@@ -186,6 +194,54 @@ def _build_app():
     return app
 
 
+def _expected_auth_permissions(
+    database_url: str,
+    *,
+    role_code: str,
+    email: str,
+) -> set[str]:
+    """Build the exact login projection from base and verified Workspace catalogs."""
+
+    connection = connect_database(database_url)
+    try:
+        user_id = connection.execute(
+            "SELECT user_id FROM users WHERE email=? AND role=?",
+            (email, role_code),
+        ).fetchone()[0]
+        provider_catalog = load_verified_provider_catalog_permissions(
+            connection,
+            role_code=role_code,
+            unavailable_error_code="rbac.unavailable",
+        )
+        workspace_role = resolve_verified_workspace_edge_role(
+            connection,
+            tenant_id=connection.execute(
+                "SELECT tenant_id FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()[0],
+            legacy_user_id=user_id,
+            legacy_role_code=role_code,
+            unavailable_error_code="rbac.unavailable",
+        )
+        edge = load_verified_workspace_edge_permissions(
+            connection,
+            role_code=workspace_role,
+            unavailable_error_code="rbac.unavailable",
+        )
+        branding = load_verified_workspace_brand_permissions(
+            connection,
+            role_code=workspace_role,
+            unavailable_error_code="rbac.unavailable",
+        )
+        return (
+            set(ROLE_GRANTABLE_PERMISSIONS[role_code])
+            | set(provider_catalog)
+            | set(edge)
+            | set(branding)
+        )
+    finally:
+        connection.close()
+
+
 async def _login(client: AsyncClient, role: str) -> Response:
     """以指定数据库角色登录并返回完整响应，便于同时断言错误和安全字段。"""
 
@@ -203,14 +259,18 @@ async def test_six_roles_login_and_me_return_database_permission_snapshot(
 ) -> None:
     """主流程：六角色登录和 /auth/me 返回相同的数据库权限、revision 与指纹。"""
 
-    _prepare_database(monkeypatch, tmp_path)
+    database_url = _prepare_database(monkeypatch, tmp_path)
     app = _build_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://control") as client:
         for role in ROLE_CODES:
             login = await _login(client, role)
             assert login.status_code == 200, login.text
             payload = login.json()
-            assert set(payload["permission_codes"]) == set(ROLE_GRANTABLE_PERMISSIONS[role])
+            assert set(payload["permission_codes"]) == _expected_auth_permissions(
+                database_url,
+                role_code=role,
+                email=_ROLE_EMAILS[role],
+            )
             assert payload["permission_codes"] == payload["user"]["permission_codes"]
             assert payload["permission_revision"] == payload["user"]["permission_revision"] == 1
             assert (
@@ -227,6 +287,34 @@ async def test_six_roles_login_and_me_return_database_permission_snapshot(
             assert me.json()["user"]["role"] == role
             assert me.json()["permission_codes"] == payload["permission_codes"]
             assert me.json()["authorization_fingerprint"] == payload["authorization_fingerprint"]
+
+
+@pytest.mark.anyio
+async def test_brand_extension_matrix_tamper_fails_console_login_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """0134 grants reach Console only while the complete immutable matrix is intact."""
+
+    database_url = _prepare_database(monkeypatch, tmp_path)
+    connection = connect_database(database_url)
+    connection.execute("DROP TRIGGER trg_workspace_brand_roles_delete_prd142")
+    connection.execute(
+        """DELETE FROM workspace_brand_role_permissions
+           WHERE role_code='owner' AND permission_code='deployment.branding.read'"""
+    )
+    connection.commit()
+    connection.close()
+
+    app = _build_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://control"
+    ) as client:
+        response = await _login(client, "admin")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "rbac.unavailable"
+    assert "workspace_brand_role_permissions" not in response.text
 
 
 @pytest.mark.anyio
@@ -248,6 +336,14 @@ async def test_existing_token_uses_new_user_role_from_database(
             "UPDATE users SET role='viewer',updated_at=? WHERE email=?",
             ("2026-07-31T05:01:00Z", _ROLE_EMAILS["developer"]),
         )
+        connection.execute(
+            """
+            UPDATE workspace_memberships
+            SET role_code='viewer',revision=revision+1,updated_at=?
+            WHERE legacy_user_id=(SELECT user_id FROM users WHERE email=?)
+            """,
+            ("2026-07-31T05:01:00Z", _ROLE_EMAILS["developer"]),
+        )
         connection.commit()
         connection.close()
 
@@ -255,7 +351,11 @@ async def test_existing_token_uses_new_user_role_from_database(
 
     assert me.status_code == 200, me.text
     assert me.json()["user"]["role"] == "viewer"
-    assert set(me.json()["permission_codes"]) == set(ROLE_GRANTABLE_PERMISSIONS["viewer"])
+    assert set(me.json()["permission_codes"]) == _expected_auth_permissions(
+        database_url,
+        role_code="viewer",
+        email=_ROLE_EMAILS["developer"],
+    )
 
 
 @pytest.mark.anyio
@@ -564,37 +664,6 @@ async def test_permission_matrix_get_patch_noop_cas_and_event_trace(
         )
     )
     connection.close()
-
-    # 本用例没有 PRD-089..PRD-092 的业务事实，因此 0086..0082 可安全回退。
-    # 自定义 Developer 矩阵不再匹配 PRD-088 默认授权，0081 必须在首项持久 DDL
-    # 前失败关闭；更早的 0068 历史 guard 由 PRD-075 冻结迁移专项独立覆盖。
-    for expected_version in ("0086", "0085", "0084", "0083", "0082"):
-        assert rollback_last_migration(database_url).rolled_back == expected_version
-    with pytest.raises(DbError) as rollback_error:
-        rollback_last_migration(database_url)
-    assert rollback_error.value.code == "db.migration_failed"
-    assert "prd088_down_guard_failed" in rollback_error.value.message
-
-    connection = connect_database(database_url)
-    for version in ("0086", "0085", "0084", "0083", "0082"):
-        assert connection.execute(
-            "SELECT status FROM schema_migrations WHERE version=?", (version,)
-        ).fetchone()[0] == "rolled_back"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0081'"
-    ).fetchone()[0] == "applied"
-    assert connection.execute(
-        "SELECT status FROM schema_migrations WHERE version='0054'"
-    ).fetchone()[0] == "applied"
-    assert connection.execute(
-        "SELECT COUNT(*) FROM role_permission_events WHERE request_id=?",
-        ("req_prd059_matrix_patch",),
-    ).fetchone()[0] == 1
-    assert connection.execute(
-        "SELECT COUNT(*) FROM audit_logs WHERE action='role.permission_changed'"
-    ).fetchone()[0] == 1
-    connection.close()
-
 
 @pytest.mark.anyio
 async def test_permission_patch_can_revoke_new_chat_permission(

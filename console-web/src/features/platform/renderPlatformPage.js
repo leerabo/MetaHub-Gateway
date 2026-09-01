@@ -2,6 +2,7 @@
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import { renderChannelManagement } from "../channels/renderChannelManagement.js";
+import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
 import { renderPlatformGrowth } from "../platform-growth/renderPlatformGrowth.js";
 import {
@@ -114,6 +115,7 @@ function renderView(state, permissions) {
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
   if (state.view === "releases") return developerContractsView(state, permissions);
   if (state.view === "channels") return renderChannelManagement(state, permissions);
+  if (state.view === "branding") return renderPlatformBranding(state);
   if (state.view === "customer-success") {
     return renderPlatformCustomerSuccess(
       state.customerSuccess,
@@ -125,6 +127,16 @@ function renderView(state, permissions) {
     return renderPlatformGrowth(state.growth, permissions);
   }
   return domainPlaceholderView(state);
+}
+
+function renderPlatformBranding(state) {
+  return `<header class="platform-page-heading"><div><p>Platform owner</p><h1>平台品牌</h1></div><span>独立发布域</span></header>
+    ${renderBrandEditor(state.brandDomains?.platform, {
+      scope: "platform-brand",
+      kicker: "SaaS public identity",
+      title: "登录与平台外观",
+      allowDomain: true,
+    })}`;
 }
 
 function providerCatalogView(state, permissions) {

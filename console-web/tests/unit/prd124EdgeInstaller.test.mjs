@@ -380,20 +380,28 @@ test("owner state renders environment, preflight, installation, health, and reco
 });
 
 test("installer wiring stays Cookie-only, parallel, responsive, and credential-free", async () => {
-  const [clientSource, stateSource, renderSource, bindingSource, mainSource, cssSource, backendSource] = await Promise.all([
+  const [
+    clientSource,
+    stateSource,
+    renderSource,
+    bindingSource,
+    mainSource,
+    cssSource,
+    edgePermissionsSource,
+  ] = await Promise.all([
     readFile(new URL("../../src/lib/edgeManagement.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/private-gateways/privateGatewayPageState.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/private-gateways/renderPrivateGateways.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/private-gateways/bindPrivateGateways.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
-    readFile(new URL("../../../control-plane-api/src/metahub_control/console/service.py", import.meta.url), "utf8"),
+    readFile(new URL("../../../control-plane-api/src/metahub_control/workspace_access/edge_permissions.py", import.meta.url), "utf8"),
   ]);
   assert.match(clientSource, /request\(controlApiUrl, "\/edge\/installers", \{ signal \}, "workspace"\)/u);
   assert.match(mainSource, /Promise\.all\(\[[\s\S]*listEdgeDeployments[\s\S]*listEdgeInstallers/u);
   assert.match(bindingSource, /data-private-gateway-installer-environment/u);
   assert.match(cssSource, /@media \(max-width: 390px\)[\s\S]*private-gateway-installer-steps/u);
-  assert.match(backendSource, /"edge\.installer\.read"[\s\S]*"edge\.installation\.manage"/u);
+  assert.match(edgePermissionsSource, /"edge\.installation\.manage"[\s\S]*"edge\.installer\.read"/u);
   assert.doesNotMatch(stateSource, /handoffCredential|secretBytes/iu);
   assert.doesNotMatch(renderSource, /metahub\s+(?:preflight|install|connect|uninstall)\s+--/iu);
   assert.doesNotMatch(bindingSource, /localStorage|sessionStorage|indexedDB/iu);

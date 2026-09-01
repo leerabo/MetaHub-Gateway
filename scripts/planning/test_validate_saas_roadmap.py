@@ -42,10 +42,12 @@ def test_post_baseline_navigation_does_not_rewrite_the_frozen_inventory() -> Non
     assert "support-tickets" not in VALIDATOR._source_navigation_ids()
     assert "growth-analytics" not in VALIDATOR._console_navigation_ids()
     assert "growth-analytics" in VALIDATOR._source_navigation_ids()
+    assert "branding" not in VALIDATOR._console_navigation_ids()
+    assert "branding" in VALIDATOR._source_navigation_ids()
     assert len(VALIDATOR._source_navigation_ids()) == 64
 
 
-def test_repository_roadmap_baseline_passes_after_prd141_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-142")
+def test_repository_roadmap_baseline_passes_after_prd142_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-143")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-142"
+    assert report.next_prd == "PRD-143"

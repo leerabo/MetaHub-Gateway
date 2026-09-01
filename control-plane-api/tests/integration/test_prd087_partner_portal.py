@@ -29,6 +29,10 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 PROJECT_ID = "prj_" + "1" * 32
 OTHER_CUSTOMER_ID = "pcu_" + "9" * 32
 STAMP = "2030-01-01T00:00:00Z"
+PRD139_SUPERSEDED_REASON = (
+    "PRD-139 cut over partner writes to owner-scoped Channel APIs; "
+    "the legacy partners table and Partner Portal runtime are read-only"
+)
 
 
 def _database_url(path: Path) -> str:
@@ -314,6 +318,7 @@ def test_idempotency_key_contract_rejects_out_of_bounds_or_unsafe_values(value: 
 
 
 @pytest.mark.anyio
+@pytest.mark.skip(reason=PRD139_SUPERSEDED_REASON)
 async def test_partner_portal_http_rbac_isolation_and_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

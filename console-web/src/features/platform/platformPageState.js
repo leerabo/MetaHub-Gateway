@@ -4,6 +4,8 @@ import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
 import { createPlatformCustomerSuccessController } from "../platform-customer-success/platformCustomerSuccessController.js";
 import { createPlatformGrowthController } from "../platform-growth/platformGrowthController.js";
+import { bindBrandEditorInteractions } from "../brand-domains/bindBrandEditor.js";
+import { createPlatformBrandingController } from "../brand-domains/platformBrandingController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
@@ -37,6 +39,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "providers",
   "provider-catalog",
   "channels",
+  "branding",
   "customer-success",
   "growth",
   "notification-templates",
@@ -90,6 +93,7 @@ export function createPlatformPageController({
     channelIssuedReferral: null,
     channelLatestLead: null,
     channelLatestAttribution: null,
+    brandDomains: null,
     customerSuccess: null,
     growth: null,
     billing: null,
@@ -230,6 +234,27 @@ export function createPlatformPageController({
   });
   state.growth = growthController.snapshot();
 
+  const brandDomainsController = createPlatformBrandingController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.brandDomains = snapshot;
+      if (state.session && !state.loading && new Set(["branding", "channels"]).has(state.view)) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && new Set(["branding", "channels"]).has(state.view)) void controller.refresh();
+      });
+    },
+  });
+  state.brandDomains = brandDomainsController.snapshot();
+
   const controller = {
     async mount() {
       bind();
@@ -314,7 +339,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
-        "channels", "customer-success", "growth",
+        "channels", "branding", "customer-success", "growth",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -355,6 +380,8 @@ export function createPlatformPageController({
           state.launchIntent = null;
         } else if (state.view === "channels") {
           clearChannelFacts();
+        } else if (state.view === "branding") {
+          brandDomainsController.leavePlatform();
         } else if (state.view === "customer-success") {
           customerSuccessController.leave();
         } else if (state.view === "growth") {
@@ -433,6 +460,10 @@ export function createPlatformPageController({
       }
       if (state.view === "channels" && !state.channels && !state.channelStatements) {
         void loadChannelManagement();
+      }
+      if (state.view === "branding") {
+        brandDomainsController.enter(state.session?.context, state.navigation);
+        if (!brandDomainsController.snapshot().platform.branding) void brandDomainsController.loadPlatform();
       }
       if (state.view === "customer-success") {
         const entered = customerSuccessController.enter(
@@ -551,6 +582,11 @@ export function createPlatformPageController({
     async refreshChannels() {
       if (state.view !== "channels") return false;
       return loadChannelManagement();
+    },
+    async selectChannelBrand(partnerId) {
+      if (state.view !== "channels") return false;
+      brandDomainsController.enter(state.session?.context, state.navigation);
+      return brandDomainsController.selectChannel(partnerId);
     },
     async filterChannels(filters = {}) {
       if (state.view !== "channels") return false;
@@ -2855,6 +2891,7 @@ export function createPlatformPageController({
       request?.abort();
       request = null;
       scrubSensitive();
+      brandDomainsController.clear();
       clearPlatformSession();
       root.replaceChildren();
     },
@@ -3232,6 +3269,7 @@ export function createPlatformPageController({
         state.launchIntent = null;
       }
       if (!state.navigation.some((item) => item.id === "channels")) clearChannelFacts();
+      brandDomainsController.enter(state.session?.context, state.navigation);
       if (!state.navigation.some((item) => item.id === "edge-fleet")) {
         state.edgeFleet = null;
         state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -3277,6 +3315,9 @@ export function createPlatformPageController({
         && state.navigation.some((item) => item.id === "growth")
         && growthController.enter(state.session?.context, state.navigation);
       if (!growthActive) growthController.leave();
+      const platformBrandActive = state.view === "branding"
+        && state.navigation.some((item) => item.id === "branding");
+      if (!platformBrandActive) brandDomainsController.leavePlatform();
       state.loading = false;
       state.error = null;
       render();
@@ -3286,6 +3327,9 @@ export function createPlatformPageController({
       if (growthActive
         && growthController.snapshot().data[growthController.snapshot().tab] === null) {
         void growthController.load();
+      }
+      if (platformBrandActive && !brandDomainsController.snapshot().platform.branding) {
+        void brandDomainsController.loadPlatform();
       }
       return true;
     } catch (error) {
@@ -5687,6 +5731,7 @@ export function createPlatformPageController({
       if (action === "channel-statement-next") controller.nextChannelStatementPage();
       if (action === "channel-statement-previous") controller.previousChannelStatementPage();
       if (action === "channel-referral-dismiss") controller.dismissChannelReferral();
+      if (action === "channel-brand-select") controller.selectChannelBrand(target.dataset.partnerId);
       if (action === "approve-grant") controller.approveGrant(target.dataset.grantId);
       if (action === "open-support") controller.openSupport(target.dataset.grantId);
       if (action === "support-ticket-select") {
@@ -5879,7 +5924,20 @@ export function createPlatformPageController({
       && (permissions.has("platform.channel.read")
         || permissions.has("platform.channel.statement.read"));
   }
-  function render() { state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state); }
+  function render() {
+    state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state);
+    if (state.session && new Set(["branding", "channels"]).has(state.view)) {
+      bindBrandEditorInteractions(root, {
+        onCommand(input) {
+          return input.scope === "platform-brand"
+            ? brandDomainsController.mutatePlatform(input)
+            : input.scope === "channel-brand"
+              ? brandDomainsController.mutateChannel(input)
+              : false;
+        },
+      });
+    }
+  }
   function currentPermissions() {
     return new Set(state.session?.context?.permissions ?? []);
   }
@@ -5903,11 +5961,13 @@ export function createPlatformPageController({
     state.channelIssuedReferral = null;
     state.channelLatestLead = null;
     state.channelLatestAttribution = null;
+    brandDomainsController.leaveChannels();
   }
   function clearProtectedFacts() {
     state.navigation = [];
     customerSuccessController.leave();
     growthController.leave();
+    brandDomainsController.clear();
     state.operators = null;
     state.plans = null;
     state.providerCatalog = null;

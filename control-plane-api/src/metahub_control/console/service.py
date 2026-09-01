@@ -62,8 +62,6 @@ EVENT_TYPE_BY_NAVIGATION = {
     "approvals": "console.page_viewed",
     # PAGE-119 页面访问只记录外壳，不携带客户名、branding、分润或附件内容。
     "partner-portal": "console.page_viewed",
-    # PAGE-120 页面访问只记录外壳，不携带品牌正文、Logo 或域名。
-    "branding": "console.page_viewed",
     "migration-guide": "migration.guide_viewed",
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
@@ -203,16 +201,6 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "管理当前租户的渠道客户、白标信息和分润报告。",
         "初始化伙伴资料后可建立客户映射并查看分润。",
         15,
-    ),
-    NavigationDefinition(
-        "branding",
-        "白标设置",
-        "配置",
-        "branding",
-        ("branding.read",),
-        "配置登录页与控制台的租户级品牌呈现，Logo 仅接受安全 PNG。",
-        "当前账号没有白标读取权限，或租户尚未创建白标配置。",
-        16,
     ),
     NavigationDefinition(
         "tenant",

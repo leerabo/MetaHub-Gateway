@@ -122,7 +122,9 @@ import {
   updatePrivacyPreferences,
 } from "../../lib/privacyCenter.js";
 import { listWorkspaceComplianceReports } from "../../lib/complianceCenter.js";
+import { getPublicBranding } from "../../lib/brandDomains.js";
 import { createIdentityPageController } from "./identityPageState.js";
+import { setIdentityPublicBranding } from "./renderIdentityPage.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
 if (root) {
@@ -131,6 +133,9 @@ if (root) {
     ? `${globalThis.window.location.protocol}//${hostname}:8001`
     : globalThis.window.location.origin;
   const pendingRiskChallenge = consumeRiskChallengeLocation(globalThis.window);
+  const publicBrandingReady = getPublicBranding({ controlApiUrl })
+    .then((response) => setIdentityPublicBranding(response.branding, globalThis.document))
+    .catch(() => setIdentityPublicBranding(null, globalThis.document));
   const controller = createIdentityPageController({
     root,
     recordWorkspaceSwitch: ({ durationMs }) => {
@@ -290,7 +295,7 @@ if (root) {
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
-  controller.mount().then(() => {
+  void publicBrandingReady.then(() => controller.mount()).then(() => {
     if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
   });
   globalThis.window.addEventListener("pagehide", () => controller.destroy(), { once: true });

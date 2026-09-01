@@ -27,11 +27,16 @@ from metahub_shared.rbac import (
     canonical_permission_codes,
     permission_matrix_sha256,
 )
+from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 STAMP = "2030-01-01T00:00:00Z"
 OTHER_TENANT_ID = "tenant_prd088_other"
 OTHER_USER_ID = "user_prd088_other"
+PRD142_SUPERSEDED_REASON = (
+    "PRD-142 retires tenant-scoped branding runtime routes; "
+    "owner-separated active contracts are covered by test_prd142_brand_domains.py"
+)
 
 
 def _database_url(path: Path) -> str:
@@ -70,24 +75,18 @@ async def _login(
     return response.json()["access_token"]
 
 
-def test_branding_backend_navigation_requires_live_read_permission() -> None:
-    branding = next(
-        item
-        for item in _visible_navigation_items(("branding.read",))
-        if item.id == "branding"
-    )
-    assert branding.target_section == "branding"
-    assert branding.required_permissions == ["branding.read"]
-    assert branding.order == 16
-    assert EVENT_TYPE_BY_NAVIGATION["branding"] == "console.page_viewed"
-    assert "branding" not in {item.id for item in _visible_navigation_items(())}
+def test_branding_backend_navigation_and_permissions_are_retired() -> None:
+    with pytest.raises(ApiError) as removed_permission:
+        _visible_navigation_items(("branding.read",))
+    assert removed_permission.value.code == "rbac.matrix_integrity_failed"
+    assert "branding" not in EVENT_TYPE_BY_NAVIGATION
     for role in ROLE_CODES:
         items = _visible_navigation_items(
             canonical_permission_codes(ROLE_GRANTABLE_PERMISSIONS[role])
         )
-        assert ("branding" in {item.id for item in items}) == (
-            "branding.read" in ROLE_GRANTABLE_PERMISSIONS[role]
-        )
+        assert "branding" not in {item.id for item in items}
+        assert "branding.read" not in ROLE_GRANTABLE_PERMISSIONS[role]
+        assert "branding.manage" not in ROLE_GRANTABLE_PERMISSIONS[role]
 
 
 def _headers(token: str, request_id: str, **extra: str) -> dict[str, str]:
@@ -193,6 +192,7 @@ def _revoke_role_permission(database_url: str, tenant_id: str, role_code: str, c
 
 
 @pytest.mark.anyio
+@pytest.mark.skip(reason=PRD142_SUPERSEDED_REASON)
 async def test_branding_http_logo_public_audit_and_no_subscription(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -428,6 +428,7 @@ async def test_branding_http_logo_public_audit_and_no_subscription(
 
 
 @pytest.mark.anyio
+@pytest.mark.skip(reason=PRD142_SUPERSEDED_REASON)
 async def test_branding_live_rbac_tenant_isolation_and_domain_conflict(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -521,6 +522,7 @@ async def test_branding_live_rbac_tenant_isolation_and_domain_conflict(
 
 
 @pytest.mark.anyio
+@pytest.mark.skip(reason=PRD142_SUPERSEDED_REASON)
 async def test_branding_transaction_rollback_and_worker_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

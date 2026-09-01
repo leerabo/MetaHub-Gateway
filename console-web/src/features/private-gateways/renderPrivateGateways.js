@@ -1,6 +1,7 @@
 /** PRD-120..130 safe Edge offline exchange, backup, and lifecycle views. */
 
 import { privateGatewayPageOwner } from "./privateGatewayPageState.js";
+import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -242,6 +243,7 @@ function renderDeployment(item, state, owner) {
       ${renderBackupRecovery(item, state, owner)}
       ${renderHealthDiagnostics(item, state, owner)}
       ${renderDesiredState(item, state.desiredStates?.[item.deployment_id] ?? null, state, owner)}
+      ${renderDeploymentAppearance(item, state, owner)}
       ${renderUpgrade(item, state, owner)}
       ${renderTelemetry(item, state.telemetryStates?.[item.deployment_id] ?? null, state, owner)}
       ${renderSecrets(item, state, owner)}
@@ -256,6 +258,20 @@ function renderDeployment(item, state, owner) {
           <button type="button" class="danger" data-private-gateway-revoke="${escapeAttribute(item.deployment_id)}"${state.busy ? " disabled" : ""}>${state.revokingId === item.deployment_id ? "正在吊销" : "吊销"}</button>
         </div>` : ""}
     </article>`;
+}
+
+function renderDeploymentAppearance(deployment, state, owner) {
+  if (!owner.canReadBranding) return "";
+  if (deployment.status !== "active") {
+    return `<section class="private-gateway-appearance" aria-label="Gateway 外观">
+      <header><div><h5>外观</h5><small>独立签名品牌包，不修改 desired config</small></div><span class="private-gateway-state-status tone-pending">注册后可用</span></header>
+    </section>`;
+  }
+  const selected = state.deploymentBranding?.selectedDeploymentId === deployment.deployment_id;
+  return `<section class="private-gateway-appearance" aria-label="Gateway 外观">
+    <header><div><h5>外观</h5><small>独立签名品牌包，不修改 desired config</small></div><button type="button" data-private-gateway-brand="${escapeAttribute(deployment.deployment_id)}"${state.busy ? " disabled" : ""}>${selected ? "刷新" : "打开"}</button></header>
+    ${selected ? renderBrandEditor(state.deploymentBranding, { scope: "deployment-brand", kicker: "Private Gateway shell", title: `${deployment.display_name} 外观`, allowDomain: false }) : ""}
+  </section>`;
 }
 
 function renderLicense(deployment, state, owner) {

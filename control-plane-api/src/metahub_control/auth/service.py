@@ -41,6 +41,9 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
 
+from metahub_control.workspace_access.brand_permissions import (
+    load_verified_workspace_brand_permissions,
+)
 from metahub_control.workspace_access.edge_permissions import (
     load_verified_workspace_edge_permissions,
     resolve_verified_workspace_edge_role,
@@ -285,8 +288,13 @@ def login_admin(
             role_code=edge_role,
             unavailable_error_code="rbac.unavailable",
         )
+        brand_permissions = load_verified_workspace_brand_permissions(
+            connection,
+            role_code=edge_role,
+            unavailable_error_code="rbac.unavailable",
+        )
         extension_permissions = tuple(
-            sorted({*provider_catalog_permissions, *edge_permissions})
+            sorted({*provider_catalog_permissions, *edge_permissions, *brand_permissions})
         )
     except Exception:
         # 登录失败路径同样释放 SQLite 句柄，避免 Windows 验收后数据库无法重命名。
@@ -601,7 +609,16 @@ def _authenticate_bearer_context(
             deadline_error_code if deadline is not None else "rbac.unavailable"
         ),
     )
-    extension_permissions = tuple(sorted({*provider_catalog_permissions, *edge_permissions}))
+    brand_permissions = load_verified_workspace_brand_permissions(
+        connection,
+        role_code=edge_role,
+        unavailable_error_code=(
+            deadline_error_code if deadline is not None else "rbac.unavailable"
+        ),
+    )
+    extension_permissions = tuple(
+        sorted({*provider_catalog_permissions, *edge_permissions, *brand_permissions})
+    )
 
     if update_last_seen:
         # 普通 API 仍在认证成功后立即刷新；PAGE-107 会把该写入并入最终不可变审计事务。

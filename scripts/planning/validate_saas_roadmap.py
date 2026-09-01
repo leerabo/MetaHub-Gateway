@@ -419,6 +419,18 @@ REQUIRED_DOCS = {
         "PRD-142",
         "0133",
     ),
+    ROOT / "docs/prd/PRD-142-platform-channel-deployment-branding-domain.md": (
+        "状态：已完成",
+        "第一轮：",
+        "第二轮：",
+        "0134",
+    ),
+    ROOT / "docs/testing/PRD-142-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-143",
+        "0134",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -456,7 +468,7 @@ SECRET_PATTERNS = {
 }
 
 POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations", "support-tickets"})
-RETIRED_SOURCE_NAVIGATION_IDS = frozenset({"growth-analytics"})
+RETIRED_SOURCE_NAVIGATION_IDS = frozenset({"branding", "growth-analytics"})
 
 ROLE_ALIAS_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:ops|security|support|billing|finance|verification_reviewer)(?![A-Za-z0-9_])"
@@ -1102,10 +1114,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 133
+        and migration_versions[-1] == 134
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0133 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0134 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1355,6 +1367,13 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             / "infra/migrations/0133_platform_growth_funnel_campaign_attribution.down.sql"
         ).is_file(),
         "PRD-141 owns reversible migration 0133 with guarded growth-fact rollback",
+    )
+    report.check(
+        (ROOT / "infra/migrations/0134_platform_channel_deployment_branding.sql").is_file()
+        and (
+            ROOT / "infra/migrations/0134_platform_channel_deployment_branding.down.sql"
+        ).is_file(),
+        "PRD-142 owns reversible migration 0134 with guarded branding-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

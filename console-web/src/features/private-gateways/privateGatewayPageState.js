@@ -180,6 +180,12 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
   const manageIdentity = hasPermission(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_DEPLOYMENT_MANAGE)
     : "";
+  const brandingReadIdentity = hasPermission(authContext, PERMISSIONS.DEPLOYMENT_BRANDING_READ)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.DEPLOYMENT_BRANDING_READ)
+    : "";
+  const brandingManageIdentity = hasPermission(authContext, PERMISSIONS.DEPLOYMENT_BRANDING_MANAGE)
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.DEPLOYMENT_BRANDING_MANAGE)
+    : "";
   const telemetryReadIdentity = hasPermission(authContext, PERMISSIONS.EDGE_TELEMETRY_READ)
     ? authorizationIdentitySnapshot(authContext, PERMISSIONS.EDGE_TELEMETRY_READ)
     : "";
@@ -280,6 +286,8 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
     tenantId,
     readIdentity,
     manageIdentity,
+    brandingReadIdentity,
+    brandingManageIdentity,
     telemetryReadIdentity,
     telemetryManageIdentity,
     usageReadIdentity,
@@ -312,6 +320,8 @@ export function privateGatewayPageOwner(authContext, consoleShellState) {
       item.id, item.target_section, required, permissions, revision, fingerprint,
     ]),
     canManage: Boolean(manageIdentity),
+    canReadBranding: Boolean(brandingReadIdentity),
+    canManageBranding: Boolean(brandingReadIdentity && brandingManageIdentity),
     canReadTelemetry: Boolean(telemetryReadIdentity),
     canManageTelemetry: Boolean(telemetryManageIdentity),
     canReadUsage: Boolean(usageReadIdentity),

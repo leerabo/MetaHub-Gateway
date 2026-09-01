@@ -2,18 +2,44 @@
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
 
+const DEFAULT_PUBLIC_BRAND = Object.freeze({
+  product_name: "MetaHub",
+  primary_color: "#08786F",
+  secondary_color: "#075F58",
+  login_title: "登录账号",
+  login_message: "",
+  logo_path: null,
+  favicon_path: null,
+});
+let publicBrand = DEFAULT_PUBLIC_BRAND;
+
+/** Apply the strict Host-scoped public projection without persisting brand or host state. */
+export function setIdentityPublicBranding(value, documentObject = globalThis.document) {
+  publicBrand = normalizedPublicBrand(value);
+  const root = documentObject?.documentElement;
+  root?.style?.setProperty?.("--identity-accent", publicBrand.primary_color);
+  root?.style?.setProperty?.("--identity-accent-dark", publicBrand.secondary_color);
+  if (documentObject) documentObject.title = `${publicBrand.product_name} 账号安全`;
+  const app = documentObject?.querySelector?.("#identity-app");
+  app?.setAttribute?.("aria-label", `${publicBrand.product_name} 账号安全`);
+  const favicon = documentObject?.querySelector?.("link[rel='icon']");
+  favicon?.setAttribute?.("href", publicBrand.favicon_path ?? "data:,");
+  return publicBrand;
+}
+
 export function renderIdentityLoginPage(container, options = {}) {
   if (!container) return;
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-login-title">
         <header class="identity-brand">
-          <span class="identity-brand-mark" aria-hidden="true">M</span>
+          ${renderIdentityBrandMark()}
           <div>
-            <p>MetaHub</p>
-            <h1 id="identity-login-title">登录账号</h1>
+            <p>${escapeHtml(publicBrand.product_name)}</p>
+            <h1 id="identity-login-title">${escapeHtml(publicBrand.login_title)}</h1>
           </div>
         </header>
+        ${publicBrand.login_message ? `<p class="identity-brand-message">${escapeHtml(publicBrand.login_message)}</p>` : ""}
         <form class="identity-login-form" data-identity-login-form>
           <label>
             <span>邮箱</span>
@@ -297,9 +323,9 @@ function renderIdentityTopbar(state) {
   const available = Boolean(state.workspaceContext);
   return `
     <header class="identity-topbar">
-      <a class="identity-wordmark" href="/identity.html" aria-label="MetaHub 账号安全首页">
-        <span class="identity-brand-mark" aria-hidden="true">M</span>
-        <strong>MetaHub</strong>
+      <a class="identity-wordmark" href="/identity.html" aria-label="${escapeAttribute(publicBrand.product_name)} 账号安全首页">
+        ${renderIdentityBrandMark()}
+        <strong>${escapeHtml(publicBrand.product_name)}</strong>
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
@@ -2707,13 +2733,51 @@ function renderFeedback(feedback) {
 function renderAccessBrand(titleId, title) {
   return `
     <header class="identity-brand">
-      <span class="identity-brand-mark" aria-hidden="true">M</span>
+      ${renderIdentityBrandMark()}
       <div>
-        <p>MetaHub</p>
+        <p>${escapeHtml(publicBrand.product_name)}</p>
         <h1 id="${escapeAttribute(titleId)}">${escapeHtml(title)}</h1>
       </div>
     </header>
   `;
+}
+
+function renderIdentityBrandMark() {
+  if (publicBrand.logo_path) {
+    return `<span class="identity-brand-mark has-image"><img src="${escapeAttribute(publicBrand.logo_path)}" alt="${escapeAttribute(publicBrand.product_name)} Logo" /></span>`;
+  }
+  const initial = Array.from(publicBrand.product_name)[0]?.toUpperCase() ?? "M";
+  return `<span class="identity-brand-mark" aria-hidden="true">${escapeHtml(initial)}</span>`;
+}
+
+function normalizedPublicBrand(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_PUBLIC_BRAND;
+  const productName = safeBrandText(value.product_name, 80) || DEFAULT_PUBLIC_BRAND.product_name;
+  return Object.freeze({
+    product_name: productName,
+    primary_color: safeBrandColor(value.primary_color) || DEFAULT_PUBLIC_BRAND.primary_color,
+    secondary_color: safeBrandColor(value.secondary_color) || DEFAULT_PUBLIC_BRAND.secondary_color,
+    login_title: safeBrandText(value.login_title, 120) || DEFAULT_PUBLIC_BRAND.login_title,
+    login_message: safeBrandText(value.login_message, 240),
+    logo_path: safeBrandAssetPath(value.logo_path),
+    favicon_path: safeBrandAssetPath(value.favicon_path),
+  });
+}
+
+function safeBrandText(value, maximum) {
+  const text = String(value ?? "");
+  return text && new TextEncoder().encode(text).length <= maximum
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(text) ? text : "";
+}
+
+function safeBrandColor(value) {
+  const color = String(value ?? "");
+  return /^#[0-9A-F]{6}$/u.test(color) ? color : "";
+}
+
+function safeBrandAssetPath(value) {
+  const path = String(value ?? "");
+  return /^\/branding\/public\/assets\/bas_[0-9a-f]{32}$/u.test(path) ? path : null;
 }
 
 function renderError(error) {

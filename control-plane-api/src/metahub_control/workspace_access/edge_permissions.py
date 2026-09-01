@@ -173,15 +173,13 @@ EDGE_OFFLINE_PLATFORM_ROLE_PERMISSIONS = {
     ),
 }
 
-_LEGACY_ROLE_BY_WORKSPACE_ROLE = {
-    "owner": "admin",
-    "admin": "admin",
-    "developer": "developer",
-    "security_admin": "security_admin",
-    "finance_admin": "finance_admin",
-    "legal_admin": "viewer",
-    "auditor": "viewer",
-    "viewer": "viewer",
+_WORKSPACE_ROLES_BY_LEGACY_ROLE = {
+    "admin": frozenset(("owner", "admin")),
+    "ops_admin": frozenset(("admin",)),
+    "developer": frozenset(("developer",)),
+    "security_admin": frozenset(("security_admin",)),
+    "finance_admin": frozenset(("finance_admin",)),
+    "viewer": frozenset(("legal_admin", "auditor", "viewer")),
 }
 
 
@@ -225,7 +223,9 @@ def resolve_verified_workspace_edge_role(
         if len(rows) != 1:
             raise ApiError(unavailable_error_code)
         workspace_role = str(rows[0][0])
-        if _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(workspace_role) != legacy_role_code:
+        if workspace_role not in _WORKSPACE_ROLES_BY_LEGACY_ROLE.get(
+            legacy_role_code, frozenset()
+        ):
             raise ApiError(unavailable_error_code)
         return workspace_role
     except sqlite3.Error as exc:

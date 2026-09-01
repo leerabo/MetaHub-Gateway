@@ -204,6 +204,12 @@ import {
   requestGrowthExport,
 } from "../../lib/platformGrowth.js";
 import { createPlatformPageController } from "./platformPageState.js";
+import {
+  getChannelBranding,
+  getPlatformBranding,
+  updateChannelBranding,
+  updatePlatformBranding,
+} from "../../lib/brandDomains.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
   const contracts = await getPlatformDeveloperContracts({ controlApiUrl, signal });
@@ -229,6 +235,10 @@ if (root) {
       session: (input) => getPlatformSession({ controlApiUrl, ...input }),
       openSession: (input) => openPlatformSession({ controlApiUrl, ...input }),
       navigation: (input) => getPlatformNavigation({ controlApiUrl, ...input }),
+      platformBrand: (input) => getPlatformBranding({ controlApiUrl, ...input }),
+      updatePlatformBrand: (input) => updatePlatformBranding({ controlApiUrl, ...input }),
+      channelBrand: (input) => getChannelBranding({ controlApiUrl, ...input }),
+      updateChannelBrand: (input) => updateChannelBranding({ controlApiUrl, ...input }),
       customerAccounts: (input) => listPlatformCustomerAccounts({ controlApiUrl, ...input }),
       customerHealth: (input) => getPlatformCustomerHealth({ controlApiUrl, ...input }),
       customerPlan: (input) => applyPlatformCustomerSuccessPlan({ controlApiUrl, ...input }),

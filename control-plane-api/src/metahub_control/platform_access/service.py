@@ -226,6 +226,7 @@ _NAVIGATION = (
         "/platform.html#provider-catalog",
     ),
     ("platform.growth.read", "growth", "Growth", "/platform.html#growth"),
+    ("platform.brand.read", "branding", "Branding", "/platform.html#branding"),
     (
         "platform.notification_template.read",
         "notification-templates",
@@ -259,6 +260,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_channel_role_permissions",
     "platform_customer_success_role_permissions",
     "platform_growth_role_permissions",
+    "platform_brand_role_permissions",
 )
 
 

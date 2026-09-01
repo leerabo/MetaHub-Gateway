@@ -36,6 +36,7 @@ from metahub_control.migration_operations.permissions import (
 )
 
 from .assurance_permissions import ASSURANCE_ROLE_PERMISSIONS
+from .brand_permissions import WORKSPACE_BRAND_ROLE_PERMISSIONS
 from .compliance_permissions import COMPLIANCE_ROLE_PERMISSIONS
 from .edge_permissions import (
     EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS,
@@ -101,6 +102,14 @@ _WORKSPACE_ROLE_BY_LEGACY_ROLE = {
     "finance_admin": "finance_admin",
     "viewer": "viewer",
 }
+_WORKSPACE_ROLES_BY_LEGACY_ROLE = {
+    "admin": frozenset(("owner", "admin")),
+    "ops_admin": frozenset(("admin",)),
+    "developer": frozenset(("developer",)),
+    "security_admin": frozenset(("security_admin",)),
+    "finance_admin": frozenset(("finance_admin",)),
+    "viewer": frozenset(("legal_admin", "auditor", "viewer")),
+}
 _GOVERNANCE_ROLE_PERMISSIONS = {
     "owner": (
         "data_governance.manage",
@@ -147,6 +156,7 @@ _WORKSPACE_EXTENSION_GROUPS = (
     "privacy",
     "compliance",
     "assurance",
+    "branding",
 )
 _WORKSPACE_EXTENSION_FAMILIES = (
     _WorkspaceExtensionFamily(
@@ -277,6 +287,13 @@ _WORKSPACE_EXTENSION_FAMILIES = (
         "workspace_security_assurance_role_permissions",
         "0129",
         ASSURANCE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "branding",
+        "workspace_brand_permission_extensions",
+        "workspace_brand_role_permissions",
+        "0134",
+        WORKSPACE_BRAND_ROLE_PERMISSIONS,
     ),
 )
 WORKSPACE_EXTENSION_PERMISSION_CODES = frozenset(
@@ -826,6 +843,7 @@ def workspace_actor_authorization_probe_in_transaction(
         privacy,
         compliance,
         assurance,
+        branding,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -1997,7 +2015,9 @@ def _authenticate_workspace(
             (_db_time(now), row["workspace_session_id"]),
         )
         raise ApiError("workspace_session.expired")
-    expected_legacy_role = _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"])
+    compatible_workspace_roles = _WORKSPACE_ROLES_BY_LEGACY_ROLE.get(
+        row["legacy_role"], frozenset()
+    )
     enterprise_authorized = _enterprise_workspace_session_authorized(connection, row, now)
     from .conditional_access import session_satisfies_conditional_access_in_transaction
 
@@ -2019,7 +2039,7 @@ def _authenticate_workspace(
         or row["global_session_status"] != "active"
         or row["global_session_account_id"] != row["account_id"]
         or row["user_status"] != "active"
-        or row["legacy_role"] != expected_legacy_role
+        or row["role_code"] not in compatible_workspace_roles
         or row["membership_revision"] != row["current_membership_revision"]
         or row["workspace_revision"] != row["current_workspace_revision"]
         or row["account_session_revision"] != row["current_account_session_revision"]
@@ -2126,7 +2146,9 @@ def _switch_target(
     ).fetchone()
     if row is None:
         return None
-    if row["legacy_role"] != _LEGACY_ROLE_BY_WORKSPACE_ROLE.get(row["role_code"]):
+    if row["role_code"] not in _WORKSPACE_ROLES_BY_LEGACY_ROLE.get(
+        row["legacy_role"], frozenset()
+    ):
         return None
     return row
 
@@ -2149,6 +2171,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         privacy,
         compliance,
         assurance,
+        branding,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -2164,6 +2187,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
             privacy,
             compliance,
             assurance,
+            branding,
         )
     ):
         return legacy
@@ -2180,6 +2204,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
                 *privacy,
                 *compliance,
                 *assurance,
+                *branding,
             }
         )
     )
@@ -2195,6 +2220,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         privacy_permissions=privacy,
         compliance_permissions=compliance,
         assurance_permissions=assurance,
+        branding_permissions=branding,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -2211,6 +2237,7 @@ def _workspace_extension_permissions(
     role_code: str,
     require_catalogs: bool = False,
 ) -> tuple[
+    tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
@@ -2330,6 +2357,7 @@ def _workspace_authorization_fingerprint(
     privacy_permissions: tuple[str, ...],
     compliance_permissions: tuple[str, ...],
     assurance_permissions: tuple[str, ...],
+    branding_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2345,6 +2373,7 @@ def _workspace_authorization_fingerprint(
                 "privacy_permissions": privacy_permissions,
                 "compliance_permissions": compliance_permissions,
                 "assurance_permissions": assurance_permissions,
+                "branding_permissions": branding_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

@@ -334,8 +334,7 @@ test("login, settings, and shell render escaped branding and never render remote
       product_name: maliciousName,
       login_title: "Welcome <img src=x onerror=alert(1)>",
       login_message: "Secure & traceable",
-      logoPresent: true,
-      logoUrl: "https://attacker.invalid/logo.png",
+      logo_path: "https://attacker.invalid/logo.png",
     },
   });
   assert.match(loginContainer.innerHTML, /Acme &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
@@ -347,11 +346,10 @@ test("login, settings, and shell render escaped branding and never render remote
       product_name: "Acme",
       login_title: "Acme Console",
       login_message: "Enterprise Gateway",
-      logoPresent: true,
-      logoUrl: "blob:acme-logo",
+      logo_path: `/branding/public/assets/bas_${"a".repeat(32)}`,
     },
   });
-  assert.match(loginContainer.innerHTML, /src="blob:acme-logo"/);
+  assert.match(loginContainer.innerHTML, /src="\/branding\/public\/assets\/bas_a{32}"/);
 
   const auth = authContext();
   const shell = brandingShell();
@@ -359,9 +357,13 @@ test("login, settings, and shell render escaped branding and never render remote
     authContext: auth,
     consoleShellState: shell,
     contentHtml: "<section>Trusted content</section>",
-    branding: { product_name: maliciousName, logoPresent: true, logoUrl: "blob:shell-logo" },
+    branding: {
+      product_name: maliciousName,
+      logoPresent: true,
+      logoUrl: `/branding/public/assets/bas_${"b".repeat(32)}`,
+    },
   });
-  assert.match(shellHtml, /src="blob:shell-logo"/);
+  assert.match(shellHtml, /src="\/branding\/public\/assets\/bas_b{32}"/);
   assert.match(shellHtml, /Acme &lt;script&gt;/);
   assert.doesNotMatch(shellHtml, /<script>|fixture-session-token|tenant_id|logo_png_base64/i);
 

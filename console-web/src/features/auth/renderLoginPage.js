@@ -1,5 +1,3 @@
-import { safeBrandingLogoUrl } from "../../lib/branding.js";
-
 /**
  * 渲染控制台登录页。
  *
@@ -11,7 +9,7 @@ export function renderLoginPage(container, options = {}) {
     return;
   }
   const branding = options.branding && typeof options.branding === "object" ? options.branding : {};
-  const logoUrl = branding.logoPresent === true ? safeBrandingLogoUrl(branding.logoUrl) : "";
+  const logoUrl = safePublicBrandAssetPath(branding.logo_path);
   const productName = boundedText(branding.product_name, 120) ? branding.product_name : "MetaHub";
   const loginTitle = boundedText(branding.login_title, 160) ? branding.login_title : "MetaHub 控制台登录";
   const loginMessage = boundedText(branding.login_message, 400) ? branding.login_message : "";
@@ -55,6 +53,12 @@ export function renderLoginPage(container, options = {}) {
 function boundedText(value, max) {
   const text = String(value ?? "");
   return text.length > 0 && text.length <= max && !/[\u0000-\u001f\u007f]/u.test(text);
+}
+
+/** Public branding assets are content-addressed same-origin PNG routes only. */
+function safePublicBrandAssetPath(value) {
+  const path = String(value ?? "");
+  return /^\/branding\/public\/assets\/bas_[0-9a-f]{32}$/u.test(path) ? path : "";
 }
 
 /**

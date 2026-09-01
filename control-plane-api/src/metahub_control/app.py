@@ -28,8 +28,8 @@ from .auth.routes import router as auth_router
 from .batch_jobs import router as batch_jobs_router
 from .billing_disputes import install_billing_dispute_scheduler
 from .billing_disputes import router as billing_disputes_router
-from .branding import router as branding_router
-from .branding.scheduler import install_branding_scheduler
+from .brand_domains import install_brand_domain_scheduler
+from .brand_domains import router as brand_domains_router
 from .budgets.routes import router as budgets_router
 from .business_verification import router as business_verification_router
 from .capacity_management import router as capacity_management_router
@@ -387,7 +387,7 @@ app.include_router(model_quality_scores_router)
 app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
-app.include_router(branding_router)
+app.include_router(brand_domains_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
@@ -438,7 +438,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_observability_scheduler,
             install_risk_scheduler,
             install_channel_scheduler,
-            install_branding_scheduler,
+            install_brand_domain_scheduler,
             install_billing_dispute_scheduler,
             install_security_event_scheduler,
             install_mcp_scheduler,

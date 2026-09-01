@@ -1,4 +1,6 @@
-/** Dense Platform Channels projection for PRD-139. */
+/** Dense Platform Channels projection for PRD-139/142. */
+
+import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 
 export function renderChannelManagement(state = {}, permissions = new Set()) {
   const partners = state.channels?.items ?? [];
@@ -26,7 +28,7 @@ export function renderChannelManagement(state = {}, permissions = new Set()) {
       ${metric("Pending", pending.length, "attribution approvals")}
       ${metric("Statements", state.channelStatements?.total ?? 0, canStatements ? "reconciled" : "restricted")}
     </section>
-    ${canRead ? directory(partners, state, canManage) : ""}
+    ${canRead ? directory(partners, state, canManage, permissions) : ""}
     ${canManage ? createPartnerForm(state.loading) : ""}
     ${canLead || canRequest ? intakeForms(partners, state.loading, canLead, canRequest) : ""}
     ${canApprove ? pendingApprovals(pending, state.loading) : ""}
@@ -34,7 +36,7 @@ export function renderChannelManagement(state = {}, permissions = new Set()) {
   </div>`;
 }
 
-function directory(partners, state, canManage) {
+function directory(partners, state, canManage, permissions) {
   const filters = state.channelFilters ?? {};
   return `<section class="platform-band platform-channel-directory">
     <div class="platform-section-heading"><div><p>Owner-qualified catalog</p><h2>Partner directory</h2></div><span>${number(partners.length)} rows</span></div>
@@ -44,12 +46,13 @@ function directory(partners, state, canManage) {
       ${select("Region", "regionScope", filters.regionScope, [["", "All"], ["global", "Global"], ["cn", "CN"], ["apac", "APAC"], ["emea", "EMEA"], ["americas", "Americas"]])}
       <button class="platform-primary" type="submit" ${state.loading ? "disabled" : ""}>Filter</button>
     </form>
-    <div class="platform-channel-list">${partners.map((partner) => partnerCard(partner, state.loading, canManage)).join("") || '<div class="platform-empty">No partners match the current filters.</div>'}</div>
+    <div class="platform-channel-list">${partners.map((partner) => partnerCard(partner, state.loading, canManage, permissions, state.brandDomains?.channel)).join("") || '<div class="platform-empty">No partners match the current filters.</div>'}</div>
+    ${renderSelectedChannelBrand(partners, state.brandDomains?.channel)}
     ${pagination("channel", state.channels, state.loading)}
   </section>`;
 }
 
-function partnerCard(partner, loading, canManage) {
+function partnerCard(partner, loading, canManage, permissions, channelBrand) {
   const members = partner.memberships.filter((item) => item.status === "active");
   return `<article class="platform-channel-partner">
     <header><div><strong>${escapeHtml(partner.display_name)}</strong><small>${escapeHtml(partner.partner_code)} · ${shortId(partner.channel_partner_id)}</small></div><div>${status(partner.status)}<span>Rev ${number(partner.revision)}</span></div></header>
@@ -63,8 +66,18 @@ function partnerCard(partner, loading, canManage) {
       <section><h3>Commission rules</h3>${partner.commission_rules.map((rule) => `<div class="platform-channel-rule"><strong>${escapeHtml(rule.currency)} · ${(rule.commission_bps / 100).toFixed(2)}%</strong><span>v${number(rule.version)} · ${shortId(rule.channel_commission_rule_snapshot_id)}</span></div>`).join("") || '<span class="platform-restricted">None</span>'}</section>
       <section><h3>Memberships</h3>${members.map((member) => `<div class="platform-channel-member"><span>${escapeHtml(label(member.role_code))}<small>${shortId(member.account_id)}</small></span>${canManage ? revokeForm(partner, member, loading) : ""}</div>`).join("") || '<span class="platform-restricted">None</span>'}</section>
     </div>
+    <div class="platform-channel-card-actions">
+      ${permissions.has("platform.channel_brand.read") ? `<button type="button" data-platform-action="channel-brand-select" data-partner-id="${escapeAttribute(partner.channel_partner_id)}"${loading ? " disabled" : ""}>${channelBrand?.partnerId === partner.channel_partner_id ? "刷新外观" : "管理外观"}</button>` : ""}
+    </div>
     ${canManage ? `<details><summary>Partner controls</summary>${partnerControls(partner, loading)}</details>` : ""}
   </article>`;
+}
+
+function renderSelectedChannelBrand(partners, channelBrand) {
+  if (!channelBrand?.partnerId) return "";
+  const partner = partners.find((item) => item.channel_partner_id === channelBrand.partnerId);
+  if (!partner) return "";
+  return `<section class="platform-channel-brand-detail"><div class="platform-section-heading"><div><p>Scoped ChannelBrand</p><h2>${escapeHtml(partner.display_name)} 外观</h2></div><span>${escapeHtml(partner.partner_code)}</span></div>${renderBrandEditor(channelBrand, { scope: "channel-brand", kicker: "Partner host identity", title: "渠道品牌", allowDomain: true })}</section>`;
 }
 
 function partnerControls(partner, loading) {
