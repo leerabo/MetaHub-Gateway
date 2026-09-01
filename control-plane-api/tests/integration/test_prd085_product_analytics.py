@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,10 +31,11 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 # 三个测试身份和签名密钥只服务于隔离数据库，覆盖 admin、ops 与第二租户边界。
-ADMIN_PASSWORD = "Prd085AdminTestOnly!2026"
-OPS_PASSWORD = "Prd085OpsTestOnly!2026"
-SECOND_PASSWORD = "Prd085SecondTestOnly!2026"
-AUTH_SECRET = "prd085-auth-secret-" + "a" * 48
+ADMIN_PASSWORD = f"Prd085!Aa9{secrets.token_urlsafe(18)}"
+OPS_PASSWORD = f"Prd085!Bb9{secrets.token_urlsafe(18)}"
+SECOND_PASSWORD = f"Prd085!Cc9{secrets.token_urlsafe(18)}"
+AUTH_SECRET = "prd085-auth-secret-" + secrets.token_urlsafe(48)
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 
 
 def _url(path: Path) -> str:
@@ -44,11 +46,16 @@ def _url(path: Path) -> str:
 
 @pytest.fixture(scope="module")
 def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """构建一次当前空库模板，后续用例复制后再写各自租户事实。"""
+    """构建止于 0080 的历史模板，隔离验证 PRD-085 保留事实。"""
 
     root = tmp_path_factory.mktemp("prd085-control-template")
     database = root / "empty.sqlite3"
-    assert apply_migrations(_url(database)).applied[-1] == "0080"
+    migrations = root / "migrations"
+    migrations.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= 80:
+            shutil.copy2(source, migrations / source.name)
+    assert apply_migrations(_url(database), migrations_dir=migrations).applied[-1] == "0080"
     return database
 
 
@@ -285,12 +292,26 @@ def _revoke_ops_product_read(database_url: str) -> None:
 
 
 @pytest.mark.anyio
-async def test_funnel_api_exact_query_permissions_isolation_and_dynamic_revoke(
+async def test_prd141_active_app_retires_the_product_analytics_route() -> None:
+    """活动 Control 应用不再挂载 PRD-085 企业漏斗路由。"""
+
+    from metahub_control.app import app as active_app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=active_app),
+        base_url="http://control",
+    ) as client:
+        response = await client.get("/product-analytics/funnel")
+
+    assert response.status_code == 404
+
+
+async def _legacy_funnel_api_acceptance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     migrated_database: Path,
 ) -> None:
-    """验证 exact query、双租户隔离、admin/ops 授权、动态撤权和统一错误链路。"""
+    """保留切换前正向场景到 PRD-147 物理清理，不进入活动测试集合。"""
 
     database_url = _prepare(monkeypatch, tmp_path, migrated_database)
     _insert_provider_event(database_url, audit_id="aud_prd085_api")

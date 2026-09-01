@@ -56,7 +56,6 @@ import { renderRequestLogPanel } from "../request-logs/renderRequestLogPanel.js"
 import { renderOutputSafety } from "../output-safety/renderOutputSafety.js";
 import { renderRequestExplanationPanel } from "../request-explanations/renderRequestExplanation.js";
 import { renderRequestFeedbackSummaryPanel } from "../request-feedback/renderRequestFeedback.js";
-import { renderProductAnalytics } from "../product-analytics/renderProductAnalytics.js";
 import { renderCustomerHealth } from "../customer-health/renderCustomerHealth.js";
 import { renderPartnerPortal } from "../partner-portal/renderPartnerPortal.js";
 import { brandingPageOwner } from "../branding/brandingPageState.js";
@@ -608,14 +607,6 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.requestFeedbackSummaryState,
         options.authContext,
         options.requestFeedbackSummaryFilters,
-        options.i18n,
-      );
-    case "growth-analytics":
-      // PAGE-117 只展示后端权威七阶段聚合；权限 capability、tenant 与漏斗不变量均在独立边界复核。
-      return renderProductAnalyticsSection(
-        options.productAnalyticsState,
-        options.authContext,
-        options.consoleShellState,
         options.i18n,
       );
     case "customer-health":
@@ -1312,18 +1303,6 @@ function renderRequestFeedbackSummarySection(summaryState, authContext, filters,
   return html
     ? `
       <section class="panel feedback-summary-panel" aria-labelledby="feedback-summary-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
-/** 仅当实时身份与后端导航指向同一租户 owner 时渲染 PAGE-117。 */
-function renderProductAnalyticsSection(state, authContext, consoleShellState, i18n) {
-  const html = renderProductAnalytics(state, authContext, consoleShellState, i18n);
-  return html
-    ? `
-      <section class="panel growth-analytics-panel" aria-labelledby="product-analytics-title">
         ${html}
       </section>
     `

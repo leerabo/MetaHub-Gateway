@@ -3,6 +3,7 @@ import { PlatformApiError } from "../../lib/platform.js";
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
 import { createPlatformCustomerSuccessController } from "../platform-customer-success/platformCustomerSuccessController.js";
+import { createPlatformGrowthController } from "../platform-growth/platformGrowthController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
@@ -90,6 +91,7 @@ export function createPlatformPageController({
     channelLatestLead: null,
     channelLatestAttribution: null,
     customerSuccess: null,
+    growth: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -207,6 +209,27 @@ export function createPlatformPageController({
   });
   state.customerSuccess = customerSuccessController.snapshot();
 
+  const growthController = createPlatformGrowthController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.growth = snapshot;
+      if (state.session && state.view === "growth" && !state.loading) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && state.view === "growth") void controller.refresh();
+      });
+    },
+  });
+  state.growth = growthController.snapshot();
+
   const controller = {
     async mount() {
       bind();
@@ -291,7 +314,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
-        "channels", "customer-success",
+        "channels", "customer-success", "growth",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -334,6 +357,8 @@ export function createPlatformPageController({
           clearChannelFacts();
         } else if (state.view === "customer-success") {
           customerSuccessController.leave();
+        } else if (state.view === "growth") {
+          growthController.leave();
         } else if (state.view === "edge-fleet") {
           state.edgeFleet = null;
           state.edgeFleetFilters = { status: "", region: "", health: "" };
@@ -418,6 +443,12 @@ export function createPlatformPageController({
           void customerSuccessController.loadDirectory();
         }
       }
+      if (state.view === "growth") {
+        const entered = growthController.enter(state.session?.context, state.navigation);
+        if (entered && growthController.snapshot().data[growthController.snapshot().tab] === null) {
+          void growthController.load();
+        }
+      }
       if (state.view === "edge-fleet" && !state.edgeFleet) void loadEdgeFleet();
       if (state.view === "edge-upgrades"
         && !state.gatewayReleases && !state.fleetRollouts) void loadEdgeUpgrades();
@@ -472,6 +503,50 @@ export function createPlatformPageController({
     async applyCustomerSuccessTask(command, stepUp = null) {
       if (state.view !== "customer-success") return false;
       return customerSuccessController.applyTask(command, stepUp);
+    },
+    async refreshGrowth() {
+      if (state.view !== "growth") return false;
+      return growthController.load();
+    },
+    selectGrowthTab(tab) {
+      if (state.view !== "growth") return false;
+      return growthController.selectTab(tab);
+    },
+    async filterGrowth(tab, filters = {}) {
+      if (state.view !== "growth") return false;
+      return growthController.configure(tab, compactObject(filters));
+    },
+    async nextGrowthPage() {
+      if (state.view !== "growth") return false;
+      return growthController.nextPage();
+    },
+    async previousGrowthPage() {
+      if (state.view !== "growth") return false;
+      return growthController.previousPage();
+    },
+    async applyGrowthCampaign(command, stepUp = null) {
+      if (state.view !== "growth") return false;
+      return growthController.applyCampaign(command, stepUp);
+    },
+    async applyGrowthExperiment(command, stepUp = null) {
+      if (state.view !== "growth") return false;
+      return growthController.applyExperiment(command, stepUp);
+    },
+    async requestGrowthExport(manifest, stepUp = null) {
+      if (state.view !== "growth") return false;
+      return growthController.requestExport(manifest, stepUp);
+    },
+    async loadGrowthExport(exportId) {
+      if (state.view !== "growth") return false;
+      return growthController.loadExport(exportId);
+    },
+    async decideGrowthExport(command, exportId, stepUp = null) {
+      if (state.view !== "growth") return false;
+      return growthController.decideExport(command, exportId, stepUp);
+    },
+    async downloadGrowthExport(exportId, stepUp = null) {
+      if (state.view !== "growth") return false;
+      return growthController.downloadExport(exportId, stepUp);
     },
     async refreshChannels() {
       if (state.view !== "channels") return false;
@@ -3198,11 +3273,19 @@ export function createPlatformPageController({
         && state.navigation.some((item) => item.id === "customer-success")
         && customerSuccessController.enter(state.session?.context, state.navigation);
       if (!customerSuccessActive) customerSuccessController.leave();
+      const growthActive = state.view === "growth"
+        && state.navigation.some((item) => item.id === "growth")
+        && growthController.enter(state.session?.context, state.navigation);
+      if (!growthActive) growthController.leave();
       state.loading = false;
       state.error = null;
       render();
       if (customerSuccessActive && !customerSuccessController.snapshot().directory) {
         void customerSuccessController.loadDirectory();
+      }
+      if (growthActive
+        && growthController.snapshot().data[growthController.snapshot().tab] === null) {
+        void growthController.load();
       }
       return true;
     } catch (error) {
@@ -4601,6 +4684,104 @@ export function createPlatformPageController({
         });
         verificationCode = "";
       }
+      if (form.matches("[data-platform-growth-filter-form]")) {
+        const tab = String(form.dataset.growthTab ?? "");
+        controller.filterGrowth(tab, growthFilters(tab, data));
+      }
+      if (form.matches("[data-platform-growth-campaign-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        const operation = String(data.get("operation") ?? "");
+        controller.applyGrowthCampaign({
+          operation,
+          ...(operation === "update" ? { campaign_id: data.get("campaignId") } : {}),
+          expected_revision: Number(data.get("expectedRevision")),
+          display_name: data.get("displayName"),
+          acquisition_source_id: data.get("sourceId"),
+          channel_code: data.get("channelCode"),
+          target_stage: data.get("targetStage"),
+          starts_at: localTimestamp(data.get("startsAt")),
+          ends_at: localTimestamp(data.get("endsAt")),
+          budget_minor: Number(data.get("budgetMinor")),
+          currency: data.get("currency"),
+          confirmed: data.get("confirmed") === "on",
+        }, secure);
+      }
+      if (form.matches("[data-platform-growth-campaign-transition-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        controller.applyGrowthCampaign({
+          operation: data.get("operation"),
+          campaign_id: data.get("campaignId"),
+          expected_revision: Number(data.get("expectedRevision")),
+          confirmed: data.get("confirmed") === "on",
+        }, secure);
+      }
+      if (form.matches("[data-platform-growth-experiment-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        const operation = String(data.get("operation") ?? "");
+        controller.applyGrowthExperiment({
+          operation,
+          ...(operation === "update" ? { experiment_id: data.get("experimentId") } : {}),
+          expected_revision: Number(data.get("expectedRevision")),
+          hypothesis_code: data.get("hypothesisCode"),
+          surface_code: data.get("surfaceCode"),
+          primary_metric: data.get("primaryMetric"),
+          control_code: data.get("controlCode"),
+          variant_code: data.get("variantCode"),
+          control_allocation_bps: Number(data.get("controlAllocationBps")),
+          variant_allocation_bps: Number(data.get("variantAllocationBps")),
+          eligibility_policy_version: data.get("eligibilityPolicyVersion"),
+          consent_version: data.get("consentVersion"),
+          sample_cap: Number(data.get("sampleCap")),
+          starts_at: localTimestamp(data.get("startsAt")),
+          ends_at: localTimestamp(data.get("endsAt")),
+          guardrail_code: data.get("guardrailCode"),
+          decision_policy_version: data.get("decisionPolicyVersion"),
+          confirmed: data.get("confirmed") === "on",
+        }, secure);
+      }
+      if (form.matches("[data-platform-growth-experiment-transition-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        const sourceWatermark = String(data.get("sourceWatermark") ?? "");
+        controller.applyGrowthExperiment({
+          operation: data.get("operation"),
+          experiment_id: data.get("experimentId"),
+          expected_revision: Number(data.get("expectedRevision")),
+          ...(sourceWatermark ? { source_watermark: sourceWatermark } : {}),
+          confirmed: data.get("confirmed") === "on",
+        }, secure);
+      }
+      if (form.matches("[data-platform-growth-export-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        const queryKind = String(data.get("queryKind") ?? "");
+        controller.requestGrowthExport({
+          query_kind: queryKind,
+          view: data.get("view"),
+          from_date: data.get("fromDate"),
+          to_date: data.get("toDate"),
+          bucket: queryKind === "funnels" ? data.get("bucket") : null,
+          dimension: data.get("dimension"),
+          formula_version: data.get("formulaVersion"),
+          sensitivity: data.get("sensitivity"),
+          confirmed: data.get("confirmed") === "on",
+        }, secure);
+      }
+      if (form.matches("[data-platform-growth-export-lookup-form]")) {
+        controller.loadGrowthExport(data.get("exportId"));
+      }
+      if (form.matches("[data-platform-growth-export-approval-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        const operation = String(data.get("operation") ?? "");
+        controller.decideGrowthExport({
+          operation,
+          expected_revision: Number(data.get("expectedRevision")),
+          reason_code: operation === "approve" ? "policy_approved" : "policy_rejected",
+          confirmed: data.get("confirmed") === "on",
+        }, data.get("exportId"), secure);
+      }
+      if (form.matches("[data-platform-growth-export-download-form]")) {
+        const secure = takeGrowthStepUp(form, data);
+        controller.downloadGrowthExport(data.get("exportId"), secure);
+      }
       if (form.matches("[data-platform-channel-filter-form]")) {
         controller.filterChannels({
           status: data.get("status"),
@@ -5485,11 +5666,17 @@ export function createPlatformPageController({
       if (target.dataset.platformCustomerTab) {
         controller.selectCustomerSuccessTab(target.dataset.platformCustomerTab);
       }
+      if (target.dataset.platformGrowthTab) {
+        controller.selectGrowthTab(target.dataset.platformGrowthTab);
+      }
       if (action === "customer-refresh") controller.refreshCustomerSuccess();
       if (action === "customer-contacts") controller.loadCustomerSuccessContacts();
       if (action === "customer-contacts-close") controller.hideCustomerSuccessContacts();
       if (action === "customer-next") controller.nextCustomerSuccessPage();
       if (action === "customer-previous") controller.previousCustomerSuccessPage();
+      if (action === "growth-refresh") controller.refreshGrowth();
+      if (action === "growth-next") controller.nextGrowthPage();
+      if (action === "growth-previous") controller.previousGrowthPage();
       if (action === "privacy-refresh") controller.refreshPrivacyQueue();
       if (action === "compliance-refresh") controller.refreshComplianceControls();
       if (action === "assurance-refresh") controller.refreshSecurityAssessment();
@@ -5550,6 +5737,17 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
+      if (select?.matches?.('[data-platform-growth-root] select[name="method"]')) {
+        const code = select.form?.querySelector?.("[data-platform-growth-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
       if (select?.matches?.('[data-platform-customer-batch-approve-form] select[name="method"]')) {
         const code = select.form?.querySelector?.("[data-platform-customer-step-up-code]");
         const input = code?.querySelector?.("[data-platform-sensitive]");
@@ -5709,6 +5907,7 @@ export function createPlatformPageController({
   function clearProtectedFacts() {
     state.navigation = [];
     customerSuccessController.leave();
+    growthController.leave();
     state.operators = null;
     state.plans = null;
     state.providerCatalog = null;
@@ -6008,6 +6207,49 @@ function lineList(value) {
 function localTimestamp(value) {
   const parsed = new Date(String(value ?? ""));
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : "";
+}
+
+function growthFilters(tab, data) {
+  if (tab === "funnels") {
+    return {
+      view: data.get("view"), from: data.get("from"), to: data.get("to"),
+      bucket: data.get("bucket"), dimension: data.get("dimension"),
+      dimension_value: data.get("dimensionValue"),
+    };
+  }
+  if (tab === "cohorts") {
+    return {
+      view: data.get("view"), cohort_kind: data.get("cohortKind"),
+      from: data.get("from"), to: data.get("to"), age_buckets: data.get("ageBuckets"),
+      dimension: data.get("dimension"), dimension_value: data.get("dimensionValue"),
+    };
+  }
+  if (tab === "campaigns") {
+    return {
+      status: data.get("status"), source: data.get("source"), channel: data.get("channel"),
+      from: data.get("from"), to: data.get("to"),
+    };
+  }
+  if (tab === "experiments") {
+    return {
+      status: data.get("status"), surface: data.get("surface"), metric: data.get("metric"),
+      from: data.get("from"), to: data.get("to"),
+    };
+  }
+  if (tab === "attribution") {
+    return {
+      view: data.get("view"), from: data.get("from"), to: data.get("to"),
+      stage: data.get("stage"), source: data.get("source"), channel: data.get("channel"),
+      campaign: data.get("campaign"),
+    };
+  }
+  return {};
+}
+
+function takeGrowthStepUp(form, data) {
+  const verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
+  return { method: String(data.get("method") ?? "totp"), verificationCode };
 }
 
 function takeChannelStepUp(form, data) {

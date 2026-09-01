@@ -3,6 +3,7 @@ import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import { renderChannelManagement } from "../channels/renderChannelManagement.js";
 import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
+import { renderPlatformGrowth } from "../platform-growth/renderPlatformGrowth.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -119,6 +120,9 @@ function renderView(state, permissions) {
       permissions,
       state.session?.context,
     );
+  }
+  if (state.view === "growth") {
+    return renderPlatformGrowth(state.growth, permissions);
   }
   return domainPlaceholderView(state);
 }

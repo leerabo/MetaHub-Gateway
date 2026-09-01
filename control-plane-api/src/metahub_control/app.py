@@ -101,6 +101,8 @@ from .platform_customer_success import install_platform_customer_success_schedul
 from .platform_customer_success import router as platform_customer_success_router
 from .platform_gateway import install_gateway_snapshot_scheduler
 from .platform_gateway import router as platform_gateway_router
+from .platform_growth import install_platform_growth_scheduler
+from .platform_growth import router as platform_growth_router
 from .platform_infrastructure import router as platform_infrastructure_router
 from .platform_jobs import install_platform_job_supervisor
 from .platform_jobs import router as platform_jobs_router
@@ -109,8 +111,6 @@ from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
 from .privacy_center import install_privacy_scheduler
 from .privacy_center import router as privacy_center_router
-from .product_analytics import install_product_event_scheduler
-from .product_analytics import router as product_analytics_router
 from .projects.routes import router as projects_router
 from .prompt_templates.routes import router as prompt_templates_router
 from .provider_catalog import router as provider_catalog_router
@@ -166,6 +166,7 @@ app = create_service_app(
         "X-MetaHub-Invoice-Download-Token",
         "X-Step-Up-Grant",
         "X-Privacy-Export-Receipt",
+        "X-Growth-Export-Receipt",
     ),
     cors_allow_credentials=True,
     extra_cors_expose_headers=(
@@ -329,6 +330,7 @@ app.include_router(public_status_router)
 app.include_router(capacity_management_router)
 app.include_router(channel_management_router)
 app.include_router(platform_customer_success_router)
+app.include_router(platform_growth_router)
 app.include_router(platform_access_router)
 app.include_router(platform_billing_router)
 app.include_router(platform_infrastructure_router)
@@ -376,7 +378,6 @@ app.include_router(provider_catalog_router)
 app.include_router(provider_health_router)
 app.include_router(provider_status_router)
 app.include_router(projects_router)
-app.include_router(product_analytics_router)
 app.include_router(prompt_templates_router)
 app.include_router(provider_keys_router)
 app.include_router(models_router)
@@ -426,7 +427,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_adapter_contract_event_scheduler,
             install_experiment_scheduler,
             install_response_cache_outbox_scheduler,
-            install_product_event_scheduler,
+            install_platform_growth_scheduler,
             install_approval_scheduler,
             install_plan_billing_scheduler,
             install_saas_billing_scheduler,

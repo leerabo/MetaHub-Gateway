@@ -258,6 +258,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_launch_role_permissions",
     "platform_channel_role_permissions",
     "platform_customer_success_role_permissions",
+    "platform_growth_role_permissions",
 )
 
 
@@ -835,6 +836,10 @@ def _navigation_items(permission_set: set[str]) -> tuple[PlatformNavigationItem,
         "platform.customer_success.finance_read",
         "platform.customer_success.renewal.read",
     }
+    growth_reads = {
+        "platform.growth.adoption_read",
+        "platform.growth.channel_attribution_read",
+    }
     return tuple(
         PlatformNavigationItem(id=item_id, label=label, href=href)
         for permission, item_id, label, href in _NAVIGATION
@@ -846,6 +851,7 @@ def _navigation_items(permission_set: set[str]) -> tuple[PlatformNavigationItem,
         or (item_id == "abuse-risk" and "platform.risk.support_read" in permission_set)
         or (item_id == "support" and "platform.support.ticket.read" in permission_set)
         or (item_id == "customer-success" and bool(customer_success_reads & permission_set))
+        or (item_id == "growth" and bool(growth_reads & permission_set))
     )
 
 

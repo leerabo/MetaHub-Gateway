@@ -74,19 +74,19 @@ def test_prd140_retires_prd086_tenant_permission() -> None:
         assert "customer_health.read" not in ROLE_GRANTABLE_PERMISSIONS[role]
 
 
-def test_prd140_contracted_role_matrix_hashes_are_exact() -> None:
-    """确认移除旧权限后的六个完整角色矩阵摘要没有静默漂移。"""
+def test_prd141_contracted_role_matrix_hashes_are_exact() -> None:
+    """确认连续移除健康与产品分析权限后的六个角色矩阵摘要。"""
 
     assert {
         role: permission_matrix_sha256(permissions)
         for role, permissions in ROLE_GRANTABLE_PERMISSIONS.items()
     } == {
-        "admin": "9af89117d6e3eb365c9c90f61778d0fe7408d03a50a6cd32a0d6eb4e61e772fb",
+        "admin": "eb48d3c3fddfa76477ae5af3943449253af0581da445e3d5695f893258dba6b8",
         "developer": "888796e8f30b282353452e012ba5132476a59ffb2509eded4cb44d8e8de5b686",
         "viewer": "be55018029cd884b139e7e919a0f7052a94c8ca1ae5120fcb499e1b8754837af",
         "finance_admin": "843de9cd51726438ebf668ab413a126b31c429a26b7ee306a394bca4435764fc",
         "security_admin": "7bece4007f6bb8affcfa72d1db73ddc12b71d4bb85f874ad440736e63e596dbb",
-        "ops_admin": "71c49cf7d47d0a5092eb50c3727cb93a1409f2f1fe3359d47e477c2f6eefdc6b",
+        "ops_admin": "bdab5bcae4741701f7171d1f08624f71306963dea15e99ccbde55028df2e6426",
     }
 
 

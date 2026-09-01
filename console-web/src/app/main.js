@@ -181,13 +181,6 @@ import {
   supportTicketReadIdentitySnapshot,
 } from "../features/support-tickets/supportTicketPageState.js";
 import { renderSupportTickets } from "../features/support-tickets/renderSupportTickets.js";
-import {
-  createProductAnalyticsPageState,
-  isProductAnalyticsAbortError,
-  productAnalyticsPageOwner,
-  productAnalyticsReadIdentitySnapshot,
-} from "../features/product-analytics/productAnalyticsPageState.js";
-import { renderProductAnalytics } from "../features/product-analytics/renderProductAnalytics.js";
 import { renderBrandingSettings } from "../features/branding/renderBrandingSettings.js";
 import { bindBrandingSettingsInteractions, clearBrandingSettingsDom } from "../features/branding/bindBrandingSettings.js";
 import {
@@ -625,7 +618,6 @@ import {
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
 } from "../lib/identity.js";
-import { getProductAnalyticsFunnel } from "../lib/productAnalytics.js";
 import {
   getBranding,
   getBrandingLogo,
@@ -1042,10 +1034,6 @@ const migrationOperationPageState = createMigrationOperationPageState({
 const supportTicketPageState = createSupportTicketPageState({
   clearDom: clearSupportTicketDom,
 });
-// PAGE-117 只持有当前授权 tenant 的七阶段聚合；DOM 清理先于 Abort 回调发生。
-const productAnalyticsPageState = createProductAnalyticsPageState({
-  clearDom: () => globalThis.document?.querySelector?.(".growth-analytics-panel")?.replaceChildren(),
-});
 // PAGE-119 owns branding, customer/commission aggregates, dialogs, and attachment lanes independently.
 const partnerPortalPageState = createPartnerPortalPageState({
   clearDom: () => clearPartnerPortalDom(globalThis.document),
@@ -1227,10 +1215,6 @@ if (app && globalThis.window) {
       if (nextItemId !== "support-tickets") {
         supportTicketPageState.clear();
       }
-      if (nextItemId !== "growth-analytics") {
-        // PAGE-117 的租户漏斗与 GET owner 在 hash 离页时立即销毁，不能等待导航 API 返回。
-        productAnalyticsPageState.clear();
-      }
       if (nextItemId !== "partner-portal") {
         // PAGE-119 clears visible branding and all private lanes before navigation work can complete.
         partnerPortalPageState.clear();
@@ -1302,7 +1286,6 @@ if (app && globalThis.window) {
       privateGatewayPageState.clear();
       migrationOperationPageState.clear();
       supportTicketPageState.clear();
-      productAnalyticsPageState.clear();
       partnerPortalPageState.clear();
       brandingPageState.clear();
       experimentPageState.clear();
@@ -1434,7 +1417,6 @@ async function start() {
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
@@ -1603,7 +1585,6 @@ async function performRefresh(options = {}) {
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearProductAnalyticsStateOnIdentityChange(authSession.context, context);
     clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearBrandingStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
@@ -1897,10 +1878,6 @@ async function performRefresh(options = {}) {
     && supportTicketPageState.enter(currentSupportTicketOwner(consoleShellState))
   ) {
     return;
-  }
-  // PAGE-117 只属于后端确认的独立 capability 导航；撤权、换租户或离页立即销毁聚合与 GET。
-  if (consoleShellState?.activeNavigationItemId !== "growth-analytics") {
-    productAnalyticsPageState.clear();
   }
   // PAGE-119 exists only while the exact backend navigation owner and live read permission remain current.
   if (consoleShellState?.activeNavigationItemId !== "partner-portal") {
@@ -2230,7 +2207,6 @@ async function performRefresh(options = {}) {
     tenantDataLifecycleState,
     mcpToolsState,
     localEndpointsState,
-    productAnalyticsState,
   ] = await Promise.all([
     loadFinOpsState(consoleShellState, refreshId),
     loadCostAnomaliesState(consoleShellState, refreshId),
@@ -2245,7 +2221,6 @@ async function performRefresh(options = {}) {
     loadTenantDataLifecycleState(consoleShellState, refreshId),
     loadMcpToolsState(consoleShellState, refreshId),
     loadLocalEndpointsState(consoleShellState, refreshId),
-    loadProductAnalyticsState(consoleShellState, refreshId),
   ]);
   if (!authSession.token) {
     return;
@@ -2454,7 +2429,6 @@ async function performRefresh(options = {}) {
     tenantDataLifecycleState,
     mcpToolsState,
     localEndpointsState,
-    productAnalyticsState,
     // PRD-139 moved partner access to the isolated Partner shell. Keep the
     // legacy renderer inert until its source is removed with PRD-147.
     partnerPortalState: null,
@@ -2754,9 +2728,6 @@ async function loadAndRenderActiveNavigation({
       state.requestFeedbackSummaryState = await loadRequestFeedbackSummaryState(consoleShellState, refreshId);
       state.requestFeedbackSummaryFilters = requestFeedbackSummaryFilters;
       break;
-    case "growth-analytics":
-      await load("productAnalyticsState", () => loadProductAnalyticsState(consoleShellState, refreshId));
-      break;
     case "branding":
       if (!shellMetadataPromise) await load("brandingState", () => loadBrandingState(refreshId));
       break;
@@ -2938,7 +2909,6 @@ function renderLogin(error, requestId) {
   privateGatewayPageState.clear();
   migrationOperationPageState.clear();
   supportTicketPageState.clear();
-  productAnalyticsPageState.clear();
   partnerPortalPageState.clear();
   brandingPageState.clear();
   experimentPageState.clear();
@@ -3339,7 +3309,6 @@ function bindAuthenticatedEvents(consoleShellState) {
     privateGatewayPageState.clear();
     migrationOperationPageState.clear();
     supportTicketPageState.clear();
-    productAnalyticsPageState.clear();
     partnerPortalPageState.clear();
     brandingPageState.clear();
     experimentPageState.clear();
@@ -3464,7 +3433,6 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRequestExplanationInteractions(consoleShellState);
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
-  bindProductAnalyticsInteractions(consoleShellState);
   bindPartnerPortalPageInteractions(consoleShellState);
   bindRoleDashboardInteractions(consoleShellState);
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
@@ -8309,66 +8277,6 @@ async function submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShell
   return privateGatewayPageState.snapshot();
 }
 
-/** 由实时 capability、授权 fingerprint、后端导航和当前 hash 共同构造 PAGE-117 owner。 */
-function currentProductAnalyticsOwner(consoleShellState) {
-  const owner = productAnalyticsPageOwner(authSession.context, consoleShellState);
-  // 后端导航与 URL hash 必须同时指向增长分析，避免历史导航 owner 在离页后继续读取。
-  return owner && readActiveNavigationHash() === "growth-analytics" ? owner : null;
-}
-
-/** 显式刷新后只重绘 PAGE-117；owner 无效时保持 DOM 空白且不重建其他控制台区域。 */
-function renderCurrentProductAnalyticsPanel(consoleShellState) {
-  const panel = globalThis.document?.querySelector?.(".growth-analytics-panel");
-  const owner = currentProductAnalyticsOwner(consoleShellState);
-  // 面板、owner 或状态机归属任一缺失都停止渲染，不能回退展示上一个租户快照。
-  if (!panel || !owner || !productAnalyticsPageState.enter(owner)) return false;
-  panel.innerHTML = renderProductAnalytics(
-    productAnalyticsPageState.snapshot(),
-    authSession.context,
-    consoleShellState,
-    currentI18n,
-  );
-  bindProductAnalyticsInteractions(consoleShellState);
-  return true;
-}
-
-/** 绑定 PAGE-117 唯一刷新命令；每次点击都重新核对完整 owner 并创建新请求代际。 */
-function bindProductAnalyticsInteractions(consoleShellState) {
-  const owner = currentProductAnalyticsOwner(consoleShellState);
-  // 无法重新进入当前 owner 时不绑定按钮，避免旧 DOM 发起越权或跨租户读取。
-  if (!owner || !productAnalyticsPageState.enter(owner)) return false;
-  const button = globalThis.document?.querySelector?.("[data-product-analytics-refresh]");
-  button?.addEventListener("click", async () => {
-    const generation = ++refreshSequence;
-    const pending = loadProductAnalyticsState(consoleShellState, generation);
-    renderCurrentProductAnalyticsPanel(consoleShellState);
-    const state = await pending;
-    if (state) renderCurrentProductAnalyticsPanel(consoleShellState);
-  }, { once: true });
-  return Boolean(button);
-}
-
-/** 仅在 PAGE-117 当前 ticket 仍有效时处理 401/403，迟到请求不得改变新身份状态。 */
-function handleProductAnalyticsAuthenticationFailure(error) {
-  // 非统一认证错误属于可展示的读取失败，不得误清 Session 或触发权限刷新。
-  if (!(error instanceof AuthApiError)) return false;
-  // 401 表示 Session 已失效，必须先销毁漏斗 owner 与 DOM，再返回登录页。
-  if (error.status === 401) {
-    productAnalyticsPageState.clear();
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error.requestId);
-    return true;
-  }
-  // 403 表示实时权限已变化，清空旧聚合后重新读取后端导航与授权 fingerprint。
-  if (error.status === 403) {
-    productAnalyticsPageState.clear();
-    globalThis.window?.setTimeout?.(() => void refresh(), 0);
-    return true;
-  }
-  return false;
-}
-
 /** Build PAGE-119 owner only from the exact live RBAC/navigation snapshot and current hash. */
 function currentPartnerPortalOwner(consoleShellState) {
   const owner = partnerPortalPageOwner(authSession.context, consoleShellState);
@@ -13067,10 +12975,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
   }
   if (itemId !== "support-tickets") {
     supportTicketPageState.clear();
-  }
-  if (itemId !== "growth-analytics") {
-    // 导航偏好请求前销毁 PAGE-117 聚合和 GET ticket，迟到响应不得写入目标页面。
-    productAnalyticsPageState.clear();
   }
   if (itemId !== "partner-portal") {
     // PAGE-119 attachment/object state and branding are destroyed before the navigation preference request.
@@ -18590,46 +18494,6 @@ async function loadPrivateGatewayDesiredStates(deployments, signal) {
   return results;
 }
 
-/** 读取 PAGE-117 精确聚合，并丢弃租户、导航、权限或刷新代际已过期的异步结果。 */
-async function loadProductAnalyticsState(consoleShellState, refreshId) {
-  const owner = currentProductAnalyticsOwner(consoleShellState);
-  // 请求发出前必须同时持有当前刷新代际和完整页面 owner，未授权页面不会预取 API。
-  if (!owner || refreshId !== refreshSequence || !productAnalyticsPageState.enter(owner)) return null;
-  const operation = productAnalyticsPageState.beginLoad(owner, refreshId);
-  // owner 状态机拒绝或 Session 已清除时立即停止，Token 不得进入无归属请求。
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await getProductAnalyticsFunnel({
-      controlApiUrl,
-      token: authSession.token,
-      tenantId: owner.tenantId,
-      signal: operation.controller.signal,
-    });
-    // 请求期间发生全局刷新时直接丢弃结果，后续 owner 复核由状态机继续执行。
-    if (refreshId !== refreshSequence) return null;
-    const currentOwner = currentProductAnalyticsOwner(consoleShellState);
-    // accept 会再次核对响应 tenant_id、七阶段结构和完整 owner，失败时保持当前状态不变。
-    productAnalyticsPageState.accept(operation, result, currentOwner, refreshId);
-    return productAnalyticsPageState.snapshot();
-  } catch (error) {
-    const currentOwner = currentProductAnalyticsOwner(consoleShellState);
-    // 离页、换租户、撤权、后续刷新或 Abort 产生的迟到失败必须静默丢弃。
-    if (
-      refreshId !== refreshSequence
-      || !productAnalyticsPageState.isCurrent(operation, currentOwner, refreshId)
-      || isProductAnalyticsAbortError(error)
-    ) return null;
-    // 只有仍属于当前 owner 的 401/403 才能清理 Session 或刷新后端权限导航。
-    if (handleProductAnalyticsAuthenticationFailure(error)) return null;
-    // 其余当前请求错误由状态机裁剪为固定 code 与 request_id，不保存响应正文。
-    productAnalyticsPageState.reject(operation, error, currentOwner, refreshId);
-    return productAnalyticsPageState.snapshot();
-  } finally {
-    // finish 仅清理同一 ticket，迟到 finally 不会覆盖更新一代的未决请求。
-    productAnalyticsPageState.finish(operation);
-  }
-}
-
 /** Load PAGE-119 profile first, then its independent project/customer/commission lanes. */
 async function loadPartnerPortalState(consoleShellState, refreshId) {
   const owner = currentPartnerPortalOwner(consoleShellState);
@@ -20384,14 +20248,6 @@ function clearMigrationOperationStateOnIdentityChange(previous, current) {
 function clearSupportTicketStateOnIdentityChange(previous, current) {
   if (supportTicketReadIdentitySnapshot(previous) !== supportTicketReadIdentitySnapshot(current)) {
     supportTicketPageState.clear();
-  }
-}
-
-/** tenant、Session、权限 revision 或 fingerprint 变化时销毁 PAGE-117 聚合与未决请求。 */
-function clearProductAnalyticsStateOnIdentityChange(previous, current) {
-  // 读取身份快照变化代表 owner 边界变化，必须同步清空旧租户 DOM 并触发 Abort。
-  if (productAnalyticsReadIdentitySnapshot(previous) !== productAnalyticsReadIdentitySnapshot(current)) {
-    productAnalyticsPageState.clear();
   }
 }
 

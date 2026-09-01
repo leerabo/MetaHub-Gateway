@@ -65,48 +65,31 @@ def _build(payload: dict[str, object], **changes: object):
     return build_webhook_event(**values)
 
 
-def test_prd085_rbac_catalog_and_default_roles_are_exact() -> None:
-    """确认修订二十只向管理员和运维管理员默认授予产品分析读取权限。"""
+def test_prd141_retires_product_analytics_from_the_active_rbac_catalog() -> None:
+    """PRD-085 的事件模型保留，但 Workspace 读取权限已由 PRD-141 退役。"""
 
-    permission = PERMISSION_BY_CODE["product_analytics.read"]
-    assert CATALOG_REVISION >= 20
-    assert len(PERMISSION_CATALOG) >= 89
-    assert (
-        permission.category,
-        permission.name,
-        permission.description,
-        permission.risk_level,
-    ) == (
-        "analytics",
-        "读取产品激活漏斗",
-        "读取当前租户产品使用行为聚合与七阶段激活漏斗。",
-        "read",
+    assert CATALOG_REVISION >= 27
+    assert "product_analytics.read" not in PERMISSION_BY_CODE
+    assert all(item.code != "product_analytics.read" for item in PERMISSION_CATALOG)
+    assert all(
+        "product_analytics.read" not in permissions
+        for permissions in ROLE_GRANTABLE_PERMISSIONS.values()
     )
-    assert "product_analytics.read" in ROLE_GRANTABLE_PERMISSIONS["admin"]
-    assert "product_analytics.read" in ROLE_GRANTABLE_PERMISSIONS["ops_admin"]
-    for role in ("developer", "viewer", "finance_admin", "security_admin"):
-        assert "product_analytics.read" not in ROLE_GRANTABLE_PERMISSIONS[role]
 
 
-def test_prd085_role_matrix_hashes_are_exact() -> None:
-    """确认剔除后续权限后，PRD-085 六个角色矩阵仍与审定值完全一致。"""
+def test_prd141_active_role_matrix_hashes_match_migration_0133() -> None:
+    """共享授权代码必须与迁移 0133 写入的六个固定矩阵完全一致。"""
 
     assert {
-        role: permission_matrix_sha256(
-            permission
-            for permission in permissions
-            if permission != "customer_health.read"
-            and not permission.startswith("partner_")
-            and not permission.startswith("branding.")
-        )
+        role: permission_matrix_sha256(permissions)
         for role, permissions in ROLE_GRANTABLE_PERMISSIONS.items()
     } == {
-        "admin": "e9fc70ecbb0aee117f913bad242eb62d23ef0374a905497ee391caae31951272",
-        "developer": "ee1bc616db2e67a2ddf1e984b938c92033ed3d486ea0b9f52300c2579dc943b1",
-        "viewer": "33a1c60b27b9536355aa1e93807771d840b8609d74db52349137a94965ae42f9",
-        "finance_admin": "86b64ca3b997f5fa252f027ecf07430e677252e6d2c17677b72ac049130cba8c",
-        "security_admin": "aeb4d6b081dce8ed36c6513b567aba4be395816c5a5ad2f1d939527a50ad14df",
-        "ops_admin": "c86c645b5c090c3ad8b1152ed783335ba82c788fc9690c4d803dd76f14eba8e7",
+        "admin": "eb48d3c3fddfa76477ae5af3943449253af0581da445e3d5695f893258dba6b8",
+        "developer": "888796e8f30b282353452e012ba5132476a59ffb2509eded4cb44d8e8de5b686",
+        "viewer": "be55018029cd884b139e7e919a0f7052a94c8ca1ae5120fcb499e1b8754837af",
+        "finance_admin": "843de9cd51726438ebf668ab413a126b31c429a26b7ee306a394bca4435764fc",
+        "security_admin": "7bece4007f6bb8affcfa72d1db73ddc12b71d4bb85f874ad440736e63e596dbb",
+        "ops_admin": "bdab5bcae4741701f7171d1f08624f71306963dea15e99ccbde55028df2e6426",
     }
 
 

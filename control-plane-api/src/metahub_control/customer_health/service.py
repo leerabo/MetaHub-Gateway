@@ -53,7 +53,7 @@ ACTION_BY_TAG = {
     "team_inactive": "reengage_team",
 }
 ACTION_TARGET = {
-    "restore_gateway_activity": ("growth-analytics", "product_analytics.read"),
+    "restore_gateway_activity": ("request-logs", "request_log.read"),
     "review_failed_requests": ("request-logs", "request_log.read"),
     "review_cost_anomalies": ("cost-anomalies", "billing.anomaly.read"),
     "configure_tenant_budget": ("budgets", "billing.budget.read"),

@@ -18,7 +18,10 @@ from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
 from metahub_control.auth.service import AuthContext
 from metahub_control.customer_health import outbox as customer_health_outbox
 from metahub_control.customer_health import scheduler as customer_health_scheduler
-from metahub_control.customer_health.models import CustomerHealthResponse
+from metahub_control.customer_health.models import (
+    CustomerHealthAction,
+    CustomerHealthResponse,
+)
 from metahub_control.customer_health.outbox import (
     _event_from_row,
     claim_next_customer_health_event,
@@ -173,6 +176,17 @@ def test_integer_formula_largest_remainder_risk_floors_and_strict_dto() -> None:
     assert projection.signals[-1].availability == "unavailable"
     assert projection.signals[-1].score_bps is None
     assert projection.signals[-1].contribution_bps == 0
+    assert CustomerHealthAction(
+        code="restore_gateway_activity",
+        target_navigation_item_id="request-logs",
+    ).target_navigation_item_id == "request-logs"
+    with pytest.raises(ValidationError):
+        CustomerHealthAction.model_validate(
+            {
+                "code": "restore_gateway_activity",
+                "target_navigation_item_id": "growth-analytics",
+            }
+        )
 
     healthy_total_but_zero_usage = replace(
         source,
@@ -333,7 +347,7 @@ def test_get_service_is_tenant_bound_strict_and_database_read_only(
     connection.close()
     context = _context(
         tenant_id,
-        ("customer_health.read", "product_analytics.read", "request_log.read"),
+        ("customer_health.read", "request_log.read"),
     )
     config = SimpleNamespace(database_url=database_url)
     first = get_customer_health(
@@ -363,6 +377,7 @@ def test_get_service_is_tenant_bound_strict_and_database_read_only(
     ]
     targets = {item.code: item.target_navigation_item_id for item in first.recommended_actions}
     assert targets["connect_support_ticket_source"] is None
+    assert targets["restore_gateway_activity"] == "request-logs"
     connection = connect_database(database_url)
     after = {
         table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]

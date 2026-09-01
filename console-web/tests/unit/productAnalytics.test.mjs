@@ -306,8 +306,7 @@ test("renderer uses backend totals and UTC values, shows gap state, and emits ze
     productAnalyticsState: { state: "ready", data, error: null },
     i18n: createI18n("en-US"),
   });
-  assert.match(container.innerHTML, /class="panel growth-analytics-panel"/);
-  assert.match(container.innerHTML, /data-active-navigation="growth-analytics"/);
+  assert.doesNotMatch(container.innerHTML, /growth-analytics-panel|data-product-analytics-refresh/u);
 });
 
 test("loading, registration-only, and escaped fixed error states are complete", () => {
@@ -334,21 +333,15 @@ test("loading, registration-only, and escaped fixed error states are complete", 
   assert.doesNotMatch(errorHtml, /<unsafe>/);
 });
 
-test("main and responsive CSS wire all PAGE-117 lifecycle boundaries without tenant query state", async () => {
+test("PRD-141 disconnects PAGE-117 runtime entrypoints while retaining inert legacy assets", async () => {
   const [main, renderer, css, messages] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
     readFile(new URL("../../src/i18n/messages.js", import.meta.url), "utf8"),
   ]);
-  assert.match(main, /pagehide[\s\S]*productAnalyticsPageState\.clear\(\)/);
-  assert.match(main, /function renderLogin[\s\S]*productAnalyticsPageState\.clear\(\)/);
-  assert.match(main, /logoutButton[\s\S]*productAnalyticsPageState\.clear\(\)/);
-  assert.match(main, /clearProductAnalyticsStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(main, /activeNavigationItemId !== "growth-analytics"[\s\S]*productAnalyticsPageState\.clear\(\)/);
-  assert.match(main, /getProductAnalyticsFunnel\(\{[\s\S]{0,400}tenantId: owner\.tenantId[\s\S]{0,400}signal: operation\.controller\.signal/);
-  assert.doesNotMatch(main, /getProductAnalyticsFunnel\(\{[\s\S]{0,500}(actor|fromTime|toTime|query)/);
-  assert.match(renderer, /case "growth-analytics"/);
+  assert.doesNotMatch(main, /productAnalytics|ProductAnalytics|growth-analytics|product-analytics/u);
+  assert.doesNotMatch(renderer, /renderProductAnalytics|growth-analytics|product-analytics/u);
   assert.match(messages, /"nav\.growth-analytics"/);
   assert.match(messages, /"product_analytics\.stage\.request_logs_viewed"/);
   assert.match(css, /\.product-analytics-steps\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);

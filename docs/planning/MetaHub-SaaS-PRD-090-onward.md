@@ -1,6 +1,6 @@
 # MetaHub SaaS 增量开发路线图（PRD-090 起）
 
-状态：**PRD-090..140 已完成，当前下一项为 PRD-141**
+状态：**PRD-090..141 已完成，当前下一项为 PRD-142**
 
 基线日期：2026-08-20
 
@@ -126,7 +126,7 @@ Provider Key、Token、Prompt、Response 和客户业务正文不得明文进入
 
 ## 5. 执行规则
 
-1. PRD-090 架构基线至 PRD-140 SaaS 平台客户管理、健康与续费协同已完成；S5/G5 与 S6/G6 已关闭，当前仍只是 release candidate。S7 已建立 0131/0132、渠道与客户成功唯一事实、独立归属审批、可对账 statement、可解释客户健康、续费协同，以及 Platform Channels、Partner 和 Customer Success 独立入口，权威下一项为 PRD-141。完整 G7 数据库、集成、FLOW、浏览器、性能、安全、兼容性和必要回归在 PRD-147 独立提交后统一执行；通过前不得开始 PRD-148 或宣称公开 GA。
+1. PRD-090 架构基线至 PRD-141 SaaS 平台增长漏斗、活动与转化归因已完成；S5/G5 与 S6/G6 已关闭，当前仍只是 release candidate。S7 已建立 0131/0132/0133、渠道、客户成功与增长唯一事实、独立归属审批、可对账 statement、可解释客户健康、续费协同、受控增长导出，以及 Platform Channels、Partner、Customer Success 和 Growth 独立入口，权威下一项为 PRD-142。完整 G7 数据库、集成、FLOW、浏览器、性能、安全、兼容性和必要回归在 PRD-147 独立提交后统一执行；通过前不得开始 PRD-148 或宣称公开 GA。
 2. 每条 PRD 先落盘详细设计，完成两轮编码前自审并关闭 P0/P1，再进入实现。
 3. 开发阶段只运行受影响专项测试；完成门禁再运行必要回归，禁止用重复全量测试代替缺失的专项证据。
 4. 每条 PRD 都必须覆盖 WB、API、BB、GR、PERF、WEB、UI、UCD、COMP、SEC、FLOW，并完成真实 API/浏览器/迁移或部署验收。

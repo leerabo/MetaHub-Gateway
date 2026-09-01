@@ -106,13 +106,6 @@ PERMISSION_CATALOG: Final[tuple[PermissionDefinition, ...]] = (
         "read",
     ),
     PermissionDefinition(
-        "product_analytics.read",
-        "analytics",
-        "读取产品激活漏斗",
-        "读取当前租户产品使用行为聚合与七阶段激活漏斗。",
-        "read",
-    ),
-    PermissionDefinition(
         "branding.read",
         "branding",
         "读取白标配置",
@@ -864,7 +857,6 @@ _SECURITY = {
 _OPS = {
     "console.basic.read",
     "dashboard.read",
-    "product_analytics.read",
     "environment.read",
     "environment.write",
     "project.read",

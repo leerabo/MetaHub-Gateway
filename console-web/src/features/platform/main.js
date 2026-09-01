@@ -189,6 +189,20 @@ import {
   listPlatformCustomerAccounts,
   listPlatformRenewalPipeline,
 } from "../../lib/platformCustomerSuccess.js";
+import {
+  applyGrowthCampaign,
+  applyGrowthExperiment,
+  decideGrowthExport,
+  downloadGrowthExport,
+  getGrowthExport,
+  issueGrowthExportReceipt,
+  listGrowthAttribution,
+  listGrowthCampaigns,
+  listGrowthCohorts,
+  listGrowthExperiments,
+  listGrowthFunnels,
+  requestGrowthExport,
+} from "../../lib/platformGrowth.js";
 import { createPlatformPageController } from "./platformPageState.js";
 
 async function getPlatformReleaseWorkspace({ controlApiUrl, signal } = {}) {
@@ -220,6 +234,18 @@ if (root) {
       customerPlan: (input) => applyPlatformCustomerSuccessPlan({ controlApiUrl, ...input }),
       customerTask: (input) => applyPlatformCustomerTask({ controlApiUrl, ...input }),
       customerRenewals: (input) => listPlatformRenewalPipeline({ controlApiUrl, ...input }),
+      growthFunnels: (input) => listGrowthFunnels({ controlApiUrl, ...input }),
+      growthCohorts: (input) => listGrowthCohorts({ controlApiUrl, ...input }),
+      growthCampaigns: (input) => listGrowthCampaigns({ controlApiUrl, ...input }),
+      growthCampaignCommand: (input) => applyGrowthCampaign({ controlApiUrl, ...input }),
+      growthExperiments: (input) => listGrowthExperiments({ controlApiUrl, ...input }),
+      growthExperimentCommand: (input) => applyGrowthExperiment({ controlApiUrl, ...input }),
+      growthAttribution: (input) => listGrowthAttribution({ controlApiUrl, ...input }),
+      growthRequestExport: (input) => requestGrowthExport({ controlApiUrl, ...input }),
+      growthExport: (input) => getGrowthExport({ controlApiUrl, ...input }),
+      growthApproveExport: (input) => decideGrowthExport({ controlApiUrl, ...input }),
+      growthExportReceipt: (input) => issueGrowthExportReceipt({ controlApiUrl, ...input }),
+      growthExportDownload: (input) => downloadGrowthExport({ controlApiUrl, ...input }),
       workspaces: (input) => listPlatformWorkspaces({ controlApiUrl, ...input }),
       workspace: (input) => getPlatformWorkspace({ controlApiUrl, ...input }),
       workspaceHealth: (input) => getPlatformWorkspaceHealth({ controlApiUrl, ...input }),

@@ -27,6 +27,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_control.auth import AuthContext
 from metahub_control.dashboard.role_service import role_dashboard_event_is_current
 from metahub_control.permissions.service import load_permission_matrix_from_connection
+from metahub_control.workspace_access.service import WORKSPACE_EXTENSION_PERMISSION_CODES
 
 from .models import (
     ConsoleEventRequest,
@@ -59,8 +60,6 @@ EVENT_TYPE_BY_NAVIGATION = {
     "admin-assistant": "console.page_viewed",
     # PAGE-108/109 页面事件只记录受控 shell 元数据，不携带 task、target、密码或票据。
     "approvals": "console.page_viewed",
-    # PAGE-117 只记录页面外壳，不复制漏斗计数、ProductEvent、actor 或时间。
-    "growth-analytics": "console.page_viewed",
     # PAGE-119 页面访问只记录外壳，不携带客户名、branding、分润或附件内容。
     "partner-portal": "console.page_viewed",
     # PAGE-120 页面访问只记录外壳，不携带品牌正文、Logo 或域名。
@@ -184,16 +183,6 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "处理当前租户预算阻断与高风险会话操作的审批任务。",
         "当前没有可见审批任务。",
         12,
-    ),
-    NavigationDefinition(
-        "growth-analytics",
-        "增长分析",
-        "总览",
-        "growth-analytics",
-        ("product_analytics.read",),
-        "查看当前租户的产品接入与激活漏斗。",
-        "当前租户尚未形成可展示的产品激活事实。",
-        13,
     ),
     NavigationDefinition(
         "customer-health",
@@ -1153,52 +1142,10 @@ def _visible_navigation_items(
     # Workspace sessions carry every verified extension family in one canonical
     # tuple.  Accept the complete known set before projecting the subset used by
     # Console navigation; an older extension must not make a newer one unusable.
-    allowed_extensions = {
-        "data_governance.manage",
-        "data_governance.read",
-        "provider_catalog.read",
-        "legal_hold.manage",
-        "legal_hold.read",
-        "machine_identity.manage",
-        "machine_identity.read",
-        "edge.deployment.read",
-        "edge.deployment.manage",
-        "edge.telemetry.manage",
-        "edge.telemetry.read",
-        "edge.usage.read",
-        "edge.secret_reference.read",
-        "edge.installer.read",
-        "edge.installation.manage",
-        "edge.delivery.accept",
-        "edge.support_bundle.read",
-        "edge.validation.manage",
-        "edge.validation.read",
-        "edge.diagnostic.approve",
-        "edge.diagnostic.read",
-        "edge.health.read",
-        "edge.rollback.manage",
-        "edge.upgrade.manage",
-        "edge.upgrade.read",
-        "edge.license.import",
-        "edge.license.read",
-        "edge.license.refresh",
-        "edge.backup.create",
-        "edge.backup.read",
-        "edge.drill.manage",
-        "edge.restore.approve",
-        "edge.offline_bundle.read",
-        "edge.offline_bundle.transfer",
-        "edge.offline_conflict.resolve",
-        "migration.manage",
-        "migration.read",
-        "support.ticket.create",
-        "support.ticket.manage",
-        "support.ticket.read",
-    }
     normalized_extensions = tuple(sorted(set(extension_permission_codes)))
     if (
         normalized_extensions != tuple(extension_permission_codes)
-        or not set(normalized_extensions) <= allowed_extensions
+        or not set(normalized_extensions) <= WORKSPACE_EXTENSION_PERMISSION_CODES
     ):
         raise ApiError("rbac.matrix_integrity_failed")
     role_matrix = (

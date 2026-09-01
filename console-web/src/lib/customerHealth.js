@@ -39,7 +39,7 @@ const TAG_ACTIONS = Object.freeze({
 });
 // 建议目标采用固定导航白名单，最终仍需与后端实时导航镜像交叉核验。
 const ACTION_TARGETS = Object.freeze({
-  restore_gateway_activity: "growth-analytics",
+  restore_gateway_activity: "request-logs",
   review_failed_requests: "request-logs",
   review_cost_anomalies: "cost-anomalies",
   configure_tenant_budget: "budgets",

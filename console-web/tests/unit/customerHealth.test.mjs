@@ -113,7 +113,7 @@ function payload({ signals = baseSignals(), tags = [], actionTargets = {}, overr
     team_inactive: "reengage_team",
   };
   const defaultTargets = {
-    restore_gateway_activity: "growth-analytics",
+    restore_gateway_activity: "request-logs",
     review_failed_requests: "request-logs",
     review_cost_anomalies: "cost-anomalies",
     configure_tenant_budget: "budgets",

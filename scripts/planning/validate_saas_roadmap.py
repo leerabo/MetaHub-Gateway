@@ -407,6 +407,18 @@ REQUIRED_DOCS = {
         "PRD-141",
         "0132",
     ),
+    ROOT / "docs/prd/PRD-141-saas-platform-growth-funnel-campaign-attribution.md": (
+        "状态：已完成",
+        "第一轮：",
+        "第二轮：",
+        "0133",
+    ),
+    ROOT / "docs/testing/PRD-141-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-142",
+        "0133",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -444,6 +456,7 @@ SECRET_PATTERNS = {
 }
 
 POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations", "support-tickets"})
+RETIRED_SOURCE_NAVIGATION_IDS = frozenset({"growth-analytics"})
 
 ROLE_ALIAS_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:ops|security|support|billing|finance|verification_reviewer)(?![A-Za-z0-9_])"
@@ -544,11 +557,12 @@ def _console_navigation_ids() -> list[str]:
 
 
 def _source_navigation_ids() -> list[str]:
-    return [
+    current = [
         item
         for item in _console_navigation_ids()
         if item not in POST_NAVIGATION_BASELINE_IDS
     ]
+    return [*current, *sorted(RETIRED_SOURCE_NAVIGATION_IDS - set(current))]
 
 
 def validate(*, expected_next: str | None = None) -> ValidationReport:
@@ -925,7 +939,9 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     disposition_ids = [str(row.get("navigation_id")) for row in navigation_rows]
     report.check(
         POST_NAVIGATION_BASELINE_IDS <= set(console_navigation_ids)
-        and not (POST_NAVIGATION_BASELINE_IDS & set(source_navigation_ids)),
+        and not (POST_NAVIGATION_BASELINE_IDS & set(source_navigation_ids))
+        and RETIRED_SOURCE_NAVIGATION_IDS.isdisjoint(console_navigation_ids)
+        and RETIRED_SOURCE_NAVIGATION_IDS <= set(source_navigation_ids),
         "post-baseline PRD-131 navigation remains explicit without rewriting the 64-item inventory",
     )
     report.check(
@@ -1008,9 +1024,9 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     report.check(
         all(
             str(disposition_by_id[item].get("承接PRD") or "").startswith("PRD-")
-            for item in source_navigation_ids
+            for item in disposition_ids
         ),
-        "every current navigation item is assigned to an explicit migration PRD",
+        "every frozen navigation item is assigned to an explicit migration PRD",
     )
 
     object_headers, object_rows = _rows_by_header(NEW_PLAN, "03_核心数据对象")
@@ -1086,10 +1102,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 132
+        and migration_versions[-1] == 133
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0132 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0133 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1329,6 +1345,16 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             ROOT / "infra/migrations/0132_platform_customer_success_renewal.down.sql"
         ).is_file(),
         "PRD-140 owns reversible migration 0132 with guarded customer-success rollback",
+    )
+    report.check(
+        (
+            ROOT / "infra/migrations/0133_platform_growth_funnel_campaign_attribution.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0133_platform_growth_funnel_campaign_attribution.down.sql"
+        ).is_file(),
+        "PRD-141 owns reversible migration 0133 with guarded growth-fact rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

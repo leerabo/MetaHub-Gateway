@@ -1,6 +1,7 @@
 # PRD-141 SaaS 平台增长漏斗、活动与转化归因
 
-状态：设计冻结，等待 G6 通过后编码。依赖 PRD-085/092/096/097/099/105/107/110/134/139/140；
+状态：已完成。0133、Platform Growth 工作台、增长 API/导出合同、旧 Product Analytics 退役链、专项测试、
+浏览器验收、敏感审计和路线图写回均已交付。依赖 PRD-085/092/096/097/099/105/107/110/134/139/140；
 批次边界见 `S7-platform-operations-console-domain-batch-design.md`。本条只交付 0133、Platform Growth
 工作台、Excel 五组 API、四个事件、受控导出辅助合同和旧产品分析切换，不提前实现 PRD-142..148。
 
@@ -112,8 +113,9 @@ approval、mapping、event、outbox 和 scheduler 表只承担可复算、并发
 ### 3.2 获客来源、漏斗与同期群
 
 - `platform_acquisition_sources` 使用稳定 `acs_*`，保存固定 source kind
-  `direct|organic|paid|partner|referral|sales|unknown`、可选 PRD-139 partner/referral 引用、平台自有 campaign
-  引用、验证状态、有效期、revision 和 canonical hash。原始 query/UTM、落地 URL、email、IP 和 arbitrary
+  `direct|organic|paid|partner|referral|sales|unknown`、可选 PRD-139 `channel_partner_id` /
+  `channel_referral_code_id` 引用、平台自有 campaign 引用、验证状态、有效期、revision 和 canonical hash。原始
+  query/UTM、落地 URL、email、IP 和 arbitrary
   metadata 不持久化；受控外部 source code 先规范化并 HMAC 后匹配目录，未知值只落 `unknown` 计数。
 - 漏斗 v2 固定阶段为 `registered -> activated -> trial_started -> paid -> retained_30d`。registered/activated
   从 PRD-085 七阶段按公式版本折叠；trial/paid 只读 PRD-098..105 订阅/订单/支付终态；retained_30d 只读
@@ -464,5 +466,5 @@ Provider 工程、PRD-144 商业账、PRD-145 页面分域、PRD-146 Workspace �
 6. P1：`growth.exported` 在制品 ready 时写会把未下载/已撤销制品记成已导出。修正为成功原子消费一次性
    receipt 时才写，未知网络结果不重放 receipt。
 
-结论：第二轮 P0=0（3 项已关闭），P1=0（3 项已关闭）。两轮自审后无未关闭 P0/P1；G6 未通过前，
-本设计不授权创建 0133、修改运行代码或启动 S7 migration。
+结论：第二轮 P0=0（3 项已关闭），P1=0（3 项已关闭）。两轮自审后无未关闭 P0/P1；G6 已通过，
+本设计授权创建 0133 并进入 PRD-141 连续编码。

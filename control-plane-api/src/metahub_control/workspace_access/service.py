@@ -24,7 +24,7 @@ from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissio
 from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
 from metahub_control.auth.service import AuthContext
 from metahub_control.customer_support.permissions import (
-    load_verified_workspace_customer_support_permissions,
+    CUSTOMER_SUPPORT_ROLE_PERMISSIONS,
 )
 from metahub_control.identity.service import (
     authenticate_global_session_in_transaction,
@@ -32,12 +32,23 @@ from metahub_control.identity.service import (
     valid_opaque_value,
 )
 from metahub_control.migration_operations.permissions import (
-    load_verified_workspace_migration_permissions,
+    MIGRATION_ROLE_PERMISSIONS,
 )
 
-from .assurance_permissions import load_verified_workspace_assurance_permissions
-from .compliance_permissions import load_verified_workspace_compliance_permissions
-from .edge_permissions import load_verified_workspace_edge_permissions
+from .assurance_permissions import ASSURANCE_ROLE_PERMISSIONS
+from .compliance_permissions import COMPLIANCE_ROLE_PERMISSIONS
+from .edge_permissions import (
+    EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_OFFLINE_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_UPGRADE_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS,
+    EDGE_WORKSPACE_ROLE_PERMISSIONS,
+)
 from .models import (
     IdentityWorkspaceListResponse,
     IdentityWorkspaceSummary,
@@ -51,11 +62,8 @@ from .models import (
     WorkspaceSessionResponse,
     WorkspaceSwitchResponse,
 )
-from .privacy_permissions import load_verified_workspace_privacy_permissions
-from .provider_catalog_permissions import (
-    PROVIDER_CATALOG_ROLE_PERMISSIONS,
-    load_verified_provider_catalog_permissions,
-)
+from .privacy_permissions import PRIVACY_ROLE_PERMISSIONS
+from .provider_catalog_permissions import PROVIDER_CATALOG_ROLE_PERMISSIONS
 
 logger = logging.getLogger("metahub.control.workspace_access")
 
@@ -117,6 +125,166 @@ _MACHINE_IDENTITY_ROLE_PERMISSIONS = {
     "security_admin": ("machine_identity.manage", "machine_identity.read"),
     "developer": ("machine_identity.read",),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkspaceExtensionFamily:
+    group: str
+    catalog_table: str
+    assignments_table: str
+    introduced_migration: str
+    expected_by_role: dict[str, tuple[str, ...]]
+    required_for_workspace_session: bool = False
+
+
+_WORKSPACE_EXTENSION_GROUPS = (
+    "governance",
+    "machine_identity",
+    "provider_catalog",
+    "edge",
+    "migration",
+    "customer_support",
+    "privacy",
+    "compliance",
+    "assurance",
+)
+_WORKSPACE_EXTENSION_FAMILIES = (
+    _WorkspaceExtensionFamily(
+        "governance",
+        "workspace_governance_permission_extensions",
+        "workspace_governance_role_permissions",
+        "0109",
+        _GOVERNANCE_ROLE_PERMISSIONS,
+        True,
+    ),
+    _WorkspaceExtensionFamily(
+        "machine_identity",
+        "workspace_machine_permission_extensions",
+        "workspace_machine_role_permissions",
+        "0110",
+        _MACHINE_IDENTITY_ROLE_PERMISSIONS,
+        True,
+    ),
+    _WorkspaceExtensionFamily(
+        "provider_catalog",
+        "workspace_provider_catalog_permission_extensions",
+        "workspace_provider_catalog_role_permissions",
+        "0111",
+        PROVIDER_CATALOG_ROLE_PERMISSIONS,
+        True,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_permission_extensions",
+        "workspace_edge_role_permissions",
+        "0112",
+        EDGE_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_telemetry_permission_extensions",
+        "workspace_edge_telemetry_role_permissions",
+        "0114",
+        EDGE_TELEMETRY_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_secret_permission_extensions",
+        "workspace_edge_secret_role_permissions",
+        "0115",
+        EDGE_SECRET_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_installer_permission_extensions",
+        "workspace_edge_installer_role_permissions",
+        "0116",
+        EDGE_INSTALLER_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_validation_permission_extensions",
+        "workspace_edge_validation_role_permissions",
+        "0117",
+        EDGE_VALIDATION_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_diagnostic_permission_extensions",
+        "workspace_edge_diagnostic_role_permissions",
+        "0118",
+        EDGE_DIAGNOSTIC_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_upgrade_permission_extensions",
+        "workspace_edge_upgrade_role_permissions",
+        "0119",
+        EDGE_UPGRADE_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_license_permission_extensions",
+        "workspace_edge_license_role_permissions",
+        "0120",
+        EDGE_LICENSE_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_backup_permission_extensions",
+        "workspace_edge_backup_role_permissions",
+        "0121",
+        EDGE_BACKUP_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "edge",
+        "workspace_edge_offline_permission_extensions",
+        "workspace_edge_offline_role_permissions",
+        "0122",
+        EDGE_OFFLINE_WORKSPACE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "migration",
+        "workspace_migration_permission_extensions",
+        "workspace_migration_role_permissions",
+        "0123",
+        MIGRATION_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "customer_support",
+        "workspace_customer_support_permission_extensions",
+        "workspace_customer_support_role_permissions",
+        "0124",
+        CUSTOMER_SUPPORT_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "privacy",
+        "workspace_privacy_permission_extensions",
+        "workspace_privacy_role_permissions",
+        "0126",
+        PRIVACY_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "compliance",
+        "workspace_compliance_permission_extensions",
+        "workspace_compliance_role_permissions",
+        "0127",
+        COMPLIANCE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "assurance",
+        "workspace_security_assurance_permission_extensions",
+        "workspace_security_assurance_role_permissions",
+        "0129",
+        ASSURANCE_ROLE_PERMISSIONS,
+    ),
+)
+WORKSPACE_EXTENSION_PERMISSION_CODES = frozenset(
+    permission_code
+    for family in _WORKSPACE_EXTENSION_FAMILIES
+    for permission_codes in family.expected_by_role.values()
+    for permission_code in permission_codes
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2053,220 +2221,100 @@ def _workspace_extension_permissions(
     tuple[str, ...],
     tuple[str, ...],
 ]:
-    if require_catalogs:
-        governance, machine_identity, provider_catalog = _required_workspace_extension_permissions(
-            connection,
-            role_code=role_code,
-        )
-        edge = load_verified_workspace_edge_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        migration = load_verified_workspace_migration_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        customer_support = load_verified_workspace_customer_support_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        privacy = load_verified_workspace_privacy_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        compliance = load_verified_workspace_compliance_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        assurance = load_verified_workspace_assurance_permissions(
-            connection,
-            role_code=role_code,
-            unavailable_error_code="workspace_session.unavailable",
-        )
-        return (
-            governance,
-            machine_identity,
-            provider_catalog,
-            edge,
-            migration,
-            customer_support,
-            privacy,
-            compliance,
-            assurance,
-        )
-    has_extension = _table_exists(connection, "workspace_governance_role_permissions")
-    has_catalog = _table_exists(connection, "workspace_governance_permission_extensions")
-    if has_extension != has_catalog:
-        raise ApiError("workspace_session.unavailable")
-    governance_expected = {
-        (assigned_role, permission_code)
-        for assigned_role, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
+    table_names = {
+        table
+        for family in _WORKSPACE_EXTENSION_FAMILIES
+        for table in (family.catalog_table, family.assignments_table)
     }
-    governance = _verified_extension_permissions(
-        connection,
-        role_code=role_code,
-        catalog_table="workspace_governance_permission_extensions",
-        assignments_table="workspace_governance_role_permissions",
-        expected=governance_expected,
-        available=has_extension,
-    )
-    has_machine_catalog = _table_exists(connection, "workspace_machine_permission_extensions")
-    has_machine_assignments = _table_exists(connection, "workspace_machine_role_permissions")
-    if has_machine_catalog != has_machine_assignments:
-        raise ApiError("workspace_session.unavailable")
-    machine_expected = {
-        (assigned_role, permission_code)
-        for assigned_role, permission_codes in _MACHINE_IDENTITY_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
-    }
-    machine_identity = _verified_extension_permissions(
-        connection,
-        role_code=role_code,
-        catalog_table="workspace_machine_permission_extensions",
-        assignments_table="workspace_machine_role_permissions",
-        expected=machine_expected,
-        available=has_machine_catalog,
-    )
-    provider_catalog = load_verified_provider_catalog_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    edge = load_verified_workspace_edge_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    migration = load_verified_workspace_migration_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    customer_support = load_verified_workspace_customer_support_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    privacy = load_verified_workspace_privacy_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    compliance = load_verified_workspace_compliance_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    assurance = load_verified_workspace_assurance_permissions(
-        connection,
-        role_code=role_code,
-        unavailable_error_code="workspace_session.unavailable",
-    )
-    return (
-        governance,
-        machine_identity,
-        provider_catalog,
-        edge,
-        migration,
-        customer_support,
-        privacy,
-        compliance,
-        assurance,
-    )
+    table_names.add("schema_migrations")
+    placeholders = ",".join("?" for _ in table_names)
+    try:
+        table_catalog = (
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema=current_schema() AND table_name IN "
+            if getattr(connection, "backend", "sqlite") == "postgresql"
+            else "SELECT name FROM sqlite_schema WHERE type='table' AND name IN "
+        )
+        existing_tables = {
+            str(row[0])
+            for row in connection.execute(
+                f"{table_catalog}({placeholders})",
+                tuple(sorted(table_names)),
+            ).fetchall()
+        }
+        migration_versions = tuple(
+            sorted({family.introduced_migration for family in _WORKSPACE_EXTENSION_FAMILIES})
+        )
+        migration_placeholders = ",".join("?" for _ in migration_versions)
+        applied_migrations = (
+            {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations WHERE status='applied' "
+                    f"AND version IN ({migration_placeholders})",
+                    migration_versions,
+                ).fetchall()
+            }
+            if "schema_migrations" in existing_tables
+            else set()
+        )
 
+        available: list[_WorkspaceExtensionFamily] = []
+        for family in _WORKSPACE_EXTENSION_FAMILIES:
+            has_catalog = family.catalog_table in existing_tables
+            has_assignments = family.assignments_table in existing_tables
+            required = family.introduced_migration in applied_migrations or (
+                require_catalogs and family.required_for_workspace_session
+            )
+            if has_catalog != has_assignments or (required and not has_catalog):
+                raise ApiError("workspace_session.unavailable")
+            if has_catalog:
+                available.append(family)
 
-def _required_workspace_extension_permissions(
-    connection: sqlite3.Connection,
-    *,
-    role_code: str,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    rows = connection.execute(
-        """SELECT 'governance_catalog' row_kind,'' role_code,permission_code
-             FROM workspace_governance_permission_extensions
-           UNION ALL
-           SELECT 'governance_assignment',role_code,permission_code
-             FROM workspace_governance_role_permissions
-           UNION ALL
-           SELECT 'machine_catalog','',permission_code
-             FROM workspace_machine_permission_extensions
-           UNION ALL
-           SELECT 'machine_assignment',role_code,permission_code
-             FROM workspace_machine_role_permissions
-           UNION ALL
-           SELECT 'provider_catalog_catalog','',permission_code
-             FROM workspace_provider_catalog_permission_extensions
-           UNION ALL
-           SELECT 'provider_catalog_assignment',role_code,permission_code
-             FROM workspace_provider_catalog_role_permissions"""
-    ).fetchall()
-    grouped: dict[str, set[tuple[str, str]]] = {
-        "governance_catalog": set(),
-        "governance_assignment": set(),
-        "machine_catalog": set(),
-        "machine_assignment": set(),
-        "provider_catalog_catalog": set(),
-        "provider_catalog_assignment": set(),
-    }
+        selects: list[str] = []
+        family_by_key: dict[str, _WorkspaceExtensionFamily] = {}
+        for index, family in enumerate(available):
+            key = f"family_{index}"
+            family_by_key[key] = family
+            selects.extend(
+                (
+                    f"SELECT '{key}' family_key,'catalog' row_kind,'' role_code,"
+                    f"permission_code FROM {family.catalog_table}",
+                    f"SELECT '{key}' family_key,'assignment' row_kind,role_code,"
+                    f"permission_code FROM {family.assignments_table}",
+                )
+            )
+        rows = connection.execute(" UNION ALL ".join(selects)).fetchall() if selects else []
+    except sqlite3.Error as exc:
+        raise ApiError("workspace_session.unavailable") from exc
+
+    catalogs = {key: set() for key in family_by_key}
+    assignments = {key: set() for key in family_by_key}
     for row in rows:
-        kind = str(row["row_kind"])
-        if kind not in grouped:
+        key = str(row["family_key"])
+        if key not in family_by_key:
             raise ApiError("workspace_session.unavailable")
-        grouped[kind].add((str(row["role_code"]), str(row["permission_code"])))
-    governance_expected = {
-        (assigned_role, permission_code)
-        for assigned_role, permission_codes in _GOVERNANCE_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
-    }
-    machine_expected = {
-        (assigned_role, permission_code)
-        for assigned_role, permission_codes in _MACHINE_IDENTITY_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
-    }
-    provider_catalog_expected = {
-        (assigned_role, permission_code)
-        for assigned_role, permission_codes in PROVIDER_CATALOG_ROLE_PERMISSIONS.items()
-        for permission_code in permission_codes
-    }
-    if (
-        grouped["governance_catalog"]
-        != {("", permission_code) for _, permission_code in governance_expected}
-        or grouped["governance_assignment"] != governance_expected
-        or grouped["machine_catalog"]
-        != {("", permission_code) for _, permission_code in machine_expected}
-        or grouped["machine_assignment"] != machine_expected
-        or grouped["provider_catalog_catalog"]
-        != {("", permission_code) for _, permission_code in provider_catalog_expected}
-        or grouped["provider_catalog_assignment"] != provider_catalog_expected
-    ):
-        raise ApiError("workspace_session.unavailable")
-    governance = tuple(
-        sorted(
-            permission_code
-            for assigned_role, permission_code in governance_expected
-            if assigned_role == role_code
+        permission_code = str(row["permission_code"])
+        if row["row_kind"] == "catalog":
+            catalogs[key].add(permission_code)
+        elif row["row_kind"] == "assignment":
+            assignments[key].add((str(row["role_code"]), permission_code))
+        else:
+            raise ApiError("workspace_session.unavailable")
+
+    grants = {group: set() for group in _WORKSPACE_EXTENSION_GROUPS}
+    for key, family in family_by_key.items():
+        expected = {
+            (assigned_role, permission_code)
+            for assigned_role, permission_codes in family.expected_by_role.items()
+            for permission_code in permission_codes
+        }
+        if catalogs[key] != {code for _, code in expected} or assignments[key] != expected:
+            raise ApiError("workspace_session.unavailable")
+        grants[family.group].update(
+            code for assigned_role, code in expected if assigned_role == role_code
         )
-    )
-    machine_identity = tuple(
-        sorted(
-            permission_code
-            for assigned_role, permission_code in machine_expected
-            if assigned_role == role_code
-        )
-    )
-    provider_catalog = tuple(
-        sorted(
-            permission_code
-            for assigned_role, permission_code in provider_catalog_expected
-            if assigned_role == role_code
-        )
-    )
-    return governance, machine_identity, provider_catalog
+    return tuple(tuple(sorted(grants[group])) for group in _WORKSPACE_EXTENSION_GROUPS)
 
 
 def _workspace_authorization_fingerprint(
@@ -2302,39 +2350,6 @@ def _workspace_authorization_fingerprint(
             separators=(",", ":"),
         ).encode("ascii")
     ).hexdigest()
-
-
-def _verified_extension_permissions(
-    connection: sqlite3.Connection,
-    *,
-    role_code: str,
-    catalog_table: str,
-    assignments_table: str,
-    expected: set[tuple[str, str]],
-    available: bool,
-) -> tuple[str, ...]:
-    if not available:
-        return ()
-    catalog = {
-        str(item[0])
-        for item in connection.execute(f"SELECT permission_code FROM {catalog_table}").fetchall()
-    }
-    assignments = {
-        (str(item[0]), str(item[1]))
-        for item in connection.execute(
-            f"SELECT role_code,permission_code FROM {assignments_table}"
-        ).fetchall()
-    }
-    if catalog != {code for _, code in expected} or assignments != expected:
-        raise ApiError("workspace_session.unavailable")
-    return tuple(
-        str(item[0])
-        for item in connection.execute(
-            f"SELECT permission_code FROM {assignments_table} "
-            "WHERE role_code=? ORDER BY permission_code",
-            (role_code,),
-        ).fetchall()
-    )
 
 
 def _identity_workspace(row: sqlite3.Row) -> IdentityWorkspaceSummary:

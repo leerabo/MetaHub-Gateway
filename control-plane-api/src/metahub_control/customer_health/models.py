@@ -143,7 +143,7 @@ class CustomerHealthAction(_StrictModel):
         "maintain_current_adoption",
     ]
     target_navigation_item_id: Literal[
-        "growth-analytics", "request-logs", "cost-anomalies", "budgets", "users"
+        "request-logs", "cost-anomalies", "budgets", "users"
     ] | None
 
     @model_validator(mode="after")
@@ -151,7 +151,7 @@ class CustomerHealthAction(_StrictModel):
         """核对建议代码与导航目标白名单，未授权目标只能投影为空值。"""
 
         allowed = {
-            "restore_gateway_activity": "growth-analytics",
+            "restore_gateway_activity": "request-logs",
             "review_failed_requests": "request-logs",
             "review_cost_anomalies": "cost-anomalies",
             "configure_tenant_budget": "budgets",

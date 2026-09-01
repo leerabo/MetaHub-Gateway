@@ -585,6 +585,30 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Reload the operator and retry.",
         owner="platform",
     ),
+    "platform.growth_credential_conflict": ErrorSpec(
+        401,
+        "Platform growth credentials are ambiguous.",
+        "Use only the Platform session cookie for Platform growth routes.",
+        owner="platform",
+    ),
+    "platform.growth_state_conflict": ErrorSpec(
+        409,
+        "Platform growth state has changed.",
+        "Reload the growth resource before retrying the operation.",
+        owner="platform",
+    ),
+    "platform.growth_not_found": ErrorSpec(
+        404,
+        "Platform growth resource was not found.",
+        "Refresh the Platform growth view.",
+        owner="platform",
+    ),
+    "platform.growth_export_unavailable": ErrorSpec(
+        409,
+        "Platform growth export is no longer available.",
+        "Refresh the export state and request a new receipt if the export is still ready.",
+        owner="platform",
+    ),
     "platform.workspace_not_found": ErrorSpec(
         404,
         "Platform Workspace was not found.",
