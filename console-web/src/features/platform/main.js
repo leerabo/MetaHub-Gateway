@@ -203,6 +203,12 @@ import {
   listGrowthFunnels,
   requestGrowthExport,
 } from "../../lib/platformGrowth.js";
+import {
+  applyPlatformErrorCatalogCommand,
+  applyPlatformProviderAdapterCommand,
+  listPlatformAdapterContracts,
+  listPlatformProviderAdapters,
+} from "../../lib/providerEngineering.js";
 import { createPlatformPageController } from "./platformPageState.js";
 import {
   getChannelBranding,
@@ -256,6 +262,14 @@ if (root) {
       growthApproveExport: (input) => decideGrowthExport({ controlApiUrl, ...input }),
       growthExportReceipt: (input) => issueGrowthExportReceipt({ controlApiUrl, ...input }),
       growthExportDownload: (input) => downloadGrowthExport({ controlApiUrl, ...input }),
+      providerAdapters: (input) => listPlatformProviderAdapters({ controlApiUrl, ...input }),
+      adapterContracts: (input) => listPlatformAdapterContracts({ controlApiUrl, ...input }),
+      commandProviderAdapter: (input) => applyPlatformProviderAdapterCommand({
+        controlApiUrl, ...input,
+      }),
+      commandErrorCatalog: (input) => applyPlatformErrorCatalogCommand({
+        controlApiUrl, ...input,
+      }),
       workspaces: (input) => listPlatformWorkspaces({ controlApiUrl, ...input }),
       workspace: (input) => getPlatformWorkspace({ controlApiUrl, ...input }),
       workspaceHealth: (input) => getPlatformWorkspaceHealth({ controlApiUrl, ...input }),

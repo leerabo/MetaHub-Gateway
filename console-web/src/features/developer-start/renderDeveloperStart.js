@@ -36,7 +36,6 @@ import { renderBillingDisputes } from "../billing-disputes/renderBillingDisputes
 import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
 import { renderApprovals } from "../approvals/renderApprovals.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
-import { renderErrorMapPanel } from "../error-maps/renderErrorMapPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
 import { renderRoutingPolicyPanel } from "../routing-policies/renderRoutingPolicyPanel.js";
 import { renderModelQualityScoresPanel } from "../model-quality-scores/renderModelQualityScoresPanel.js";
@@ -48,8 +47,6 @@ import { renderPolicySnapshotsPanel } from "../policy-snapshots/renderPolicySnap
 import { renderPolicyTemplates as renderPolicyTemplateLibrary } from "../policy-templates/renderPolicyTemplates.js";
 import { renderProviderPanel } from "../providers/renderProviderPanel.js";
 import { renderProviderStatusPanel } from "../provider-health/renderProviderStatusPanel.js";
-import { renderAdapterSpecs } from "../adapter-specs/renderAdapterSpecs.js";
-import { renderAdapterContractRuns } from "../adapter-contract-runs/renderAdapterContractRuns.js";
 import { renderProjectApplicationPanel } from "../projects/renderProjectApplicationPanel.js";
 import { renderLanguageSettingsPanel } from "../language-settings/renderLanguageSettingsPanel.js";
 import { renderRequestLogPanel } from "../request-logs/renderRequestLogPanel.js";
@@ -283,82 +280,6 @@ export function renderProviderStatusLoading(container, options) {
 }
 
 /**
- * 在 PAGE-090 首次读取期间渲染后端导航授权的 loading shell。
- *
- * 只有实时权限快照和精确 `adapter-specs` 导航同时成立才投影页面；该函数不修改原始导航对象，
- * 失败时保留现有 DOM，避免手写 hash 或旧角色文本制造受限页面节点。
- */
-export function renderAdapterSpecsLoading(container, options) {
-  const navigationItems = options?.consoleShellState?.navigation?.navigation_items;
-  const authorized = Array.isArray(navigationItems)
-    && navigationItems.some((item) => (
-      item?.id === "adapter-specs"
-      && item?.target_section === "adapter-specs"
-      && item?.visible !== false
-      && item?.disabled !== true
-    ));
-  // 导航 owner、容器或实时权限任一缺失都保持原 DOM，不允许手写 hash 生成受限页面。
-  if (!container || !authorized || !hasPermission(
-    options?.authContext,
-    PERMISSIONS.PROVIDER_HEALTH_READ,
-  )) {
-    return null;
-  }
-  const projectedState = {
-    ...options.consoleShellState,
-    navigation: {
-      ...options.consoleShellState.navigation,
-      active_navigation_item_id: "adapter-specs",
-    },
-    activeNavigationItemId: "adapter-specs",
-  };
-  renderDeveloperStart(container, {
-    ...options,
-    consoleShellState: projectedState,
-    adapterSpecsState: null,
-  });
-  return projectedState;
-}
-
-/**
- * 在 PAGE-091 首次读取期间投影已授权 loading shell。
- *
- * 后端导航必须精确声明 adapter-contract-runs，当前认证快照也必须包含 provider.health.read；
- * 任一条件缺失都保留原 DOM，防止 viewer 或手写 hash 生成页面节点并触发预取。
- */
-export function renderAdapterContractRunsLoading(container, options) {
-  const navigationItems = options?.consoleShellState?.navigation?.navigation_items;
-  const authorized = Array.isArray(navigationItems)
-    && navigationItems.some((item) => (
-      item?.id === "adapter-contract-runs"
-      && item?.target_section === "adapter-contract-runs"
-      && item?.visible !== false
-      && item?.disabled !== true
-    ));
-  // loading 也属于受限页面 DOM，不能在权限或导航事实不完整时宽松投影。
-  if (!container || !authorized || !hasPermission(
-    options?.authContext,
-    PERMISSIONS.PROVIDER_HEALTH_READ,
-  )) {
-    return null;
-  }
-  const projectedState = {
-    ...options.consoleShellState,
-    navigation: {
-      ...options.consoleShellState.navigation,
-      active_navigation_item_id: "adapter-contract-runs",
-    },
-    activeNavigationItemId: "adapter-contract-runs",
-  };
-  renderDeveloperStart(container, {
-    ...options,
-    consoleShellState: projectedState,
-    adapterContractRunsState: null,
-  });
-  return projectedState;
-}
-
-/**
  * 根据当前导航项渲染主内容区。
  * 关键边界：这里只做前端内容调度，任何真实读写权限仍由对应后端业务 API 校验。
  */
@@ -382,12 +303,6 @@ function renderActiveContent(activeItemId, options, statuses) {
       return renderProvidersSection(options.providersState, options.authContext);
     case "provider-health":
       return `<section class="panel provider-health-shell" aria-labelledby="provider-health-title">${renderProviderStatusPanel(options.providerHealthState, options.authContext)}</section>`;
-    case "adapter-specs":
-      // PAGE-090 只消费当前租户已激活的公开 spec；真实 RBAC、激活事实与 tenant 边界仍由 Control API 强制执行。
-      return `<section class="panel adapter-spec-shell" aria-labelledby="adapter-specs-title">${renderAdapterSpecs(options.adapterSpecsState, options.authContext)}</section>`;
-    case "adapter-contract-runs":
-      // PAGE-091 只消费不可变运行摘要；执行探测、RBAC 和 tenant owner 均不属于浏览器职责。
-      return renderAdapterContractRunsSection(options.adapterContractRunsState, options.authContext);
     case "models":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderModelsSection(options.modelsState, options.providersState, options.authContext);
@@ -576,9 +491,6 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.authContext,
         options.i18n,
       );
-    case "error-maps":
-      // PAGE-081 只消费后端授权导航和安全规则 DTO；真实 RBAC、tenant owner 与 guard 由 Control API 强制执行。
-      return renderErrorMapsSection(options.errorMapsState, options.authContext, options.errorMapFilters);
     case "webhooks":
       // Webhook 页面只做前端内容调度，Endpoint 权限、签名密钥和 tenant_id 边界必须由后端校验。
       return renderWebhooksSection(options.webhookState, options.authContext);
@@ -1162,21 +1074,6 @@ function renderApprovalsSection(state, authContext, consoleShellState) {
 }
 
 /**
- * 渲染 PAGE-081 Provider 错误规则工作区。
- * 前端仅对 admin/developer 输出 DOM；租户隔离、内置只读和写权限均由后端再次校验。
- */
-function renderErrorMapsSection(state, authContext, filters) {
-  const html = renderErrorMapPanel(state, authContext, filters);
-  return html
-    ? `
-      <section class="panel error-maps-panel" aria-labelledby="error-maps-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
-/**
  * 渲染 Webhook 设置和发送记录区域。
  * 前端按角色隐藏入口只是体验优化，后端 /webhooks 仍要强制校验角色、租户、签名和发送记录边界。
  */
@@ -1225,20 +1122,6 @@ function renderPromptTemplatesContent(options) {
     : "";
 }
 
-/**
- * 渲染 PAGE-091 契约测试只读证据面。
- * viewer 即使绕过导航直接调用内容分发也得到零 DOM；后端 GET 仍会再次校验实时权限和租户。
- */
-function renderAdapterContractRunsSection(state, authContext) {
-  const html = renderAdapterContractRuns(state, authContext);
-  return html
-    ? `
-      <section class="panel adapter-contract-runs-panel" aria-labelledby="adapter-contract-runs-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
 /**
  * 渲染调用日志区域。
  * 前端会按角色隐藏该区域，但后端 /request-logs 仍会做管理员/开发者权限校验。

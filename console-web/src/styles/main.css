@@ -103,6 +103,276 @@
   .developer-security-findings li small { grid-column: auto; }
 }
 
+/* PRD-143 keeps Workspace Provider overrides inside Provider detail, never as a top-level page. */
+.workspace-provider-engineering {
+  margin-top: 20px;
+  border-top: 2px solid #176b4d;
+  padding-top: 20px;
+}
+
+.workspace-provider-engineering-heading,
+.workspace-provider-overrides-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workspace-provider-engineering-heading p,
+.workspace-provider-overrides-title p {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workspace-provider-engineering-heading h3,
+.workspace-provider-overrides-title h4 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.workspace-provider-engineering-heading > div > span,
+.workspace-provider-overrides-title > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-provider-engineering-heading-actions,
+.workspace-provider-override-pagination > div {
+  display: flex;
+  gap: 8px;
+}
+
+.workspace-provider-engineering-heading button,
+.workspace-provider-override-pagination button,
+.workspace-provider-override-filters button,
+.workspace-provider-override-actions button,
+.workspace-provider-override-create button {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  padding: 7px 11px;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.workspace-provider-engineering-heading button:disabled,
+.workspace-provider-override-pagination button:disabled,
+.workspace-provider-override-filters button:disabled,
+.workspace-provider-override-actions button:disabled,
+.workspace-provider-override-create button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.workspace-provider-compatibility {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  background: var(--line);
+  gap: 1px;
+}
+
+.workspace-provider-compatibility > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  background: #fff;
+  padding: 12px;
+}
+
+.workspace-provider-compatibility > div > span:first-child {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workspace-provider-compatibility strong,
+.workspace-provider-compatibility small {
+  overflow-wrap: anywhere;
+}
+
+.workspace-provider-compatibility small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.workspace-provider-overrides {
+  margin-top: 22px;
+}
+
+.workspace-provider-override-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, .5fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.workspace-provider-override-filters label,
+.workspace-provider-override-actions label,
+.workspace-provider-override-create label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.workspace-provider-override-filters label > span,
+.workspace-provider-override-actions label > span,
+.workspace-provider-override-create label > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.workspace-provider-override-filters input,
+.workspace-provider-override-filters select,
+.workspace-provider-override-actions input,
+.workspace-provider-override-actions select,
+.workspace-provider-override-create input,
+.workspace-provider-override-create select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  padding: 7px 9px;
+}
+
+.workspace-provider-override-list {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-provider-override {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 14px;
+}
+
+.workspace-provider-override > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-provider-override > header strong,
+.workspace-provider-override > header span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.workspace-provider-override > header span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-provider-override > dl {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 13px 0 0;
+}
+
+.workspace-provider-override dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.workspace-provider-override dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.workspace-provider-override-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.workspace-provider-override-actions > form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr)) auto;
+  align-items: end;
+  flex: 1 1 430px;
+  gap: 8px;
+}
+
+.workspace-provider-override-actions > details {
+  flex: 1 1 100%;
+}
+
+.workspace-provider-override-actions summary,
+.workspace-provider-override-create summary {
+  cursor: pointer;
+  color: #176b4d;
+  font-weight: 800;
+}
+
+.workspace-provider-override-actions details form,
+.workspace-provider-override-create form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.workspace-provider-override-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-provider-override-create {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+@media (max-width: 980px) {
+  .workspace-provider-compatibility { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-provider-override > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workspace-provider-override-actions details form,
+  .workspace-provider-override-create form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .workspace-provider-engineering-heading,
+  .workspace-provider-overrides-title,
+  .workspace-provider-override-pagination { flex-direction: column; }
+  .workspace-provider-compatibility,
+  .workspace-provider-override-filters,
+  .workspace-provider-override > dl,
+  .workspace-provider-override-actions > form,
+  .workspace-provider-override-actions details form,
+  .workspace-provider-override-create form { grid-template-columns: minmax(0, 1fr); }
+  .workspace-provider-engineering-heading-actions,
+  .workspace-provider-engineering-heading-actions button { width: 100%; }
+  .workspace-provider-engineering-heading-actions button { flex: 1; }
+}
+
 /* PRD-120 private Gateway device identity workspace. */
 .private-gateway-workspace { display: grid; gap: 18px; min-width: 0; }
 .private-gateway-toolbar,

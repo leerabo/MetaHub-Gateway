@@ -66,14 +66,10 @@ EVENT_TYPE_BY_NAVIGATION = {
     "competitor-comparison": "help.competitor_viewed",
     # PAGE-088 只记录页面访问，不携带 Provider 指标、筛选或故障内容。
     "provider-health": "status.viewed",
-    # PAGE-091 访问事件只记录页面外壳，不携带 run、case、失败码或 CI 报告正文。
-    "adapter-contract-runs": "console.page_viewed",
     # PAGE-071 使用通用页面访问事件，显式登记可防止后续默认事件变化造成前后端合同漂移。
     "feedback-summary": "console.page_viewed",
     # PAGE-085 访问事件不得携带矩阵正文、权限指纹或租户身份。
     "role-permissions": "console.page_viewed",
-    # PAGE-081 访问事件只记录页面、来源和视口，不携带规则 pattern 或 Provider 信息。
-    "error-maps": "console.page_viewed",
     # PAGE-083 访问事件不携带 event_id、Endpoint、错误码或重放结果。
     "webhook-dead-letters": "console.page_viewed",
     # PAGE-094 访问事件只记录页面来源/视口，不携带模板正文、变量 schema 或版本定义。
@@ -293,26 +289,6 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         48,
     ),
     NavigationDefinition(
-        "adapter-specs",
-        "Adapter 规范",
-        "配置",
-        "adapter-specs",
-        ("provider.health.read",),
-        "查看国内模型、客户 Endpoint 与迁移平台的版本化 Adapter 执行合同。",
-        "当前目录由发布制品激活；若目录不可用，请联系平台管理员核对版本。",
-        43,
-    ),
-    NavigationDefinition(
-        "adapter-contract-runs",
-        "CI 测试报告",
-        "配置",
-        "adapter-contract-runs",
-        ("provider.health.read",),
-        "查看 Provider Adapter 合同测试运行、覆盖结果与安全失败摘要。",
-        "尚无合同测试报告；请先由受控 CI runner 完成一次内部上报。",
-        44,
-    ),
-    NavigationDefinition(
         "provider-health",
         "Provider 状态",
         "配置",
@@ -321,16 +297,6 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看上游可用性、真实调用指标、探测结果和最近故障。",
         "等待真实调用或周期探测形成状态样本。",
         45,
-    ),
-    NavigationDefinition(
-        "error-maps",
-        "错误码管理",
-        "配置",
-        "error-maps",
-        ("provider_error_map.read",),
-        "查看 Provider 错误归一规则与当前租户覆盖层版本。",
-        "平台内置规则只读；管理员可创建租户覆盖规则。",
-        47,
     ),
     NavigationDefinition(
         "models",
@@ -807,10 +773,7 @@ WORKSPACE_NAVIGATION_EXCLUDED_IDS = frozenset(
         "partner-portal",
         "providers",
         "local-models",
-        "adapter-specs",
-        "adapter-contract-runs",
         "provider-health",
-        "error-maps",
         "billing-disputes",
         "competitor-comparison",
     }

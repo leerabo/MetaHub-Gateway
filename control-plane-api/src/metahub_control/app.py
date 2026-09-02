@@ -15,9 +15,8 @@ from metahub_shared.observability import install_telemetry_runtime
 from metahub_shared.runtime.fastapi_app import create_service_app
 from starlette.requests import Request
 
-from .adapter_contracts import install_adapter_contract_event_scheduler
-from .adapter_contracts import router as adapter_contracts_router
-from .adapter_specs.routes import router as adapter_specs_router
+from .adapter_contracts import internal_router as adapter_contracts_internal_router
+from .adapter_specs.routes import internal_router as adapter_specs_internal_router
 from .admin_assistant import install_admin_assistant_scheduler
 from .admin_assistant import router as admin_assistant_router
 from .approvals import install_approval_scheduler
@@ -59,8 +58,7 @@ from .edge_management import router as edge_management_router
 from .enterprise_chat.routes import router as enterprise_chat_router
 from .enterprise_identity import router as enterprise_identity_router
 from .environments.routes import router as environments_router
-from .error_maps import install_provider_error_map_scheduler
-from .error_maps import router as error_maps_router
+from .error_maps import internal_router as error_maps_internal_router
 from .experiments import install_experiment_scheduler
 from .experiments import router as experiments_router
 from .feature_rollouts import router as feature_rollouts_router
@@ -114,6 +112,8 @@ from .privacy_center import router as privacy_center_router
 from .projects.routes import router as projects_router
 from .prompt_templates.routes import router as prompt_templates_router
 from .provider_catalog import router as provider_catalog_router
+from .provider_engineering import install_platform_provider_engineering_scheduler
+from .provider_engineering import router as provider_engineering_router
 from .provider_health import install_provider_health_scheduler
 from .provider_health import router as provider_health_router
 from .provider_status import router as provider_status_router
@@ -341,8 +341,8 @@ app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
 app.include_router(billing_disputes_router)
-app.include_router(adapter_contracts_router)
-app.include_router(adapter_specs_router)
+app.include_router(adapter_contracts_internal_router)
+app.include_router(adapter_specs_internal_router)
 app.include_router(audit_router)
 app.include_router(console_router)
 app.include_router(cost_anomalies_router)
@@ -357,7 +357,7 @@ app.include_router(developer_portal_router)
 app.include_router(dlp_router)
 app.include_router(environments_router)
 app.include_router(enterprise_chat_router)
-app.include_router(error_maps_router)
+app.include_router(error_maps_internal_router)
 app.include_router(experiments_router)
 app.include_router(feature_rollouts_router)
 app.include_router(feedback_router)
@@ -388,6 +388,7 @@ app.include_router(mcp_governance_router)
 app.include_router(permissions_router)
 app.include_router(plan_billing_router)
 app.include_router(brand_domains_router)
+app.include_router(provider_engineering_router)
 app.include_router(policies_router)
 app.include_router(policy_templates_router)
 app.include_router(policy_snapshots_router)
@@ -420,11 +421,10 @@ if app.state.config.control_background_schedulers_enabled:
             install_launch_governance_scheduler,
             install_request_explanation_scheduler,
             install_request_log_query_event_scheduler,
-            install_provider_error_map_scheduler,
+            install_platform_provider_engineering_scheduler,
             install_audit_export_scheduler,
             install_webhook_replay_scheduler,
             install_file_security_event_scheduler,
-            install_adapter_contract_event_scheduler,
             install_experiment_scheduler,
             install_response_cache_outbox_scheduler,
             install_platform_growth_scheduler,

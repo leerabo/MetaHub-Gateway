@@ -424,12 +424,10 @@ test("PAGE-082 renders attempt and stream facts without raw Provider body", () =
   assert.match(html, /错误归一事实/);
   assert.match(html, /data-provider-error-fact-owner="attempt"/);
   assert.match(html, /data-provider-error-fact-owner="stream_session"/);
-  assert.match(html, /#error-maps/);
-  assert.match(html, /data-provider-error-map-source="tenant"/);
-  assert.match(html, /data-provider-error-map-version="2"/);
-  assert.match(html, /data-provider-error-map-source="builtin"/);
-  assert.match(html, /data-provider-error-map-catalog="provider-error-builtin-v1"/);
-  assert.doesNotMatch(html, /href="#error-maps[?&]|data-provider-error-catalog-jump/);
+  assert.doesNotMatch(html, /#error-maps|data-provider-error-map|data-provider-error-catalog-jump/);
+  assert.match(html, /pem_11111111111111111111111111111111/);
+  assert.match(html, /builtin_model_not_found_signal/);
+  assert.match(html, /provider-error-builtin-v1/);
   assert.match(html, /&lt;script&gt;NORMALIZED&lt;\/script&gt;/);
   assert.doesNotMatch(html, /sk-provider-secret|RAW_RESPONSE_MUST_NOT_RENDER|PROMPT_MUST_NOT_RENDER|<script>/);
   assert.match(html, /pef_0123456789abcdef0123456789abcdef/);
@@ -439,18 +437,15 @@ test("PAGE-082 renders attempt and stream facts without raw Provider body", () =
   assert.match(html, /2026/);
 });
 
-test("main wires backend navigation, zero viewer prefetch and shell replacement protection", async () => {
-  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(source, /!hasPermission\(authSession\.context, PERMISSIONS\.PROVIDER_ERROR_MAP_READ\)[\s\S]*activeNavigationItemId !== "error-maps"/);
-  assert.match(source, /errorMapPageMemory\.blocksShellDomReplacement\(\)[\s\S]*return;/);
-  assert.match(source, /beginConflictRefresh[\s\S]*listErrorMaps\([\s\S]*errorMapId: ticket\.errorMapId/);
-  assert.match(source, /bindErrorMapDialogLifecycle[\s\S]*event\.key === "Escape"[\s\S]*event\.key !== "Tab"/);
-  assert.match(source, /clearErrorMapStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(source, /pagehide[\s\S]*clearErrorMapSessionState\(\)/);
-  assert.match(source, /const errorMapHandoff = createErrorMapHandoff\(\)/);
-  assert.match(source, /errorMapHandoff\.stage\([\s\S]*matchedRuleVersion:[\s\S]*builtinCatalogVersion:/);
-  assert.match(source, /errorMapHandoff\.consume\([\s\S]*navigation: "error-maps"/);
-  assert.match(source, /errorMapId: effectiveReference\?\.source === "tenant"/);
-  assert.match(source, /clearErrorMapSessionState\(\)[\s\S]*errorMapHandoff\.clear\(\)/);
-  assert.doesNotMatch(source, /localStorage[^\n]*errorMap|sessionStorage[^\n]*errorMap/i);
+test("PRD-143 removes the top-level Error Maps runtime and keeps Provider-detail ownership", async () => {
+  const [entry, renderer, requestLog] = await Promise.all([
+    readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/request-logs/renderRequestLogPanel.js", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(entry, /errorMapPageMemory|errorMapHandoff|bindErrorMapInteractions|loadErrorMapsState|#error-maps/u);
+  assert.doesNotMatch(renderer, /renderErrorMapPanel|case "error-maps"|error-maps-panel/u);
+  assert.doesNotMatch(requestLog, /#error-maps|data-provider-error-map-jump/u);
+  assert.match(entry, /workspaceProviderEngineeringController/u);
+  assert.match(entry, /listWorkspaceProviderErrorOverrides/u);
 });

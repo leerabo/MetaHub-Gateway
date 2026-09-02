@@ -1,0 +1,102 @@
+{
+  "prd_id": "PRD-143",
+  "generated_at": "2026-09-02T16:05:27Z",
+  "origin": "http://localhost:5173",
+  "api_origin": "http://localhost:8001",
+  "browser_family": "Edge",
+  "checks": [
+    {
+      "id": "platform_provider_engineering",
+      "result": "pass",
+      "evidence": "Platform Provider Engineering renders the adapter release directory, safe release projection, fixed contract aggregate, and opaque keyset controls under the Platform shell."
+    },
+    {
+      "id": "workspace_provider_engineering",
+      "result": "pass",
+      "evidence": "The Workspace Provider detail renders a separate compatibility and error-override surface with an owner-bound empty state and no Platform command controls."
+    },
+    {
+      "id": "domain_separation",
+      "result": "pass",
+      "evidence": "Platform release engineering and Workspace override management use visibly independent shells, controls, projections, and owner context."
+    },
+    {
+      "id": "legacy_navigation_cutover",
+      "result": "pass",
+      "evidence": "The active Workspace navigation does not expose Adapter Specs, Adapter Contract Runs, or the former top-level Error Maps page."
+    },
+    {
+      "id": "safe_projection",
+      "result": "pass",
+      "evidence": "Rendered release and compatibility facts contain only bounded identifiers, digests, status, revision, and aggregate values; raw contract cases and error matcher bodies are absent."
+    },
+    {
+      "id": "responsive_desktop",
+      "result": "pass",
+      "evidence": "The 1280 and 1440 evidence keeps filters, release facts, Provider compatibility, and override controls readable without document-level horizontal overflow."
+    },
+    {
+      "id": "responsive_mobile",
+      "result": "pass",
+      "evidence": "The 390 evidence keeps headings, controls, status facts, and scroll ownership coherent without text or controls overlapping."
+    },
+    {
+      "id": "sensitive_value_exclusion",
+      "result": "pass",
+      "evidence": "Official PNG bytes and visible content contain no password, TOTP value, Authorization header, Cookie, session token, Provider key, raw error condition, or contract case payload. Workspace evidence is a safety crop of the PRD-143 panel."
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "platform-provider-engineering-1280x800.png",
+      "bytes": 77079,
+      "width": 1265,
+      "height": 791,
+      "sha256": "6d92b4dc7ce701770dbf253dfa493140201163089eec54731cf8ee34f5c5c874",
+      "official": true
+    },
+    {
+      "file": "platform-provider-engineering-1440x900.png",
+      "bytes": 91208,
+      "width": 1425,
+      "height": 891,
+      "sha256": "2a69310f464f793a0519674d2f94e0b223f50fd4274dd5c27db260a267259fd6",
+      "official": true
+    },
+    {
+      "file": "platform-provider-engineering-390x844.png",
+      "bytes": 28068,
+      "width": 375,
+      "height": 812,
+      "sha256": "8a5b017cf55f8957eb0dc6ebeb7d94ef999ce92abc1dd0a46ec6fba9d1ef500b",
+      "official": true
+    },
+    {
+      "file": "workspace-provider-engineering-1280x800.png",
+      "bytes": 133458,
+      "width": 1265,
+      "height": 441,
+      "sha256": "88ffaee9e518bf2ac50e7c73a021575e8d12f0cc605f666127be473604068ffd",
+      "official": true,
+      "note": "Safety crop retains only the PRD-143 business panel."
+    },
+    {
+      "file": "workspace-provider-engineering-1440x900.png",
+      "bytes": 140300,
+      "width": 1425,
+      "height": 491,
+      "sha256": "6e4b5b18cf592ba97341b7109349d835dc64f1b82d6f85f930666b264894d32c",
+      "official": true,
+      "note": "Safety crop retains only the PRD-143 business panel."
+    },
+    {
+      "file": "workspace-provider-engineering-390x844.png",
+      "bytes": 78883,
+      "width": 375,
+      "height": 522,
+      "sha256": "82b93b39f3afc182b642d7844485b5c2752b881530596a2bd16dbb1b5d5a5f6e",
+      "official": true,
+      "note": "Safety crop retains only the PRD-143 business panel."
+    }
+  ]
+}

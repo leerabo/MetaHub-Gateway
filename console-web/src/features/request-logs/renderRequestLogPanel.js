@@ -1773,9 +1773,9 @@ function renderProviderErrorFact(fact, ownerKind) {
 }
 
 /**
- * 渲染可交接的归一化规则引用。
+ * 渲染归一化规则引用。
  * tenant 必须同时有稳定资源 ID 和正版本；builtin 必须同时有安全规则 ID 和不可变目录版本；
- * guard、损坏 DTO 或缺失版本只显示纯文本，绝不制造可点击但无法完整绑定的跳转。
+ * guard、损坏 DTO 或缺失版本只显示纯文本。规则管理已收口到 Provider 详情，调用日志不再生成顶级页面跳转。
  */
 function renderProviderErrorRuleReference(source, ruleId, fact) {
   const normalizedRuleId = String(ruleId ?? "");
@@ -1785,8 +1785,7 @@ function renderProviderErrorRuleReference(source, ruleId, fact) {
     && Number.isSafeInteger(fact?.matched_rule_version)
     && fact.matched_rule_version > 0
   ) {
-    // tenant 跳转只携带稳定规则 ID 与冻结版本，禁止把 pattern、request_id 或原始错误写入 URL。
-    return `<div><dt>命中规则</dt><dd><a href="#error-maps" data-provider-error-map-jump="${escapeAttribute(normalizedRuleId)}" data-provider-error-map-source="tenant" data-provider-error-map-version="${escapeAttribute(fact.matched_rule_version)}"><code>${escapeHtml(normalizedRuleId)}</code></a></dd></div>`;
+    return `<div><dt>命中规则</dt><dd><code>${escapeHtml(normalizedRuleId)}</code> · v${escapeHtml(fact.matched_rule_version)}</dd></div>`;
   }
   const catalogVersion = String(fact?.builtin_catalog_version ?? "");
   if (
@@ -1794,8 +1793,7 @@ function renderProviderErrorRuleReference(source, ruleId, fact) {
     && SAFE_ERROR_MAP_REFERENCE_PATTERN.test(normalizedRuleId)
     && SAFE_ERROR_MAP_REFERENCE_PATTERN.test(catalogVersion)
   ) {
-    // builtin 跳转必须绑定不可变目录版本，不能借当前 catalog 冒充历史命中规则。
-    return `<div><dt>命中规则</dt><dd><a href="#error-maps" data-provider-error-map-jump="${escapeAttribute(normalizedRuleId)}" data-provider-error-map-source="builtin" data-provider-error-map-catalog="${escapeAttribute(catalogVersion)}"><code>${escapeHtml(normalizedRuleId)}</code> · ${escapeHtml(catalogVersion)}</a></dd></div>`;
+    return `<div><dt>命中规则</dt><dd><code>${escapeHtml(normalizedRuleId)}</code> · ${escapeHtml(catalogVersion)}</dd></div>`;
   }
   return renderPair(
     "命中规则",

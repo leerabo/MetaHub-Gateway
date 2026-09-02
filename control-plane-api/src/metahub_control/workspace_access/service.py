@@ -65,6 +65,9 @@ from .models import (
 )
 from .privacy_permissions import PRIVACY_ROLE_PERMISSIONS
 from .provider_catalog_permissions import PROVIDER_CATALOG_ROLE_PERMISSIONS
+from .provider_engineering_permissions import (
+    WORKSPACE_PROVIDER_ENGINEERING_ROLE_PERMISSIONS,
+)
 
 logger = logging.getLogger("metahub.control.workspace_access")
 
@@ -157,6 +160,7 @@ _WORKSPACE_EXTENSION_GROUPS = (
     "compliance",
     "assurance",
     "branding",
+    "provider_engineering",
 )
 _WORKSPACE_EXTENSION_FAMILIES = (
     _WorkspaceExtensionFamily(
@@ -294,6 +298,13 @@ _WORKSPACE_EXTENSION_FAMILIES = (
         "workspace_brand_role_permissions",
         "0134",
         WORKSPACE_BRAND_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "provider_engineering",
+        "workspace_provider_engineering_permission_extensions",
+        "workspace_provider_engineering_role_permissions",
+        "0135",
+        WORKSPACE_PROVIDER_ENGINEERING_ROLE_PERMISSIONS,
     ),
 )
 WORKSPACE_EXTENSION_PERMISSION_CODES = frozenset(
@@ -844,6 +855,7 @@ def workspace_actor_authorization_probe_in_transaction(
         compliance,
         assurance,
         branding,
+        provider_engineering,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -875,6 +887,8 @@ def workspace_actor_authorization_probe_in_transaction(
             privacy_permissions=privacy,
             compliance_permissions=compliance,
             assurance_permissions=assurance,
+            branding_permissions=branding,
+            provider_engineering_permissions=provider_engineering,
         ),
     )
 
@@ -2172,6 +2186,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         compliance,
         assurance,
         branding,
+        provider_engineering,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -2188,6 +2203,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
             compliance,
             assurance,
             branding,
+            provider_engineering,
         )
     ):
         return legacy
@@ -2205,6 +2221,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
                 *compliance,
                 *assurance,
                 *branding,
+                *provider_engineering,
             }
         )
     )
@@ -2221,6 +2238,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         compliance_permissions=compliance,
         assurance_permissions=assurance,
         branding_permissions=branding,
+        provider_engineering_permissions=provider_engineering,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -2237,6 +2255,7 @@ def _workspace_extension_permissions(
     role_code: str,
     require_catalogs: bool = False,
 ) -> tuple[
+    tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
@@ -2358,6 +2377,7 @@ def _workspace_authorization_fingerprint(
     compliance_permissions: tuple[str, ...],
     assurance_permissions: tuple[str, ...],
     branding_permissions: tuple[str, ...],
+    provider_engineering_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2374,6 +2394,7 @@ def _workspace_authorization_fingerprint(
                 "compliance_permissions": compliance_permissions,
                 "assurance_permissions": assurance_permissions,
                 "branding_permissions": branding_permissions,
+                "provider_engineering_permissions": provider_engineering_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

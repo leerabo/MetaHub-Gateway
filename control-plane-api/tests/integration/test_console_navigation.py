@@ -160,10 +160,15 @@ async def test_console_navigation_roles_and_preferences(
     assert len(admin_payload["authorization_fingerprint"]) == 64
     assert all(item["required_permissions"] for item in admin_payload["navigation_items"])
     admin_ids = {item["id"] for item in admin_payload["navigation_items"]}
+    legacy_provider_engineering_ids = {
+        "adapter-specs",
+        "adapter-contract-runs",
+        "error-maps",
+    }
+    assert admin_ids.isdisjoint(legacy_provider_engineering_ids)
     assert {
         "providers",
         "local-models",
-        "adapter-specs",
         "users",
         "role-permissions",
         "environments",
@@ -199,10 +204,10 @@ async def test_console_navigation_roles_and_preferences(
         "feedback-summary",
         "api-docs",
         "models",
-        "adapter-specs",
         "local-models",
         "sdk-examples",
     }.issubset(developer_ids)
+    assert developer_ids.isdisjoint(legacy_provider_engineering_ids)
     assert "providers" not in developer_ids
     assert "usage" not in developer_ids
     assert "budgets" not in developer_ids
@@ -246,7 +251,7 @@ async def test_console_navigation_roles_and_preferences(
     assert "audit-logs" not in viewer_ids
     # 满意度报表属于租户调用事实，viewer 不得收到导航或通过偏好恢复受限入口。
     assert "feedback-summary" not in viewer_ids
-    assert "adapter-specs" not in viewer_ids
+    assert viewer_ids.isdisjoint(legacy_provider_engineering_ids)
     assert "local-models" not in viewer_ids
     assert "request-explanations" not in viewer_ids
     assert viewer_explanation_denied.status_code == 422

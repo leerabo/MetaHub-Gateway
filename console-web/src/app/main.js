@@ -77,8 +77,6 @@ function clearPublicBrandingPreview() {
 
 import {
   isConsoleNavigationOwnerCurrent,
-  renderAdapterContractRunsLoading,
-  renderAdapterSpecsLoading,
   renderDeveloperStart,
   renderProviderStatusLoading,
   renderRoutingPoliciesLoading,
@@ -331,21 +329,6 @@ import {
   roleDashboardNavigationOwned,
 } from "../features/dashboard/roleDashboardPageState.js";
 import { renderRoleDashboardPanel } from "../features/dashboard/renderRoleDashboardPanel.js";
-import {
-  adapterSpecApiFilters,
-  adapterSpecFilterKey,
-  adapterSpecIdentitySnapshot,
-  canonicalAdapterSpecFilters,
-  createAdapterSpecPageState,
-} from "../features/adapter-specs/adapterSpecPageState.js";
-import {
-  adapterContractRunFilterKey,
-  adapterContractRunIdentitySnapshot,
-  canonicalAdapterContractRunFilters,
-  createAdapterContractRunPageState,
-  isAdapterContractRunAbortError,
-} from "../features/adapter-contract-runs/adapterContractRunPageState.js";
-import { renderAdapterContractRuns } from "../features/adapter-contract-runs/renderAdapterContractRuns.js";
 import { createI18n, DEFAULT_LOCALE } from "../i18n/messages.js";
 import {
   AuthApiError,
@@ -361,11 +344,6 @@ import {
   getDeveloperContractWorkspace,
 } from "../lib/developerContracts.js";
 import { getDeveloperSupplyChainSecurity } from "../lib/supplyChainSecurity.js";
-import { listAdapterSpecs } from "../lib/adapterSpecs.js";
-import {
-  getAdapterContractRun,
-  listAdapterContractRuns,
-} from "../lib/adapterContractRuns.js";
 import {
   authorizationIdentitySnapshot,
   authorizeNavigationSnapshot,
@@ -432,11 +410,6 @@ import {
 } from "../lib/pythonSdkExamples.js";
 import { getUserPreferences, updateUserPreferences } from "../lib/userPreferences.js";
 import { createDlpRule, listDlpRules, updateDlpRule } from "../lib/dlp.js";
-import {
-  createErrorMap,
-  listErrorMaps,
-  updateErrorMap,
-} from "../lib/errorMaps.js";
 import { createPolicy, listPolicies, updatePolicy, validatePolicy } from "../lib/policies.js";
 import { executePolicyDryRun } from "../lib/policyDryRun.js";
 import { classifyIntent } from "../lib/intentSecurity.js";
@@ -609,6 +582,7 @@ import {
   createIdentityStepUpGrant,
   getWebAuthnAssertion,
 } from "../lib/identity.js";
+import { getCurrentWorkspaceSession } from "../lib/workspaces.js";
 import {
   createBrandingIdempotencyKey,
   getDeploymentBranding,
@@ -726,6 +700,12 @@ import {
   preflightCatalogProvider,
 } from "../lib/providerCatalog.js";
 import {
+  applyWorkspaceProviderErrorOverrideCommand,
+  listWorkspaceProviderErrorOverrides,
+} from "../lib/providerEngineering.js";
+import { createWorkspaceProviderEngineeringController } from "../features/workspace-provider-engineering/workspaceProviderEngineeringController.js";
+import { renderWorkspaceProviderEngineering } from "../features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
+import {
   createVirtualKey,
   disableVirtualKey,
   listVirtualKeys,
@@ -798,19 +778,6 @@ import {
   requestLogFiltersFromSavedFilter,
   requestLogIdentitySnapshot,
 } from "../features/request-logs/renderRequestLogPanel.js";
-import {
-  createErrorMapHandoff,
-  createErrorMapPageMemory,
-  errorMapIdentitySnapshot,
-} from "../features/error-maps/errorMapPageState.js";
-import {
-  createErrorMapDialogRestoreState,
-  resolveErrorMapDialogRestoreTarget,
-} from "../features/error-maps/errorMapDialogFocus.js";
-import {
-  errorMapDraftFromFormData,
-  renderErrorMapPanel,
-} from "../features/error-maps/renderErrorMapPanel.js";
 import { renderRequestExplanationPanel } from "../features/request-explanations/renderRequestExplanation.js";
 import {
   createRequestExplanationHandoff,
@@ -912,6 +879,39 @@ let providerHealthRequestGeneration = 0;
 let providerHealthController = null;
 // Provider 列表及其 Key 读取绑定当前刷新；导航或注销时必须先取消，避免失效 Token 继续请求。
 let providersLoadController = null;
+let workspaceProviderEngineeringProviders = [];
+const workspaceProviderEngineeringController = createWorkspaceProviderEngineeringController({
+  api: {
+    workspaceSession: (input) => getCurrentWorkspaceSession({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    providerErrorOverrides: (input) => listWorkspaceProviderErrorOverrides({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    commandProviderErrorOverride: (input) => applyWorkspaceProviderErrorOverrideCommand({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    beginIdentityStepUp: (input) => beginIdentityWebAuthnStepUp({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    createIdentityStepUpGrant: (input) => createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    getWebAuthnAssertion,
+  },
+  onChange: renderCurrentWorkspaceProviderEngineering,
+  onSessionInvalid() {
+    if (authSession.token) void refresh();
+  },
+  onPermissionRevoked() {
+    if (authSession.token) void refresh();
+  },
+});
 let consoleSidebarController = null;
 // 导航偏好和访问事件是低优先级写入；快速切页时只保留最后一页。
 const CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000;
@@ -921,11 +921,6 @@ const providerStatusPageState = createProviderStatusPageState();
 // PAGE-092 使用独立 owner 和记忆；selected view 只驻留内存，禁止写入 URL、Storage 或用户偏好。
 const roleDashboardPageState = createRoleDashboardPageState();
 let roleDashboardEntrySource = readActiveNavigationHash() === "overview" ? "direct_hash" : "refresh";
-// PAGE-090 目录筛选和 GET owner 完全独立于 Provider 状态页，任一页面失败或离开都不能清空另一页面。
-let adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-const adapterSpecPageState = createAdapterSpecPageState();
-// PAGE-091 的列表、opaque cursor、详情和完整异步 owner 全部封装在独立内存容器，禁止写入 URL/Storage。
-const adapterContractRunPageState = createAdapterContractRunPageState();
 let projectActionError = null;
 let projectFeedback = "";
 let environmentActionError = null;
@@ -950,15 +945,6 @@ const auditExportLifecycle = createAuditExportLifecycle();
 const rolePermissionPageState = createRolePermissionPageState();
 // PAGE-087 的链接、邮件文案和异步 owner 全部由私有闭包持有，公开 snapshot 永不含密文。
 const invitationPageState = createInvitationPageState();
-// PAGE-082 到 PAGE-081 的引用只通过完整身份绑定的一次性内存交接，不进入 URL 或 Storage。
-const errorMapHandoff = createErrorMapHandoff();
-// PAGE-081 的规则、历史引用、dialog、mutation 与冲突 GET 只保存在完整身份 owner 下的内存仓库。
-const errorMapPageMemory = createErrorMapPageMemory();
-let errorMapFilters = { providerId: "", source: "", status: "", outputErrorCode: "", limit: 100, offset: 0 };
-// 对话框恢复 descriptor 同时绑定稳定按钮身份和完整 Session owner，局部重绘后也不能跨身份聚焦。
-let errorMapDialogRestoreState = null;
-let errorMapDialogKeydownHandler = null;
-let errorMapBodyOverflow = null;
 // 每次刷新分配递增序号；较早刷新即使更晚返回，也不能覆盖用户已经切换的新页面。
 let refreshSequence = 0;
 let developerContractDownloadController = null;
@@ -1180,11 +1166,11 @@ if (app && globalThis.window) {
       adminAssistantPageState.leave();
       // PAGE-088 额外监听同一 hash 边界，同步淘汰旧状态回调；通用监听仍负责重读后端导航。
       providerStatusPageState.clear();
-      // PAGE-090 同样不能等待导航 API 返回才失效；手写 hash 离页时立即阻止旧目录写回 DOM。
-      adapterSpecPageState.clear();
-      // PAGE-091 的列表和详情都绑定当前 hash；手写切换必须在导航 API 返回前淘汰全部迟到回调。
-      adapterContractRunPageState.clear();
       const nextItemId = readActiveNavigationHash();
+      if (nextItemId !== "providers") {
+        workspaceProviderEngineeringProviders = [];
+        workspaceProviderEngineeringController.close();
+      }
       if (nextItemId !== "enterprise-chat") {
         // 地址栏离开 PAGE-093 时先清正文和在途请求，不能等待导航 API 或下一轮全页渲染。
         clearEnterpriseChatSessionState();
@@ -1267,9 +1253,6 @@ if (app && globalThis.window) {
         // 离开首页时立即取消 role-view 并清除旧卡片，不等待导航接口或下一轮全页渲染。
         clearRoleDashboardSessionState();
       }
-      if (nextItemId !== "adapter-specs") {
-        adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-      }
       // Provider 状态页单独维护访问来源；其他 hash 必须销毁 tracker，避免跨页面误记事件。
       if (nextItemId === "provider-health") {
         providerStatusEntrySource = "direct_hash";
@@ -1314,7 +1297,6 @@ if (app && globalThis.window) {
       clearIntentSecuritySessionState();
       clearRoutingPolicySessionState();
       clearModelQualityScoreSessionState();
-      clearErrorMapSessionState();
       clearRequestLogSessionState();
       clearRequestExplanationSessionState();
       clearRequestFeedbackSummarySessionState();
@@ -1323,8 +1305,8 @@ if (app && globalThis.window) {
       providerStatusPageState.clear();
       providerStatusVisitTracker.leave();
       clearRoleDashboardSessionState();
-      adapterSpecPageState.clear();
-      adapterContractRunPageState.clear();
+      workspaceProviderEngineeringProviders = [];
+      workspaceProviderEngineeringController.close();
       clearEnterpriseChatSessionState();
       clearPromptTemplateSessionState();
     });
@@ -1443,7 +1425,6 @@ async function start() {
     clearIntentSecurityStateOnIdentityChange(authSession.context, context);
     clearRoutingPolicyStateOnIdentityChange(authSession.context, context);
     clearModelQualityScoreStateOnIdentityChange(authSession.context, context);
-    clearErrorMapStateOnIdentityChange(authSession.context, context);
     clearRequestLogStateOnIdentityChange(authSession.context, context);
     clearRequestExplanationStateOnIdentityChange(authSession.context, context);
     clearRequestFeedbackSummaryStateOnIdentityChange(authSession.context, context);
@@ -1533,6 +1514,8 @@ function handleConsoleWorkspaceContextInvalidation() {
   deploymentBrandingController.clear();
   migrationOperationPageState.clear();
   supportTicketPageState.clear();
+  workspaceProviderEngineeringProviders = [];
+  workspaceProviderEngineeringController.close();
   void refresh();
 }
 
@@ -1617,7 +1600,6 @@ async function performRefresh(options = {}) {
     clearIntentSecurityStateOnIdentityChange(authSession.context, context);
     clearRoutingPolicyStateOnIdentityChange(authSession.context, context);
     clearModelQualityScoreStateOnIdentityChange(authSession.context, context);
-    clearErrorMapStateOnIdentityChange(authSession.context, context);
     clearRequestLogStateOnIdentityChange(authSession.context, context);
     clearRequestExplanationStateOnIdentityChange(authSession.context, context);
     clearRequestFeedbackSummaryStateOnIdentityChange(authSession.context, context);
@@ -1626,18 +1608,6 @@ async function performRefresh(options = {}) {
     if (roleDashboardIdentitySnapshot(authSession.context) !== roleDashboardIdentitySnapshot(context)) {
       clearRoleDashboardSessionState();
       roleDashboardEntrySource = "refresh";
-    }
-    // 目录响应属于完整授权身份；tenant、Session、revision、权限指纹任一变化都先 abort 再替换 Session。
-    if (adapterSpecIdentitySnapshot(authSession.context) !== adapterSpecIdentitySnapshot(context)) {
-      adapterSpecPageState.clear();
-      adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-    }
-    // 契约运行事实同样属于完整 tenant/Session/RBAC owner；任一 revision 或指纹变化都先销毁旧列表与详情。
-    if (
-      adapterContractRunIdentitySnapshot(authSession.context)
-      !== adapterContractRunIdentitySnapshot(context)
-    ) {
-      adapterContractRunPageState.clear();
     }
     saveAuthSession(refreshToken, context);
     authSession = { token: refreshToken, context };
@@ -1658,6 +1628,10 @@ async function performRefresh(options = {}) {
   }
   if (!consoleShellState || !authSession.token) {
     return;
+  }
+  if (consoleShellState.activeNavigationItemId !== "providers") {
+    workspaceProviderEngineeringProviders = [];
+    workspaceProviderEngineeringController.close();
   }
   consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
   if (isFastNavigation) {
@@ -1745,15 +1719,6 @@ async function performRefresh(options = {}) {
   if (consoleShellState?.activeNavigationItemId !== "provider-health") {
     providerStatusPageState.clear();
   }
-  // PAGE-090 只有后端仍确认 active owner 时才能保留 GET；导航裁剪或离页立即销毁上一租户目录。
-  if (consoleShellState?.activeNavigationItemId !== "adapter-specs") {
-    adapterSpecPageState.clear();
-    adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-  }
-  // PAGE-091 只在后端仍确认 active owner 时保留内存事实；导航裁剪会同步 abort 列表和详情。
-  if (consoleShellState?.activeNavigationItemId !== "adapter-contract-runs") {
-    adapterContractRunPageState.clear();
-  }
   // 邀请弹窗必须同时属于当前 Session、授权指纹和后端确认的 users 导航；任一漂移立即清除密文。
   invitationPageState.syncOwner({
     authContext: authSession.context,
@@ -1787,14 +1752,6 @@ async function performRefresh(options = {}) {
   // PAGE-069 数据和人工评分草稿只属于后端确认的 active 导航；viewer 或 hash 回退不会触发后台预取。
   if (consoleShellState?.activeNavigationItemId !== "model-quality-scores") {
     clearModelQualityScoreSessionState();
-  }
-  // PAGE-081 的 dialog/dirty/busy/conflict 只属于后端确认的 active 导航；降权或裁剪必须立即销毁。
-  if (consoleShellState?.activeNavigationItemId !== "error-maps") {
-    clearErrorMapSessionState();
-  } else if (errorMapPageMemory.blocksShellDomReplacement()) {
-    // 15 秒刷新已经在上方重新校验 Session 与后端导航；同 owner 编辑中禁止 app.innerHTML 重建，
-    // 以保留 dialog、焦点陷阱和滚动锁。身份或权限变化已经通过前置 clear/导航判断强制 leave。
-    return;
   }
   // 调用日志只属于后端确认的 active 页面；离页先 abort list/detail，再销毁上一租户详情。
   if (!REQUEST_LOG_NAVIGATION_IDS.has(consoleShellState?.activeNavigationItemId)) {
@@ -2011,8 +1968,6 @@ async function performRefresh(options = {}) {
     tenantState,
     usersState,
     providerHealthState,
-    adapterSpecsState,
-    adapterContractRunsState,
   ] = await Promise.all([
     fastRoleDashboardState ?? loadRoleDashboardState(consoleShellState, roleDashboardEntrySource),
     loadQuickstartState(consoleShellState),
@@ -2020,8 +1975,6 @@ async function performRefresh(options = {}) {
     loadTenantState(),
     loadUsersState(consoleShellState),
     loadProviderHealthState(consoleShellState),
-    loadAdapterSpecsState(consoleShellState),
-    loadAdapterContractRunsState(consoleShellState, refreshId),
   ]);
   // 角色首页失败会保留统一错误或同 owner partial，但当前 401 仍必须切断全部后续租户读取。
   if (!authSession.token) {
@@ -2044,14 +1997,6 @@ async function performRefresh(options = {}) {
     return;
   }
   // 健康接口若确认会话失效会清空 Token，后续所有租户配置读取必须立即停止。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-090 只在后端确认 active 导航后读取；loader 会再次冻结权限、身份、筛选和 Token owner。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-091 只有精确后端导航 owner 才读取，viewer 和其他导航不会预取运行或 case。
   if (!authSession.token) {
     return;
   }
@@ -2154,14 +2099,12 @@ async function performRefresh(options = {}) {
   const [
     modelAliasesState,
     modelQualityScoresState,
-    errorMapsState,
     projectState,
     virtualKeysState,
     usageState,
   ] = await Promise.all([
     loadExperimentCreateResources ? loadModelAliasesState() : Promise.resolve(null),
     loadModelQualityScoresState(consoleShellState, refreshId),
-    loadErrorMapsState(consoleShellState, refreshId),
     loadExperimentCreateResources ? loadProjectState() : Promise.resolve(null),
     loadVirtualKeysState(),
     loadUsageState(),
@@ -2185,10 +2128,6 @@ async function performRefresh(options = {}) {
     return;
   }
   // PAGE-069 只有在后端授权且确认 active 导航后才读取；loader 自身还会复核角色、身份和 refresh owner。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-081 只在后端 active 导航和 admin/developer 角色同时成立时读取，viewer 不会预取。
   if (!authSession.token) {
     return;
   }
@@ -2384,8 +2323,6 @@ async function performRefresh(options = {}) {
     i18n,
     roleDashboardState,
     providerHealthState,
-    adapterSpecsState,
-    adapterContractRunsState,
     userPreferencesState,
     quickstartState,
     sdkExampleStates,
@@ -2423,8 +2360,6 @@ async function performRefresh(options = {}) {
       : null,
     modelQualityScoresState,
     modelQualityScoreFilters,
-    errorMapsState,
-    errorMapFilters,
     projectState,
     virtualKeysState,
     usageState,
@@ -2539,12 +2474,6 @@ async function loadAndRenderActiveNavigation({
       break;
     case "provider-health":
       await load("providerHealthState", () => loadProviderHealthState(consoleShellState));
-      break;
-    case "adapter-specs":
-      await load("adapterSpecsState", () => loadAdapterSpecsState(consoleShellState));
-      break;
-    case "adapter-contract-runs":
-      await load("adapterContractRunsState", () => loadAdapterContractRunsState(consoleShellState, refreshId));
       break;
     case "models":
       [state.modelsState, state.providersState] = await Promise.all([
@@ -2717,10 +2646,6 @@ async function loadAndRenderActiveNavigation({
     case "request-logs":
       await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
       state.requestFeedbackState = requestFeedbackMutationMemory.snapshot();
-      break;
-    case "error-maps":
-      state.errorMapsState = await loadErrorMapsState(consoleShellState, refreshId);
-      state.errorMapFilters = errorMapFilters;
       break;
     case "webhooks":
       await load("webhookState", loadWebhookState);
@@ -2932,7 +2857,6 @@ function renderLogin(error, requestId) {
   clearIntentSecuritySessionState();
   clearRoutingPolicySessionState();
   clearModelQualityScoreSessionState();
-  clearErrorMapSessionState();
   // 登录页不能保留上一租户的调用列表、详情 request_id、错误反馈或未完成 fetch。
   clearRequestLogSessionState();
   // 登录页不能保留上一租户的请求解释、一次性跳转 ID 或活动读取。
@@ -2963,11 +2887,6 @@ function renderLogin(error, requestId) {
   providerStatusFilters = { limit: 50, offset: 0 };
   providerStatusEventWarning = null;
   providerStatusEntrySource = readActiveNavigationHash() === "provider-health" ? "direct_hash" : "sidebar";
-  // 登录页不得保留上一租户 PAGE-090 的目录请求或筛选，即使旧 fetch 忽略 Abort 也会因 generation 失效。
-  adapterSpecPageState.clear();
-  adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-  // 登录边界必须销毁 PAGE-091 的运行、case、opaque cursor 和请求 owner，避免跨租户证据残留。
-  adapterContractRunPageState.clear();
   renderLoginPage(app, {
     error,
     requestId,
@@ -3285,8 +3204,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     providerStatusPageState.clear();
     providerStatusVisitTracker.leave();
     clearRoleDashboardSessionState();
-    adapterSpecPageState.clear();
-    adapterContractRunPageState.clear();
+    workspaceProviderEngineeringProviders = [];
+    workspaceProviderEngineeringController.close();
     const token = authSession.token;
     // 一次性 Secret 必须在发起登出请求前从状态和 DOM 清除，不能等待网络响应后再处理。
     clearWebhookSessionState();
@@ -3318,7 +3237,6 @@ function bindAuthenticatedEvents(consoleShellState) {
     clearIntentSecuritySessionState();
     clearRoutingPolicySessionState();
     clearModelQualityScoreSessionState();
-    clearErrorMapSessionState();
     clearRequestLogSessionState();
     clearRequestExplanationSessionState();
     clearRequestFeedbackSummarySessionState();
@@ -3422,7 +3340,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindIntentSecurityInteractions(consoleShellState);
   bindRoutingPolicyInteractions(consoleShellState);
   bindModelQualityScoreInteractions(consoleShellState);
-  bindErrorMapInteractions(consoleShellState);
+  bindWorkspaceProviderEngineeringInteractions(consoleShellState);
   bindRequestExplanationInteractions(consoleShellState);
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
@@ -3674,39 +3592,6 @@ function bindAuthenticatedEvents(consoleShellState) {
       await runProviderProbe(String(button.dataset.providerProbe ?? ""));
     });
   }
-
-  for (const button of document.querySelectorAll("[data-adapter-spec-view]")) {
-    button.addEventListener("click", async () => {
-      const view = String(button.dataset.adapterSpecView ?? "");
-      const next = canonicalAdapterSpecFilters({ ...adapterSpecFilters, view, provider_type: "" });
-      adapterSpecFilters = { ...next };
-      // tab 切换立即淘汰旧分类响应，不能等待完整 refresh 后再取消。
-      adapterSpecPageState.clear();
-      await refresh();
-    });
-  }
-  const adapterSpecForm = document.querySelector("#adapter-spec-filters");
-  adapterSpecForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(adapterSpecForm);
-    adapterSpecFilters = {
-      ...canonicalAdapterSpecFilters({
-        view: adapterSpecFilters.view,
-        status: data.get("status"),
-        provider_type: data.get("provider_type"),
-      }),
-    };
-    adapterSpecPageState.clear();
-    await refresh();
-  });
-  document.querySelector("[data-adapter-spec-reset]")?.addEventListener("click", async (event) => {
-    event.preventDefault();
-    adapterSpecFilters = { view: adapterSpecFilters.view, status: "", provider_type: "" };
-    adapterSpecPageState.clear();
-    await refresh();
-  });
-
-  bindAdapterContractRunInteractions(consoleShellState);
 
   const createProjectForm = document.querySelector("#create-project-form");
   createProjectForm?.addEventListener("submit", async (event) => {
@@ -5226,33 +5111,6 @@ function bindAuthenticatedEvents(consoleShellState) {
       // 显式命令只发起一轮现有详情读取，不建立 interval、递归轮询或持久后台任务。
       configureCurrentRequestLogState(requestLogPageMemory.query().filters, selectedRequestId);
       await refresh();
-    });
-  }
-
-  for (const link of document.querySelectorAll("[data-provider-error-map-jump]")) {
-    link.addEventListener("click", async (event) => {
-      // hash 只保留固定 #error-maps；真正导航必须先完成 owner 绑定，不能依赖浏览器默认锚点行为。
-      event.preventDefault();
-      if (!requestLogInteractionAllowed(consoleShellState)) {
-        errorMapHandoff.clear();
-        return;
-      }
-      const owner = currentRequestLogOwner();
-      const staged = errorMapHandoff.stage({
-        identity: owner.identity,
-        tenantId: owner.tenantId,
-        source: link.dataset.providerErrorMapSource,
-        errorMapId: link.dataset.providerErrorMapJump,
-        matchedRuleVersion: link.dataset.providerErrorMapVersion,
-        builtinCatalogVersion: link.dataset.providerErrorMapCatalog,
-      });
-      const navigationButton = Array.from(document.querySelectorAll("[data-console-nav]"))
-        .find((candidate) => candidate.dataset.consoleNav === "error-maps");
-      if (!staged || !navigationButton) {
-        errorMapHandoff.clear();
-        return;
-      }
-      await switchConsoleNavigation(navigationButton, consoleShellState);
     });
   }
 
@@ -12828,15 +12686,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
     providerStatusVisitTracker.leave();
     providerStatusEventWarning = null;
   }
-  if (itemId !== "adapter-specs") {
-    // 导航请求发出前销毁 PAGE-090 owner，迟到目录和迟到 401/403 均不能影响目标页面或新 Session。
-    adapterSpecPageState.clear();
-    adapterSpecFilters = { view: "default", status: "", provider_type: "" };
-  }
-  if (itemId !== "adapter-contract-runs") {
-    // PAGE-091 的列表、详情与 opaque cursor 必须在偏好写入前销毁，不能跨导航或下一 Session 残留。
-    adapterContractRunPageState.clear();
-  }
   // 离开用量页立即终止异步轮询，不能等待偏好写入或下一轮完整刷新。
   if (itemId !== "usage") {
     clearUsageExportSessionState();
@@ -12872,10 +12721,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "model-quality-scores") {
     // PAGE-069 的 GET/PATCH owner 在导航请求前失效，迟到 200/401/409 均不得影响下一页面。
     clearModelQualityScoreSessionState();
-  }
-  if (itemId !== "error-maps") {
-    // 导航请求发出前销毁 PAGE-081 dialog、焦点 owner 和异步 ticket，不能让旧租户响应回写新页面。
-    clearErrorMapSessionState();
   }
   if (!REQUEST_LOG_NAVIGATION_IDS.has(itemId)) {
     // 导航请求发出前销毁调用日志 owner，不能等待后端偏好返回后才取消上一租户详情请求。
@@ -13027,27 +12872,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
         // loading 替换了整个 shell，必须重绑导航、注销和唯一 status.viewed tracker。
         bindAuthenticatedEvents(projectedState);
       }
-    }
-    // PAGE-090 的 loading 只在实时权限和后端导航 owner 同时成立时投影，随后 GET 仍由独立 owner 校验。
-    if (itemId === "adapter-specs") {
-      const projectedState = renderAdapterSpecsLoading(app, {
-        authContext: authSession.context,
-        consoleShellState: authorizedProjectedState,
-        i18n: currentI18n,
-      });
-      // loading 会替换 shell DOM，只有授权投影成功时才重新绑定认证事件，空结果保持原页面不变。
-      // loading 替换整个 shell 后必须重绑；未授权 null 结果保持旧 DOM 且不绑定 PAGE-091。
-      if (projectedState) bindAuthenticatedEvents(projectedState);
-    }
-    // PAGE-091 loading 也要求后端导航与实时 provider.health.read 同时成立，viewer 不生成页面 DOM。
-    if (itemId === "adapter-contract-runs") {
-      const projectedState = renderAdapterContractRunsLoading(app, {
-        authContext: authSession.context,
-        consoleShellState: authorizedProjectedState,
-        i18n: currentI18n,
-      });
-      // loading 替换整个 shell 后必须重绑；未授权 null 结果保持旧 DOM 且不创建 PAGE-091 事件。
-      if (projectedState) bindAuthenticatedEvents(projectedState);
     }
     if (itemId === "routing-policies") {
       // PAGE-072 的读取可能受慢网络影响；目标页先展示真实 loading，偏好与 page_viewed 延后串行写入。
@@ -13491,6 +13315,145 @@ async function loadUsersState(consoleShellState) {
   }
 }
 
+function renderCurrentWorkspaceProviderEngineering(snapshot = workspaceProviderEngineeringController.snapshot()) {
+  const host = document.querySelector("[data-workspace-provider-engineering-host]");
+  if (!host) return false;
+  const provider = workspaceProviderEngineeringProviders.find(
+    (item) => item.provider_id === snapshot.providerId,
+  );
+  host.innerHTML = provider ? renderWorkspaceProviderEngineering(snapshot, provider) : "";
+  for (const button of document.querySelectorAll("[data-workspace-provider-engineering-open]")) {
+    button.setAttribute(
+      "aria-expanded",
+      String(button.dataset.workspaceProviderEngineeringOpen === snapshot.providerId),
+    );
+  }
+  bindWorkspaceProviderEngineeringDetailInteractions();
+  return true;
+}
+
+function bindWorkspaceProviderEngineeringInteractions(consoleShellState) {
+  for (const button of document.querySelectorAll("[data-workspace-provider-engineering-open]")) {
+    button.onclick = () => {
+      const providerId = String(button.dataset.workspaceProviderEngineeringOpen ?? "");
+      if (consoleShellState?.activeNavigationItemId !== "providers"
+        || !workspaceProviderEngineeringProviders.some(
+          (provider) => provider.provider_id === providerId,
+        )) return;
+      void workspaceProviderEngineeringController.open({
+        authContext: authSession.context,
+        activeNavigationItemId: consoleShellState.activeNavigationItemId,
+        providerId,
+      });
+    };
+  }
+  bindWorkspaceProviderEngineeringDetailInteractions();
+}
+
+function bindWorkspaceProviderEngineeringDetailInteractions() {
+  const root = document.querySelector("[data-workspace-provider-engineering-root]");
+  if (!root) return;
+  for (const button of root.querySelectorAll("[data-workspace-provider-engineering-action]")) {
+    button.onclick = () => {
+      const action = button.dataset.workspaceProviderEngineeringAction;
+      if (action === "close") workspaceProviderEngineeringController.close();
+      if (action === "refresh") void workspaceProviderEngineeringController.refresh();
+      if (action === "next") void workspaceProviderEngineeringController.nextPage();
+      if (action === "previous") void workspaceProviderEngineeringController.previousPage();
+    };
+  }
+  const filterForm = root.querySelector("[data-workspace-provider-override-filter-form]");
+  if (filterForm) filterForm.onsubmit = (event) => {
+    event.preventDefault();
+    const data = new FormData(filterForm);
+    void workspaceProviderEngineeringController.configure({
+      status: String(data.get("status") ?? ""),
+      output_error_code: String(data.get("outputErrorCode") ?? "").trim(),
+    });
+  };
+  const createForm = root.querySelector("[data-workspace-provider-override-create-form]");
+  if (createForm) createForm.onsubmit = (event) => {
+    event.preventDefault();
+    const data = new FormData(createForm);
+    const secure = takeWorkspaceProviderStepUp(createForm, data);
+    void workspaceProviderEngineeringController.apply({
+      action: "create",
+      provider_id: String(data.get("providerId") ?? ""),
+      ...workspaceOverrideFields(data),
+    }, secure);
+  };
+  for (const form of root.querySelectorAll("[data-workspace-provider-override-update-form]")) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const secure = takeWorkspaceProviderStepUp(form, data);
+      void workspaceProviderEngineeringController.apply({
+        action: "update",
+        provider_error_override_id: String(data.get("overrideId") ?? ""),
+        expected_version: Number(data.get("expectedVersion")),
+        provider_id: String(data.get("providerId") ?? ""),
+        ...workspaceOverrideFields(data),
+      }, secure);
+    };
+  }
+  for (const form of root.querySelectorAll("[data-workspace-provider-override-transition-form]")) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const secure = takeWorkspaceProviderStepUp(form, data);
+      void workspaceProviderEngineeringController.apply({
+        action: String(data.get("action") ?? ""),
+        provider_error_override_id: String(data.get("overrideId") ?? ""),
+        expected_version: Number(data.get("expectedVersion")),
+      }, secure);
+    };
+  }
+  for (const select of root.querySelectorAll("[data-workspace-provider-step-up-method]")) {
+    select.onchange = () => {
+      const code = select.form?.querySelector("[data-workspace-provider-step-up-code]");
+      const input = code?.querySelector("[data-workspace-provider-sensitive]");
+      const webAuthn = select.value === "webauthn";
+      if (input) {
+        input.value = "";
+        input.disabled = webAuthn;
+        input.required = !webAuthn;
+      }
+      if (code) code.hidden = webAuthn;
+    };
+  }
+}
+
+function workspaceOverrideFields(data) {
+  const statuses = String(data.get("httpStatuses") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(Number);
+  const optional = (name) => {
+    const value = String(data.get(name) ?? "").trim();
+    return value || null;
+  };
+  return {
+    priority: Number(data.get("priority")),
+    http_statuses: [...new Set(statuses)],
+    http_status_class: optional("httpStatusClass"),
+    error_field: optional("errorField"),
+    field_operator: optional("fieldOperator"),
+    field_pattern: optional("fieldPattern"),
+    output_error_code: String(data.get("outputErrorCode") ?? "").trim(),
+  };
+}
+
+function takeWorkspaceProviderStepUp(form, data) {
+  let verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-workspace-provider-sensitive]").forEach((node) => {
+    node.value = "";
+  });
+  const result = { method: String(data.get("method") ?? "totp"), verificationCode };
+  verificationCode = "";
+  return result;
+}
+
 /**
  * 执行 控制台主应用 的 `loadProvidersState` 辅助逻辑，保持页面状态和后端响应口径一致。
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
@@ -13500,6 +13463,10 @@ async function loadProvidersState({ includeCatalog = false } = {}) {
   const canReadCatalog = includeCatalog
     && hasPermission(authSession.context, PERMISSIONS.PROVIDER_CATALOG_READ);
   if (!canReadProviders && !canReadCatalog) {
+    if (includeCatalog) {
+      workspaceProviderEngineeringProviders = [];
+      workspaceProviderEngineeringController.close();
+    }
     return null;
   }
   const identity = JSON.stringify([
@@ -13508,6 +13475,8 @@ async function loadProvidersState({ includeCatalog = false } = {}) {
     authSession.context?.session?.session_id ?? "",
   ]);
   if (providerCatalogIdentity && providerCatalogIdentity !== identity) {
+    workspaceProviderEngineeringProviders = [];
+    workspaceProviderEngineeringController.close();
     providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
     providerCatalogCompatibilityByEntryCode = {};
     providerCatalogLastCreated = null;
@@ -13571,12 +13540,24 @@ async function loadProvidersState({ includeCatalog = false } = {}) {
         }
       }),
     );
+    if (includeCatalog) {
+      workspaceProviderEngineeringProviders = [...(state.providers ?? [])];
+      const selectedProviderId = workspaceProviderEngineeringController.snapshot().providerId;
+      if (selectedProviderId && !workspaceProviderEngineeringProviders.some(
+        (provider) => provider.provider_id === selectedProviderId,
+      )) {
+        workspaceProviderEngineeringController.close();
+      }
+    }
     return {
       ...state,
       providerKeysByProviderId: Object.fromEntries(providerKeyEntries.filter(Boolean)),
       actionError: providerActionError,
       feedback: providerFeedback,
       lastTestResult: providerLastTestResult,
+      providerEngineering: includeCatalog
+        ? workspaceProviderEngineeringController.snapshot()
+        : null,
       providerCatalog: catalog ? {
         ...catalog,
         activeTab: providerCatalogActiveTab,
@@ -15859,439 +15840,6 @@ function clearModelQualityScoreStateOnIdentityChange(previous, current) {
   }
 }
 
-/**
- * 绑定 PAGE-081 筛选、分页、编辑和启停交互。
- * developer 只绑定 GET 命令；admin 写入还要同时通过实时身份、后端 active 导航和 DOM owner 门禁。
- */
-function bindErrorMapInteractions(consoleShellState) {
-  const identity = errorMapIdentitySnapshot(authSession.context);
-  if (
-    !hasPermission(authSession.context, PERMISSIONS.PROVIDER_ERROR_MAP_READ)
-    || consoleShellState?.activeNavigationItemId !== "error-maps"
-    || !identity
-  ) {
-    return;
-  }
-  const filterForm = document.querySelector("#error-map-filter-form");
-  filterForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(filterForm);
-    errorMapFilters = {
-      ...errorMapFilters,
-      providerId: String(data.get("providerId") ?? "").trim(),
-      source: String(data.get("source") ?? "").trim(),
-      status: String(data.get("status") ?? "").trim(),
-      outputErrorCode: String(data.get("outputErrorCode") ?? "").trim(),
-      offset: 0,
-    };
-    errorMapPageMemory.leave();
-    await refresh();
-  });
-  document.querySelector("#error-map-filter-reset")?.addEventListener("click", async () => {
-    errorMapFilters = { providerId: "", source: "", status: "", outputErrorCode: "", limit: 100, offset: 0 };
-    errorMapPageMemory.leave();
-    await refresh();
-  });
-  document.querySelector("#error-map-refresh")?.addEventListener("click", async () => {
-    errorMapPageMemory.leave();
-    await refresh();
-  });
-  document.querySelector("#error-map-prev")?.addEventListener("click", async () => {
-    errorMapFilters = { ...errorMapFilters, offset: Math.max(0, errorMapFilters.offset - errorMapFilters.limit) };
-    errorMapPageMemory.leave();
-    await refresh();
-  });
-  document.querySelector("#error-map-next")?.addEventListener("click", async () => {
-    errorMapFilters = { ...errorMapFilters, offset: errorMapFilters.offset + errorMapFilters.limit };
-    errorMapPageMemory.leave();
-    await refresh();
-  });
-
-  // developer 不绑定任何写 listener；即使伪造按钮，也不会从主应用构造 POST/PATCH。
-  if (!hasPermission(authSession.context, PERMISSIONS.PROVIDER_ERROR_MAP_WRITE)) {
-    return;
-  }
-  document.querySelector("#error-map-create")?.addEventListener("click", (event) => {
-    const restoreState = captureCurrentErrorMapDialogRestoreState(event.currentTarget, identity);
-    if (!restoreState) {
-      return;
-    }
-    // 创建入口只在当前 admin owner 可写时打开对话框，失败时不得渲染可提交表单。
-    if (errorMapPageMemory.openCreate()) {
-      errorMapDialogRestoreState = restoreState;
-      renderErrorMapPanelFromMemory({ focusDialog: true });
-    }
-  });
-  for (const button of document.querySelectorAll("[data-error-map-edit]")) {
-    button.addEventListener("click", () => {
-      const restoreState = captureCurrentErrorMapDialogRestoreState(button, identity);
-      if (!restoreState) {
-        return;
-      }
-      // 编辑入口再次校验租户规则可写性，builtin 与失效资源不会生成草稿。
-      if (errorMapPageMemory.openEdit(button.dataset.errorMapEdit)) {
-        errorMapDialogRestoreState = restoreState;
-        renderErrorMapPanelFromMemory({ focusDialog: true });
-      }
-    });
-  }
-  for (const button of document.querySelectorAll("[data-error-map-status]")) {
-    button.addEventListener("click", async () => {
-      const restoreState = captureCurrentErrorMapDialogRestoreState(button, identity);
-      if (!restoreState) {
-        return;
-      }
-      // 启停先冻结资源版本和目标状态，最终 PATCH 仍由后端执行 RBAC 与 CAS 校验。
-      if (errorMapPageMemory.prepareStatusChange(
-        button.dataset.errorMapStatus,
-        button.dataset.nextStatus,
-      )) {
-        errorMapDialogRestoreState = restoreState;
-        renderErrorMapPanelFromMemory({ focusDialog: true });
-        await submitCurrentErrorMapMutation();
-      }
-    });
-  }
-
-  const editor = document.querySelector("#error-map-editor-form");
-  for (const control of editor?.elements ?? []) {
-    if (control?.name) {
-      control.addEventListener("input", () => syncErrorMapDraft(editor));
-      control.addEventListener("change", () => syncErrorMapDraft(editor));
-    }
-  }
-  editor?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    // 浏览器约束失败时不发送写请求，避免无效草稿占用或错误复用幂等键。
-    if (!syncErrorMapDraft(editor, { report: true })) {
-      return;
-    }
-    await submitCurrentErrorMapMutation();
-  });
-  for (const closeButton of document.querySelectorAll("[data-error-map-close], [data-error-map-cancel]")) {
-    closeButton.addEventListener("click", () => closeCurrentErrorMapDialog());
-  }
-  document.querySelector("[data-error-map-adopt]")?.addEventListener("click", () => {
-    // 只有同一 owner 的冲突精确读取可被显式采纳，跨租户或迟到结果必须失败关闭。
-    if (errorMapPageMemory.adoptConflict()) {
-      renderErrorMapPanelFromMemory({ focusDialog: true });
-    }
-  });
-  bindErrorMapDialogLifecycle();
-}
-
-/**
- * 将 dialog 控件同步到内存并执行最小浏览器约束。
- * guard、状态输出矩阵、资源冲突和租户归属仍由后端重复校验，前端校验只用于即时反馈。
- */
-function syncErrorMapDraft(form, { report = false } = {}) {
-  if (!form) {
-    return false;
-  }
-  const draft = errorMapDraftFromFormData(new FormData(form));
-  const statusInput = form.elements.httpStatuses;
-  const priorityInput = form.elements.priority;
-  const hasInvalidStatus = draft.http_statuses.some((value) => (
-    !Number.isSafeInteger(value) || value < 100 || value > 599
-  ));
-  const hasCondition = draft.http_statuses.length > 0
-    || Boolean(draft.http_status_class)
-    || Boolean(draft.field_pattern)
-    || Boolean(draft.message_pattern);
-  let message = "";
-  if (hasInvalidStatus) {
-    message = "HTTP 状态必须是 100 到 599 的三位整数，并使用逗号分隔";
-  } else if (draft.http_statuses.length && draft.http_status_class) {
-    message = "精确 HTTP 状态与状态类不能同时设置";
-  } else if (!hasCondition) {
-    message = "至少设置一个 HTTP、错误字段或 message 条件";
-  } else if (draft.message_pattern && !draft.provider_id && !draft.http_statuses.length && !draft.http_status_class && !draft.field_pattern) {
-    message = "仅使用 message 条件时必须绑定具体 Provider";
-  }
-  statusInput?.setCustomValidity(message);
-  const priorityValid = Number.isSafeInteger(draft.priority) && draft.priority >= 1 && draft.priority <= 1000;
-  priorityInput?.setCustomValidity(priorityValid ? "" : "优先级必须是 1 到 1000 的整数");
-  const valid = !message && priorityValid;
-  if (valid) {
-    errorMapPageMemory.updateDraft(draft);
-  }
-  const submit = form.querySelector("button[type='submit']");
-  const dialogState = errorMapPageMemory.snapshot().dialog;
-  if (submit) {
-    submit.disabled = !valid || !dialogState?.dirty || dialogState.busy || dialogState.conflicted;
-  }
-  if (report && !valid) {
-    (message ? statusInput : priorityInput)?.reportValidity();
-  }
-  return valid;
-}
-
-/** 发出当前 dialog 的 POST/PATCH，并在每个回调前复核完整 owner。 */
-async function submitCurrentErrorMapMutation() {
-  const token = authSession.token;
-  const owner = currentErrorMapOwner();
-  // 写操作必须同时持有认证 Token 与当前页面 owner，任一失配都先销毁本地会话状态。
-  if (!token || !owner.identity || owner.navigation !== "error-maps") {
-    clearErrorMapSessionState();
-    renderLogin();
-    return;
-  }
-  const acquired = errorMapPageMemory.acquireMutation(owner);
-  if (acquired.state !== "ok" || acquired.reused) {
-    return;
-  }
-  const ticket = acquired.ticket;
-  renderErrorMapPanelFromMemory({ focusDialog: true });
-  try {
-    const result = ticket.mode === "create"
-      ? await createErrorMap({
-          controlApiUrl,
-          token,
-          draft: ticket.draft,
-          requestId: ticket.requestId,
-          signal: ticket.signal,
-        })
-      : await updateErrorMap({
-          controlApiUrl,
-          token,
-          errorMapId: ticket.errorMapId,
-          expectedVersion: ticket.expectedVersion,
-          draft: ticket.draft,
-          requestId: ticket.requestId,
-          signal: ticket.signal,
-        });
-    const currentOwner = currentErrorMapOwner();
-    // 网络返回后复核实时 owner，迟到成功不得写入另一身份或已经离开的页面。
-    if (!errorMapPageMemory.isCurrentOperation(ticket, currentOwner)) {
-      return;
-    }
-    // 成功响应仍需通过完整 DTO 与 ticket 校验，损坏响应按安全错误保留当前草稿。
-    if (!errorMapPageMemory.acceptMutationSuccess(ticket, result, currentOwner)) {
-      errorMapPageMemory.acceptMutationFailure(ticket, {
-        status: 502,
-        code: "error_map.response_invalid",
-        message: "错误规则响应不完整",
-        requestId: result?.request_id ?? "-",
-      }, currentOwner);
-      renderErrorMapPanelFromMemory({ focusDialog: true });
-      return;
-    }
-    renderErrorMapPanelFromMemory();
-    await refresh();
-  } catch (error) {
-    if (ticket.signal.aborted) {
-      return;
-    }
-    const currentOwner = currentErrorMapOwner();
-    // 异常回调同样执行 owner 复核，旧 Session 的失败不得覆盖新用户页面。
-    if (!errorMapPageMemory.isCurrentOperation(ticket, currentOwner)) {
-      return;
-    }
-    // 后端 401 表示认证边界失效，必须清空规则状态和 Session 后回到登录页。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearErrorMapSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    const safeError = error instanceof AuthApiError
-      ? error
-      : { code: "error_map.network_unknown", message: "错误规则请求结果未知", requestId: ticket.requestId };
-    errorMapPageMemory.acceptMutationFailure(ticket, safeError, currentOwner);
-    renderErrorMapPanelFromMemory({ focusDialog: true });
-    // 只有明确 409 才触发独立精确 GET；普通错误和网络未知不会擅自覆盖用户草稿。
-    if (safeError.status === 409) {
-      await refreshCurrentErrorMapConflict();
-    }
-  }
-}
-
-/** 409 后按稳定资源 ID 独立读取最新版本；该 ticket 与列表 GET、旧 PATCH 均不共享 request_id。 */
-async function refreshCurrentErrorMapConflict() {
-  const owner = currentErrorMapOwner();
-  const ticket = errorMapPageMemory.beginConflictRefresh(owner);
-  // 冲突重取必须拥有独立 ticket 和当前认证 Token，缺失时不发任何宽泛读取请求。
-  if (!ticket || !authSession.token) {
-    return;
-  }
-  try {
-    const result = await listErrorMaps({
-      controlApiUrl,
-      token: authSession.token,
-      errorMapId: ticket.errorMapId,
-      signal: ticket.signal,
-      requestId: ticket.requestId,
-    });
-    const currentOwner = currentErrorMapOwner();
-    // 精确 GET 结果仅在资源、请求 ID 与完整 owner 都匹配时进入待采纳状态。
-    if (errorMapPageMemory.acceptConflictRefresh(ticket, result, currentOwner)) {
-      renderErrorMapPanelFromMemory({ focusDialog: true });
-    }
-  } catch (error) {
-    if (ticket.signal.aborted) {
-      return;
-    }
-    const currentOwner = currentErrorMapOwner();
-    // 冲突读取的迟到失败不能污染已切换身份或已关闭的编辑器。
-    if (!errorMapPageMemory.isCurrentConflict(ticket, currentOwner)) {
-      return;
-    }
-    // 冲突读取收到 401 时同步销毁认证与草稿，禁止保留上一 Session 的规则内容。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearErrorMapSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    errorMapPageMemory.acceptConflictError(ticket, error, currentOwner);
-    renderErrorMapPanelFromMemory({ focusDialog: true });
-  }
-}
-
-/** 局部重绘 PAGE-081；编辑期绝不调用 app.innerHTML，也不触发其他租户接口。 */
-function renderErrorMapPanelFromMemory({ focusDialog = false } = {}) {
-  const panel = document.querySelector(".error-maps-panel");
-  if (!panel || !hasPermission(authSession.context, PERMISSIONS.PROVIDER_ERROR_MAP_READ)) {
-    return;
-  }
-  panel.innerHTML = renderErrorMapPanel(
-    errorMapPageMemory.snapshot(),
-    authSession.context,
-    errorMapFilters,
-  );
-  bindErrorMapInteractions({ activeNavigationItemId: "error-maps" });
-  if (focusDialog) {
-    document.querySelector("#error-map-editor-form [autofocus]")?.focus({ preventScroll: true });
-  }
-}
-
-/** 安装单层 dialog 的滚动锁、Escape 与 Tab/Shift+Tab 焦点陷阱。 */
-function bindErrorMapDialogLifecycle() {
-  const dialog = document.querySelector(".error-map-dialog");
-  if (!dialog) {
-    releaseErrorMapDialogLifecycle({ restoreFocus: true });
-    return;
-  }
-  // 首次打开对话框时冻结原始滚动状态，嵌套重绘不能覆盖该恢复基线。
-  if (errorMapBodyOverflow === null) {
-    errorMapBodyOverflow = document.body.style.overflow;
-  }
-  document.body.style.overflow = "hidden";
-  // 重绑焦点陷阱前先移除旧监听器，避免一次按键触发多个跨 owner 回调。
-  if (errorMapDialogKeydownHandler) {
-    document.removeEventListener("keydown", errorMapDialogKeydownHandler);
-  }
-  errorMapDialogKeydownHandler = (event) => {
-    const currentDialog = document.querySelector(".error-map-dialog");
-    const busy = currentDialog?.getAttribute("aria-busy") === "true";
-    if (!currentDialog) {
-      return;
-    }
-    if (event.key === "Escape" && !busy) {
-      event.preventDefault();
-      closeCurrentErrorMapDialog();
-      return;
-    }
-    if (event.key !== "Tab") {
-      return;
-    }
-    const focusable = [...currentDialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]')];
-    if (!focusable.length) {
-      event.preventDefault();
-      currentDialog.focus();
-      return;
-    }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-  document.addEventListener("keydown", errorMapDialogKeydownHandler);
-}
-
-/** 关闭当前非 busy dialog，并仅在相同身份 owner 下恢复仍连接的触发器焦点。 */
-function closeCurrentErrorMapDialog() {
-  if (errorMapPageMemory.closeDialog()) {
-    renderErrorMapPanelFromMemory();
-  }
-}
-
-/**
- * 捕获打开 dialog 的稳定触发器身份。
- * 状态机打开前先比较 listener 冻结身份与实时 owner，并把节点限定在当前 PAGE-081 面板。
- */
-function captureCurrentErrorMapDialogRestoreState(target, identity) {
-  const owner = currentErrorMapOwner();
-  // 身份和导航必须与 listener 快照完全相同，旧 Session 回调在进入状态机前失败关闭。
-  if (owner.identity !== identity || owner.navigation !== "error-maps") {
-    return null;
-  }
-  return createErrorMapDialogRestoreState(target, {
-    ownerIdentity: identity,
-    navigation: owner.navigation,
-    panel: document.querySelector(".error-maps-panel"),
-  });
-}
-
-/** 始终解除滚动锁和 document listener；身份变化后不恢复上一用户的焦点节点。 */
-function releaseErrorMapDialogLifecycle({ restoreFocus = false } = {}) {
-  // 离页和身份变化都必须同步移除 document 监听器，防止旧草稿继续接收键盘事件。
-  if (errorMapDialogKeydownHandler) {
-    document.removeEventListener("keydown", errorMapDialogKeydownHandler);
-    errorMapDialogKeydownHandler = null;
-  }
-  // 仅在保存过滚动基线时恢复页面状态，不能把 null 写回新的页面 owner。
-  if (errorMapBodyOverflow !== null) {
-    document.body.style.overflow = errorMapBodyOverflow;
-    errorMapBodyOverflow = null;
-  }
-  // descriptor 先单次消费并清空；即使解析或 focus 抛错，也不能被下一次 dialog 重放。
-  const restoreState = errorMapDialogRestoreState;
-  errorMapDialogRestoreState = null;
-  const owner = currentErrorMapOwner();
-  const target = restoreFocus
-    ? resolveErrorMapDialogRestoreTarget(restoreState, {
-        ownerIdentity: owner.identity,
-        navigation: owner.navigation,
-        panel: document.querySelector(".error-maps-panel"),
-      })
-    : null;
-  if (target) {
-    target.focus({ preventScroll: true });
-  }
-}
-
-/** 返回 PAGE-081 当前实时 owner；DOM 被销毁时空导航会让迟到响应失败关闭。 */
-function currentErrorMapOwner() {
-  return {
-    identity: errorMapIdentitySnapshot(authSession.context),
-    navigation: document.querySelector(".error-maps-panel") ? "error-maps" : "",
-  };
-}
-
-/** 离页、登出、401、降权或 pagehide 时同步 abort 三类 ticket，清空 dialog 并解除滚动锁。 */
-function clearErrorMapSessionState() {
-  errorMapHandoff.clear();
-  errorMapPageMemory.leave();
-  errorMapFilters = { providerId: "", source: "", status: "", outputErrorCode: "", limit: 100, offset: 0 };
-  releaseErrorMapDialogLifecycle();
-  document.querySelector(".error-maps-panel")?.replaceChildren();
-}
-
-/** 完整身份任一维度变化都销毁上一 owner；前端不会在 tenant 间迁移草稿。 */
-function clearErrorMapStateOnIdentityChange(previous, current) {
-  if (errorMapIdentitySnapshot(previous) !== errorMapIdentitySnapshot(current)) {
-    clearErrorMapSessionState();
-  }
-}
-
 /** 返回 PAGE-070 POST 的实时 owner；DOM、身份或所选 request_id 任一消失都会让迟到回调失败关闭。 */
 function currentRequestFeedbackOwner() {
   const snapshot = requestFeedbackMutationMemory.snapshot();
@@ -17244,303 +16792,9 @@ function providerStatusNavigationOwned(consoleShellState) {
   ));
 }
 
-/**
- * 读取 PAGE-090 当前租户已激活的 Adapter 规范。
- * 成功、401/403 和普通错误在产生全局副作用或返回渲染状态前都必须通过同一个完整 owner 门禁。
- */
-async function loadAdapterSpecsState(consoleShellState) {
-  const owner = currentAdapterSpecOwner(consoleShellState);
-  if (!owner) {
-    adapterSpecPageState.clear();
-    return null;
-  }
-  const ticket = adapterSpecPageState.begin(owner);
-  if (!ticket) return null;
-  try {
-    const state = await listAdapterSpecs({
-      controlApiUrl,
-      token: ticket.token,
-      filters: adapterSpecApiFilters(ticket.filters),
-      signal: ticket.controller.signal,
-    });
-    if (!adapterSpecPageState.owns(ticket, currentAdapterSpecOwner(consoleShellState))) {
-      return null;
-    }
-    return { ...state, filters: ticket.filters };
-  } catch (error) {
-    // Abort 是离页、筛选或身份变更的正常结果，不应制造错误 DOM 或覆盖下一页面。
-    if (!adapterSpecPageState.owns(ticket, currentAdapterSpecOwner(consoleShellState))) {
-      return null;
-    }
-    // Abort 属于离页或 owner 变化的预期结果，不能渲染错误态覆盖新页面。
-    if (error?.name === "AbortError") return null;
-    // 401 表示 Session 已失效，必须同时销毁页面 owner 和内存 Token，再回到登录界面。
-    if (error instanceof AuthApiError && error.status === 401) {
-      adapterSpecPageState.clear();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    // 403 先销毁 owner；页面不会依据角色文本补权，下一轮后端导航刷新会裁掉入口。
-    if (error instanceof AuthApiError && error.status === 403) {
-      adapterSpecPageState.clear();
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      filters: ticket.filters,
-    };
-  } finally {
-    adapterSpecPageState.finish(ticket);
-  }
-}
-
-/** 构造 PAGE-090 当前 owner；Token 只在闭包内比较，绝不进入 DOM、日志或诊断快照。 */
-function currentAdapterSpecOwner(consoleShellState) {
-  const identity = adapterSpecIdentitySnapshot(authSession.context);
-  if (!identity || !authSession.token || !adapterSpecNavigationOwned(consoleShellState)) {
-    return null;
-  }
-  const filters = canonicalAdapterSpecFilters(adapterSpecFilters);
-  return {
-    identity,
-    navigation: "adapter-specs",
-    filters,
-    filterKey: adapterSpecFilterKey(filters),
-    token: authSession.token,
-  };
-}
-
-/** 只有精确的后端导航 owner 和当前 hash 才允许 PAGE-090 发起目录请求。 */
-function adapterSpecNavigationOwned(consoleShellState) {
-  if (consoleShellState?.activeNavigationItemId !== "adapter-specs") return false;
-  const hashState = readNavigationHashState();
-  if (hashState.rejected || (hashState.value && hashState.value !== "adapter-specs")) return false;
-  const items = consoleShellState?.navigation?.navigation_items;
-  return Array.isArray(items) && items.some((item) => (
-    item?.id === "adapter-specs"
-    && item?.target_section === "adapter-specs"
-    && item?.visible !== false
-    && item?.disabled !== true
-  ));
-}
-
-/**
- * 读取 PAGE-091 当前筛选的契约测试运行。
- * 成功、401、403 和普通错误都必须仍属于相同 tenant/Session/RBAC/navigation/filter/generation owner。
- */
-async function loadAdapterContractRunsState(consoleShellState, refreshId) {
-  const owner = currentAdapterContractRunOwner(consoleShellState, refreshId);
-  if (!owner) {
-    adapterContractRunPageState.clear();
-    return null;
-  }
-  const operation = adapterContractRunPageState.beginListOperation(owner);
-  if (!operation) return null;
-  try {
-    const result = await listAdapterContractRuns({
-      controlApiUrl,
-      token: operation.token,
-      expectedTenantId: currentTenantId(),
-      filters: adapterContractRunPageState.query(),
-      signal: operation.controller.signal,
-    });
-    if (!adapterContractRunPageState.isListOperationCurrent(
-      operation,
-      currentAdapterContractRunOwner(consoleShellState, refreshId),
-    )) return null;
-    return adapterContractRunPageState.acceptPage(result);
-  } catch (error) {
-    // 主动取消和任何 owner 漂移都完整丢弃，尤其不能让旧 401 清除后来登录的 Session。
-    if (
-      !adapterContractRunPageState.isListOperationCurrent(
-        operation,
-        currentAdapterContractRunOwner(consoleShellState, refreshId),
-      )
-      || isAdapterContractRunAbortError(error)
-    ) return null;
-    // 只有仍属于当前完整 owner 的 401 才能销毁 Session；迟到 401 已被上方统一门禁丢弃。
-    if (error instanceof AuthApiError && error.status === 401) {
-      adapterContractRunPageState.clear();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    // 403 由状态机立即销毁旧页面事实；随后导航仍按最新 RBAC 裁掉入口，前端不会按角色名补权。
-    return adapterContractRunPageState.rejectList(error);
-  } finally {
-    adapterContractRunPageState.finishListOperation(operation);
-  }
-}
-
-/**
- * 构造 PAGE-091 当前 owner。
- * Token 和 tenant 身份只用于内存比较/响应校验，不进入 URL、DOM、Storage 或错误消息。
- */
-function currentAdapterContractRunOwner(consoleShellState, refreshId = refreshSequence) {
-  if (refreshId !== refreshSequence) return null;
-  const identity = adapterContractRunIdentitySnapshot(authSession.context);
-  // 身份、Token 或后端导航任一缺失都禁止创建列表/详情 ticket，确保 viewer 零预取。
-  if (!identity || !authSession.token || !adapterContractRunNavigationOwned(consoleShellState)) return null;
-  const filters = adapterContractRunPageState.snapshot().filters;
-  return {
-    identity,
-    navigation: "adapter-contract-runs",
-    filterKey: adapterContractRunFilterKey(filters),
-    token: authSession.token,
-    refreshGeneration: refreshId,
-  };
-}
-
-/** 后端授权导航、active item 和当前 hash 必须精确指向 PAGE-091 才允许任何 GET。 */
-function adapterContractRunNavigationOwned(consoleShellState) {
-  if (consoleShellState?.activeNavigationItemId !== "adapter-contract-runs") return false;
-  const hashState = readNavigationHashState();
-  if (hashState.rejected || (hashState.value && hashState.value !== "adapter-contract-runs")) return false;
-  const items = consoleShellState?.navigation?.navigation_items;
-  return Array.isArray(items) && items.some((item) => (
-    item?.id === "adapter-contract-runs"
-    && item?.target_section === "adapter-contract-runs"
-    && item?.visible !== false
-    && item?.disabled !== true
-  ));
-}
-
 /** 从认证快照读取仅用于响应 owner 校验的 tenant_id；它从不作为 API query 或 path 参数。 */
 function currentTenantId() {
   return String(authSession.context?.user?.tenant_id ?? authSession.context?.tenant?.tenant_id ?? "");
-}
-
-/**
- * 读取当前页选中运行的 case 摘要并局部重绘。
- * run ID 必须先由状态机确认存在于当前租户列表，DOM 注入的页外 ID 不会发出网络请求。
- */
-async function loadAdapterContractRunDetail(adapterContractRunId, consoleShellState) {
-  const owner = currentAdapterContractRunOwner(consoleShellState);
-  const operation = adapterContractRunPageState.beginDetailOperation(owner, adapterContractRunId);
-  if (!operation) return;
-  renderAdapterContractRunPanel(consoleShellState);
-  let shouldRender = false;
-  try {
-    const result = await getAdapterContractRun({
-      controlApiUrl,
-      token: operation.token,
-      expectedTenantId: currentTenantId(),
-      adapterContractRunId: operation.adapterContractRunId,
-      signal: operation.controller.signal,
-    });
-    if (!adapterContractRunPageState.isDetailOperationCurrent(
-      operation,
-      currentAdapterContractRunOwner(consoleShellState),
-    )) return;
-    adapterContractRunPageState.acceptDetail(result);
-    shouldRender = true;
-  } catch (error) {
-    if (
-      !adapterContractRunPageState.isDetailOperationCurrent(
-        operation,
-        currentAdapterContractRunOwner(consoleShellState),
-      )
-      || isAdapterContractRunAbortError(error)
-    ) return;
-    // 详情迟到错误也先通过同一 ticket；只有当前 401 可以结束当前登录态。
-    if (error instanceof AuthApiError && error.status === 401) {
-      adapterContractRunPageState.clear();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    adapterContractRunPageState.rejectDetail(error);
-    shouldRender = true;
-  } finally {
-    adapterContractRunPageState.finishDetailOperation(operation);
-  }
-  if (shouldRender && currentAdapterContractRunOwner(consoleShellState)) {
-    renderAdapterContractRunPanel(consoleShellState);
-  }
-}
-
-/** 局部替换 PAGE-091 内容并只重绑该页事件，避免重复绑定整个控制台导航和其他表单。 */
-function renderAdapterContractRunPanel(consoleShellState) {
-  if (!currentAdapterContractRunOwner(consoleShellState)) {
-    adapterContractRunPageState.clear();
-    return;
-  }
-  const panel = document.querySelector(".adapter-contract-runs-panel");
-  if (!panel) return;
-  panel.innerHTML = renderAdapterContractRuns(adapterContractRunPageState.snapshot(), authSession.context);
-  bindAdapterContractRunInteractions(consoleShellState);
-}
-
-/**
- * 绑定 PAGE-091 的只读交互。
- * 事件层只改变内存筛选、闭包 cursor 或发起 GET；不存在 POST、真实探测 URL、Endpoint 或凭据输入。
- */
-function bindAdapterContractRunInteractions(consoleShellState) {
-  for (const button of document.querySelectorAll("[data-adapter-contract-suite]")) {
-    button.addEventListener("click", async () => {
-      const current = adapterContractRunPageState.snapshot().filters;
-      adapterContractRunPageState.setFilters({
-        ...current,
-        suite_kind: String(button.dataset.adapterContractSuite ?? ""),
-        // 分段切换清空旧 mode，避免把 mock 条件错误沿用到 probe，或反向沿用 gateway_probe。
-        mode: "",
-      });
-      await refresh();
-    });
-  }
-  const form = document.querySelector("#adapter-contract-filters");
-  form?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(form);
-    const current = adapterContractRunPageState.snapshot().filters;
-    adapterContractRunPageState.setFilters({
-      ...current,
-      status: data.get("status"),
-      mode: data.get("mode"),
-    });
-    await refresh();
-  });
-  document.querySelector("[data-adapter-contract-reset]")?.addEventListener("click", async (event) => {
-    event.preventDefault();
-    const current = adapterContractRunPageState.snapshot().filters;
-    adapterContractRunPageState.setFilters({
-      suite_kind: current.suite_kind,
-      status: "",
-      mode: "",
-      limit: 50,
-    });
-    await refresh();
-  });
-  document.querySelector("[data-adapter-contract-refresh]")?.addEventListener("click", async () => {
-    // 显式刷新仍只执行 GET，并重新走 /auth/me、后端导航和完整 owner 校验。
-    await refresh();
-  });
-  document.querySelector("[data-adapter-contract-previous]")?.addEventListener("click", async () => {
-    if (adapterContractRunPageState.previousPage()) await refresh();
-  });
-  document.querySelector("[data-adapter-contract-next]")?.addEventListener("click", async () => {
-    if (adapterContractRunPageState.nextPage()) await refresh();
-  });
-  for (const button of document.querySelectorAll("[data-adapter-contract-detail]")) {
-    button.addEventListener("click", async () => {
-      const runId = String(button.dataset.adapterContractDetail ?? "");
-      if (adapterContractRunPageState.snapshot().selected_run_id === runId) {
-        adapterContractRunPageState.closeDetail();
-        renderAdapterContractRunPanel(consoleShellState);
-        return;
-      }
-      await loadAdapterContractRunDetail(runId, consoleShellState);
-    });
-  }
-  document.querySelector("[data-adapter-contract-close-detail]")?.addEventListener("click", () => {
-    adapterContractRunPageState.closeDetail();
-    renderAdapterContractRunPanel(consoleShellState);
-  });
 }
 
 /** 触发单行手工探测；POST 开始前作废在途 GET，完成后统一刷新最新快照。 */
@@ -19751,112 +19005,6 @@ async function loadModelQualityScoresState(consoleShellState, refreshId) {
         };
     modelQualityScorePageMemory.acceptRefreshError(ticket, safeError);
     return modelQualityScorePageMemory.snapshot();
-  }
-}
-
-/**
- * 仅在后端确认 PAGE-081 active 且角色可读时加载当前租户规则。
- * viewer、未授权 hash、非活动页面和旧 refresh 不会发出 /error-maps 请求，tenant_id 永不进入 URL。
- */
-async function loadErrorMapsState(consoleShellState, refreshId) {
-  if (
-    !hasPermission(authSession.context, PERMISSIONS.PROVIDER_ERROR_MAP_READ)
-    || consoleShellState?.activeNavigationItemId !== "error-maps"
-    || refreshId !== refreshSequence
-  ) {
-    return null;
-  }
-  const identity = errorMapIdentitySnapshot(authSession.context);
-  if (!identity) {
-    return null;
-  }
-  const tenantId = String(
-    authSession.context?.user?.tenant_id
-      ?? authSession.context?.tenant?.tenant_id
-      ?? "",
-  ).trim();
-  const handedOffReference = errorMapHandoff.consume({
-    identity,
-    tenantId,
-    navigation: "error-maps",
-  });
-  if (handedOffReference) {
-    // 新 handoff 从确定的全量边界开始；旧筛选不得让历史规则在目标页静默缺失。
-    errorMapFilters = {
-      providerId: "",
-      source: handedOffReference.source,
-      status: "",
-      outputErrorCode: "",
-      limit: 100,
-      offset: 0,
-    };
-  }
-  const retainedReference = errorMapPageMemory.snapshot().reference;
-  const effectiveReference = handedOffReference ?? retainedReference;
-  const effectiveFilters = effectiveReference
-    ? {
-        providerId: "",
-        source: effectiveReference.source,
-        status: "",
-        outputErrorCode: "",
-        limit: 100,
-        offset: 0,
-      }
-    : errorMapFilters;
-  const query = JSON.stringify([
-    effectiveFilters.providerId,
-    effectiveFilters.source,
-    effectiveFilters.status,
-    effectiveFilters.outputErrorCode,
-    effectiveFilters.limit,
-    effectiveFilters.offset,
-    effectiveReference?.source ?? "",
-    effectiveReference?.errorMapId ?? "",
-    effectiveReference?.requestedVersion ?? null,
-    effectiveReference?.requestedCatalogVersion ?? "",
-  ]);
-  const ticket = errorMapPageMemory.beginRefresh({
-    identity,
-    navigation: "error-maps",
-    query,
-    reference: effectiveReference,
-  });
-  try {
-    const result = await listErrorMaps({
-      controlApiUrl,
-      token: authSession.token,
-      // tenant handoff 必须使用认证租户下的精确 GET；builtin 没有可写资源路径，只读取对应只读目录。
-      errorMapId: effectiveReference?.source === "tenant" ? effectiveReference.errorMapId : "",
-      providerId: effectiveFilters.providerId,
-      source: effectiveFilters.source,
-      status: effectiveFilters.status,
-      outputErrorCode: effectiveFilters.outputErrorCode,
-      limit: effectiveFilters.limit,
-      offset: effectiveFilters.offset,
-      signal: ticket.signal,
-    });
-    const owner = { identity: errorMapIdentitySnapshot(authSession.context), navigation: "error-maps" };
-    // 列表响应只有在刷新序号和完整 owner 都仍有效时才能替换当前租户页面状态。
-    if (refreshId !== refreshSequence || !errorMapPageMemory.acceptRefresh(ticket, result, owner)) {
-      return null;
-    }
-    return errorMapPageMemory.snapshot();
-  } catch (error) {
-    const owner = { identity: errorMapIdentitySnapshot(authSession.context), navigation: "error-maps" };
-    // 取消、迟到或 owner 失配的失败均静默丢弃，不能覆盖新身份下已完成的刷新。
-    if (isAbortError(error) || refreshId !== refreshSequence || !errorMapPageMemory.isCurrentRefresh(ticket, owner)) {
-      return null;
-    }
-    // 当前刷新收到后端 401 时清空认证和规则内存，避免继续展示上一 Session 数据。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearErrorMapSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    errorMapPageMemory.acceptRefreshError(ticket, error, owner);
-    return errorMapPageMemory.snapshot();
   }
 }
 

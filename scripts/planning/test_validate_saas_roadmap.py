@@ -44,10 +44,16 @@ def test_post_baseline_navigation_does_not_rewrite_the_frozen_inventory() -> Non
     assert "growth-analytics" in VALIDATOR._source_navigation_ids()
     assert "branding" not in VALIDATOR._console_navigation_ids()
     assert "branding" in VALIDATOR._source_navigation_ids()
+    assert "adapter-specs" not in VALIDATOR._console_navigation_ids()
+    assert "adapter-specs" in VALIDATOR._source_navigation_ids()
+    assert "adapter-contract-runs" not in VALIDATOR._console_navigation_ids()
+    assert "adapter-contract-runs" in VALIDATOR._source_navigation_ids()
+    assert "error-maps" not in VALIDATOR._console_navigation_ids()
+    assert "error-maps" in VALIDATOR._source_navigation_ids()
     assert len(VALIDATOR._source_navigation_ids()) == 64
 
 
-def test_repository_roadmap_baseline_passes_after_prd142_completion() -> None:
-    report = VALIDATOR.validate(expected_next="PRD-143")
+def test_repository_roadmap_baseline_passes_after_prd143_completion() -> None:
+    report = VALIDATOR.validate(expected_next="PRD-144")
     assert report.ok, report.errors
-    assert report.next_prd == "PRD-143"
+    assert report.next_prd == "PRD-144"

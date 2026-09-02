@@ -4,6 +4,7 @@ import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
 import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
 import { createPlatformCustomerSuccessController } from "../platform-customer-success/platformCustomerSuccessController.js";
 import { createPlatformGrowthController } from "../platform-growth/platformGrowthController.js";
+import { createPlatformProviderEngineeringController } from "../platform-provider-engineering/platformProviderEngineeringController.js";
 import { bindBrandEditorInteractions } from "../brand-domains/bindBrandEditor.js";
 import { createPlatformBrandingController } from "../brand-domains/platformBrandingController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
@@ -38,6 +39,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "releases",
   "providers",
   "provider-catalog",
+  "provider-engineering",
   "channels",
   "branding",
   "customer-success",
@@ -96,6 +98,7 @@ export function createPlatformPageController({
     brandDomains: null,
     customerSuccess: null,
     growth: null,
+    providerEngineering: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -234,6 +237,27 @@ export function createPlatformPageController({
   });
   state.growth = growthController.snapshot();
 
+  const providerEngineeringController = createPlatformProviderEngineeringController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.providerEngineering = snapshot;
+      if (state.session && state.view === "provider-engineering" && !state.loading) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && state.view === "provider-engineering") void controller.refresh();
+      });
+    },
+  });
+  state.providerEngineering = providerEngineeringController.snapshot();
+
   const brandDomainsController = createPlatformBrandingController({
     api,
     newIdempotencyKey,
@@ -338,7 +362,7 @@ export function createPlatformPageController({
       if (new Set([
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
-        "security-assurance", "launch-gates", "provider-catalog", "releases", "edge-fleet", "edge-upgrades",
+        "security-assurance", "launch-gates", "provider-catalog", "provider-engineering", "releases", "edge-fleet", "edge-upgrades",
         "channels", "branding", "customer-success", "growth",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
@@ -368,6 +392,8 @@ export function createPlatformPageController({
           state.riskDecisionIntent = null;
         } else if (state.view === "provider-catalog") {
           state.providerCatalogPublishIntent = null;
+        } else if (state.view === "provider-engineering") {
+          providerEngineeringController.leave();
         } else if (state.view === "releases") {
           state.developerContracts = null;
           state.developerContractIntent = null;
@@ -447,6 +473,15 @@ export function createPlatformPageController({
       if (state.view === "abuse-risk" && !state.riskCases) void loadRiskCases();
       if (state.view === "provider-catalog" && !state.providerCatalog) {
         void loadProviderCatalog();
+      }
+      if (state.view === "provider-engineering") {
+        const entered = providerEngineeringController.enter(
+          state.session?.context,
+          state.navigation,
+        );
+        if (entered && !providerEngineeringController.snapshot().adapters) {
+          void providerEngineeringController.loadAdapters();
+        }
       }
       if (state.view === "releases" && !state.developerContracts) {
         void loadDeveloperContracts();
@@ -578,6 +613,40 @@ export function createPlatformPageController({
     async downloadGrowthExport(exportId, stepUp = null) {
       if (state.view !== "growth") return false;
       return growthController.downloadExport(exportId, stepUp);
+    },
+    async refreshProviderEngineering() {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.loadAdapters();
+    },
+    async filterProviderEngineering(filters = {}) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.configureAdapters(compactObject(filters));
+    },
+    async filterProviderContractRuns(filters = {}) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.configureRuns(compactObject(filters));
+    },
+    async selectProviderAdapter(adapterId) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.selectAdapter(adapterId);
+    },
+    async selectProviderContractRun(runId) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.selectRun(runId);
+    },
+    async moveProviderEngineeringPage(kind, direction) {
+      if (state.view !== "provider-engineering") return false;
+      return direction === "next"
+        ? providerEngineeringController.nextPage(kind)
+        : providerEngineeringController.previousPage(kind);
+    },
+    async applyProviderAdapter(input, stepUp) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.applyAdapter(input, stepUp);
+    },
+    async applyProviderErrorCatalog(input, stepUp) {
+      if (state.view !== "provider-engineering") return false;
+      return providerEngineeringController.applyCatalog(input, stepUp);
     },
     async refreshChannels() {
       if (state.view !== "channels") return false;
@@ -3255,6 +3324,9 @@ export function createPlatformPageController({
         state.providerCatalog = null;
         state.providerCatalogPublishIntent = null;
       }
+      if (!state.navigation.some((item) => item.id === "provider-engineering")) {
+        providerEngineeringController.leave();
+      }
       if (!state.navigation.some((item) => item.id === "releases")) {
         state.developerContracts = null;
         state.developerContractIntent = null;
@@ -3315,6 +3387,10 @@ export function createPlatformPageController({
         && state.navigation.some((item) => item.id === "growth")
         && growthController.enter(state.session?.context, state.navigation);
       if (!growthActive) growthController.leave();
+      const providerEngineeringActive = state.view === "provider-engineering"
+        && state.navigation.some((item) => item.id === "provider-engineering")
+        && providerEngineeringController.enter(state.session?.context, state.navigation);
+      if (!providerEngineeringActive) providerEngineeringController.leave();
       const platformBrandActive = state.view === "branding"
         && state.navigation.some((item) => item.id === "branding");
       if (!platformBrandActive) brandDomainsController.leavePlatform();
@@ -3327,6 +3403,9 @@ export function createPlatformPageController({
       if (growthActive
         && growthController.snapshot().data[growthController.snapshot().tab] === null) {
         void growthController.load();
+      }
+      if (providerEngineeringActive && !providerEngineeringController.snapshot().adapters) {
+        void providerEngineeringController.loadAdapters();
       }
       if (platformBrandActive && !brandDomainsController.snapshot().platform.branding) {
         void brandDomainsController.loadPlatform();
@@ -4698,6 +4777,88 @@ export function createPlatformPageController({
           confirmed: data.get("confirmed") === "on",
         });
       }
+      if (form.matches("[data-platform-provider-engineering-filter-form]")) {
+        const releaseGeneration = String(data.get("releaseGeneration") ?? "").trim();
+        controller.filterProviderEngineering({
+          adapter: data.get("adapter"),
+          status: data.get("status"),
+          protocol: data.get("protocol"),
+          release_generation: releaseGeneration ? Number(releaseGeneration) : "",
+          compatibility: data.get("compatibility"),
+        });
+      }
+      if (form.matches("[data-platform-provider-contract-filter-form]")) {
+        controller.filterProviderContractRuns({
+          scope: data.get("scope"),
+          status: data.get("status"),
+          suite: data.get("suite"),
+          mode: data.get("mode"),
+          from: localTimestamp(data.get("from")),
+          to: localTimestamp(data.get("to")),
+        });
+      }
+      if (form.matches("[data-platform-provider-adapter-candidate-form]")) {
+        const secure = takeProviderEngineeringStepUp(form, data);
+        controller.applyProviderAdapter({
+          adapterIdentifier: data.get("adapterCode"),
+          expectedRevision: 0,
+          command: {
+            action: "create_candidate",
+            sdk_release_id: data.get("sdkReleaseId"),
+            release_version: data.get("releaseVersion"),
+            protocol_family: data.get("protocolFamily"),
+            spec_manifest_version: data.get("specManifestVersion"),
+            spec_manifest_sha256: data.get("specManifestSha256"),
+            compatibility_sha256: data.get("compatibilitySha256"),
+            required_runtime_version: data.get("requiredRuntimeVersion"),
+            required_api_version: data.get("requiredApiVersion"),
+          },
+        }, secure);
+      }
+      if (form.matches("[data-platform-provider-adapter-action-form]")) {
+        const secure = takeProviderEngineeringStepUp(form, data);
+        controller.applyProviderAdapter({
+          adapterIdentifier: data.get("adapterId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          command: { action: data.get("action") },
+        }, secure);
+      }
+      if (form.matches("[data-platform-provider-failure-review-form]")) {
+        const secure = takeProviderEngineeringStepUp(form, data);
+        controller.applyProviderAdapter({
+          adapterIdentifier: data.get("adapterId"),
+          expectedRevision: Number(data.get("expectedRevision")),
+          command: {
+            action: "review_failure",
+            contract_run_id: data.get("contractRunId"),
+            failure_disposition: data.get("failureDisposition"),
+          },
+        }, secure);
+      }
+      if (form.matches("[data-platform-provider-catalog-candidate-form]")) {
+        const secure = takeProviderEngineeringStepUp(form, data);
+        controller.applyProviderErrorCatalog({
+          expectedRevision: 0,
+          command: {
+            action: "create_candidate",
+            builtin_catalog_version: data.get("builtinCatalogVersion"),
+            sdk_release_id: data.get("sdkReleaseId"),
+            signed_candidate_id: data.get("signedCandidateId"),
+          },
+        }, secure);
+      }
+      if (form.matches("[data-platform-provider-catalog-action-form]")) {
+        const secure = takeProviderEngineeringStepUp(form, data);
+        const expectedRevision = Number(data.get("expectedRevision"));
+        controller.applyProviderErrorCatalog({
+          expectedRevision,
+          command: {
+            action: data.get("action"),
+            error_catalog_release_id: data.get("catalogId"),
+            expected_revision: expectedRevision,
+          },
+        }, secure);
+      }
       if (form.matches("[data-platform-customer-batch-prepare-form]")) {
         controller.applyCustomerSuccessTask({
           operation: "prepare_batch",
@@ -5704,6 +5865,21 @@ export function createPlatformPageController({
       }
       const action = target.dataset.platformAction;
       if (action === "refresh") controller.refresh();
+      if (target.dataset.platformProviderAdapterSelect) {
+        controller.selectProviderAdapter(target.dataset.platformProviderAdapterSelect);
+      }
+      if (target.dataset.platformProviderRunSelect) {
+        controller.selectProviderContractRun(target.dataset.platformProviderRunSelect);
+      }
+      if (target.dataset.platformProviderPage) {
+        controller.moveProviderEngineeringPage(
+          target.dataset.platformProviderPage,
+          target.dataset.direction,
+        );
+      }
+      if (action === "provider-engineering-refresh") {
+        controller.refreshProviderEngineering();
+      }
       if (target.dataset.platformCustomerSelect) {
         controller.selectCustomerSuccessAccount(target.dataset.platformCustomerSelect);
       }
@@ -5782,6 +5958,17 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
+      if (select?.matches?.("[data-platform-provider-engineering-step-up-method]")) {
+        const code = select.form?.querySelector?.("[data-platform-provider-engineering-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-provider-engineering-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
       if (select?.matches?.('[data-platform-growth-root] select[name="method"]')) {
         const code = select.form?.querySelector?.("[data-platform-growth-step-up-code]");
         const input = code?.querySelector?.("[data-platform-sensitive]");
@@ -5967,6 +6154,7 @@ export function createPlatformPageController({
     state.navigation = [];
     customerSuccessController.leave();
     growthController.leave();
+    providerEngineeringController.leave();
     brandDomainsController.clear();
     state.operators = null;
     state.plans = null;
@@ -6310,6 +6498,16 @@ function takeGrowthStepUp(form, data) {
   const verificationCode = String(data.get("verificationCode") ?? "");
   form.querySelectorAll("[data-platform-sensitive]").forEach((node) => { node.value = ""; });
   return { method: String(data.get("method") ?? "totp"), verificationCode };
+}
+
+function takeProviderEngineeringStepUp(form, data) {
+  let verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-platform-provider-engineering-sensitive]").forEach((node) => {
+    node.value = "";
+  });
+  const result = { method: String(data.get("method") ?? "totp"), verificationCode };
+  verificationCode = "";
+  return result;
 }
 
 function takeChannelStepUp(form, data) {

@@ -7,18 +7,19 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request
+from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import (
     AuthContext,
     require_internal_service_token,
     require_provider_health_reader,
 )
-from metahub_shared.runtime.errors import ApiError
 
 from .models import AdapterSpecActivationResponse, AdapterSpecListResponse
 from .service import activate_adapter_spec_catalog, list_adapter_specs
 
 router = APIRouter(tags=["adapter-specs"])
+internal_router = APIRouter(tags=["adapter-specs-internal"])
 
 # 查询白名单、幂等标识格式和正文上限共同限制公开与内部接口的输入攻击面。
 _PUBLIC_QUERY_FIELDS = frozenset({"classification", "status"})
@@ -58,7 +59,7 @@ async def get_adapter_specs(
     )
 
 
-@router.post(
+@internal_router.post(
     "/internal/adapter-specs/{tenant_id}/activate",
     response_model=AdapterSpecActivationResponse,
 )
@@ -202,3 +203,6 @@ def _trace_id(request: Request) -> str:
     """读取共享中间件确定的 trace_id，禁止由业务正文覆盖链路身份。"""
 
     return getattr(request.state, "trace_id", "")
+
+
+__all__ = ["internal_router", "router"]

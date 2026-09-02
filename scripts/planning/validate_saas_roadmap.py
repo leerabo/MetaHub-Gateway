@@ -431,6 +431,18 @@ REQUIRED_DOCS = {
         "PRD-143",
         "0134",
     ),
+    ROOT / "docs/prd/PRD-143-platform-provider-adapter-engineering-domain.md": (
+        "状态：已完成",
+        "第一轮：",
+        "第二轮：",
+        "0135",
+    ),
+    ROOT / "docs/testing/PRD-143-tests.md": (
+        "状态：已完成",
+        "敏感",
+        "PRD-144",
+        "0135",
+    ),
 }
 
 REQUIRED_MASTER_FIELDS = (
@@ -468,7 +480,15 @@ SECRET_PATTERNS = {
 }
 
 POST_NAVIGATION_BASELINE_IDS = frozenset({"migration-operations", "support-tickets"})
-RETIRED_SOURCE_NAVIGATION_IDS = frozenset({"branding", "growth-analytics"})
+RETIRED_SOURCE_NAVIGATION_IDS = frozenset(
+    {
+        "adapter-contract-runs",
+        "adapter-specs",
+        "branding",
+        "error-maps",
+        "growth-analytics",
+    }
+)
 
 ROLE_ALIAS_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])(?:ops|security|support|billing|finance|verification_reviewer)(?![A-Za-z0-9_])"
@@ -1114,10 +1134,10 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
     )
     report.check(
         bool(migration_versions)
-        and migration_versions[-1] == 134
+        and migration_versions[-1] == 135
         and (ROOT / "infra/migrations/0083_global_account_identity.sql").is_file()
         and (ROOT / "infra/migrations/0083_global_account_identity.down.sql").is_file(),
-        "migration sequence advances through 0134 while PRD-091 migration 0083 remains present",
+        "migration sequence advances through 0135 while PRD-091 migration 0083 remains present",
     )
     report.check(
         (ROOT / "infra/migrations/0084_identity_self_service.sql").is_file()
@@ -1374,6 +1394,16 @@ def validate(*, expected_next: str | None = None) -> ValidationReport:
             ROOT / "infra/migrations/0134_platform_channel_deployment_branding.down.sql"
         ).is_file(),
         "PRD-142 owns reversible migration 0134 with guarded branding-fact rollback",
+    )
+    report.check(
+        (
+            ROOT / "infra/migrations/0135_platform_provider_adapter_engineering.sql"
+        ).is_file()
+        and (
+            ROOT
+            / "infra/migrations/0135_platform_provider_adapter_engineering.down.sql"
+        ).is_file(),
+        "PRD-143 owns reversible migration 0135 with guarded provider-engineering rollback",
     )
 
     audit_text = workbook_text + "\n" + _document_texts(REQUIRED_DOCS)

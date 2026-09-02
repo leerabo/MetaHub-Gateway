@@ -11,6 +11,7 @@ import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request
+from metahub_shared.runtime.errors import ApiError
 from pydantic import ValidationError
 
 from metahub_control.auth import (
@@ -18,7 +19,6 @@ from metahub_control.auth import (
     require_internal_service_token,
     require_provider_health_reader,
 )
-from metahub_shared.runtime.errors import ApiError
 
 from .models import (
     AdapterContractRunDetailResponse,
@@ -32,8 +32,8 @@ from .service import (
     list_adapter_contract_runs,
 )
 
-
 router = APIRouter(tags=["adapter-contracts"])
+internal_router = APIRouter(tags=["adapter-contracts-internal"])
 
 # 512 KiB/2048 cases 是设计冻结上限；节点和深度还要独立限制，避免小字节深嵌套消耗递归资源。
 MAX_REPORT_BODY_BYTES = 512 * 1024
@@ -71,7 +71,7 @@ def _require_internal_report_access(
         raise ApiError("auth.internal_token_invalid")
 
 
-@router.post(
+@internal_router.post(
     "/internal/tenants/{tenant_id}/adapter-contract-runs",
     response_model=AdapterContractRunIngestResponse,
 )
@@ -291,4 +291,4 @@ def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", "")
 
 
-__all__ = ["router"]
+__all__ = ["internal_router", "router"]

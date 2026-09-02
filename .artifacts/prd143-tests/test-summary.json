@@ -1,0 +1,90 @@
+{
+  "prd_id": "PRD-143",
+  "generated_at": "2026-09-02T16:05:27Z",
+  "overall_result": "pass",
+  "checks": [
+    {
+      "id": "backend_api_migration_navigation",
+      "result": "pass",
+      "passed": 8,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 1153.023,
+      "junit": "backend-focused-junit.xml",
+      "junit_sha256": "8f2fedba0def46b9dcb287fc50cf020fa2dd617ceb2b632f6c9e3e5ff238e42f"
+    },
+    {
+      "id": "contract_case_100k_keyset_slo",
+      "result": "pass",
+      "rows_per_run": 100000,
+      "runs": 2,
+      "pages_per_run": 200,
+      "page_size": 500,
+      "p95_limit_ms": 500,
+      "business_selects_per_page": 3,
+      "duplicates": 0,
+      "missing": 0,
+      "count_queries": 0,
+      "json_extraction_queries": 0,
+      "query_plan": "composite keyset range seek"
+    },
+    {
+      "id": "console_affected",
+      "result": "pass",
+      "passed": 46,
+      "failed": 0
+    },
+    {
+      "id": "console_lint",
+      "result": "pass",
+      "files": 448
+    },
+    {
+      "id": "roadmap_validator",
+      "result": "pass",
+      "checks": 250,
+      "next_prd": "PRD-144",
+      "roadmap_sha256": "ce08eddb1ae73b1b0f2c80bf89ae836a97140f8879130b3d01836bcf9b2a1d36"
+    },
+    {
+      "id": "python_ruff_new_prd143",
+      "result": "pass",
+      "rules": "all configured rules"
+    },
+    {
+      "id": "python_ruff_affected",
+      "result": "pass",
+      "rules": "F"
+    },
+    {
+      "id": "python_compileall",
+      "result": "pass"
+    },
+    {
+      "id": "git_diff_check",
+      "result": "pass"
+    },
+    {
+      "id": "browser_acceptance",
+      "result": "pass",
+      "checks": 8,
+      "official_screenshots": 6,
+      "manifest": "../prd143-browser/browser-acceptance.json",
+      "manifest_sha256": "97bff6e9d89eae7a885fb17bf5a0e64dd33a821ee0178f8a94a70c61beaffc3c"
+    },
+    {
+      "id": "sensitive_audit",
+      "result": "pass",
+      "high_confidence_secret_hits": 0,
+      "structured_artifact_sensitive_value_hits": 0,
+      "forbidden_candidate_paths": 0,
+      "artifact_files_scanned": 8
+    }
+  ],
+  "batch_gate": {
+    "name": "G7",
+    "status": "pending",
+    "note": "The PRD-143 focused pass does not replace the unified PRD-139..147 batch gate."
+  }
+}

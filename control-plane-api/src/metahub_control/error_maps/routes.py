@@ -37,6 +37,7 @@ from .service import (
 )
 
 router = APIRouter(tags=["error-maps"])
+internal_router = APIRouter(tags=["error-maps-internal"])
 
 # Wire 白名单与资源上限必须在任何持久化和意图指纹计算之前执行。
 LIST_QUERY_FIELDS = frozenset(
@@ -171,7 +172,7 @@ async def patch_provider_error_map_route(
     return result
 
 
-@router.get("/internal/error-maps/{tenant_id}/current")
+@internal_router.get("/internal/error-maps/{tenant_id}/current")
 async def get_internal_provider_error_map_route(
     request: Request,
     _: Annotated[None, Depends(require_internal_service_token)],
@@ -455,4 +456,4 @@ def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", "")
 
 
-__all__ = ["router"]
+__all__ = ["internal_router", "router"]

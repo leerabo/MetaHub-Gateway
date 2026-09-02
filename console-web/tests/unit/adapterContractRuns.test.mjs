@@ -4,10 +4,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  renderAdapterContractRunsLoading,
-  renderDeveloperStart,
-} from "../../src/features/developer-start/renderDeveloperStart.js";
-import {
   adapterContractRunFilterKey,
   adapterContractRunIdentitySnapshot,
   canonicalAdapterContractRunFilters,
@@ -346,48 +342,17 @@ test("PAGE-091 escapes every dynamic field and keeps sensitive extras out of DOM
   assert.doesNotMatch(html, /<img|<script|private-response-canary|Bearer private-token/);
 });
 
-test("viewer has zero PAGE-091 DOM and loading projection requires exact backend navigation", () => {
+test("viewer has zero PAGE-091 legacy renderer DOM", () => {
   assert.equal(renderAdapterContractRuns({ state: "ok" }, contractAuth([])), "");
-  const shellState = {
-    state: "ok",
-    activeNavigationItemId: "adapter-contract-runs",
-    navigation: {
-      active_navigation_item_id: "adapter-contract-runs",
-      navigation_items: [{
-        id: "adapter-contract-runs",
-        label: "CI 测试报告",
-        group: "Provider 治理",
-        target_section: "adapter-contract-runs",
-        required_permissions: [PERMISSIONS.PROVIDER_HEALTH_READ],
-        visible: true,
-        disabled: false,
-      }],
-    },
-  };
-  const container = { innerHTML: "" };
-  renderDeveloperStart(container, {
-    authContext: contractAuth(),
-    consoleShellState: shellState,
-    adapterContractRunsState: null,
-  });
-  assert.match(container.innerHTML, /data-active-navigation="adapter-contract-runs"/);
-  assert.match(container.innerHTML, /data-adapter-contract-root/);
+});
 
-  const denied = { innerHTML: "preserved" };
-  assert.equal(renderAdapterContractRunsLoading(denied, {
-    authContext: contractAuth([]),
-    consoleShellState: shellState,
-  }), null);
-  assert.equal(denied.innerHTML, "preserved");
-  const wrongNavigation = { innerHTML: "preserved" };
-  assert.equal(renderAdapterContractRunsLoading(wrongNavigation, {
-    authContext: contractAuth(),
-    consoleShellState: {
-      ...shellState,
-      navigation: { ...shellState.navigation, navigation_items: [] },
-    },
-  }), null);
-  assert.equal(wrongNavigation.innerHTML, "preserved");
+test("PRD-143 cutover removes PAGE-091 shell dispatch and loading runtime", async () => {
+  const [entry, renderer] = await Promise.all([
+    readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(entry, /adapterContractRunsState|adapterContractRunPageState|renderAdapterContractRunsLoading|listAdapterContractRuns/u);
+  assert.doesNotMatch(renderer, /renderAdapterContractRuns|case "adapter-contract-runs"|renderAdapterContractRunsLoading/u);
 });
 
 test("page state keeps cursor private and supports filter/pagination lifecycle", () => {
@@ -670,16 +635,14 @@ test("list and detail tickets reject identity navigation filter token and genera
   assert.doesNotMatch(JSON.stringify(state.snapshot()), /token-a|tenant_contract|contract_fingerprint/);
 });
 
-test("PAGE-091 source contains only GET clients and responsive CSS converts both tables on mobile", async () => {
+test("PAGE-091 legacy client remains read-only while its active runtime is unloaded", async () => {
   const [clientSource, mainSource, css] = await Promise.all([
     readFile(new URL("../../src/lib/adapterContractRuns.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(clientSource, /method:\s*["']POST["']/);
-  assert.match(mainSource, /currentAdapterContractRunOwner/);
-  assert.match(mainSource, /adapterContractRunNavigationOwned/);
-  assert.match(mainSource, /listAdapterContractRuns/);
+  assert.doesNotMatch(mainSource, /currentAdapterContractRunOwner|adapterContractRunNavigationOwned|listAdapterContractRuns/u);
   assert.match(css, /\.adapter-contract-run-row\s*\{[^}]*grid-template-columns:/s);
   assert.match(css, /\.adapter-contract-case-row\s*\{[^}]*grid-template-columns:/s);
   assert.match(css, /@media \(max-width: 720px\)[\s\S]*?\.adapter-contract-run-row:not\(\.adapter-contract-run-head\)[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);

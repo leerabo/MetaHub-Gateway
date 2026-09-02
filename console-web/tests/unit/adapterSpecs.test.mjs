@@ -4,10 +4,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  renderAdapterSpecsLoading,
-  renderDeveloperStart,
-} from "../../src/features/developer-start/renderDeveloperStart.js";
-import {
   adapterSpecApiFilters,
   adapterSpecFilterKey,
   adapterSpecIdentitySnapshot,
@@ -366,47 +362,13 @@ test("adapter spec tickets reject late results across filters identity navigatio
   assert.doesNotMatch(JSON.stringify(state.snapshot()), /token|tenant|deepseek|fingerprint/);
 });
 
-test("developer shell dispatch and loading projection require exact backend owner", () => {
-  const authContext = specAuth();
-  const shellState = {
-    state: "ok",
-    activeNavigationItemId: "adapter-specs",
-    navigation: {
-      active_navigation_item_id: "adapter-specs",
-      navigation_items: [{
-        id: "adapter-specs",
-        label: "Adapter 规范",
-        group: "Provider 治理",
-        target_section: "adapter-specs",
-        required_permissions: [PERMISSIONS.PROVIDER_HEALTH_READ],
-        visible: true,
-        disabled: false,
-      }],
-    },
-  };
-  const container = { innerHTML: "" };
-  renderDeveloperStart(container, {
-    authContext,
-    consoleShellState: shellState,
-    adapterSpecsState: { ...sanitizeAdapterSpecPayload(specPayload()), filters: { view: "default" } },
-  });
-  assert.match(container.innerHTML, /data-active-navigation="adapter-specs"/);
-  assert.match(container.innerHTML, /data-adapter-spec-root/);
-
-  const loadingContainer = { innerHTML: "existing" };
-  const projected = renderAdapterSpecsLoading(loadingContainer, {
-    authContext,
-    consoleShellState: { ...shellState, activeNavigationItemId: "overview" },
-  });
-  assert.equal(projected.activeNavigationItemId, "adapter-specs");
-  assert.match(loadingContainer.innerHTML, /正在读取 Adapter 规范/);
-
-  const denied = { innerHTML: "preserved" };
-  assert.equal(renderAdapterSpecsLoading(denied, {
-    authContext: specAuth([]),
-    consoleShellState: shellState,
-  }), null);
-  assert.equal(denied.innerHTML, "preserved");
+test("PRD-143 cutover removes PAGE-090 shell dispatch and loading runtime", async () => {
+  const [entry, renderer] = await Promise.all([
+    readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(entry, /adapterSpecsState|adapterSpecPageState|renderAdapterSpecsLoading|listAdapterSpecs/u);
+  assert.doesNotMatch(renderer, /renderAdapterSpecs|case "adapter-specs"|renderAdapterSpecsLoading/u);
 });
 
 test("responsive CSS keeps desktop tracks and converts the contract table on mobile", async () => {

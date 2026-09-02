@@ -1,5 +1,6 @@
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 import { renderProviderCatalog } from "./renderProviderCatalog.js";
+import { renderWorkspaceProviderEngineering } from "../workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
 
 // Provider 面板的类型标签用于控制台展示，Provider Key 明文永远不应进入前端列表状态。
 
@@ -88,6 +89,10 @@ export function renderProviderPanel(providersState, authContext) {
 
   const providers = providersState.providers ?? [];
   const providerKeysByProviderId = providersState.providerKeysByProviderId ?? {};
+  const providerEngineering = providersState.providerEngineering ?? null;
+  const selectedEngineeringProvider = providers.find(
+    (provider) => provider.provider_id === providerEngineering?.providerId,
+  ) ?? null;
   const canWrite = hasPermission(authContext, PERMISSIONS.PROVIDER_WRITE);
   return `
     <div class="panel-heading providers-heading">
@@ -153,10 +158,16 @@ export function renderProviderPanel(providersState, authContext) {
                 provider,
                 providerKeysByProviderId[provider.provider_id],
                 canWrite,
+                provider.provider_id === selectedEngineeringProvider?.provider_id,
               ))
               .join("")
           : renderEmptyRow()
       }
+    </div>
+    <div data-workspace-provider-engineering-host>
+      ${selectedEngineeringProvider
+        ? renderWorkspaceProviderEngineering(providerEngineering, selectedEngineeringProvider)
+        : ""}
     </div>
   `;
 }
@@ -167,7 +178,7 @@ export function renderProviderPanel(providersState, authContext) {
  * 行内只展示 Endpoint 元数据和健康状态；启用/禁用通过隐藏字段提交目标状态，后端
  * 负责二次校验。
  */
-function renderProviderRow(provider, keyState, canWrite) {
+function renderProviderRow(provider, keyState, canWrite, engineeringSelected) {
   const nextStatus = provider.status === "active" ? "disabled" : "active";
   const statusLabel = provider.status === "active" ? "禁用" : "启用";
   return `
@@ -190,15 +201,17 @@ function renderProviderRow(provider, keyState, canWrite) {
       <span title="${escapeAttribute(provider.last_test_error || "")}">
         ${escapeHtml(formatDateTime(provider.last_tested_at))}
       </span>
-      ${canWrite ? `<div class="provider-row-actions">
-        <form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
+      <div class="provider-row-actions">
+        <button type="button" data-workspace-provider-engineering-open="${escapeAttribute(provider.provider_id)}"
+          aria-expanded="${engineeringSelected ? "true" : "false"}">兼容与错误规则</button>
+        ${canWrite ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
           <button type="submit">测试</button>
         </form>
         <form data-provider-status-form data-provider-id="${escapeAttribute(provider.provider_id)}">
           <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
           <button type="submit">${statusLabel}</button>
-        </form>
-      </div>` : ""}
+        </form>` : ""}
+      </div>
     </div>
     ${renderProviderKeypool(provider, keyState, canWrite)}
   `;

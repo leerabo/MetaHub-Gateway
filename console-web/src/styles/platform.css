@@ -1369,6 +1369,198 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-offline-table form { min-width: 0; }
 }
 
+/* PRD-143 Provider Engineering stays dense and scan-oriented across adapter, run, and case lanes. */
+.platform-provider-engineering-filters {
+  grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(130px, .8fr)) minmax(220px, 1.2fr) auto;
+}
+
+.platform-provider-engineering-adapters,
+.platform-provider-engineering-runs,
+.platform-provider-engineering-case-table {
+  min-width: 940px;
+  table-layout: fixed;
+}
+
+.platform-provider-engineering-adapters tr.is-selected,
+.platform-provider-engineering-runs tr.is-selected {
+  background: #edf7f1;
+  box-shadow: inset 3px 0 #287a55;
+}
+
+.platform-provider-engineering-adapters td,
+.platform-provider-engineering-runs td,
+.platform-provider-engineering-case-table td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.platform-provider-engineering-adapters td strong,
+.platform-provider-engineering-adapters td small,
+.platform-provider-engineering-runs td strong,
+.platform-provider-engineering-runs td small,
+.platform-provider-engineering-case-table td strong,
+.platform-provider-engineering-case-table td small {
+  display: block;
+}
+
+.platform-provider-engineering-adapters td small,
+.platform-provider-engineering-runs td small,
+.platform-provider-engineering-case-table td small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.platform-link-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #175d45;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.platform-link-button:focus-visible {
+  outline: 2px solid #287a55;
+  outline-offset: 3px;
+}
+
+.platform-provider-engineering-detail,
+.platform-provider-engineering-cases {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.platform-provider-engineering-detail h3,
+.platform-provider-engineering-cases h3 {
+  margin: 2px 0 0;
+  font-size: 18px;
+}
+
+.platform-provider-engineering-proof {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 14px 0 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.platform-provider-engineering-proof > div {
+  min-width: 0;
+  background: #fff;
+  padding: 11px 12px;
+}
+
+.platform-provider-engineering-proof dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.platform-provider-engineering-proof dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.platform-provider-engineering-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.platform-provider-engineering-actions form,
+.platform-provider-engineering-cases > form,
+.platform-provider-engineering-create form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.platform-provider-engineering-actions form {
+  flex: 1 1 460px;
+}
+
+.platform-provider-engineering-actions label,
+.platform-provider-engineering-cases > form label,
+.platform-provider-engineering-create label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.platform-provider-engineering-actions label > span,
+.platform-provider-engineering-cases > form label > span,
+.platform-provider-engineering-create label > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.platform-provider-engineering-actions input,
+.platform-provider-engineering-actions select,
+.platform-provider-engineering-cases > form input,
+.platform-provider-engineering-cases > form select,
+.platform-provider-engineering-create input,
+.platform-provider-engineering-create select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+.platform-provider-engineering-create {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.platform-provider-engineering-create summary {
+  cursor: pointer;
+  color: #175d45;
+  font-weight: 800;
+}
+
+.platform-provider-engineering-create form {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  margin-top: 14px;
+}
+
+.platform-provider-engineering-create button {
+  justify-self: start;
+}
+
+@media (max-width: 1100px) {
+  .platform-provider-engineering-filters,
+  .platform-provider-engineering-create form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .platform-provider-engineering-proof { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .platform-provider-engineering-filters,
+  .platform-provider-engineering-create form,
+  .platform-provider-engineering-actions form,
+  .platform-provider-engineering-cases > form,
+  .platform-provider-engineering-proof {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .platform-provider-engineering-adapters,
+  .platform-provider-engineering-runs,
+  .platform-provider-engineering-case-table { min-width: 760px; }
+  .platform-provider-engineering-actions form { flex-basis: 100%; }
+}
+
 /* PRD-140 customer-success workbench */
 [data-platform-customer-success-root] { min-width: 0; }
 .platform-customer-success-heading > span { max-width: 360px; text-align: right; }

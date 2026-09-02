@@ -1,6 +1,6 @@
 # PRD-143 Platform Provider Adapter 工程台与错误规则分域
 
-状态：设计冻结，等待 G6 通过后编码。依赖 PRD-063/064/119/123/133/136/137；批次边界见
+状态：已完成。依赖 PRD-063/064/119/123/133/136/137；批次边界见
 `S7-platform-operations-console-domain-batch-design.md`。本条只交付 0135、Platform Provider Engineering 工作台、
 官方 Adapter release/合同证明、内置错误目录 release、Workspace override 和兼容投影，不提前实现 PRD-144..148。
 

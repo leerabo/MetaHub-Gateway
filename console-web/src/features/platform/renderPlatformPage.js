@@ -5,6 +5,7 @@ import { renderChannelManagement } from "../channels/renderChannelManagement.js"
 import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
 import { renderPlatformGrowth } from "../platform-growth/renderPlatformGrowth.js";
+import { renderPlatformProviderEngineering } from "../platform-provider-engineering/renderPlatformProviderEngineering.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -113,6 +114,9 @@ function renderView(state, permissions) {
   if (state.view === "verification") return verificationView(state, permissions);
   if (state.view === "notification-templates") return notificationTemplatesView(state, permissions);
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
+  if (state.view === "provider-engineering") {
+    return renderPlatformProviderEngineering(state.providerEngineering, permissions);
+  }
   if (state.view === "releases") return developerContractsView(state, permissions);
   if (state.view === "channels") return renderChannelManagement(state, permissions);
   if (state.view === "branding") return renderPlatformBranding(state);
