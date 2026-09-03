@@ -37,6 +37,7 @@ const APPROVAL_ID = `apr_${"a".repeat(32)}`;
 const DECISION_ID = `apd_${"b".repeat(32)}`;
 const TENANT_ID = "tenant_approval_a";
 const FULL_PERMISSIONS = [
+  PERMISSIONS.WORKSPACE_CONSOLE_APPROVAL_READ,
   PERMISSIONS.APPROVAL_READ,
   PERMISSIONS.APPROVAL_DECIDE,
   PERMISSIONS.BILLING_BUDGET_READ,
@@ -801,7 +802,7 @@ test("Console shell renders approvals only from the exact backend navigation own
     approvalsState: state.snapshot(),
   });
   assert.match(container.innerHTML, /approvals-panel/);
-  assert.match(container.innerHTML, /data-approvals-root/);
+  assert.match(container.innerHTML, /data-console-experience-approval-filter/);
 
   const denied = authContext({ permissions: [PERMISSIONS.SESSION_RISK_READ] });
   const deniedContainer = { innerHTML: "" };
@@ -810,7 +811,7 @@ test("Console shell renders approvals only from the exact backend navigation own
     consoleShellState: shellState(denied),
     approvalsState: state.snapshot(),
   });
-  assert.doesNotMatch(deniedContainer.innerHTML, /data-approvals-root/);
+  assert.doesNotMatch(deniedContainer.innerHTML, /data-console-experience-approval-filter/);
 });
 
 test("main lifecycle and CSS freeze cleanup, detail refresh and 1280/390 layouts", async () => {

@@ -272,6 +272,12 @@ import {
   isApprovalAbortError,
 } from "../features/approvals/approvalPageState.js";
 import { renderApprovals } from "../features/approvals/renderApprovals.js";
+import { createWorkspaceConsoleExperienceController } from "../features/workspace-console-experience/workspaceConsoleExperienceController.js";
+import {
+  bindWorkspaceConsoleExperience,
+  hydrateWorkspaceConsoleAssistant,
+  renderWorkspaceConsoleExperience,
+} from "../features/workspace-console-experience/renderWorkspaceConsoleExperience.js";
 import { bindWebhookDeadLetterInteractions } from "../features/webhook-dead-letters/bindWebhookDeadLetters.js";
 import {
   createWebhookDeadLetterPageState,
@@ -638,6 +644,12 @@ import {
   listApprovals,
   stepUpApproval,
 } from "../lib/approvals.js";
+import {
+  getWorkspaceConsoleOverview,
+  getWorkspaceDeploymentSummary,
+  listWorkspaceConsoleApprovals,
+  queryWorkspaceConsoleAssistant,
+} from "../lib/workspaceConsoleExperience.js";
 import {
   createRoutingPolicyRequestId,
   createCacheAffinityRequestId,
@@ -1016,9 +1028,6 @@ let tenantDataDeletionTrigger = null;
 let activeConsoleNavigationCount = 0;
 // 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
 let nextRefreshIsBackground = false;
-// 导航点击使用一次性快速路径；先投影当前入口，再由后台 refresh 补齐非当前页面数据。
-let nextRefreshIsFastNavigation = false;
-const FAST_NAVIGATION_COMPLETE_IDS = new Set(["overview", "admin-assistant"]);
 let usageFilters = { limit: 20, offset: 0 };
 let usageActionError = null;
 // CSV 导出状态只驻留当前认证会话内存；controller 和 generation 防止离页后的旧轮询覆盖新会话页面。
@@ -1121,6 +1130,28 @@ const approvalPageState = createApprovalPageState({
   },
   createIdempotencyKey: createApprovalIdempotencyKey,
 });
+let workspaceConsoleExperienceShellState = null;
+const workspaceConsoleExperienceController = createWorkspaceConsoleExperienceController({
+  api: {
+    consoleOverview: (input) => getWorkspaceConsoleOverview({ controlApiUrl, ...input }),
+    consoleAssistant: (input) => queryWorkspaceConsoleAssistant({ controlApiUrl, ...input }),
+    consoleApprovals: (input) => listWorkspaceConsoleApprovals({ controlApiUrl, ...input }),
+    deploymentSummary: (input) => getWorkspaceDeploymentSummary({ controlApiUrl, ...input }),
+  },
+  onChange(snapshot) {
+    if (snapshot.status !== "draft") renderCurrentWorkspaceConsoleExperience();
+  },
+  onSessionInvalid(error) {
+    clearAuthSession();
+    authSession = { token: null, context: null };
+    renderLogin(authErrorMessage(error), error?.requestId);
+  },
+  onPermissionRevoked() {
+    globalThis.queueMicrotask?.(() => {
+      if (authSession.token) void refresh();
+    });
+  },
+});
 let budgetActionError = null;
 let budgetFeedback = "";
 // 预算规则快照只属于当前认证会话，用于选择 create-only POST 或兼容 PATCH，不能跨租户复用。
@@ -1220,6 +1251,8 @@ if (app && globalThis.window) {
       // PAGE-107 的问题、回答和来源属于旧 hash owner；即使新 hash 仍规范化为同一页面，
       // 也必须先推进 generation 并同步擦除正文，再允许通用导航监听器发起后端复核。
       adminAssistantPageState.leave();
+      workspaceConsoleExperienceShellState = null;
+      workspaceConsoleExperienceController.leave();
       // PAGE-088 额外监听同一 hash 边界，同步淘汰旧状态回调；通用监听仍负责重读后端导航。
       providerStatusPageState.clear();
       const nextItemId = readActiveNavigationHash();
@@ -1350,6 +1383,8 @@ if (app && globalThis.window) {
       billingDisputePageState.clear();
       adminAssistantPageState.leave();
       approvalPageState.clear();
+      workspaceConsoleExperienceShellState = null;
+      workspaceConsoleExperienceController.leave();
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -1604,8 +1639,6 @@ async function performRefresh(options = {}) {
   providersLoadController = null;
   const isBackgroundRefresh = nextRefreshIsBackground;
   nextRefreshIsBackground = false;
-  const isFastNavigation = nextRefreshIsFastNavigation;
-  nextRefreshIsFastNavigation = false;
   // Token 与刷新序号共同构成本轮 owner；只冻结公开的会话句柄，不复制用户上下文或任何业务敏感数据。
   const refreshToken = authSession.token;
   // 刷新入口仍以有效登录态为第一边界，序号不能替代认证校验。
@@ -1702,67 +1735,7 @@ async function performRefresh(options = {}) {
     workspaceCommercialAccountingController.close();
   }
   consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
-  if (isFastNavigation) {
-    // 此处已经完成 auth/me、导航可见性、RBAC 指纹和当前 Session 校验。
-    // 目标页先使用后端授权导航和安全空态投影，避免等待无关页面的整套请求。
-    if (consoleShellState.activeNavigationItemId === "overview") {
-      fastRoleDashboardState = await loadRoleDashboardState(consoleShellState, roleDashboardEntrySource);
-    }
-    if (!refreshOwnerCurrent() || !authSession.token) {
-      return;
-    }
-    const fastAdminAssistantState = consoleShellState.activeNavigationItemId === "admin-assistant"
-      ? loadAdminAssistantState(consoleShellState, refreshId)
-      : null;
-    renderDeveloperStart(app, {
-      gatewayUrl,
-      controlApiUrl,
-      consoleUrl,
-      authContext: authSession.context,
-      consoleShellState,
-      i18n: currentI18n,
-      branding: publicBrandingDisplay(),
-      roleDashboardState: fastRoleDashboardState,
-      adminAssistantState: fastAdminAssistantState,
-    });
-    bindOutputSafetyDetailInteractions(consoleShellState);
-    bindAuthenticatedEvents(consoleShellState);
-    // Continue in the same owner-bound refresh. The active-page dispatcher below
-    // loads only this navigation item instead of starting a second full refresh.
-  }
-  // overview 首屏只依赖后端导航和角色首页聚合；先完成这两个关键请求即可显示可用控制台。
-  // 结果会在后续完整刷新中复用，避免重复 GET 或让后续 loader 取消首屏请求。
-  if (!isBackgroundRefresh && !fastRoleDashboardState && consoleShellState.activeNavigationItemId === "overview") {
-    fastRoleDashboardState = await loadRoleDashboardState(consoleShellState, roleDashboardEntrySource);
-    if (
-      fastRoleDashboardState
-      && refreshId === refreshSequence
-      && refreshOwnerCurrent()
-      && authSession.token
-    ) {
-      renderDeveloperStart(app, {
-        gatewayUrl,
-        controlApiUrl,
-        consoleUrl,
-        authContext: authSession.context,
-        consoleShellState,
-        i18n: currentI18n,
-        roleDashboardState: fastRoleDashboardState,
-      });
-      bindAuthenticatedEvents(consoleShellState);
-    }
-  }
   if (!authSession.token || !refreshOwnerCurrent()) {
-    return;
-  }
-  if (
-    isBackgroundRefresh
-    && !adminAssistantIdentityChanged
-    && consoleShellState?.activeNavigationItemId === "admin-assistant"
-    && adminAssistantPageState.enter(currentAdminAssistantOwner(consoleShellState))
-  ) {
-    // PAGE-107 不预取任何业务事实，空闲态和有正文态的后台刷新都只需重验 auth/navigation。
-    // 身份未漂移且完整 owner 仍成立时立即结束；权限、revision 或 fingerprint 变化继续全页失败关闭重绘。
     return;
   }
   if (consoleShellState?.activeNavigationItemId !== "enterprise-chat") {
@@ -1982,6 +1955,7 @@ async function performRefresh(options = {}) {
     adminAssistantPageState.leave();
   } else if (
     isBackgroundRefresh
+    && !workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId)
     && adminAssistantPageState.blocksShellDomReplacement()
     && adminAssistantPageState.enter(currentAdminAssistantOwner(consoleShellState))
   ) {
@@ -1992,6 +1966,7 @@ async function performRefresh(options = {}) {
     approvalPageState.clear();
   } else if (
     isBackgroundRefresh
+    && !workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId)
     && approvalPageState.blocksShellDomReplacement()
     && approvalPageState.enter(currentApprovalOwner(consoleShellState))
   ) {
@@ -2508,6 +2483,11 @@ async function loadAndRenderActiveNavigation({
   preserveConsoleSidebar = false,
 }) {
   const activeNavigationId = consoleShellState.activeNavigationItemId;
+  const consoleExperienceView = workspaceConsoleExperienceView(activeNavigationId);
+  if (!consoleExperienceView) {
+    workspaceConsoleExperienceShellState = null;
+    workspaceConsoleExperienceController.leave();
+  }
   const state = {};
   const metadataIdentity = roleDashboardIdentitySnapshot(authSession.context);
   const shellMetadataPromise = metadataIdentity && metadataIdentity !== shellMetadataIdentity
@@ -2520,12 +2500,10 @@ async function loadAndRenderActiveNavigation({
 
   switch (activeNavigationId) {
     case "overview":
-      [state.roleDashboardState, state.onboardingState] = await Promise.all([
-        fastRoleDashboardState
-          ? Promise.resolve(fastRoleDashboardState)
-          : loadRoleDashboardState(consoleShellState, roleDashboardEntrySource),
-        loadTenantOnboardingState(),
-      ]);
+      state.workspaceConsoleExperienceState = await loadWorkspaceConsoleExperienceState(
+        consoleShellState,
+        "overview",
+      );
       break;
     case "tenant":
       await load("tenantState", loadTenantState);
@@ -2747,7 +2725,7 @@ async function loadAndRenderActiveNavigation({
       await load("rolePermissionState", () => loadRolePermissionState(consoleShellState, refreshId));
       break;
     case "language-settings":
-      if (!shellMetadataPromise) state.userPreferencesState = await loadUserPreferencesState();
+      state.accountPreferenceLocation = "/identity.html#account-preferences";
       break;
     case "quickstart":
       await load("quickstartState", () => loadQuickstartState(consoleShellState));
@@ -2794,19 +2772,28 @@ async function loadAndRenderActiveNavigation({
       await load("promptTemplateState", () => loadPromptTemplateState(consoleShellState, refreshId));
       break;
     case "approvals":
-      await load("approvalsState", () => loadApprovalsState(consoleShellState, refreshId));
+      state.workspaceConsoleExperienceState = await loadWorkspaceConsoleExperienceState(
+        consoleShellState,
+        "approvals",
+      );
       break;
     case "admin-assistant":
-      state.adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
+      state.workspaceConsoleExperienceState = await loadWorkspaceConsoleExperienceState(
+        consoleShellState,
+        "admin-assistant",
+      );
       break;
     case "system-status":
-      [state.statuses, state.systemHealth] = await Promise.all([
-        getServiceStatuses({ gatewayUrl, controlApiUrl, consoleUrl }),
-        getSystemHealth({ gatewayUrl, controlApiUrl }),
-      ]);
+      state.workspaceConsoleExperienceState = await loadWorkspaceConsoleExperienceState(
+        consoleShellState,
+        "system-status",
+      );
       break;
     case "config-summary":
-      state.configSummary = await getConfigSummary({ controlApiUrl });
+      state.workspaceConsoleExperienceState = await loadWorkspaceConsoleExperienceState(
+        consoleShellState,
+        "deployment-summary",
+      );
       break;
     default:
       // Static pages (API docs, comparison, and debug console) require no data API.
@@ -2847,6 +2834,8 @@ async function loadAndRenderActiveNavigation({
     policyDryRunState,
     enterpriseChatState: enterpriseChatPageState.snapshot(),
     adminAssistantState: adminAssistantPageState.snapshot(),
+    workspaceConsoleExperienceState:
+      state.workspaceConsoleExperienceState ?? workspaceConsoleExperienceController.snapshot(),
     invitationState: invitationPageState.snapshot(),
     preserveConsoleSidebar,
     ...state,
@@ -2855,7 +2844,7 @@ async function loadAndRenderActiveNavigation({
     hydrateEnterpriseChatText(app, enterpriseChatPageState.snapshot());
   }
   if (activeNavigationId === "admin-assistant") {
-    hydrateAdminAssistantText(app, adminAssistantPageState.snapshot());
+    hydrateWorkspaceConsoleAssistant(app, workspaceConsoleExperienceController.snapshot());
   }
   if (activeNavigationId === "billing-disputes") {
     hydrateBillingDisputePrivateText(
@@ -2881,6 +2870,8 @@ async function loadAndRenderActiveNavigation({
 function renderLogin(error, requestId) {
   // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
   loginGeneration += 1;
+  workspaceConsoleExperienceShellState = null;
+  workspaceConsoleExperienceController.leave();
   clearDeveloperContractDownload();
   clearDeveloperContractSecurityLoad();
   developerContractDownloadMetadata = new Map();
@@ -3261,6 +3252,8 @@ function bindAuthenticatedEvents(consoleShellState) {
   logoutButton?.addEventListener("click", async () => {
     // 注销是强认证边界：冻结推进后的 owner，既淘汰旧刷新，也约束迟到注销响应不能覆盖后续新会话。
     const logoutGeneration = ++refreshSequence;
+    workspaceConsoleExperienceShellState = null;
+    workspaceConsoleExperienceController.leave();
     providersLoadController?.abort();
     providersLoadController = null;
     consoleSidebarController?.abort();
@@ -5622,8 +5615,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindPlanManagementPageInteractions(consoleShellState);
   bindQuotaManagementPageInteractions(consoleShellState);
   bindBillingDisputePageInteractions(consoleShellState);
-  bindAdminAssistantPageInteractions(consoleShellState);
-  bindApprovalPageInteractions(consoleShellState);
+  bindWorkspaceConsoleExperiencePageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
   bindDebugConsoleEvents();
@@ -10371,6 +10363,69 @@ function isBillingDisputePermissionRevocation(error) {
 }
 
 /** 构造 PAGE-107 实时 owner；hash 只能限制当前页面，不能替代后端 active navigation 合同。 */
+function workspaceConsoleExperienceView(navigationId) {
+  return ({
+    overview: "overview",
+    "admin-assistant": "admin-assistant",
+    approvals: "approvals",
+    "system-status": "system-status",
+    "config-summary": "deployment-summary",
+  })[navigationId] ?? "";
+}
+
+async function loadWorkspaceConsoleExperienceState(consoleShellState, view) {
+  workspaceConsoleExperienceShellState = consoleShellState;
+  if (!workspaceConsoleExperienceController.enter(authSession.context, consoleShellState, view)) {
+    return null;
+  }
+  if (view !== "admin-assistant") await workspaceConsoleExperienceController.load();
+  return workspaceConsoleExperienceController.snapshot();
+}
+
+function renderCurrentWorkspaceConsoleExperience() {
+  const consoleShellState = workspaceConsoleExperienceShellState;
+  const view = workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId);
+  const panel = globalThis.document?.querySelector?.(".workspace-console-experience-panel");
+  if (!panel || !view || !authSession.token) return false;
+  const state = workspaceConsoleExperienceController.snapshot();
+  panel.innerHTML = renderWorkspaceConsoleExperience(state, view);
+  hydrateWorkspaceConsoleAssistant(panel, state);
+  bindWorkspaceConsoleExperiencePageInteractions(consoleShellState, panel);
+  return true;
+}
+
+function bindWorkspaceConsoleExperiencePageInteractions(
+  consoleShellState,
+  root = globalThis.document,
+) {
+  const view = workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId);
+  if (!view) return false;
+  workspaceConsoleExperienceShellState = consoleShellState;
+  return bindWorkspaceConsoleExperience(root, {
+    onAssistantDraft(value) {
+      return workspaceConsoleExperienceController.setAssistantDraft(value);
+    },
+    onAssistantSubmit() {
+      return workspaceConsoleExperienceController.submitAssistant();
+    },
+    onAssistantClear() {
+      return workspaceConsoleExperienceController.clearAssistant();
+    },
+    onApprovalFilter(filters) {
+      return workspaceConsoleExperienceController.configureApprovals(filters);
+    },
+    onApprovalPrevious() {
+      return workspaceConsoleExperienceController.previousApprovals();
+    },
+    onApprovalNext() {
+      return workspaceConsoleExperienceController.nextApprovals();
+    },
+    onRefresh() {
+      return workspaceConsoleExperienceController.load();
+    },
+  });
+}
+
 function currentAdminAssistantOwner(consoleShellState) {
   const owner = adminAssistantPageOwner(authSession.context, consoleShellState);
   const hashNavigation = readActiveNavigationHash();
@@ -12721,6 +12776,8 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (!itemId) {
     return;
   }
+  workspaceConsoleExperienceShellState = null;
+  workspaceConsoleExperienceController.leave();
   cancelPendingConsoleNavigationSideEffects();
   // 导航 owner 在任何 await 前冻结；后续点击、全页刷新或换 Session 任一发生都会使它失效。
   // Token 只在闭包内做等值判断，绝不能进入 DOM、遥测、日志或错误消息。

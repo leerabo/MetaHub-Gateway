@@ -303,6 +303,30 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Use the exact bounded identity request contract.",
         owner="identity",
     ),
+    "identity.revision_required": ErrorSpec(
+        428,
+        "Account preference revision is required.",
+        "Send the current quoted ETag in If-Match.",
+        owner="identity",
+    ),
+    "identity.revision_conflict": ErrorSpec(
+        412,
+        "Account preference revision is stale.",
+        "Reload account preferences and retry.",
+        owner="identity",
+    ),
+    "identity.idempotency_invalid": ErrorSpec(
+        422,
+        "Account preference idempotency key is invalid.",
+        "Send one unique Idempotency-Key between 16 and 128 characters.",
+        owner="identity",
+    ),
+    "identity.idempotency_conflict": ErrorSpec(
+        409,
+        "Account preference request conflicts with an earlier command.",
+        "Use the original body or a new Idempotency-Key.",
+        owner="identity",
+    ),
     "identity.session_required": ErrorSpec(
         401,
         "Global account session is required.",
@@ -809,6 +833,12 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Workspace session is required.",
         "Choose a Workspace from the account page.",
         owner="workspace",
+    ),
+    "workspace_session.request_invalid": ErrorSpec(
+        422,
+        "Workspace console request is invalid.",
+        "Use the exact bounded Workspace console request contract.",
+        owner="identity",
     ),
     "workspace_session.invalid": ErrorSpec(
         401,

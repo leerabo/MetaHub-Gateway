@@ -15,6 +15,7 @@ function dashboardContext({ role = "admin", canOpenLogs = true, baseContext = {}
     { ...baseContext, user: { ...(baseContext.user ?? {}), role } },
     [
       PERMISSIONS.DASHBOARD_READ,
+      PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ,
       ...(canOpenLogs ? [PERMISSIONS.REQUEST_LOG_READ] : []),
     ],
   );
@@ -278,10 +279,9 @@ test("developer start overview renders PAGE-092 role dashboard state", () => {
     roleDashboardState: roleOverviewPayload,
   });
 
-  assert.match(container.innerHTML, /dashboard-overview-shell/);
-  assert.match(container.innerHTML, /角色首页/);
-  assert.match(container.innerHTML, /data-role-dashboard-card="cost"/);
-  assert.doesNotMatch(container.innerHTML, /Top 模型|req_prd026_failed/);
+  assert.match(container.innerHTML, /workspace-console-experience-panel/);
+  assert.match(container.innerHTML, /workspace-console-overview-title/);
+  assert.doesNotMatch(container.innerHTML, /dashboard-overview-shell|角色首页|data-role-dashboard-card|Top 模型|req_prd026_failed/);
 });
 
 test("dashboard styles keep nested facts inside the 900px sidebar layout", async () => {

@@ -7,6 +7,7 @@ import { renderPlatformCustomerSuccess } from "../platform-customer-success/rend
 import { renderPlatformGrowth } from "../platform-growth/renderPlatformGrowth.js";
 import { renderPlatformProviderEngineering } from "../platform-provider-engineering/renderPlatformProviderEngineering.js";
 import { renderPlatformCommercialAccounting } from "../platform-commercial-accounting/renderPlatformCommercialAccounting.js";
+import { renderPlatformConsoleExperience } from "../platform-console-experience/renderPlatformConsoleExperience.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -86,7 +87,9 @@ export function renderPlatformWorkspace(container, state) {
 }
 
 function renderView(state, permissions) {
-  if (state.view === "overview") return overviewView(state);
+  if (new Set(["overview", "admin-assistant", "approvals"]).has(state.view)) {
+    return renderPlatformConsoleExperience(state.consoleExperience, state.view);
+  }
   if (state.view === "infrastructure") return infrastructureView(state, permissions);
   if (state.view === "gateway") return gatewayView(state, permissions);
   if (state.view === "edge-fleet") return edgeFleetView(state, permissions);

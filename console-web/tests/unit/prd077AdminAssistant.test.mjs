@@ -29,6 +29,7 @@ import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs
 const TENANT_ID = "tenant_assistant_a";
 const PAGE_PERMISSION = PERMISSIONS.ADMIN_ASSISTANT_QUERY;
 const ALL_PERMISSIONS = [
+  PERMISSIONS.WORKSPACE_CONSOLE_ASSISTANT_QUERY,
   PAGE_PERMISSION,
   PERMISSIONS.DASHBOARD_READ,
   PERMISSIONS.BILLING_USAGE_READ,
@@ -601,7 +602,7 @@ test("existing Console shell renders PAGE-107 only from authorized backend navig
     adminAssistantState: state.snapshot(),
   });
   assert.match(container.innerHTML, /admin-assistant-panel/);
-  assert.match(container.innerHTML, /data-admin-assistant-root/);
+  assert.match(container.innerHTML, /data-console-experience-assistant-form/);
   assert.doesNotMatch(container.innerHTML, /shell-private-question-canary/);
 });
 
@@ -632,8 +633,8 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
   assert.ok(shellOwnerGuardIndex > shellLoadIndex);
   assert.ok(firstShellMutationIndex > shellOwnerGuardIndex);
   assert.match(
-    main.slice(shellOwnerGuardIndex, firstShellMutationIndex),
-    /!adminAssistantIdentityChanged[\s\S]*activeNavigationItemId === "admin-assistant"[\s\S]*adminAssistantPageState\.enter/,
+    main,
+    /!workspaceConsoleExperienceView\(consoleShellState\?\.activeNavigationItemId\)[\s\S]*adminAssistantPageState\.blocksShellDomReplacement/,
   );
   const assistantLifecycleIndex = main.indexOf(
     'if (consoleShellState?.activeNavigationItemId !== "admin-assistant")',
@@ -650,10 +651,10 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
     main,
     /activeConsoleNavigationCount \+= 1;[\s\S]*?try \{[\s\S]*?finally \{\s*activeConsoleNavigationCount -= 1;/,
   );
-  assert.match(main, /case "admin-assistant":[\s\S]*loadAdminAssistantState\(consoleShellState, refreshId\)/);
-  assert.match(main, /function loadAdminAssistantState[\s\S]*adminAssistantPageState\.snapshot/);
-  assert.match(main, /function submitAdminAssistantQuery[\s\S]*queryAdminAssistant\(/);
-  assert.equal((main.match(/queryAdminAssistant\(/g) ?? []).length, 1);
+  assert.match(main, /case "admin-assistant":[\s\S]*loadWorkspaceConsoleExperienceState\([\s\S]*"admin-assistant"/);
+  assert.match(main, /function loadWorkspaceConsoleExperienceState[\s\S]*workspaceConsoleExperienceController\.enter/);
+  assert.match(main, /onAssistantSubmit\(\)[\s\S]*workspaceConsoleExperienceController\.submitAssistant\(\)/);
+  assert.equal((main.match(/queryWorkspaceConsoleAssistant\(/g) ?? []).length, 1);
 
   const implementation = `${client}\n${pageState}\n${renderer}\n${binder}`;
   assert.doesNotMatch(implementation, /localStorage|sessionStorage|indexedDB|caches\.open|console\.(?:log|error|warn)|location\.(?:hash|href)/);

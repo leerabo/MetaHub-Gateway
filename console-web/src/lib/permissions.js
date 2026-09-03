@@ -71,6 +71,11 @@ export const PERMISSIONS = Object.freeze({
   // PAGE-108/109 的读取与决策独立；每条任务还必须与预算或会话风险目标域权限求交。
   APPROVAL_READ: "approval.read",
   APPROVAL_DECIDE: "approval.decide",
+  WORKSPACE_CONSOLE_OVERVIEW_READ: "workspace.console.overview.read",
+  WORKSPACE_CONSOLE_ASSISTANT_QUERY: "workspace.console.assistant.query",
+  WORKSPACE_CONSOLE_APPROVAL_READ: "workspace.console.approval.read",
+  WORKSPACE_DEPLOYMENT_DIAGNOSTIC_READ: "workspace.deployment_diagnostic.read",
+  WORKSPACE_DEPLOYMENT_DIAGNOSTIC_AUDIT_READ: "workspace.deployment_diagnostic.audit_read",
   REQUEST_LOG_READ: "request_log.read",
   REQUEST_EXPLANATION_READ: "request_explanation.read",
   FEEDBACK_USE: "feedback.use",

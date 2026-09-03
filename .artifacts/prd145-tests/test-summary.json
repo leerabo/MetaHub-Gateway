@@ -1,0 +1,50 @@
+{
+  "status": "passed_focused",
+  "prd_id": "PRD-145",
+  "scope": "platform_workspace_console_experience",
+  "g7_status": "deferred_until_prd_147_batch_completion",
+  "test_groups": [
+    {
+      "name": "control_api_and_state_machines",
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "name": "migration_roundtrip_and_fact_loss_guard",
+      "passed": 2,
+      "failed": 0
+    },
+    {
+      "name": "console_affected_regression_including_prd145",
+      "passed": 57,
+      "failed": 0
+    }
+  ],
+  "focused_test_total": 65,
+  "lint": {
+    "status": "passed",
+    "console_file_count": 472,
+    "python_ruff": "passed"
+  },
+  "sensitive_audit": {
+    "high_confidence_secret_patterns": "no_matches",
+    "authorization_or_bearer_in_new_clients": "no_matches",
+    "browser_persistence_in_new_modules": "no_matches",
+    "real_credentials_or_provider_endpoints_persisted": false
+  },
+  "roadmap": {
+    "authoritative_path": "C:/MetaHub/企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx",
+    "authoritative_sha256": "57059d9e2ce89848eb9534698c9a2c5d6b72ffb6c5a7a145c5cf3355036e4a87",
+    "output_path": "C:/MetaHub/outputs/prd145-roadmap-closeout/企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx",
+    "output_sha256": "3b7b8f1ad259bbea4510144cb315d3ac13a7b144ac1040f7d6b740fce5257e68",
+    "status": "verified",
+    "sheet_count": 12,
+    "sheet_render_count": 12,
+    "focus_render_count": 1,
+    "formula_errors": 0,
+    "prd_145_status": "已完成",
+    "automated_render_checks": "passed_nonblank_dimensions_color_sampling_and_style_consistency",
+    "manual_visual_review": "not_claimed_local_view_tools_timed_out",
+    "next_prd": "PRD-146"
+  }
+}

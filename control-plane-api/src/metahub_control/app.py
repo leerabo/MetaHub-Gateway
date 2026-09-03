@@ -41,6 +41,8 @@ from .config.routes import router as config_router
 from .config_distribution import router as config_distribution_router
 from .config_transfer.routes import router as config_transfer_router
 from .console.routes import router as console_router
+from .console_experience import install_console_experience_scheduler
+from .console_experience import router as console_experience_router
 from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
 from .customer_support.routes import router as customer_support_router
@@ -318,6 +320,7 @@ app.include_router(migration_operations_router)
 app.include_router(customer_support_router)
 app.include_router(business_verification_router)
 app.include_router(commercial_accounting_router)
+app.include_router(console_experience_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
@@ -427,6 +430,7 @@ if app.state.config.control_background_schedulers_enabled:
             install_platform_growth_scheduler,
             install_approval_scheduler,
             install_commercial_accounting_scheduler,
+            install_console_experience_scheduler,
             install_notification_scheduler,
             install_observability_scheduler,
             install_risk_scheduler,

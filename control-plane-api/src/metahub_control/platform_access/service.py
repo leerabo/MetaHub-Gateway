@@ -95,6 +95,24 @@ _ROLE_CODES = frozenset(
 )
 _NAVIGATION = (
     (
+        "platform.console.overview.read",
+        "overview",
+        "Overview",
+        "/platform.html#overview",
+    ),
+    (
+        "platform.console.assistant.query",
+        "admin-assistant",
+        "Operations assistant",
+        "/platform.html#admin-assistant",
+    ),
+    (
+        "platform.console.approval.read",
+        "approvals",
+        "Approvals",
+        "/platform.html#approvals",
+    ),
+    (
         "platform.infrastructure.read",
         "infrastructure",
         "Infrastructure",
@@ -275,6 +293,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_brand_role_permissions",
     "platform_provider_engineering_role_permissions",
     "platform_commercial_role_permissions",
+    "platform_console_role_permissions",
 )
 
 

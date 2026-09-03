@@ -33,8 +33,7 @@ import {
   renderQuotaManagement,
 } from "../plan-billing/renderPlanBilling.js";
 import { renderBillingDisputes } from "../billing-disputes/renderBillingDisputes.js";
-import { renderAdminAssistant } from "../admin-assistant/renderAdminAssistant.js";
-import { renderApprovals } from "../approvals/renderApprovals.js";
+import { renderWorkspaceConsoleExperience } from "../workspace-console-experience/renderWorkspaceConsoleExperience.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
 import { renderRoutingPolicyPanel } from "../routing-policies/renderRoutingPolicyPanel.js";
@@ -48,7 +47,6 @@ import { renderPolicyTemplates as renderPolicyTemplateLibrary } from "../policy-
 import { renderProviderPanel } from "../providers/renderProviderPanel.js";
 import { renderProviderStatusPanel } from "../provider-health/renderProviderStatusPanel.js";
 import { renderProjectApplicationPanel } from "../projects/renderProjectApplicationPanel.js";
-import { renderLanguageSettingsPanel } from "../language-settings/renderLanguageSettingsPanel.js";
 import { renderRequestLogPanel } from "../request-logs/renderRequestLogPanel.js";
 import { renderOutputSafety } from "../output-safety/renderOutputSafety.js";
 import { renderRequestExplanationPanel } from "../request-explanations/renderRequestExplanation.js";
@@ -323,14 +321,14 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "admin-assistant":
       // PAGE-107 只投影完整 query owner；来源链接还会与最新导航及各源域原始权限再次求交。
       return renderAdminAssistantSection(
-        options.adminAssistantState,
+        options.workspaceConsoleExperienceState,
         options.authContext,
         options.consoleShellState,
       );
     case "approvals":
       // PAGE-108/109 只投影后端 approval.read 导航 owner；行与动作仍分别叠加目标域实时权限。
       return renderApprovalsSection(
-        options.approvalsState,
+        options.workspaceConsoleExperienceState,
         options.authContext,
         options.consoleShellState,
       );
@@ -603,9 +601,17 @@ function renderActiveContent(activeItemId, options, statuses) {
       // PAGE-094 只消费当前授权 owner 的模板投影；读写权限、tenant 和 CAS 均由后端逐请求执行。
       return renderPromptTemplatesContent(options);
     case "system-status":
-      return `<section class="panel system-status-panel" aria-labelledby="system-status-title">${renderSystemStatusPanel(options.systemHealth)}</section>`;
+      return renderWorkspaceConsoleExperienceSection(
+        options.workspaceConsoleExperienceState,
+        "system-status",
+        options.authContext,
+      );
     case "config-summary":
-      return `<section class="panel config-panel" aria-labelledby="config-title">${renderConfigSummary(options.configSummary)}</section>`;
+      return renderWorkspaceConsoleExperienceSection(
+        options.workspaceConsoleExperienceState,
+        "deployment-summary",
+        options.authContext,
+      );
     case "overview":
     default:
       return renderOverviewContent(options, statuses);
@@ -617,13 +623,11 @@ function renderActiveContent(activeItemId, options, statuses) {
  * 后端 role-view 响应同时给出视图目录与六类聚合卡片，旧 overview 和 Provider Health 预取不能在这里回退绕权。
  */
 function renderOverviewContent(options) {
+  if (!hasPermission(options.authContext, PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ)) return "";
   return `
-    <div class="dashboard-overview-shell">
-      ${hasPermission(options.authContext, PERMISSIONS.USER_MANAGE) ? renderAdminOnboarding(options.onboardingState) : ""}
-      <section class="panel" aria-labelledby="role-dashboard-title">
-        ${renderRoleDashboardPanel(options.roleDashboardState, options.authContext, options.consoleShellState)}
-      </section>
-    </div>
+    <section class="panel workspace-console-experience-panel" aria-labelledby="workspace-console-overview-title">
+      ${renderWorkspaceConsoleExperience(options.workspaceConsoleExperienceState, "overview")}
+    </section>
   `;
 }
 
@@ -642,7 +646,11 @@ function renderQuickstartContent(options) {
 function renderLanguageSettingsContent(options) {
   return `
     <section class="panel language-settings-shell" aria-labelledby="language-settings-title">
-      ${renderLanguageSettingsPanel(options.userPreferencesState, options.i18n)}
+      <header class="console-experience-heading">
+        <div><p>${escapeHtml(options.i18n.t("language.account_scope"))}</p><h1 id="language-settings-title">${escapeHtml(options.i18n.t("language.migrated_title"))}</h1></div>
+      </header>
+      <p>${escapeHtml(options.i18n.t("language.migrated_description"))}</p>
+      <a class="primary-command" href="${escapeAttribute(options.accountPreferenceLocation ?? "/identity.html#account-preferences")}">${escapeHtml(options.i18n.t("language.open_account_settings"))}</a>
     </section>
   `;
 }
@@ -1062,10 +1070,11 @@ function renderBillingDisputesSection(state, authContext, consoleShellState, i18
 
 /** PAGE-107 失权时不保留空壳 DOM；前端可见性不能替代 POST 的实时 base/source 权限复核。 */
 function renderAdminAssistantSection(state, authContext, consoleShellState) {
-  const html = renderAdminAssistant(state, authContext, consoleShellState);
+  if (!hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_ASSISTANT_QUERY)) return "";
+  const html = renderWorkspaceConsoleExperience(state, "admin-assistant");
   return html
     ? `
-      <section class="panel admin-assistant-panel" aria-labelledby="admin-assistant-title">
+      <section class="panel admin-assistant-panel workspace-console-experience-panel" aria-labelledby="admin-assistant-title">
         ${html}
       </section>
     `
@@ -1074,14 +1083,28 @@ function renderAdminAssistantSection(state, authContext, consoleShellState) {
 
 /** PAGE-108/109 失权时不保留空壳 DOM；任务 ID 只是选择器，不是授权凭据。 */
 function renderApprovalsSection(state, authContext, consoleShellState) {
-  const html = renderApprovals(state, authContext, consoleShellState);
+  if (!hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_APPROVAL_READ)) return "";
+  const html = renderWorkspaceConsoleExperience(state, "approvals");
   return html
     ? `
-      <section class="panel approvals-panel" aria-labelledby="approvals-title">
+      <section class="panel approvals-panel workspace-console-experience-panel" aria-labelledby="approvals-title">
         ${html}
       </section>
     `
     : "";
+}
+
+function renderWorkspaceConsoleExperienceSection(state, view, authContext) {
+  const allowed = view === "system-status"
+    ? hasPermission(authContext, PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ)
+    : hasPermission(authContext, PERMISSIONS.WORKSPACE_DEPLOYMENT_DIAGNOSTIC_READ)
+      || hasPermission(authContext, PERMISSIONS.WORKSPACE_DEPLOYMENT_DIAGNOSTIC_AUDIT_READ);
+  if (!allowed) return "";
+  return `
+    <section class="panel workspace-console-experience-panel">
+      ${renderWorkspaceConsoleExperience(state, view)}
+    </section>
+  `;
 }
 
 /**

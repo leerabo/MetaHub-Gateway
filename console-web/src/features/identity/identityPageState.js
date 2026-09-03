@@ -14,6 +14,7 @@ import {
   renderIdentitySecurityPage,
   renderIdentityVerificationPage,
 } from "./renderIdentityPage.js";
+import { createAccountPreferenceController } from "../account-preferences/accountPreferenceController.js";
 
 const CONSENT_VERSION = "privacy-2026-08";
 
@@ -131,6 +132,22 @@ export function createIdentityPageController({
   let contextChannel = null;
   let autoSwitchAttempted = false;
   let destroyed = false;
+  const accountPreferenceEnabled = typeof api.preferences === "function"
+    && typeof api.updatePreferences === "function";
+
+  const accountPreferenceController = createAccountPreferenceController({
+    api: {
+      preferences: (input) => api.preferences(input),
+      updatePreferences: (input) => api.updatePreferences(input),
+    },
+    createIdempotencyKey: api.createAccountPreferenceIdempotencyKey ?? newIdempotencyKey,
+    onChange() {
+      if (account && currentSession && !destroyed) renderSecurity();
+    },
+    onSessionInvalid() {
+      clearToLogin();
+    },
+  });
 
   const controller = {
     async mount() {
@@ -2583,6 +2600,7 @@ export function createIdentityPageController({
       contextChannel?.close?.();
       contextChannel = null;
       scrubSensitiveInputs();
+      accountPreferenceController.leave();
       pendingChallenge = null;
       riskChallenge = null;
       riskChallengeIntent = null;
@@ -2750,8 +2768,11 @@ export function createIdentityPageController({
       account = me.account;
       currentSession = me.current_session;
       sessions = [currentSession];
-      await loadSessions(ticket, feedback, null);
-      return true;
+      const loaded = await loadSessions(ticket, feedback, null);
+      if (loaded && isCurrent(ticket) && enterAccountPreferences()) {
+        void accountPreferenceController.load();
+      }
+      return loaded;
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
@@ -4088,6 +4109,7 @@ export function createIdentityPageController({
       identitySecurity,
       identitySecurityBusy,
       identitySecurityError,
+      accountPreferenceState: accountPreferenceController.snapshot(),
       recoveryCodes,
       factorDisableIndex,
       platformAccess,
@@ -4099,6 +4121,7 @@ export function createIdentityPageController({
   function scrubProtectedState() {
     account = null;
     currentSession = null;
+    accountPreferenceController.leave();
     sessions = [];
     mfaEnrollment = null;
     mfaEnrollmentMethod = "totp";
@@ -4310,6 +4333,12 @@ export function createIdentityPageController({
           newPassword: fields.get("newPassword"),
           confirmPassword: fields.get("confirmPassword"),
         });
+      } else if (form?.matches?.("[data-account-preference-form]")) {
+        event.preventDefault();
+        const fields = new FormData(form);
+        if (enterAccountPreferences()) {
+          await accountPreferenceController.save(String(fields.get("locale") ?? ""));
+        }
       } else if (form?.matches?.("[data-identity-mfa-enrollment-form]")) {
         event.preventDefault();
         const fields = new FormData(form);
@@ -4819,6 +4848,13 @@ export function createIdentityPageController({
         filterWorkspaceOptions(event.target.value);
       }
     });
+  }
+
+  function enterAccountPreferences() {
+    if (!accountPreferenceEnabled) return false;
+    const accountId = String(account?.account_id ?? "");
+    const sessionId = String(currentSession?.session_id ?? "");
+    return accountPreferenceController.enter({ accountId, sessionId });
   }
 
   function filterWorkspaceOptions(value) {

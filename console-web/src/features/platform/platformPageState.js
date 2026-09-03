@@ -6,11 +6,19 @@ import { createPlatformCustomerSuccessController } from "../platform-customer-su
 import { createPlatformGrowthController } from "../platform-growth/platformGrowthController.js";
 import { createPlatformProviderEngineeringController } from "../platform-provider-engineering/platformProviderEngineeringController.js";
 import { createPlatformCommercialAccountingController } from "../platform-commercial-accounting/platformCommercialAccountingController.js";
+import { createPlatformConsoleExperienceController } from "../platform-console-experience/platformConsoleExperienceController.js";
+import {
+  bindPlatformConsoleExperience,
+  hydratePlatformConsoleAssistant,
+} from "../platform-console-experience/renderPlatformConsoleExperience.js";
 import { bindBrandEditorInteractions } from "../brand-domains/bindBrandEditor.js";
 import { createPlatformBrandingController } from "../brand-domains/platformBrandingController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
 
 const PLATFORM_NAVIGATION_IDS = new Set([
+  "overview",
+  "admin-assistant",
+  "approvals",
   "infrastructure",
   "gateway",
   "edge-fleet",
@@ -47,6 +55,11 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "customer-success",
   "growth",
   "notification-templates",
+]);
+const PLATFORM_CONSOLE_EXPERIENCE_VIEWS = new Set([
+  "overview",
+  "admin-assistant",
+  "approvals",
 ]);
 const WORKSPACE_READ_PERMISSIONS = new Set([
   "platform.workspace.directory.read",
@@ -102,6 +115,7 @@ export function createPlatformPageController({
     growth: null,
     providerEngineering: null,
     commercialAccounting: null,
+    consoleExperience: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -303,6 +317,33 @@ export function createPlatformPageController({
   });
   state.brandDomains = brandDomainsController.snapshot();
 
+  const consoleExperienceController = createPlatformConsoleExperienceController({
+    api,
+    onChange(snapshot) {
+      state.consoleExperience = snapshot;
+      if (
+        state.session
+        && PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)
+        && state.navigation.some((item) => item.id === state.view)
+        && snapshot.status !== "draft"
+      ) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)) {
+          void controller.refresh();
+        }
+      });
+    },
+  });
+  state.consoleExperience = consoleExperienceController.snapshot();
+
   const controller = {
     async mount() {
       bind();
@@ -382,8 +423,9 @@ export function createPlatformPageController({
         || state.edgeUpgradeIntent || state.edgeLicenseIntent
         || state.offlineBundleIntent || state.supportTicketIntent)) return false;
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
-      const nextView = allowed.has(view) ? view : "overview";
+      const nextView = allowed.has(view) ? view : state.navigation[0]?.id ?? "overview";
       if (new Set([
+        "overview", "admin-assistant", "approvals",
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "provider-engineering", "releases", "edge-fleet", "edge-upgrades",
@@ -471,9 +513,22 @@ export function createPlatformPageController({
         state.loading = false;
       }
       state.view = nextView;
+      if (!PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(nextView)) {
+        consoleExperienceController.leave();
+      }
       replacePlatformHash(nextView);
       state.pendingAction = null;
       render();
+      if (PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)) {
+        const entered = consoleExperienceController.enter(
+          state.session?.context,
+          state.navigation,
+          state.view,
+        );
+        if (entered && state.view !== "admin-assistant") {
+          void consoleExperienceController.load();
+        }
+      }
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
       if (state.view === "feature-rollouts" && !state.featureFlags) {
         void loadFeatureRollouts();
@@ -3021,6 +3076,7 @@ export function createPlatformPageController({
       request = null;
       scrubSensitive();
       brandDomainsController.clear();
+      consoleExperienceController.leave();
       clearPlatformSession();
       root.replaceChildren();
     },
@@ -3073,6 +3129,28 @@ export function createPlatformPageController({
         workspaceEvents: null,
       };
       const tasks = [];
+      const consoleOnly = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view);
+      if (consoleOnly) {
+        state.navigation = next.navigation;
+        if (!state.navigation.some((item) => item.id === state.view)) {
+          state.view = state.navigation[0]?.id ?? "overview";
+        }
+        const consoleActive = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)
+          && consoleExperienceController.enter(
+            state.session?.context,
+            state.navigation,
+            state.view,
+          );
+        if (!consoleActive) consoleExperienceController.leave();
+        state.loading = false;
+        state.error = null;
+        render();
+        if (consoleActive && state.view !== "admin-assistant") {
+          void consoleExperienceController.load();
+        }
+        return true;
+      }
+      consoleExperienceController.leave();
       const fleetOnly = new Set([
         "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups", "offline-bundles",
       ]).has(state.view);
@@ -3441,7 +3519,9 @@ export function createPlatformPageController({
         state.complianceControls = null;
         state.complianceWorkspaceId = "";
       }
-      if (!state.navigation.some((item) => item.id === state.view)) state.view = "overview";
+      if (!state.navigation.some((item) => item.id === state.view)) {
+        state.view = state.navigation[0]?.id ?? "overview";
+      }
       const customerSuccessActive = state.view === "customer-success"
         && state.navigation.some((item) => item.id === "customer-success")
         && customerSuccessController.enter(state.session?.context, state.navigation);
@@ -6305,6 +6385,32 @@ export function createPlatformPageController({
   }
   function render() {
     state.session ? renderPlatformWorkspace(root, state) : renderPlatformGate(root, state);
+    if (state.session && PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)) {
+      bindPlatformConsoleExperience(root, {
+        onAssistantDraft(value) {
+          return consoleExperienceController.setAssistantDraft(value);
+        },
+        onAssistantSubmit() {
+          return consoleExperienceController.submitAssistant();
+        },
+        onAssistantClear() {
+          return consoleExperienceController.clearAssistant();
+        },
+        onApprovalFilter(filters) {
+          return consoleExperienceController.configureApprovals(filters);
+        },
+        onApprovalPrevious() {
+          return consoleExperienceController.previousApprovals();
+        },
+        onApprovalNext() {
+          return consoleExperienceController.nextApprovals();
+        },
+        onRefresh() {
+          return consoleExperienceController.load();
+        },
+      });
+      hydratePlatformConsoleAssistant(root, state.consoleExperience);
+    }
     if (state.session && new Set(["branding", "channels"]).has(state.view)) {
       bindBrandEditorInteractions(root, {
         onCommand(input) {
@@ -6349,6 +6455,7 @@ export function createPlatformPageController({
     providerEngineeringController.leave();
     commercialAccountingController.leave();
     brandDomainsController.clear();
+    consoleExperienceController.leave();
     state.operators = null;
     state.plans = null;
     state.providerCatalog = null;
@@ -6537,7 +6644,7 @@ function normalizeNavigation(items) {
     seen.add(item.id);
     return true;
   });
-  return [{ id: "overview", label: "概览", href: "/platform.html#overview" }, ...authorized];
+  return authorized;
 }
 
 function normalizeWorkspaceFilters(input) {

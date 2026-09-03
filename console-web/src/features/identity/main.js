@@ -123,6 +123,11 @@ import {
 } from "../../lib/privacyCenter.js";
 import { listWorkspaceComplianceReports } from "../../lib/complianceCenter.js";
 import { getPublicBranding } from "../../lib/brandDomains.js";
+import {
+  createAccountPreferenceIdempotencyKey,
+  getAccountPreferences,
+  updateAccountPreferences,
+} from "../../lib/accountPreferences.js";
 import { createIdentityPageController } from "./identityPageState.js";
 import { setIdentityPublicBranding } from "./renderIdentityPage.js";
 
@@ -167,6 +172,9 @@ if (root) {
       stepUp: (input) => createIdentityStepUpGrant({ controlApiUrl, ...input }),
       me: (input) => getIdentityMe({ controlApiUrl, ...input }),
       platformAccess: (input) => getIdentityPlatformAccess({ controlApiUrl, ...input }),
+      preferences: (input) => getAccountPreferences({ controlApiUrl, ...input }),
+      updatePreferences: (input) => updateAccountPreferences({ controlApiUrl, ...input }),
+      createAccountPreferenceIdempotencyKey,
       sessions: (input) => listIdentitySessions({ controlApiUrl, ...input }),
       revoke: (input) => revokeIdentitySession({ controlApiUrl, ...input }),
       logout: (input) => logoutIdentity({ controlApiUrl, ...input }),

@@ -1,6 +1,7 @@
 // 账号安全渲染层只展示后端脱敏投影，企业认证表单可见性不构成服务端授权。
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
+import { renderAccountPreferences } from "../account-preferences/renderAccountPreferences.js";
 
 const DEFAULT_PUBLIC_BRAND = Object.freeze({
   product_name: "MetaHub",
@@ -234,6 +235,7 @@ export function renderIdentitySecurityPage(container, state) {
         </section>
         ${renderFeedback(state.feedback)}
         ${renderError(state.error)}
+        ${renderAccountPreferences(state.accountPreferenceState)}
         ${renderOnboardingSection(state)}
         ${renderSaasSubscriptionSection(state)}
         ${renderPaymentCommerceSection(state)}

@@ -33,7 +33,10 @@ function dashboardAuth(options = {}) {
       session_id: options.sessionId ?? "ses_dashboard_1",
       session_revision: options.sessionRevision ?? 1,
     },
-  }, options.permissions ?? [PERMISSIONS.DASHBOARD_READ], {
+  }, options.permissions ?? [
+    PERMISSIONS.DASHBOARD_READ,
+    PERMISSIONS.WORKSPACE_CONSOLE_OVERVIEW_READ,
+  ], {
     permissionRevision: options.permissionRevision ?? 11,
     authorizationFingerprint: options.fingerprint ?? "dashboard_fingerprint_11",
   });
@@ -434,9 +437,9 @@ test("developer shell uses PAGE-092 and does not render the legacy dashboard or 
     consoleShellState: dashboardShell(),
     roleDashboardState: { state: "ok", ...sanitized },
   });
-  assert.match(container.innerHTML, /data-role-dashboard-root/);
-  assert.match(container.innerHTML, /角色首页/);
-  assert.doesNotMatch(container.innerHTML, /总览 Dashboard|Top 模型|provider-health-dashboard/);
+  assert.match(container.innerHTML, /workspace-console-experience-panel/);
+  assert.match(container.innerHTML, /workspace-console-overview-title/);
+  assert.doesNotMatch(container.innerHTML, /data-role-dashboard-root|角色首页|总览 Dashboard|Top 模型|provider-health-dashboard/);
 });
 
 test("view event is claimed once per generation and a user switch opens a new claim", () => {

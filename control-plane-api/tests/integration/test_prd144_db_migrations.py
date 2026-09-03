@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from contextlib import closing
 from pathlib import Path
 
@@ -18,9 +19,20 @@ def _url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def _migration_subset(destination: Path) -> Path:
+    destination.mkdir(parents=True, exist_ok=False)
+    source_dir = Path(__file__).resolve().parents[3] / "infra" / "migrations"
+    for source in source_dir.glob("*.sql"):
+        version = source.name[:4]
+        if version.isdigit() and int(version) <= 136:
+            shutil.copy2(source, destination / source.name)
+    return destination
+
+
 def test_prd144_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd144-fresh.sqlite3")
-    result = apply_migrations(database_url)
+    migrations = _migration_subset(tmp_path / "migrations-0136")
+    result = apply_migrations(database_url, migrations_dir=migrations)
     assert result.applied[-1] == "0136"
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
@@ -74,7 +86,7 @@ def test_prd144_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert rollback_last_migration(
-        database_url, expected_version="0136"
+        database_url, expected_version="0136", migrations_dir=migrations
     ).rolled_back == "0136"
     with closing(connect_database(database_url)) as connection:
         routing_candidates_sql = connection.execute(
@@ -82,7 +94,7 @@ def test_prd144_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
             "WHERE type='table' AND name='routing_candidates'"
         ).fetchone()[0]
         assert "workspace_provider_cost_rate" not in routing_candidates_sql
-    assert apply_migrations(database_url).applied == ["0136"]
+    assert apply_migrations(database_url, migrations_dir=migrations).applied == ["0136"]
     with closing(connect_database(database_url)) as connection:
         routing_candidates_sql = connection.execute(
             "SELECT sql FROM sqlite_schema "
@@ -93,7 +105,8 @@ def test_prd144_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
 
 def test_prd144_down_refuses_target_domain_fact(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd144-guard.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0136"
+    migrations = _migration_subset(tmp_path / "migrations-0136")
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0136"
     with closing(connect_database(database_url)) as connection:
         connection.execute(
             """
@@ -116,4 +129,6 @@ def test_prd144_down_refuses_target_domain_fact(tmp_path: Path) -> None:
         )
         connection.commit()
     with pytest.raises(DbError):
-        rollback_last_migration(database_url, expected_version="0136")
+        rollback_last_migration(
+            database_url, expected_version="0136", migrations_dir=migrations
+        )

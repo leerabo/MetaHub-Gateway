@@ -218,6 +218,11 @@ import {
 } from "../../lib/platformCommercialAccounting.js";
 import { createPlatformPageController } from "./platformPageState.js";
 import {
+  getPlatformConsoleOverview,
+  listPlatformConsoleApprovals,
+  queryPlatformConsoleAssistant,
+} from "../../lib/platformConsoleExperience.js";
+import {
   getChannelBranding,
   getPlatformBranding,
   updateChannelBranding,
@@ -248,6 +253,9 @@ if (root) {
       session: (input) => getPlatformSession({ controlApiUrl, ...input }),
       openSession: (input) => openPlatformSession({ controlApiUrl, ...input }),
       navigation: (input) => getPlatformNavigation({ controlApiUrl, ...input }),
+      consoleOverview: (input) => getPlatformConsoleOverview({ controlApiUrl, ...input }),
+      consoleAssistant: (input) => queryPlatformConsoleAssistant({ controlApiUrl, ...input }),
+      consoleApprovals: (input) => listPlatformConsoleApprovals({ controlApiUrl, ...input }),
       platformBrand: (input) => getPlatformBranding({ controlApiUrl, ...input }),
       updatePlatformBrand: (input) => updatePlatformBranding({ controlApiUrl, ...input }),
       channelBrand: (input) => getChannelBranding({ controlApiUrl, ...input }),

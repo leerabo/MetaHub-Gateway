@@ -158,7 +158,8 @@ test("developer shell renders active language settings with English i18n", () =>
   assert.match(container.innerHTML, /MetaHub Console/);
   assert.match(container.innerHTML, /Governance/);
   assert.match(container.innerHTML, /Language/);
-  assert.match(container.innerHTML, /Save language/);
+  assert.match(container.innerHTML, /Open account settings/);
+  assert.doesNotMatch(container.innerHTML, /Save language/);
   assert.match(container.innerHTML, /Session expires: 2026-07-10T12:00:00Z/);
   assert.doesNotMatch(container.innerHTML, /undefined/);
 });
