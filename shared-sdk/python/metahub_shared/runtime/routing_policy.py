@@ -40,7 +40,13 @@ CandidateRole = Literal["default", "fallback"]
 ObjectStatus = Literal["active", "disabled", "missing"]
 HealthState = Literal["healthy", "unhealthy", "unknown"]
 KeyPoolState = Literal["available", "unavailable", "unknown", "not_evaluated"]
-PriceSource = Literal["price_plan", "model_catalog", "missing", "not_evaluated"]
+PriceSource = Literal[
+    "workspace_provider_cost_rate",
+    "price_plan",
+    "model_catalog",
+    "missing",
+    "not_evaluated",
+]
 QualityEvidenceState = Literal["ready", "cold", "not_evaluated"]
 CandidateFinalStatus = Literal["selected", "standby", "rejected"]
 SelectionStatus = Literal["selected", "unavailable"]
@@ -51,7 +57,15 @@ _MODEL_STATUSES = frozenset({"active", "disabled", "missing"})
 _PROVIDER_STATUSES = frozenset({"active", "disabled", "missing"})
 _HEALTH_STATES = frozenset({"healthy", "unhealthy", "unknown"})
 _KEYPOOL_STATES = frozenset({"available", "unavailable", "unknown", "not_evaluated"})
-_PRICE_SOURCES = frozenset({"price_plan", "model_catalog", "missing", "not_evaluated"})
+_PRICE_SOURCES = frozenset(
+    {
+        "workspace_provider_cost_rate",
+        "price_plan",
+        "model_catalog",
+        "missing",
+        "not_evaluated",
+    }
+)
 _CURRENCIES = frozenset({"CNY", "USD"})
 
 # 原因码是数据库、Webhook、API 与 UI 共用的机器合同，禁止拼接 SQL、URL 或错误正文。
@@ -1085,7 +1099,11 @@ def _selected_result(
         rank = rank_by_model[model_id]
         fact = prices.get(model_id)
         source: PriceSource = fact.source if fact is not None else "not_evaluated"
-        price_available = source in {"price_plan", "model_catalog"}
+        price_available = source in {
+            "workspace_provider_cost_rate",
+            "price_plan",
+            "model_catalog",
+        }
         results.append(
             RoutingCandidateResult(
                 candidate=item.candidate,
@@ -1171,7 +1189,11 @@ def _quality_selection_result(
         evidence_state = evidence_states[model_id]
         price = prices.get(model_id)
         price_source: PriceSource = price.source if price is not None else "not_evaluated"
-        price_available = price_source in {"price_plan", "model_catalog"}
+        price_available = price_source in {
+            "workspace_provider_cost_rate",
+            "price_plan",
+            "model_catalog",
+        }
         # ready 且低于质量门槛的模型必须彻底退出可执行顺序，不能保留 rank 后被运行时复活。
         if model_id in low_quality_models:
             rank = None

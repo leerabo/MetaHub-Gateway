@@ -96,6 +96,9 @@ EVENT_TYPE_BY_NAVIGATION = {
     "quota-buckets": "console.page_viewed",
     # PAGE-112 只记录页面访问，不携带争议原因、item、金额、幂等键或审核决定。
     "billing-disputes": "console.page_viewed",
+    # PRD-144 events carry only the shell envelope, never commercial amounts or IDs.
+    "workspace-subscription": "console.page_viewed",
+    "internal-finops": "console.page_viewed",
     # PAGE-114 访问事件只记录外壳元数据，不携带 Endpoint、Token、Schema、参数或结果。
     "mcp-tools": "console.page_viewed",
     # PRD-132 page events carry only the Console shell envelope; subjects, messages,
@@ -369,6 +372,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         70,
     ),
     NavigationDefinition(
+        "workspace-subscription",
+        "订阅与账务",
+        "调用与成本",
+        "workspace-subscription",
+        ("workspace.commercial.subscription.read",),
+        "查看当前 Workspace 的商业订阅、付款、发票与争议投影。",
+        "当前 Workspace 尚无商业订阅。",
+        79,
+    ),
+    NavigationDefinition(
         "usage",
         "用量与成本",
         "调用与成本",
@@ -377,6 +390,16 @@ NAVIGATION_DEFINITIONS: tuple[NavigationDefinition, ...] = (
         "查看 Token 用量、估算标识、价格快照和成本汇总。",
         "先通过调试台或业务系统发起一次请求，再查看用量。",
         80,
+    ),
+    NavigationDefinition(
+        "internal-finops",
+        "企业内部 FinOps",
+        "调用与成本",
+        "internal-finops",
+        ("workspace.internal_finops.read", "workspace.provider_cost.read"),
+        "维护 Workspace Provider 成本率并进入内部账本、额度和预算。",
+        "当前 Workspace 尚无 Provider 成本率。",
+        81,
     ),
     NavigationDefinition(
         "finops-ledger",

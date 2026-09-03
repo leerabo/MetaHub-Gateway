@@ -706,6 +706,17 @@ import {
 import { createWorkspaceProviderEngineeringController } from "../features/workspace-provider-engineering/workspaceProviderEngineeringController.js";
 import { renderWorkspaceProviderEngineering } from "../features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
 import {
+  applyWorkspaceProviderCostRateCommand,
+  createWorkspaceCommercialDispute,
+  getWorkspaceCommercialSubscription,
+  listWorkspaceProviderCostRates,
+} from "../lib/workspaceCommercialAccounting.js";
+import { createWorkspaceCommercialAccountingController } from "../features/workspace-commercial-accounting/workspaceCommercialAccountingController.js";
+import {
+  renderWorkspaceInternalFinOps,
+  renderWorkspaceSubscription,
+} from "../features/workspace-commercial-accounting/renderWorkspaceCommercialAccounting.js";
+import {
   createVirtualKey,
   disableVirtualKey,
   listVirtualKeys,
@@ -905,6 +916,51 @@ const workspaceProviderEngineeringController = createWorkspaceProviderEngineerin
     getWebAuthnAssertion,
   },
   onChange: renderCurrentWorkspaceProviderEngineering,
+  onSessionInvalid() {
+    if (authSession.token) void refresh();
+  },
+  onPermissionRevoked() {
+    if (authSession.token) void refresh();
+  },
+});
+const WORKSPACE_COMMERCIAL_NAVIGATION_IDS = new Set([
+  "workspace-subscription",
+  "internal-finops",
+]);
+let workspaceCommercialNavigationItems = [];
+const workspaceCommercialAccountingController = createWorkspaceCommercialAccountingController({
+  api: {
+    workspaceSession: (input) => getCurrentWorkspaceSession({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    workspaceSubscription: (input) => getWorkspaceCommercialSubscription({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    createDispute: (input) => createWorkspaceCommercialDispute({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    providerCostRates: (input) => listWorkspaceProviderCostRates({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    commandProviderCostRate: (input) => applyWorkspaceProviderCostRateCommand({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    beginIdentityStepUp: (input) => beginIdentityWebAuthnStepUp({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    createIdentityStepUpGrant: (input) => createIdentityStepUpGrant({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    getWebAuthnAssertion,
+  },
+  onChange: renderCurrentWorkspaceCommercialAccounting,
   onSessionInvalid() {
     if (authSession.token) void refresh();
   },
@@ -1171,6 +1227,10 @@ if (app && globalThis.window) {
         workspaceProviderEngineeringProviders = [];
         workspaceProviderEngineeringController.close();
       }
+      if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(nextItemId)) {
+        workspaceCommercialNavigationItems = [];
+        workspaceCommercialAccountingController.close();
+      }
       if (nextItemId !== "enterprise-chat") {
         // 地址栏离开 PAGE-093 时先清正文和在途请求，不能等待导航 API 或下一轮全页渲染。
         clearEnterpriseChatSessionState();
@@ -1307,6 +1367,8 @@ if (app && globalThis.window) {
       clearRoleDashboardSessionState();
       workspaceProviderEngineeringProviders = [];
       workspaceProviderEngineeringController.close();
+      workspaceCommercialNavigationItems = [];
+      workspaceCommercialAccountingController.close();
       clearEnterpriseChatSessionState();
       clearPromptTemplateSessionState();
     });
@@ -1516,6 +1578,8 @@ function handleConsoleWorkspaceContextInvalidation() {
   supportTicketPageState.clear();
   workspaceProviderEngineeringProviders = [];
   workspaceProviderEngineeringController.close();
+  workspaceCommercialNavigationItems = [];
+  workspaceCommercialAccountingController.close();
   void refresh();
 }
 
@@ -1632,6 +1696,10 @@ async function performRefresh(options = {}) {
   if (consoleShellState.activeNavigationItemId !== "providers") {
     workspaceProviderEngineeringProviders = [];
     workspaceProviderEngineeringController.close();
+  }
+  if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(consoleShellState.activeNavigationItemId)) {
+    workspaceCommercialNavigationItems = [];
+    workspaceCommercialAccountingController.close();
   }
   consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
   if (isFastNavigation) {
@@ -2546,6 +2614,18 @@ async function loadAndRenderActiveNavigation({
     case "usage":
       await load("usageState", loadUsageState);
       break;
+    case "workspace-subscription":
+    case "internal-finops":
+      workspaceCommercialNavigationItems = [
+        ...(consoleShellState.navigation?.navigation_items ?? []),
+      ];
+      await workspaceCommercialAccountingController.open({
+        authContext: authSession.context,
+        activeNavigationItemId: activeNavigationId,
+      });
+      state.workspaceCommercialAccountingState =
+        workspaceCommercialAccountingController.snapshot();
+      break;
     case "finops-ledger":
       await load("finOpsState", () => loadFinOpsState(consoleShellState, refreshId));
       break;
@@ -3206,6 +3286,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     clearRoleDashboardSessionState();
     workspaceProviderEngineeringProviders = [];
     workspaceProviderEngineeringController.close();
+    workspaceCommercialNavigationItems = [];
+    workspaceCommercialAccountingController.close();
     const token = authSession.token;
     // 一次性 Secret 必须在发起登出请求前从状态和 DOM 清除，不能等待网络响应后再处理。
     clearWebhookSessionState();
@@ -3341,6 +3423,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRoutingPolicyInteractions(consoleShellState);
   bindModelQualityScoreInteractions(consoleShellState);
   bindWorkspaceProviderEngineeringInteractions(consoleShellState);
+  bindWorkspaceCommercialAccountingInteractions();
   bindRequestExplanationInteractions(consoleShellState);
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
@@ -12797,6 +12880,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
     // 导航请求前同步擦除 PAGE-112 reason、decision、幂等键和所有异步 owner。
     billingDisputePageState.clear();
   }
+  if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(itemId)) {
+    workspaceCommercialNavigationItems = [];
+    workspaceCommercialAccountingController.close();
+  }
   if (itemId !== "admin-assistant") {
     // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
     adminAssistantPageState.leave();
@@ -13313,6 +13400,138 @@ async function loadUsersState(consoleShellState) {
       requestId: error?.requestId ?? "-",
     };
   }
+}
+
+function renderCurrentWorkspaceCommercialAccounting(
+  snapshot = workspaceCommercialAccountingController.snapshot(),
+) {
+  if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(snapshot.navigation)) return false;
+  const root = document.querySelector("[data-workspace-commercial-root]");
+  if (!root || root.dataset.workspaceCommercialRoot !== snapshot.navigation) return false;
+  const html = snapshot.navigation === "workspace-subscription"
+    ? renderWorkspaceSubscription(snapshot)
+    : renderWorkspaceInternalFinOps(snapshot, workspaceCommercialNavigationItems);
+  const template = document.createElement("template");
+  template.innerHTML = html.trim();
+  const next = template.content.firstElementChild;
+  if (!next) return false;
+  root.replaceWith(next);
+  bindWorkspaceCommercialAccountingInteractions();
+  return true;
+}
+
+function bindWorkspaceCommercialAccountingInteractions() {
+  const root = document.querySelector("[data-workspace-commercial-root]");
+  if (!root) return;
+  for (const button of root.querySelectorAll("[data-workspace-commercial-action]")) {
+    button.onclick = () => {
+      const action = String(button.dataset.workspaceCommercialAction ?? "");
+      if (action === "refresh") void workspaceCommercialAccountingController.refresh();
+      if (action === "rate-next") {
+        void workspaceCommercialAccountingController.moveRatePage("next");
+      }
+      if (action === "rate-previous") {
+        void workspaceCommercialAccountingController.moveRatePage("previous");
+      }
+    };
+  }
+  const filterForm = root.querySelector("[data-workspace-provider-cost-filter-form]");
+  if (filterForm) filterForm.onsubmit = (event) => {
+    event.preventDefault();
+    const data = new FormData(filterForm);
+    void workspaceCommercialAccountingController.configureRates({
+      provider_id: String(data.get("providerId") ?? "").trim(),
+      model_id: String(data.get("modelId") ?? "").trim(),
+      currency: String(data.get("currency") ?? ""),
+      status: String(data.get("status") ?? ""),
+      effective_at: workspaceCommercialTimestamp(data.get("effectiveAt"), true),
+    });
+  };
+  const disputeForm = root.querySelector("[data-workspace-commercial-dispute-form]");
+  if (disputeForm) disputeForm.onsubmit = (event) => {
+    event.preventDefault();
+    const data = new FormData(disputeForm);
+    const source = disputeForm.querySelector('select[name="sourceId"]')?.selectedOptions?.[0];
+    const stepUp = takeWorkspaceCommercialStepUp(disputeForm, data);
+    void workspaceCommercialAccountingController.submitDispute({
+      command: {
+        source_kind: "invoice",
+        source_id: String(data.get("sourceId") ?? ""),
+        reason_code: String(data.get("reasonCode") ?? ""),
+      },
+      expectedSourceRevision: Number(source?.dataset.sourceRevision),
+    }, stepUp);
+  };
+  for (const form of root.querySelectorAll("[data-workspace-provider-cost-command-form]")) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const action = String(data.get("action") ?? "");
+      const stepUp = takeWorkspaceCommercialStepUp(form, data);
+      let command;
+      if (action === "disable") {
+        command = {
+          action,
+          workspace_provider_cost_rate_id: String(data.get("rateId") ?? ""),
+        };
+      } else if (action === "adopt_reference") {
+        command = {
+          action,
+          provider_id: String(data.get("providerId") ?? ""),
+          model_id: String(data.get("modelId") ?? ""),
+          currency: String(data.get("currency") ?? ""),
+          provider_reference_rate_release_id: String(data.get("referenceRateId") ?? "").trim(),
+        };
+      } else {
+        const effectiveUntil = workspaceCommercialTimestamp(data.get("effectiveUntil"), true);
+        command = {
+          action: "create_version",
+          provider_id: String(data.get("providerId") ?? ""),
+          model_id: String(data.get("modelId") ?? ""),
+          currency: String(data.get("currency") ?? ""),
+          input_rate_micros_per_1k: Number(data.get("inputRate")),
+          output_rate_micros_per_1k: Number(data.get("outputRate")),
+          effective_from: workspaceCommercialTimestamp(data.get("effectiveFrom")),
+          ...(effectiveUntil ? { effective_until: effectiveUntil } : {}),
+        };
+      }
+      void workspaceCommercialAccountingController.applyRate({
+        command,
+        expectedHeadRevision: Number(data.get("expectedHeadRevision")),
+        resourceId: String(data.get("resourceId") ?? "").trim() || undefined,
+      }, stepUp);
+    };
+  }
+  for (const select of root.querySelectorAll("[data-workspace-commercial-step-up-method]")) {
+    select.onchange = () => {
+      const code = select.form?.querySelector("[data-workspace-commercial-step-up-code]");
+      const input = code?.querySelector("[data-workspace-commercial-sensitive]");
+      const webAuthn = select.value === "webauthn";
+      if (input) {
+        input.value = "";
+        input.disabled = webAuthn;
+        input.required = !webAuthn;
+      }
+      if (code) code.hidden = webAuthn;
+    };
+  }
+}
+
+function takeWorkspaceCommercialStepUp(form, data) {
+  let verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-workspace-commercial-sensitive]").forEach((node) => {
+    node.value = "";
+  });
+  const result = { method: String(data.get("method") ?? "totp"), verificationCode };
+  verificationCode = "";
+  return result;
+}
+
+function workspaceCommercialTimestamp(value, optional = false) {
+  const input = String(value ?? "").trim();
+  if (!input && optional) return "";
+  const parsed = new Date(input);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : input;
 }
 
 function renderCurrentWorkspaceProviderEngineering(snapshot = workspaceProviderEngineeringController.snapshot()) {

@@ -424,3 +424,16 @@ def _request_id(request: Request) -> str:
 
 def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", "")
+
+
+# The PRD-144 runtime owns both Platform plan methods. Keep the full router for
+# isolated PRD-098 compatibility tests until PRD-147 removes the legacy surface.
+runtime_router = APIRouter()
+runtime_router.routes.extend(
+    route
+    for route in router.routes
+    if not (
+        getattr(route, "path", None) == "/platform/plans"
+        and bool(getattr(route, "methods", set()) & {"GET", "POST"})
+    )
+)

@@ -1,6 +1,8 @@
 # PRD-144 平台商业账务与企业内部 FinOps 分域
 
-状态：设计冻结，等待 G6 通过后编码。依赖 PRD-051/079/080/098/099/102/103/104/132/139，
+状态：已完成。0136、Control/Gateway 商业核算、Platform/Workspace 分域页面、权限导航、冻结对账、
+聚焦自动化、三浏览器三视口证据、SLO 与敏感审计均已交付，记录见
+`docs/testing/PRD-144-tests.md`。依赖 PRD-051/079/080/098/099/102/103/104/132/139，
 批次边界见 `S7-platform-operations-console-domain-batch-design.md`。本条只交付 0136、平台商业账务工作台、
 Workspace 订阅/发票/争议投影、Provider 成本率和企业内部 FinOps owner 迁移，不提前实现 PRD-145..148。
 

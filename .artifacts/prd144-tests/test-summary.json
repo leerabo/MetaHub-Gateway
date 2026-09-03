@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "prd_id": "PRD-144",
+  "scope": "focused-s7",
+  "g7_status": "pending-until-prd-147",
+  "test_groups": [
+    {"name": "migration", "passed": 2, "failed": 0},
+    {"name": "control-commercial-accounting", "passed": 6, "failed": 0},
+    {"name": "gateway-commercial-accounting", "passed": 4, "failed": 0},
+    {"name": "console-commercial-accounting", "passed": 7, "failed": 0},
+    {"name": "console-affected-regressions", "passed": 42, "failed": 0},
+    {"name": "navigation-and-workspace-access", "passed": 12, "failed": 0}
+  ],
+  "focused_test_total": 73,
+  "lint": {
+    "status": "passed",
+    "console_file_count": 457,
+    "python_ruff": "passed",
+    "git_diff_check": "passed"
+  },
+  "roadmap": {
+    "authoritative_path": "企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx",
+    "export_path": "outputs/prd144-roadmap-closeout/企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx",
+    "sha256": "e01f764e6cfe1f0f658fa7f01cdac92a0188d84a3276d96a73c650fe16bedbbd",
+    "sheet_count": 12,
+    "sheet_render_count": 26,
+    "focus_render_count": 2,
+    "formula_errors": 0,
+    "prd_144_status": "已完成",
+    "next_prd": "PRD-145",
+    "global_completion_flags": false,
+    "automated_render_checks": "passed",
+    "manual_visual_review": "not-completed-viewer-and-computer-use-timeout"
+  },
+  "slo": {
+    "evidence": ".artifacts/prd144-slo/slo-results.json",
+    "sha256": "ad4fbc231b4c0cee44283ff83ca2be7c9f77bdcf80b342f7803bf55abbe416bd"
+  },
+  "browser": {
+    "evidence": ".artifacts/prd144-browser/browser-acceptance.json",
+    "sha256": "7c2b827e6ca119f0139f3cb6953abc98b6253d47c1a81aaeedb93f8a4ef714ae",
+    "browser_count": 3,
+    "viewport_count": 3,
+    "run_count": 9,
+    "screenshot_count": 9,
+    "automated_layout_and_pixel_checks": "passed",
+    "manual_visual_review": "not-completed-viewer-timeout"
+  }
+}

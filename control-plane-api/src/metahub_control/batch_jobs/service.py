@@ -30,6 +30,7 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from metahub_gateway.pricing import resolve_workspace_cost_rate
 from metahub_shared.batch import (
     BATCH_KEY_VERSION,
     BATCH_OPERATION_TEMPLATE_VERSION,
@@ -1322,47 +1323,35 @@ def _priced_candidate(
     """
     row = connection.execute(
         """
-        SELECT model.model_id,model.provider_id,model.status,
-               plan.price_plan_id,CAST(plan.input_price_per_1k AS TEXT) AS plan_input,
-               CAST(plan.output_price_per_1k AS TEXT) AS plan_output,
-               plan.currency AS plan_currency,plan.price_schema_version AS plan_version,
-               CAST(model.input_price_per_1k AS TEXT) AS catalog_input,
-               CAST(model.output_price_per_1k AS TEXT) AS catalog_output,
-               model.currency AS catalog_currency,model.price_schema_version AS catalog_version
-        FROM models model
-        LEFT JOIN model_price_plans plan ON plan.price_plan_id=(
-          SELECT selected.price_plan_id FROM model_price_plans selected
-          WHERE selected.tenant_id=model.tenant_id AND selected.model_id=model.model_id
-            AND selected.effective_from<=?
-          ORDER BY selected.effective_from DESC,selected.created_at DESC,selected.price_plan_id DESC
-          LIMIT 1
-        )
-        WHERE model.tenant_id=? AND model.model_id=?
+        SELECT model_id,provider_id,status
+        FROM models
+        WHERE tenant_id=? AND model_id=?
         """,
-        (_db_time(as_of), tenant_id, model_id),
+        (tenant_id, model_id),
     ).fetchone()
     if row is None or row["status"] != "active":
         # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
         raise ApiError("batch.binding_unavailable")
-    if row["price_plan_id"] is not None:
-        source = "price_plan"
-        input_price = row["plan_input"]
-        output_price = row["plan_output"]
-        currency = row["plan_currency"]
-        version = row["plan_version"]
-    else:
-        source = "model_catalog"
-        input_price = row["catalog_input"]
-        output_price = row["catalog_output"]
-        currency = row["catalog_currency"]
-        version = row["catalog_version"]
+    try:
+        rate = resolve_workspace_cost_rate(
+            connection,
+            tenant_id=tenant_id,
+            model_id=model_id,
+            observed_at=_db_time(as_of),
+        )
+    except sqlite3.IntegrityError:
+        raise ApiError("batch.cost_estimate_unavailable") from None
+    if rate is None:
+        raise ApiError("batch.cost_estimate_unavailable")
+    if rate.provider_id != str(row["provider_id"]) or rate.model_id != model_id:
+        raise ApiError("batch.binding_unavailable")
     # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
-    if currency != "CNY" or type(version) is not str or not version:
+    if rate.currency != "CNY" or not rate.price_schema_version:
         # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
         raise ApiError("batch.cost_estimate_unavailable")
     try:
-        normalized_input = _price(input_price)
-        normalized_output = _price(output_price)
+        normalized_input = _price(rate.input_price_per_1k)
+        normalized_output = _price(rate.output_price_per_1k)
     # 异常统一为稳定错误并保留请求标识；不得泄露堆栈和敏感配置。
     except ValueError:
         # 成败请求均须结算用量和成本；异常时保留事实，不得静默丢账。
@@ -1373,8 +1362,8 @@ def _priced_candidate(
         provider_id=str(row["provider_id"]),
         input_price_per_1k=normalized_input,
         output_price_per_1k=normalized_output,
-        price_source=source,
-        price_version=version,
+        price_source=rate.source,
+        price_version=rate.price_schema_version,
     )
 
 
@@ -1869,7 +1858,8 @@ def _route_plan_from_json(value: object) -> _FrozenRoutePlan:
         if (
             item["role"] != expected_role
             or item["currency"] != "CNY"
-            or item["price_source"] not in {"price_plan", "model_catalog"}
+            or item["price_source"]
+            not in {"workspace_provider_cost_rate", "price_plan", "model_catalog"}
             or type(item["price_version"]) is not str
             or not item["price_version"]
         ):

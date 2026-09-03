@@ -60,6 +60,10 @@ import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
 import { renderTenantDataLifecycle } from "../tenant-data-lifecycle/renderTenantDataLifecycle.js";
 import { renderUsagePanel } from "../usage/renderUsagePanel.js";
 import { renderFinOpsLedger } from "../finops-ledger/renderFinOpsLedger.js";
+import {
+  renderWorkspaceInternalFinOps,
+  renderWorkspaceSubscription,
+} from "../workspace-commercial-accounting/renderWorkspaceCommercialAccounting.js";
 import { renderCostAnomalies } from "../cost-anomalies/renderCostAnomalies.js";
 import { renderUserManagementPanel } from "../users/renderUserManagementPanel.js";
 import { renderVirtualKeyPanel } from "../virtual-keys/renderVirtualKeyPanel.js";
@@ -359,6 +363,13 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "usage":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderUsageSection(options.usageState, options.authContext, options.budgetState);
+    case "workspace-subscription":
+      return renderWorkspaceSubscription(options.workspaceCommercialAccountingState);
+    case "internal-finops":
+      return renderWorkspaceInternalFinOps(
+        options.workspaceCommercialAccountingState,
+        options.consoleShellState?.navigation?.navigation_items,
+      );
     case "finops-ledger":
       // 正式账本仅消费后端 admin 导航；前端渲染不能替代 /finops 的后端权限与租户校验。
       return renderFinOpsSection(options.finOpsState, options.authContext);

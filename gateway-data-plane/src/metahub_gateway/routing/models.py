@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -33,6 +33,7 @@ from metahub_shared.runtime.routing_policy import (
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
 from metahub_gateway.cache_affinity.models import CacheAffinityRouteContext
+from metahub_gateway.pricing import resolve_workspace_cost_rate
 
 logger = logging.getLogger("metahub.gateway.routing")
 
@@ -810,7 +811,7 @@ def _load_routing_prices(
     model_ids: tuple[str, ...],
     as_of: datetime,
 ) -> tuple[RoutingPriceFact, ...]:
-    """只在 cost 两候选阶段读取同一 as_of 的 PricePlan/目录价格 Decimal 文本。"""
+    """只在 cost 两候选阶段读取同一 as_of 的 Workspace ProviderCostRate。"""
 
     # shared 只会在恰有两条 cost eligible 候选时触发价格读取，偏离表示调用图损坏。
     if len(model_ids) != 2:
@@ -818,60 +819,30 @@ def _load_routing_prices(
     facts: list[RoutingPriceFact] = []
     as_of_text = _to_db_time(as_of)
     for model_id in model_ids:
-        row = connection.execute(
-            """
-            SELECT
-              pp.price_plan_id,
-              CAST(pp.input_price_per_1k AS TEXT) AS plan_input_price,
-              CAST(pp.output_price_per_1k AS TEXT) AS plan_output_price,
-              pp.currency AS plan_currency,
-              pp.price_schema_version AS plan_version,
-              CAST(m.input_price_per_1k AS TEXT) AS catalog_input_price,
-              CAST(m.output_price_per_1k AS TEXT) AS catalog_output_price,
-              m.currency AS catalog_currency,
-              m.price_schema_version AS catalog_version
-            FROM models m
-            LEFT JOIN model_price_plans pp ON pp.price_plan_id=(
-              SELECT selected.price_plan_id
-              FROM model_price_plans selected
-              WHERE selected.tenant_id=m.tenant_id AND selected.model_id=m.model_id
-                AND selected.effective_from<=?
-              ORDER BY selected.effective_from DESC, selected.created_at DESC,
-                       selected.price_plan_id DESC
-              LIMIT 1
+        try:
+            rate = resolve_workspace_cost_rate(
+                connection,
+                tenant_id=tenant_id,
+                model_id=model_id,
+                observed_at=as_of_text,
             )
-            WHERE m.tenant_id=? AND m.model_id=?
-            """,
-            (as_of_text, tenant_id, model_id),
-        ).fetchone()
-        if row is None:
-            # 候选在同一事务内消失说明 owner 图损坏，不能把它伪装成正常缺价。
-            raise ValueError("routing price model missing")
-        if row["price_plan_id"] is not None:
-            facts.append(
-                RoutingPriceFact(
-                    model_id=model_id,
-                    source="price_plan",
-                    input_price_per_1k=Decimal(str(row["plan_input_price"])),
-                    output_price_per_1k=Decimal(str(row["plan_output_price"])),
-                    currency=str(row["plan_currency"]),
-                    price_schema_version=str(row["plan_version"] or ""),
-                )
-            )
-        elif row["catalog_version"]:
-            facts.append(
-                RoutingPriceFact(
-                    model_id=model_id,
-                    source="model_catalog",
-                    input_price_per_1k=Decimal(str(row["catalog_input_price"])),
-                    output_price_per_1k=Decimal(str(row["catalog_output_price"])),
-                    currency=str(row["catalog_currency"]),
-                    price_schema_version=str(row["catalog_version"]),
-                )
-            )
-        else:
-            # 目录默认 0 没有 schema version 时是缺价，不能错误宣称免费模型。
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("routing price fact invalid") from exc
+        if rate is None:
             facts.append(RoutingPriceFact.missing(model_id))
+            continue
+        if rate.model_id != model_id:
+            raise ValueError("routing price owner invalid")
+        facts.append(
+            RoutingPriceFact(
+                model_id=model_id,
+                source=rate.source,
+                input_price_per_1k=rate.input_price_per_1k,
+                output_price_per_1k=rate.output_price_per_1k,
+                currency=rate.currency,
+                price_schema_version=rate.price_schema_version,
+            )
+        )
     return tuple(facts)
 
 

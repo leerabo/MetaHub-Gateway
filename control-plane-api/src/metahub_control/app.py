@@ -25,7 +25,6 @@ from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
 from .batch_jobs import router as batch_jobs_router
-from .billing_disputes import install_billing_dispute_scheduler
 from .billing_disputes import router as billing_disputes_router
 from .brand_domains import install_brand_domain_scheduler
 from .brand_domains import router as brand_domains_router
@@ -34,6 +33,8 @@ from .business_verification import router as business_verification_router
 from .capacity_management import router as capacity_management_router
 from .channel_management import install_channel_scheduler
 from .channel_management import router as channel_management_router
+from .commercial_accounting import install_commercial_accounting_scheduler
+from .commercial_accounting import router as commercial_accounting_router
 from .compliance_center import install_compliance_scheduler
 from .compliance_center import router as compliance_center_router
 from .config.routes import router as config_router
@@ -70,7 +71,6 @@ from .finops.routes import router as finops_router
 from .identity.routes import router as identity_router
 from .intent_security import router as intent_security_router
 from .invitations.routes import router as invitations_router
-from .invoice_reconciliation import install_invoice_reconciliation_scheduler
 from .invoice_reconciliation import router as invoice_reconciliation_router
 from .launch_governance import install_launch_governance_scheduler
 from .launch_governance import router as launch_governance_router
@@ -87,13 +87,10 @@ from .notifications import install_notification_scheduler
 from .notifications import router as notifications_router
 from .observability import install_observability_scheduler
 from .observability import router as observability_router
-from .payment_commerce import install_payment_commerce_scheduler
 from .payment_commerce import router as payment_commerce_router
 from .permissions.routes import router as permissions_router
-from .plan_billing import install_plan_billing_scheduler
 from .plan_billing import router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
-from .platform_billing import install_platform_billing_scheduler
 from .platform_billing import router as platform_billing_router
 from .platform_customer_success import install_platform_customer_success_scheduler
 from .platform_customer_success import router as platform_customer_success_router
@@ -129,8 +126,7 @@ from .response_cache import install_response_cache_outbox_scheduler
 from .response_cache import router as response_cache_router
 from .risk_controls import install_risk_scheduler
 from .risk_controls import router as risk_controls_router
-from .saas_billing import install_saas_billing_scheduler
-from .saas_billing import router as saas_billing_router
+from .saas_billing import runtime_router as saas_billing_router
 from .security_assurance import install_security_assurance_scheduler
 from .security_assurance import router as security_assurance_router
 from .security_events import install_security_event_scheduler
@@ -321,6 +317,7 @@ app.include_router(workspace_onboarding_router)
 app.include_router(migration_operations_router)
 app.include_router(customer_support_router)
 app.include_router(business_verification_router)
+app.include_router(commercial_accounting_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
@@ -429,17 +426,12 @@ if app.state.config.control_background_schedulers_enabled:
             install_response_cache_outbox_scheduler,
             install_platform_growth_scheduler,
             install_approval_scheduler,
-            install_plan_billing_scheduler,
-            install_saas_billing_scheduler,
-            install_platform_billing_scheduler,
-            install_payment_commerce_scheduler,
-            install_invoice_reconciliation_scheduler,
+            install_commercial_accounting_scheduler,
             install_notification_scheduler,
             install_observability_scheduler,
             install_risk_scheduler,
             install_channel_scheduler,
             install_brand_domain_scheduler,
-            install_billing_dispute_scheduler,
             install_security_event_scheduler,
             install_mcp_scheduler,
             install_tenant_data_scheduler,

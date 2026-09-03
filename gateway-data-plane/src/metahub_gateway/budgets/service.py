@@ -49,6 +49,7 @@ from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
 from metahub_gateway.batch import TrustedBatchContext
+from metahub_gateway.pricing import resolve_workspace_cost_rate
 from metahub_gateway.routing.models import GatewayRoute, GatewayRoutePlan
 from metahub_gateway.usage.ledger import RequestLogContext
 
@@ -1259,65 +1260,43 @@ def _estimate_request_cost(
     token_estimate: TokenEstimate | None = None,
     price_as_of: datetime | None = None,
 ) -> EstimatedRequestCost:
-    """按 PricePlan 优先、带版本目录价兜底的规则估算预算成本。
+    """按 Workspace ProviderCostRate 估算预算成本。
 
-    返回值始终保留 Token 数和兼容金额；``price_available=false`` 表示没有可审计版本价格，
+    返回值始终保留 Token 数和兼容金额；price_available=false 表示没有可审计版本价格，
     调用方必须失败关闭且不得创建零元预留。显式带版本零价仍是有效免费价格。
     """
 
     estimate = token_estimate or estimate_request_tokens(request_kind, payload)
     input_tokens, output_tokens = estimate.input_tokens, estimate.output_tokens
-    row = connection.execute(
-        """
-        SELECT
-          pp.price_plan_id,
-          CAST(CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.input_price_per_1k ELSE m.input_price_per_1k END AS TEXT)
-            AS input_price_per_1k,
-          CAST(CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.output_price_per_1k ELSE m.output_price_per_1k END AS TEXT)
-            AS output_price_per_1k,
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.currency ELSE m.currency END AS currency,
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.price_schema_version ELSE m.price_schema_version END AS price_schema_version
-        FROM models m
-        LEFT JOIN model_price_plans pp ON pp.price_plan_id=(
-          SELECT selected.price_plan_id
-          FROM model_price_plans selected
-          WHERE selected.tenant_id=m.tenant_id AND selected.model_id=m.model_id
-            AND selected.effective_from<=?
-          ORDER BY selected.effective_from DESC, selected.created_at DESC,
-                   selected.price_plan_id DESC
-          LIMIT 1
+    try:
+        rate = resolve_workspace_cost_rate(
+            connection,
+            tenant_id=route.tenant_id,
+            model_id=route.model_id,
+            observed_at=_to_db_time(price_as_of or _utcnow()),
         )
-        WHERE m.tenant_id=? AND m.model_id=?
-        """,
-        (
-            _to_db_time(price_as_of or _utcnow()),
-            route.tenant_id,
-            route.model_id,
-        ),
-    ).fetchone()
-    if row is None:
-        # 模型事实消失时没有可预留价格；兼容金额保持 0，但可用性必须明确为 false。
+    except sqlite3.IntegrityError as exc:
+        raise ApiError("gateway.budget_unavailable") from exc
+    if rate is None:
+        # 无 Workspace 成本价时没有可预留价格；兼容金额保持 0，但可用性必须明确为 false。
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_cny=Decimal("0"),
             price_available=False,
         )
-    price_schema_version = str(row["price_schema_version"] or "").strip()
+    if rate.provider_id != route.provider_id or rate.model_id != route.model_id:
+        raise ApiError("gateway.budget_unavailable")
+    price_schema_version = rate.price_schema_version.strip()
     if not price_schema_version:
-        # 无版本目录默认 0 是“缺价”而非免费；选中了 PricePlan 时也不允许借目录版本
-        # 给计划价背书。这里不回退其他来源，保持与 Router 相同的来源优先级。
+        # 无版本默认 0 是“缺价”而非免费；这里不回退其他来源。
         return EstimatedRequestCost(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_cny=Decimal("0"),
             price_available=False,
         )
-    currency = str(row["currency"] or "").strip().upper()
+    currency = rate.currency
     # 日预算以 CNY 为唯一结算单位；没有版本化汇率时，USD/未知币种都不是“免费”。
     if currency != "CNY":
         return EstimatedRequestCost(
@@ -1326,8 +1305,8 @@ def _estimate_request_cost(
             cost_cny=Decimal("0"),
             price_available=False,
         )
-    input_price = _strict_budget_price(row["input_price_per_1k"])
-    output_price = _strict_budget_price(row["output_price_per_1k"])
+    input_price = _strict_budget_price(rate.input_price_per_1k)
+    output_price = _strict_budget_price(rate.output_price_per_1k)
     try:
         # 固定高精度上下文覆盖合法价格与有界 Token 的乘加，避免依赖进程全局 Decimal 设置。
         with localcontext() as context:

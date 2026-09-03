@@ -47,6 +47,7 @@ from metahub_gateway.output_safety.models import (
 from metahub_gateway.output_safety.service import (
     finalize_output_safety_scan_in_transaction,
 )
+from metahub_gateway.pricing import resolve_workspace_cost_rate
 from metahub_gateway.providers.keypool import snapshot_response_cache_credential_scope
 from metahub_gateway.quota import (
     release_request_quota_in_transaction,
@@ -58,11 +59,9 @@ from metahub_gateway.usage.ledger import (
     PriceSnapshotEvidence,
     RequestLogContext,
     _cost_amounts,
-    _decimal_value,
     _ensure_replay_request_log,
     _insert_price_snapshot_evidence,
     _money_amount,
-    _normalize_currency,
     record_request_log,
 )
 
@@ -622,34 +621,15 @@ def _freeze_reference_estimate(
     observed_at: str,
 ) -> tuple[CostEstimate, bool]:
     """命中结算必须原子写入缓存事实、用量、成本和预算状态，禁止出现部分成功。 当前定义负责 _freeze_reference_estimate 对应步骤。"""
-    row = connection.execute(
-        """
-        SELECT
-          CASE WHEN plan.price_plan_id IS NOT NULL
-            THEN plan.input_price_per_1k ELSE model.input_price_per_1k END AS input_price,
-          CASE WHEN plan.price_plan_id IS NOT NULL
-            THEN plan.output_price_per_1k ELSE model.output_price_per_1k END AS output_price,
-          CASE WHEN plan.price_plan_id IS NOT NULL
-            THEN plan.currency ELSE model.currency END AS currency,
-          CASE WHEN plan.price_plan_id IS NOT NULL
-            THEN plan.price_schema_version ELSE model.price_schema_version END AS schema_version,
-          plan.price_plan_id,plan.effective_from,provider.provider_code
-        FROM models model
-        JOIN providers provider
-          ON provider.tenant_id=model.tenant_id AND provider.provider_id=model.provider_id
-        LEFT JOIN model_price_plans plan ON plan.price_plan_id=(
-          SELECT selected.price_plan_id
-          FROM model_price_plans selected
-          WHERE selected.tenant_id=model.tenant_id
-            AND selected.model_id=model.model_id
-            AND selected.effective_from<=?
-          ORDER BY selected.effective_from DESC,selected.created_at DESC
-          LIMIT 1
+    try:
+        rate = resolve_workspace_cost_rate(
+            connection,
+            tenant_id=context.tenant_id,
+            model_id=route.model_id,
+            observed_at=observed_at,
         )
-        WHERE model.tenant_id=? AND model.model_id=? AND model.provider_id=?
-        """,
-        (observed_at, context.tenant_id, route.model_id, route.provider_id),
-    ).fetchone()
+    except sqlite3.IntegrityError:
+        rate = None
     available = False
     currency = "CNY"
     input_price = Decimal("0")
@@ -658,25 +638,19 @@ def _freeze_reference_estimate(
     plan_id = None
     effective_from = observed_at
     provider_code = route.provider_code
-    if row is not None:
-        parsed_currency = _normalize_currency(row["currency"])
-        parsed_input = _decimal_value(row["input_price"])
-        parsed_output = _decimal_value(row["output_price"])
-        parsed_schema = str(row["schema_version"] or "").strip()
-        if (
-            parsed_currency is not None
-            and parsed_input is not None
-            and parsed_output is not None
-            and parsed_schema
-        ):
-            currency = parsed_currency
-            input_price = parsed_input
-            output_price = parsed_output
-            schema = parsed_schema
-            plan_id = row["price_plan_id"]
-            effective_from = row["effective_from"] or observed_at
-            provider_code = str(row["provider_code"] or route.provider_code)
-            available = currency == "CNY"
+    if (
+        rate is not None
+        and rate.provider_id == route.provider_id
+        and rate.model_id == route.model_id
+    ):
+        currency = rate.currency
+        input_price = rate.input_price_per_1k
+        output_price = rate.output_price_per_1k
+        schema = rate.price_schema_version
+        plan_id = rate.source_id if rate.source == "price_plan" else None
+        effective_from = rate.effective_from or observed_at
+        provider_code = rate.provider_code
+        available = currency == "CNY"
     try:
         amount = _money_amount(
             (

@@ -234,6 +234,12 @@ _NAVIGATION = (
         "/platform.html#provider-engineering",
     ),
     (
+        "platform.commercial.plan.read",
+        "commercial-accounting",
+        "Commercial accounting",
+        "/platform.html#commercial-accounting",
+    ),
+    (
         "platform.notification_template.read",
         "notification-templates",
         "Notification templates",
@@ -268,6 +274,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_growth_role_permissions",
     "platform_brand_role_permissions",
     "platform_provider_engineering_role_permissions",
+    "platform_commercial_role_permissions",
 )
 
 

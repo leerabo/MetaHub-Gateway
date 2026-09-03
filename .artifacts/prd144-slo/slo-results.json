@@ -1,0 +1,16 @@
+{
+  "dispatched_event_count": 2,
+  "dispute_projection_seconds": 1.831245,
+  "dispute_projection_threshold_seconds": 5,
+  "platform_subscription_query_p95_ms": 270.182,
+  "prd_id": "PRD-144",
+  "query_sample_count": 30,
+  "query_threshold_ms": 500,
+  "reconciliation_difference_count": 100000,
+  "reconciliation_result_sha256": "e3991e3a8e2f93568bc1efa9d9089430099c054e64595c8778457c6b7a0add17",
+  "reconciliation_seconds": 15.920618,
+  "reconciliation_source_set_sha256": "ebba1f4fed77076b5a8dd11ad1088c56c27dd613443101bd5ee7cd3065382709",
+  "reconciliation_threshold_seconds": 600,
+  "status": "passed",
+  "workspace_subscription_query_p95_ms": 82.739
+}

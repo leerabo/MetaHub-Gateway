@@ -6,6 +6,7 @@ import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
 import { renderPlatformCustomerSuccess } from "../platform-customer-success/renderPlatformCustomerSuccess.js";
 import { renderPlatformGrowth } from "../platform-growth/renderPlatformGrowth.js";
 import { renderPlatformProviderEngineering } from "../platform-provider-engineering/renderPlatformProviderEngineering.js";
+import { renderPlatformCommercialAccounting } from "../platform-commercial-accounting/renderPlatformCommercialAccounting.js";
 import {
   edgeCommandLabel,
   edgeDiagnosticStatusLabel,
@@ -116,6 +117,9 @@ function renderView(state, permissions) {
   if (state.view === "provider-catalog") return providerCatalogView(state, permissions);
   if (state.view === "provider-engineering") {
     return renderPlatformProviderEngineering(state.providerEngineering, permissions);
+  }
+  if (state.view === "commercial-accounting") {
+    return renderPlatformCommercialAccounting(state.commercialAccounting, permissions);
   }
   if (state.view === "releases") return developerContractsView(state, permissions);
   if (state.view === "channels") return renderChannelManagement(state, permissions);

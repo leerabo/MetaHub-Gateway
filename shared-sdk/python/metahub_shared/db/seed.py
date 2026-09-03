@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -84,6 +86,9 @@ def apply_seed_data(
             connection, credential_id, tenant_id, provider_id, credential_secret
         )
         _upsert_model(connection, model_id, tenant_id, provider_id, model)
+        _upsert_commercial_provider_cost_rate(
+            connection, model_id, tenant_id, provider_id, model
+        )
         _upsert_virtual_key(
             connection, virtual_key_id, tenant_id, virtual_key, seed["virtual_key"]["name"]
         )
@@ -438,6 +443,147 @@ def _upsert_model(
             (model.get("currency") or "CNY").upper(),
             model.get("price_schema_version") or "seed-v1",
         ),
+    )
+
+
+def _upsert_commercial_provider_cost_rate(
+    connection: sqlite3.Connection,
+    model_id: str,
+    tenant_id: str,
+    provider_id: str,
+    model: dict[str, str],
+) -> None:
+    if connection.execute(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' "
+        "AND name='workspace_provider_cost_rates'"
+    ).fetchone() is None:
+        return
+    owner = connection.execute(
+        """
+        SELECT binding.workspace_id,membership.workspace_membership_id
+        FROM workspace_tenant_bindings binding
+        JOIN workspace_memberships membership
+          ON membership.workspace_id=binding.workspace_id
+         AND membership.tenant_id=binding.tenant_id
+        WHERE binding.tenant_id=? AND binding.status='active'
+          AND membership.role_code='owner' AND membership.status='active'
+        ORDER BY membership.created_at,membership.workspace_membership_id
+        LIMIT 2
+        """,
+        (tenant_id,),
+    ).fetchall()
+    if len(owner) != 1:
+        raise sqlite3.IntegrityError("seed commercial rate owner invalid")
+    currency = (model.get("currency") or "CNY").upper()
+    existing = connection.execute(
+        """
+        SELECT 1 FROM workspace_provider_cost_rates
+        WHERE workspace_id=? AND tenant_id=? AND provider_id=? AND model_id=?
+          AND currency=?
+        """,
+        (owner[0]["workspace_id"], tenant_id, provider_id, model_id, currency),
+    ).fetchone()
+    if existing is not None:
+        return
+    try:
+        input_scaled = Decimal(model.get("input_price_per_1k") or "0") * Decimal(
+            1_000_000
+        )
+        output_scaled = Decimal(model.get("output_price_per_1k") or "0") * Decimal(
+            1_000_000
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        raise sqlite3.IntegrityError("seed commercial rate invalid") from None
+    if (
+        input_scaled != input_scaled.to_integral_value()
+        or output_scaled != output_scaled.to_integral_value()
+    ):
+        raise sqlite3.IntegrityError("seed commercial rate precision invalid")
+    input_micros = int(input_scaled)
+    output_micros = int(output_scaled)
+    workspace_id = str(owner[0]["workspace_id"])
+    membership_id = str(owner[0]["workspace_membership_id"])
+    rate_id = "pcr_" + hashlib.sha256(
+        (
+            f"provider-rate|{workspace_id}|{tenant_id}|{provider_id}|{model_id}|{currency}"
+        ).encode()
+    ).hexdigest()[:32]
+    version_id = "pcrv_" + hashlib.sha256(
+        f"legacy-model|{model_id}".encode()
+    ).hexdigest()[:32]
+    source_sha = hashlib.sha256(
+        json.dumps(
+            {
+                "model_id": model_id,
+                "source_type": "legacy_model",
+                "tenant_id": tenant_id,
+                "workspace_id": workspace_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    content_sha = hashlib.sha256(
+        json.dumps(
+            {
+                "currency": currency,
+                "input_rate_micros_per_1k": input_micros,
+                "model_id": model_id,
+                "output_rate_micros_per_1k": output_micros,
+                "provider_id": provider_id,
+                "source_type": "legacy_model",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rates(
+          workspace_provider_cost_rate_id,workspace_id,tenant_id,provider_id,model_id,
+          currency,created_at)
+        VALUES(?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        """,
+        (rate_id, workspace_id, tenant_id, provider_id, model_id, currency),
+    )
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rate_versions(
+          workspace_provider_cost_rate_version_id,workspace_provider_cost_rate_id,
+          version_number,input_rate_micros_per_1k,output_rate_micros_per_1k,
+          effective_from,effective_until,source_type,source_id,source_sha256,status,
+          revision,content_sha256,created_by_membership_id,created_at)
+        VALUES(?,?,1,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),NULL,
+          'legacy_model',?,?,'active',1,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        """,
+        (
+            version_id,
+            rate_id,
+            input_micros,
+            output_micros,
+            model_id,
+            source_sha,
+            content_sha,
+            membership_id,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO workspace_provider_cost_rate_heads(
+          workspace_provider_cost_rate_id,workspace_provider_cost_rate_version_id,
+          head_revision,adoption_state,updated_at)
+        VALUES(?,?,1,'active',strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        """,
+        (rate_id, version_id),
+    )
+    connection.execute(
+        """
+        UPDATE commercial_accounting_migration_cursors
+        SET owner_coverage_count=(
+          SELECT count(*) FROM workspace_provider_cost_rate_versions),
+          updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE source_kind='provider_rates'
+        """
     )
 
 

@@ -5,6 +5,7 @@ import { LAUNCH_GATE_CODES, LAUNCH_WAVES } from "../../lib/launchGovernance.js";
 import { createPlatformCustomerSuccessController } from "../platform-customer-success/platformCustomerSuccessController.js";
 import { createPlatformGrowthController } from "../platform-growth/platformGrowthController.js";
 import { createPlatformProviderEngineeringController } from "../platform-provider-engineering/platformProviderEngineeringController.js";
+import { createPlatformCommercialAccountingController } from "../platform-commercial-accounting/platformCommercialAccountingController.js";
 import { bindBrandEditorInteractions } from "../brand-domains/bindBrandEditor.js";
 import { createPlatformBrandingController } from "../brand-domains/platformBrandingController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
@@ -40,6 +41,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "providers",
   "provider-catalog",
   "provider-engineering",
+  "commercial-accounting",
   "channels",
   "branding",
   "customer-success",
@@ -99,6 +101,7 @@ export function createPlatformPageController({
     customerSuccess: null,
     growth: null,
     providerEngineering: null,
+    commercialAccounting: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -258,6 +261,27 @@ export function createPlatformPageController({
   });
   state.providerEngineering = providerEngineeringController.snapshot();
 
+  const commercialAccountingController = createPlatformCommercialAccountingController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.commercialAccounting = snapshot;
+      if (state.session && state.view === "commercial-accounting" && !state.loading) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && state.view === "commercial-accounting") void controller.refresh();
+      });
+    },
+  });
+  state.commercialAccounting = commercialAccountingController.snapshot();
+
   const brandDomainsController = createPlatformBrandingController({
     api,
     newIdempotencyKey,
@@ -363,7 +387,7 @@ export function createPlatformPageController({
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "provider-engineering", "releases", "edge-fleet", "edge-upgrades",
-        "channels", "branding", "customer-success", "growth",
+        "channels", "branding", "customer-success", "growth", "commercial-accounting",
         "edge-licenses", "edge-backups",
         "offline-bundles", "support", "privacy",
         "compliance",
@@ -394,6 +418,8 @@ export function createPlatformPageController({
           state.providerCatalogPublishIntent = null;
         } else if (state.view === "provider-engineering") {
           providerEngineeringController.leave();
+        } else if (state.view === "commercial-accounting") {
+          commercialAccountingController.leave();
         } else if (state.view === "releases") {
           state.developerContracts = null;
           state.developerContractIntent = null;
@@ -481,6 +507,16 @@ export function createPlatformPageController({
         );
         if (entered && !providerEngineeringController.snapshot().adapters) {
           void providerEngineeringController.loadAdapters();
+        }
+      }
+      if (state.view === "commercial-accounting") {
+        const entered = commercialAccountingController.enter(
+          state.session?.context,
+          state.navigation,
+        );
+        if (entered && !commercialAccountingController.snapshot().plans
+          && !commercialAccountingController.snapshot().subscriptions) {
+          void commercialAccountingController.refresh();
         }
       }
       if (state.view === "releases" && !state.developerContracts) {
@@ -647,6 +683,30 @@ export function createPlatformPageController({
     async applyProviderErrorCatalog(input, stepUp) {
       if (state.view !== "provider-engineering") return false;
       return providerEngineeringController.applyCatalog(input, stepUp);
+    },
+    async refreshCommercialAccounting() {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.refresh();
+    },
+    async filterCommercialAccounting(kind, filters = {}) {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.configure(kind, compactObject(filters));
+    },
+    async moveCommercialAccountingPage(kind, direction) {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.movePage(kind, direction);
+    },
+    async applyCommercialPlan(input, stepUp) {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.applyPlan(input, stepUp);
+    },
+    async applyCommercialReferenceRate(input, stepUp) {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.applyReferenceRate(input, stepUp);
+    },
+    async decideCommercialDispute(input, stepUp) {
+      if (state.view !== "commercial-accounting") return false;
+      return commercialAccountingController.decideDispute(input, stepUp);
     },
     async refreshChannels() {
       if (state.view !== "channels") return false;
@@ -3327,6 +3387,9 @@ export function createPlatformPageController({
       if (!state.navigation.some((item) => item.id === "provider-engineering")) {
         providerEngineeringController.leave();
       }
+      if (!state.navigation.some((item) => item.id === "commercial-accounting")) {
+        commercialAccountingController.leave();
+      }
       if (!state.navigation.some((item) => item.id === "releases")) {
         state.developerContracts = null;
         state.developerContractIntent = null;
@@ -3391,6 +3454,10 @@ export function createPlatformPageController({
         && state.navigation.some((item) => item.id === "provider-engineering")
         && providerEngineeringController.enter(state.session?.context, state.navigation);
       if (!providerEngineeringActive) providerEngineeringController.leave();
+      const commercialAccountingActive = state.view === "commercial-accounting"
+        && state.navigation.some((item) => item.id === "commercial-accounting")
+        && commercialAccountingController.enter(state.session?.context, state.navigation);
+      if (!commercialAccountingActive) commercialAccountingController.leave();
       const platformBrandActive = state.view === "branding"
         && state.navigation.some((item) => item.id === "branding");
       if (!platformBrandActive) brandDomainsController.leavePlatform();
@@ -3406,6 +3473,11 @@ export function createPlatformPageController({
       }
       if (providerEngineeringActive && !providerEngineeringController.snapshot().adapters) {
         void providerEngineeringController.loadAdapters();
+      }
+      if (commercialAccountingActive
+        && !commercialAccountingController.snapshot().plans
+        && !commercialAccountingController.snapshot().subscriptions) {
+        void commercialAccountingController.refresh();
       }
       if (platformBrandActive && !brandDomainsController.snapshot().platform.branding) {
         void brandDomainsController.loadPlatform();
@@ -4716,6 +4788,108 @@ export function createPlatformPageController({
       event.preventDefault();
       const data = new FormData(form);
       if (form.matches("[data-platform-session-form]")) controller.openSession(data.get("totpCode"));
+      if (form.matches("[data-platform-commercial-plan-filter-form]")) {
+        controller.filterCommercialAccounting("plans", {
+          plan_code: data.get("planCode"),
+          status: data.get("status"),
+          currency: data.get("currency"),
+          billing_period: data.get("billingPeriod"),
+        });
+      }
+      if (form.matches("[data-platform-commercial-subscription-filter-form]")) {
+        controller.filterCommercialAccounting("subscriptions", {
+          status: data.get("status"),
+          plan_catalog_id: data.get("planCatalogId"),
+          projection_state: data.get("projectionState"),
+          from: localTimestamp(data.get("from")),
+          until: localTimestamp(data.get("until")),
+        });
+      }
+      if (form.matches("[data-platform-commercial-plan-create-form]")) {
+        const stepUp = takeCommercialAccountingStepUp(form, data);
+        controller.applyCommercialPlan({
+          command: {
+            action: "create_candidate",
+            plan_code: data.get("planCode"),
+            display_name: data.get("displayName"),
+            display_order: Number(data.get("displayOrder")),
+            billing_period: data.get("billingPeriod"),
+            currency: data.get("currency"),
+            unit_price_minor: Number(data.get("unitPriceMinor")),
+            trial_days: Number(data.get("trialDays")),
+            entitlements: {
+              gateway_requests_per_month: Number(data.get("gatewayRequests")),
+              workspace_seats: Number(data.get("workspaceSeats")),
+              model_aliases: Number(data.get("modelAliases")),
+              retention_days: Number(data.get("retentionDays")),
+              priority_support: data.get("prioritySupport") === "on",
+            },
+          },
+          expectedRevision: 0,
+          resourceId: data.get("planCode"),
+        }, stepUp);
+      }
+      if (form.matches("[data-platform-commercial-plan-command-form]")) {
+        const action = String(data.get("action") ?? "");
+        const stepUp = takeCommercialAccountingStepUp(form, data);
+        controller.applyCommercialPlan({
+          command: {
+            action,
+            plan_version_id: data.get("planVersionId"),
+            ...(action === "release"
+              ? { governance_approval_id: data.get("governanceApprovalId") } : {}),
+          },
+          expectedRevision: Number(data.get("expectedRevision")),
+          resourceId: data.get("resourceId"),
+        }, stepUp);
+      }
+      if (form.matches("[data-platform-commercial-reference-create-form]")) {
+        const stepUp = takeCommercialAccountingStepUp(form, data);
+        const effectiveUntil = localTimestamp(data.get("effectiveUntil"));
+        controller.applyCommercialReferenceRate({
+          providerId: data.get("providerId"),
+          command: {
+            action: "create_candidate",
+            model_id: data.get("modelId"),
+            currency: data.get("currency"),
+            input_rate_micros_per_1k: Number(data.get("inputRate")),
+            output_rate_micros_per_1k: Number(data.get("outputRate")),
+            effective_from: localTimestamp(data.get("effectiveFrom")),
+            source_version: data.get("sourceVersion"),
+            ...(effectiveUntil ? { effective_until: effectiveUntil } : {}),
+          },
+          expectedRevision: Number(data.get("expectedRevision")),
+        }, stepUp);
+      }
+      if (form.matches("[data-platform-commercial-reference-command-form]")) {
+        const action = String(data.get("action") ?? "");
+        const stepUp = takeCommercialAccountingStepUp(form, data);
+        controller.applyCommercialReferenceRate({
+          providerId: data.get("providerId"),
+          command: {
+            action,
+            provider_reference_rate_release_id: data.get("referenceRateId"),
+            ...(action === "release"
+              ? { governance_approval_id: data.get("governanceApprovalId") } : {}),
+          },
+          expectedRevision: Number(data.get("expectedRevision")),
+          resourceId: data.get("resourceId"),
+        }, stepUp);
+      }
+      if (form.matches("[data-platform-commercial-dispute-command-form]")) {
+        const action = String(data.get("action") ?? "");
+        const stepUp = takeCommercialAccountingStepUp(form, data);
+        controller.decideCommercialDispute({
+          disputeId: data.get("disputeId"),
+          command: {
+            action,
+            expected_source_revision: Number(data.get("expectedSourceRevision")),
+            ...(action === "start_review"
+              ? {} : { decision_code: data.get("decisionCode") }),
+          },
+          expectedRevision: Number(data.get("expectedRevision")),
+        }, stepUp);
+      }
       if (form.matches("[data-platform-customer-filter-form]")) {
         controller.filterCustomerSuccess({
           customer_account_id: data.get("customerAccountId"),
@@ -5865,6 +6039,13 @@ export function createPlatformPageController({
       }
       const action = target.dataset.platformAction;
       if (action === "refresh") controller.refresh();
+      if (action === "commercial-refresh") controller.refreshCommercialAccounting();
+      if (target.dataset.platformCommercialPage) {
+        controller.moveCommercialAccountingPage(
+          target.dataset.platformCommercialPage,
+          target.dataset.direction,
+        );
+      }
       if (target.dataset.platformProviderAdapterSelect) {
         controller.selectProviderAdapter(target.dataset.platformProviderAdapterSelect);
       }
@@ -5958,6 +6139,17 @@ export function createPlatformPageController({
     });
     root.addEventListener("change", (event) => {
       const select = event.target;
+      if (select?.matches?.("[data-platform-commercial-step-up-method]")) {
+        const code = select.form?.querySelector?.("[data-platform-commercial-step-up-code]");
+        const input = code?.querySelector?.("[data-platform-sensitive]");
+        const webAuthn = select.value === "webauthn";
+        if (input) {
+          input.value = "";
+          input.disabled = webAuthn;
+          input.required = !webAuthn;
+        }
+        if (code) code.hidden = webAuthn;
+      }
       if (select?.matches?.("[data-platform-provider-engineering-step-up-method]")) {
         const code = select.form?.querySelector?.("[data-platform-provider-engineering-step-up-code]");
         const input = code?.querySelector?.("[data-platform-provider-engineering-sensitive]");
@@ -6155,6 +6347,7 @@ export function createPlatformPageController({
     customerSuccessController.leave();
     growthController.leave();
     providerEngineeringController.leave();
+    commercialAccountingController.leave();
     brandDomainsController.clear();
     state.operators = null;
     state.plans = null;
@@ -6503,6 +6696,16 @@ function takeGrowthStepUp(form, data) {
 function takeProviderEngineeringStepUp(form, data) {
   let verificationCode = String(data.get("verificationCode") ?? "");
   form.querySelectorAll("[data-platform-provider-engineering-sensitive]").forEach((node) => {
+    node.value = "";
+  });
+  const result = { method: String(data.get("method") ?? "totp"), verificationCode };
+  verificationCode = "";
+  return result;
+}
+
+function takeCommercialAccountingStepUp(form, data) {
+  let verificationCode = String(data.get("verificationCode") ?? "");
+  form.querySelectorAll("[data-platform-sensitive]").forEach((node) => {
     node.value = "";
   });
   const result = { method: String(data.get("method") ?? "totp"), verificationCode };

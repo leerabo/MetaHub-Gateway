@@ -91,6 +91,14 @@ export const PERMISSIONS = Object.freeze({
   BILLING_DISPUTE_READ: "billing.dispute.read",
   BILLING_DISPUTE_CREATE: "billing.dispute.create",
   BILLING_DISPUTE_REVIEW: "billing.dispute.review",
+  // PRD-144 commercial subscription and Workspace-owned provider cost facts are isolated.
+  WORKSPACE_COMMERCIAL_SUBSCRIPTION_READ: "workspace.commercial.subscription.read",
+  WORKSPACE_COMMERCIAL_INVOICE_READ: "workspace.commercial.invoice.read",
+  WORKSPACE_COMMERCIAL_DISPUTE_SUBMIT: "workspace.commercial.dispute.submit",
+  WORKSPACE_PROVIDER_COST_READ: "workspace.provider_cost.read",
+  WORKSPACE_PROVIDER_COST_MANAGE: "workspace.provider_cost.manage",
+  WORKSPACE_INTERNAL_FINOPS_READ: "workspace.internal_finops.read",
+  WORKSPACE_INTERNAL_FINOPS_MANAGE: "workspace.internal_finops.manage",
   // PAGE-114 MCP 读取、Server 管理、策略管理、调用和审批均为独立后端能力。
   MCP_READ: "mcp.read",
   MCP_SERVER_MANAGE: "mcp.server.manage",

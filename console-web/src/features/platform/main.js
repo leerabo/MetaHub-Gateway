@@ -209,6 +209,13 @@ import {
   listPlatformAdapterContracts,
   listPlatformProviderAdapters,
 } from "../../lib/providerEngineering.js";
+import {
+  applyPlatformCommercialPlanCommand,
+  applyPlatformProviderReferenceRateCommand,
+  decidePlatformCommercialDispute,
+  listPlatformCommercialPlans,
+  listPlatformCommercialSubscriptions,
+} from "../../lib/platformCommercialAccounting.js";
 import { createPlatformPageController } from "./platformPageState.js";
 import {
   getChannelBranding,
@@ -268,6 +275,21 @@ if (root) {
         controlApiUrl, ...input,
       }),
       commandErrorCatalog: (input) => applyPlatformErrorCatalogCommand({
+        controlApiUrl, ...input,
+      }),
+      commercialPlans: (input) => listPlatformCommercialPlans({
+        controlApiUrl, ...input,
+      }),
+      commandCommercialPlan: (input) => applyPlatformCommercialPlanCommand({
+        controlApiUrl, ...input,
+      }),
+      commercialSubscriptions: (input) => listPlatformCommercialSubscriptions({
+        controlApiUrl, ...input,
+      }),
+      decideCommercialDispute: (input) => decidePlatformCommercialDispute({
+        controlApiUrl, ...input,
+      }),
+      commandProviderReferenceRate: (input) => applyPlatformProviderReferenceRateCommand({
         controlApiUrl, ...input,
       }),
       workspaces: (input) => listPlatformWorkspaces({ controlApiUrl, ...input }),

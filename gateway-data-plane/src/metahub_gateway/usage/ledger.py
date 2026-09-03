@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -26,6 +27,8 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.routing_policy import MAX_PRICE_DECIMAL_PLACES, MAX_PRICE_PER_1K
 from metahub_shared.runtime.usage import sanitize_provider_usage
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
+
+from metahub_gateway.pricing import ResolvedCostRate, resolve_workspace_cost_rate
 
 logger = logging.getLogger("metahub.gateway.usage")
 
@@ -1121,6 +1124,12 @@ def record_usage_ledger(
         # 额度结算后的财务投影必须在同事务可见，缺失时回滚所有用量事实。
         if committed is None:
             raise sqlite3.IntegrityError("finops_usage_projection_missing_after_quota")
+        _bind_usage_owner(
+            connection,
+            context,
+            usage_ledger_id=write_intent.usage_ledger_id,
+            now=write_intent.pricing_observed_at,
+        )
         # blocked dispute 与 Usage/正式 charge 共用当前事务；零金额只待复核，不伪造可冲正。
         _ensure_output_safety_billing_evidence(
             connection,
@@ -1439,6 +1448,212 @@ def _ensure_output_safety_billing_evidence(
             expected[8],
             committed.created_at,
         ),
+    )
+
+
+def _bind_price_snapshot_owner(
+    connection: sqlite3.Connection,
+    context: RequestLogContext,
+    evidence: PriceSnapshotEvidence,
+    *,
+    now: str,
+) -> None:
+    if not _table_exists(connection, "internal_finops_ledger_owner_bindings"):
+        return
+    workspace_id = _active_workspace_id(connection, context.tenant_id)
+    _insert_internal_finops_owner_binding(
+        connection,
+        source_kind="price_snapshot",
+        source_id=evidence.price_snapshot_id,
+        workspace_id=workspace_id,
+        tenant_id=context.tenant_id,
+        source_values={
+            "currency": evidence.currency,
+            "price_schema_version": evidence.price_schema_version,
+            "price_snapshot_id": evidence.price_snapshot_id,
+        },
+        now=now,
+    )
+    if not evidence.price_schema_version.startswith("provider-cost-v1:"):
+        return
+    version_id = _provider_cost_version_id(evidence.price_schema_version)
+    matched = connection.execute(
+        """
+        SELECT version.input_rate_micros_per_1k,version.output_rate_micros_per_1k,
+          version.effective_from,version.content_sha256
+        FROM workspace_provider_cost_rate_versions version
+        JOIN workspace_provider_cost_rates rate
+          USING(workspace_provider_cost_rate_id)
+        WHERE version.workspace_provider_cost_rate_version_id=?
+          AND rate.workspace_id=? AND rate.tenant_id=? AND rate.model_id=?
+          AND rate.provider_id=? AND rate.currency=?
+        """,
+        (
+            version_id,
+            workspace_id,
+            context.tenant_id,
+            evidence.model_id,
+            evidence.provider_id,
+            evidence.currency,
+        ),
+    ).fetchone()
+    try:
+        exact_rate = matched is not None and (
+            Decimal(int(matched["input_rate_micros_per_1k"])) / Decimal(1_000_000)
+            == Decimal(evidence.input_price_per_1k)
+            and Decimal(int(matched["output_rate_micros_per_1k"])) / Decimal(1_000_000)
+            == Decimal(evidence.output_price_per_1k)
+            and str(matched["effective_from"]) == evidence.effective_from
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        exact_rate = False
+    if not exact_rate:
+        raise sqlite3.IntegrityError("price_snapshot_provider_cost_owner_mismatch")
+    source_sha = _safe_sha(
+        {
+            "price_snapshot_id": evidence.price_snapshot_id,
+            "tenant_id": context.tenant_id,
+            "version_id": version_id,
+            "workspace_id": workspace_id,
+        }
+    )
+    connection.execute(
+        """
+        INSERT INTO price_snapshot_provider_cost_rate_bindings(
+          price_snapshot_provider_cost_rate_binding_id,price_snapshot_id,
+          workspace_provider_cost_rate_version_id,workspace_id,tenant_id,
+          source_sha256,generation,created_at)
+        VALUES(?,?,?,?,?,?,1,?)
+        """,
+        (
+            "psrb_" + _safe_digest(f"price-rate|{evidence.price_snapshot_id}")[:32],
+            evidence.price_snapshot_id,
+            version_id,
+            workspace_id,
+            context.tenant_id,
+            source_sha,
+            now,
+        ),
+    )
+
+
+def _bind_usage_owner(
+    connection: sqlite3.Connection,
+    context: RequestLogContext,
+    *,
+    usage_ledger_id: str,
+    now: str,
+) -> None:
+    if not _table_exists(connection, "internal_finops_ledger_owner_bindings"):
+        return
+    workspace_id = _active_workspace_id(connection, context.tenant_id)
+    _insert_internal_finops_owner_binding(
+        connection,
+        source_kind="usage_ledger",
+        source_id=usage_ledger_id,
+        workspace_id=workspace_id,
+        tenant_id=context.tenant_id,
+        source_values={"tenant_id": context.tenant_id, "usage_ledger_id": usage_ledger_id},
+        now=now,
+    )
+    entries = connection.execute(
+        """
+        SELECT finops_ledger_entry_id,ledger_sequence,currency,amount_micros,status
+        FROM finops_ledger_entries
+        WHERE tenant_id=? AND usage_ledger_id=?
+        """,
+        (context.tenant_id, usage_ledger_id),
+    ).fetchall()
+    if len(entries) != 1:
+        raise sqlite3.IntegrityError("internal_finops_usage_entry_owner_missing")
+    entry = entries[0]
+    _insert_internal_finops_owner_binding(
+        connection,
+        source_kind="ledger_entry",
+        source_id=str(entry["finops_ledger_entry_id"]),
+        workspace_id=workspace_id,
+        tenant_id=context.tenant_id,
+        source_values={
+            "amount_micros": entry["amount_micros"],
+            "currency": entry["currency"],
+            "ledger_sequence": entry["ledger_sequence"],
+            "status": entry["status"],
+        },
+        now=now,
+    )
+
+
+def _insert_internal_finops_owner_binding(
+    connection: sqlite3.Connection,
+    *,
+    source_kind: str,
+    source_id: str,
+    workspace_id: str,
+    tenant_id: str,
+    source_values: dict[str, object],
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO internal_finops_ledger_owner_bindings(
+          internal_finops_owner_binding_id,source_kind,source_id,workspace_id,tenant_id,
+          source_sha256,generation,created_at)
+        VALUES(?,?,?,?,?,?,1,?)
+        """,
+        (
+            "ifob_" + _safe_digest(f"{source_kind}|{source_id}")[:32],
+            source_kind,
+            source_id,
+            workspace_id,
+            tenant_id,
+            _safe_sha(source_values),
+            now,
+        ),
+    )
+
+
+def _active_workspace_id(connection: sqlite3.Connection, tenant_id: str) -> str:
+    rows = connection.execute(
+        """
+        SELECT workspace_id FROM workspace_tenant_bindings
+        WHERE tenant_id=? AND status='active'
+        ORDER BY workspace_id LIMIT 2
+        """,
+        (tenant_id,),
+    ).fetchall()
+    if len(rows) != 1:
+        raise sqlite3.IntegrityError("internal_finops_workspace_owner_invalid")
+    return str(rows[0]["workspace_id"])
+
+
+def _provider_cost_version_id(schema_version: str) -> str:
+    prefix = "provider-cost-v1:"
+    version_id = schema_version[len(prefix) :] if schema_version.startswith(prefix) else ""
+    if (
+        len(version_id) != 37
+        or not version_id.startswith("pcrv_")
+        or any(character not in "0123456789abcdef" for character in version_id[5:])
+    ):
+        raise sqlite3.IntegrityError("workspace_provider_cost_rate_version_invalid")
+    return version_id
+
+
+def _safe_sha(value: object) -> str:
+    return _safe_digest(
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def _safe_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
     )
 
 
@@ -2216,7 +2431,13 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
         snapshot_id != evidence_snapshot_id
         or version != evidence_version
         or currency != evidence_currency
-        or source not in {"price_plan", "model_catalog", "finops_unpriced"}
+        or source
+        not in {
+            "price_plan",
+            "model_catalog",
+            "workspace_provider_cost_rate",
+            "finops_unpriced",
+        }
     ):
         # 跨字段不一致意味着价格证据可能被错配，必须整条拒绝而不是局部修补。
         raise ValueError("finops_spool_payload_invalid")
@@ -2224,7 +2445,10 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
     output_price = _spool_price_text(evidence_value["output_price_per_1k"])
     price_plan_id = _spool_optional_text(evidence_value["price_plan_id"], maximum=128)
     effective_from = _spool_optional_text(evidence_value["effective_from"], maximum=64)
-    # 缺价、价格计划和模型目录三类来源各有互斥字段合同，禁止跨类型拼接证据。
+    model_id = _spool_optional_text(evidence_value["model_id"], maximum=128)
+    provider_id = _spool_optional_text(evidence_value["provider_id"], maximum=128)
+    provider_code = _spool_optional_text(evidence_value["provider_code"], maximum=64)
+    # 缺价、Workspace 成本率、价格计划和模型目录来源各有互斥字段合同。
     if source == "finops_unpriced":
         if (
             version != "unpriced-v1"
@@ -2242,11 +2466,24 @@ def _deserialize_spool_estimate(value: object) -> CostEstimate | None:
     elif source == "model_catalog" and price_plan_id is not None:
         # 模型目录价格禁止夹带计划身份，避免来源标签与真实证据矛盾。
         raise ValueError("finops_spool_payload_invalid")
+    elif source == "workspace_provider_cost_rate":
+        try:
+            _provider_cost_version_id(version)
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("finops_spool_payload_invalid") from exc
+        if (
+            price_plan_id is not None
+            or effective_from is None
+            or model_id is None
+            or provider_id is None
+            or provider_code is None
+        ):
+            raise ValueError("finops_spool_payload_invalid")
     evidence = PriceSnapshotEvidence(
         price_snapshot_id=evidence_snapshot_id,
-        model_id=_spool_optional_text(evidence_value["model_id"], maximum=128),
-        provider_id=_spool_optional_text(evidence_value["provider_id"], maximum=128),
-        provider_code=_spool_optional_text(evidence_value["provider_code"], maximum=64),
+        model_id=model_id,
+        provider_id=provider_id,
+        provider_code=provider_code,
         currency=currency,
         input_price_per_1k=format(input_price, "f"),
         output_price_per_1k=format(output_price, "f"),
@@ -3006,6 +3243,12 @@ def _insert_price_snapshot_evidence(
             evidence.effective_from,
         ),
     )
+    _bind_price_snapshot_owner(
+        connection,
+        context,
+        evidence,
+        now=now,
+    )
 
 
 def safe_record_request_log(
@@ -3149,35 +3392,19 @@ def _estimate_cost(
             usage_ledger_id=snapshot_usage_id,
             capture_intent=capture_intent,
         )
-    row = connection.execute(
-        """
-        SELECT
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.input_price_per_1k ELSE m.input_price_per_1k END AS input_price_per_1k,
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.output_price_per_1k ELSE m.output_price_per_1k END AS output_price_per_1k,
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.currency ELSE m.currency END AS currency,
-          CASE WHEN pp.price_plan_id IS NOT NULL
-            THEN pp.price_schema_version ELSE m.price_schema_version END AS price_schema_version,
-          pp.price_plan_id, pp.effective_from,
-          m.provider_id, p.provider_code
-        FROM models m
-        LEFT JOIN providers p ON p.provider_id=m.provider_id AND p.tenant_id=m.tenant_id
-        LEFT JOIN model_price_plans pp ON pp.price_plan_id=(
-          SELECT selected.price_plan_id
-          FROM model_price_plans selected
-          WHERE selected.tenant_id=m.tenant_id
-            AND selected.model_id=m.model_id
-            AND selected.effective_from<=?
-          ORDER BY selected.effective_from DESC, selected.created_at DESC
-          LIMIT 1
+    try:
+        rate = resolve_workspace_cost_rate(
+            connection,
+            tenant_id=context.tenant_id,
+            model_id=context.model_id,
+            observed_at=now,
         )
-        WHERE m.tenant_id=? AND m.model_id=?
-        """,
-        (now, context.tenant_id, context.model_id),
-    ).fetchone()
-    if row is None:
+    except sqlite3.IntegrityError:
+        _log_price_configuration_invalid(
+            context, price_source="workspace_provider_cost_rate"
+        )
+        rate = None
+    if rate is None:
         return _unpriced_cost(
             connection,
             context,
@@ -3186,7 +3413,7 @@ def _estimate_cost(
             capture_intent=capture_intent,
         )
 
-    price_schema_version = str(row["price_schema_version"] or "").strip()
+    price_schema_version = rate.price_schema_version.strip()
     if not price_schema_version:
         # models 的历史默认单价是 0；没有版本时它只表示“尚未配置价格”，不能创建
         # source=model_catalog/status=active 的零价快照，否则下游会把未知成本误认为免费。
@@ -3197,14 +3424,14 @@ def _estimate_cost(
             usage_ledger_id=snapshot_usage_id,
             capture_intent=capture_intent,
         )
-    input_price = _decimal_value(row["input_price_per_1k"])
-    output_price = _decimal_value(row["output_price_per_1k"])
-    currency = _normalize_currency(row["currency"])
+    input_price = rate.input_price_per_1k
+    output_price = rate.output_price_per_1k
+    currency = rate.currency
     # 版本号不能替损坏的金额或币种背书；否则非法值会被伪装成可审计的 active 零价快照。
     if input_price is None or output_price is None or currency is None:
         _log_price_configuration_invalid(
             context,
-            price_source="price_plan" if row["price_plan_id"] else "model_catalog",
+            price_source=rate.source,
         )
         return _unpriced_cost(
             connection,
@@ -3228,7 +3455,7 @@ def _estimate_cost(
     except (DecimalException, OverflowError):
         _log_price_configuration_invalid(
             context,
-            price_source="price_plan" if row["price_plan_id"] else "model_catalog",
+            price_source=rate.source,
         )
         return _unpriced_cost(
             connection,
@@ -3239,7 +3466,11 @@ def _estimate_cost(
         )
     cost_cny, cost_usd = _cost_amounts(money_amount, currency)
     evidence = _build_price_snapshot_evidence(
-        context, row=row, input_price=input_price, output_price=output_price, currency=currency
+        context,
+        rate=rate,
+        input_price=input_price,
+        output_price=output_price,
+        currency=currency,
     )
     estimate = CostEstimate(
         amount=money_amount,
@@ -3266,7 +3497,7 @@ def _estimate_cost(
 def _build_price_snapshot_evidence(
     context: RequestLogContext,
     *,
-    row: sqlite3.Row,
+    rate: ResolvedCostRate,
     input_price: Decimal,
     output_price: Decimal,
     currency: str,
@@ -3279,15 +3510,15 @@ def _build_price_snapshot_evidence(
     return PriceSnapshotEvidence(
         price_snapshot_id=f"prs_{uuid4().hex}",
         model_id=context.model_id,
-        provider_id=context.provider_id or row["provider_id"],
-        provider_code=context.provider_code or row["provider_code"],
+        provider_id=context.provider_id or rate.provider_id,
+        provider_code=context.provider_code or rate.provider_code,
         currency=currency,
         input_price_per_1k=format(input_price, "f"),
         output_price_per_1k=format(output_price, "f"),
-        price_schema_version=str(row["price_schema_version"] or ""),
-        source="price_plan" if row["price_plan_id"] else "model_catalog",
-        price_plan_id=row["price_plan_id"],
-        effective_from=row["effective_from"],
+        price_schema_version=rate.price_schema_version,
+        source=rate.source,
+        price_plan_id=(rate.source_id if rate.source == "price_plan" else None),
+        effective_from=rate.effective_from,
     )
 
 
