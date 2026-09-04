@@ -215,6 +215,7 @@ test("PRD-117 Platform controller loads, filters, and paginates only evidence DT
   });
   assert.equal(await controller.mount(), true);
   assert.equal(controller.selectView("data-residency"), undefined);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.match(root.innerHTML, /数据驻留/u);
   assert.match(root.innerHTML, /Policy-bound observations/u);
   assert.match(root.innerHTML, /Generation 1/u);
@@ -395,6 +396,9 @@ function identityState(overrides = {}) {
 }
 
 function identityApi(overrides = {}) {
+  const permissionCodes = [
+    "data_governance.read", "data_governance.manage", "legal_hold.read", "legal_hold.manage",
+  ];
   return {
     me: async () => ({
       account: identityState().account,
@@ -402,14 +406,15 @@ function identityApi(overrides = {}) {
     }),
     sessions: async () => ({ sessions: [identitySession()] }),
     identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
-    workspaceSession: async () => ({ context: workspaceSessionContext() }),
+    workspaceSession: async () => ({
+      context: workspaceSessionContext(),
+      authorization: workspaceAuthorization(permissionCodes),
+    }),
     workspaceNavigation: async () => ({
-      navigation_items: [],
-      permission_codes: [
-        "data_governance.read", "data_governance.manage", "legal_hold.read", "legal_hold.manage",
-      ],
+      groups: [],
+      membership_revision: 1,
       permission_revision: 1,
-      authorization_fingerprint: "governance-authz-fingerprint",
+      permission_fingerprint: HASH,
     }),
     logout: async () => ({ logged_out: true }),
     ...overrides,
@@ -459,6 +464,15 @@ function workspaceSessionContext() {
     role: "owner",
     session_status: "active",
     expires_at: "2026-08-27T00:00:00Z",
+  };
+}
+
+function workspaceAuthorization(permissionCodes) {
+  return {
+    permission_codes: [...permissionCodes],
+    permission_revision: 1,
+    permission_fingerprint: HASH,
+    membership_revision: 1,
   };
 }
 

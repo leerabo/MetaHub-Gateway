@@ -48,8 +48,22 @@ class WorkspaceSwitchResponse(BaseModel):
     trace_id: str
 
 
+class WorkspaceAuthorizationSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    permission_codes: tuple[str, ...] = Field(max_length=300)
+    permission_revision: int = Field(ge=1)
+    permission_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    membership_revision: int = Field(ge=1)
+
+
 class WorkspaceSessionResponse(BaseModel):
     context: WorkspaceContextSummary
+    authorization: WorkspaceAuthorizationSummary
     request_id: str
     trace_id: str
 

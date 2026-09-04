@@ -853,9 +853,11 @@ export function createIdentityPageController({
       scrubWorkspaceScope();
       renderSecurity({ feedback: "正在进入空间…" });
       try {
-        const sessionResult = await queueWrite(() =>
+        await queueWrite(() =>
           api.switchWorkspace({ workspaceId: choice.workspace_id, signal: ticket.signal }),
         );
+        if (!isCurrent(ticket)) return false;
+        const sessionResult = await api.workspaceSession({ signal: ticket.signal });
         if (!isCurrent(ticket)) return false;
         autoSwitchAttempted = true;
         broadcastContextInvalidation();
@@ -1294,10 +1296,12 @@ export function createIdentityPageController({
         broadcastContextInvalidation();
         scrubWorkspaceAuthorization();
         renderSecurity({ feedback: "策略已保存，正在重新建立空间上下文…" });
-        const sessionResult = await queueWrite(() => api.switchWorkspace({
+        await queueWrite(() => api.switchWorkspace({
           workspaceId: ownerWorkspaceId,
           signal: ticket.signal,
         }));
+        if (!isCurrent(ticket)) return false;
+        const sessionResult = await api.workspaceSession({ signal: ticket.signal });
         if (!isCurrent(ticket)) return false;
         autoSwitchAttempted = true;
         return loadWorkspaceAuthorization(
@@ -3883,7 +3887,7 @@ export function createIdentityPageController({
           : Promise.resolve({ memberships: [] }),
         typeof api.workspaceNavigation === "function"
           ? api.workspaceNavigation({ signal: ticket.signal })
-          : Promise.resolve({ navigation_items: [] }),
+          : Promise.resolve(null),
         typeof api.onboarding === "function"
           ? api.onboarding({ signal: ticket.signal }).then(
             (value) => ({ value, error: null }),
@@ -3895,19 +3899,34 @@ export function createIdentityPageController({
       if (onboardingOutcome.error && isWorkspaceAuthorizationDrift(onboardingOutcome.error)) {
         throw onboardingOutcome.error;
       }
+      const authorization = sessionResult.authorization;
+      if (!validWorkspaceAuthorization(authorization)) {
+        throw workspaceAuthorizationDriftError();
+      }
+      if (
+        navigationResult !== null
+        && (
+          navigationResult.permission_revision !== authorization.permission_revision
+          || navigationResult.permission_fingerprint !== authorization.permission_fingerprint
+          || navigationResult.membership_revision !== authorization.membership_revision
+        )
+      ) {
+        throw workspaceAuthorizationDriftError(navigationResult.request_id);
+      }
       memberships = Array.isArray(membershipResult.memberships)
         ? membershipResult.memberships
         : [];
-      navigationItems = Array.isArray(navigationResult.navigation_items)
-        ? navigationResult.navigation_items
+      navigationItems = Array.isArray(navigationResult?.groups)
+        ? navigationResult.groups.flatMap((group) => (
+          Array.isArray(group?.items) ? group.items : []
+        ))
         : [];
       workspaceContext = {
         ...workspaceContext,
-        permission_codes: Array.isArray(navigationResult.permission_codes)
-          ? [...navigationResult.permission_codes]
-          : [],
-        permission_revision: navigationResult.permission_revision,
-        authorization_fingerprint: navigationResult.authorization_fingerprint,
+        permission_codes: [...authorization.permission_codes],
+        permission_revision: authorization.permission_revision,
+        authorization_fingerprint: authorization.permission_fingerprint,
+        membership_revision: authorization.membership_revision,
       };
       onboardingBusy = false;
       onboardingIntent = null;
@@ -5011,6 +5030,28 @@ function isWorkspaceAuthorizationDrift(error) {
   return (error instanceof IdentityApiError || error instanceof PrivacyApiError
     || error instanceof ComplianceApiError)
     && new Set([401, 403]).has(error.status);
+}
+
+function validWorkspaceAuthorization(value) {
+  return Boolean(
+    value
+    && Array.isArray(value.permission_codes)
+    && Number.isSafeInteger(value.permission_revision)
+    && value.permission_revision > 0
+    && Number.isSafeInteger(value.membership_revision)
+    && value.membership_revision > 0
+    && typeof value.permission_fingerprint === "string"
+    && /^[0-9a-f]{64}$/u.test(value.permission_fingerprint),
+  );
+}
+
+function workspaceAuthorizationDriftError(requestId = "-") {
+  return new IdentityApiError({
+    status: 403,
+    code: "workspace_session.authorization_drift",
+    message: "空间权限摘要已变化，请重新校验。",
+    requestId,
+  });
 }
 
 function isOnboardingRevisionDrift(error) {

@@ -19,7 +19,7 @@ Workspace 工作区只展示当前成员职责内的企业 Gateway 能力。Plat
 3. `PATCH /identity/preferences/navigation` 保存当前 GlobalAccount 在指定 Workspace 的纯 UI 偏好；偏好不能增加菜单、route
    或 API 权限。
 4. `GET /workspace/advanced-tools` 只返回当前成员有权限且当前 Workspace 可用的高级工具；直接 URL 仍重新鉴权。
-5. 64 项 Excel 导航逐项只有一个处置，源码合法后增的 2 项也有唯一合同；五个被错误隐藏的企业入口恢复，六个迁出项在
+5. 64 项 Excel 导航逐项只有一个处置，源码合法后增的 4 项也有唯一合同；五个企业入口恢复，六个迁出项在
    Workspace Navigation、DOM、prefetch 和 route switch 中归零。
 6. 默认导航组折叠、任一时刻最多展开一组；当前页面只加载自身数据，390/1280/1440 下完成真实鼠标、键盘和读屏流程。
 
@@ -35,6 +35,13 @@ Response、文件正文或客户业务正文，不在本条物理删除旧 sourc
 Membership、role、Membership/permission revision、全部 extension permission、authorization fingerprint 和 active
 WorkspaceTenantBinding。父 GlobalSession Cookie可以共存，但不能替代 WorkspaceSession；PlatformSession、SupportSession、
 Bearer、OAuth machine token、query credential、重复 Workspace Cookie 和错域 Cookie 全部失败关闭。
+
+`GET /workspace/session` 在公开 `context` 之外返回独立且严格的 `authorization` 摘要，字段精确为
+`permission_codes`、`permission_revision`、`permission_fingerprint` 和 `membership_revision`。Identity 页面只能从该摘要
+取得完整权限集合；Navigation DTO 继续只负责路由投影，不返回权限全集。前端在启用任何权限控制的读取或操作前，必须把
+Navigation 的 Membership revision、permission revision 和 fingerprint 与 Session 摘要逐项比对；任一漂移即清空
+Workspace 私有状态并最多重新读取一次。Workspace switch 响应不携带授权摘要，切换成功后必须重新读取
+`/workspace/session`，不得用旧 Navigation 或切换响应恢复权限。
 
 NavigationPreference 写 API 只以 GlobalSession 认证账号本人。body 中的 `workspace_id` 只是选择目标，不是 owner 证明；服务端
 必须重新查询该 account 在目标 Workspace 的唯一 active human Membership 和复合 WorkspaceTenantBinding。不存在、停用、
@@ -73,12 +80,12 @@ contract snapshot、entitlement generation 和 Workspace owner。Membership 撤�
 
 `workspace_navigation_contract_snapshots/items/heads` 使用稳定 `ncs_*`，每个版本重复携带
 `workspace_id + tenant_id`，保存 contract version、source catalog version/hash、item count、64 项 Excel disposition hash、
-2 项后增来源 hash、group/order/placement、canonical route code、required permission expression、advanced/detail/account-shell
+4 项后增来源 hash、group/order/placement、canonical route code、required permission expression、advanced/detail/account-shell
 分类、feature/deployment requirement、status `candidate|active|superseded|rejected`、revision、generation 和 UTC。
 
 snapshot item 使用稳定 source navigation ID，但对外只返回新的 canonical route code。编译期 route registry 只接受固定
 route code，不把服务端字符串当 URL、module path、selector 或动态 import。released snapshot immutable；新增、改名、移动、
-retire 或权限表达式变化必须创建新版本、完整验证 66 项唯一性后 CAS 推进 head。
+retire 或权限表达式变化必须创建新版本、完整验证 68 项审计合同唯一性后 CAS 推进 head。
 
 被迁出的条目仍以 `placement=retired_internal` 保留在内部 snapshot 供迁移审计，但不会出现在公开 DTO、404 文案或前端
 source registry。它们不形成兼容页面或 tombstone API；PRD-147 最终卸载旧 router/import。
@@ -172,9 +179,10 @@ advanced entitlement 扩权。GET 只返回当前 actor 同时满足 base/source
 
 ## 4. 64 项 Excel 唯一处置与最终位置
 
-源码当前 66 个 `NAVIGATION_DEFINITIONS` 与 Excel 对照结果为：Excel 64 项全部存在、零重复、零缺失；源码额外且合法的
-只有 `migration-operations` 和 `support-tickets`。0138 migration 与测试把以下 D01..D22 作为不可变 disposition catalog，
-同一 source ID 不允许第二种结论：
+0137 源码实际有 63 个 `NAVIGATION_DEFINITIONS`：Excel 64 项中存在 59 项，另有 4 个合法后增项。缺失的 5 项里，
+`growth-analytics`、`adapter-specs`、`adapter-contract-runs` 已先行从旧源码移除且属于最终六个退休项；`branding` 由
+Deployment detail route 承接，`error-maps` 由 Advanced Tool route 承接，二者必须在 0138 新合同恢复。0138 migration 与
+测试把以下 D01..D22 作为不可变 disposition catalog，同一 source ID 不允许第二种结论：
 
 | Code | Excel 处置 |
 | --- | --- |
@@ -270,12 +278,15 @@ advanced entitlement 扩权。GET 只返回当前 actor 同时满足 base/source
 | language-settings | D22 | Identity account menu / Preferences |
 | config-summary | D07 | Advanced / Deployment summary |
 
-两项后增源码合同为：`migration-operations -> Observability / Migration center`，
-`support-tickets -> Observability / Workspace support`。它们均保留复合 Workspace owner 与现有来源权限，不占 Excel 64 行，
-也不能作为“额外项”掩盖 Excel 缺失。
+四项后增源码合同为：`migration-operations -> Observability / Migration center`、
+`support-tickets -> Observability / Workspace support`、`workspace-subscription -> Finance / Workspace subscription`、
+`internal-finops -> Finance / Internal FinOps`。后两项是 PRD-144 的新 canonical primary route；旧 `plans` 与
+`finops-ledger` 在 0138 只作为兼容 source mapping，不能与新入口同时成为 primary placement，PRD-147 再卸载旧入口。
+四项均保留复合 Workspace owner 与现有来源权限，不占 Excel 64 行，也不能作为“额外项”掩盖 Excel 缺失。
 
-当前 `WORKSPACE_NAVIGATION_EXCLUDED_IDS` 错误隐藏 11 项。0138 恢复
-`providers`、`local-models`、`provider-health`、`error-maps`、`billing-disputes` 的企业裁剪入口；最终只从 Workspace
+0137 的 `WORKSPACE_NAVIGATION_EXCLUDED_IDS` 实际列出 8 项，其中 `growth-analytics` 已不在 source definition；
+`providers`、`local-models`、`provider-health`、`billing-disputes` 四个 active source 被错误隐藏，`error-maps` 则缺少
+Advanced Tool 承接。0138 恢复这五个企业裁剪入口；最终只从 Workspace
 公开合同删除 `growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`、
 `adapter-contract-runs`、`competitor-comparison` 六项。language-settings 作为 account action、detail/advanced/dev-center
 子路由仍在内部 contract 中，但不占普通一级组。
@@ -311,9 +322,10 @@ watermark。
 
 ### 6.1 Catalog 与投影 backfill
 
-1. 从当前 66 个 `NAVIGATION_DEFINITIONS` 解析固定 source ID/permission/order，并与 Excel 64 行逐项比对；缺失、重复、未知
-   extra、处置码漂移或 source hash 不符在首个持久 DDL 前阻断。
-2. 为每个 active WorkspaceTenantBinding 创建 NavigationContractSnapshot，精确包含 64 Excel disposition 与两个 approved
+1. 从 0137 当前 63 个 `NAVIGATION_DEFINITIONS` 解析固定 source ID/permission/order，并与 Excel 64 行逐项比对；结果必须
+   精确为 59 个 Excel source、5 个已解释缺失和 4 个 approved extra；重复、未知 extra、处置码漂移或 source hash 不符在
+   首个持久 DDL 前阻断。
+2. 为每个 active WorkspaceTenantBinding 创建 NavigationContractSnapshot，精确包含 64 Excel disposition 与四个 approved
    extra；按 PRD-139..145 source cutover、产品 entitlement 和 Deployment kind 生成 WorkspaceNavigationProjection。
 3. 当前 exclusion 的五个误隐藏项必须有可证明 Workspace source permission/owner 后才恢复；六个迁出项一律
    `retired_internal`，不能因 legacy permission 仍存在而回到公开投影。
@@ -368,6 +380,9 @@ permission、非法 route/tool/group、超限 body 与混合凭据固定拒绝�
 Membership/permission revision/fingerprint、contract snapshot/generation、navigation epoch、`Cache-Control: no-store, private`
 及适用 quoted ETag。
 
+Identity 使用的权限全集不属于下列 Navigation API DTO；它由 2.1 所述 `/workspace/session.authorization` 单独提供并与
+Navigation 证据交叉校验。
+
 ### 7.1 `GET /workspace/navigation`
 
 不接受 query。要求 WorkspaceSession + `workspace.navigation.read`，先验证 current contract/head/source watermark，再按当前
@@ -415,6 +430,10 @@ overview/getting-started 始终在授权后可达；业务组默认折叠，点�
 打开，不把 debug、intent test、dead letter 或 Deployment diagnostics 混进普通一级菜单。Identity locale 与 navigation
 preference 分属 Account/Workspace scope，Workspace switch 后分别保留正确状态。
 
+Identity 的 Conditional Access、Data Governance、Privacy、Compliance、Machine Identity 等入口和动作只读取当前
+WorkspaceSession 的 `authorization.permission_codes`。旧 `/console/navigation.permission_codes`、静态 role 推断、DOM 状态
+或 Navigation item 可见性均不能启用这些能力。
+
 所有 route 使用后端返回的 canonical code 与编译期 registry。每次 contract/permission/Workspace/route change 先推进 epoch、
 使全部 ticket 失效并 abort，再同步清空旧 DOM/store/cursor/form/answer/detail，最后只加载当前 route API。当前 item 的 label、
 group、description、empty/recovery 文案来自固定 i18n key；屏幕不显示 migration ID、table、permission code、hash、token、env
@@ -435,7 +454,7 @@ revision、contract/route/tool/task code、source revision/evidence digest、out
 CSRF、Bearer、Idempotency-Key 明文、Provider Key/Endpoint、Prompt/Response、文件/日志正文、业务筛选或前端 DOM 文本。
 
 DB/source/scheduler 故障时 navigation/advanced 失败关闭；task home 可以在 owner/current permission 可证明时返回明确 stale，
-但不能用旧 action capability。contract hash、item count、64 disposition、2 extras、Membership fingerprint 或 source watermark
+但不能用旧 action capability。contract hash、item count、64 disposition、4 extras、Membership fingerprint 或 source watermark
 任一不一致阻断 head/cutover。reconciliation 从持久 cursor 恢复，失租接管不清空 preference 或重复 completion/open event。
 
 固定 Excel SLO：
@@ -452,8 +471,9 @@ permission revoked、contract conflict、dependency unavailable 和 recovery in 
 
 PRD-146 开发中只跑受影响 unit/API/browser smoke：
 
-- migration verifier 从 Excel 与源码解析 ID：`64/64`、source 66、零重复、零缺失、extras 精确为两项、每项一个 D code、最终
-  retired 精确六项、恢复精确五项；
+- migration verifier 从 Excel 与源码解析 ID：Excel disposition `64/64`、0137 source 63（59 个 Excel source + 4 extras）、
+  新审计合同 68、零重复、5 个缺失来源均有固定承接/退休解释、extras 精确为四项、每项一个 D code、最终 retired 精确六项、
+  恢复精确五项；
 - 0137 current head、fresh/up/down guard/replay、复合 FK、Membership/account mapping、preference conflict、contract hash/
   keyed item-set digest、event/outbox、lease/fence 与空库往返；
 - 八个 human role、custom role 交集、service account/OAuth/VirtualKey/Edge/Platform/Support/Bearer 全负例；owner/admin 不能
@@ -493,12 +513,13 @@ PRD-097 onboarding 权威事实，不实施 PRD-147 外部 router tombstone、�
   entitlement/source permission 并写 event/outbox；返回 route 不是 capability。
 - P0：只隐藏侧栏无法阻止 direct hash/import/prefetch。已把 primary/detail/advanced/account/dev-center/retired 作为后端合同，
   新 router 只认本次 allowed route code；retired 不进入 DTO 或 source request。
-- P1：当前 exclusion 错误隐藏五个 Excel 要求保留的入口。已精确恢复五项，最终 retired 精确六项；64 Excel + 2 extras
+- P1：当前 exclusion 错误隐藏四个 Excel 要求保留的入口且 `error-maps` 缺少 Advanced 承接。已精确恢复五项，最终 retired
+  精确六项；64 Excel + 4 extras
   独立计数，extra 不能补齐缺失。
 - P1：PRD-145 locale 与本条导航偏好容易混表。已固定 AccountPreference 只管 locale，NavigationPreference 绑定
   account+Workspace 且不保存 locale/role/permission。
 
-第一轮结论：五个对象、四 API、三事件、64+2 处置、三类主体和迁移来源都有明确 owner 与唯一事实；无未解决 P0/P1。
+第一轮结论：五个对象、四 API、三事件、64+4 处置、三类主体和迁移来源都有明确 owner 与唯一事实；无未解决 P0/P1。
 
 ### 第二轮：任务真实性、交互、恢复与 SLO
 

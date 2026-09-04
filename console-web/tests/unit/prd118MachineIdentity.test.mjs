@@ -17,6 +17,7 @@ const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;
 const SERVICE_ACCOUNT_ID = `svc_${"2".repeat(32)}`;
 const OAUTH_CLIENT_ID = `ocl_${"3".repeat(32)}`;
 const PUBLIC_CLIENT_ID = `moc_${"4".repeat(32)}`;
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const IDEMPOTENCY_KEYS = ["service-account-create-0001", "oauth-client-create-000001",
   "oauth-client-rotate-000001", "service-account-revoke-001"];
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -352,6 +353,7 @@ function identityState(overrides = {}) {
 }
 
 function identityApi(overrides = {}) {
+  const permissionCodes = ["machine_identity.read", "machine_identity.manage"];
   return {
     me: async () => ({
       account: identityState().account,
@@ -359,12 +361,15 @@ function identityApi(overrides = {}) {
     }),
     sessions: async () => ({ sessions: [identitySession()] }),
     identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
-    workspaceSession: async () => ({ context: workspaceSessionContext() }),
+    workspaceSession: async () => ({
+      context: workspaceSessionContext(),
+      authorization: workspaceAuthorization(permissionCodes),
+    }),
     workspaceNavigation: async () => ({
-      navigation_items: [],
-      permission_codes: ["machine_identity.read", "machine_identity.manage"],
+      groups: [],
+      membership_revision: 1,
       permission_revision: 1,
-      authorization_fingerprint: "machine-authz-fingerprint",
+      permission_fingerprint: AUTHORIZATION_FINGERPRINT,
     }),
     logout: async () => ({ logged_out: true }),
     ...overrides,
@@ -416,6 +421,15 @@ function workspaceSessionContext() {
     role: "owner",
     session_status: "active",
     expires_at: "2026-08-27T00:00:00Z",
+  };
+}
+
+function workspaceAuthorization(permissionCodes) {
+  return {
+    permission_codes: [...permissionCodes],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

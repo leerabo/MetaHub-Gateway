@@ -33,6 +33,7 @@ const SSR = `ssr_${"a".repeat(32)}`;
 const SCF = `scf_${"b".repeat(32)}`;
 const SCIM_BEARER = `mhscim_${"C".repeat(48)}`;
 const CLIENT_SECRET = "not-a-real-client-secret-0001";
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const CERTIFICATE_PEM = `-----BEGIN CERTIFICATE-----\n${"A".repeat(96)}\n-----END CERTIFICATE-----`;
 
 test("PRD-114 clients send exact Workspace cookie, CSRF, CAS, and idempotency contracts", async () => {
@@ -381,7 +382,7 @@ function controllerApi(overrides = {}) {
     identityWorkspaces: async () => identityWorkspaceListResponse("owner"),
     workspaceSession: async () => workspaceContextResponse("owner"),
     memberships: async () => ({ memberships: [] }),
-    workspaceNavigation: async () => ({ navigation_items: [] }),
+    workspaceNavigation: async () => workspaceNavigationProjection(),
     enterpriseIdentity: async () => summary(),
     ...overrides,
   };
@@ -720,6 +721,25 @@ function workspaceContextResponse(role) {
       session_status: "active",
       expires_at: "2026-08-26T09:00:00Z",
     },
+    authorization: workspaceAuthorization(),
+  };
+}
+
+function workspaceAuthorization() {
+  return {
+    permission_codes: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
+  };
+}
+
+function workspaceNavigationProjection() {
+  return {
+    groups: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

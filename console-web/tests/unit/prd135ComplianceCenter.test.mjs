@@ -18,6 +18,7 @@ const EVIDENCE_ID = `evd_${"3".repeat(32)}`;
 const REMEDIATION_ID = `rem_${"4".repeat(32)}`;
 const REPORT_ID = `crp_${"5".repeat(32)}`;
 const SERVICE_ACCOUNT_ID = `svc_${"6".repeat(32)}`;
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const ORIGINAL_FETCH = globalThis.fetch;
 
 test.afterEach(() => { globalThis.fetch = ORIGINAL_FETCH; });
@@ -283,12 +284,15 @@ function identityApi({ permissionCodes = ["compliance.report.read"], ...override
     me: async () => ({ account: identityAccount(), current_session: identitySession() }),
     sessions: async () => ({ sessions: [identitySession()] }),
     identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
-    workspaceSession: async () => ({ context: workspaceSessionContext() }),
+    workspaceSession: async () => ({
+      context: workspaceSessionContext(),
+      authorization: workspaceAuthorization(permissionCodes),
+    }),
     workspaceNavigation: async () => ({
-      navigation_items: [],
-      permission_codes: permissionCodes,
+      groups: [],
+      membership_revision: 1,
       permission_revision: 1,
-      authorization_fingerprint: "compliance-authz-fingerprint",
+      permission_fingerprint: AUTHORIZATION_FINGERPRINT,
     }),
     logout: async () => ({ logged_out: true }),
     ...overrides,
@@ -325,6 +329,15 @@ function workspaceChoice() {
 function workspaceSessionContext() {
   return {
     ...workspaceChoice(), session_status: "active", expires_at: "2026-08-31T10:00:00Z",
+  };
+}
+
+function workspaceAuthorization(permissionCodes) {
+  return {
+    permission_codes: [...permissionCodes],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

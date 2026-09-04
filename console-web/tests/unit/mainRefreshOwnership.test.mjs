@@ -76,23 +76,32 @@ test("console does not register a periodic full-page refresh", async () => {
 });
 
 
-test("navigation refresh renders the authorized target before active-page hydration", async () => {
+test("navigation refresh authorizes the target before route-only hydration", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const refresh = sourceSection(source, "async function performRefresh(options = {})", "function renderLogin(");
-  const consumeIndex = refresh.indexOf("const isFastNavigation = nextRefreshIsFastNavigation;");
+  const ownerIndex = refresh.indexOf("const refreshOwner = Object.freeze");
   const shellIndex = refresh.indexOf("const consoleShellState = await loadConsoleShellState();");
-  const fastGateIndex = refresh.indexOf("if (isFastNavigation)", shellIndex);
-  const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent() || !authSession.token)", fastGateIndex);
-  const renderIndex = refresh.indexOf("renderDeveloperStart(app", ownerGateIndex);
-  const bindIndex = refresh.indexOf("bindAuthenticatedEvents(consoleShellState);", renderIndex);
-  const dispatcherIndex = refresh.indexOf("await loadAndRenderActiveNavigation({", bindIndex);
+  const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent())", shellIndex);
+  const dispatcherIndex = refresh.indexOf("await loadAndRenderActiveNavigation({", ownerGateIndex);
   const dispatcherReturnIndex = refresh.indexOf("return;", dispatcherIndex);
+  const dispatcher = sourceSection(
+    source,
+    "async function loadAndRenderActiveNavigation({",
+    "function renderLogin(",
+  );
+  const routeSwitchIndex = dispatcher.indexOf("switch (activeNavigationId)");
+  const finalGateIndex = dispatcher.indexOf(
+    "if (!authSession.token || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;",
+  );
+  const renderIndex = dispatcher.indexOf("renderDeveloperStart(app", finalGateIndex);
+  const bindIndex = dispatcher.indexOf("bindAuthenticatedEvents(consoleShellState);", renderIndex);
 
-  assert.ok(consumeIndex >= 0 && consumeIndex < shellIndex);
-  assert.ok(shellIndex < fastGateIndex && fastGateIndex < ownerGateIndex);
-  assert.ok(ownerGateIndex < renderIndex && renderIndex < bindIndex);
-  assert.ok(bindIndex < dispatcherIndex && dispatcherIndex < dispatcherReturnIndex);
-  assert.doesNotMatch(refresh.slice(fastGateIndex, dispatcherIndex), /void refresh\(\)/);
+  assert.ok(ownerIndex >= 0 && ownerIndex < shellIndex);
+  assert.ok(shellIndex < ownerGateIndex && ownerGateIndex < dispatcherIndex);
+  assert.ok(dispatcherIndex < dispatcherReturnIndex);
+  assert.ok(routeSwitchIndex >= 0 && routeSwitchIndex < finalGateIndex);
+  assert.ok(finalGateIndex < renderIndex && renderIndex < bindIndex);
+  assert.doesNotMatch(refresh.slice(shellIndex, dispatcherIndex), /void refresh\(\)/);
 });
 
 
@@ -109,40 +118,56 @@ test("active-page dispatcher does not preload unrelated navigation data", async 
   );
 
   const overview = pageCase("overview", "tenant");
-  assert.match(overview, /loadRoleDashboardState/);
+  assert.match(overview, /loadWorkspaceConsoleExperienceState/);
   assert.doesNotMatch(overview, /loadProvidersState|loadUsageState|loadProjectState/);
 
   const providers = pageCase("providers", "provider-health");
   assert.match(providers, /loadProvidersState/);
   assert.doesNotMatch(providers, /loadModelsState|loadUsageState|loadProjectState/);
 
-  const usage = pageCase("usage", "finops-ledger");
+  const usage = pageCase("usage", "workspace-subscription");
   assert.match(usage, /loadUsageState/);
   assert.doesNotMatch(usage, /loadProvidersState|loadProjectState|loadVirtualKeysState/);
 
   const assistant = pageCase("admin-assistant", "system-status");
-  assert.match(assistant, /loadAdminAssistantState/);
-  assert.doesNotMatch(assistant, /await|getServiceStatuses|getConfigSummary/);
+  assert.match(assistant, /loadWorkspaceConsoleExperienceState/);
+  assert.doesNotMatch(assistant, /getServiceStatuses|getConfigSummary|loadProvidersState/);
+
+  const quickstart = pageCase("quickstart", "sdk-examples");
+  assert.match(quickstart, /workspaceNavigationController\.loadGettingStarted/);
+  assert.doesNotMatch(quickstart, /loadProvidersState|loadUsageState|loadProjectState/);
 });
 
 
-test("console preferences are cached only for the complete authorization identity", async () => {
+test("workspace navigation preferences come only from the current canonical response", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const shellLoader = sourceSection(
     source,
     "async function loadConsoleShellState()",
     "async function switchConsoleNavigation",
   );
-  assert.match(shellLoader, /roleDashboardIdentitySnapshot\(authSession\.context\)/);
-  assert.match(shellLoader, /identity === consolePreferencesIdentity/);
-  assert.match(shellLoader, /cachedPreferences[\s\S]*Promise\.resolve\(cachedPreferences\)[\s\S]*getConsolePreferences/);
-  assert.match(source, /function renderLogin[\s\S]*consolePreferencesIdentity = "";[\s\S]*consolePreferencesCache = null;/);
+  assert.match(shellLoader, /workspaceNavigationController\.loadNavigation\(\)/);
+  assert.match(shellLoader, /preferences: \{ preference: navigation\.preference \}/);
+  assert.match(shellLoader, /expandedConsoleGroupKey = navigation\.preference\.expanded_group_code/);
+  assert.doesNotMatch(
+    shellLoader,
+    /consolePreferencesCache|getConsolePreferences|localStorage|sessionStorage/,
+  );
+  assert.match(
+    source,
+    /function renderLogin[\s\S]*workspaceNavigationController\.leave\(\)/,
+  );
 });
 
 
 test("navigation click hydrates only a backend-visible target before deferred telemetry", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  const navigation = sourceSection(source, "async function switchConsoleNavigation", "function readExpandedConsoleGroupKey");
+  const navigation = sourceSection(
+    source,
+    "async function switchConsoleNavigation",
+    "function cancelPendingConsoleNavigationSideEffects",
+  );
+  const routeFenceIndex = navigation.indexOf("workspaceNavigationController.changeRoute();");
   const transitionIndex = navigation.indexOf("renderConsoleNavigationTransition(button");
   const authorizedItemIndex = navigation.indexOf("const projectedNavigationItem =", transitionIndex);
   const visibilityIndex = navigation.indexOf("item.visible !== false && item.disabled !== true", authorizedItemIndex);
@@ -152,7 +177,8 @@ test("navigation click hydrates only a backend-visible target before deferred te
   const preserveSidebarIndex = navigation.indexOf("preserveConsoleSidebar: true", hydrateIndex);
   const sideEffectIndex = navigation.indexOf("scheduleConsoleNavigationSideEffects({", hydrateIndex);
 
-  assert.ok(transitionIndex >= 0 && transitionIndex < authorizedItemIndex);
+  assert.ok(routeFenceIndex >= 0 && routeFenceIndex < transitionIndex);
+  assert.ok(transitionIndex < authorizedItemIndex);
   assert.ok(authorizedItemIndex < visibilityIndex && visibilityIndex < renderIndex);
   assert.ok(renderIndex < bindIndex && bindIndex < hydrateIndex);
   assert.ok(hydrateIndex < preserveSidebarIndex && preserveSidebarIndex < sideEffectIndex);
@@ -162,7 +188,14 @@ test("navigation click hydrates only a backend-visible target before deferred te
   const sideEffects = sourceSection(
     source,
     "function scheduleConsoleNavigationSideEffects",
-    "function readExpandedConsoleGroupKey",
+    "function toggleConsoleSidebarGroup",
+  );
+  const canonicalPreferenceIndex = sideEffects.indexOf(
+    "workspaceNavigationController.savePreference",
+  );
+  const legacyPreferenceIndex = sideEffects.indexOf("await updateConsolePreferences");
+  assert.ok(
+    canonicalPreferenceIndex >= 0 && canonicalPreferenceIndex < legacyPreferenceIndex,
   );
   assert.ok(sideEffects.indexOf("await updateConsolePreferences") < sideEffects.indexOf("await recordConsolePageView"));
   assert.match(sideEffects, /if \(!navigationOwnerCurrent\(\)\) return;/);
@@ -202,8 +235,12 @@ test("sidebar groups use one persisted accordion expansion", async () => {
   const toggle = sourceSection(source, "function toggleConsoleSidebarGroup", "/** 导航请求期间");
   assert.match(toggle, /document\.querySelectorAll\("\[data-sidebar-group\]"\)/);
   assert.match(toggle, /const shouldExpand = button\.getAttribute\("aria-expanded"\) !== "true"/);
-  assert.match(toggle, /expandedConsoleGroupKey = shouldExpand \? key : null/);
-  assert.match(toggle, /persistExpandedConsoleGroupKey\(\)/);
+  assert.match(toggle, /const next = shouldExpand \? key : null/);
+  assert.match(toggle, /expandedConsoleGroupKey = next/);
+  assert.match(toggle, /workspaceNavigationController\.savePreference\(\{[\s\S]*expanded_group_code: next/);
+  assert.match(toggle, /catch \(error\)[\s\S]*expandedConsoleGroupKey = previous/);
+  assert.match(toggle, /applyExpandedConsoleGroup\(previous\)/);
+  assert.doesNotMatch(toggle, /localStorage|sessionStorage|persistExpandedConsoleGroupKey/);
 });
 
 

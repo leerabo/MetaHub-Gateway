@@ -794,10 +794,8 @@ WORKSPACE_NAVIGATION_EXCLUDED_IDS = frozenset(
         "growth-analytics",
         "customer-health",
         "partner-portal",
-        "providers",
-        "local-models",
-        "provider-health",
-        "billing-disputes",
+        "adapter-specs",
+        "adapter-contract-runs",
         "competitor-comparison",
     }
 )

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { normalizeWorkspaceNavigation } from "../../../console-web/src/lib/workspaceNavigation.js";
 
 const require = createRequire(import.meta.url);
 const { chromium, firefox } = require(path.resolve(".tools/product-qa-browser/node_modules/playwright"));
@@ -79,6 +80,21 @@ async function assertAllNavigationGroupsCollapsed(page) {
 
 async function expandNavigationGroup(page, navigationId) {
   const navigation = page.locator(`[data-console-nav='${navigationId}']`);
+  try {
+    await navigation.first().waitFor({ state: "attached", timeout: 4_000 });
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => ({
+      routes: Array.from(document.querySelectorAll("[data-console-nav]"), (element) => (
+        String(element.getAttribute("data-console-nav") ?? "")
+      )).filter(Boolean),
+      shellState: document.querySelector(".console-shell-message")?.textContent?.trim() ?? "",
+    }));
+    diagnostic.responseShape = page.__safeWorkspaceNavigationShape ?? null;
+    throw new Error(
+      `navigation_missing:${navigationId}:${JSON.stringify(diagnostic)}`,
+      { cause: error },
+    );
+  }
   const group = navigation.locator("xpath=ancestor::*[@data-sidebar-group][1]");
   const groupKey = await group.getAttribute("data-sidebar-group");
   assert.ok(groupKey, `sidebar_group_missing:${navigationId}`);
@@ -156,6 +172,9 @@ async function createJourneyPage(browser, viewport) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: scale });
   const page = await context.newPage();
   let consoleErrorCount = 0;
+  const consoleErrorKinds = [];
+  let authProbeActive = true;
+  const expectedAuthProbeConsoleErrorKinds = [];
   let expectedFaultConsoleErrorCount = 0;
   let expectedFaultActive = false;
   let requestFailureCount = 0;
@@ -165,8 +184,24 @@ async function createJourneyPage(browser, viewport) {
   const expectedFailurePaths = new Set();
   page.on("console", (message) => {
     if (message.type() === "error") {
-      if (expectedFaultActive) expectedFaultConsoleErrorCount += 1;
-      else consoleErrorCount += 1;
+      const text = message.text();
+      const status = text.match(/status of (\d{3})/iu)?.[1] ?? "none";
+      let source = "unknown";
+      try {
+        source = new URL(message.location().url).pathname || "/";
+      } catch {
+        source = "unknown";
+      }
+      const kind = `${/failed to load resource/iu.test(text) ? "resource" : "script"}:${status}:${source}`;
+      if (authProbeActive
+        && status === "401"
+        && new Set(["/identity/me", "/workspace/session"]).has(source)) {
+        expectedAuthProbeConsoleErrorKinds.push(kind);
+      } else if (expectedFaultActive) expectedFaultConsoleErrorCount += 1;
+      else {
+        consoleErrorCount += 1;
+        consoleErrorKinds.push(kind);
+      }
     }
   });
   page.on("requestfailed", (request) => {
@@ -211,6 +246,9 @@ async function createJourneyPage(browser, viewport) {
     },
     facts: () => ({
       console_error_count: consoleErrorCount,
+      console_error_kinds: consoleErrorKinds,
+      expected_auth_probe_console_error_count: expectedAuthProbeConsoleErrorKinds.length,
+      expected_auth_probe_console_error_kinds: expectedAuthProbeConsoleErrorKinds,
       expected_fault_console_error_count: expectedFaultConsoleErrorCount,
       request_failure_count: requestFailureCount,
       request_abort_count: requestAbortCount,
@@ -218,10 +256,44 @@ async function createJourneyPage(browser, viewport) {
     }),
     expectServiceFault() { expectedFaultActive = true; },
     clearServiceFault() { expectedFaultActive = false; },
+    finishAuthProbes() {
+      authProbeActive = false;
+      return [...expectedAuthProbeConsoleErrorKinds].sort();
+    },
   };
 }
 
-async function login(page, email, password, locale) {
+async function establishScopedSessions(page, email, password) {
+  await page.goto(`${consoleUrl}identity.html`, { waitUntil: "domcontentloaded" });
+  const form = page.locator("[data-identity-login-form]");
+  await form.waitFor({ state: "visible", timeout: 20_000 });
+  const workspaceSessionResponse = page.waitForResponse((response) => {
+    let responsePath = "";
+    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+    return response.request().method() === "GET"
+      && responsePath === "/workspace/session"
+      && response.status() >= 200
+      && response.status() < 300;
+  }, { timeout: 25_000 });
+  await typeField(page, "邮箱", email);
+  await typeField(page, "密码", password);
+  await humanClick(page, form.getByRole("button", { name: "登录", exact: true }));
+  await Promise.all([
+    workspaceSessionResponse,
+    page.locator(".identity-workspace-selector strong").waitFor({
+      state: "visible",
+      timeout: 25_000,
+    }),
+  ]);
+}
+
+async function login(runtime, email, password, locale) {
+  const { page } = runtime;
+  await establishScopedSessions(page, email, password);
+  assert.deepEqual(runtime.finishAuthProbes(), [
+    "resource:401:/identity/me",
+    "resource:401:/workspace/session",
+  ]);
   await page.goto(consoleUrl, { waitUntil: "domcontentloaded" });
   const form = page.locator("#login-form");
   assert.equal(await form.evaluate((element) => element.checkValidity()), false);
@@ -241,19 +313,11 @@ async function login(page, email, password, locale) {
   await typeField(page, "租户标识", "default");
   await typeField(page, "邮箱", email);
   await typeField(page, "密码", password);
-  const preferencesResponse = page.waitForResponse((response) => {
+  const navigationResponse = page.waitForResponse((response) => {
     let responsePath = "";
     try { responsePath = new URL(response.url()).pathname; } catch { return false; }
     return response.request().method() === "GET"
-      && responsePath === "/user/preferences"
-      && response.status() >= 200
-      && response.status() < 300;
-  }, { timeout: 20_000 });
-  const initialConsoleEventResponse = page.waitForResponse((response) => {
-    let responsePath = "";
-    try { responsePath = new URL(response.url()).pathname; } catch { return false; }
-    return response.request().method() === "POST"
-      && responsePath === "/console/events"
+      && responsePath === "/workspace/navigation"
       && response.status() >= 200
       && response.status() < 300;
   }, { timeout: 20_000 });
@@ -264,9 +328,51 @@ async function login(page, email, password, locale) {
     const alert = await page.locator("[role='alert']").allTextContents();
     throw new Error(`login_failed:${alert.join(" ").slice(0, 240)}`);
   }
-  // The overview paints before the authoritative preference request completes. Waiting on
-  // text alone is insufficient when the saved locale equals the initial locale.
-  await Promise.all([preferencesResponse, initialConsoleEventResponse]);
+  const resolvedNavigationResponse = await navigationResponse;
+  const navigationPayload = await resolvedNavigationResponse.json();
+  let payloadValidation = { passed: true };
+  try {
+    normalizeWorkspaceNavigation(navigationPayload);
+  } catch (error) {
+    payloadValidation = {
+      passed: false,
+      stack: String(error?.stack ?? "").split("\n").slice(0, 8),
+    };
+  }
+  page.__safeWorkspaceNavigationShape = {
+    keys: Object.keys(navigationPayload).sort(),
+    values: Object.fromEntries([
+      "contract_version", "contract_generation", "projection_generation",
+      "projection_status", "navigation_epoch", "membership_revision",
+      "permission_revision", "advanced_tools_available",
+    ].map((key) => [key, navigationPayload[key]])),
+    groups: Array.isArray(navigationPayload.groups)
+      ? navigationPayload.groups.map((group) => ({
+        group_code: group?.group_code,
+        item_routes: Array.isArray(group?.items)
+          ? group.items.map((item) => ({
+            route_code: item?.route_code,
+            kind: item?.kind,
+            order: item?.order,
+          }))
+          : null,
+      }))
+      : null,
+    detail_route_codes: navigationPayload.detail_route_codes,
+    developer_route_codes: navigationPayload.developer_route_codes,
+    account_action_codes: navigationPayload.account_action_codes,
+    preference: navigationPayload.preference,
+    payloadValidation,
+    headers: {
+      cache_control: resolvedNavigationResponse.headers()["cache-control"],
+      pragma: resolvedNavigationResponse.headers().pragma,
+      vary: resolvedNavigationResponse.headers().vary,
+      etag: resolvedNavigationResponse.headers().etag,
+      permission_fingerprint_matches:
+        resolvedNavigationResponse.headers()["x-permission-fingerprint"]
+          === navigationPayload.permission_fingerprint,
+    },
+  };
   const expectedLogoutLabel = locale === "en-US" ? "Log out" : "\u767b\u51fa";
   await page.waitForFunction(
     (expected) => document.querySelector("#logout-button")?.textContent?.trim() === expected,
@@ -372,7 +478,7 @@ async function runJourney(browser, definition) {
   const runtime = await createJourneyPage(browser, definition.viewport);
   try {
     const loginFacts = await login(
-      runtime.page,
+      runtime,
       definition.email,
       definition.password,
       definition.locale,
@@ -388,7 +494,11 @@ async function runJourney(browser, definition) {
       0,
       `request_failures:${facts.request_failure_kinds.join(",")}`,
     );
-    assert.equal(facts.console_error_count, 0);
+    assert.equal(
+      facts.console_error_count,
+      0,
+      `console_errors:${facts.console_error_kinds.join(",")}`,
+    );
     return {
       journey_id: definition.id,
       role: definition.role,
@@ -423,8 +533,33 @@ try {
     password: process.env.METAHUB_QA_ADMIN_PASSWORD,
     async execute(page, runtime) {
       await assertAllNavigationGroupsCollapsed(page);
-      await page.locator(".admin-onboarding").waitFor({ state: "visible", timeout: 4_000 });
-      await page.locator(".admin-onboarding [role='progressbar']").waitFor({ state: "visible" });
+      const taskHome = await openNavigation(
+        page,
+        "quickstart",
+        ["/workspace/getting-started"],
+      );
+      await page.locator(".workspace-task-home").waitFor({ state: "visible", timeout: 4_000 });
+      const advancedTrigger = page.locator("[data-workspace-advanced-open]");
+      const advancedResponse = page.waitForResponse((response) => {
+        let responsePath = "";
+        try { responsePath = new URL(response.url()).pathname; } catch { return false; }
+        return response.request().method() === "GET"
+          && responsePath === "/workspace/advanced-tools"
+          && response.status() >= 200
+          && response.status() < 300;
+      }, { timeout: 10_000 });
+      await humanClick(page, advancedTrigger);
+      await advancedResponse;
+      const advancedDialog = page.locator("[data-workspace-advanced-dialog]");
+      await advancedDialog.waitFor({ state: "visible", timeout: 4_000 });
+      assert.equal(await advancedDialog.getAttribute("open"), "");
+      assert.equal(await page.evaluate(() => (
+        document.querySelector("[data-workspace-advanced-dialog]")
+          ?.contains(document.activeElement) === true
+      )), true, "advanced_dialog_focus_missing");
+      await page.keyboard.press("Escape");
+      await advancedDialog.waitFor({ state: "detached", timeout: 4_000 });
+      assert.equal(await advancedTrigger.evaluate((element) => document.activeElement === element), true);
       const providers = await openNavigation(page, "providers", ["/providers"]);
       const usage = await openNavigation(page, "usage", ["/usage/summary", "/usage/records"]);
       assert.notEqual(providers.groupKey, usage.groupKey, "qa_navigation_groups_must_be_distinct");
@@ -436,8 +571,10 @@ try {
       await verifyServiceRecovery(runtime);
       await collapseSidebar(page);
       return {
-        onboarding_visible: true,
+        advanced_dialog_keyboard_passed: true,
+        task_home_visible: true,
         navigation_latency_ms: {
+          task_home: taskHome.elapsedMs,
           providers: providers.elapsedMs,
           usage: usage.elapsedMs,
         },
@@ -475,11 +612,51 @@ try {
     email: process.env.METAHUB_QA_VIEWER_EMAIL,
     password: process.env.METAHUB_QA_VIEWER_PASSWORD,
     async execute(page) {
+      const toggle = page.locator("[data-sidebar-toggle]");
+      assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+      assert.equal(
+        await page.locator(".console-shell.sidebar-collapsed").count(),
+        1,
+        "mobile_drawer_should_start_closed",
+      );
+      await humanClick(page, toggle);
+      await page.locator("[data-sidebar-toggle][aria-expanded='true']").waitFor({
+        state: "visible",
+        timeout: 4_000,
+      });
+      const touchTargets = page.locator(
+        "[data-sidebar-toggle], [data-sidebar-group-toggle], [data-workspace-advanced-open]",
+      );
+      const targetSizes = await touchTargets.evaluateAll((elements) => elements
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }));
+      assert.ok(targetSizes.length > 1, "mobile_touch_targets_missing");
+      for (const target of targetSizes) {
+        assert.ok(target.width >= 44 && target.height >= 44, `mobile_touch_target_too_small:${target.width}x${target.height}`);
+      }
+      await openNavigation(page, "quickstart", ["/workspace/getting-started"]);
+      await page.locator(".workspace-task-home").waitFor({ state: "visible", timeout: 4_000 });
+      const taskActionSizes = await page.locator(".workspace-task-row button").evaluateAll(
+        (elements) => elements.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
+      );
+      for (const target of taskActionSizes) {
+        assert.ok(target.width >= 44 && target.height >= 44, `mobile_task_target_too_small:${target.width}x${target.height}`);
+      }
       await collapseSidebar(page);
       const body = (await page.locator("body").innerText()).toLowerCase();
       for (const sensitive of ["provider key", "access token", "response body"]) {
         assert.ok(!body.includes(sensitive));
       }
+      return { mobile_drawer_default_closed: true, mobile_touch_targets: targetSizes.length };
     },
   }));
   process.stdout.write(JSON.stringify({ browser: browserName, scale, journeys, all_108_prds_complete: false }));

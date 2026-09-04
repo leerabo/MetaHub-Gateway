@@ -22,6 +22,7 @@ const MEMBER_OWNER = `wmb_${"1".repeat(32)}`;
 const MEMBER_ADMIN = `wmb_${"2".repeat(32)}`;
 const MEMBER_SERVICE = `wmb_${"3".repeat(32)}`;
 const INVITATION_TOKEN = "A".repeat(43);
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 
 test("PRD-094 clients use exact Global and Workspace cookie contracts", async () => {
   const originalDocument = globalThis.document;
@@ -30,10 +31,11 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
   };
   const calls = installFetch((url) => responseFor(url));
   let navigation;
+  let workspaceSession;
   try {
     await listIdentityWorkspaces({ controlApiUrl: CONTROL_URL });
     await switchIdentityWorkspace({ controlApiUrl: CONTROL_URL, workspaceId: WSP_ONE });
-    await getCurrentWorkspaceSession({ controlApiUrl: CONTROL_URL });
+    workspaceSession = await getCurrentWorkspaceSession({ controlApiUrl: CONTROL_URL });
     await listWorkspaceMemberships({ controlApiUrl: CONTROL_URL });
     await updateWorkspaceMembership({
       controlApiUrl: CONTROL_URL,
@@ -68,16 +70,23 @@ test("PRD-094 clients use exact Global and Workspace cookie contracts", async ()
       [`http://control.local/memberships/${MEMBER_ADMIN}`, "PATCH", "include", "no-store"],
       ["http://control.local/membership-invitations", "POST", "include", "no-store"],
       ["http://control.local/workspace-owner-transfers", "POST", "include", "no-store"],
-      ["http://control.local/console/navigation", "GET", "include", "no-store"],
+      ["http://control.local/workspace/navigation", "GET", "include", "no-store"],
     ],
   );
   assert.equal(calls[0].options.headers["X-CSRF-Token"], undefined);
   assert.equal(calls[1].options.headers["X-CSRF-Token"], "global-csrf");
   assert.equal(calls[4].options.headers["X-CSRF-Token"], "workspace-csrf");
   assert.equal(calls[4].options.headers["If-Match"], '"4"');
-  assert.deepEqual(navigation.permission_codes, ["dashboard.read"]);
+  assert.equal(navigation.groups[0].items[0].route_code, "workspace.home.overview");
   assert.equal(navigation.permission_revision, 1);
-  assert.equal(navigation.authorization_fingerprint, "f".repeat(64));
+  assert.equal(navigation.permission_fingerprint, AUTHORIZATION_FINGERPRINT);
+  assert.equal("permission_codes" in navigation, false);
+  assert.deepEqual(workspaceSession.authorization, {
+    permission_codes: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
+  });
   assert.deepEqual(JSON.parse(calls[1].options.body), { workspace_id: WSP_ONE });
   assert.deepEqual(JSON.parse(calls[4].options.body), { role: "auditor", status: "active" });
   assert.deepEqual(JSON.parse(calls[5].options.body), {
@@ -137,6 +146,12 @@ test("PRD-094 client rejects credential confusion and over-posted DTOs", async (
     listIdentityWorkspaces({ controlApiUrl: CONTROL_URL }),
     (error) => error.code === "workspace_session.response_invalid",
   );
+
+  installFetch(() => jsonResponse(workspaceContextPayload()));
+  await assert.rejects(
+    getCurrentWorkspaceSession({ controlApiUrl: CONTROL_URL }),
+    (error) => error.code === "workspace_session.response_invalid",
+  );
 });
 
 test("PRD-094 controller switches, manages members, and keeps invitation Token out of DOM", async () => {
@@ -167,7 +182,7 @@ test("PRD-094 controller switches, manages members, and keeps invitation Token o
       },
       workspaceSession: async () => {
         if (!sessionAvailable) throw workspaceError(401, "workspace_session.revoked");
-        return workspaceContextPayload(activeWorkspace);
+        return workspaceSessionPayload(activeWorkspace);
       },
       updateMembership: async (input) => {
         updated.push(input);
@@ -315,7 +330,7 @@ test("PRD-094 renderer exposes machine subjects without internal identifiers or 
     workspaceChoices: identityWorkspaceListPayload().workspaces,
     workspaceContext: workspaceContextPayload().context,
     memberships: membershipListPayload().memberships,
-    navigationItems: navigationPayload().navigation_items,
+    navigationItems: navigationPayload().groups.flatMap((group) => group.items),
     workspaceView: "summary",
   });
 
@@ -338,14 +353,23 @@ test("PRD-094 renderer exposes machine subjects without internal identifiers or 
 function responseFor(url) {
   const path = new URL(url).pathname;
   if (path === "/identity/workspaces") return jsonResponse(identityWorkspaceListPayload());
-  if (path === "/identity/workspace-switches" || path === "/workspace/session") {
+  if (path === "/identity/workspace-switches") {
     return jsonResponse(workspaceContextPayload());
   }
+  if (path === "/workspace/session") return jsonResponse(workspaceSessionPayload());
   if (path === "/memberships") return jsonResponse(membershipListPayload());
   if (path.startsWith("/memberships/")) return jsonResponse(membershipPayload());
   if (path === "/membership-invitations") return jsonResponse(invitationPayload(), 201);
   if (path === "/workspace-owner-transfers") return jsonResponse(ownerTransferPayload());
-  if (path === "/console/navigation") return jsonResponse(navigationPayload());
+  if (path === "/workspace/navigation") {
+    return jsonResponse(navigationPayload(), 200, {
+      "Cache-Control": "no-store, private",
+      ETag: '"1.1.1.1"',
+      Pragma: "no-cache",
+      Vary: "Cookie",
+      "X-Permission-Fingerprint": "f".repeat(64),
+    });
+  }
   throw new Error(`unexpected path ${path}`);
 }
 
@@ -355,7 +379,7 @@ function workingApi(overrides = {}) {
     sessions: async () => sessionListPayload(),
     workspaces: async () => richWorkspaceListPayload(),
     identityWorkspaces: async () => identityWorkspaceListPayload(),
-    workspaceSession: async () => workspaceContextPayload(),
+    workspaceSession: async () => workspaceSessionPayload(),
     memberships: async () => membershipListPayload(),
     workspaceNavigation: async () => navigationPayload(),
     createWorkspace: async () => ({ workspace: richWorkspace(WSP_ONE, "Acme AI") }),
@@ -454,6 +478,18 @@ function workspaceContextPayload(workspaceId = WSP_ONE) {
   };
 }
 
+function workspaceSessionPayload(workspaceId = WSP_ONE) {
+  return {
+    ...workspaceContextPayload(workspaceId),
+    authorization: {
+      permission_codes: [],
+      permission_revision: 1,
+      permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+      membership_revision: 1,
+    },
+  };
+}
+
 function membershipListPayload() {
   return {
     memberships: [
@@ -533,27 +569,44 @@ function ownerTransferPayload() {
 
 function navigationPayload() {
   return {
-    navigation_items: [
+    account_action_codes: ["identity.preferences"],
+    advanced_tools_available: false,
+    contract_generation: 1,
+    contract_snapshot_id: `ncs_${"1".repeat(32)}`,
+    contract_version: "workspace-navigation-v1",
+    detail_route_codes: [],
+    developer_route_codes: [],
+    groups: [
       {
-        id: "overview",
-        label: "概览",
-        group: "总览",
-        target_section: "overview",
-        required_roles: ["admin"],
-        required_permissions: ["dashboard.read"],
-        visible: true,
-        disabled: false,
-        description: "查看空间概览。",
-        empty_state_hint: "暂无内容。",
-        order: 10,
+        group_code: "home",
+        label_key: "navigation.group.home",
+        expanded: false,
+        items: [
+          {
+            route_code: "workspace.home.overview",
+            label_key: "navigation.overview.label",
+            description_key: "navigation.overview.description",
+            kind: "primary",
+            order: 10,
+          },
+        ],
       },
     ],
-    active_navigation_item_id: "overview",
-    gateway_base_url: null,
-    gateway_base_url_status: "configuration_required",
-    permission_codes: ["dashboard.read"],
+    item_set_digest: "d".repeat(64),
+    membership_revision: 1,
+    navigation_epoch: 1,
+    observed_at: "2026-09-03T08:00:00Z",
+    owner_ref: "a".repeat(64),
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
     permission_revision: 1,
-    authorization_fingerprint: "f".repeat(64),
+    preference: {
+      revision: 0,
+      last_primary_route_code: "workspace.home.overview",
+      expanded_group_code: null,
+      sidebar_collapsed: false,
+    },
+    projection_generation: 1,
+    projection_status: "ready",
     request_id: "req_navigation",
     trace_id: "trc_navigation",
   };
@@ -604,11 +657,14 @@ function installFetch(handler) {
   return calls;
 }
 
-function jsonResponse(payload, status = 200) {
+function jsonResponse(payload, status = 200, responseHeaders = {}) {
+  const headers = Object.fromEntries(
+    Object.entries(responseHeaders).map(([key, value]) => [key.toLowerCase(), value]),
+  );
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: () => null },
+    headers: { get: (name) => headers[String(name).toLowerCase()] ?? null },
     async json() {
       return structuredClone(payload);
     },

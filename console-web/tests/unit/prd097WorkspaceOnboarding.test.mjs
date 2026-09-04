@@ -13,6 +13,7 @@ import { renderIdentitySecurityPage } from "../../src/features/identity/renderId
 const CONTROL_URL = "http://control.local";
 const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;
 const NOW = "2026-08-22T08:00:00Z";
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const STEP_DEFINITIONS = [
   ["workspace_profile", "确认空间资料", "confirm", "#workspace-profile"],
   ["environment", "准备开发环境", "confirm", "#workspace-environments"],
@@ -231,11 +232,32 @@ function workingApi(overrides = {}) {
     sessions: async () => ({ sessions: state.sessions }),
     workspaces: async () => ({ workspaces: state.workspaces }),
     identityWorkspaces: async () => ({ workspaces: state.workspaceChoices }),
-    workspaceSession: async () => ({ context: state.workspaceContext }),
+    workspaceSession: async () => ({
+      context: state.workspaceContext,
+      authorization: workspaceAuthorization(),
+    }),
     memberships: async () => ({ memberships: [] }),
-    workspaceNavigation: async () => ({ navigation_items: [] }),
+    workspaceNavigation: async () => workspaceNavigationProjection(),
     onboarding: async () => onboardingPayload(),
     ...overrides,
+  };
+}
+
+function workspaceAuthorization() {
+  return {
+    permission_codes: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
+  };
+}
+
+function workspaceNavigationProjection() {
+  return {
+    groups: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

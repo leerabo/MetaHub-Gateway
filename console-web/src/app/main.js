@@ -352,7 +352,6 @@ import {
 import { getDeveloperSupplyChainSecurity } from "../lib/supplyChainSecurity.js";
 import {
   authorizationIdentitySnapshot,
-  authorizeNavigationSnapshot,
   getPermissions,
   hasPermission,
   PERMISSIONS,
@@ -374,12 +373,9 @@ import {
 import { getConfigSummary } from "../lib/configSummary.js";
 import {
   bindNavigationHashRefresh,
-  getConsoleNavigation,
-  getConsolePreferences,
   parseApprovalCardHash,
   parseNavigationHash,
   recordConsolePageView,
-  resolveVisibleNavigation,
   updateConsolePreferences,
 } from "../lib/consoleShell.js";
 import { sendDebugChatCompletion } from "../lib/debugConsole.js";
@@ -589,6 +585,22 @@ import {
   getWebAuthnAssertion,
 } from "../lib/identity.js";
 import { getCurrentWorkspaceSession } from "../lib/workspaces.js";
+import {
+  WORKSPACE_ROUTE_REGISTRY,
+  WORKSPACE_SOURCE_ROUTE_REGISTRY,
+  createWorkspaceNavigationIdempotencyKey,
+  getWorkspaceAdvancedTools,
+  getWorkspaceGettingStarted,
+  getWorkspaceNavigation,
+  openWorkspaceAdvancedTool,
+  projectWorkspaceNavigationForConsole,
+  resolveWorkspaceNavigationRoute,
+  updateWorkspaceNavigationPreference,
+} from "../lib/workspaceNavigation.js";
+import { createWorkspaceNavigationController } from "../features/workspace-navigation/workspaceNavigationController.js";
+import {
+  renderWorkspaceAdvancedTools,
+} from "../features/workspace-navigation/renderWorkspaceNavigation.js";
 import {
   createBrandingIdempotencyKey,
   getDeploymentBranding,
@@ -851,9 +863,11 @@ let shellMetadataIdentity = "";
 let consolePreferencesIdentity = "";
 let consolePreferencesCache = null;
 let gatewayDebugState = {};
-// 分组折叠只保存稳定导航 ID，不保存租户、用户、业务数据或任何凭据。
-const SIDEBAR_GROUP_STORAGE_KEY = "metahub.console.sidebar-group.v2";
-let expandedConsoleGroupKey = readExpandedConsoleGroupKey();
+// 0138 分组状态只来自当前 Workspace 的服务端偏好；默认全部折叠。
+let expandedConsoleGroupKey = null;
+let workspaceAdvancedToolsDialogState = null;
+let workspaceAdvancedToolsDialogController = null;
+let workspaceAdvancedToolsDialogTrigger = null;
 // 生命周期管理器集中持有当前 AbortController 和递增代次，防止旧流回调覆盖连续提交后的新结果。
 const gatewayDebugLifecycle = createGatewayDebugStreamLifecycle();
 // PAGE-093 的正文、草稿、Session owner 和 AbortController 全部封装在独立闭包，绝不复用 Debug Console。
@@ -934,6 +948,35 @@ const workspaceProviderEngineeringController = createWorkspaceProviderEngineerin
   onPermissionRevoked() {
     if (authSession.token) void refresh();
   },
+});
+const workspaceNavigationController = createWorkspaceNavigationController({
+  api: {
+    workspaceSession: (input) => getCurrentWorkspaceSession({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    navigation: (input) => getWorkspaceNavigation({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    gettingStarted: (input) => getWorkspaceGettingStarted({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    advancedTools: (input) => getWorkspaceAdvancedTools({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    updatePreference: (input) => updateWorkspaceNavigationPreference({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+    openAdvancedTool: (input) => openWorkspaceAdvancedTool({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
+  },
+  createIdempotencyKey: createWorkspaceNavigationIdempotencyKey,
 });
 const WORKSPACE_COMMERCIAL_NAVIGATION_IDS = new Set([
   "workspace-subscription",
@@ -1385,6 +1428,8 @@ if (app && globalThis.window) {
       approvalPageState.clear();
       workspaceConsoleExperienceShellState = null;
       workspaceConsoleExperienceController.leave();
+      workspaceNavigationController.leave();
+      closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
       webhookDeadLetterPageState.clear();
       clearPolicyEditorSessionState();
       clearPolicySnapshotSessionState();
@@ -1602,6 +1647,8 @@ export function bindConsoleWorkspaceContextInvalidation({
 /** Fence old Cookie-scoped Edge work before any server-authoritative reload can begin. */
 function handleConsoleWorkspaceContextInvalidation() {
   refreshSequence += 1;
+  workspaceNavigationController.leave();
+  closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   providersLoadController?.abort();
   providersLoadController = null;
   consoleSidebarController?.abort();
@@ -2728,7 +2775,9 @@ async function loadAndRenderActiveNavigation({
       state.accountPreferenceLocation = "/identity.html#account-preferences";
       break;
     case "quickstart":
-      await load("quickstartState", () => loadQuickstartState(consoleShellState));
+      await load("workspaceTaskHomeState", () => (
+        workspaceNavigationController.loadGettingStarted()
+      ));
       break;
     case "sdk-examples":
       await load("sdkExampleStates", () => loadSdkExampleStates(consoleShellState));
@@ -2872,6 +2921,8 @@ function renderLogin(error, requestId) {
   loginGeneration += 1;
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
+  workspaceNavigationController.leave();
+  closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   clearDeveloperContractDownload();
   clearDeveloperContractSecurityLoad();
   developerContractDownloadMetadata = new Map();
@@ -3350,10 +3401,11 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   for (const groupToggle of document.querySelectorAll("[data-sidebar-group-toggle]")) {
-    groupToggle.onclick = () => {
-      toggleConsoleSidebarGroup(groupToggle, consoleShellState);
+    groupToggle.onclick = async () => {
+      await toggleConsoleSidebarGroup(groupToggle, consoleShellState);
     };
   }
+  bindWorkspaceNavigationInteractions(consoleShellState);
 
   const sidebarToggle = document.querySelector("[data-sidebar-toggle]");
   if (sidebarToggle) sidebarToggle.onclick = async () => {
@@ -12702,51 +12754,46 @@ function bindRolePermissionInteractions(consoleShellState) {
  */
 async function loadConsoleShellState() {
   const hashState = readNavigationHashState();
-  const identity = roleDashboardIdentitySnapshot(authSession.context);
-  const cachedPreferences = identity && identity === consolePreferencesIdentity
-    ? consolePreferencesCache
-    : null;
   try {
-    const [navigation, preferences] = await Promise.all([
-      getConsoleNavigation({
-        controlApiUrl,
-        token: authSession.token,
-      }),
-      cachedPreferences
-        ? Promise.resolve(cachedPreferences)
-        : getConsolePreferences({ controlApiUrl, token: authSession.token }),
-    ]);
-    if (identity && identity === roleDashboardIdentitySnapshot(authSession.context)) {
-      consolePreferencesIdentity = identity;
-      consolePreferencesCache = preferences;
+    const loaded = await workspaceNavigationController.loadNavigation();
+    const navigation = loaded.navigation;
+    const requestedRegistry = WORKSPACE_ROUTE_REGISTRY[hashState.value];
+    let advancedTools = null;
+    if (
+      navigation.advanced_tools_available
+      && requestedRegistry?.placement === "advanced"
+    ) {
+      advancedTools = await workspaceNavigationController.loadAdvancedTools();
     }
-    // /auth/me 与 /console/navigation 必须携带完全一致的权限集合、revision 和指纹；
-    // 任一漂移都整包失败关闭，禁止回退到历史 required_roles 或本地角色名。
-    const authorizedNavigation = authorizeNavigationSnapshot(navigation, authSession.context);
-    // hash 只在后端可见导航集合内解析；非法入口本地回退，后端直接调用仍保留 422 权限边界。
-    const resolution = resolveVisibleNavigation(authorizedNavigation, hashState.value, {
+    const resolution = resolveWorkspaceNavigationRoute(navigation, hashState.value, {
       requestedRejected: hashState.rejected,
+      advancedTools,
     });
-    if (resolution.rejectedRequestedItem) {
+    if (resolution.rejected) {
       replaceNavigationHash("");
     }
-    const resolvedNavigation = {
-      ...authorizedNavigation,
-      active_navigation_item_id: resolution.activeItemId,
-    };
+    const resolvedNavigation = projectWorkspaceNavigationForConsole(
+      navigation,
+      resolution.routeCode,
+      advancedTools,
+    );
+    expandedConsoleGroupKey = navigation.preference.expanded_group_code;
     return {
       state: "ok",
       navigation: resolvedNavigation,
-      preferences,
-      activeNavigationItemId: resolution.activeItemId,
-      ...(resolution.rejectedRequestedItem
+      preferences: { preference: navigation.preference },
+      workspaceContext: loaded.context,
+      workspaceNavigationContract: true,
+      activeNavigationItemId: resolvedNavigation.active_navigation_item_id,
+      activeRouteCode: resolution.routeCode,
+      sidebarExpandedGroupKey: expandedConsoleGroupKey,
+      ...(resolution.rejected
         ? { warning: "当前角色不可访问该入口，已回到概览。" }
         : {}),
       actionError: consoleShellActionError,
     };
   } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
+    if (Number(error?.status) === 401) {
       clearAuthSession();
       authSession = { token: null, context: null };
       renderLogin(authErrorMessage(error), error.requestId);
@@ -12772,12 +12819,16 @@ async function switchConsoleNavigation(button, consoleShellState) {
     return;
   }
   const itemId = button.dataset.consoleNav;
+  const routeCode = button.dataset.consoleRoute
+    || WORKSPACE_SOURCE_ROUTE_REGISTRY[itemId];
   const targetSection = button.dataset.consoleTarget || itemId;
-  if (!itemId) {
+  if (!itemId || !routeCode || WORKSPACE_ROUTE_REGISTRY[routeCode]?.sourceId !== itemId) {
     return;
   }
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
+  workspaceNavigationController.changeRoute();
+  closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   cancelPendingConsoleNavigationSideEffects();
   // 导航 owner 在任何 await 前冻结；后续点击、全页刷新或换 Session 任一发生都会使它失效。
   // Token 只在闭包内做等值判断，绝不能进入 DOM、遥测、日志或错误消息。
@@ -12956,7 +13007,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
   consoleShellActionError = null;
   // navigationOwner 创建时已经推进 refreshSequence，使正在运行的旧刷新立即失效；
   // 不能等偏好写入完成后才阻止旧页面回写。
-  replaceNavigationHash(itemId);
+  replaceNavigationHash(routeCode);
   // 先投影目标入口和加载态，避免等待偏好、审计事件及完整数据刷新时用户看到旧页面。
   renderConsoleNavigationTransition(button, consoleShellState, itemId);
   // 当前按钮来自上一轮后端授权导航快照；先投影同一快照中的目标入口安全空态，
@@ -12971,8 +13022,10 @@ async function switchConsoleNavigation(button, consoleShellState) {
       navigation: {
         ...consoleShellState.navigation,
         active_navigation_item_id: itemId,
+        active_route_code: routeCode,
       },
       activeNavigationItemId: itemId,
+      activeRouteCode: routeCode,
     };
     renderDeveloperStart(app, {
       gatewayUrl,
@@ -13051,6 +13104,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     }
     scheduleConsoleNavigationSideEffects({
       itemId,
+      routeCode,
       targetSection,
       token,
       navigationOwnerCurrent,
@@ -13081,12 +13135,134 @@ function cancelPendingConsoleNavigationSideEffects() {
   }
 }
 
+function bindWorkspaceNavigationInteractions(consoleShellState) {
+  if (consoleShellState?.workspaceNavigationContract !== true) return;
+  for (const button of document.querySelectorAll("[data-workspace-task-route]")) {
+    const routeCode = String(button.dataset.workspaceTaskRoute ?? "");
+    const route = WORKSPACE_ROUTE_REGISTRY[routeCode];
+    if (!route) {
+      button.disabled = true;
+      continue;
+    }
+    const navigationButton = [...document.querySelectorAll("[data-console-route]")].find(
+      (candidate) => candidate.dataset.consoleRoute === routeCode,
+    );
+    button.onclick = async () => {
+      button.dataset.consoleNav = route.sourceId;
+      button.dataset.consoleRoute = routeCode;
+      button.dataset.consoleTarget = route.sourceId;
+      button.dataset.consoleNavLabel = navigationButton?.dataset.consoleNavLabel ?? "当前任务";
+      button.dataset.consoleGroup = navigationButton?.dataset.consoleGroup ?? "任务";
+      button.dataset.consoleDescription = navigationButton?.dataset.consoleDescription ?? "";
+      await switchConsoleNavigation(button, consoleShellState);
+    };
+  }
+  const advanced = document.querySelector("[data-workspace-advanced-open]");
+  if (advanced) {
+    advanced.onclick = async () => {
+      await openWorkspaceAdvancedToolsDialog(consoleShellState);
+    };
+  }
+}
+
+async function openWorkspaceAdvancedToolsDialog(consoleShellState) {
+  const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
+  workspaceAdvancedToolsDialogTrigger = trigger;
+  const controller = new AbortController();
+  workspaceAdvancedToolsDialogController = controller;
+  workspaceAdvancedToolsDialogState = { status: "loading" };
+  renderWorkspaceAdvancedToolsDialogState(consoleShellState);
+  try {
+    const tools = await workspaceNavigationController.loadAdvancedTools();
+    if (controller.signal.aborted
+      || workspaceAdvancedToolsDialogController !== controller) return;
+    workspaceAdvancedToolsDialogState = tools;
+    consoleShellState.navigation = projectWorkspaceNavigationForConsole(
+      workspaceNavigationController.snapshot().navigation,
+      consoleShellState.activeRouteCode,
+      tools,
+    );
+    renderWorkspaceAdvancedToolsDialogState(consoleShellState);
+  } catch (error) {
+    if (controller.signal.aborted
+      || workspaceAdvancedToolsDialogController !== controller) return;
+    workspaceAdvancedToolsDialogState = { status: "error", error };
+    renderWorkspaceAdvancedToolsDialogState(consoleShellState);
+  }
+}
+
+function renderWorkspaceAdvancedToolsDialogState(consoleShellState) {
+  document.querySelector("[data-workspace-advanced-dialog]")?.remove();
+  const shell = document.querySelector(".console-shell");
+  if (!shell || consoleShellState?.workspaceNavigationContract !== true) return;
+  shell.insertAdjacentHTML(
+    "beforeend",
+    renderWorkspaceAdvancedTools(workspaceAdvancedToolsDialogState),
+  );
+  const dialog = shell.querySelector("[data-workspace-advanced-dialog]");
+  if (dialog && typeof dialog.showModal === "function") {
+    try {
+      dialog.showModal();
+    } catch {
+      dialog.setAttribute("open", "");
+    }
+  } else {
+    dialog?.setAttribute("open", "");
+  }
+  const close = () => closeWorkspaceAdvancedToolsDialog();
+  dialog?.querySelector("[data-workspace-advanced-close]")?.addEventListener("click", close);
+  dialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  for (const button of dialog?.querySelectorAll("[data-workspace-advanced-tool]") ?? []) {
+    button.onclick = async () => {
+      const toolCode = String(button.dataset.workspaceAdvancedTool ?? "");
+      const routeCode = String(button.dataset.workspaceAdvancedRoute ?? "");
+      const route = WORKSPACE_ROUTE_REGISTRY[routeCode];
+      if (!route || route.placement !== "advanced") return;
+      const row = button.closest(".workspace-advanced-row");
+      button.disabled = true;
+      try {
+        await workspaceNavigationController.openAdvancedTool(toolCode);
+        button.dataset.consoleNav = route.sourceId;
+        button.dataset.consoleRoute = routeCode;
+        button.dataset.consoleTarget = route.sourceId;
+        button.dataset.consoleNavLabel = row?.querySelector("h3")?.textContent ?? "高级工具";
+        button.dataset.consoleGroup = "高级工具";
+        button.dataset.consoleDescription = row?.querySelector("p")?.textContent ?? "";
+        await switchConsoleNavigation(button, consoleShellState);
+        close();
+      } catch (error) {
+        if (!button.isConnected) return;
+        workspaceAdvancedToolsDialogState = { status: "error", error };
+        renderWorkspaceAdvancedToolsDialogState(consoleShellState);
+      }
+    };
+  }
+}
+
+function closeWorkspaceAdvancedToolsDialog({ restoreFocus = true } = {}) {
+  const trigger = workspaceAdvancedToolsDialogTrigger;
+  workspaceAdvancedToolsDialogController?.abort();
+  workspaceAdvancedToolsDialogController = null;
+  workspaceAdvancedToolsDialogState = null;
+  workspaceAdvancedToolsDialogTrigger = null;
+  workspaceNavigationController.cancelAdvancedTools();
+  document.querySelector("[data-workspace-advanced-dialog]")?.remove();
+  if (restoreFocus && trigger?.isConnected && typeof trigger.focus === "function") {
+    trigger.focus();
+  }
+}
+
 /**
  * 页面可用后再防抖、串行写入偏好和低风险访问事件。
  * 两次写入不得与当前页读取并发，也不得为已离开的页面继续补写事件。
  */
 function scheduleConsoleNavigationSideEffects({
   itemId,
+  routeCode,
   targetSection,
   token,
   navigationOwnerCurrent,
@@ -13095,6 +13271,19 @@ function scheduleConsoleNavigationSideEffects({
   consoleNavigationSideEffectTimer = globalThis.setTimeout(async () => {
     consoleNavigationSideEffectTimer = null;
     if (!navigationOwnerCurrent()) return;
+    const canonical = WORKSPACE_ROUTE_REGISTRY[routeCode];
+    if (canonical) {
+      if (new Set(["primary", "task_home"]).has(canonical.placement)) {
+        const result = await workspaceNavigationController.savePreference({
+          last_primary_route_code: routeCode,
+        }).catch(() => null);
+        if (!navigationOwnerCurrent()) return;
+        if (result?.navigation) {
+          expandedConsoleGroupKey = result.navigation.preference.expanded_group_code;
+        }
+      }
+      return;
+    }
     const preferences = await updateConsolePreferences({
       controlApiUrl,
       token,
@@ -13127,40 +13316,44 @@ function scheduleConsoleNavigationSideEffects({
   }, CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS);
 }
 
-function readExpandedConsoleGroupKey() {
-  try {
-    const value = globalThis.localStorage?.getItem(SIDEBAR_GROUP_STORAGE_KEY);
-    const parsed = value ? JSON.parse(value) : null;
-    const key = typeof parsed === "string" ? parsed.trim() : "";
-    return key && key.length <= 400 ? key : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistExpandedConsoleGroupKey() {
-  try {
-    globalThis.localStorage?.setItem(
-      SIDEBAR_GROUP_STORAGE_KEY,
-      JSON.stringify(expandedConsoleGroupKey),
-    );
-  } catch {
-    // 浏览器禁用 Storage 时保留当前页面内存状态即可。
-  }
-}
-
-/** 分组手风琴是纯 UI 状态；不写业务 API，也不携带 tenant/user 标识。 */
-function toggleConsoleSidebarGroup(button, consoleShellState) {
+/** 分组手风琴只保存当前 Workspace 的服务端 UI 偏好，失败时恢复已确认 revision。 */
+async function toggleConsoleSidebarGroup(button, consoleShellState) {
   const key = String(button?.dataset?.sidebarGroupToggle ?? "").trim();
   const group = button?.closest?.("[data-sidebar-group]");
   const items = group?.querySelector?.(".sidebar-group-items");
   if (!key || !group || !items) return;
+  const previous = expandedConsoleGroupKey;
   const shouldExpand = button.getAttribute("aria-expanded") !== "true";
+  const next = shouldExpand ? key : null;
+  applyExpandedConsoleGroup(next);
+  expandedConsoleGroupKey = next;
+  if (consoleShellState) consoleShellState.sidebarExpandedGroupKey = next;
+  if (consoleShellState?.workspaceNavigationContract !== true) return;
+  try {
+    const result = await workspaceNavigationController.savePreference({
+      expanded_group_code: next,
+    });
+    expandedConsoleGroupKey = result.navigation.preference.expanded_group_code;
+    consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
+    consoleShellState.navigation = projectWorkspaceNavigationForConsole(
+      result.navigation,
+      consoleShellState.activeRouteCode,
+      workspaceNavigationController.snapshot().advancedTools,
+    );
+  } catch (error) {
+    expandedConsoleGroupKey = previous;
+    consoleShellState.sidebarExpandedGroupKey = previous;
+    applyExpandedConsoleGroup(previous);
+    renderConsoleSidebarPreferenceError(error);
+  }
+}
+
+function applyExpandedConsoleGroup(expandedKey) {
   for (const candidate of document.querySelectorAll("[data-sidebar-group]")) {
     const candidateButton = candidate.querySelector("[data-sidebar-group-toggle]");
     const candidateItems = candidate.querySelector(".sidebar-group-items");
     if (!candidateButton || !candidateItems) continue;
-    const expanded = shouldExpand && candidate === group;
+    const expanded = candidate.dataset.sidebarGroup === expandedKey;
     const label = candidate.getAttribute("aria-label") ?? "导航分组";
     candidateButton.setAttribute("aria-expanded", String(expanded));
     candidateButton.setAttribute("aria-label", `${expanded ? "收起" : "展开"}${label}`);
@@ -13168,11 +13361,6 @@ function toggleConsoleSidebarGroup(button, consoleShellState) {
     candidateItems.hidden = !expanded;
     candidate.classList.toggle("is-collapsed", !expanded);
   }
-  expandedConsoleGroupKey = shouldExpand ? key : null;
-  if (consoleShellState) {
-    consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
-  }
-  persistExpandedConsoleGroupKey();
 }
 
 /** 导航请求期间立即切换标题和加载态；完整页面数据仍由后端权限校验后的 refresh 提供。 */
@@ -13184,6 +13372,7 @@ function renderConsoleNavigationTransition(button, consoleShellState, itemId) {
   const label = String(button.dataset.consoleNavLabel ?? button.getAttribute("aria-label") ?? itemId);
   const description = String(button.dataset.consoleDescription ?? "");
   shell.dataset.activeNavigation = itemId;
+  shell.dataset.activeRoute = button.dataset.consoleRoute ?? "";
   for (const candidate of shell.querySelectorAll("[data-console-nav]")) {
     const active = candidate === button;
     candidate.classList.toggle("active", active);
@@ -13204,7 +13393,7 @@ function renderConsoleNavigationTransition(button, consoleShellState, itemId) {
   copy.append(eyebrow, title, detail);
   const pill = document.createElement("span");
   pill.className = "active-section-pill";
-  pill.textContent = `当前入口: ${itemId}`;
+  pill.textContent = "当前页面";
   heading.append(copy, pill);
   const loading = document.createElement("section");
   loading.className = "empty-state console-navigation-loading";
@@ -13229,23 +13418,41 @@ async function toggleConsoleSidebar(button, consoleShellState) {
 
   const previous = shell.dataset.sidebarCollapsed === "true";
   const next = !previous;
+  if (Number(globalThis.window?.innerWidth ?? 0) > 0
+    && Number(globalThis.window.innerWidth) <= 820) {
+    applyConsoleSidebarCollapsedState(shell, next);
+    return;
+  }
   button.disabled = true;
   applyConsoleSidebarCollapsedState(shell, next);
   consoleSidebarController?.abort();
   const controller = new AbortController();
   consoleSidebarController = controller;
   try {
-    const result = await updateConsolePreferences({
-      controlApiUrl,
-      token,
-      sidebarCollapsed: next,
-      signal: controller.signal,
-    });
+    const result = consoleShellState?.workspaceNavigationContract === true
+      ? await workspaceNavigationController.savePreference({
+        sidebar_collapsed: next,
+      })
+      : await updateConsolePreferences({
+        controlApiUrl,
+        token,
+        sidebarCollapsed: next,
+        signal: controller.signal,
+      });
     // 保留本轮已确认的偏好，后续导航重绘时不会短暂回到旧状态。
     if (shell.isConnected && authSession.token === token) {
-      consoleShellState.preferences = result;
-      consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
-      consolePreferencesCache = result;
+      if (consoleShellState.workspaceNavigationContract === true) {
+        consoleShellState.navigation = projectWorkspaceNavigationForConsole(
+          result.navigation,
+          consoleShellState.activeRouteCode,
+          workspaceNavigationController.snapshot().advancedTools,
+        );
+        consoleShellState.preferences = { preference: result.navigation.preference };
+      } else {
+        consoleShellState.preferences = result;
+        consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
+        consolePreferencesCache = result;
+      }
     }
   } catch (error) {
     if (isAbortError(error) || consoleSidebarController !== controller) return;
@@ -13335,7 +13542,8 @@ function readNavigationHashState() {
  * 非法值在 loadConsoleShellState 中清理；其他调用点只把它视为无可用目标。
  */
 function readActiveNavigationHash() {
-  return readNavigationHashState().value;
+  const routeCode = readNavigationHashState().value;
+  return WORKSPACE_ROUTE_REGISTRY[routeCode]?.sourceId;
 }
 
 /**

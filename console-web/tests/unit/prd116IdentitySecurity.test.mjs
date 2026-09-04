@@ -33,6 +33,7 @@ const DEVICE_ID = `trd_${"5".repeat(32)}`;
 const CHALLENGE_ID = `mfc_${"6".repeat(32)}`;
 const GRANT_ID = `sug_${"7".repeat(32)}`;
 const POLICY_ID = `cap_${"8".repeat(32)}`;
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const SIMULATION_ID = `cas_${"9".repeat(32)}`;
 const RECOVERY_CODES = Object.freeze(Array.from({ length: 10 }, (_, index) => {
   const marker = "ABCDEFGHJKLM"[index];
@@ -415,7 +416,7 @@ test("PRD-116 recovery assurance requires an explicit workspace re-entry", async
       },
       switchWorkspace: async () => {
         workspaceSwitches += 1;
-        return { context: workspaceSessionContext() };
+        return workspaceSessionResponse();
       },
     }),
   });
@@ -440,7 +441,7 @@ test("PRD-116 controller consumes step-up inline and scrubs proof and grant from
       identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
       workspaceSession: async () => {
         workspaceSessionReads += 1;
-        return { context: workspaceSessionContext() };
+        return workspaceSessionResponse();
       },
       switchWorkspace: async ({ workspaceId }) => {
         activity.push(["switch_workspace", workspaceId]);
@@ -490,9 +491,64 @@ test("PRD-116 controller consumes step-up inline and scrubs proof and grant from
     ["switch_workspace", WORKSPACE_ID],
     ["conditional_read", WORKSPACE_ID],
   ]);
-  assert.equal(workspaceSessionReads, 1);
+  assert.equal(workspaceSessionReads, 2);
   assert.doesNotMatch(root.innerHTML, /123456|GGGGGGGG/u);
   controller.destroy();
+});
+
+test("PRD-146 Identity trusts only WorkspaceSession permissions and fails closed on drift", async () => {
+  let conditionalReads = 0;
+  const legacyRoot = createRoot();
+  const legacyController = createIdentityPageController({
+    root: legacyRoot,
+    api: controllerApi({
+      identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
+      workspaceSession: async () => workspaceSessionResponse([]),
+      memberships: async () => ({ memberships: [membership()] }),
+      workspaceNavigation: async () => ({
+        ...workspaceNavigationProjection(),
+        permission_codes: ["conditional_access.read", "conditional_access.manage"],
+      }),
+      conditionalAccess: async () => {
+        conditionalReads += 1;
+        return conditionalAccessProjection();
+      },
+    }),
+  });
+
+  assert.equal(await legacyController.mount(), true);
+  assert.equal(conditionalReads, 0);
+  assert.doesNotMatch(legacyRoot.innerHTML, /data-conditional-access-form/u);
+  legacyController.destroy();
+
+  let sessionReads = 0;
+  const driftRoot = createRoot();
+  const driftController = createIdentityPageController({
+    root: driftRoot,
+    api: controllerApi({
+      identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
+      workspaceSession: async () => {
+        sessionReads += 1;
+        return workspaceSessionResponse();
+      },
+      memberships: async () => ({ memberships: [membership()] }),
+      workspaceNavigation: async () => ({
+        ...workspaceNavigationProjection(),
+        permission_fingerprint: "0".repeat(64),
+      }),
+      conditionalAccess: async () => {
+        conditionalReads += 1;
+        return conditionalAccessProjection();
+      },
+    }),
+  });
+
+  assert.equal(await driftController.mount(), false);
+  assert.equal(sessionReads, 2);
+  assert.equal(conditionalReads, 0);
+  assert.doesNotMatch(driftRoot.innerHTML, /data-conditional-access-form/u);
+  assert.match(driftRoot.innerHTML, /空间权限已变化/u);
+  driftController.destroy();
 });
 
 test("PRD-116 identity entry destroys sensitive state on pagehide and clients avoid browser storage", async () => {
@@ -783,7 +839,7 @@ function workspaceContext() {
     membership_id: MEMBERSHIP_ID,
     permission_codes: ["conditional_access.manage", "conditional_access.read"],
     permission_revision: 27,
-    authorization_fingerprint: "authz-fingerprint",
+    authorization_fingerprint: AUTHORIZATION_FINGERPRINT,
     session_id: `wss_${"b".repeat(32)}`,
     expires_at: "2026-08-26T00:00:00Z",
   };
@@ -812,13 +868,26 @@ function workspaceSessionContext() {
   };
 }
 
+function workspaceSessionResponse(permissionCodes = workspaceContext().permission_codes) {
+  const context = workspaceContext();
+  return {
+    context: workspaceSessionContext(),
+    authorization: {
+      permission_codes: [...permissionCodes],
+      permission_revision: context.permission_revision,
+      permission_fingerprint: context.authorization_fingerprint,
+      membership_revision: 9,
+    },
+  };
+}
+
 function workspaceNavigationProjection() {
   const context = workspaceContext();
   return {
-    navigation_items: [],
-    permission_codes: [...context.permission_codes],
+    groups: [],
+    membership_revision: 9,
     permission_revision: context.permission_revision,
-    authorization_fingerprint: context.authorization_fingerprint,
+    permission_fingerprint: context.authorization_fingerprint,
   };
 }
 

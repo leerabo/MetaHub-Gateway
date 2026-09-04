@@ -19,6 +19,11 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.workspace_navigation.scheduler import (
+    NavigationLeaseProof,
+    run_navigation_queue_once,
+)
+
 logger = logging.getLogger("metahub.control.console_experience.scheduler")
 WORKER_ID = f"console-experience-{uuid4().hex}"
 POLL_SECONDS = 2.0
@@ -35,6 +40,13 @@ _WORKER_KINDS = (
     "account_preference_outbox",
     "reconciliation",
     "cleanup",
+)
+_NAVIGATION_WORKER_KINDS = (
+    "workspace_navigation_projection",
+    "role_task_home",
+    "advanced_tool_entitlement",
+    "workspace_navigation_outbox",
+    "navigation_reconciliation",
 )
 
 
@@ -99,6 +111,43 @@ def run_console_experience_once(config: AppConfig) -> bool:
                 continue
             if worked:
                 return True
+        if config.workspace_navigation_scheduler_enabled:
+            return _run_navigation_workers(config)
+    return False
+
+
+def _run_navigation_workers(config: AppConfig) -> bool:
+    for queue_code in _NAVIGATION_WORKER_KINDS:
+        lease = _claim_navigation(config, queue_code)
+        if lease is None:
+            continue
+        proof = NavigationLeaseProof(
+            queue_code=queue_code,
+            lease_owner_id=WORKER_ID,
+            fence_generation=lease.generation,
+            lease_token_hmac=_navigation_lease_hmac(
+                config,
+                queue_code,
+                lease.token,
+            ),
+        )
+        try:
+            worked = run_navigation_queue_once(config, proof)
+            _release_navigation(config, lease, worked=worked)
+        except ApiError as exc:
+            _release_navigation_after_failure(config, lease, exc.code)
+            _warning(queue_code, exc.code)
+            continue
+        except Exception:
+            _release_navigation_after_failure(
+                config,
+                lease,
+                "platform.unavailable",
+            )
+            _warning(queue_code, "platform.unavailable")
+            continue
+        if worked:
+            return True
     return False
 
 
@@ -236,6 +285,145 @@ def _release_after_failure(
                 lease.generation,
                 WORKER_ID,
                 _lease_hmac(config, lease.worker_kind, lease.token),
+            ),
+        )
+        connection.commit()
+    except sqlite3.Error:
+        _rollback(connection)
+    finally:
+        connection.close()
+
+
+def _claim_navigation(
+    config: AppConfig,
+    queue_code: str,
+) -> _SchedulerLease | None:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now()
+        stamp = _db_time(now)
+        row = connection.execute(
+            """SELECT * FROM workspace_navigation_scheduler_state
+               WHERE queue_code=?""",
+            (queue_code,),
+        ).fetchone()
+        if (
+            row is None
+            or not row["enabled"]
+            or row["next_attempt_at"] > stamp
+            or (row["lease_expires_at"] is not None and row["lease_expires_at"] > stamp)
+        ):
+            connection.commit()
+            return None
+        generation = int(row["fence_generation"]) + 1
+        token = uuid4().hex + uuid4().hex
+        updated = connection.execute(
+            """UPDATE workspace_navigation_scheduler_state
+               SET fence_generation=?,lease_owner_id=?,lease_token_hmac=?,
+                 lease_expires_at=?,attempt_count=attempt_count+1,updated_at=?
+               WHERE queue_code=? AND enabled=1 AND fence_generation=?
+                 AND next_attempt_at<=?
+                 AND(lease_expires_at IS NULL OR lease_expires_at<=?)""",
+            (
+                generation,
+                WORKER_ID,
+                _navigation_lease_hmac(config, queue_code, token),
+                _db_time(now + timedelta(seconds=LEASE_SECONDS)),
+                stamp,
+                queue_code,
+                row["fence_generation"],
+                stamp,
+                stamp,
+            ),
+        ).rowcount
+        if updated != 1:
+            connection.rollback()
+            return None
+        connection.commit()
+        return _SchedulerLease(queue_code, generation, token)
+    except sqlite3.Error:
+        _rollback(connection)
+        raise ApiError("platform.unavailable") from None
+    finally:
+        connection.close()
+
+
+def _release_navigation(
+    config: AppConfig,
+    lease: _SchedulerLease,
+    *,
+    worked: bool,
+) -> None:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now()
+        stamp = _db_time(now)
+        updated = connection.execute(
+            """UPDATE workspace_navigation_scheduler_state
+               SET cursor_value=?,source_watermark=?,lease_owner_id=NULL,
+                 lease_token_hmac=NULL,lease_expires_at=NULL,last_error_code=NULL,
+                 next_attempt_at=?,updated_at=?
+               WHERE queue_code=? AND fence_generation=? AND lease_owner_id=?
+                 AND lease_token_hmac=? AND lease_expires_at>?""",
+            (
+                f"worked:{stamp}" if worked else f"idle:{stamp}",
+                stamp,
+                _db_time(now + timedelta(seconds=1 if worked else 2)),
+                stamp,
+                lease.worker_kind,
+                lease.generation,
+                WORKER_ID,
+                _navigation_lease_hmac(
+                    config,
+                    lease.worker_kind,
+                    lease.token,
+                ),
+                stamp,
+            ),
+        ).rowcount
+        if updated != 1:
+            raise ApiError("platform.unavailable")
+        connection.commit()
+    except ApiError:
+        _rollback(connection)
+        raise
+    except sqlite3.Error:
+        _rollback(connection)
+        raise ApiError("platform.unavailable") from None
+    finally:
+        connection.close()
+
+
+def _release_navigation_after_failure(
+    config: AppConfig,
+    lease: _SchedulerLease,
+    error_code: str,
+) -> None:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        now = _now()
+        stamp = _db_time(now)
+        connection.execute(
+            """UPDATE workspace_navigation_scheduler_state
+               SET lease_owner_id=NULL,lease_token_hmac=NULL,lease_expires_at=NULL,
+                 last_error_code=?,next_attempt_at=?,updated_at=?
+               WHERE queue_code=? AND fence_generation=? AND lease_owner_id=?
+                 AND lease_token_hmac=?""",
+            (
+                error_code,
+                _db_time(now + timedelta(seconds=5)),
+                stamp,
+                lease.worker_kind,
+                lease.generation,
+                WORKER_ID,
+                _navigation_lease_hmac(
+                    config,
+                    lease.worker_kind,
+                    lease.token,
+                ),
             ),
         )
         connection.commit()
@@ -1079,6 +1267,18 @@ def _outbox_hmac(config: AppConfig, worker_kind: str, token: str) -> str:
     return hmac.new(
         config.workspace_session_secret.encode(),
         f"prd145/outbox/{worker_kind}/v1\x00{token}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _navigation_lease_hmac(
+    config: AppConfig,
+    queue_code: str,
+    token: str,
+) -> str:
+    return hmac.new(
+        config.workspace_session_secret.encode(),
+        f"prd146/scheduler/{queue_code}/v1\x00{token}".encode(),
         hashlib.sha256,
     ).hexdigest()
 

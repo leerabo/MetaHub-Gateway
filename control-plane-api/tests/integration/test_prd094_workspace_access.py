@@ -266,21 +266,27 @@ async def test_workspace_switch_navigation_mixed_credentials_and_logout_cleanup(
 
         session = await client.get("/workspace/session")
         assert session.status_code == 200
+        session_body = session.json()
+        assert set(session_body["authorization"]) == {
+            "permission_codes",
+            "permission_revision",
+            "permission_fingerprint",
+            "membership_revision",
+        }
+        assert session_body["authorization"]["membership_revision"] == 1
+        assert session_body["authorization"]["permission_revision"] >= 1
+        assert len(session_body["authorization"]["permission_fingerprint"]) == 64
+        assert "console.basic.read" in session_body["authorization"]["permission_codes"]
         members = await client.get("/memberships")
         assert members.status_code == 200
         assert members.json()["memberships"][0]["role"] == "owner"
 
         navigation = await client.get("/console/navigation")
         assert navigation.status_code == 200, navigation.text
-        ids = {item["id"] for item in navigation.json()["navigation_items"]}
-        assert not ids & {
-            "growth-analytics",
-            "customer-health",
-            "partner-portal",
-            "providers",
-            "billing-disputes",
-            "competitor-comparison",
-        }
+        navigation_body = navigation.json()
+        assert navigation_body["groups"]
+        assert "navigation_items" not in navigation_body
+        assert "permission_codes" not in navigation_body
 
         legacy_token = await _legacy_login(client)
         mixed = await client.get(

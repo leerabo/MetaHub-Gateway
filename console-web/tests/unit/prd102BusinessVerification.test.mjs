@@ -19,6 +19,7 @@ const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;
 const INTENT_ID = `bvi_${"2".repeat(32)}`;
 const EVIDENCE_ID = `bve_${"3".repeat(32)}`;
 const HASH = "a".repeat(64);
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const NOW = "2026-08-23T00:00:00Z";
 const WORKSPACE_CSRF = "w".repeat(43);
 const PLATFORM_CSRF = "p".repeat(43);
@@ -438,11 +439,32 @@ function workingIdentityApi(overrides = {}) {
     sessions: async () => ({ sessions: state.sessions }),
     workspaces: async () => ({ workspaces: [] }),
     identityWorkspaces: async () => ({ workspaces: [state.workspaceContext] }),
-    workspaceSession: async () => ({ context: state.workspaceContext }),
+    workspaceSession: async () => ({
+      context: state.workspaceContext,
+      authorization: workspaceAuthorization(),
+    }),
     memberships: async () => ({ memberships: [] }),
-    workspaceNavigation: async () => ({ navigation_items: [] }),
+    workspaceNavigation: async () => workspaceNavigationProjection(),
     businessVerification: async () => workspaceResponse(),
     ...overrides,
+  };
+}
+
+function workspaceAuthorization() {
+  return {
+    permission_codes: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
+  };
+}
+
+function workspaceNavigationProjection() {
+  return {
+    groups: [],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

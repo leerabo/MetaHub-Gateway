@@ -23,6 +23,7 @@ const WORKSPACE_ID = `wsp_${"1".repeat(32)}`;
 const REQUEST_ID = `dsr_${"2".repeat(32)}`;
 const EXPORT_ID = `pex_${"3".repeat(32)}`;
 const PREFERENCE_ID = `prf_${"4".repeat(32)}`;
+const AUTHORIZATION_FINGERPRINT = "f".repeat(64);
 const CONSENT_ID = `con_${"5".repeat(32)}`;
 const GLOBAL_CSRF = "G".repeat(43);
 const STEP_UP = "S".repeat(43);
@@ -410,19 +411,23 @@ function platformQueue() {
 }
 
 function identityApi(overrides = {}) {
+  const permissionCodes = [
+    "privacy.preference.read", "privacy.preference.manage", "privacy.dsr.read",
+    "privacy.dsr.create", "privacy.dsr.cancel",
+  ];
   return {
     me: async () => ({ account: identityAccount(), current_session: identitySession() }),
     sessions: async () => ({ sessions: [identitySession()] }),
     identityWorkspaces: async () => ({ workspaces: [workspaceChoice()] }),
-    workspaceSession: async () => ({ context: workspaceSessionContext() }),
+    workspaceSession: async () => ({
+      context: workspaceSessionContext(),
+      authorization: workspaceAuthorization(permissionCodes),
+    }),
     workspaceNavigation: async () => ({
-      navigation_items: [],
-      permission_codes: [
-        "privacy.preference.read", "privacy.preference.manage", "privacy.dsr.read",
-        "privacy.dsr.create", "privacy.dsr.cancel",
-      ],
+      groups: [],
+      membership_revision: 1,
       permission_revision: 1,
-      authorization_fingerprint: "privacy-authz-fingerprint",
+      permission_fingerprint: AUTHORIZATION_FINGERPRINT,
     }),
     privacyPreferences: async () => preferenceResponse(),
     privacyRequests: async () => requestList(),
@@ -459,6 +464,15 @@ function workspaceSessionContext() {
     ...workspaceChoice(),
     session_status: "active",
     expires_at: "2026-08-31T10:00:00Z",
+  };
+}
+
+function workspaceAuthorization(permissionCodes) {
+  return {
+    permission_codes: [...permissionCodes],
+    permission_revision: 1,
+    permission_fingerprint: AUTHORIZATION_FINGERPRINT,
+    membership_revision: 1,
   };
 }
 

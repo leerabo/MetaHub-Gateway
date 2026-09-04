@@ -1,4 +1,5 @@
 import { IdentityApiError, readIdentityCsrfCookie } from "./identity.js";
+import { getWorkspaceNavigation } from "./workspaceNavigation.js";
 
 const WORKSPACE_KEYS = Object.freeze([
   "environment",
@@ -151,10 +152,7 @@ export async function transferWorkspaceOwner({
 }
 
 export async function getWorkspaceConsoleNavigation({ controlApiUrl, signal } = {}) {
-  return workspaceAccessRequest(controlApiUrl, "/console/navigation", {
-    responseType: "navigation",
-    signal,
-  });
+  return getWorkspaceNavigation({ controlApiUrl, signal });
 }
 
 export async function getWorkspaceOnboarding({ controlApiUrl, signal } = {}) {
@@ -365,9 +363,15 @@ function validateWorkspaceAccessResponse(payload, responseType) {
   if (responseType === "workspaceContext" || responseType === "workspaceSession") {
     const responseKeys = responseType === "workspaceContext"
       ? ["context", "request_id", "trace_id"]
-      : ["context", "request_id", "trace_id"];
+      : ["authorization", "context", "request_id", "trace_id"];
     requireExactKeys(payload, responseKeys, "response");
-    return { context: validateWorkspaceContext(payload.context), ...validateRequestTrace(payload) };
+    return {
+      context: validateWorkspaceContext(payload.context),
+      ...(responseType === "workspaceSession"
+        ? { authorization: validateWorkspaceAuthorization(payload.authorization) }
+        : {}),
+      ...validateRequestTrace(payload),
+    };
   }
   if (responseType === "membershipList") {
     requireExactKeys(
@@ -579,6 +583,44 @@ function validateWorkspaceContext(context) {
     }),
     session_status: requireChoice(context.session_status, ["active"], "session_status"),
     expires_at: requireTimestamp(context.expires_at, "expires_at"),
+  };
+}
+
+function validateWorkspaceAuthorization(authorization) {
+  requirePlainObject(authorization, "authorization");
+  requireExactKeys(
+    authorization,
+    [
+      "membership_revision",
+      "permission_codes",
+      "permission_fingerprint",
+      "permission_revision",
+    ],
+    "authorization",
+  );
+  const permissionFingerprint = requireText(
+    authorization.permission_fingerprint,
+    64,
+    "permission_fingerprint",
+  );
+  if (!/^[0-9a-f]{64}$/u.test(permissionFingerprint)) {
+    invalidAccessResponse("permission_fingerprint");
+  }
+  return {
+    permission_codes: validateTextArray(
+      authorization.permission_codes,
+      300,
+      "permission_codes",
+    ),
+    permission_revision: requirePositiveInteger(
+      authorization.permission_revision,
+      "permission_revision",
+    ),
+    permission_fingerprint: permissionFingerprint,
+    membership_revision: requirePositiveInteger(
+      authorization.membership_revision,
+      "membership_revision",
+    ),
   };
 }
 

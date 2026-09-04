@@ -13,6 +13,14 @@ const DEFAULT_NAVIGATION = [
 
 // 后端导航分组仍返回稳定业务标签，展示层在这里映射到 i18n key。
 const GROUP_KEY_BY_LABEL = {
+  home: "home",
+  workspace: "workspace",
+  gateway: "gateway",
+  finance: "finance",
+  governance: "governance",
+  applications: "applications",
+  observability: "observability",
+  "developer-center": "developer-center",
   系统: "system",
   System: "system",
   // PAGE-071 位于调用与成本分组，英文偏好只改变展示标签，不改变后端导航 ID 或权限集合。
@@ -35,7 +43,8 @@ export function renderConsoleShell({
     localizeNavigationItem(item, i18n),
   );
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
-  const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState);
+  const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState)
+    || isCompactNavigationViewport();
   const expandedGroupKey = String(consoleShellState?.sidebarExpandedGroupKey ?? "").trim();
   const sidebarToggleLabel = sidebarCollapsed
     ? t(i18n, "shell.sidebar_expand", "展开导航")
@@ -47,10 +56,10 @@ export function renderConsoleShell({
         <p class="eyebrow">${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.eyebrow", "中国境内企业级 AI Gateway")))}</p>
         <h1>${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.title", "MetaHub 控制台")))}</h1>
       </div>
-      ${renderUserMenu(authContext, i18n)}
+      ${renderUserMenu(authContext, i18n, consoleShellState?.navigation)}
     </section>
 
-    <section class="console-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}" data-active-navigation="${escapeAttribute(activeItem.id)}" data-sidebar-collapsed="${sidebarCollapsed ? "true" : "false"}">
+    <section class="console-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}" data-active-navigation="${escapeAttribute(activeItem.id)}" data-active-route="${escapeAttribute(activeItem.route_code ?? activeItem.id)}" data-sidebar-collapsed="${sidebarCollapsed ? "true" : "false"}">
       <aside id="console-sidebar" class="console-sidebar" aria-label="${escapeAttribute(t(i18n, "shell.nav_aria", "控制台导航"))}">
         <div class="sidebar-title">
           <div class="sidebar-title-copy">
@@ -70,7 +79,8 @@ export function renderConsoleShell({
             <span class="sidebar-toggle-text">${escapeHtml(sidebarToggleLabel)}</span>
           </button>
         </div>
-        ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey, sidebarCollapsed)}
+        ${renderNavigationGroups(navigationItems, activeItem.id, expandedGroupKey)}
+        ${renderAdvancedToolsEntry(consoleShellState?.navigation)}
       </aside>
       <main class="console-main" aria-labelledby="console-main-title">
         <div class="console-main-heading">
@@ -79,7 +89,7 @@ export function renderConsoleShell({
             <h2 id="console-main-title">${escapeHtml(activeItem.label)}</h2>
             <p>${escapeHtml(activeItem.description ?? "")}</p>
           </div>
-          <span class="active-section-pill">${escapeHtml(t(i18n, "shell.active_id", "当前入口"))}: ${escapeHtml(activeItem.id)}</span>
+          <span class="active-section-pill">${escapeHtml(t(i18n, "shell.current_page", "当前页面"))}</span>
         </div>
         ${renderShellMessage(consoleShellState, i18n)}
         ${contentHtml}
@@ -111,6 +121,11 @@ function brandingText(value, fallback) {
 function sidebarCollapsedFromState(consoleShellState) {
   return consoleShellState?.preferences?.preference?.sidebar_collapsed === true
     || consoleShellState?.preferences?.sidebar_collapsed === true;
+}
+
+function isCompactNavigationViewport() {
+  const width = Number(globalThis.window?.innerWidth ?? 0);
+  return width > 0 && width <= 820;
 }
 
 /**
@@ -169,9 +184,9 @@ function localizeGroupLabel(group, i18n) {
 /**
  * 按 group 渲染侧边栏导航，保证不同角色只看到后端返回的可见入口。
  */
-function renderNavigationGroups(items, activeId, expandedGroupKey = "", sidebarCollapsed = false) {
+function renderNavigationGroups(items, activeId, expandedGroupKey = "") {
   const groups = [];
-  for (const item of items) {
+  for (const item of items.filter((candidate) => candidate.sidebar_visible !== false)) {
     let group = groups.find((entry) => entry.name === item.group);
     if (!group) {
       group = { name: item.group, items: [] };
@@ -183,7 +198,7 @@ function renderNavigationGroups(items, activeId, expandedGroupKey = "", sidebarC
     .map((group, index) => {
       const key = sidebarGroupKey(group);
       // The full sidebar is an accordion. The compact icon rail still exposes every authorized item.
-      const isExpanded = sidebarCollapsed || key === expandedGroupKey;
+      const isExpanded = key === expandedGroupKey;
       const isCollapsed = !isExpanded;
       const itemsId = `sidebar-group-items-${index}`;
       return `
@@ -211,6 +226,8 @@ function renderNavigationGroups(items, activeId, expandedGroupKey = "", sidebarC
 
 /** Group identity is derived only from backend navigation IDs, not display labels. */
 function sidebarGroupKey(group) {
+  const canonical = String(group.items[0]?.group_code ?? "").trim();
+  if (canonical) return canonical;
   const ids = group.items
     .map((item) => String(item?.id ?? "").trim())
     .filter(Boolean);
@@ -229,6 +246,7 @@ function renderNavigationItem(item, activeId) {
       type="button"
       class="sidebar-link${active ? " active" : ""}"
       data-console-nav="${escapeAttribute(item.id)}"
+      data-console-route="${escapeAttribute(item.route_code ?? item.id)}"
       data-console-target="${escapeAttribute(item.target_section)}"
       data-console-nav-label="${escapeAttribute(label)}"
       data-console-group="${escapeAttribute(item.group ?? "")}"
@@ -240,6 +258,21 @@ function renderNavigationItem(item, activeId) {
       <span class="sidebar-link-label">${escapeHtml(label)}</span>
       <span class="sidebar-link-short" aria-hidden="true">${escapeHtml(shortNavigationLabel(item))}</span>
       <small>${escapeHtml(item.description ?? "")}</small>
+    </button>
+  `;
+}
+
+function renderAdvancedToolsEntry(navigation) {
+  if (navigation?.advanced_tools_available !== true) return "";
+  return `
+    <button
+      type="button"
+      class="sidebar-advanced-entry"
+      data-workspace-advanced-open
+      aria-haspopup="dialog"
+    >
+      <span aria-hidden="true">+</span>
+      <strong>高级工具</strong>
     </button>
   `;
 }
@@ -274,7 +307,7 @@ function renderShellMessage(consoleShellState, i18n) {
 /**
  * 渲染顶部用户菜单，展示当前租户、角色和 Session 到期时间。
  */
-function renderUserMenu(authContext, i18n) {
+function renderUserMenu(authContext, i18n, navigation) {
   if (!authContext?.user) {
     return `<div class="version-pill">${escapeHtml(t(i18n, "shell.guest", "未登录"))}</div>`;
   }
@@ -287,6 +320,9 @@ function renderUserMenu(authContext, i18n) {
         <span>${escapeHtml(authContext.tenant?.name ?? authContext.user.tenant_id)}</span>
         <span>${escapeHtml(t(i18n, "shell.session_expires", "Session 到期：{value}", { value: expiresAt }))}</span>
       </div>
+      ${navigation?.account_action_codes?.includes("identity.preferences")
+        ? '<a class="user-menu-preferences" href="/identity.html#account-preferences">账号偏好</a>'
+        : ""}
       <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
     </div>
   `;

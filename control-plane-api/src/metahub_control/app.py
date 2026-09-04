@@ -146,6 +146,7 @@ from .virtual_keys.routes import router as virtual_keys_router
 from .webhooks import install_webhook_replay_scheduler
 from .webhooks.routes import router as webhooks_router
 from .workspace_access.routes import router as workspace_access_router
+from .workspace_navigation import router as workspace_navigation_router
 from .workspace_onboarding.routes import router as workspace_onboarding_router
 from .workspaces.routes import router as workspaces_router
 
@@ -169,6 +170,8 @@ app = create_service_app(
     cors_allow_credentials=True,
     extra_cors_expose_headers=(
         "ETag",
+        # Workspace navigation rejects responses whose authorization evidence is hidden by CORS.
+        "X-Permission-Fingerprint",
         "X-Policy-Candidate-ETag",
         "X-MetaHub-Audit-Export-ID",
         "X-MetaHub-Audit-Export-Row-Count",
@@ -315,6 +318,7 @@ app.include_router(enterprise_identity_router)
 app.include_router(edge_management_router)
 app.include_router(workspaces_router)
 app.include_router(workspace_access_router)
+app.include_router(workspace_navigation_router)
 app.include_router(workspace_onboarding_router)
 app.include_router(migration_operations_router)
 app.include_router(customer_support_router)

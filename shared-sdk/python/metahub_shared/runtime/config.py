@@ -283,6 +283,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     # Production and direct launches retain recovery workers. The local
     # three-service launcher explicitly disables them for a lean dev profile.
     "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "true",
+    "METAHUB_WORKSPACE_NAVIGATION_SCHEDULER_ENABLED": "false",
     "METAHUB_BATCH_POLL_INTERVAL_SECONDS": "1",
     "METAHUB_BATCH_GLOBAL_CONCURRENCY": "2",
     "METAHUB_BATCH_TENANT_CONCURRENCY": "1",
@@ -622,6 +623,7 @@ class AppConfig(BaseModel):
     batch_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     batch_worker_enabled: bool = False
     control_background_schedulers_enabled: bool = True
+    workspace_navigation_scheduler_enabled: bool = False
     batch_poll_interval_seconds: float = 1.0
     batch_global_concurrency: int = 2
     batch_tenant_concurrency: int = 1
@@ -2633,6 +2635,9 @@ def load_app_config(service_name: str) -> AppConfig:
         control_background_schedulers_enabled=_control_background_schedulers_enabled(
             values, environment
         ),
+        workspace_navigation_scheduler_enabled=_boolean(
+            values, "METAHUB_WORKSPACE_NAVIGATION_SCHEDULER_ENABLED"
+        ),
         batch_poll_interval_seconds=batch_poll_interval_seconds,
         batch_global_concurrency=batch_global_concurrency,
         batch_tenant_concurrency=batch_tenant_concurrency,
@@ -4045,6 +4050,7 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_INTERNAL_BATCH_TOKEN",
         "METAHUB_BATCH_ENCRYPTION_SECRET",
         "METAHUB_BATCH_WORKER_ENABLED",
+        "METAHUB_WORKSPACE_NAVIGATION_SCHEDULER_ENABLED",
         "METAHUB_BATCH_POLL_INTERVAL_SECONDS",
         "METAHUB_BATCH_GLOBAL_CONCURRENCY",
         "METAHUB_BATCH_TENANT_CONCURRENCY",

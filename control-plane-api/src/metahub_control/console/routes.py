@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from metahub_control.auth import AuthContext, require_console_user, require_current_user
+from metahub_control.workspace_navigation.models import WorkspaceNavigationResponse
+from metahub_control.workspace_navigation.routes import workspace_navigation_route
 
 from .models import (
     ConsoleEventRequest,
@@ -30,22 +32,35 @@ from .service import (
 router = APIRouter(prefix="/console", tags=["console"])
 
 
-@router.get("/navigation", response_model=ConsoleNavigationResponse)
+@router.get(
+    "/navigation",
+    response_model=ConsoleNavigationResponse | WorkspaceNavigationResponse,
+)
 async def get_console_navigation_route(
     request: Request,
+    response: Response,
     context: Annotated[AuthContext, Depends(require_console_user)],
     active_item_id: Annotated[str | None, Query()] = None,
-) -> ConsoleNavigationResponse:
+) -> ConsoleNavigationResponse | WorkspaceNavigationResponse:
     """读取当前登录用户可见的控制台导航项。
 
     后端按 AuthContext 计算角色可见性，前端传入的 active_item_id 只作为候选当前页，不参与权限判定。
     """
 
+    workspace_scoped = (
+        getattr(request.state, "workspace_session_authenticated", False) is True
+    )
+    if workspace_scoped:
+        # 0138 compatibility boundary: the legacy path remains callable while
+        # WorkspaceSession consumers receive only the new canonical contract.
+        # The delegated endpoint also rejects every query and revalidates the
+        # WorkspaceSession before reading the projection.
+        return await workspace_navigation_route(request, response, context)  # type: ignore[arg-type]
     return get_console_navigation(
         request.app.state.config,
         context,
         requested_active_item_id=active_item_id,
-        workspace_scoped=getattr(request.state, "workspace_session_authenticated", False) is True,
+        workspace_scoped=False,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
     )

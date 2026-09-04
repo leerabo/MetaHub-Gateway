@@ -34,6 +34,7 @@ import {
 } from "../plan-billing/renderPlanBilling.js";
 import { renderBillingDisputes } from "../billing-disputes/renderBillingDisputes.js";
 import { renderWorkspaceConsoleExperience } from "../workspace-console-experience/renderWorkspaceConsoleExperience.js";
+import { renderWorkspaceTaskHome } from "../workspace-navigation/renderWorkspaceNavigation.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
 import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js";
 import { renderRoutingPolicyPanel } from "../routing-policies/renderRoutingPolicyPanel.js";
@@ -554,7 +555,7 @@ function renderActiveContent(activeItemId, options, statuses) {
       // 语言设置页只保存当前用户偏好，真实租户和用户边界由 /user/preferences 后端接口恢复。
       return renderLanguageSettingsContent(options);
     case "quickstart":
-      return renderQuickstartContent(options);
+      return renderWorkspaceTaskHome(options.workspaceTaskHomeState);
     case "sdk-examples":
       // SDK 下载页同时保留两种语言的独立状态；真正下载仍需携带登录 Token 由后端再次校验。
       return renderSdkExamples({

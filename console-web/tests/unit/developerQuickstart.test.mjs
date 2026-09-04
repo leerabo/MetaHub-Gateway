@@ -121,7 +121,7 @@ test("renderDeveloperQuickstart escapes text and keeps secret placeholders", () 
   assert.match(html, /准备 &lt;Key&gt;/);
 });
 
-test("renderDeveloperStart renders quickstart active item inside console shell", () => {
+test("renderDeveloperStart migrates the quickstart route to the Workspace task home", () => {
   const container = { innerHTML: "" };
   renderDeveloperStart(container, {
     gatewayUrl: "http://gateway.local",
@@ -151,7 +151,10 @@ test("renderDeveloperStart renders quickstart active item inside console shell",
     quickstartState,
   });
 
-  assert.match(container.innerHTML, /5分钟快速接入/);
-  assert.match(container.innerHTML, /quickstart-code-python-openai/);
+  assert.match(container.innerHTML, /class="workspace-task-home"/);
+  assert.match(container.innerHTML, /正在读取当前职责的下一步任务/);
+  assert.doesNotMatch(container.innerHTML, /5分钟快速接入/);
+  assert.doesNotMatch(container.innerHTML, /quickstart-code-python-openai/);
+  assert.doesNotMatch(container.innerHTML, /http:\/\/gateway\.local/);
   assert.doesNotMatch(container.innerHTML, /API 文档 · OpenAI-Compatible/);
 });

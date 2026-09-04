@@ -61,10 +61,12 @@ from .models import (
     MembershipResponse,
     MembershipSummary,
     OwnerTransferResponse,
+    WorkspaceAuthorizationSummary,
     WorkspaceContextSummary,
     WorkspaceSessionResponse,
     WorkspaceSwitchResponse,
 )
+from .navigation_permissions import WORKSPACE_NAVIGATION_ROLE_PERMISSIONS
 from .privacy_permissions import PRIVACY_ROLE_PERMISSIONS
 from .provider_catalog_permissions import PROVIDER_CATALOG_ROLE_PERMISSIONS
 from .provider_engineering_permissions import (
@@ -165,6 +167,7 @@ _WORKSPACE_EXTENSION_GROUPS = (
     "provider_engineering",
     "commercial",
     "console",
+    "navigation",
 )
 _WORKSPACE_EXTENSION_FAMILIES = (
     _WorkspaceExtensionFamily(
@@ -323,6 +326,13 @@ _WORKSPACE_EXTENSION_FAMILIES = (
         "workspace_console_role_permissions",
         "0137",
         WORKSPACE_CONSOLE_ROLE_PERMISSIONS,
+    ),
+    _WorkspaceExtensionFamily(
+        "navigation",
+        "workspace_navigation_permission_extensions",
+        "workspace_navigation_role_permissions",
+        "0138",
+        WORKSPACE_NAVIGATION_ROLE_PERMISSIONS,
     ),
 )
 WORKSPACE_EXTENSION_PERMISSION_CODES = frozenset(
@@ -692,6 +702,12 @@ def get_workspace_session(
         connection.commit()
         return WorkspaceSessionResponse(
             context=_context_summary(row, context.expires_at),
+            authorization=WorkspaceAuthorizationSummary(
+                permission_codes=context.permission_codes,
+                permission_revision=context.permission_revision,
+                permission_fingerprint=context.authorization_fingerprint,
+                membership_revision=row["current_membership_revision"],
+            ),
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -876,6 +892,7 @@ def workspace_actor_authorization_probe_in_transaction(
         provider_engineering,
         commercial,
         console,
+        navigation,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -911,6 +928,7 @@ def workspace_actor_authorization_probe_in_transaction(
             provider_engineering_permissions=provider_engineering,
             commercial_permissions=commercial,
             console_permissions=console,
+            navigation_permissions=navigation,
         ),
     )
 
@@ -2211,6 +2229,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         provider_engineering,
         commercial,
         console,
+        navigation,
     ) = _workspace_extension_permissions(
         connection,
         role_code=str(row["role_code"]),
@@ -2230,6 +2249,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
             provider_engineering,
             commercial,
             console,
+            navigation,
         )
     ):
         return legacy
@@ -2250,6 +2270,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
                 *provider_engineering,
                 *commercial,
                 *console,
+                *navigation,
             }
         )
     )
@@ -2269,6 +2290,7 @@ def _permission_snapshot(connection: sqlite3.Connection, row: sqlite3.Row):
         provider_engineering_permissions=provider_engineering,
         commercial_permissions=commercial,
         console_permissions=console,
+        navigation_permissions=navigation,
     )
     return _WorkspacePermissionSnapshot(
         permission_codes=permissions,
@@ -2285,6 +2307,7 @@ def _workspace_extension_permissions(
     role_code: str,
     require_catalogs: bool = False,
 ) -> tuple[
+    tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
     tuple[str, ...],
@@ -2412,6 +2435,7 @@ def _workspace_authorization_fingerprint(
     provider_engineering_permissions: tuple[str, ...],
     commercial_permissions: tuple[str, ...],
     console_permissions: tuple[str, ...],
+    navigation_permissions: tuple[str, ...],
 ) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -2431,6 +2455,7 @@ def _workspace_authorization_fingerprint(
                 "provider_engineering_permissions": provider_engineering_permissions,
                 "commercial_permissions": commercial_permissions,
                 "console_permissions": console_permissions,
+                "navigation_permissions": navigation_permissions,
             },
             sort_keys=True,
             separators=(",", ":"),

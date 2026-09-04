@@ -78,7 +78,12 @@ def require_console_user(
 
     workspace_token = _workspace_cookie(request)
     if workspace_token is not None:
-        if authorization is not None or _raw_authorization_present(request):
+        if (
+            authorization is not None
+            or _raw_authorization_present(request)
+            or _cookie_present(request, PLATFORM_SESSION_COOKIE)
+            or _cookie_present(request, SUPPORT_SESSION_COOKIE)
+        ):
             raise ApiError("workspace_session.credential_conflict")
         clear_workspace_cookies_on_error(request)
         # Delay the cross-domain adapter import so auth package initialization remains acyclic.
