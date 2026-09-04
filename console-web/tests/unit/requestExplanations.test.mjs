@@ -457,7 +457,7 @@ test("main wires no-prefetch RBAC, cleanup, handoff and generic page-view skip",
   assert.match(source, /activeNavigationItemId !== "request-explanations"[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /hasPermission\(authSession\.context, PERMISSIONS\.REQUEST_EXPLANATION_READ\)[\s\S]*activeNavigationItemId !== "request-explanations"/);
   assert.match(source, /requestExplanationHandoff\.stage\([\s\S]*switchConsoleNavigation/);
-  assert.match(source, /\["overview", "migration-guide", "competitor-comparison", "request-explanations"\]/);
+  assert.match(source, /\["overview", "migration-guide", "request-explanations"\]/);
   assert.match(source, /getRequestExplanation\([\s\S]*signal: ticket\.signal/);
   assert.doesNotMatch(source, /localStorage[\s\S]{0,200}requestExplanation|sessionStorage[\s\S]{0,200}requestExplanation/);
 });

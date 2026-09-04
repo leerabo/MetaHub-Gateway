@@ -422,7 +422,7 @@ test("main wires shared refresh, admin PATCH ownership and lifecycle invalidatio
   const mainSource = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   assert.match(
     mainSource,
-    /const cacheAffinityRefreshTicket = routingPolicyRefreshTicket[\s\S]*?loadModelAliasesState\(\)[\s\S]*?cacheAffinityPageMemory\.acceptRefresh\(/,
+    /case "routing-policies": \{[\s\S]*?const cacheTicket = cacheAffinityPageMemory\.beginRefresh\([\s\S]*?loadModelAliasesState\(\)[\s\S]*?cacheAffinityPageMemory\.acceptRefresh\(cacheTicket/,
   );
   assert.match(
     mainSource,

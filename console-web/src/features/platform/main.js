@@ -223,6 +223,12 @@ import {
   queryPlatformConsoleAssistant,
 } from "../../lib/platformConsoleExperience.js";
 import {
+  getConsoleMigrationStatus,
+  submitConsoleMigrationBackfill,
+  submitConsoleMigrationCutover,
+  submitConsoleMigrationRollback,
+} from "../../lib/consoleMigration.js";
+import {
   getChannelBranding,
   getPlatformBranding,
   updateChannelBranding,
@@ -256,6 +262,18 @@ if (root) {
       consoleOverview: (input) => getPlatformConsoleOverview({ controlApiUrl, ...input }),
       consoleAssistant: (input) => queryPlatformConsoleAssistant({ controlApiUrl, ...input }),
       consoleApprovals: (input) => listPlatformConsoleApprovals({ controlApiUrl, ...input }),
+      consoleMigrationStatus: (input) => getConsoleMigrationStatus({
+        controlApiUrl, ...input,
+      }),
+      consoleMigrationBackfill: (input) => submitConsoleMigrationBackfill({
+        controlApiUrl, ...input,
+      }),
+      consoleMigrationCutover: (input) => submitConsoleMigrationCutover({
+        controlApiUrl, ...input,
+      }),
+      consoleMigrationRollback: (input) => submitConsoleMigrationRollback({
+        controlApiUrl, ...input,
+      }),
       platformBrand: (input) => getPlatformBranding({ controlApiUrl, ...input }),
       updatePlatformBrand: (input) => updatePlatformBranding({ controlApiUrl, ...input }),
       channelBrand: (input) => getChannelBranding({ controlApiUrl, ...input }),

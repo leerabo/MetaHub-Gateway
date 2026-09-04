@@ -541,16 +541,15 @@ test("PAGE-092 source and styles forbid persistence, legacy prefetch, overflow a
     readFile(new URL("../../src/features/dashboard/roleDashboardPageState.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
-    readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
+    readFile(new URL("../../src/styles/console-experience.css", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(stateSource, /localStorage|sessionStorage|updateUserPreferences|updateConsolePreferences/);
   assert.doesNotMatch(mainSource, /getDashboardOverview|dashboard\.viewed|listProviderHealth/);
   assert.doesNotMatch(developerSource, /renderDashboardPanel|renderProviderHealthDashboardCard/);
-  assert.match(mainSource, /getDashboardRoleView/);
-  assert.match(css, /\.role-dashboard-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
-  assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?\.role-dashboard-grid\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(css, /@media \(max-width: 620px\)[\s\S]*?\.role-dashboard-view-segments\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(css, /@media \(max-width: 620px\)[\s\S]*?\.role-dashboard-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
-  assert.match(css, /\.role-dashboard-card\s*\{[^}]*min-height:\s*252px/s);
-  assert.match(css, /\.role-dashboard-card header span\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  assert.doesNotMatch(mainSource, /getDashboardRoleView/);
+  assert.match(mainSource, /case "overview":[\s\S]*loadWorkspaceConsoleExperienceState\([\s\S]*"overview"/);
+  assert.match(developerSource, /renderWorkspaceConsoleExperience\(options\.workspaceConsoleExperienceState, "overview"\)/);
+  assert.match(css, /\.console-experience-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.console-experience-metrics,[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+  assert.match(css, /\.console-experience-metrics span,[\s\S]*overflow-wrap:\s*anywhere/s);
 });

@@ -460,7 +460,7 @@ test("renderer shows safe aggregates and action links only after the second navi
     customerHealthState: { state: "ready", data, error: null },
     i18n: createI18n("en-US"),
   });
-  assert.match(container.innerHTML, /class="panel customer-health-panel"/);
+  assert.doesNotMatch(container.innerHTML, /class="panel customer-health-panel"/);
   assert.match(container.innerHTML, /data-active-navigation="customer-health"/);
 });
 

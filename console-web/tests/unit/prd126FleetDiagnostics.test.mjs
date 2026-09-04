@@ -701,6 +701,10 @@ function platformNavigation() {
       id: "edge-fleet",
       label: "Private Gateway fleet",
       href: "/platform.html#edge-fleet",
+    }, {
+      id: "overview",
+      label: "Overview",
+      href: "/platform.html#overview",
     }],
   };
 }

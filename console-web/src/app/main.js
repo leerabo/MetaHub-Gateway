@@ -182,18 +182,6 @@ import {
 } from "../features/support-tickets/supportTicketPageState.js";
 import { renderSupportTickets } from "../features/support-tickets/renderSupportTickets.js";
 import {
-  bindPartnerPortalInteractions,
-  clearPartnerPortalBranding,
-  clearPartnerPortalDom,
-} from "../features/partner-portal/bindPartnerPortal.js";
-import {
-  createPartnerPortalPageState,
-  isPartnerPortalAbortError,
-  partnerPortalPageOwner,
-  partnerPortalReadIdentitySnapshot,
-} from "../features/partner-portal/partnerPortalPageState.js";
-import { renderPartnerPortal } from "../features/partner-portal/renderPartnerPortal.js";
-import {
   bindExperimentInteractions,
   clearExperimentDom,
 } from "../features/experiments/bindExperiments.js";
@@ -216,62 +204,16 @@ import {
 } from "../features/cache-policies/responseCachePageState.js";
 import { renderResponseCache } from "../features/cache-policies/renderResponseCache.js";
 import {
-  bindPlanManagementInteractions,
-  bindQuotaManagementInteractions,
-  clearPlanManagementDom,
-  clearQuotaManagementDom,
-} from "../features/plan-billing/bindPlanBilling.js";
+  bindWorkspaceQuotaInteractions,
+  clearWorkspaceQuotaDom,
+} from "../features/workspace-quota/bindWorkspaceQuota.js";
 import {
-  createPlanPageState,
   createQuotaPageState,
-  isPlanBillingAbortError,
-  planPageOwner,
-  planReadIdentitySnapshot,
+  isWorkspaceQuotaAbortError,
   quotaPageOwner,
   quotaReadIdentitySnapshot,
-} from "../features/plan-billing/planBillingPageState.js";
-import {
-  renderPlanManagement,
-  renderQuotaManagement,
-} from "../features/plan-billing/renderPlanBilling.js";
-import {
-  bindBillingDisputeInteractions,
-  clearBillingDisputeDom,
-  hydrateBillingDisputePrivateText,
-} from "../features/billing-disputes/bindBillingDisputes.js";
-import {
-  billingDisputePageOwner,
-  billingDisputeReadIdentitySnapshot,
-  createBillingDisputePageState,
-} from "../features/billing-disputes/billingDisputePageState.js";
-import { renderBillingDisputes } from "../features/billing-disputes/renderBillingDisputes.js";
-import {
-  bindAdminAssistantInteractions,
-  clearAdminAssistantDom,
-} from "../features/admin-assistant/bindAdminAssistant.js";
-import {
-  adminAssistantPageOwner,
-  adminAssistantReadIdentitySnapshot,
-  createAdminAssistantPageState,
-} from "../features/admin-assistant/adminAssistantPageState.js";
-import {
-  ADMIN_ASSISTANT_SUGGESTIONS,
-  hydrateAdminAssistantText,
-  renderAdminAssistant,
-} from "../features/admin-assistant/renderAdminAssistant.js";
-import {
-  approvalHasPasswordInput,
-  bindApprovalInteractions,
-  clearApprovalDom,
-  restoreApprovalActionFocus,
-} from "../features/approvals/bindApprovals.js";
-import {
-  approvalPageOwner,
-  approvalReadIdentitySnapshot,
-  createApprovalPageState,
-  isApprovalAbortError,
-} from "../features/approvals/approvalPageState.js";
-import { renderApprovals } from "../features/approvals/renderApprovals.js";
+} from "../features/workspace-quota/workspaceQuotaPageState.js";
+import { renderWorkspaceQuota } from "../features/workspace-quota/renderWorkspaceQuota.js";
 import { createWorkspaceConsoleExperienceController } from "../features/workspace-console-experience/workspaceConsoleExperienceController.js";
 import {
   bindWorkspaceConsoleExperience,
@@ -321,20 +263,10 @@ import {
   normalizeMigrationLanguage,
 } from "../features/migration-guide/renderMigrationGuide.js";
 import {
-  competitorTabForKey,
-  normalizeCompetitorTab,
-} from "../features/competitor-comparison/renderCompetitorComparison.js";
-import {
   createProviderStatusPageState,
   providerStatusFilterKey,
   providerStatusIdentitySnapshot,
 } from "../features/provider-health/providerStatusPageState.js";
-import {
-  createRoleDashboardPageState,
-  roleDashboardIdentitySnapshot,
-  roleDashboardNavigationOwned,
-} from "../features/dashboard/roleDashboardPageState.js";
-import { renderRoleDashboardPanel } from "../features/dashboard/renderRoleDashboardPanel.js";
 import { createI18n, DEFAULT_LOCALE } from "../i18n/messages.js";
 import {
   AuthApiError,
@@ -370,10 +302,8 @@ import {
   listAuditLogs,
   triggerAuditCsvDownload,
 } from "../lib/auditLogs.js";
-import { getConfigSummary } from "../lib/configSummary.js";
 import {
   bindNavigationHashRefresh,
-  parseApprovalCardHash,
   parseNavigationHash,
   recordConsolePageView,
   updateConsolePreferences,
@@ -401,7 +331,6 @@ import {
 } from "../lib/policyTemplates.js";
 import { GatewayApiError, sendChatCompletion } from "../lib/gatewayApi.js";
 import { createEnvironment, listEnvironments, updateEnvironment } from "../lib/environments.js";
-import { getDashboardRoleView } from "../lib/dashboard.js";
 import { getTenantOnboardingSummary } from "../lib/onboarding.js";
 import { getDeveloperQuickstartData } from "../lib/developerQuickstart.js";
 import {
@@ -410,7 +339,6 @@ import {
   getJavascriptSdkExample,
   getPythonSdkExample,
 } from "../lib/pythonSdkExamples.js";
-import { getUserPreferences, updateUserPreferences } from "../lib/userPreferences.js";
 import { createDlpRule, listDlpRules, updateDlpRule } from "../lib/dlp.js";
 import { createPolicy, listPolicies, updatePolicy, validatePolicy } from "../lib/policies.js";
 import { executePolicyDryRun } from "../lib/policyDryRun.js";
@@ -608,19 +536,6 @@ import {
   updateDeploymentBranding,
 } from "../lib/brandDomains.js";
 import {
-  configurePartner,
-  createPartnerCustomer,
-  downloadPartnerCommissionCsv,
-  downloadPartnerDeliveryPackage,
-  getPartnerCommission,
-  getPartnerProfile,
-  listPartnerCustomers,
-  listPartnerProjects,
-  triggerPartnerAttachmentDownload,
-  updatePartnerBranding,
-  updatePartnerCustomer,
-} from "../lib/partnerPortal.js";
-import {
   createExperiment,
   getExperiment,
   getExperimentResults,
@@ -634,28 +549,8 @@ import {
 } from "../lib/responseCache.js";
 import {
   createQuotaAdjustment,
-  getCurrentPlan,
   getQuotaBuckets,
-  patchCurrentPlan,
-} from "../lib/planBilling.js";
-import {
-  createBillingDispute,
-  getBillingDispute,
-  isBillingDisputeAbortError,
-  listBillingDisputes,
-  transitionBillingDispute,
-} from "../lib/billingDisputes.js";
-import {
-  adminAssistantSourceAccess,
-  queryAdminAssistant,
-} from "../lib/adminAssistant.js";
-import {
-  createApprovalIdempotencyKey,
-  decideApproval,
-  getApproval,
-  listApprovals,
-  stepUpApproval,
-} from "../lib/approvals.js";
+} from "../lib/workspaceQuota.js";
 import {
   getWorkspaceConsoleOverview,
   getWorkspaceDeploymentSummary,
@@ -678,7 +573,6 @@ import {
   updateModelQualityScore,
 } from "../lib/modelQualityScores.js";
 import { createModel, listModels, updateModel } from "../lib/models.js";
-import { createModelPrice, listModelPrices } from "../lib/modelPrices.js";
 import { createApplication, createProject, listApplications, listProjects } from "../lib/projects.js";
 import { probeProvider } from "../lib/providerHealth.js";
 import { listProviderStatuses } from "../lib/providerStatus.js";
@@ -728,7 +622,10 @@ import {
   listWorkspaceProviderErrorOverrides,
 } from "../lib/providerEngineering.js";
 import { createWorkspaceProviderEngineeringController } from "../features/workspace-provider-engineering/workspaceProviderEngineeringController.js";
-import { renderWorkspaceProviderEngineering } from "../features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
+import {
+  renderWorkspaceProviderEngineering,
+  renderWorkspaceProviderErrorMaps,
+} from "../features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
 import {
   applyWorkspaceProviderCostRateCommand,
   createWorkspaceCommercialDispute,
@@ -859,9 +756,6 @@ let publicBrandingGeneration = 0;
 let publicBrandingLogoUrl = "";
 // 当前 i18n 上下文供 PAGE-070 局部重绘复用；身份清除时会回到默认中文，避免沿用上一用户偏好。
 let currentI18n = createI18n(DEFAULT_LOCALE);
-let shellMetadataIdentity = "";
-let consolePreferencesIdentity = "";
-let consolePreferencesCache = null;
 let gatewayDebugState = {};
 // 0138 分组状态只来自当前 Workspace 的服务端偏好；默认全部折叠。
 let expandedConsoleGroupKey = null;
@@ -892,9 +786,6 @@ const modelQualityScorePageMemory = createModelQualityScorePageMemory({
 let modelQualityScoreFilters = { modelId: "", limit: 100, offset: 0 };
 let modelActionError = null;
 let modelFeedback = "";
-let modelPriceActionError = null;
-let modelPriceFeedback = "";
-let modelPriceFilters = { effectiveStatus: "all", limit: 100, offset: 0 };
 let providerActionError = null;
 let providerFeedback = "";
 let providerLastTestResult = null;
@@ -917,6 +808,7 @@ let providerHealthController = null;
 // Provider 列表及其 Key 读取绑定当前刷新；导航或注销时必须先取消，避免失效 Token 继续请求。
 let providersLoadController = null;
 let workspaceProviderEngineeringProviders = [];
+const WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS = new Set(["providers", "error-maps"]);
 const workspaceProviderEngineeringController = createWorkspaceProviderEngineeringController({
   api: {
     workspaceSession: (input) => getCurrentWorkspaceSession({
@@ -980,7 +872,9 @@ const workspaceNavigationController = createWorkspaceNavigationController({
 });
 const WORKSPACE_COMMERCIAL_NAVIGATION_IDS = new Set([
   "workspace-subscription",
+  "billing-disputes",
   "internal-finops",
+  "model-prices",
 ]);
 let workspaceCommercialNavigationItems = [];
 const workspaceCommercialAccountingController = createWorkspaceCommercialAccountingController({
@@ -1029,9 +923,6 @@ const CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000;
 let consoleNavigationSideEffectTimer = null;
 // Provider 状态 GET 使用完整身份、导航、筛选、Token 与 generation 共同约束迟到响应。
 const providerStatusPageState = createProviderStatusPageState();
-// PAGE-092 使用独立 owner 和记忆；selected view 只驻留内存，禁止写入 URL、Storage 或用户偏好。
-const roleDashboardPageState = createRoleDashboardPageState();
-let roleDashboardEntrySource = readActiveNavigationHash() === "overview" ? "direct_hash" : "refresh";
 let projectActionError = null;
 let projectFeedback = "";
 let environmentActionError = null;
@@ -1143,36 +1034,13 @@ const migrationOperationPageState = createMigrationOperationPageState({
 const supportTicketPageState = createSupportTicketPageState({
   clearDom: clearSupportTicketDom,
 });
-// PAGE-119 owns branding, customer/commission aggregates, dialogs, and attachment lanes independently.
-const partnerPortalPageState = createPartnerPortalPageState({
-  clearDom: () => clearPartnerPortalDom(globalThis.document),
-  clearBranding: () => clearPartnerPortalBranding(globalThis.document),
-});
 // PAGE-105 的 cursor、详情、统计与创建幂等 owner 只驻留当前授权 Session 内存。
 const experimentPageState = createExperimentPageState({ clearDom: clearExperimentDom });
 // PAGE-106 的策略草稿、cursor、Dialog 和三条异步 lane 只属于完整 response-cache owner。
 const responseCachePageState = createResponseCachePageState({ clearDom: clearResponseCacheDom });
 // PAGE-110 的 Plan CAS 草稿和确认 Dialog 只属于完整 plan.read owner。
-const planManagementPageState = createPlanPageState({ clearDom: clearPlanManagementDom });
 // PAGE-111 的 reason、幂等键和额度调整 ticket 只驻留完整 quota.read owner 的 Dialog 闭包。
-const quotaManagementPageState = createQuotaPageState({ clearDom: clearQuotaManagementDom });
-// PAGE-112 reason/decision text and idempotency keys stay inside this owner-bound state closure.
-const billingDisputePageState = createBillingDisputePageState({
-  clearDom: () => clearBillingDisputeDom(globalThis.document),
-});
-// PAGE-107 的问题、回答、来源与 POST ticket 只属于完整 assistant owner；任何清理都会同步擦除正文 DOM。
-const adminAssistantPageState = createAdminAssistantPageState({
-  clearDom: () => clearAdminAssistantDom(globalThis.document),
-});
-// PAGE-108/109 的任务、私有 cursor、动作幂等 owner 与三条异步 lane 只属于完整审批页面 owner。
-let approvalActionFocusReturn = null;
-const approvalPageState = createApprovalPageState({
-  clearDom: () => {
-    approvalActionFocusReturn = null;
-    clearApprovalDom(globalThis.document);
-  },
-  createIdempotencyKey: createApprovalIdempotencyKey,
-});
+const quotaManagementPageState = createQuotaPageState({ clearDom: clearWorkspaceQuotaDom });
 let workspaceConsoleExperienceShellState = null;
 const workspaceConsoleExperienceController = createWorkspaceConsoleExperienceController({
   api: {
@@ -1250,8 +1118,6 @@ const webhookDeadLetterPageState = createWebhookDeadLetterPageState();
 let virtualKeyCreatedSecret = null;
 let virtualKeyActionError = null;
 let virtualKeyFeedback = "";
-let userPreferenceActionError = null;
-let userPreferenceFeedback = "";
 // SDK active language 使用模块级状态，保证 15 秒刷新和下载反馈后仍保留选择；进入登录页时统一重置为 Python。
 let activeSdkLanguage = "python";
 // 迁移指南使用完全独立的语言和显式配置选择，禁止与 SDK tabs 或其他页面筛选状态相互覆盖。
@@ -1263,14 +1129,6 @@ let migrationGuideEventWarning = null;
 let migrationGuideEntrySource = readActiveNavigationHash() === "migration-guide" ? "direct_hash" : "sidebar";
 // 唯一访问 tracker 在首屏渲染后记录迁移事件；模块级实例跨 15 秒刷新保留 attempted/inFlight 状态。
 const migrationGuideVisitTracker = createMigrationGuideVisitTracker(recordMigrationGuideVisit);
-// 竞品对比页使用独立 tab 与访问生命周期，定时刷新不得重置用户选择或重复写入事件。
-let activeCompetitorTab = "positioning";
-let competitorEventWarning = null;
-let competitorEntrySource = readActiveNavigationHash() === "competitor-comparison" ? "direct_hash" : "sidebar";
-const competitorVisitTracker = createUniquePageVisitTracker({
-  targetItemId: "competitor-comparison",
-  recordVisit: recordCompetitorVisit,
-});
 // PAGE-088 访问事件绑定已授权页面 shell；状态 API 为空或 503 都不影响每次进入只记一次。
 let providerStatusEventWarning = null;
 let providerStatusEntrySource = readActiveNavigationHash() === "provider-health" ? "direct_hash" : "sidebar";
@@ -1291,9 +1149,6 @@ if (app && globalThis.window) {
   } else {
     bindConsoleWorkspaceContextInvalidation();
     window.addEventListener("hashchange", () => {
-      // PAGE-107 的问题、回答和来源属于旧 hash owner；即使新 hash 仍规范化为同一页面，
-      // 也必须先推进 generation 并同步擦除正文，再允许通用导航监听器发起后端复核。
-      adminAssistantPageState.leave();
       workspaceConsoleExperienceShellState = null;
       workspaceConsoleExperienceController.leave();
       // PAGE-088 额外监听同一 hash 边界，同步淘汰旧状态回调；通用监听仍负责重读后端导航。
@@ -1354,10 +1209,6 @@ if (app && globalThis.window) {
       if (nextItemId !== "support-tickets") {
         supportTicketPageState.clear();
       }
-      if (nextItemId !== "partner-portal") {
-        // PAGE-119 clears visible branding and all private lanes before navigation work can complete.
-        partnerPortalPageState.clear();
-      }
       if (nextItemId !== "experiments") {
         // PAGE-105 的私有 cursor、创建幂等 owner 和统计 ticket 不得越过 hash 导航边界。
         experimentPageState.clear();
@@ -1366,28 +1217,9 @@ if (app && globalThis.window) {
         // PAGE-106 的策略草稿、Dialog、cursor 和幂等 owner 不得越过 hash 导航边界。
         responseCachePageState.clear();
       }
-      if (nextItemId !== "plans") {
-        // PAGE-110 的套餐草稿、确认 Dialog 和 CAS ticket 在 hash 离页时立即销毁。
-        planManagementPageState.clear();
-      }
       if (nextItemId !== "quota-buckets") {
         // PAGE-111 的 reason、幂等键和调整 ticket 不能越过 hash 导航边界。
         quotaManagementPageState.clear();
-      }
-      if (nextItemId !== "billing-disputes") {
-        // PAGE-112 的详情自由文本、Dialog 与所有 GET/PATCH 代次不能越过 hash 边界。
-        billingDisputePageState.clear();
-      }
-      if (nextItemId !== "approvals") {
-        // PAGE-108/109 的任务详情、密码 DOM、cursor 和动作 owner 在 hash 离页时立即销毁。
-        approvalPageState.clear();
-      }
-      if (nextItemId === "overview") {
-        // 地址栏进入 overview 只记录页面来源；selected view 从不编码到 hash。
-        roleDashboardEntrySource = "direct_hash";
-      } else {
-        // 离开首页时立即取消 role-view 并清除旧卡片，不等待导航接口或下一轮全页渲染。
-        clearRoleDashboardSessionState();
       }
       // Provider 状态页单独维护访问来源；其他 hash 必须销毁 tracker，避免跨页面误记事件。
       if (nextItemId === "provider-health") {
@@ -1418,14 +1250,9 @@ if (app && globalThis.window) {
       privateGatewayPageState.clear();
       migrationOperationPageState.clear();
       supportTicketPageState.clear();
-      partnerPortalPageState.clear();
       experimentPageState.clear();
       responseCachePageState.clear();
-      planManagementPageState.clear();
       quotaManagementPageState.clear();
-      billingDisputePageState.clear();
-      adminAssistantPageState.leave();
-      approvalPageState.clear();
       workspaceConsoleExperienceShellState = null;
       workspaceConsoleExperienceController.leave();
       workspaceNavigationController.leave();
@@ -1441,10 +1268,8 @@ if (app && globalThis.window) {
       clearRequestExplanationSessionState();
       clearRequestFeedbackSummarySessionState();
       migrationGuideVisitTracker.leave();
-      competitorVisitTracker.leave();
       providerStatusPageState.clear();
       providerStatusVisitTracker.leave();
-      clearRoleDashboardSessionState();
       workspaceProviderEngineeringProviders = [];
       workspaceProviderEngineeringController.close();
       workspaceCommercialNavigationItems = [];
@@ -1553,13 +1378,9 @@ async function start() {
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
-    clearPlanBillingStateOnIdentityChange(authSession.context, context);
-    clearBillingDisputeStateOnIdentityChange(authSession.context, context);
-    clearAdminAssistantStateOnIdentityChange(authSession.context, context);
-    clearApprovalStateOnIdentityChange(authSession.context, context);
+    clearWorkspaceQuotaStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
     clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
@@ -1574,11 +1395,6 @@ async function start() {
     clearPromptTemplateStateOnIdentityChange(authSession.context, context);
     clearPolicyTemplateLibraryStateOnIdentityChange(authSession.context, context);
     clearEnterpriseChatStateOnIdentityChange(authSession.context, context);
-    // tenant、Session、permission revision 或指纹任一漂移都必须在替换认证上下文前销毁旧首页 owner 和 DOM。
-    if (roleDashboardIdentitySnapshot(authSession.context) !== roleDashboardIdentitySnapshot(context)) {
-      clearRoleDashboardSessionState();
-      roleDashboardEntrySource = "refresh";
-    }
     saveAuthSession(authSession.token, context);
     authSession = { token: authSession.token, context };
     await refresh();
@@ -1698,8 +1514,6 @@ async function performRefresh(options = {}) {
     refreshOwner,
     { generation: refreshSequence, token: authSession.token },
   );
-  let adminAssistantIdentityChanged = false;
-  let fastRoleDashboardState = null;
   try {
     // 登录刚完成时，调用方已经用同一个新 Token 完成了一次 /auth/me。
     // 复用该响应可避免首屏再次发起相同认证查询；后续刷新不传此值，仍完整复核 Session/RBAC。
@@ -1725,17 +1539,9 @@ async function performRefresh(options = {}) {
     clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
     clearMigrationOperationStateOnIdentityChange(authSession.context, context);
     clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearPartnerPortalStateOnIdentityChange(authSession.context, context);
     clearExperimentStateOnIdentityChange(authSession.context, context);
     clearResponseCacheStateOnIdentityChange(authSession.context, context);
-    clearPlanBillingStateOnIdentityChange(authSession.context, context);
-    clearBillingDisputeStateOnIdentityChange(authSession.context, context);
-    adminAssistantIdentityChanged = (
-      adminAssistantReadIdentitySnapshot(authSession.context)
-      !== adminAssistantReadIdentitySnapshot(context)
-    );
-    clearAdminAssistantStateOnIdentityChange(authSession.context, context);
-    clearApprovalStateOnIdentityChange(authSession.context, context);
+    clearWorkspaceQuotaStateOnIdentityChange(authSession.context, context);
     clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
     clearFinOpsStateOnIdentityChange(authSession.context, context);
     clearPolicyStateOnIdentityChange(authSession.context, context);
@@ -1748,11 +1554,6 @@ async function performRefresh(options = {}) {
     clearRequestExplanationStateOnIdentityChange(authSession.context, context);
     clearRequestFeedbackSummaryStateOnIdentityChange(authSession.context, context);
     clearRolePermissionStateOnIdentityChange(authSession.context, context);
-    // PAGE-092 owner 显式包含 tenant、Session、permission revision 与指纹；漂移时先清 DOM，再写入新认证上下文。
-    if (roleDashboardIdentitySnapshot(authSession.context) !== roleDashboardIdentitySnapshot(context)) {
-      clearRoleDashboardSessionState();
-      roleDashboardEntrySource = "refresh";
-    }
     saveAuthSession(refreshToken, context);
     authSession = { token: refreshToken, context };
   } catch (error) {
@@ -1773,7 +1574,12 @@ async function performRefresh(options = {}) {
   if (!consoleShellState || !authSession.token) {
     return;
   }
-  if (consoleShellState.activeNavigationItemId !== "providers") {
+  const providerEngineeringSnapshot = workspaceProviderEngineeringController.snapshot();
+  if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(
+    consoleShellState.activeNavigationItemId,
+  ) || (providerEngineeringSnapshot.activeNavigationItemId
+    && providerEngineeringSnapshot.activeNavigationItemId
+      !== consoleShellState.activeNavigationItemId)) {
     workspaceProviderEngineeringProviders = [];
     workspaceProviderEngineeringController.close();
   }
@@ -1799,10 +1605,6 @@ async function performRefresh(options = {}) {
     clearPolicyTemplateLibrarySessionState();
   }
   const policyTemplateLibraryState = null;
-  // 角色首页只属于后端确认的 overview；导航裁剪、非法 hash 或离页时立即 abort 并清除受保护卡片。
-  if (!roleDashboardNavigationOwned(consoleShellState, readNavigationHashState())) {
-    clearRoleDashboardSessionState();
-  }
   // PAGE-088 owner 只属于后端确认的 provider-health 导航；离页或权限裁剪后立即取消在途状态读取。
   if (consoleShellState?.activeNavigationItemId !== "provider-health") {
     providerStatusPageState.clear();
@@ -1935,10 +1737,6 @@ async function performRefresh(options = {}) {
   ) {
     return;
   }
-  // PAGE-119 exists only while the exact backend navigation owner and live read permission remain current.
-  if (consoleShellState?.activeNavigationItemId !== "partner-portal") {
-      partnerPortalPageState.clear();
-  }
   // PAGE-105 只属于后端确认的 experiments 导航；离页或降权立即销毁 cursor、统计和创建 owner。
   if (consoleShellState?.activeNavigationItemId !== "experiments") {
     experimentPageState.clear();
@@ -1962,16 +1760,6 @@ async function performRefresh(options = {}) {
     // 后台已完成 auth/navigation 复核；同 owner 草稿、冲突或 Dialog 仅阻止普通 DOM replacement。
     return;
   }
-  // PAGE-110 只属于后端确认的 plans 导航；同 owner 草稿、冲突或确认 Dialog 阻止后台全壳替换。
-  if (consoleShellState?.activeNavigationItemId !== "plans") {
-    planManagementPageState.clear();
-  } else if (
-    isBackgroundRefresh
-    && planManagementPageState.blocksShellDomReplacement()
-    && planManagementPageState.enter(currentPlanManagementOwner(consoleShellState))
-  ) {
-    return;
-  }
   // PAGE-111 只属于后端确认的 quota-buckets 导航；busy/dirty Dialog 不得被 15 秒刷新覆盖。
   if (consoleShellState?.activeNavigationItemId !== "quota-buckets") {
     quotaManagementPageState.clear();
@@ -1982,42 +1770,10 @@ async function performRefresh(options = {}) {
   ) {
     return;
   }
-  // PAGE-112 free text and write tickets only belong to the backend-confirmed read navigation owner.
-  if (consoleShellState?.activeNavigationItemId !== "billing-disputes") {
-    billingDisputePageState.clear();
-  } else if (
-    isBackgroundRefresh
-    && billingDisputePageState.blocksShellDomReplacement()
-    && billingDisputePageState.enter(currentBillingDisputeOwner(consoleShellState))
-  ) {
-    return;
-  }
   // PAGE-107 后台刷新仍先重读 auth/navigation；同 owner 有正文时保留 DOM，撤权则 leave 后继续失败关闭。
   // 上方多个页面 loader 都包含 await；离开旧导航后必须再次核对本轮 owner，禁止旧 overview 快照
   // 在新 PAGE-107 已经建立 owner 后调用 leave() 并移除刚渲染的根节点。
   if (!refreshOwnerCurrent()) {
-    return;
-  }
-  if (consoleShellState?.activeNavigationItemId !== "admin-assistant") {
-    adminAssistantPageState.leave();
-  } else if (
-    isBackgroundRefresh
-    && !workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId)
-    && adminAssistantPageState.blocksShellDomReplacement()
-    && adminAssistantPageState.enter(currentAdminAssistantOwner(consoleShellState))
-  ) {
-    return;
-  }
-  // PAGE-108/109 只属于后端确认的 approval.read 导航；撤权或离页同步清密码 DOM 和全部 ticket。
-  if (consoleShellState?.activeNavigationItemId !== "approvals") {
-    approvalPageState.clear();
-  } else if (
-    isBackgroundRefresh
-    && !workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId)
-    && approvalPageState.blocksShellDomReplacement()
-    && approvalPageState.enter(currentApprovalOwner(consoleShellState))
-  ) {
-    // 同 owner 的确认对话框和未决动作不能被后台全壳刷新重建；auth/navigation 已在上方重新校验。
     return;
   }
   // PAGE-083 只属于后端确认的 manager 导航；离页、hash 回退或降权立即取消 GET/POST 与轮询。
@@ -2035,485 +1791,10 @@ async function performRefresh(options = {}) {
   await loadAndRenderActiveNavigation({
     consoleShellState,
     refreshId,
-    fastRoleDashboardState,
     isBackgroundRefresh,
     refreshOwnerCurrent,
   });
   return;
-  // PAGE-085 只在后端授权导航激活时读取；loader 还会冻结 tenant、Session、revision 与授权指纹。
-  const [rolePermissionState, userPreferencesState] = await Promise.all([
-    loadRolePermissionState(consoleShellState, refreshId),
-    loadUserPreferencesState(),
-  ]);
-  // 语言偏好同样依赖当前登录态，401 必须立即回到登录页。
-  if (!authSession.token) {
-    return;
-  }
-  const i18n = createI18n(userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
-  currentI18n = i18n;
-  const [
-    roleDashboardState,
-    quickstartState,
-    sdkExampleStates,
-    tenantState,
-    usersState,
-    providerHealthState,
-  ] = await Promise.all([
-    fastRoleDashboardState ?? loadRoleDashboardState(consoleShellState, roleDashboardEntrySource),
-    loadQuickstartState(consoleShellState),
-    loadSdkExampleStates(consoleShellState),
-    loadTenantState(),
-    loadUsersState(consoleShellState),
-    loadProviderHealthState(consoleShellState),
-  ]);
-  // 角色首页失败会保留统一错误或同 owner partial，但当前 401 仍必须切断全部后续租户读取。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 任一语言元数据接口确认会话失效后，顺序加载器会统一清理会话，后续租户数据请求必须停止。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 健康接口若确认会话失效会清空 Token，后续所有租户配置读取必须立即停止。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-105 缺任一创建依赖时不得预取四类候选；其他页面保持既有共享目录加载行为。
-  const loadExperimentCreateResources = shouldLoadExperimentCreateResources(consoleShellState);
-  const [environmentState, providersState, modelsState] = await Promise.all([
-    loadExperimentCreateResources ? loadEnvironmentState() : Promise.resolve(null),
-    consoleShellState?.activeNavigationItemId === "local-models"
-      ? Promise.resolve(null)
-      : loadProvidersState(),
-    loadExperimentCreateResources ? loadModelsState() : Promise.resolve(null),
-  ]);
-  // Static lifecycle contract marker: activeNavigationItemId === "local-models" ? null : await loadProvidersState()
-  // Static lifecycle contract markers retained for the established loader
-  // ownership checks: const environmentState = loadExperimentCreateResources ? await loadEnvironmentState()
-  // const modelsState = loadExperimentCreateResources ? await loadModelsState()
-  // const modelAliasesState = loadExperimentCreateResources ? await loadModelAliasesState()
-  // const projectState = loadExperimentCreateResources ? await loadProjectState()
-  // Environment 是 Key、别名和预算的共同依赖，认证失败时必须停止后续配置读取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-116 uses its dedicated aggregate and must never preload the Provider page or any KeyPool.
-  // Provider 管理读取可能因会话过期清空 Token，此时不能继续加载模型及健康数据。
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 策略正文只在后端确认 active policies 导航后读取；route_to 选项复用本轮已授权模型目录。
-  const [
-    policiesState,
-    policySnapshotsRenderState,
-    modelPricesState,
-    responseCacheState,
-    planManagementState,
-    quotaManagementState,
-    billingDisputesState,
-    approvalsState,
-  ] = await Promise.all([
-    loadPoliciesState(consoleShellState, refreshId, modelsState),
-    loadPolicySnapshotsState(consoleShellState, refreshId),
-    loadModelPricesState(),
-    loadResponseCacheState(consoleShellState, refreshId),
-    loadPlanManagementState(consoleShellState, refreshId),
-    loadQuotaManagementState(consoleShellState, refreshId),
-    loadBillingDisputesState(consoleShellState, refreshId),
-    loadApprovalsState(consoleShellState, refreshId),
-  ]);
-  // Static lifecycle contract marker: const batchJobsState = await loadBatchJobsState(consoleShellState, refreshId
-  if (!authSession.token) {
-    return;
-  }
-  // 策略快照原因和历史仅在后端确认 active admin 导航后读取，非管理员不会预取任何发布元数据。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-106 只在后端授权导航激活时读取 Alias 策略；其他页面不预取策略或 selector。
-  // PAGE-110/111 仅在各自后端授权导航激活时读取，互不预取套餐草稿或额度调整事实。
-  if (!authSession.token) {
-    return;
-  }
-  // 额度读取可能清除失效会话，后续页面加载必须在无令牌时立即停止。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-112 only loads after backend navigation confirms billing.dispute.read; detail remains explicit.
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-107 首屏只建立内存 owner，不预取事实也不自动 POST；查询必须来自一次明确表单提交。
-  const adminAssistantState = loadAdminAssistantState(consoleShellState, refreshId);
-  // PAGE-108 读取列表；PAGE-109 受控 hash 只读取一个任务，不在其他页面后台预取审批事实。
-  if (!authSession.token) {
-    return;
-  }
-  // 模型价格属于成本治理数据，认证失败时必须停止后续模型配置读取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-072 两个编辑器复用本轮唯一一次 ModelAlias GET，各自 refresh ticket 都不参与对方 PATCH 门禁。
-  const routingPolicyRefreshTicket = (
-    refreshId === refreshSequence
-    && consoleShellState?.activeNavigationItemId === "routing-policies"
-  )
-    ? routingPolicyPageMemory.beginRefresh({
-        identity: routingPolicyIdentitySnapshot(authSession.context),
-        navigation: "routing-policies",
-      })
-    : null;
-  const cacheAffinityRefreshTicket = routingPolicyRefreshTicket
-    ? cacheAffinityPageMemory.beginRefresh({
-        identity: routingPolicyIdentitySnapshot(authSession.context),
-        navigation: "routing-policies",
-      })
-    : null;
-  const [
-    modelAliasesState,
-    modelQualityScoresState,
-    projectState,
-    virtualKeysState,
-    usageState,
-  ] = await Promise.all([
-    loadExperimentCreateResources ? loadModelAliasesState() : Promise.resolve(null),
-    loadModelQualityScoresState(consoleShellState, refreshId),
-    loadExperimentCreateResources ? loadProjectState() : Promise.resolve(null),
-    loadVirtualKeysState(),
-    loadUsageState(),
-  ]);
-  if (routingPolicyRefreshTicket) {
-    if (modelAliasesState?.state === "ok") {
-      routingPolicyPageMemory.acceptRefresh(routingPolicyRefreshTicket, modelAliasesState.model_aliases);
-    } else {
-      routingPolicyPageMemory.acceptRefreshError(routingPolicyRefreshTicket, modelAliasesState);
-    }
-  }
-  if (cacheAffinityRefreshTicket) {
-    if (modelAliasesState?.state === "ok") {
-      cacheAffinityPageMemory.acceptRefresh(cacheAffinityRefreshTicket, modelAliasesState.model_aliases);
-    } else {
-      cacheAffinityPageMemory.acceptRefreshError(cacheAffinityRefreshTicket, modelAliasesState);
-    }
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-069 只有在后端授权且确认 active 导航后才读取；loader 自身还会复核角色、身份和 refresh owner。
-  if (!authSession.token) {
-    return;
-  }
-  // 项目归属会影响 Key 创建和日志/用量筛选，认证失败时必须停止后续渲染。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-074/075 只在后端确认 active admin 导航后读取，其他页面不后台预取正式财务分录。
-  const [
-    finOpsState,
-    costAnomaliesState,
-    sessionRisksState,
-    filesState,
-    fileSecurityState,
-    batchJobsState,
-    tenantDataLifecycleState,
-    mcpToolsState,
-    localEndpointsState,
-  ] = await Promise.all([
-    loadFinOpsState(consoleShellState, refreshId),
-    loadCostAnomaliesState(consoleShellState, refreshId),
-    loadSessionRisksState(consoleShellState, refreshId),
-    loadFilesState(consoleShellState, refreshId),
-    loadFileSecurityState(consoleShellState, refreshId),
-    loadBatchJobsState(consoleShellState, refreshId, {
-      projectState,
-      environmentState,
-      modelAliasesState,
-    }),
-    loadTenantDataLifecycleState(consoleShellState, refreshId),
-    loadMcpToolsState(consoleShellState, refreshId),
-    loadLocalEndpointsState(consoleShellState, refreshId),
-  ]);
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-077/078 只在后端授权的 admin 导航激活时读取，其他页面不预取成本异常治理事实。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-098 只有后端导航与实时 read 权限共同成立时读取，其他页面保持零预取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-101/PAGE-102 只有后端 files 导航与实时 file.read 同时成立时读取，其他页面零预取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-103 只有后端 file-security 导航与实时 file.read 同时成立时读取 ready 文件和报告。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-104 只在精确 Batch 导航 owner 下读取列表、选中详情和创建候选；其他页面零预取。
-  // Batch loader 确认 Session 失效后必须停止，不能继续读取实验租户事实。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-121 only reads the dedicated aggregate for its backend-confirmed navigation owner.
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-114 每次只读取活动 tab；Schema 详情必须由显式 Dialog 操作另行加载。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-116 only calls the dedicated aggregate API; it never preloads Provider or KeyPool details.
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-117 仅在后端导航 owner 有效时读取独立全历史聚合，不预取事件明细或其他租户数据。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-118 只读取专用评分 DTO，绝不预取用量、预算、用户或成本异常源接口。
-  // 客户健康 loader 若确认 Session 已失效，必须立刻停止后续控制面读取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-119 composes only its dedicated aggregate endpoints after the profile owner is confirmed.
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-105 只在精确 experiment.read owner 下读取；创建候选仅在五项复合权限同时存在时投影。
-  const [
-    experimentsState,
-    budgetState,
-    dlpState,
-    webhookState,
-    webhookDeadLettersState,
-    requestLogsState,
-    requestExplanationState,
-    requestFeedbackSummaryState,
-    auditLogsState,
-  ] = await Promise.all([
-    loadExperimentsState(consoleShellState, refreshId, {
-      projectState,
-      environmentState,
-      modelAliasesState,
-      modelsState,
-    }, {
-      preserveFinalOnStatisticsUnavailable: isBackgroundRefresh,
-    }),
-    loadBudgetState(virtualKeysState, consoleShellState, refreshId),
-    loadDlpState(),
-    loadWebhookState(),
-    loadWebhookDeadLettersState(consoleShellState, refreshId),
-    loadRequestLogsState(consoleShellState, refreshId),
-    loadRequestExplanationState(consoleShellState, refreshId),
-    loadRequestFeedbackSummaryState(consoleShellState, refreshId),
-    loadAuditLogsState(consoleShellState, refreshId),
-  ]);
-  // 实验 loader 确认 Session 失效后必须停止全部后续控制面读取。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-083 仅在后端确认 active 且角色为 admin/developer 时读取；其他页面零死信预取。
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-079 只在后端授权导航激活时读取一次完整解释，禁止在其他页面后台预取。
-  if (!authSession.token) {
-    return;
-  }
-  // PAGE-071 只有在后端导航确认 active 且角色可读时才发 GET；loader 还会复核完整身份和 refresh owner。
-  if (!authSession.token) {
-    return;
-  }
-  // 审计日志只有在后端确认当前导航为 audit-logs 后才读取，避免在其他页面后台预取治理数据。
-  if (!authSession.token) {
-    return;
-  }
-  const [statuses, configSummary, systemHealth] = await Promise.all([
-    getServiceStatuses({
-      gatewayUrl,
-      controlApiUrl,
-      consoleUrl,
-    }),
-    getConfigSummary({ controlApiUrl }),
-    getSystemHealth({
-      gatewayUrl,
-      controlApiUrl,
-    }),
-  ]);
-  // 导航点击或定时器可能在当前请求期间启动新刷新，旧结果必须在渲染前丢弃。
-  if (refreshId !== refreshSequence) {
-    return;
-  }
-  // 上下文缓存只含已授权配置对象，不含 Prompt；供提交后的局部重绘复用。
-  policyDryRunContextState = consoleShellState?.activeNavigationItemId === "policy-simulator"
-    ? { environmentState, projectState, modelsState, modelAliasesState }
-    : null;
-  const intentSecurityOwner = intentSecurityPageOwner(
-    authSession.context,
-    consoleShellState,
-    { refreshId, currentRefreshId: refreshSequence },
-  );
-  // 只有实时权限和本轮后端导航共同成立才绑定 PAGE-096 owner；失败分支清空结果且不会创建隐藏 DOM。
-  if (intentSecurityOwner) {
-    intentSecurityPageState.enter(intentSecurityOwner);
-  } else {
-    intentSecurityPageState.leave();
-  }
-  renderDeveloperStart(app, {
-    gatewayUrl,
-    controlApiUrl,
-    consoleUrl,
-    statuses,
-    configSummary,
-    systemHealth,
-    authContext: authSession.context,
-    consoleShellState,
-    i18n,
-    roleDashboardState,
-    providerHealthState,
-    userPreferencesState,
-    quickstartState,
-    sdkExampleStates,
-    activeSdkLanguage,
-    activeMigrationLanguage,
-    selectedMigrationEnvironmentId,
-    selectedMigrationModelAlias,
-    migrationGuideEventWarning,
-    activeCompetitorTab,
-    competitorEventWarning,
-    tenantState,
-    usersState,
-    invitationState: invitationPageState.snapshot(),
-    environmentState,
-    providersState,
-    modelsState,
-    policiesState,
-    policyDryRunState,
-    intentSecurityState: intentSecurityPageState.snapshot(),
-    policySnapshotsState: policySnapshotsRenderState,
-    modelPricesState,
-    responseCacheState,
-    planManagementState,
-    quotaManagementState,
-    billingDisputesState,
-    adminAssistantState,
-    approvalsState,
-    modelAliasesState,
-    // 读取后的其他接口可能较慢；渲染前重新取快照，避免期间发生的选择或保存被旧对象重建 DOM 覆盖。
-    routingPoliciesState: consoleShellState?.activeNavigationItemId === "routing-policies"
-      ? {
-          ...routingPolicyPageMemory.snapshot(),
-          cacheAffinity: cacheAffinityPageMemory.snapshot(),
-        }
-      : null,
-    modelQualityScoresState,
-    modelQualityScoreFilters,
-    projectState,
-    virtualKeysState,
-    usageState,
-    finOpsState,
-    costAnomaliesState,
-    sessionRisksState,
-    filesState,
-    fileSecurityState,
-    batchJobsState,
-    tenantDataLifecycleState,
-    mcpToolsState,
-    localEndpointsState,
-    // PRD-139 moved partner access to the isolated Partner shell. Keep the
-    // legacy renderer inert until its source is removed with PRD-147.
-    partnerPortalState: null,
-    branding: publicBrandingDisplay(),
-    experimentsState,
-    budgetState,
-    dlpState,
-    webhookState,
-    webhookDeadLettersState,
-    requestLogsState,
-    requestExplanationState,
-    requestFeedbackState: requestFeedbackMutationMemory.snapshot(),
-    requestFeedbackSummaryState,
-    requestFeedbackSummaryFilters,
-    auditLogsState,
-    rolePermissionState,
-    promptTemplateState,
-    policyTemplateLibraryState,
-    // 全页读取可能与局部建会话/发送并行；渲染前必须重新取最新快照，不能用本轮开始时的旧 Chat 状态覆盖成功结果。
-    enterpriseChatState: enterpriseChatPageState.snapshot(),
-    gatewayDebugState,
-  });
-  // Prompt/Response 不进入 renderDeveloperStart 的 innerHTML 字符串，只在 DOM 就位后通过 textContent/value 注入。
-  if (consoleShellState?.activeNavigationItemId === "enterprise-chat") {
-    hydrateEnterpriseChatText(app, enterpriseChatPageState.snapshot());
-  }
-  if (consoleShellState?.activeNavigationItemId === "admin-assistant") {
-    // question/answer 不进入 Shell innerHTML；只在完整 owner 的当前 DOM 上同步注入正文。
-    hydrateAdminAssistantText(app, adminAssistantPageState.snapshot());
-  }
-  if (consoleShellState?.activeNavigationItemId === "billing-disputes") {
-    // Free text never enters renderDeveloperStart HTML; only an explicit current-owner reveal hydrates textContent.
-    hydrateBillingDisputePrivateText(
-      globalThis.document,
-      billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
-    );
-  }
-  if (consoleShellState?.activeNavigationItemId === "prompt-templates") {
-    // 解密正文与变量草稿只能在当前授权 DOM 就位后通过 textContent/value 注入。
-    hydratePromptTemplateSensitiveText(app, promptTemplatePageState.snapshot());
-  }
-  // 当前导航进入 API 调试台时使用 PRD-037 的直连 Gateway 流式面板；模板内所有动态值均已安全转义。
-  if (consoleShellState?.activeNavigationItemId === "debug-console") {
-    const gatewayDebugPanel = document.querySelector(".gateway-debug-panel");
-    if (gatewayDebugPanel) {
-      gatewayDebugPanel.innerHTML = renderGatewayDebugConsole(gatewayDebugState, { gatewayUrl });
-    }
-  }
-  // PAGE-099 的稳定父面板已随本轮 DOM 一起生成；先绑定局部详情，避免通用长绑定链中
-  // 任一无关模块异常让“查看详情”失去响应。真实读取仍由后端 RBAC 与 RequestLog owner 约束。
-  bindOutputSafetyDetailInteractions(consoleShellState);
-  bindAuthenticatedEvents(consoleShellState);
 }
 
 /**
@@ -2524,7 +1805,6 @@ async function performRefresh(options = {}) {
 async function loadAndRenderActiveNavigation({
   consoleShellState,
   refreshId,
-  fastRoleDashboardState,
   isBackgroundRefresh,
   refreshOwnerCurrent,
   preserveConsoleSidebar = false,
@@ -2536,10 +1816,6 @@ async function loadAndRenderActiveNavigation({
     workspaceConsoleExperienceController.leave();
   }
   const state = {};
-  const metadataIdentity = roleDashboardIdentitySnapshot(authSession.context);
-  const shellMetadataPromise = metadataIdentity && metadataIdentity !== shellMetadataIdentity
-    ? Promise.all([loadUserPreferencesState()])
-    : null;
   const load = async (key, loader) => {
     state[key] = await loader();
     return state[key];
@@ -2565,17 +1841,20 @@ async function loadAndRenderActiveNavigation({
     case "providers":
       await load("providersState", () => loadProvidersState({ includeCatalog: true }));
       break;
+    case "error-maps":
+      await workspaceProviderEngineeringController.open({
+        authContext: authSession.context,
+        activeNavigationItemId: activeNavigationId,
+        providerId: "",
+      });
+      state.workspaceProviderEngineeringState = workspaceProviderEngineeringController.snapshot();
+      break;
     case "provider-health":
       await load("providerHealthState", () => loadProviderHealthState(consoleShellState));
       break;
     case "models":
       [state.modelsState, state.providersState] = await Promise.all([
         loadModelsState(), loadProvidersState(),
-      ]);
-      break;
-    case "model-prices":
-      [state.modelPricesState, state.modelsState] = await Promise.all([
-        loadModelPricesState(), loadModelsState(),
       ]);
       break;
     case "response-cache":
@@ -2640,7 +1919,9 @@ async function loadAndRenderActiveNavigation({
       await load("usageState", loadUsageState);
       break;
     case "workspace-subscription":
+    case "billing-disputes":
     case "internal-finops":
+    case "model-prices":
       workspaceCommercialNavigationItems = [
         ...(consoleShellState.navigation?.navigation_items ?? []),
       ];
@@ -2654,14 +1935,8 @@ async function loadAndRenderActiveNavigation({
     case "finops-ledger":
       await load("finOpsState", () => loadFinOpsState(consoleShellState, refreshId));
       break;
-    case "plans":
-      await load("planManagementState", () => loadPlanManagementState(consoleShellState, refreshId));
-      break;
     case "quota-buckets":
       await load("quotaManagementState", () => loadQuotaManagementState(consoleShellState, refreshId));
-      break;
-    case "billing-disputes":
-      await load("billingDisputesState", () => loadBillingDisputesState(consoleShellState, refreshId));
       break;
     case "cost-anomalies":
       await load("costAnomaliesState", () => loadCostAnomaliesState(consoleShellState, refreshId));
@@ -2849,17 +2124,6 @@ async function loadAndRenderActiveNavigation({
       break;
   }
 
-  if (shellMetadataPromise) {
-    const [userPreferencesState] = await shellMetadataPromise;
-    state.userPreferencesState ??= userPreferencesState;
-    if (refreshId === refreshSequence && refreshOwnerCurrent() && authSession.token) {
-      shellMetadataIdentity = metadataIdentity;
-      currentI18n = createI18n(userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
-    }
-  } else if (activeNavigationId === "language-settings") {
-    currentI18n = createI18n(state.userPreferencesState?.preference?.locale ?? DEFAULT_LOCALE);
-  }
-
   if (!authSession.token || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;
 
   developerContractDownloadMetadata = activeNavigationId === "api-docs"
@@ -2882,7 +2146,6 @@ async function loadAndRenderActiveNavigation({
     gatewayDebugState,
     policyDryRunState,
     enterpriseChatState: enterpriseChatPageState.snapshot(),
-    adminAssistantState: adminAssistantPageState.snapshot(),
     workspaceConsoleExperienceState:
       state.workspaceConsoleExperienceState ?? workspaceConsoleExperienceController.snapshot(),
     invitationState: invitationPageState.snapshot(),
@@ -2894,12 +2157,6 @@ async function loadAndRenderActiveNavigation({
   }
   if (activeNavigationId === "admin-assistant") {
     hydrateWorkspaceConsoleAssistant(app, workspaceConsoleExperienceController.snapshot());
-  }
-  if (activeNavigationId === "billing-disputes") {
-    hydrateBillingDisputePrivateText(
-      globalThis.document,
-      billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
-    );
   }
   if (activeNavigationId === "prompt-templates") {
     hydratePromptTemplateSensitiveText(app, promptTemplatePageState.snapshot());
@@ -2940,9 +2197,6 @@ function renderLogin(error, requestId) {
   // 登录边界不能保留上一 Session 的邀请草稿、链接或邮件文案。
   invitationPageState.clear();
   currentI18n = createI18n(DEFAULT_LOCALE);
-  shellMetadataIdentity = "";
-  consolePreferencesIdentity = "";
-  consolePreferencesCache = null;
   // 登录边界变化时停止导出轮询；job、文件名和 request_id 不得跨用户或租户残留。
   clearUsageExportSessionState();
   clearAuditExportSessionState();
@@ -2957,16 +2211,9 @@ function renderLogin(error, requestId) {
   privateGatewayPageState.clear();
   migrationOperationPageState.clear();
   supportTicketPageState.clear();
-  partnerPortalPageState.clear();
   experimentPageState.clear();
   responseCachePageState.clear();
-  planManagementPageState.clear();
   quotaManagementPageState.clear();
-  billingDisputePageState.clear();
-  // 登录页是 PAGE-107 强边界，问题、回答、来源和迟到 POST 都不能跨 Session 保留。
-  adminAssistantPageState.leave();
-  // 登录页是审批强身份边界，先擦密码和任务事实，再取消 list/detail/action。
-  approvalPageState.clear();
   webhookDeadLetterPageState.clear();
   clearBudgetSessionState();
   // 登录页不得保留上一管理员的 Policy、DSL 草稿、校验指纹或异步请求 owner。
@@ -2998,14 +2245,8 @@ function renderLogin(error, requestId) {
   selectedMigrationModelAlias = null;
   migrationGuideEventWarning = null;
   migrationGuideEntrySource = readActiveNavigationHash() === "migration-guide" ? "direct_hash" : "sidebar";
-  competitorVisitTracker.leave();
-  activeCompetitorTab = "positioning";
-  competitorEventWarning = null;
-  competitorEntrySource = readActiveNavigationHash() === "competitor-comparison" ? "direct_hash" : "sidebar";
   providerStatusPageState.clear();
   providerStatusVisitTracker.leave();
-  clearRoleDashboardSessionState();
-  roleDashboardEntrySource = readActiveNavigationHash() === "overview" ? "direct_hash" : "refresh";
   providerStatusFilters = { limit: 50, offset: 0 };
   providerStatusEventWarning = null;
   providerStatusEntrySource = readActiveNavigationHash() === "provider-health" ? "direct_hash" : "sidebar";
@@ -3324,10 +2565,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     clearPolicyTemplateLibrarySessionState();
     // 登出在网络请求前就结束迁移 visit，避免失效 Session 的异步事件完成后污染下一次登录。
     migrationGuideVisitTracker.leave();
-    competitorVisitTracker.leave();
     providerStatusPageState.clear();
     providerStatusVisitTracker.leave();
-    clearRoleDashboardSessionState();
     workspaceProviderEngineeringProviders = [];
     workspaceProviderEngineeringController.close();
     workspaceCommercialNavigationItems = [];
@@ -3348,14 +2587,9 @@ function bindAuthenticatedEvents(consoleShellState) {
     privateGatewayPageState.clear();
     migrationOperationPageState.clear();
     supportTicketPageState.clear();
-    partnerPortalPageState.clear();
     experimentPageState.clear();
     responseCachePageState.clear();
-    planManagementPageState.clear();
     quotaManagementPageState.clear();
-    billingDisputePageState.clear();
-    adminAssistantPageState.leave();
-    approvalPageState.clear();
     webhookDeadLetterPageState.clear();
     clearPolicyEditorSessionState();
     clearPolicySnapshotSessionState();
@@ -3412,54 +2646,10 @@ function bindAuthenticatedEvents(consoleShellState) {
     await toggleConsoleSidebar(sidebarToggle, consoleShellState);
   };
 
-  const languageSettingsForm = document.querySelector("#language-settings-form");
-  languageSettingsForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const token = authSession.token;
-    // 语言偏好只能写当前登录用户，前端不得提交 tenant_id 或 user_id。
-    if (!token) {
-      renderLogin();
-      return;
-    }
-    const data = new FormData(languageSettingsForm);
-    const nextLocale = String(data.get("locale") ?? DEFAULT_LOCALE);
-    const formI18n = createI18n(nextLocale);
-    const button = languageSettingsForm.querySelector("button[type='submit']");
-    if (button) {
-      button.disabled = true;
-      button.textContent = formI18n.t("language.saving");
-    }
-    userPreferenceActionError = null;
-    userPreferenceFeedback = formI18n.t("language.saving");
-    try {
-      const result = await updateUserPreferences({
-        controlApiUrl,
-        token,
-        locale: nextLocale,
-      });
-      const savedLocale = result.preference?.locale ?? nextLocale;
-      userPreferenceFeedback = createI18n(savedLocale).t("language.saved");
-      await refresh();
-    } catch (error) {
-      // 认证失败必须清理本地登录态，避免语言设置页在过期会话上继续提交。
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
-      userPreferenceActionError = error;
-      userPreferenceFeedback = "";
-      await refresh();
-    }
-  });
-
   bindQuickstartCopyButtons();
   bindSdkLanguageTabs();
   bindSdkExampleDownloads();
   bindMigrationGuideInteractions();
-  bindCompetitorInteractions();
   bindRolePermissionInteractions(consoleShellState);
   bindPolicyInteractions(consoleShellState);
   bindPolicySnapshotInteractions(consoleShellState);
@@ -3472,13 +2662,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindRequestExplanationInteractions(consoleShellState);
   bindRequestFeedbackInteractions(consoleShellState);
   bindRequestFeedbackSummaryInteractions(consoleShellState);
-  bindPartnerPortalPageInteractions(consoleShellState);
-  bindRoleDashboardInteractions(consoleShellState);
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
   void ownMigrationGuideVisitAfterRender(consoleShellState);
-  void ownCompetitorVisitAfterRender(consoleShellState);
   void ownProviderStatusVisitAfterRender(consoleShellState);
-  void ownRoleDashboardVisitAfterRender(consoleShellState);
 
   const tenantForm = document.querySelector("#tenant-form");
   tenantForm?.addEventListener("submit", async (event) => {
@@ -4383,67 +3569,6 @@ function bindAuthenticatedEvents(consoleShellState) {
       }
     });
   }
-
-  const createModelPriceForm = document.querySelector("#create-model-price-form");
-  createModelPriceForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const token = authSession.token;
-    // 价格写入会改变新请求成本，令牌缺失时必须立即停止并回到登录页。
-    if (!token) {
-      renderLogin();
-      return;
-    }
-    const data = new FormData(createModelPriceForm);
-    const button = createModelPriceForm.querySelector("button[type='submit']");
-    button.disabled = true;
-    modelPriceActionError = null;
-    modelPriceFeedback = "价格计划创建中";
-    try {
-      await createModelPrice({
-        controlApiUrl,
-        token,
-        modelId: String(data.get("modelId") ?? ""),
-        inputPricePer1k: String(data.get("inputPricePer1k") ?? ""),
-        outputPricePer1k: String(data.get("outputPricePer1k") ?? ""),
-        currency: String(data.get("currency") ?? ""),
-        effectiveFrom: toUtcIso(data.get("effectiveFrom")),
-        priceSchemaVersion: String(data.get("priceSchemaVersion") ?? ""),
-      });
-      modelPriceFeedback = "价格计划已创建";
-      await refresh();
-    } catch (error) {
-      // 会话失效必须清除本地 Token；业务错误保留 request_id 回到价格页面展示。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
-      modelPriceActionError = error;
-      modelPriceFeedback = "价格计划创建失败";
-      await refresh();
-    }
-  });
-
-  const modelPriceFilterForm = document.querySelector("#model-price-filter-form");
-  modelPriceFilterForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(modelPriceFilterForm);
-    modelPriceFilters = {
-      modelId: optionalText(data.get("modelId")),
-      effectiveStatus: String(data.get("effectiveStatus") ?? "all"),
-      limit: 100,
-      offset: 0,
-    };
-    await refresh();
-  });
-
-  const modelPriceFilterReset = document.querySelector("#model-price-filter-reset");
-  modelPriceFilterReset?.addEventListener("click", async () => {
-    modelPriceFilters = { effectiveStatus: "all", limit: 100, offset: 0 };
-    modelPriceActionError = null;
-    await refresh();
-  });
 
   const createModelAliasForm = document.querySelector("#create-model-alias-form");
   createModelAliasForm?.addEventListener("submit", async (event) => {
@@ -5664,9 +4789,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   bindSupportTicketPageInteractions(consoleShellState);
   bindExperimentsPageInteractions(consoleShellState);
   bindResponseCachePageInteractions(consoleShellState);
-  bindPlanManagementPageInteractions(consoleShellState);
   bindQuotaManagementPageInteractions(consoleShellState);
-  bindBillingDisputePageInteractions(consoleShellState);
   bindWorkspaceConsoleExperiencePageInteractions(consoleShellState);
   bindWebhookDeadLetterPageInteractions(consoleShellState);
   scheduleWebhookDeadLetterPoll(consoleShellState);
@@ -8275,210 +7398,6 @@ async function submitPrivateGatewayRevoke(deploymentId, reasonCode, consoleShell
 }
 
 /** Build PAGE-119 owner only from the exact live RBAC/navigation snapshot and current hash. */
-function currentPartnerPortalOwner(consoleShellState) {
-  const owner = partnerPortalPageOwner(authSession.context, consoleShellState);
-  return owner && readActiveNavigationHash() === "partner-portal" ? owner : null;
-}
-
-/** Redraw only PAGE-119 and immediately rebind commands to the same owner snapshot. */
-function renderCurrentPartnerPortalPanel(consoleShellState) {
-  const panel = globalThis.document?.querySelector?.(".partner-portal-panel");
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!panel || !owner || !partnerPortalPageState.enter(owner)) return false;
-  panel.innerHTML = renderPartnerPortal(
-    partnerPortalPageState.snapshot(), authSession.context, consoleShellState, currentI18n,
-  );
-  bindPartnerPortalPageInteractions(consoleShellState);
-  return true;
-}
-
-/** Bind setup, CAS edits, filtering, confirmations, and authenticated downloads for the current PAGE-119 owner. */
-function bindPartnerPortalPageInteractions(consoleShellState) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!owner || !partnerPortalPageState.enter(owner)) return false;
-  return bindPartnerPortalInteractions(globalThis.document, {
-    onRefresh: () => refresh(),
-    onSetup: (input) => runPartnerProfileMutation(consoleShellState, "configure", input),
-    onBranding: (input, revision) => runPartnerProfileMutation(consoleShellState, "branding", input, revision),
-    onCustomerFilter: async (filters) => {
-      const current = currentPartnerPortalOwner(consoleShellState);
-      if (!partnerPortalPageState.setCustomerFilters(current, filters)) return;
-      const pending = loadPartnerCustomersLane(consoleShellState, refreshSequence);
-      renderCurrentPartnerPortalPanel(consoleShellState);
-      await pending;
-      renderCurrentPartnerPortalPanel(consoleShellState);
-    },
-    onCommissionFilter: async (filters) => {
-      const current = currentPartnerPortalOwner(consoleShellState);
-      if (!partnerPortalPageState.setCommissionFilters(current, filters)) return;
-      const pending = loadPartnerCommissionLane(consoleShellState, refreshSequence);
-      renderCurrentPartnerPortalPanel(consoleShellState);
-      await pending;
-      renderCurrentPartnerPortalPanel(consoleShellState);
-    },
-    onOpenCustomer: (kind, customerId) => {
-      const current = currentPartnerPortalOwner(consoleShellState);
-      if (partnerPortalPageState.openCustomerDialog(current, kind, customerId)) {
-        renderCurrentPartnerPortalPanel(consoleShellState);
-      }
-    },
-    onCloseDialog: () => {
-      const current = currentPartnerPortalOwner(consoleShellState);
-      if (partnerPortalPageState.closeDialog(current)) renderCurrentPartnerPortalPanel(consoleShellState);
-    },
-    onCreateCustomer: (input) => runPartnerCustomerMutation(consoleShellState, "create", "", 0, input),
-    onUpdateCustomer: (kind, customerId, revision, input) => (
-      runPartnerCustomerMutation(consoleShellState, kind, customerId, revision, input)
-    ),
-    onExport: () => runPartnerAttachmentDownload(consoleShellState, "export"),
-    onDelivery: () => runPartnerAttachmentDownload(consoleShellState, "delivery"),
-  });
-}
-
-/** Configure the Partner or update branding with revision CAS; no form body is retained after completion. */
-async function runPartnerProfileMutation(consoleShellState, kind, input, revision = 0) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!owner || !partnerPortalPageState.enter(owner)) return false;
-  const operation = partnerPortalPageState.beginMutation(owner, kind);
-  if (!operation || !authSession.token) return false;
-  renderCurrentPartnerPortalPanel(consoleShellState);
-  try {
-    const result = kind === "configure"
-      ? await configurePartner({
-          controlApiUrl, token: authSession.token, input,
-          idempotencyKey: createPartnerPortalIdempotencyKey(), signal: operation.controller.signal,
-        })
-      : await updatePartnerBranding({
-          controlApiUrl, token: authSession.token, input, revision, signal: operation.controller.signal,
-        });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent("mutation", operation, current)) return false;
-    partnerPortalPageState.acceptPartnerMutation(operation, result, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    if (kind === "configure") {
-      await Promise.all([
-        loadPartnerProjectsLane(consoleShellState, refreshSequence),
-        loadPartnerCustomersLane(consoleShellState, refreshSequence),
-        loadPartnerCommissionLane(consoleShellState, refreshSequence),
-      ]);
-      renderCurrentPartnerPortalPanel(consoleShellState);
-    }
-    return true;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent("mutation", operation, current) || isPartnerPortalAbortError(error)) return false;
-    if (handlePartnerPortalAuthenticationFailure(error)) return false;
-    partnerPortalPageState.rejectMutation(operation, error, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    return false;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-/** Create, rename, or disable one customer mapping with its frozen idempotency/CAS boundary. */
-async function runPartnerCustomerMutation(consoleShellState, kind, customerId, revision, input) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!owner || !partnerPortalPageState.enter(owner)) return false;
-  const operation = partnerPortalPageState.beginMutation(owner, kind, { customerId, revision });
-  if (!operation || !authSession.token) return false;
-  renderCurrentPartnerPortalPanel(consoleShellState);
-  try {
-    const result = kind === "create"
-      ? await createPartnerCustomer({
-          controlApiUrl, token: authSession.token, input,
-          idempotencyKey: createPartnerPortalIdempotencyKey(), signal: operation.controller.signal,
-        })
-      : await updatePartnerCustomer({
-          controlApiUrl, token: authSession.token, partnerCustomerId: customerId,
-          input, revision, signal: operation.controller.signal,
-        });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent("mutation", operation, current)) return false;
-    partnerPortalPageState.acceptCustomerMutation(operation, result, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    await Promise.all([
-      loadPartnerProjectsLane(consoleShellState, refreshSequence),
-      loadPartnerCustomersLane(consoleShellState, refreshSequence),
-      loadPartnerCommissionLane(consoleShellState, refreshSequence),
-    ]);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    return true;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent("mutation", operation, current) || isPartnerPortalAbortError(error)) return false;
-    if (handlePartnerPortalAuthenticationFailure(error)) return false;
-    partnerPortalPageState.rejectMutation(operation, error, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    return false;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-/** Fetch, validate, click, and immediately revoke a PAGE-119 attachment without storing its Blob in page state. */
-async function runPartnerAttachmentDownload(consoleShellState, lane) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!owner || !partnerPortalPageState.enter(owner)) return false;
-  const operation = partnerPortalPageState.beginDownload(owner, lane);
-  if (!operation || !authSession.token || !operation.partnerCode) return false;
-  renderCurrentPartnerPortalPanel(consoleShellState);
-  try {
-    const result = lane === "export"
-      ? await downloadPartnerCommissionCsv({
-          controlApiUrl, token: authSession.token, partnerCode: operation.partnerCode,
-          filters: operation.filters, signal: operation.controller.signal,
-        })
-      : await downloadPartnerDeliveryPackage({
-          controlApiUrl, token: authSession.token, partnerCode: operation.partnerCode,
-          signal: operation.controller.signal,
-        });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent(lane, operation, current)) return false;
-    triggerPartnerAttachmentDownload(result);
-    partnerPortalPageState.acceptDownload(operation, result, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    return true;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent(lane, operation, current) || isPartnerPortalAbortError(error)) return false;
-    if (handlePartnerPortalAuthenticationFailure(error)) return false;
-    partnerPortalPageState.rejectDownload(operation, error, current);
-    renderCurrentPartnerPortalPanel(consoleShellState);
-    return false;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-/** Only a still-current PAGE-119 ticket may react to 401/403. */
-function handlePartnerPortalAuthenticationFailure(error) {
-  if (!(error instanceof AuthApiError)) return false;
-  if (error.status === 401) {
-    partnerPortalPageState.clear();
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error.requestId);
-    return true;
-  }
-  if (error.status === 403) {
-    partnerPortalPageState.clear();
-    globalThis.window?.setTimeout?.(() => void refresh(), 0);
-    return true;
-  }
-  return false;
-}
-
-function createPartnerPortalIdempotencyKey() {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  if (!uuid) throw new AuthApiError({
-    status: 503, code: "partner.unavailable", message: "伙伴门户暂不可用", requestId: "-", traceId: "-",
-  });
-  return `partner-${uuid}`;
-}
-
-/** Construct the current PAGE-104 read owner and bind it to the browser navigation boundary. */
-/** 从当前导航和认证快照取得批任务页面所有者；失败时返回空值并清除旧状态。 */
 function currentBatchReadOwner(consoleShellState) {
   const owner = batchJobPageOwner(authSession.context, consoleShellState);
   const hashNavigation = readActiveNavigationHash();
@@ -9863,14 +8782,6 @@ function isResponseCachePermissionRevocation(error) {
     && error.code === "auth.permission_denied";
 }
 
-/** 构造 PAGE-110 实时 owner；hash 只能收紧后端导航，不能制造套餐权限。 */
-function currentPlanManagementOwner(consoleShellState, mode = "read") {
-  const owner = planPageOwner(authSession.context, consoleShellState, { mode });
-  const hashNavigation = readActiveNavigationHash();
-  if (!owner || (hashNavigation && hashNavigation !== "plans")) return null;
-  return owner;
-}
-
 /** 构造 PAGE-111 实时 owner；quota.write 始终与 quota.read 独立复核。 */
 function currentQuotaManagementOwner(consoleShellState, mode = "read") {
   const owner = quotaPageOwner(authSession.context, consoleShellState, { mode });
@@ -9879,147 +8790,11 @@ function currentQuotaManagementOwner(consoleShellState, mode = "read") {
   return owner;
 }
 
-/** 绑定 Plan 草稿、确认、CAS 保存和显式重读。 */
-function bindPlanManagementPageInteractions(consoleShellState) {
-  const owner = currentPlanManagementOwner(consoleShellState);
-  if (!planManagementPageState.enter(owner)) return;
-  bindPlanManagementInteractions({
-    currentRevision: () => planManagementPageState.snapshot().plan?.state_revision ?? 0,
-    async onRefresh() {
-      await refreshPlanManagementPanel(consoleShellState);
-    },
-    async onRebase() {
-      await refreshPlanManagementPanel(consoleShellState, { rebase: true });
-    },
-    async onDraft(request) {
-      if (planManagementPageState.replaceDraft(request)) {
-        renderCurrentPlanManagementPanel(consoleShellState);
-      }
-    },
-    async onDiscard() {
-      const writeOwner = currentPlanManagementOwner(consoleShellState, "write");
-      if (planManagementPageState.discardDraft(writeOwner)) {
-        renderCurrentPlanManagementPanel(consoleShellState);
-      }
-    },
-    async onOpenConfirmation(request) {
-      const opened = planManagementPageState.openConfirmation(
-        currentPlanManagementOwner(consoleShellState, "write"),
-        request,
-      );
-      if (opened) {
-        refreshSequence += 1;
-        renderCurrentPlanManagementPanel(consoleShellState);
-      }
-      return opened;
-    },
-    async onCloseConfirmation() {
-      const closed = planManagementPageState.closeConfirmation(
-        currentPlanManagementOwner(consoleShellState, "write"),
-      );
-      if (closed) renderCurrentPlanManagementPanel(consoleShellState);
-      return closed;
-    },
-    async onConfirmSave() {
-      await submitPlanManagement(consoleShellState);
-    },
-  });
-}
-
-/** 局部重建 PAGE-110；失权时先由状态机擦除旧租户 DOM。 */
-function renderCurrentPlanManagementPanel(consoleShellState) {
-  const owner = currentPlanManagementOwner(consoleShellState);
-  if (!planManagementPageState.enter(owner)) return false;
-  const panel = globalThis.document?.querySelector?.(".plans-panel");
-  if (!panel) return false;
-  const html = renderPlanManagement(
-    planManagementPageState.snapshot(),
-    authSession.context,
-    consoleShellState,
-    currentI18n,
-  );
-  if (!html) {
-    planManagementPageState.clear();
-    return false;
-  }
-  panel.innerHTML = html;
-  bindPlanManagementPageInteractions(consoleShellState);
-  return true;
-}
-
-/** 显式 Plan GET 推进全局代次，旧整页刷新不能覆盖当前结果。 */
-async function refreshPlanManagementPanel(consoleShellState, { rebase = false } = {}) {
-  const owner = currentPlanManagementOwner(consoleShellState);
-  if (!planManagementPageState.enter(owner)) return null;
-  const refreshId = ++refreshSequence;
-  renderCurrentPlanManagementPanel(consoleShellState);
-  const state = await loadPlanManagementState(consoleShellState, refreshId, { rebase });
-  if (!state || refreshId !== refreshSequence) return null;
-  return renderCurrentPlanManagementPanel(consoleShellState) ? state : null;
-}
-
-/** 提交 Plan 完整 CAS；未知结果必须重新读取，不能盲重放旧 revision。 */
-async function submitPlanManagement(consoleShellState) {
-  const token = authSession.token;
-  const owner = currentPlanManagementOwner(consoleShellState, "write");
-  // 套餐写入同时要求有效令牌与实时写所有者，任一缺失都清除页面状态。
-  if (!token || !owner) {
-    planManagementPageState.clear();
-    if (!token) renderLogin();
-    return null;
-  }
-  const operation = planManagementPageState.beginSave(owner);
-  if (!operation) return planManagementPageState.snapshot();
-  refreshSequence += 1;
-  renderCurrentPlanManagementPanel(consoleShellState);
-  let finished = false;
-  /** 幂等完成当前套餐保存通道，避免成功、异常和 finally 重复清理。 */
-  const finish = () => {
-    if (finished) return;
-    finished = true;
-    planManagementPageState.finishSave(operation);
-  };
-  try {
-    const response = await patchCurrentPlan({
-      controlApiUrl,
-      token,
-      tenantId: owner.tenantId,
-      request: operation.request,
-      signal: operation.controller.signal,
-    });
-    const currentOwner = currentPlanManagementOwner(consoleShellState, "write");
-    if (!planManagementPageState.acceptSave(operation, response, currentOwner)) return null;
-    finish();
-    renderCurrentPlanManagementPanel(consoleShellState);
-    return planManagementPageState.snapshot();
-  } catch (error) {
-    const currentOwner = currentPlanManagementOwner(consoleShellState, "write");
-    if (
-      !planManagementPageState.isSaveCurrent(operation, currentOwner)
-      || isPlanBillingAbortError(error)
-    ) return null;
-    // 当前操作的认证失败统一清会话，权限撤销则清页面并重建后端导航。
-    if (handlePlanBillingAuthenticationFailure(error)) return null;
-    if (isPlanBillingPermissionRevocation(error)) {
-      planManagementPageState.clear();
-      finish();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    planManagementPageState.rejectSave(operation, error, currentOwner);
-    finish();
-    renderCurrentPlanManagementPanel(consoleShellState);
-    return planManagementPageState.snapshot();
-  } finally {
-    finish();
-  }
-}
-
 /** 绑定 Quota 刷新、调整 Dialog 和同一幂等意图恢复。 */
 function bindQuotaManagementPageInteractions(consoleShellState) {
   const owner = currentQuotaManagementOwner(consoleShellState);
   if (!quotaManagementPageState.enter(owner)) return;
-  bindQuotaManagementInteractions({
+  bindWorkspaceQuotaInteractions({
     currentBuckets: () => quotaManagementPageState.snapshot().quotaBuckets,
     async onRefresh() {
       await refreshQuotaManagementPanel(consoleShellState);
@@ -10057,7 +8832,7 @@ function renderCurrentQuotaManagementPanel(consoleShellState) {
   if (!quotaManagementPageState.enter(owner)) return false;
   const panel = globalThis.document?.querySelector?.(".quota-buckets-panel");
   if (!panel) return false;
-  const html = renderQuotaManagement(
+  const html = renderWorkspaceQuota(
     quotaManagementPageState.snapshot(),
     authSession.context,
     consoleShellState,
@@ -10122,11 +8897,11 @@ async function submitQuotaAdjustment(request, consoleShellState, { retry = false
     const currentOwner = currentQuotaManagementOwner(consoleShellState, "write");
     if (
       !quotaManagementPageState.isAdjustmentCurrent(operation, currentOwner)
-      || isPlanBillingAbortError(error)
+      || isWorkspaceQuotaAbortError(error)
     ) return null;
     // 当前操作的认证失败统一清会话，权限撤销则清页面并重建后端导航。
-    if (handlePlanBillingAuthenticationFailure(error)) return null;
-    if (isPlanBillingPermissionRevocation(error)) {
+    if (handleWorkspaceQuotaAuthenticationFailure(error)) return null;
+    if (isWorkspaceQuotaPermissionRevocation(error)) {
       quotaManagementPageState.clear();
       finish();
       globalThis.window?.setTimeout?.(() => void refresh(), 0);
@@ -10146,9 +8921,8 @@ async function submitQuotaAdjustment(request, consoleShellState, { retry = false
 }
 
 /** 当前 owner 的 401 才能清 Session；旧 generation 已在调用方提前拒绝。 */
-function handlePlanBillingAuthenticationFailure(error) {
+function handleWorkspaceQuotaAuthenticationFailure(error) {
   if (!(error instanceof AuthApiError) || error.status !== 401) return false;
-  planManagementPageState.clear();
   quotaManagementPageState.clear();
   clearAuthSession();
   authSession = { token: null, context: null };
@@ -10157,7 +8931,7 @@ function handlePlanBillingAuthenticationFailure(error) {
 }
 
 /** 识别套餐额度权限撤销错误，仅接受固定错误类型、状态和错误码组合。 */
-function isPlanBillingPermissionRevocation(error) {
+function isWorkspaceQuotaPermissionRevocation(error) {
   // 权限撤销判断必须精确匹配受控认证错误，普通异常不得触发授权刷新。
   return error instanceof AuthApiError
     && error.status === 403
@@ -10165,256 +8939,6 @@ function isPlanBillingPermissionRevocation(error) {
 }
 
 /** Build the current PAGE-112 owner; hash can only narrow the backend navigation decision. */
-function currentBillingDisputeOwner(consoleShellState, mode = "read") {
-  const owner = billingDisputePageOwner(authSession.context, consoleShellState, { mode });
-  const hashNavigation = readActiveNavigationHash();
-  if (!owner || (hashNavigation && hashNavigation !== "billing-disputes")) return null;
-  return owner;
-}
-
-/** Bind PAGE-112 list/detail, private reveal and owner-checked write commands. */
-function bindBillingDisputePageInteractions(consoleShellState) {
-  const owner = currentBillingDisputeOwner(consoleShellState);
-  if (!billingDisputePageState.enter(owner)) return false;
-  return bindBillingDisputeInteractions({
-    async onRefresh() {
-      await refreshBillingDisputePanel(consoleShellState);
-    },
-    async onFilters(filters) {
-      if (billingDisputePageState.setFilters(currentBillingDisputeOwner(consoleShellState), filters)) {
-        await refreshBillingDisputePanel(consoleShellState);
-      }
-    },
-    async onNextPage() {
-      if (billingDisputePageState.useNextCursor(currentBillingDisputeOwner(consoleShellState))) {
-        await refreshBillingDisputePanel(consoleShellState);
-      }
-    },
-    async onFirstPage() {
-      if (billingDisputePageState.resetCursor(currentBillingDisputeOwner(consoleShellState))) {
-        await refreshBillingDisputePanel(consoleShellState);
-      }
-    },
-    async onSelectDetail(billingDisputeId) {
-      const currentOwner = currentBillingDisputeOwner(consoleShellState);
-      if (!billingDisputePageState.selectDetail(currentOwner, billingDisputeId)) return;
-      const refreshId = ++refreshSequence;
-      renderCurrentBillingDisputePanel(consoleShellState);
-      await loadBillingDisputeDetailState(consoleShellState, refreshId);
-      if (refreshId === refreshSequence) renderCurrentBillingDisputePanel(consoleShellState);
-    },
-    onCloseDetail() {
-      if (billingDisputePageState.closeDetail(currentBillingDisputeOwner(consoleShellState))) {
-        renderCurrentBillingDisputePanel(consoleShellState);
-      }
-    },
-    onReveal(kind) {
-      if (billingDisputePageState.revealText(currentBillingDisputeOwner(consoleShellState), kind)) {
-        refreshSequence += 1;
-        renderCurrentBillingDisputePanel(consoleShellState);
-      }
-    },
-    onCollapse(kind) {
-      if (billingDisputePageState.collapseText(currentBillingDisputeOwner(consoleShellState), kind)) {
-        renderCurrentBillingDisputePanel(consoleShellState);
-      }
-    },
-    onOpenCreate() {
-      if (billingDisputePageState.openCreate(currentBillingDisputeOwner(consoleShellState, "create"))) {
-        refreshSequence += 1;
-        renderCurrentBillingDisputePanel(consoleShellState);
-      }
-    },
-    onOpenAction(action) {
-      const mode = action === "cancel" ? "create" : action === "approve" ? "approve" : "review";
-      if (billingDisputePageState.openAction(currentBillingDisputeOwner(consoleShellState, mode), action)) {
-        refreshSequence += 1;
-        renderCurrentBillingDisputePanel(consoleShellState);
-      }
-    },
-    onCloseDialog() {
-      const closed = billingDisputePageState.closeDialog(currentBillingDisputeOwner(consoleShellState));
-      if (closed) renderCurrentBillingDisputePanel(consoleShellState);
-      return closed;
-    },
-    async onSubmitCreate(request) {
-      await submitBillingDisputeMutation(consoleShellState, request);
-    },
-    async onSubmitAction(request) {
-      await submitBillingDisputeMutation(consoleShellState, request);
-    },
-    async onRetry() {
-      await submitBillingDisputeMutation(consoleShellState, null, { retry: true });
-    },
-  });
-}
-
-/** Re-render PAGE-112 and hydrate explicitly revealed text through textContent. */
-function renderCurrentBillingDisputePanel(consoleShellState) {
-  const owner = currentBillingDisputeOwner(consoleShellState);
-  if (!billingDisputePageState.enter(owner)) return false;
-  const panel = globalThis.document?.querySelector?.(".billing-disputes-panel");
-  if (!panel) return false;
-  const html = renderBillingDisputes(
-    billingDisputePageState.snapshot(),
-    authSession.context,
-    consoleShellState,
-    currentI18n,
-  );
-  if (!html) {
-    billingDisputePageState.clear();
-    return false;
-  }
-  panel.innerHTML = html;
-  bindBillingDisputePageInteractions(consoleShellState);
-  hydrateBillingDisputePrivateText(
-    globalThis.document,
-    billingDisputePageState.revealedText(currentBillingDisputeOwner(consoleShellState)),
-  );
-  return true;
-}
-
-/** Run an explicit list GET under a new global refresh generation. */
-async function refreshBillingDisputePanel(consoleShellState) {
-  const owner = currentBillingDisputeOwner(consoleShellState);
-  if (!billingDisputePageState.enter(owner)) return null;
-  const refreshId = ++refreshSequence;
-  renderCurrentBillingDisputePanel(consoleShellState);
-  const state = await loadBillingDisputesState(consoleShellState, refreshId);
-  if (!state || refreshId !== refreshSequence) return null;
-  return renderCurrentBillingDisputePanel(consoleShellState) ? state : null;
-}
-
-/** Load one explicitly selected detail; late responses cannot refill another selection. */
-async function loadBillingDisputeDetailState(consoleShellState, refreshId) {
-  const owner = currentBillingDisputeOwner(consoleShellState);
-  if (refreshId !== refreshSequence || !billingDisputePageState.enter(owner)) return null;
-  const operation = billingDisputePageState.beginDetail(owner);
-  if (!operation) return billingDisputePageState.snapshot();
-  try {
-    const response = await getBillingDispute({
-      controlApiUrl,
-      token: authSession.token,
-      tenantId: owner.tenantId,
-      billingDisputeId: operation.billingDisputeId,
-      signal: operation.controller.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const accepted = billingDisputePageState.acceptDetail(
-      operation,
-      response,
-      currentBillingDisputeOwner(consoleShellState),
-    );
-    return accepted ? billingDisputePageState.snapshot() : null;
-  } catch (error) {
-    const currentOwner = currentBillingDisputeOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !billingDisputePageState.isDetailCurrent(operation, currentOwner)
-      || isBillingDisputeAbortError(error)
-    ) return null;
-    if (handleBillingDisputeAuthenticationFailure(error)) return null;
-    if (isBillingDisputePermissionRevocation(error)) {
-      billingDisputePageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    billingDisputePageState.rejectDetail(operation, error, currentOwner);
-    return billingDisputePageState.snapshot();
-  } finally {
-    billingDisputePageState.finishDetail(operation);
-  }
-}
-
-/** Submit create or PATCH while keeping reason/decision/key inside the operation closure. */
-async function submitBillingDisputeMutation(consoleShellState, request, { retry = false } = {}) {
-  const dialog = billingDisputePageState.snapshot().dialog;
-  const mode = dialog.kind === "create"
-    ? "create"
-    : dialog.action === "cancel"
-      ? "create"
-      : dialog.action === "approve"
-        ? "approve"
-        : "review";
-  const token = authSession.token;
-  const owner = currentBillingDisputeOwner(consoleShellState, mode);
-  if (!token || !owner) {
-    billingDisputePageState.clear();
-    if (!token) renderLogin();
-    return null;
-  }
-  const operation = billingDisputePageState.beginMutation(owner, request, { retry });
-  if (!operation) return billingDisputePageState.snapshot();
-  refreshSequence += 1;
-  renderCurrentBillingDisputePanel(consoleShellState);
-  let finished = false;
-  const finish = () => {
-    if (finished) return;
-    finished = true;
-    billingDisputePageState.finishMutation(operation);
-  };
-  try {
-    const response = operation.kind === "create"
-      ? await createBillingDispute({
-          controlApiUrl,
-          token,
-          tenantId: owner.tenantId,
-          request: operation.request,
-          idempotencyKey: operation.idempotencyKey,
-          signal: operation.controller.signal,
-        })
-      : await transitionBillingDispute({
-          controlApiUrl,
-          token,
-          tenantId: owner.tenantId,
-          billingDisputeId: operation.billingDisputeId,
-          request: operation.request,
-          idempotencyKey: operation.idempotencyKey,
-          signal: operation.controller.signal,
-        });
-    const currentOwner = currentBillingDisputeOwner(consoleShellState, mode);
-    if (!billingDisputePageState.acceptMutation(operation, response, currentOwner)) return null;
-    finish();
-    renderCurrentBillingDisputePanel(consoleShellState);
-    return billingDisputePageState.snapshot();
-  } catch (error) {
-    const currentOwner = currentBillingDisputeOwner(consoleShellState, mode);
-    if (
-      !billingDisputePageState.isMutationCurrent(operation, currentOwner)
-      || isBillingDisputeAbortError(error)
-    ) return null;
-    if (handleBillingDisputeAuthenticationFailure(error)) return null;
-    if (isBillingDisputePermissionRevocation(error)) {
-      billingDisputePageState.clear();
-      finish();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    billingDisputePageState.rejectMutation(operation, error, currentOwner);
-    finish();
-    renderCurrentBillingDisputePanel(consoleShellState);
-    return billingDisputePageState.snapshot();
-  } finally {
-    finish();
-  }
-}
-
-function handleBillingDisputeAuthenticationFailure(error) {
-  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
-  billingDisputePageState.clear();
-  clearAuthSession();
-  authSession = { token: null, context: null };
-  renderLogin(authErrorMessage(error), error.requestId);
-  return true;
-}
-
-function isBillingDisputePermissionRevocation(error) {
-  return error instanceof AuthApiError
-    && error.status === 403
-    && error.code === "auth.permission_denied";
-}
-
-/** 构造 PAGE-107 实时 owner；hash 只能限制当前页面，不能替代后端 active navigation 合同。 */
 function workspaceConsoleExperienceView(navigationId) {
   return ({
     overview: "overview",
@@ -10478,417 +9002,6 @@ function bindWorkspaceConsoleExperiencePageInteractions(
   });
 }
 
-function currentAdminAssistantOwner(consoleShellState) {
-  const owner = adminAssistantPageOwner(authSession.context, consoleShellState);
-  const hashNavigation = readActiveNavigationHash();
-  if (!owner || (hashNavigation && hashNavigation !== "admin-assistant")) return null;
-  return owner;
-}
-
-/**
- * 绑定 PAGE-107 composer、取消、清空和来源跳转。
- * 每个回调都重新读取 owner；闭包中的 consoleShellState 只是本轮后端导航快照，不赋予任何源权限。
- */
-function bindAdminAssistantPageInteractions(consoleShellState) {
-  const owner = currentAdminAssistantOwner(consoleShellState);
-  if (!adminAssistantPageState.enter(owner)) return false;
-  return bindAdminAssistantInteractions({
-    onDraft(question) {
-      if (adminAssistantPageState.setDraft(currentAdminAssistantOwner(consoleShellState), question)) {
-        // 输入发生在慢全页刷新期间时，推进代次阻止旧 snapshot 重建 textarea。
-        refreshSequence += 1;
-        hydrateAdminAssistantText(globalThis.document, adminAssistantPageState.snapshot());
-      }
-    },
-    onSuggestion(index) {
-      const suggestion = ADMIN_ASSISTANT_SUGGESTIONS[index];
-      if (
-        suggestion
-        && adminAssistantPageState.setDraft(currentAdminAssistantOwner(consoleShellState), suggestion)
-      ) {
-        refreshSequence += 1;
-        hydrateAdminAssistantText(globalThis.document, adminAssistantPageState.snapshot());
-        globalThis.document?.querySelector?.("[data-admin-assistant-question]")?.focus?.();
-      }
-    },
-    async onSubmit() {
-      await submitAdminAssistantQuery(consoleShellState);
-    },
-    onCancel() {
-      if (adminAssistantPageState.cancel(currentAdminAssistantOwner(consoleShellState))) {
-        refreshSequence += 1;
-        renderCurrentAdminAssistantPanel(consoleShellState);
-      }
-    },
-    onClear() {
-      if (adminAssistantPageState.clear(currentAdminAssistantOwner(consoleShellState))) {
-        refreshSequence += 1;
-        renderCurrentAdminAssistantPanel(consoleShellState);
-      }
-    },
-    async onOpenSource(index, renderedHref) {
-      const liveOwner = currentAdminAssistantOwner(consoleShellState);
-      const source = adminAssistantPageState.sourceAt(liveOwner, index);
-      const access = adminAssistantSourceAccess(source, authSession.context, consoleShellState);
-      const hrefMatches = access.allowed && renderedHref === access.href;
-
-      // 设计要求 source 点击先同步 leave，再发生任何导航 await；answer 不能在目标页加载期间短暂回填。
-      adminAssistantPageState.leave();
-      const navigationButton = Array.from(globalThis.document?.querySelectorAll?.("[data-console-nav]") ?? [])
-        .find((button) => button.dataset.consoleNav === access.navigationId);
-      if (!hrefMatches || !navigationButton) {
-        await refresh();
-        return;
-      }
-      await switchConsoleNavigation(navigationButton, consoleShellState);
-    },
-  });
-}
-
-/** PAGE-107 局部重绘只输出占位 HTML，随后用 textContent/value 注入当前 owner 的正文。 */
-function renderCurrentAdminAssistantPanel(consoleShellState) {
-  const panel = globalThis.document?.querySelector?.(".admin-assistant-panel");
-  if (!panel) return false;
-  const owner = currentAdminAssistantOwner(consoleShellState);
-  if (!adminAssistantPageState.enter(owner)) {
-    panel.innerHTML = "";
-    return false;
-  }
-  const html = renderAdminAssistant(
-    adminAssistantPageState.snapshot(),
-    authSession.context,
-    consoleShellState,
-  );
-  if (!html) {
-    adminAssistantPageState.leave();
-    panel.innerHTML = "";
-    return false;
-  }
-  panel.innerHTML = html;
-  hydrateAdminAssistantText(panel, adminAssistantPageState.snapshot());
-  bindAdminAssistantPageInteractions(consoleShellState);
-  return true;
-}
-
-/**
- * 提交一次无幂等重放语义的只读查询。
- * 只有 state ticket 与实时 owner 同时匹配时才接纳结果；网络结果未知只显示固定状态，不自动重试。
- */
-async function submitAdminAssistantQuery(consoleShellState) {
-  const token = authSession.token;
-  const owner = currentAdminAssistantOwner(consoleShellState);
-  // Token 或完整 PAGE-107 owner 任一缺失都立即擦除页面，不能依赖按钮隐藏维持授权。
-  if (!token || !adminAssistantPageState.enter(owner)) {
-    adminAssistantPageState.leave();
-    // Session 已失效时回到登录态；owner 漂移但仍有 Token 时由外层刷新重新取得授权事实。
-    if (!token) renderLogin();
-    return null;
-  }
-  const operation = adminAssistantPageState.beginQuery(owner);
-  if (!operation) return adminAssistantPageState.snapshot();
-  refreshSequence += 1;
-  renderCurrentAdminAssistantPanel(consoleShellState);
-  try {
-    const response = await queryAdminAssistant({
-      controlApiUrl,
-      token,
-      question: operation.question,
-      signal: operation.signal,
-    });
-    const currentOwner = authSession.token === token
-      ? currentAdminAssistantOwner(consoleShellState)
-      : null;
-    if (!adminAssistantPageState.acceptQuery(operation, response, currentOwner)) return null;
-    renderCurrentAdminAssistantPanel(consoleShellState);
-    return adminAssistantPageState.snapshot();
-  } catch (error) {
-    const currentOwner = authSession.token === token
-      ? currentAdminAssistantOwner(consoleShellState)
-      : null;
-    // 已撤权、切租户或被后续操作淘汰的错误不得恢复旧页面状态。
-    if (!adminAssistantPageState.rejectQuery(operation, error, currentOwner)) return null;
-    // 认证失效必须同时销毁页面正文与本地 Session，再显示固定登录错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      adminAssistantPageState.leave();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    renderCurrentAdminAssistantPanel(consoleShellState);
-    // 权限失败后必须从后端重取认证与导航快照，以清除可能已撤销的来源链接。
-    if (error instanceof AuthApiError && error.status === 403) {
-      // 403 可能是 base 或任一源权限撤销；必须重读 auth/navigation，不能只保留旧页面并隐藏链接。
-      await refresh();
-    }
-    return adminAssistantPageState.snapshot();
-  }
-}
-
-/** 构造 PAGE-108/109 当前 owner；hash 任务 ID 只影响选择，不扩大后端导航授权。 */
-function currentApprovalOwner(consoleShellState) {
-  const owner = approvalPageOwner(authSession.context, consoleShellState);
-  const hashNavigation = readActiveNavigationHash();
-  if (!owner || (hashNavigation && hashNavigation !== "approvals")) return null;
-  return owner;
-}
-
-/** 绑定筛选、分页、详情和决策；每个回调都重新核对完整 auth/navigation owner。 */
-function bindApprovalPageInteractions(consoleShellState) {
-  const owner = currentApprovalOwner(consoleShellState);
-  if (!approvalPageState.enter(owner)) return false;
-  return bindApprovalInteractions({
-    async onRefresh() {
-      await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
-    },
-    async onBack() {
-      replaceApprovalCardHash("");
-      approvalPageState.syncMobileFocus("");
-      await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
-    },
-    async onFilter(status, targetType) {
-      if (approvalPageState.setFilters(status, targetType)) {
-        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
-      }
-    },
-    async onPrevious() {
-      if (approvalPageState.previousPage()) {
-        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
-      }
-    },
-    async onNext() {
-      if (approvalPageState.nextPage()) {
-        await refreshApprovalPanel(consoleShellState, { resetGeneration: true });
-      }
-    },
-    async onSelect(approvalId) {
-      if (!approvalPageState.selectApproval(approvalId)) return;
-      await refreshApprovalDetail(consoleShellState, ++refreshSequence);
-      renderCurrentApprovalPanel(consoleShellState);
-    },
-    onOpenAction(description) {
-      const currentOwner = currentApprovalOwner(consoleShellState);
-      const currentState = approvalPageState.snapshot();
-      if (
-        description?.approvalId !== currentState.selectedApprovalId
-        || description?.approvalId !== currentState.detail?.approval?.approval_id
-      ) return;
-      if (approvalPageState.openAction(currentOwner, description.action)) {
-        approvalActionFocusReturn = Object.freeze({
-          approvalId: description.approvalId,
-          action: description.action,
-          ownerKey: approvalFocusOwnerKey(currentOwner),
-        });
-        refreshSequence += 1;
-        renderCurrentApprovalPanel(consoleShellState);
-      }
-    },
-    onCloseAction(description) {
-      if (!approvalFocusDescriptionMatches(approvalActionFocusReturn, description)) {
-        approvalActionFocusReturn = null;
-      }
-      if (approvalPageState.closeAction()) {
-        refreshSequence += 1;
-        renderCurrentApprovalPanel(consoleShellState);
-      }
-    },
-    isActionBusy() {
-      return approvalPageState.isActionBusy();
-    },
-    onReason(reason) {
-      approvalPageState.setActionReason(reason);
-    },
-    async onSubmitAction(password) {
-      await submitApprovalAction(password, consoleShellState);
-    },
-  });
-}
-
-/** 局部重绘审批面板，避免一次动作或分页重新读取整个控制台的无关模块。 */
-function renderCurrentApprovalPanel(consoleShellState) {
-  const panel = globalThis.document?.querySelector?.(".approvals-panel");
-  if (!panel) return false;
-  const owner = currentApprovalOwner(consoleShellState);
-  if (!approvalPageState.enter(owner)) {
-    panel.innerHTML = "";
-    return false;
-  }
-  const state = approvalPageState.snapshot();
-  const html = renderApprovals(
-    state,
-    authSession.context,
-    consoleShellState,
-  );
-  if (!html) {
-    approvalPageState.clear();
-    panel.innerHTML = "";
-    return false;
-  }
-  panel.innerHTML = html;
-  bindApprovalPageInteractions(consoleShellState);
-  if (!state.actionOpen && approvalActionFocusReturn) {
-    const description = approvalActionFocusReturn;
-    approvalActionFocusReturn = null;
-    restoreApprovalActionFocus(
-      description,
-      approvalFocusOwnerKey(currentApprovalOwner(consoleShellState)),
-      panel,
-    );
-  }
-  return true;
-}
-
-/** 将审批身份和权限集合序列化为稳定焦点 owner；不保留 DOM、凭据或请求正文。 */
-function approvalFocusOwnerKey(owner) {
-  if (!owner) return "";
-  return JSON.stringify([
-    owner.readIdentity,
-    owner.tenantId,
-    owner.navigationOwner,
-    owner.canDecide === true,
-    [...owner.readableTargets].sort(),
-    [...owner.writableTargets].sort(),
-  ]);
-}
-
-/** 仅当审批任务和动作均一致时复用焦点描述，避免跨任务恢复到错误按钮。 */
-function approvalFocusDescriptionMatches(left, right) {
-  return Boolean(
-    left
-    && right
-    && left.approvalId === right.approvalId
-    && left.action === right.action,
-  );
-}
-
-/** 显式刷新只读取审批列表或 hash 指定详情；不会预取另一个租户或其他目标域。 */
-async function refreshApprovalPanel(consoleShellState, { resetGeneration = false } = {}) {
-  const refreshId = resetGeneration ? ++refreshSequence : refreshSequence;
-  const state = await loadApprovalsState(consoleShellState, refreshId);
-  if (!state || refreshId !== refreshSequence) return state;
-  // A list refresh may preserve the selected task. Refresh its authoritative detail in the
-  // same generation so the right pane cannot retain a stale revision or writeback status.
-  const nextState = state.selectedApprovalId && !state.mobileFocus
-    ? await loadApprovalDetailState(consoleShellState, refreshId)
-    : state;
-  if (nextState && refreshId === refreshSequence) renderCurrentApprovalPanel(consoleShellState);
-  return nextState;
-}
-
-/** 点击列表后只刷新当前详情，并以同一 generation 隔离迟到响应与离页 owner 漂移。 */
-async function refreshApprovalDetail(consoleShellState, refreshId) {
-  if (refreshId !== refreshSequence) return null;
-  // selectApproval 已把 detail 置为 loading；先投影即时反馈，再发起后端读取。
-  renderCurrentApprovalPanel(consoleShellState);
-  const state = await loadApprovalDetailState(consoleShellState, refreshId);
-  if (state && refreshId === refreshSequence) renderCurrentApprovalPanel(consoleShellState);
-  return state;
-}
-
-/** 高风险动作在同一 closure 内先换取票据再提交；密码、票据和幂等键从不进入 state/DOM/Storage。 */
-async function submitApprovalAction(password, consoleShellState) {
-  const token = authSession.token;
-  const owner = currentApprovalOwner(consoleShellState);
-  // 该治理分支必须保持租户隔离和失败关闭，并通过固定错误语义保留请求链路可追踪性。
-  if (!token || !approvalPageState.enter(owner)) {
-    approvalPageState.clear();
-    // 令牌只允许在短生命周期内做摘要和所有权校验；缺失、额外出现或不匹配均固定失败。
-    if (!token) renderLogin();
-    return null;
-  }
-  const operation = approvalPageState.beginAction(owner);
-  if (!operation) {
-    renderCurrentApprovalPanel(consoleShellState);
-    return approvalPageState.snapshot();
-  }
-  refreshSequence += 1;
-  renderCurrentApprovalPanel(consoleShellState);
-  let stepUpToken;
-  try {
-    if (operation.requiresStepUp) {
-      const challenge = await stepUpApproval({
-        controlApiUrl,
-        token,
-        approvalId: operation.approvalId,
-        action: operation.action,
-        password,
-        signal: operation.signal,
-      });
-      if (!approvalPageState.isCurrentOperation("action", operation, currentApprovalOwner(consoleShellState))) {
-        return null;
-      }
-      stepUpToken = challenge.step_up_token;
-    }
-    const response = await decideApproval({
-      controlApiUrl,
-      token,
-      approvalId: operation.approvalId,
-      action: operation.action,
-      expectedRevision: operation.expectedRevision,
-      reasonCode: operation.reasonCode,
-      idempotencyKey: operation.idempotencyKey,
-      ...(stepUpToken === undefined ? {} : { stepUpToken }),
-      signal: operation.signal,
-    });
-    const currentOwner = authSession.token === token
-      ? currentApprovalOwner(consoleShellState)
-      : null;
-    if (!approvalPageState.acceptAction(operation, response, currentOwner)) return null;
-    renderCurrentApprovalPanel(consoleShellState);
-    return approvalPageState.snapshot();
-  } catch (error) {
-    const currentOwner = authSession.token === token
-      ? currentApprovalOwner(consoleShellState)
-      : null;
-    if (
-      !approvalPageState.isCurrentOperation("action", operation, currentOwner)
-      || isApprovalAbortError(error)
-    ) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (handleApprovalAuthenticationFailure(error)) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (isApprovalPermissionRevocation(error)) {
-      approvalPageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    approvalPageState.rejectAction(operation, error, currentOwner);
-    renderCurrentApprovalPanel(consoleShellState);
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (error instanceof AuthApiError && error.status === 409) {
-      globalThis.window?.setTimeout?.(
-        () => void refreshApprovalPanel(consoleShellState, { resetGeneration: true }),
-        0,
-      );
-    }
-    return approvalPageState.snapshot();
-  } finally {
-    password = undefined;
-    stepUpToken = undefined;
-    approvalPageState.finishAction(operation);
-  }
-}
-
-/** 当前 owner 的 401 才能清 Session；旧 generation 已在调用方提前拒绝。 */
-function handleApprovalAuthenticationFailure(error) {
-  if (!(error instanceof AuthApiError) || error.status !== 401) return false;
-  approvalPageState.clear();
-  clearAuthSession();
-  authSession = { token: null, context: null };
-  renderLogin(authErrorMessage(error), error.requestId);
-  return true;
-}
-
-/** 只有 canonical permission_denied 表示撤权；step-up 业务 403 必须留在当前 Dialog。 */
-function isApprovalPermissionRevocation(error) {
-  return error instanceof AuthApiError
-    && error.status === 403
-    && error.code === "auth.permission_denied";
-}
-/**
- * 绑定 FinOps 筛选、opaque cursor、详情和调整命令。
- * 主应用只调度页面内存与 API；tenant、actor、currency、direction 和权限结论都不会在此生成。
- */
 function bindFinOpsInteractions(consoleShellState) {
   bindFinOpsLedgerInteractions({
     // 新筛选会使旧签名 cursor 失效，状态机同步清除 cursor 栈与选中详情。
@@ -11466,165 +9579,6 @@ function sdkExampleErrorState(error) {
 /**
  * 读取当前用户语言偏好，并把保存反馈和统一错误透传给语言设置页。
  * 安全：请求体和查询参数都不携带 tenant_id/user_id，后端只能根据登录态恢复数据边界。
- */
-async function loadUserPreferencesState() {
-  // 用户偏好属于控制台基础能力，授权快照损坏时不得仅凭登录态继续后台读取。
-  if (!hasPermission(authSession.context, PERMISSIONS.CONSOLE_BASIC_READ)) {
-    return null;
-  }
-  try {
-    const state = await getUserPreferences({
-      controlApiUrl,
-      token: authSession.token,
-    });
-    return {
-      ...state,
-      actionError: userPreferenceActionError,
-      feedback: userPreferenceFeedback,
-    };
-  } catch (error) {
-    // 认证失败必须清理本地登录态，避免过期会话继续驱动控制台请求。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      code: error?.code,
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      actionError: userPreferenceActionError,
-    };
-  }
-}
-
-/**
- * 构造 PAGE-092 当前请求 owner。
- *
- * identity 冻结 tenant、user、Session、permission revision 与 fingerprint；navigation 必须由同轮后端
- * shell 精确授权。Token 只返回给私有 ticket 做内存比较，不进入 snapshot、DOM、日志或遥测。
- */
-function currentRoleDashboardOwner(consoleShellState, requestedView = "") {
-  const identity = roleDashboardIdentitySnapshot(authSession.context);
-  if (
-    !identity
-    || !authSession.token
-    || !roleDashboardNavigationOwned(consoleShellState, readNavigationHashState())
-  ) {
-    return null;
-  }
-  return {
-    identity,
-    navigation: "overview",
-    requestedView,
-    token: authSession.token,
-  };
-}
-
-/**
- * 读取 PAGE-092 角色首页。
- *
- * 默认读取不带 view；后续自动刷新只回传最近成功响应下发的 selected view。成功与所有错误共用同一个
- * owner 门禁，503 仅由状态机在同身份、同视图下保留 partial，其他失败清除旧受保护数据。
- */
-async function loadRoleDashboardState(consoleShellState, source = "refresh") {
-  const selectedView = roleDashboardPageState.selectedView();
-  const owner = currentRoleDashboardOwner(consoleShellState, selectedView);
-  if (!owner) {
-    clearRoleDashboardSessionState();
-    return null;
-  }
-  const availableViewCodes = roleDashboardPageState.availableViewCodes();
-  const ticket = roleDashboardPageState.begin({
-    ...owner,
-    availableViewCodes,
-    source,
-  });
-  // owner 构造失败时只返回已净化页面快照，禁止绕过状态机直接发起角色首页请求。
-  if (!ticket) return roleDashboardPageState.snapshot();
-  try {
-    const response = await getDashboardRoleView({
-      controlApiUrl,
-      token: ticket.token,
-      view: ticket.requestedView,
-      availableViewCodes: ticket.availableViewCodes,
-      signal: ticket.controller.signal,
-    });
-    const state = roleDashboardPageState.accept(
-      ticket,
-      response,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    );
-    // 只有当前 owner 接纳成功后才把后续自动读取来源恢复为 refresh，迟到成功不会改写入口语义。
-    if (state) roleDashboardEntrySource = "refresh";
-    return state;
-  } catch (error) {
-    // 成功、401、403 和 503 全部先走完整 owner；旧 Session 的迟到错误不能清认证或覆盖当前页面。
-    if (!roleDashboardPageState.owns(
-      ticket,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    )) {
-      return null;
-    }
-    // 主动取消表示 owner 已切换，不能把正常的离页或换视图渲染成依赖错误。
-    if (error?.name === "AbortError") return null;
-    const state = roleDashboardPageState.reject(
-      ticket,
-      error,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    );
-    roleDashboardEntrySource = "refresh";
-    // 只有通过完整 owner 门禁的当前 401 才能销毁认证状态，迟到认证错误已经在上方丢弃。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRoleDashboardSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    // 403、配置损坏和其他非 partial 错误都立即替换旧卡片；不能等待其余控制台接口后才清理受保护 DOM。
-    if (state?.state === "error") {
-      renderRoleDashboardRootState(state, consoleShellState);
-    }
-    return state;
-  } finally {
-    roleDashboardPageState.finish(ticket);
-  }
-}
-
-/**
- * 同步销毁 PAGE-092 请求、事件和可见卡片。
- * 该函数用于离页、登出、pagehide、身份漂移和后端导航裁剪，清理不依赖网络请求成功。
- */
-function clearRoleDashboardSessionState() {
-  roleDashboardPageState.clear();
-  document.querySelector("[data-role-dashboard-root]")?.replaceChildren();
-}
-
-/**
- * 局部替换角色首页根节点并重绑分段控制。
- * 只在当前 overview shell 内操作，避免视图切换触发全控制台数据重载或改写其他页面状态。
- */
-function renderRoleDashboardRootState(state, consoleShellState) {
-  const root = document.querySelector("[data-role-dashboard-root]");
-  if (!root || currentRenderedNavigation() !== "overview") return false;
-  const html = renderRoleDashboardPanel(state, authSession.context, consoleShellState);
-  if (!html) {
-    root.replaceChildren();
-    return false;
-  }
-  root.outerHTML = html;
-  bindRoleDashboardInteractions(consoleShellState);
-  return true;
-}
-
-/**
- * 构造 PAGE-093 当前授权 owner。
- *
- * 后端导航必须精确声明 enterprise-chat，认证快照必须含 chat.use；前端 owner 只防迟到响应，不能替代
- * Control API 的实时权限、tenant、用户和登录 Session 校验。
  */
 function enterpriseChatOwner(consoleShellState) {
   const item = consoleShellState?.navigation?.navigation_items?.find((candidate) => (
@@ -12864,13 +10818,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
     // 导航偏好写入前清空 PAGE-094 DOM 和闭包，迟到 GET/PATCH 不得落到目标页。
     clearPromptTemplateSessionState();
   }
-  if (itemId !== "overview") {
-    // 离开首页必须在偏好请求前同步清除 role-view owner 和卡片，迟到响应不能跨导航写回。
-    clearRoleDashboardSessionState();
-  } else {
-    // overview 访问事件只能在 role-view 成功并完成 DOM 投影后发送，这里只冻结侧栏来源。
-    roleDashboardEntrySource = "sidebar";
-  }
   if (itemId !== "provider-health") {
     // 导航偏好请求发出前立即作废状态 GET 和 visit owner，迟到 200/401/403 均不能影响下一页面。
     providerStatusPageState.clear();
@@ -12964,10 +10911,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId !== "support-tickets") {
     supportTicketPageState.clear();
   }
-  if (itemId !== "partner-portal") {
-    // PAGE-119 attachment/object state and branding are destroyed before the navigation preference request.
-    partnerPortalPageState.clear();
-  }
   if (itemId !== "experiments") {
     // 导航请求前销毁 PAGE-105 私有 cursor、Dialog 草稿 owner 与全部 GET/POST ticket。
     experimentPageState.clear();
@@ -12976,29 +10919,13 @@ async function switchConsoleNavigation(button, consoleShellState) {
     // 导航请求前销毁 PAGE-106 草稿、失效 Dialog、私有 cursor 与全部异步票据。
     responseCachePageState.clear();
   }
-  if (itemId !== "plans") {
-    // 导航请求前销毁 PAGE-110 套餐草稿、确认 Dialog 与 CAS ticket。
-    planManagementPageState.clear();
-  }
   if (itemId !== "quota-buckets") {
     // 导航请求前销毁 PAGE-111 reason、幂等键与额度调整 ticket。
     quotaManagementPageState.clear();
   }
-  if (itemId !== "billing-disputes") {
-    // 导航请求前同步擦除 PAGE-112 reason、decision、幂等键和所有异步 owner。
-    billingDisputePageState.clear();
-  }
   if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(itemId)) {
     workspaceCommercialNavigationItems = [];
     workspaceCommercialAccountingController.close();
-  }
-  if (itemId !== "admin-assistant") {
-    // 来源点击和普通导航都在任何 await 前销毁 PAGE-107 owner，迟到回答不能短暂回填目标页。
-    adminAssistantPageState.leave();
-  }
-  if (itemId !== "approvals") {
-    // 导航请求前同步擦除审批密码、任务详情、cursor 与动作 ticket；迟到响应不能越过页面边界。
-    approvalPageState.clear();
   }
   if (itemId !== "webhook-dead-letters") {
     // PAGE-083 在偏好写入前就清除读取、写入、幂等键与轮询，旧回调不能越过导航边界。
@@ -13035,8 +10962,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
       consoleShellState: authorizedProjectedState,
       i18n: currentI18n,
       branding: publicBrandingDisplay(),
-      roleDashboardState: itemId === "overview" ? null : undefined,
-      adminAssistantState: itemId === "admin-assistant" ? loadAdminAssistantState(authorizedProjectedState, refreshSequence) : null,
     });
     bindOutputSafetyDetailInteractions(authorizedProjectedState);
     bindAuthenticatedEvents(authorizedProjectedState);
@@ -13045,11 +10970,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (itemId === "migration-guide") {
     migrationGuideEntrySource = "sidebar";
     migrationGuideEventWarning = null;
-  }
-  // 竞品页与迁移页都由渲染后 tracker 独占事件写入；导航切换这里只记录进入来源。
-  if (itemId === "competitor-comparison") {
-    competitorEntrySource = "sidebar";
-    competitorEventWarning = null;
   }
   // PAGE-088 使用独立 status.viewed；这里只冻结侧栏来源并清除上一次进入的非阻断告警。
   if (itemId === "provider-health") {
@@ -13094,7 +11014,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
     await loadAndRenderActiveNavigation({
       consoleShellState: authorizedProjectedState,
       refreshId: navigationOwner.generation,
-      fastRoleDashboardState: null,
       isBackgroundRefresh: false,
       refreshOwnerCurrent: navigationOwnerCurrent,
       preserveConsoleSidebar: true,
@@ -13284,18 +11203,14 @@ function scheduleConsoleNavigationSideEffects({
       }
       return;
     }
-    const preferences = await updateConsolePreferences({
+    await updateConsolePreferences({
       controlApiUrl,
       token,
       activeNavigationItemId: itemId,
     }).catch(() => null);
     if (!navigationOwnerCurrent()) return;
-    if (preferences) {
-      consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
-      consolePreferencesCache = preferences;
-    }
     if (
-      ["overview", "migration-guide", "competitor-comparison", "request-explanations"].includes(itemId)
+      ["overview", "migration-guide", "request-explanations"].includes(itemId)
       || itemId === "provider-health"
     ) {
       return;
@@ -13450,8 +11365,6 @@ async function toggleConsoleSidebar(button, consoleShellState) {
         consoleShellState.preferences = { preference: result.navigation.preference };
       } else {
         consoleShellState.preferences = result;
-        consolePreferencesIdentity = roleDashboardIdentitySnapshot(authSession.context);
-        consolePreferencesCache = result;
       }
     }
   } catch (error) {
@@ -13562,25 +11475,6 @@ function replaceNavigationHash(itemId) {
 }
 
 /** PAGE-109 只允许 canonical approval_id 进入 hash；返回中心时恢复无 query 的 approvals 路由。 */
-function replaceApprovalCardHash(approvalId) {
-  if (!globalThis.history || !globalThis.location) return;
-  const normalized = /^apr_[0-9a-f]{32}$/.test(String(approvalId ?? ""))
-    ? approvalId
-    : "";
-  const nextHash = normalized
-    ? `#approvals?approval_id=${encodeURIComponent(normalized)}`
-    : "#approvals";
-  globalThis.history.replaceState(
-    null,
-    "",
-    `${globalThis.location.pathname}${globalThis.location.search}${nextHash}`,
-  );
-}
-
-/**
- * 生成页面访问事件中的规范路径，只保留后端导航 ID 对应的根路径与 hash。
- * 查询串可能携带调试参数或临时上下文，不能进入访问事件，也不能参与后端事件配对。
- */
 function currentNavigationPath(itemId) {
   return `/#${encodeURIComponent(itemId)}`;
 }
@@ -13672,8 +11566,11 @@ function renderCurrentWorkspaceCommercialAccounting(
 ) {
   if (!WORKSPACE_COMMERCIAL_NAVIGATION_IDS.has(snapshot.navigation)) return false;
   const root = document.querySelector("[data-workspace-commercial-root]");
-  if (!root || root.dataset.workspaceCommercialRoot !== snapshot.navigation) return false;
-  const html = snapshot.navigation === "workspace-subscription"
+  const subscriptionNavigation = ["workspace-subscription", "billing-disputes"]
+    .includes(snapshot.navigation);
+  const canonicalRoot = subscriptionNavigation ? "workspace-subscription" : "internal-finops";
+  if (!root || root.dataset.workspaceCommercialRoot !== canonicalRoot) return false;
+  const html = subscriptionNavigation
     ? renderWorkspaceSubscription(snapshot)
     : renderWorkspaceInternalFinOps(snapshot, workspaceCommercialNavigationItems);
   const template = document.createElement("template");
@@ -13800,6 +11697,16 @@ function workspaceCommercialTimestamp(value, optional = false) {
 }
 
 function renderCurrentWorkspaceProviderEngineering(snapshot = workspaceProviderEngineeringController.snapshot()) {
+  const errorMapsRoot = document.querySelector("[data-workspace-provider-error-maps-root]");
+  if (errorMapsRoot) {
+    const template = document.createElement("template");
+    template.innerHTML = renderWorkspaceProviderErrorMaps(snapshot).trim();
+    const next = template.content.firstElementChild;
+    if (!next) return false;
+    errorMapsRoot.replaceWith(next);
+    bindWorkspaceProviderEngineeringDetailInteractions();
+    return true;
+  }
   const host = document.querySelector("[data-workspace-provider-engineering-host]");
   if (!host) return false;
   const provider = workspaceProviderEngineeringProviders.find(
@@ -13820,7 +11727,9 @@ function bindWorkspaceProviderEngineeringInteractions(consoleShellState) {
   for (const button of document.querySelectorAll("[data-workspace-provider-engineering-open]")) {
     button.onclick = () => {
       const providerId = String(button.dataset.workspaceProviderEngineeringOpen ?? "");
-      if (consoleShellState?.activeNavigationItemId !== "providers"
+      if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(
+        consoleShellState?.activeNavigationItemId,
+      )
         || !workspaceProviderEngineeringProviders.some(
           (provider) => provider.provider_id === providerId,
         )) return;
@@ -13851,6 +11760,7 @@ function bindWorkspaceProviderEngineeringDetailInteractions() {
     event.preventDefault();
     const data = new FormData(filterForm);
     void workspaceProviderEngineeringController.configure({
+      provider_id: String(data.get("providerId") ?? "").trim(),
       status: String(data.get("status") ?? ""),
       output_error_code: String(data.get("outputErrorCode") ?? "").trim(),
     });
@@ -16626,167 +14536,6 @@ function bindMigrationGuideInteractions() {
  * 绑定 PAGE-092 分段视图。
  * 按钮集合只来自已净化的后端 available_views；鼠标和方向键最终都进入同一个受控切换函数。
  */
-function bindRoleDashboardInteractions(consoleShellState) {
-  const tabs = [...document.querySelectorAll("[data-role-dashboard-view-option]")];
-  for (const [index, tab] of tabs.entries()) {
-    tab.addEventListener("click", () => {
-      if (tab.getAttribute("aria-selected") === "true") return;
-      void switchRoleDashboardView(tab.dataset.roleDashboardViewOption, consoleShellState);
-    });
-    tab.addEventListener("keydown", (event) => {
-      let nextIndex = null;
-      if (["ArrowRight", "ArrowDown"].includes(event.key)) nextIndex = (index + 1) % tabs.length;
-      if (["ArrowLeft", "ArrowUp"].includes(event.key)) nextIndex = (index - 1 + tabs.length) % tabs.length;
-      if (event.key === "Home") nextIndex = 0;
-      if (event.key === "End") nextIndex = tabs.length - 1;
-      if (nextIndex == null || !tabs[nextIndex]) return;
-      event.preventDefault();
-      tabs[nextIndex].focus();
-      if (tabs[nextIndex].getAttribute("aria-selected") !== "true") {
-        void switchRoleDashboardView(
-          tabs[nextIndex].dataset.roleDashboardViewOption,
-          consoleShellState,
-        );
-      }
-    });
-  }
-}
-
-/**
- * 执行一次 PAGE-092 局部视图切换。
- *
- * 切换前推进全页 refresh owner、abort 旧 role-view 并立即渲染无卡片 loading；请求只携带上一份后端
- * 响应下发的 view code，不写 URL、Storage、用户偏好，也不重新加载其他控制台业务接口。
- */
-async function switchRoleDashboardView(view, consoleShellState) {
-  const selectedView = String(view ?? "");
-  const availableViewCodes = roleDashboardPageState.availableViewCodes();
-  if (!availableViewCodes.includes(selectedView)) return;
-  const owner = currentRoleDashboardOwner(consoleShellState, selectedView);
-  if (!owner) {
-    clearRoleDashboardSessionState();
-    return;
-  }
-  // 立即淘汰正在执行的全页刷新；即使旧 fetch 忽略 Abort，也会因 refreshSequence 和页面 ticket 双重失权。
-  refreshSequence += 1;
-  activeRefreshCount += 1;
-  const ticket = roleDashboardPageState.begin({
-    ...owner,
-    availableViewCodes,
-    source: "view_switch",
-    transition: true,
-  });
-  if (!ticket) {
-    activeRefreshCount -= 1;
-    return;
-  }
-  renderRoleDashboardRootState(roleDashboardPageState.snapshot(), consoleShellState);
-  try {
-    const response = await getDashboardRoleView({
-      controlApiUrl,
-      token: ticket.token,
-      view: ticket.requestedView,
-      availableViewCodes: ticket.availableViewCodes,
-      signal: ticket.controller.signal,
-    });
-    const state = roleDashboardPageState.accept(
-      ticket,
-      response,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    );
-    // 只有成功接纳并完成真实 DOM 投影后才允许继续记录角色首页访问事件。
-    if (!state || !renderRoleDashboardRootState(state, consoleShellState)) return;
-    // 事件必须晚于成功 GET、owner 复核和真实 DOM 投影；失败不撤销已经可读的首页。
-    await ownRoleDashboardVisitAfterRender(consoleShellState);
-  } catch (error) {
-    if (!roleDashboardPageState.owns(
-      ticket,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    )) return;
-    // Abort 是视图 owner 正常转移，不应展示错误或保留上一视图的任何卡片。
-    if (error?.name === "AbortError") return;
-    const state = roleDashboardPageState.reject(
-      ticket,
-      error,
-      currentRoleDashboardOwner(consoleShellState, ticket.requestedView),
-    );
-    // 当前视图请求确认 401 时必须同步清理 Session 和受保护首页 DOM。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRoleDashboardSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    // 非认证错误只渲染状态机生成的安全快照，原始异常正文绝不进入页面。
-    if (state) renderRoleDashboardRootState(state, consoleShellState);
-  } finally {
-    roleDashboardPageState.finish(ticket);
-    activeRefreshCount -= 1;
-  }
-}
-
-/**
- * 在成功角色首页已经出现在当前 overview DOM 后认领唯一访问事件。
- * 自动刷新不会重放同一 viewGeneration/view；用户显式切换会获得新代次并记录新视图。
- */
-async function ownRoleDashboardVisitAfterRender(consoleShellState) {
-  const root = document.querySelector("[data-role-dashboard-root]");
-  const selectedView = root?.dataset.roleDashboardView ?? "";
-  const configRevision = Number(root?.dataset.roleDashboardRevision);
-  const owner = currentRoleDashboardOwner(consoleShellState, selectedView);
-  if (!root || !owner || !selectedView || !Number.isSafeInteger(configRevision)) return;
-  const ticket = roleDashboardPageState.claimRenderedEvent({
-    ...owner,
-    selectedView,
-    configRevision,
-  });
-  if (!ticket) return;
-  try {
-    await recordConsolePageView({
-      controlApiUrl,
-      token: ticket.token,
-      navigationItemId: "overview",
-      targetSection: "overview",
-      path: "/#overview",
-      eventType: "dashboard.role_viewed",
-      payload: {
-        source: ticket.source,
-        hash: "#overview",
-        viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
-        view_code: ticket.selectedView,
-        config_revision: ticket.configRevision,
-      },
-    });
-  } catch (error) {
-    const current = currentRoleDashboardOwner(consoleShellState, ticket.selectedView);
-    // 迟到事件错误不属于当前 Session 或视图，必须静默丢弃且不能影响新登录态。
-    if (!roleDashboardPageState.ownsEvent(ticket, current)) return;
-    // 事件 401 只有在完整 owner 仍一致时才改变认证边界并清空角色首页。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRoleDashboardSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    // 非认证遥测失败只写入安全告警节点；attempt 已冻结，定时刷新不会形成事件重试风暴。
-    const warning = roleDashboardPageState.setEventWarning(error);
-    const warningNode = document.querySelector("[data-role-dashboard-event-warning]");
-    if (warningNode) {
-      warningNode.textContent = `访问记录暂不可用：${warning.message} · request_id: ${warning.requestId}`;
-    } else if (roleDashboardPageState.ownsEvent(ticket, current)) {
-      // 首次失败时响应 HTML 尚无告警节点，局部重绘只使用已净化快照，不重新发送访问事件。
-      renderRoleDashboardRootState(roleDashboardPageState.snapshot(), consoleShellState);
-    }
-  } finally {
-    roleDashboardPageState.finishEvent(ticket);
-  }
-}
-
-/**
- * 激活迁移指南语言并同步专属 tab/tabpanel 的 ARIA 状态，不触发网络请求或 SDK 下载状态变化。
- */
 function activateMigrationLanguage(language, tabs) {
   activeMigrationLanguage = normalizeMigrationLanguage(language);
   for (const tab of tabs) {
@@ -16843,96 +14592,6 @@ async function recordMigrationGuideVisit({ source }) {
     payload: {
       source: source === "direct_hash" ? "direct_hash" : "sidebar",
       hash: "#migration-guide",
-      viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
-    },
-  });
-}
-
-/**
- * 绑定竞品对比页的 ARIA tabs；状态保存在模块内，15 秒刷新后仍停留在用户当前视图。
- */
-function bindCompetitorInteractions() {
-  const tabs = [...document.querySelectorAll("[data-competitor-tab]")];
-  for (const tab of tabs) {
-    tab.addEventListener("click", () => {
-      activateCompetitorTab(tab.dataset.competitorTab, tabs);
-    });
-    tab.addEventListener("keydown", (event) => {
-      const nextTab = competitorTabForKey(tab.dataset.competitorTab, event.key);
-      // Tab 和未知按键保留浏览器默认行为，不能把键盘焦点困在标签列表中。
-      if (!nextTab) {
-        return;
-      }
-      event.preventDefault();
-      const target = tabs.find((candidate) => candidate.dataset.competitorTab === nextTab);
-      if (!target) {
-        return;
-      }
-      activateCompetitorTab(nextTab, tabs);
-      target.focus();
-    });
-  }
-}
-
-/**
- * 激活竞品页标签并同步 aria-selected、tabindex 和 tabpanel 可见状态。
- */
-function activateCompetitorTab(tab, tabs) {
-  activeCompetitorTab = normalizeCompetitorTab(tab);
-  for (const candidate of tabs) {
-    const selected = candidate.dataset.competitorTab === activeCompetitorTab;
-    candidate.setAttribute("aria-selected", String(selected));
-    candidate.tabIndex = selected ? 0 : -1;
-  }
-  for (const panel of document.querySelectorAll("[data-competitor-panel]")) {
-    panel.hidden = panel.dataset.competitorPanel !== activeCompetitorTab;
-  }
-}
-
-/**
- * 页面渲染后推进竞品页唯一访问状态机；401 清理认证，其他遥测失败只展示一次局部告警。
- */
-async function ownCompetitorVisitAfterRender(consoleShellState) {
-  try {
-    await competitorVisitTracker.afterRender({
-      activeItemId: consoleShellState?.activeNavigationItemId,
-      sessionKey: authSession.token,
-      source: competitorEntrySource,
-    });
-  } catch (error) {
-    // 竞品事件 401 表示认证边界已经变化，必须清理旧会话，不能仅显示遥测告警。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
-    competitorEventWarning = {
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-    const warning = document.querySelector("[data-competitor-event-warning]");
-    if (warning) {
-      warning.hidden = false;
-      warning.textContent = `访问记录暂不可用：${competitorEventWarning.message} · request_id: ${competitorEventWarning.requestId}`;
-    }
-  }
-}
-
-/**
- * 写入竞品帮助页专属事件；只发送后端白名单允许的来源、hash 和视口分类。
- */
-async function recordCompetitorVisit({ source }) {
-  return recordConsolePageView({
-    controlApiUrl,
-    token: authSession.token,
-    navigationItemId: "competitor-comparison",
-    targetSection: "competitor-comparison",
-    path: "/#competitor-comparison",
-    eventType: "help.competitor_viewed",
-    payload: {
-      source: source === "direct_hash" ? "direct_hash" : "sidebar",
-      hash: "#competitor-comparison",
       viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
     },
   });
@@ -17320,49 +14979,6 @@ async function runProviderProbe(providerId) {
 
 /**
  * 读取当前租户模型价格时间线，并保留筛选、反馈和统一错误状态。
- */
-async function loadModelPricesState() {
-  // 缺少 model_price.read 时不主动读取财务价格，真实权限仍由后端再次校验。
-  if (!hasPermission(authSession.context, PERMISSIONS.MODEL_PRICE_READ)) {
-    return null;
-  }
-  try {
-    const state = await listModelPrices({
-      controlApiUrl,
-      token: authSession.token,
-      modelId: modelPriceFilters.modelId,
-      effectiveStatus: modelPriceFilters.effectiveStatus,
-      limit: modelPriceFilters.limit ?? 100,
-      offset: modelPriceFilters.offset ?? 0,
-    });
-    return {
-      ...state,
-      filters: modelPriceFilters,
-      actionError: modelPriceActionError,
-      feedback: modelPriceFeedback,
-    };
-  } catch (error) {
-    // 认证失效必须清除本地会话，避免继续用过期 Token 读取价格数据。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: error?.message ?? "模型价格读取失败",
-      requestId: error?.requestId,
-      filters: modelPriceFilters,
-      actionError: modelPriceActionError,
-      feedback: modelPriceFeedback,
-    };
-  }
-}
-
-/**
- * 执行 控制台主应用 的 `loadModelAliasesState` 辅助逻辑，保持页面状态和后端响应口径一致。
- * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 async function loadEnvironmentState() {
   /** 读取当前租户全部 Environment，禁用项仍需展示在历史配置和设置页。 */
@@ -18189,41 +15805,6 @@ async function loadPrivateGatewayDesiredStates(deployments, signal) {
 }
 
 /** Load PAGE-119 profile first, then its independent project/customer/commission lanes. */
-async function loadPartnerPortalState(consoleShellState, refreshId) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  if (!owner || refreshId !== refreshSequence || !partnerPortalPageState.enter(owner)) return null;
-  const operation = partnerPortalPageState.beginProfile(owner, refreshId);
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await getPartnerProfile({
-      controlApiUrl, token: authSession.token, signal: operation.controller.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (!partnerPortalPageState.isCurrent("profile", operation, current)) return null;
-    partnerPortalPageState.acceptProfile(operation, result, current);
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !partnerPortalPageState.isCurrent("profile", operation, current)
-      || isPartnerPortalAbortError(error)
-    ) return null;
-    if (handlePartnerPortalAuthenticationFailure(error)) return null;
-    partnerPortalPageState.rejectProfile(operation, error, current);
-    return partnerPortalPageState.snapshot();
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-  await Promise.all([
-    loadPartnerProjectsLane(consoleShellState, refreshId),
-    loadPartnerCustomersLane(consoleShellState, refreshId),
-    loadPartnerCommissionLane(consoleShellState, refreshId),
-  ]);
-  return refreshId === refreshSequence ? partnerPortalPageState.snapshot() : null;
-}
-
-/** Project only the host-scoped public brand into the SaaS shell. */
 function publicBrandingDisplay() {
   const item = publicBrandingPreview;
   if (!item) return null;
@@ -18236,91 +15817,6 @@ function publicBrandingDisplay() {
   });
 }
 
-async function loadPartnerProjectsLane(consoleShellState, refreshId) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  const operation = partnerPortalPageState.beginProjects(owner);
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await listPartnerProjects({
-      controlApiUrl, token: authSession.token, signal: operation.controller.signal,
-    });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("projects", operation, current)) return null;
-    partnerPortalPageState.acceptProjects(operation, result, current);
-    return result;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("projects", operation, current)
-      || isPartnerPortalAbortError(error)
-    ) return null;
-    if (handlePartnerPortalAuthenticationFailure(error)) return null;
-    partnerPortalPageState.rejectProjects(operation, error, current);
-    return null;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-async function loadPartnerCustomersLane(consoleShellState, refreshId) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  const operation = partnerPortalPageState.beginCustomers(owner);
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await listPartnerCustomers({
-      controlApiUrl, token: authSession.token, filters: operation.filters,
-      signal: operation.controller.signal,
-    });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("customers", operation, current)) return null;
-    partnerPortalPageState.acceptCustomers(operation, result, current);
-    return result;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("customers", operation, current)
-      || isPartnerPortalAbortError(error)
-    ) return null;
-    if (handlePartnerPortalAuthenticationFailure(error)) return null;
-    partnerPortalPageState.rejectCustomers(operation, error, current);
-    return null;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-async function loadPartnerCommissionLane(consoleShellState, refreshId) {
-  const owner = currentPartnerPortalOwner(consoleShellState);
-  const operation = partnerPortalPageState.beginCommission(owner);
-  if (!operation || !authSession.token) return null;
-  try {
-    const result = await getPartnerCommission({
-      controlApiUrl, token: authSession.token, filters: operation.filters,
-      signal: operation.controller.signal,
-    });
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("commission", operation, current)) return null;
-    partnerPortalPageState.acceptCommission(operation, result, current);
-    return result;
-  } catch (error) {
-    const current = currentPartnerPortalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence || !partnerPortalPageState.isCurrent("commission", operation, current)
-      || isPartnerPortalAbortError(error)
-    ) return null;
-    if (handlePartnerPortalAuthenticationFailure(error)) return null;
-    partnerPortalPageState.rejectCommission(operation, error, current);
-    return null;
-  } finally {
-    partnerPortalPageState.finish(operation);
-  }
-}
-
-/**
- * Load PAGE-104 list, bounded create candidates and the selected Job/Task page.
- * Every response is accepted only while the full Batch owner and global refresh generation match.
- */
-/** 加载批任务列表或详情，并用刷新代次阻止旧租户响应覆盖当前页面。 */
 async function loadBatchJobsState(consoleShellState, refreshId, resourceStates) {
   const owner = currentBatchReadOwner(consoleShellState);
   if (!owner || refreshId !== refreshSequence || !batchJobPageState.enter(owner)) return null;
@@ -18651,51 +16147,6 @@ async function loadResponseCacheState(
   }
 }
 
-/** PAGE-110 只在同一授权 owner 下读取；普通 GET 不覆盖 dirty/conflict 套餐草稿。 */
-async function loadPlanManagementState(
-  consoleShellState,
-  refreshId,
-  { rebase = false } = {},
-) {
-  const owner = currentPlanManagementOwner(consoleShellState);
-  if (refreshId !== refreshSequence || !planManagementPageState.enter(owner)) return null;
-  const operation = planManagementPageState.beginLoad(owner, { rebase });
-  if (!operation) return planManagementPageState.snapshot();
-  try {
-    const response = await getCurrentPlan({
-      controlApiUrl,
-      token: authSession.token,
-      tenantId: owner.tenantId,
-      signal: operation.controller.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const accepted = planManagementPageState.acceptLoad(
-      operation,
-      response,
-      currentPlanManagementOwner(consoleShellState),
-    );
-    return accepted ? planManagementPageState.snapshot() : null;
-  } catch (error) {
-    const currentOwner = currentPlanManagementOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !planManagementPageState.isLoadCurrent(operation, currentOwner)
-      || isPlanBillingAbortError(error)
-    ) return null;
-    // 当前读取的认证失败统一清会话，权限撤销则清页面并重建后端导航。
-    if (handlePlanBillingAuthenticationFailure(error)) return null;
-    if (isPlanBillingPermissionRevocation(error)) {
-      planManagementPageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    planManagementPageState.rejectLoad(operation, error, currentOwner);
-    return planManagementPageState.snapshot();
-  } finally {
-    planManagementPageState.finishLoad(operation);
-  }
-}
-
 /** PAGE-111 只在同一授权 owner 下读取；打开或 busy Dialog 时不启动 GET。 */
 async function loadQuotaManagementState(consoleShellState, refreshId) {
   const owner = currentQuotaManagementOwner(consoleShellState);
@@ -18721,11 +16172,11 @@ async function loadQuotaManagementState(consoleShellState, refreshId) {
     if (
       refreshId !== refreshSequence
       || !quotaManagementPageState.isLoadCurrent(operation, currentOwner)
-      || isPlanBillingAbortError(error)
+      || isWorkspaceQuotaAbortError(error)
     ) return null;
     // 当前读取的认证失败统一清会话，权限撤销则清页面并重建后端导航。
-    if (handlePlanBillingAuthenticationFailure(error)) return null;
-    if (isPlanBillingPermissionRevocation(error)) {
+    if (handleWorkspaceQuotaAuthenticationFailure(error)) return null;
+    if (isWorkspaceQuotaPermissionRevocation(error)) {
       quotaManagementPageState.clear();
       globalThis.window?.setTimeout?.(() => void refresh(), 0);
       return null;
@@ -18738,150 +16189,6 @@ async function loadQuotaManagementState(consoleShellState, refreshId) {
 }
 
 /** PAGE-112 list loader; no read permission means no hidden prefetch or retained DOM. */
-async function loadBillingDisputesState(consoleShellState, refreshId) {
-  const owner = currentBillingDisputeOwner(consoleShellState);
-  if (refreshId !== refreshSequence || !billingDisputePageState.enter(owner)) return null;
-  const operation = billingDisputePageState.beginList(owner);
-  if (!operation) return billingDisputePageState.snapshot();
-  try {
-    const response = await listBillingDisputes({
-      controlApiUrl,
-      token: authSession.token,
-      tenantId: owner.tenantId,
-      filters: operation.filters,
-      signal: operation.controller.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const accepted = billingDisputePageState.acceptList(
-      operation,
-      response,
-      currentBillingDisputeOwner(consoleShellState),
-    );
-    return accepted ? billingDisputePageState.snapshot() : null;
-  } catch (error) {
-    const currentOwner = currentBillingDisputeOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !billingDisputePageState.isListCurrent(operation, currentOwner)
-      || isBillingDisputeAbortError(error)
-    ) return null;
-    if (handleBillingDisputeAuthenticationFailure(error)) return null;
-    if (isBillingDisputePermissionRevocation(error)) {
-      billingDisputePageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    billingDisputePageState.rejectList(operation, error, currentOwner);
-    return billingDisputePageState.snapshot();
-  } finally {
-    billingDisputePageState.finishList(operation);
-  }
-}
-
-/** PAGE-107 不在刷新阶段读取业务事实；这里只建立经过 auth/navigation 双校验的当前页面 owner。 */
-function loadAdminAssistantState(consoleShellState, refreshId) {
-  if (refreshId !== refreshSequence) return null;
-  const owner = currentAdminAssistantOwner(consoleShellState);
-  return adminAssistantPageState.enter(owner) ? adminAssistantPageState.snapshot() : null;
-}
-
-/** PAGE-108/109 只在审批导航激活时读取；移动 hash 直达时跳过列表并只请求一个任务。 */
-async function loadApprovalsState(consoleShellState, refreshId) {
-  const owner = currentApprovalOwner(consoleShellState);
-  if (refreshId !== refreshSequence || !approvalPageState.enter(owner)) return null;
-  const mobileApprovalId = parseApprovalCardHash(globalThis.location?.hash);
-  approvalPageState.syncMobileFocus(mobileApprovalId);
-  if (mobileApprovalId) {
-    return loadApprovalDetailState(consoleShellState, refreshId);
-  }
-  const operation = approvalPageState.beginList(owner, refreshId);
-  if (!operation) return approvalPageState.snapshot();
-  try {
-    const query = approvalPageState.listQuery();
-    const response = await listApprovals({
-      controlApiUrl,
-      token: authSession.token,
-      status: query.status,
-      targetType: query.targetType,
-      limit: 50,
-      cursor: query.cursor,
-      signal: operation.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const accepted = approvalPageState.acceptList(
-      operation,
-      response,
-      currentApprovalOwner(consoleShellState),
-      refreshId,
-    );
-    return accepted ? approvalPageState.snapshot() : null;
-  } catch (error) {
-    const currentOwner = currentApprovalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !approvalPageState.isCurrentOperation("list", operation, currentOwner)
-      || isApprovalAbortError(error)
-    ) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (handleApprovalAuthenticationFailure(error)) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (isApprovalPermissionRevocation(error)) {
-      approvalPageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    approvalPageState.rejectList(operation, error, currentOwner);
-    return approvalPageState.snapshot();
-  } finally {
-    approvalPageState.finishList(operation);
-  }
-}
-
-/** 读取当前选中或 PAGE-109 hash 指定任务；跨租户、无权和不存在统一由后端返回同形 404。 */
-async function loadApprovalDetailState(consoleShellState, refreshId) {
-  const owner = currentApprovalOwner(consoleShellState);
-  const operation = approvalPageState.beginDetail(owner, refreshId);
-  if (!operation) return approvalPageState.snapshot();
-  try {
-    const response = await getApproval({
-      controlApiUrl,
-      token: authSession.token,
-      approvalId: operation.approvalId,
-      signal: operation.signal,
-    });
-    if (refreshId !== refreshSequence) return null;
-    const accepted = approvalPageState.acceptDetail(
-      operation,
-      response,
-      currentApprovalOwner(consoleShellState),
-      refreshId,
-    );
-    return accepted ? approvalPageState.snapshot() : null;
-  } catch (error) {
-    const currentOwner = currentApprovalOwner(consoleShellState);
-    if (
-      refreshId !== refreshSequence
-      || !approvalPageState.isCurrentOperation("detail", operation, currentOwner)
-      || isApprovalAbortError(error)
-    ) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (handleApprovalAuthenticationFailure(error)) return null;
-    // 授权只能使用后端刚刷新且与当前 tenant_id 绑定的权限快照，客户端声明不能扩大可执行范围。
-    if (isApprovalPermissionRevocation(error)) {
-      approvalPageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
-      return null;
-    }
-    approvalPageState.rejectDetail(operation, error, currentOwner);
-    return approvalPageState.snapshot();
-  } finally {
-    approvalPageState.finishDetail(operation);
-  }
-}
-/**
- * 身份边界变化时清除预算页面全部会话内事实。
- * tenant、用户、角色或 Session 任一变化都不能沿用旧规则快照、Key 选择或 Mutation owner。
- */
 function clearBudgetStateOnIdentityChange(previousContext, currentContext) {
   if (budgetIdentitySnapshot(previousContext) !== budgetIdentitySnapshot(currentContext)) {
     clearBudgetSessionState();
@@ -19802,13 +17109,6 @@ function clearSupportTicketStateOnIdentityChange(previous, current) {
 }
 
 /** Destroy PAGE-119 branding, aggregates, dialogs, and attachment tickets on any read-owner drift. */
-function clearPartnerPortalStateOnIdentityChange(previous, current) {
-  if (partnerPortalReadIdentitySnapshot(previous) !== partnerPortalReadIdentitySnapshot(current)) {
-    partnerPortalPageState.clear();
-  }
-}
-
-/** tenant、Session、RBAC revision 或 experiment.read owner 变化时销毁全部 PAGE-105 内存事实。 */
 function clearExperimentStateOnIdentityChange(previous, current) {
   if (experimentReadIdentitySnapshot(previous) !== experimentReadIdentitySnapshot(current)) {
     experimentPageState.clear();
@@ -19822,40 +17122,14 @@ function clearResponseCacheStateOnIdentityChange(previous, current) {
   }
 }
 
-/** tenant、Session、权限 revision 或任一套餐/额度授权变化时销毁 PAGE-110/111。 */
-function clearPlanBillingStateOnIdentityChange(previous, current) {
-  if (planReadIdentitySnapshot(previous) !== planReadIdentitySnapshot(current)) {
-    planManagementPageState.clear();
-  }
+/** tenant、Session、权限 revision 或额度授权变化时销毁 Workspace quota 状态。 */
+function clearWorkspaceQuotaStateOnIdentityChange(previous, current) {
   if (quotaReadIdentitySnapshot(previous) !== quotaReadIdentitySnapshot(current)) {
     quotaManagementPageState.clear();
   }
 }
 
 /** Destroy PAGE-112 on tenant, Session, permission revision, matrix or fingerprint drift. */
-function clearBillingDisputeStateOnIdentityChange(previous, current) {
-  if (billingDisputeReadIdentitySnapshot(previous) !== billingDisputeReadIdentitySnapshot(current)) {
-    billingDisputePageState.clear();
-  }
-}
-
-/** tenant、Session、任一权限、revision 或 fingerprint 变化时销毁 PAGE-107 全部正文与在途 POST。 */
-function clearAdminAssistantStateOnIdentityChange(previous, current) {
-  if (adminAssistantReadIdentitySnapshot(previous) !== adminAssistantReadIdentitySnapshot(current)) {
-    adminAssistantPageState.leave();
-  }
-}
-
-/** tenant、Session、任一权限、revision 或 fingerprint 变化时销毁审批任务、密码 DOM 和动作票据。 */
-function clearApprovalStateOnIdentityChange(previous, current) {
-  if (approvalReadIdentitySnapshot(previous) !== approvalReadIdentitySnapshot(current)) {
-    approvalPageState.clear();
-  }
-}
-/**
- * tenant、用户、角色、Session 或 Session revision 变化时销毁 PAGE-083 状态。
- * 完整 owner 比较同时覆盖原地降权和 Token 续期 revision，旧 cursor、键、反馈和轮询不得跨身份保留。
- */
 function clearWebhookDeadLetterStateOnIdentityChange(previous, current) {
   if (webhookDeadLetterIdentitySnapshot(previous) !== webhookDeadLetterIdentitySnapshot(current)) {
     webhookDeadLetterPageState.clear();

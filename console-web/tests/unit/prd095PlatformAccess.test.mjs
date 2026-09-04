@@ -297,7 +297,7 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   });
 
   assert.equal(await controller.mount(), true);
-  assert.match(root.innerHTML, /平台工作台/u);
+  assert.match(root.innerHTML, /class="platform-shell"/u);
   assert.match(root.innerHTML, /操作员/u);
   assert.match(root.innerHTML, /支持授权/u);
   assert.match(root.innerHTML, /Billing/u);
@@ -306,7 +306,7 @@ test("PRD-095 controller uses backend permissions and scrubs sensitive inputs", 
   assert.match(root.innerHTML, /<h1>Workspace 目录<\/h1>/u);
   assert.match(root.innerHTML, /没有符合条件的 Workspace/u);
   controller.selectView("not-authorized");
-  assert.match(root.innerHTML, /平台工作台/u);
+  assert.match(root.innerHTML, /class="platform-shell"/u);
   assert.equal(await controller.openSession("123456"), true);
   assert.deepEqual(sensitiveInputs.map((input) => input.value), ["", ""]);
   sensitiveInputs[0].value = "654321";
@@ -345,7 +345,10 @@ test("PRD-095 controller commits only the newest refresh snapshot", async () => 
   assert.equal(await controller.mount(), true);
   controller.selectView("operators");
   const staleRefresh = controller.refresh();
-  while (!releaseStale) await Promise.resolve();
+  for (let attempt = 0; attempt < 10 && !releaseStale; attempt += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(typeof releaseStale, "function");
   assert.equal(await controller.refresh(), true);
   releaseStale();
   assert.equal(await staleRefresh, false);
@@ -376,7 +379,7 @@ test("PRD-095 controller clears only an expired PlatformSession", async () => {
   expirePlatform = true;
   assert.equal(await platformController.refresh(), false);
   assert.match(platformRoot.innerHTML, /进入工作台/u);
-  assert.doesNotMatch(platformRoot.innerHTML, /平台工作台/u);
+  assert.doesNotMatch(platformRoot.innerHTML, /class="platform-shell"/u);
 
   const supportRoot = createRoot();
   const supportController = createPlatformPageController({
@@ -393,7 +396,7 @@ test("PRD-095 controller clears only an expired PlatformSession", async () => {
   });
   assert.equal(await supportController.mount(), true);
   assert.equal(await supportController.openSupport(GRANT_ID), false);
-  assert.match(supportRoot.innerHTML, /平台工作台/u);
+  assert.match(supportRoot.innerHTML, /class="platform-shell"/u);
   assert.match(supportRoot.innerHTML, /支持会话已过期/u);
   platformController.destroy();
   supportController.destroy();

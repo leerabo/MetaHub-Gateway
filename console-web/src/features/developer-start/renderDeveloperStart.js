@@ -10,7 +10,6 @@ import {
 } from "../observability/renderObservabilityPanels.js";
 import { renderBudgetPanel } from "../budgets/renderBudgetPanel.js";
 import { renderAuditLogPanel } from "../audit-logs/renderAuditLogPanel.js";
-import { renderRoleDashboardPanel } from "../dashboard/renderRoleDashboardPanel.js";
 import { renderAdminOnboarding } from "../admin-onboarding/renderAdminOnboarding.js";
 import { renderDebugConsolePanel } from "../debug-console/renderDebugConsolePanel.js";
 import { renderEnterpriseChat } from "../enterprise-chat/renderEnterpriseChat.js";
@@ -28,11 +27,7 @@ import { renderMigrationOperations } from "../migration-operations/renderMigrati
 import { renderSupportTickets } from "../support-tickets/renderSupportTickets.js";
 import { renderExperiments } from "../experiments/renderExperiments.js";
 import { renderResponseCache } from "../cache-policies/renderResponseCache.js";
-import {
-  renderPlanManagement,
-  renderQuotaManagement,
-} from "../plan-billing/renderPlanBilling.js";
-import { renderBillingDisputes } from "../billing-disputes/renderBillingDisputes.js";
+import { renderWorkspaceQuota } from "../workspace-quota/renderWorkspaceQuota.js";
 import { renderWorkspaceConsoleExperience } from "../workspace-console-experience/renderWorkspaceConsoleExperience.js";
 import { renderWorkspaceTaskHome } from "../workspace-navigation/renderWorkspaceNavigation.js";
 import { renderEnvironmentPanel } from "../environments/renderEnvironmentPanel.js";
@@ -40,20 +35,18 @@ import { renderModelAliasPanel } from "../model-aliases/renderModelAliasPanel.js
 import { renderRoutingPolicyPanel } from "../routing-policies/renderRoutingPolicyPanel.js";
 import { renderModelQualityScoresPanel } from "../model-quality-scores/renderModelQualityScoresPanel.js";
 import { renderModelCatalogPanel } from "../models/renderModelCatalogPanel.js";
-import { renderModelPricePanel } from "../model-prices/renderModelPricePanel.js";
 import { renderPoliciesPanel } from "../policies/renderPoliciesPanel.js";
 import { renderPolicyDryRunPanel } from "../policy-dry-run/renderPolicyDryRunPanel.js";
 import { renderPolicySnapshotsPanel } from "../policy-snapshots/renderPolicySnapshotsPanel.js";
 import { renderPolicyTemplates as renderPolicyTemplateLibrary } from "../policy-templates/renderPolicyTemplates.js";
 import { renderProviderPanel } from "../providers/renderProviderPanel.js";
 import { renderProviderStatusPanel } from "../provider-health/renderProviderStatusPanel.js";
+import { renderWorkspaceProviderErrorMaps } from "../workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
 import { renderProjectApplicationPanel } from "../projects/renderProjectApplicationPanel.js";
 import { renderRequestLogPanel } from "../request-logs/renderRequestLogPanel.js";
 import { renderOutputSafety } from "../output-safety/renderOutputSafety.js";
 import { renderRequestExplanationPanel } from "../request-explanations/renderRequestExplanation.js";
 import { renderRequestFeedbackSummaryPanel } from "../request-feedback/renderRequestFeedback.js";
-import { renderCustomerHealth } from "../customer-health/renderCustomerHealth.js";
-import { renderPartnerPortal } from "../partner-portal/renderPartnerPortal.js";
 import { renderSystemStatusPanel } from "../system-status/renderSystemStatusPanel.js";
 import { renderTenantPanel } from "../tenant/renderTenantPanel.js";
 import { renderTenantDataLifecycle } from "../tenant-data-lifecycle/renderTenantDataLifecycle.js";
@@ -77,10 +70,6 @@ import { renderDeveloperQuickstart } from "../developer-quickstart/renderDevelop
 import { renderDeveloperContracts } from "../developer-contracts/renderDeveloperContracts.js";
 import { renderSdkExamples } from "../python-sdk-examples/renderPythonSdkExamples.js";
 import { buildMigrationGuide, renderMigrationGuide } from "../migration-guide/renderMigrationGuide.js";
-import {
-  buildCompetitorComparison,
-  renderCompetitorComparison,
-} from "../competitor-comparison/renderCompetitorComparison.js";
 import { renderRolePermissionMatrix } from "../role-permissions/renderRolePermissionMatrix.js";
 import { hasEveryPermission, hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 
@@ -304,14 +293,18 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "providers":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderProvidersSection(options.providersState, options.authContext);
+    case "error-maps":
+      return renderWorkspaceProviderErrorMaps(options.workspaceProviderEngineeringState);
     case "provider-health":
       return `<section class="panel provider-health-shell" aria-labelledby="provider-health-title">${renderProviderStatusPanel(options.providerHealthState, options.authContext)}</section>`;
     case "models":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderModelsSection(options.modelsState, options.providersState, options.authContext);
     case "model-prices":
-      // 价格页面只做前端内容调度，金额校验、租户隔离和写权限由后端接口执行。
-      return renderModelPricesSection(options.modelPricesState, options.modelsState, options.authContext);
+      return renderWorkspaceInternalFinOps(
+        options.workspaceCommercialAccountingState,
+        options.consoleShellState?.navigation?.navigation_items,
+      );
     case "response-cache":
       // PAGE-106 只消费后端授权 owner 的安全策略摘要；真实读写与失效权限由每次 Control API 复核。
       return renderResponseCacheSection(
@@ -372,30 +365,16 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "finops-ledger":
       // 正式账本仅消费后端 admin 导航；前端渲染不能替代 /finops 的后端权限与租户校验。
       return renderFinOpsSection(options.finOpsState, options.authContext);
-    case "plans":
-      // PAGE-110 只消费完整 plan.read owner；保存按钮与 PATCH 分别复核实时 plan.write。
-      return renderPlanManagementSection(
-        options.planManagementState,
-        options.authContext,
-        options.consoleShellState,
-        options.i18n,
-      );
     case "quota-buckets":
       // PAGE-111 只消费完整 quota.read owner；调整 Dialog 与 POST 分别复核实时 quota.write。
-      return renderQuotaManagementSection(
+      return renderWorkspaceQuotaSection(
         options.quotaManagementState,
         options.authContext,
         options.consoleShellState,
         options.i18n,
       );
     case "billing-disputes":
-      // PAGE-112 list/detail requires billing.dispute.read; write commands are projected independently.
-      return renderBillingDisputesSection(
-        options.billingDisputesState,
-        options.authContext,
-        options.consoleShellState,
-        options.i18n,
-      );
+      return renderWorkspaceSubscription(options.workspaceCommercialAccountingState);
     case "cost-anomalies":
       // 成本异常页仅消费后端 admin 导航和 tenant-qualified DTO；真实治理动作仍由 PATCH 接口校验。
       return renderCostAnomaliesSection(options.costAnomaliesState, options.authContext);
@@ -529,22 +508,6 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.requestFeedbackSummaryFilters,
         options.i18n,
       );
-    case "customer-health":
-      // PAGE-118 only consumes the dedicated score DTO; source-domain APIs are never composed in the browser.
-      return renderCustomerHealthSection(
-        options.customerHealthState,
-        options.authContext,
-        options.consoleShellState,
-        options.i18n,
-      );
-    case "partner-portal":
-      // PAGE-119 only renders the backend-authorized partner owner and strict aggregate DTOs.
-      return renderPartnerPortalSection(
-        options.partnerPortalState,
-        options.authContext,
-        options.consoleShellState,
-        options.i18n,
-      );
     case "audit-logs":
       // 审计日志只允许 admin 进入；前端隐藏只是体验优化，后端仍必须再次执行 RBAC 和租户隔离。
       return renderAuditLogsSection(options.auditLogsState, options.authContext);
@@ -577,18 +540,6 @@ function renderActiveContent(activeItemId, options, statuses) {
         authContext: options.authContext,
         activeLanguage: options.activeMigrationLanguage,
         eventWarning: options.migrationGuideEventWarning,
-      });
-    }
-    case "competitor-comparison": {
-      // 竞品页只把后端已授权导航转换为可点击映射，静态帮助内容本身不承担权限判定。
-      const comparison = buildCompetitorComparison({
-        consoleShellState: options.consoleShellState,
-      });
-      return renderCompetitorComparison({
-        comparison,
-        authContext: options.authContext,
-        activeTab: options.activeCompetitorTab,
-        eventWarning: options.competitorEventWarning,
       });
     }
     case "api-docs":
@@ -722,16 +673,6 @@ function renderVirtualKeysSection(virtualKeysState, authContext, projectState, e
         ${html}
       </section>
     `
-    : "";
-}
-
-/**
- * 渲染模型价格时间线区域，admin 可新增计划，developer 仅查看。
- */
-function renderModelPricesSection(modelPricesState, modelsState, authContext) {
-  const html = renderModelPricePanel(modelPricesState, modelsState, authContext);
-  return html
-    ? `<section class="panel model-prices-panel" aria-labelledby="model-prices-title">${html}</section>`
     : "";
 }
 
@@ -1033,36 +974,12 @@ function renderResponseCacheSection(state, authContext, consoleShellState) {
     : "";
 }
 
-/** PAGE-110 失权时不保留套餐表单或上一租户余额 DOM。 */
-function renderPlanManagementSection(state, authContext, consoleShellState, i18n) {
-  const html = renderPlanManagement(state, authContext, consoleShellState, i18n);
-  return html
-    ? `
-      <section class="panel plans-panel" aria-labelledby="plans-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
 /** PAGE-111 失权时不保留额度表格、reason Dialog 或调整反馈。 */
-function renderQuotaManagementSection(state, authContext, consoleShellState, i18n) {
-  const html = renderQuotaManagement(state, authContext, consoleShellState, i18n);
+function renderWorkspaceQuotaSection(state, authContext, consoleShellState, i18n) {
+  const html = renderWorkspaceQuota(state, authContext, consoleShellState, i18n);
   return html
     ? `
       <section class="panel quota-buckets-panel" aria-labelledby="quota-buckets-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
-/** PAGE-112 loses its entire DOM when the read/navigation owner is no longer current. */
-function renderBillingDisputesSection(state, authContext, consoleShellState, i18n) {
-  const html = renderBillingDisputes(state, authContext, consoleShellState, i18n);
-  return html
-    ? `
-      <section class="panel billing-disputes-panel" aria-labelledby="billing-disputes-title">
         ${html}
       </section>
     `
@@ -1211,30 +1128,6 @@ function renderRequestFeedbackSummarySection(summaryState, authContext, filters,
   return html
     ? `
       <section class="panel feedback-summary-panel" aria-labelledby="feedback-summary-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
-/** 仅在租户、读取权限和后端导航 owner 都仍有效时渲染 PAGE-118。 */
-function renderCustomerHealthSection(state, authContext, consoleShellState, i18n) {
-  const html = renderCustomerHealth(state, authContext, consoleShellState, i18n);
-  return html
-    ? `
-      <section class="panel customer-health-panel" aria-labelledby="customer-health-title">
-        ${html}
-      </section>
-    `
-    : "";
-}
-
-/** PAGE-119 keeps partner branding and customer/commission facts inside its independent owner boundary. */
-function renderPartnerPortalSection(state, authContext, consoleShellState, i18n) {
-  const html = renderPartnerPortal(state, authContext, consoleShellState, i18n);
-  return html
-    ? `
-      <section class="panel partner-portal-panel" aria-labelledby="partner-portal-title">
         ${html}
       </section>
     `

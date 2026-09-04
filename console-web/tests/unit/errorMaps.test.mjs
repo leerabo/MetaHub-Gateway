@@ -437,14 +437,15 @@ test("PAGE-082 renders attempt and stream facts without raw Provider body", () =
   assert.match(html, /2026/);
 });
 
-test("PRD-143 removes the top-level Error Maps runtime and keeps Provider-detail ownership", async () => {
+test("PRD-147 replaces the retired Error Maps runtime with Workspace Provider Engineering", async () => {
   const [entry, renderer, requestLog] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/request-logs/renderRequestLogPanel.js", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(entry, /errorMapPageMemory|errorMapHandoff|bindErrorMapInteractions|loadErrorMapsState|#error-maps/u);
-  assert.doesNotMatch(renderer, /renderErrorMapPanel|case "error-maps"|error-maps-panel/u);
+  assert.doesNotMatch(renderer, /renderErrorMapPanel|error-maps-panel/u);
+  assert.match(renderer, /case "error-maps"[\s\S]*renderWorkspaceProviderErrorMaps/u);
   assert.doesNotMatch(requestLog, /#error-maps|data-provider-error-map-jump/u);
   assert.match(entry, /workspaceProviderEngineeringController/u);
   assert.match(entry, /listWorkspaceProviderErrorOverrides/u);

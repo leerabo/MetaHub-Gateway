@@ -322,6 +322,8 @@ test("PRD-138 controller consumes step-up, reuses retry idempotency, and honors 
     } }),
     navigation: async () => ({ items: [{
       id: "launch-gates", label: "Launch gates", href: "/platform.html#launch-gates",
+    }, {
+      id: "overview", label: "Overview", href: "/platform.html#overview",
     }] }),
     launchGates: async () => {
       launchReads += 1;

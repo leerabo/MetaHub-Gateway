@@ -10,7 +10,9 @@ import {
 
 const NAVIGATION_PERMISSIONS = Object.freeze({
   "workspace-subscription": PERMISSIONS.WORKSPACE_COMMERCIAL_SUBSCRIPTION_READ,
+  "billing-disputes": PERMISSIONS.WORKSPACE_COMMERCIAL_SUBSCRIPTION_READ,
   "internal-finops": PERMISSIONS.WORKSPACE_PROVIDER_COST_READ,
+  "model-prices": PERMISSIONS.WORKSPACE_PROVIDER_COST_READ,
 });
 
 export function createWorkspaceCommercialAccountingStore({ onChange = () => {} } = {}) {
@@ -334,7 +336,7 @@ function initialState() {
 
 function derivePhase(value) {
   if (value.error) return value.phase;
-  if (value.navigation === "workspace-subscription") {
+  if (["workspace-subscription", "billing-disputes"].includes(value.navigation)) {
     if (!value.subscription) return value.loading.length ? "loading" : "idle";
     const projection = value.subscription.subscription;
     if (!projection) return "empty";
@@ -350,7 +352,7 @@ function derivePhase(value) {
     }
     return "ready";
   }
-  if (value.navigation === "internal-finops") {
+  if (["internal-finops", "model-prices"].includes(value.navigation)) {
     if (!value.rates) return value.loading.length ? "loading" : "idle";
     return value.rates.rates.length ? "ready" : "empty";
   }

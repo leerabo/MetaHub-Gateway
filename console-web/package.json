@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node scripts/verify-production-surface.mjs && node scripts/build-production.mjs",
     "dev": "node scripts/dev-server.mjs",
-    "lint": "node scripts/lint.mjs",
+    "lint": "node scripts/lint.mjs && node scripts/verify-production-surface.mjs",
     "test": "node --test tests/unit/*.test.mjs"
   }
 }

@@ -11,6 +11,8 @@ import {
   bindPlatformConsoleExperience,
   hydratePlatformConsoleAssistant,
 } from "../platform-console-experience/renderPlatformConsoleExperience.js";
+import { createConsoleMigrationController } from "../console-migration/consoleMigrationController.js";
+import { bindConsoleMigrationInteractions } from "../console-migration/renderConsoleMigration.js";
 import { bindBrandEditorInteractions } from "../brand-domains/bindBrandEditor.js";
 import { createPlatformBrandingController } from "../brand-domains/platformBrandingController.js";
 import { renderPlatformGate, renderPlatformWorkspace } from "./renderPlatformPage.js";
@@ -19,6 +21,7 @@ const PLATFORM_NAVIGATION_IDS = new Set([
   "overview",
   "admin-assistant",
   "approvals",
+  "console-migration",
   "infrastructure",
   "gateway",
   "edge-fleet",
@@ -116,6 +119,7 @@ export function createPlatformPageController({
     providerEngineering: null,
     commercialAccounting: null,
     consoleExperience: null,
+    consoleMigration: null,
     billing: null,
     billingStatus: "",
     billingCursor: null,
@@ -344,6 +348,27 @@ export function createPlatformPageController({
   });
   state.consoleExperience = consoleExperienceController.snapshot();
 
+  const consoleMigrationController = createConsoleMigrationController({
+    api,
+    newIdempotencyKey,
+    onChange(snapshot) {
+      state.consoleMigration = snapshot;
+      if (state.session && state.view === "console-migration" && !state.loading) render();
+    },
+    onSessionInvalid(error) {
+      clearPlatformSession();
+      state.loading = false;
+      state.error = safeError(error);
+      renderPlatformGate(root, state);
+    },
+    onPermissionRevoked() {
+      globalThis.queueMicrotask?.(() => {
+        if (state.session && state.view === "console-migration") void controller.refresh();
+      });
+    },
+  });
+  state.consoleMigration = consoleMigrationController.snapshot();
+
   const controller = {
     async mount() {
       bind();
@@ -426,6 +451,7 @@ export function createPlatformPageController({
       const nextView = allowed.has(view) ? view : state.navigation[0]?.id ?? "overview";
       if (new Set([
         "overview", "admin-assistant", "approvals",
+        "console-migration",
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
         "security-assurance", "launch-gates", "provider-catalog", "provider-engineering", "releases", "edge-fleet", "edge-upgrades",
@@ -442,6 +468,8 @@ export function createPlatformPageController({
           state.selectedJob = null;
           state.jobCommandIntent = null;
           state.jobTypeIntent = null;
+        } else if (state.view === "console-migration") {
+          consoleMigrationController.leave();
         } else if (state.view === "feature-rollouts") {
           state.featureCommandIntent = null;
         } else if (state.view === "config-distribution") {
@@ -516,6 +544,7 @@ export function createPlatformPageController({
       if (!PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(nextView)) {
         consoleExperienceController.leave();
       }
+      if (nextView !== "console-migration") consoleMigrationController.leave();
       replacePlatformHash(nextView);
       state.pendingAction = null;
       render();
@@ -527,6 +556,15 @@ export function createPlatformPageController({
         );
         if (entered && state.view !== "admin-assistant") {
           void consoleExperienceController.load();
+        }
+      }
+      if (state.view === "console-migration") {
+        const entered = consoleMigrationController.enter(
+          state.session?.context,
+          state.navigation,
+        );
+        if (entered && !consoleMigrationController.snapshot().response) {
+          void consoleMigrationController.load();
         }
       }
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
@@ -3077,6 +3115,7 @@ export function createPlatformPageController({
       scrubSensitive();
       brandDomainsController.clear();
       consoleExperienceController.leave();
+      consoleMigrationController.leave();
       clearPlatformSession();
       root.replaceChildren();
     },
@@ -3129,12 +3168,12 @@ export function createPlatformPageController({
         workspaceEvents: null,
       };
       const tasks = [];
+      state.navigation = next.navigation;
+      if (!state.navigation.some((item) => item.id === state.view)) {
+        state.view = state.navigation[0]?.id ?? "overview";
+      }
       const consoleOnly = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view);
       if (consoleOnly) {
-        state.navigation = next.navigation;
-        if (!state.navigation.some((item) => item.id === state.view)) {
-          state.view = state.navigation[0]?.id ?? "overview";
-        }
         const consoleActive = PLATFORM_CONSOLE_EXPERIENCE_VIEWS.has(state.view)
           && consoleExperienceController.enter(
             state.session?.context,
@@ -3151,6 +3190,20 @@ export function createPlatformPageController({
         return true;
       }
       consoleExperienceController.leave();
+      if (state.view === "console-migration") {
+        const migrationActive = state.view === "console-migration"
+          && consoleMigrationController.enter(
+            state.session?.context,
+            state.navigation,
+          );
+        if (!migrationActive) consoleMigrationController.leave();
+        state.loading = false;
+        state.error = null;
+        render();
+        if (migrationActive) void consoleMigrationController.load();
+        return true;
+      }
+      consoleMigrationController.leave();
       const fleetOnly = new Set([
         "edge-fleet", "edge-upgrades", "edge-licenses", "edge-backups", "offline-bundles",
       ]).has(state.view);
@@ -6411,6 +6464,22 @@ export function createPlatformPageController({
       });
       hydratePlatformConsoleAssistant(root, state.consoleExperience);
     }
+    if (state.session && state.view === "console-migration") {
+      bindConsoleMigrationInteractions(root, {
+        onRefresh() {
+          return consoleMigrationController.load();
+        },
+        onFilter(filters) {
+          return consoleMigrationController.configure(filters);
+        },
+        onPage(direction) {
+          return consoleMigrationController.move(direction);
+        },
+        onCommand(kind, command, stepUp) {
+          return consoleMigrationController.command(kind, command, stepUp);
+        },
+      });
+    }
     if (state.session && new Set(["branding", "channels"]).has(state.view)) {
       bindBrandEditorInteractions(root, {
         onCommand(input) {
@@ -6456,6 +6525,7 @@ export function createPlatformPageController({
     commercialAccountingController.leave();
     brandDomainsController.clear();
     consoleExperienceController.leave();
+    consoleMigrationController.leave();
     state.operators = null;
     state.plans = null;
     state.providerCatalog = null;

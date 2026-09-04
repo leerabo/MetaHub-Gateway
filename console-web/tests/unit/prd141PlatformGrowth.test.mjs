@@ -326,7 +326,10 @@ test("PRD-141 Platform shell loads only the role-clipped Growth model", async (t
       permissions: ["platform.growth.adoption_read"],
     }) }),
     navigation: async () => ({
-      items: [{ id: "growth", label: "Growth", href: "/platform.html#growth" }],
+      items: [
+        { id: "growth", label: "Growth", href: "/platform.html#growth" },
+        { id: "overview", label: "Overview", href: "/platform.html#overview" },
+      ],
     }),
     growthFunnels: async ({ filters }) => {
       reads.push(filters);

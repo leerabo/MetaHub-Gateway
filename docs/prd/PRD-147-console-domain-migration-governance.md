@@ -17,7 +17,7 @@ rollback，并证明每个 Workspace 的历史事实、owner、event/outbox、�
    0139 SQL 只 expand schema 和种子合同，不在 DDL 事务内执行大规模业务回填。
 2. 只有来源/目标 row count、keyed canonical digest、复合 owner、FK、event/outbox、审计、Scheduler
    watermark、导航合同和跨域负测试全部匹配，才允许 CAS 切换 reader/writer generation。
-3. 64 项 Excel 导航和两个合法后增项保留唯一处置；六个迁出项以及 PRD-139..146 的旧 API、route、
+3. 64 项 Excel 导航和四个合法后增项保留唯一处置；六个迁出项以及 PRD-139..146 的旧 API、route、
    import、client、DOM、prefetch、permission、遥测和新审计写入从生产执行面归零。
 4. 旧入口在外部 router 上不存在并返回普通统一 404。LegacyRouteTombstone 只保存内部迁移事实，
    不形成 retired 响应、查询 API、兼容页面或可枚举目录。
@@ -160,14 +160,15 @@ tombstone 没有公开 GET、redirect 或 retired response。请求到达外部 
 ### 3.4 NavigationContractSnapshot 与 ConsoleContractRelease
 
 Excel 再次列出 NavigationContractSnapshot，但 0138 已建立唯一权威
-`workspace_navigation_contract_snapshots/items/heads`。0139 不创建同名第二套表，也不复制 64+2 item；它只引用当前
+`workspace_navigation_contract_snapshots/items/heads`。0139 不创建同名第二套表，也不复制 64+4 item；它只引用当前
 0138 immutable snapshot、disposition digest、keyed item-set digest 和 head generation。
 
 0139 新增平台全局 `console_contract_releases/items/heads`，把 0131..0138 target generation、0138 navigation snapshot、
 external route deny manifest、API/OpenAPI manifest、permission retirement manifest、frontend bundle manifest、telemetry/audit
 manifest 和 scheduler manifest 固定到同一 release generation。released row 只追加，head 只用 CAS 推进。
 
-64 项 Excel disposition 必须零重复、零缺失；源码合法 extras 精确为 `migration-operations` 和 `support-tickets`。最终
+64 项 Excel disposition 必须零重复、零缺失；源码合法 extras 精确为 `migration-operations`、`support-tickets`、
+`workspace-subscription` 和 `internal-finops`。后两项替代旧 `plans`/`finops-ledger` primary placement。最终
 Workspace 公开合同只退休 `growth-analytics`、`customer-health`、`partner-portal`、`adapter-specs`、
 `adapter-contract-runs`、`competitor-comparison` 六项；五个此前误隐藏的 `providers`、`local-models`、
 `provider-health`、`error-maps`、`billing-disputes` 必须在来源权限和 owner 可证明时恢复。
@@ -184,7 +185,7 @@ check type 固定为：
 - `source_target_rows`、`canonical_digest`、`owner_coverage`、`foreign_keys`；
 - `event_outbox`、`audit_watermark`、`scheduler_watermark`、`legacy_write_fence`；
 - `route_registration_zero`、`openapi_zero`、`frontend_runtime_zero`、`prefetch_zero`；
-- `permission_retirement`、`navigation_64_plus_2`、`cross_domain_negative`、`target_smoke`；
+- `permission_retirement`、`navigation_64_plus_4`、`cross_domain_negative`、`target_smoke`；
 - `n_minus_one_fenced`、`late_writer_fenced`、`static_sensitive_zero`。
 
 check row 不保存 arbitrary payload、SQL、URL、selector、文件路径、错误堆栈或响应正文。详细机器证据只写 `.artifacts`，
@@ -220,7 +221,7 @@ job/owner lease 时继续保留，外层 registry lease 不替代业务 lease，
 | 0135 | 0046/0055/0056 adapter run/error map/fact/outbox | Platform Provider Engineering + Workspace override | `/adapter-specs`、`/adapter-contract-runs`、顶级 `/error-maps` writer |
 | 0136 | 0072/0073、0090..0096、price/ledger/payment/invoice/outbox | Platform commercial + Workspace/Internal FinOps | tenant `/plans`、`/model-prices`、`/billing-disputes`、`/subscriptions/current` |
 | 0137 | dashboard/role view/assistant/approval/user preference/config summary | 独立 Platform/Workspace/Identity console | `/dashboard/overview`、`/dashboard/role-view`、`/admin-assistant/query`、`GET /approvals`、`/user/preferences`、`/internal/config/summary` |
-| 0138 | 66 source definitions、0011/0019 preference、0057 role config、PRD-097 onboarding | 64+2 contract、task home、advanced tools | `/console/navigation`、`/console/preferences`、旧 page-event ingress、六个 retired UI route |
+| 0138 | 63 个 0137 source definitions、0011/0019 preference、0057 role config、PRD-097 onboarding | 64+4 contract、task home、advanced tools | `/console/navigation`、`/console/preferences`、旧 page-event ingress、六个 retired UI route |
 
 `/branding/public` 路径本身不退休；它切换为只按受信 canonical Host 解析 Platform/verified Channel brand。带
 `tenant_slug` 的旧 query shape 和 `/branding/public/logo?tenant_slug=` 必须普通 404。PRD-103/104 的 `/payments/*`、
@@ -234,7 +235,8 @@ router registration 必须和 manifest 双向相等：manifest 中 route 仍挂�
 
 0139 up 只创建表、约束、索引、固定 permission/manifest seed 和 write-fence 支撑，不扫描 10 万 Workspace、不执行网络
 请求、不启动 backfill。启动命令先验证 schema head 0139、0131..0138 target tables/heads、源码 manifest digest、当前
-66 navigation definitions、41 scheduler installer contexts 和三个额外 runtime surface 全部符合冻结合同。
+63 个 0137 navigation source、68 个 0138 audit contract item、41 scheduler installer contexts 和三个额外 runtime surface
+全部符合冻结合同。
 
 inventory 对每个 active WorkspaceTenantBinding 和平台全局 source 保存 source upper watermark、row count、owner/FK coverage、
 keyed digest、event/outbox/audit/scheduler watermark。缺失/重复 owner、orphan、unknown source schema、active old write lease、
@@ -293,7 +295,7 @@ scheduler registry 非 seed 行、lease、watermark 和 runtime observation 均 
 
 每个 retirement 必须同时满足：
 
-1. 合同层：旧 permission 不再由固定/自定义角色授予，Navigation 64+2 disposition、API/OpenAPI 和 ingress deny manifest
+1. 合同层：旧 permission 不再由固定/自定义角色授予，Navigation 64+4 disposition、API/OpenAPI 和 ingress deny manifest
    精确匹配；六个 retired ID 不出现在公开 Workspace DTO。
 2. 服务层：FastAPI router/import/client 不可达，直接 method/path、旧 Cookie、Bearer、query credential、大小写/编码变体和
    N-1 请求只得到普通 unknown route；不存在 tombstone controller 或 fallback proxy。
@@ -306,10 +308,10 @@ scheduler registry 非 seed 行、lease、watermark 和 runtime observation 均 
 静态零命中不是对整个仓库运行无差别 grep。扫描器使用版本化 production surface manifest，明确区分 shipped runtime 与
 history allowlist；任何 runtime allowlist 例外必须是 exact file + symbol + digest，不接受宽目录、通配字符串或“临时兼容”。
 
-### 5.2 64+2 导航证明
+### 5.2 64+4 导航证明
 
 0139 读取 0138 immutable NavigationContractSnapshot，不重新按前端角色名生成菜单。自动证明 Excel 64 项零重复、零缺失、
-源码 extras 精确为两项；五项恢复、六项退休、detail/advanced/account/dev-center 分类、source permission expression、
+源码 extras 精确为四项；五项恢复、六项退休、detail/advanced/account/dev-center 分类、source permission expression、
 entitlement generation 和 current Membership 求交全部匹配。
 
 成员可见 item set 只保存 keyed digest，不能以可反推角色/权限的普通 hash 落库。撤权不等待 migration event；下一 API 请求
@@ -601,7 +603,7 @@ PRD-147 编码期间只运行受影响的 0139 migration、状态机/API、regis
 - Scheduler：41 baseline slot 到 36 final installer 的静态映射、第 37 platform job、全部内部 queue contract、多 replica
   partition leader/fence/takeover、disabled/config drift、nested business lease、水位不倒退；单 coordinator/持租才创建 child
   task，两个 per-replica data buffer 独立排空、queue full、sink/flush timeout、backend failure 和 bounded shutdown。
-- Route/navigation：64+2 自动证明、五项恢复、六项退休、production router/OpenAPI/client/import/DOM/prefetch/permission/
+- Route/navigation：64+4 自动证明、五项恢复、六项退休、production router/OpenAPI/client/import/DOM/prefetch/permission/
   telemetry/audit 零命中、ordinary 404、N-1 ingress deny、历史 event/outbox 仍可对账。
 - 浏览器/流程：Chromium/Edge/Firefox 真实服务，390/1280/1440 与 DPR 1/1.25/1.5，鼠标主要流程、键盘/焦点/读屏、
   Abort/迟到响应/logout/revoke、Network/Console/Page error 为零、完成态和失败恢复入口真实可用。

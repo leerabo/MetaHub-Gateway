@@ -404,7 +404,10 @@ test("PAGE-097 escapes fixed-enum drift and main uses command refresh without po
   assert.match(mainSource, /data-request-log-detail-refresh/);
   assert.match(mainSource, /configureCurrentRequestLogState\(requestLogPageMemory\.query\(\)\.filters, selectedRequestId\)/);
   const refreshHandlerStart = mainSource.indexOf("const requestLogDetailRefresh");
-  const refreshHandlerEnd = mainSource.indexOf("for (const link of document.querySelectorAll", refreshHandlerStart);
+  const refreshHandlerEnd = mainSource.indexOf(
+    'for (const button of document.querySelectorAll("[data-request-log-explain]"))',
+    refreshHandlerStart,
+  );
   const refreshHandler = mainSource.slice(refreshHandlerStart, refreshHandlerEnd);
   assert.ok(refreshHandlerStart > 0 && refreshHandlerEnd > refreshHandlerStart);
   assert.doesNotMatch(refreshHandler, /setInterval|setTimeout|while\s*\(/);

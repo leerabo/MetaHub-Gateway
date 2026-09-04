@@ -1344,320 +1344,6 @@
   .tenant-data-export-row button { width: 100%; }
 }
 
-/* PAGE-119 partner workbench: dense desktop operations with a bounded single-column mobile projection. */
-.partner-portal-panel {
-  --partner-portal-accent: var(--partner-brand-primary, #176b5b);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.partner-portal-loading,
-.partner-portal-error,
-.partner-portal-empty {
-  min-height: 260px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.partner-portal-empty {
-  max-width: 620px;
-}
-
-.partner-portal-kicker {
-  margin: 0;
-  color: var(--muted-text, #64748b);
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.partner-portal-empty h2,
-.partner-portal-header h2,
-.partner-portal-section h3,
-.partner-portal-side-section h3,
-.partner-portal-dialog h3 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.partner-portal-setup-form,
-.partner-portal-side-section form,
-.partner-portal-dialog form {
-  width: min(100%, 560px);
-  display: grid;
-  gap: 12px;
-}
-
-.partner-portal-setup-form label,
-.partner-portal-side-section label,
-.partner-portal-dialog label,
-.partner-portal-filters label {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-  color: var(--muted-text, #64748b);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.partner-portal-setup-form input,
-.partner-portal-side-section input,
-.partner-portal-dialog input,
-.partner-portal-dialog select,
-.partner-portal-filters input,
-.partner-portal-filters select {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.partner-portal-color-field input[type="color"] {
-  width: 48px;
-  height: 34px;
-  padding: 2px;
-}
-
-.partner-portal-workbench {
-  min-width: 0;
-}
-
-.partner-portal-header,
-.partner-portal-section-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.partner-portal-header {
-  padding: 4px 0 18px 14px;
-  border-left: 4px solid var(--partner-portal-accent);
-}
-
-.partner-portal-header p,
-.partner-portal-section-heading p,
-.partner-portal-side-section p {
-  margin: 5px 0 0;
-  color: var(--muted-text, #64748b);
-  line-height: 1.5;
-}
-
-.partner-portal-header-actions,
-.partner-portal-row-actions,
-.partner-portal-download-actions,
-.partner-portal-dialog-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.partner-portal-status,
-.partner-portal-freshness {
-  display: inline-flex;
-  min-height: 26px;
-  align-items: center;
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--partner-portal-accent) 45%, #cbd5e1);
-  color: var(--partner-portal-accent);
-  background: color-mix(in srgb, var(--partner-portal-accent) 8%, white);
-  border-radius: 4px;
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.partner-portal-layout {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
-  align-items: start;
-  gap: 20px;
-}
-
-.partner-portal-main,
-.partner-portal-aside {
-  min-width: 0;
-  display: grid;
-  gap: 20px;
-}
-
-.partner-portal-section,
-.partner-portal-side-section {
-  min-width: 0;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color, #d9e0e7);
-}
-
-.partner-portal-side-section {
-  padding: 16px 0 0 16px;
-  border-left: 1px solid var(--border-color, #d9e0e7);
-}
-
-.partner-portal-filters {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(120px, 0.75fr)) minmax(120px, 0.7fr) minmax(140px, 1fr) auto;
-  align-items: end;
-  gap: 10px;
-  margin: 14px 0;
-}
-
-.partner-portal-section-state {
-  min-height: 74px;
-  display: flex;
-  align-items: center;
-  padding: 12px;
-  border: 1px dashed var(--border-color, #d9e0e7);
-  color: var(--muted-text, #64748b);
-}
-
-.partner-portal-section-state.is-error,
-.partner-portal-form-error,
-.partner-portal-warning {
-  color: #9f2d2d;
-  background: #fff7f5;
-}
-
-.partner-portal-table {
-  min-width: 0;
-  border: 1px solid var(--border-color, #d9e0e7);
-}
-
-.partner-portal-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(150px, 1.45fr) repeat(3, minmax(68px, 0.55fr)) minmax(118px, 0.9fr) minmax(90px, 0.72fr) minmax(112px, 0.8fr);
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border-color, #d9e0e7);
-}
-
-.partner-portal-commission-table .partner-portal-row {
-  grid-template-columns: minmax(150px, 1.3fr) minmax(155px, 1fr) minmax(65px, 0.45fr) minmax(100px, 0.7fr) minmax(100px, 0.7fr);
-}
-
-.partner-portal-row:first-child {
-  border-top: 0;
-}
-
-.partner-portal-row > * {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.partner-portal-row strong,
-.partner-portal-row small {
-  display: block;
-}
-
-.partner-portal-row small {
-  margin-top: 3px;
-  color: var(--muted-text, #64748b);
-}
-
-.partner-portal-table-head {
-  background: #f6f8fa;
-  color: #46515d;
-  font-size: 0.75rem;
-  font-weight: 750;
-}
-
-.partner-portal-freshness.is-lagging {
-  border-color: #d99a3a;
-  color: #81500c;
-  background: #fff8e8;
-}
-
-.partner-portal-currency-summaries {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 12px 0;
-}
-
-.partner-portal-currency-summaries > div {
-  min-width: 0;
-  padding: 12px;
-  border-left: 3px solid var(--partner-portal-accent);
-  background: #f6f8fa;
-}
-
-.partner-portal-currency-summaries span,
-.partner-portal-currency-summaries strong,
-.partner-portal-currency-summaries small {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.partner-portal-currency-summaries strong {
-  margin: 4px 0;
-  font-size: 1.2rem;
-}
-
-.partner-portal-feedback,
-.partner-portal-form-error,
-.partner-portal-warning,
-.partner-portal-readonly-note {
-  padding: 9px 11px;
-  border: 1px solid var(--border-color, #d9e0e7);
-  overflow-wrap: anywhere;
-}
-
-.partner-portal-feedback {
-  color: #176044;
-  background: #f0faf5;
-}
-
-.partner-portal-download-actions {
-  margin-top: 14px;
-}
-
-.partner-portal-dialog {
-  width: min(520px, calc(100vw - 32px));
-  max-height: calc(100vh - 40px);
-  box-sizing: border-box;
-  overflow: auto;
-  border: 1px solid #aeb8c3;
-  border-radius: 6px;
-  box-shadow: 0 18px 45px rgb(15 23 42 / 22%);
-}
-
-.partner-portal-dialog::backdrop {
-  background: rgb(15 23 42 / 42%);
-}
-
-.partner-portal-dialog-actions {
-  justify-content: flex-end;
-}
-
-.partner-portal-row-actions .text-button {
-  padding: 2px 0;
-}
-
-.partner-portal-row-actions .danger,
-.partner-portal-dialog .danger-button {
-  color: #9f2d2d;
-}
-
-/* 1280/1440px 视口扣除控制台侧栏后不足以容纳门户主区与操作栏，提前折叠为单列。 */
-@media (max-width: 1680px) {
-  .partner-portal-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .partner-portal-aside {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .partner-portal-side-section {
-    padding-left: 0;
-    border-left: 0;
-  }
-}
-
 /* PRD-131 Workspace Migration Center */
 .migration-operations {
   display: grid;
@@ -2246,68 +1932,6 @@
   .migration-dialog-actions,
   .migration-dialog-actions button,
   .migration-form-actions button {
-    width: 100%;
-  }
-}
-
-@media (max-width: 760px) {
-  .partner-portal-header,
-  .partner-portal-section-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .partner-portal-aside,
-  .partner-portal-filters,
-  .partner-portal-currency-summaries {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .partner-portal-table-head {
-    display: none;
-  }
-
-  .partner-portal-row,
-  .partner-portal-commission-table .partner-portal-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 7px;
-    padding: 13px 12px;
-  }
-
-  .partner-portal-row:not(.partner-portal-table-head) > * {
-    display: grid;
-    grid-template-columns: minmax(92px, 0.45fr) minmax(0, 1fr);
-    align-items: baseline;
-    gap: 8px;
-  }
-
-  .partner-portal-row:not(.partner-portal-table-head) > *::before {
-    content: attr(data-label);
-    color: var(--muted-text, #64748b);
-    font-size: 0.72rem;
-    font-weight: 700;
-  }
-
-  .partner-portal-row-actions {
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 420px) {
-  .partner-portal-panel {
-    padding-inline: 12px;
-  }
-
-  .partner-portal-header-actions,
-  .partner-portal-download-actions,
-  .partner-portal-dialog-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .partner-portal-header-actions button,
-  .partner-portal-download-actions button,
-  .partner-portal-dialog-actions button {
     width: 100%;
   }
 }
@@ -6322,662 +5946,6 @@ h3 {
   .provider-catalog-checkpoint { align-items: stretch; flex-direction: column; }
   .provider-catalog-checkpoint form { align-items: stretch; flex-direction: column; }
   .provider-catalog-checkpoint form input { width: 100%; }
-}
-
-/* PAGE-117 增长分析：七个权威阶段保持紧凑可扫描，并在窄屏切换为稳定单列。 */
-.growth-analytics-panel {
-  min-width: 0;
-}
-
-.product-analytics-header,
-.product-analytics-summary-heading,
-.product-analytics-details-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.product-analytics-header h2,
-.product-analytics-summary h3,
-.product-analytics-funnel h3,
-.product-analytics-details h3 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.product-analytics-header h2 {
-  font-size: 1.35rem;
-}
-
-.product-analytics-kicker {
-  margin: 0 0 3px;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.product-analytics-refresh {
-  flex: 0 0 38px;
-  width: 38px;
-  height: 38px;
-  padding: 0;
-  font-size: 1.15rem;
-}
-
-.product-analytics-loading,
-.product-analytics-error {
-  margin-top: 18px;
-  min-height: 96px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  display: grid;
-  align-content: center;
-  gap: 6px;
-  color: var(--muted);
-}
-
-.product-analytics-error {
-  color: var(--danger);
-}
-
-.product-analytics-error span {
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.product-analytics-summary,
-.product-analytics-funnel,
-.product-analytics-details {
-  margin-top: 20px;
-  min-width: 0;
-}
-
-.product-analytics-summary-heading h3,
-.product-analytics-funnel h3,
-.product-analytics-details-heading h3 {
-  font-size: 0.95rem;
-}
-
-.product-analytics-activation,
-.product-analytics-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.product-analytics-activation.is-activated,
-.product-analytics-status.is-complete {
-  color: var(--ok);
-}
-
-.product-analytics-status.is-out-of-order,
-.product-analytics-status.is-gap {
-  color: var(--warning);
-}
-
-.product-analytics-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-.product-analytics-metrics > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px 14px;
-  border-right: 1px solid var(--line);
-}
-
-.product-analytics-metrics > div:last-child {
-  border-right: 0;
-}
-
-.product-analytics-metrics span {
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
-.product-analytics-metrics strong {
-  overflow-wrap: anywhere;
-  font-size: 1.08rem;
-}
-
-.product-analytics-progress {
-  display: block;
-  width: 100%;
-  height: 6px;
-  margin-top: 10px;
-  accent-color: var(--accent);
-}
-
-.product-analytics-initial {
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size: 0.84rem;
-}
-
-.product-analytics-steps {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.product-analytics-step {
-  position: relative;
-  display: grid;
-  grid-template-rows: 24px minmax(38px, auto) minmax(34px, auto) 20px;
-  align-content: start;
-  gap: 5px;
-  min-width: 0;
-  min-height: 132px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-}
-
-.product-analytics-step::after {
-  content: "";
-  position: absolute;
-  top: 21px;
-  right: -9px;
-  width: 9px;
-  height: 2px;
-  background: var(--line);
-}
-
-.product-analytics-step:last-child::after {
-  display: none;
-}
-
-.product-analytics-step.is-complete {
-  border-top: 3px solid var(--ok);
-}
-
-.product-analytics-step.is-out-of-order {
-  border-top: 3px solid var(--warning);
-}
-
-.product-analytics-step.is-gap {
-  border-top: 3px solid var(--danger);
-}
-
-.product-analytics-step.is-blocked {
-  border-top: 3px solid #7b8794;
-  background: #f8fafc;
-}
-
-.product-analytics-step-number {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #eef2f6;
-  color: var(--text);
-  font-size: 0.75rem;
-  font-weight: 800;
-}
-
-.product-analytics-step strong,
-.product-analytics-step span,
-.product-analytics-step small {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.product-analytics-step strong {
-  font-size: 0.82rem;
-}
-
-.product-analytics-step > span:not(.product-analytics-step-number),
-.product-analytics-step small {
-  color: var(--muted);
-  font-size: 0.72rem;
-}
-
-.product-analytics-details-heading time {
-  color: var(--muted);
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.product-analytics-table {
-  display: grid;
-  min-width: 0;
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.product-analytics-row {
-  display: grid;
-  grid-template-columns:
-    minmax(150px, 1.25fr)
-    minmax(120px, 1fr)
-    minmax(64px, 0.45fr)
-    minmax(156px, 1.15fr)
-    minmax(156px, 1.15fr)
-    minmax(96px, 0.75fr);
-  align-items: center;
-  min-width: 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.product-analytics-row > * {
-  min-width: 0;
-  padding: 9px 8px;
-  overflow-wrap: anywhere;
-  font-size: 0.8rem;
-}
-
-.product-analytics-table-head {
-  color: var(--muted);
-  background: #f8fafc;
-  font-weight: 700;
-}
-
-@media (max-width: 1100px) {
-  .product-analytics-steps {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .product-analytics-step::after {
-    display: none;
-  }
-
-  .product-analytics-table-head {
-    display: none;
-  }
-
-  .product-analytics-row:not(.product-analytics-table-head) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 8px 0;
-  }
-
-  .product-analytics-row:not(.product-analytics-table-head) > * {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    text-align: right;
-  }
-
-  .product-analytics-row:not(.product-analytics-table-head) > *::before {
-    content: attr(data-label);
-    flex: 0 0 42%;
-    color: var(--muted);
-    text-align: left;
-    font-size: 0.74rem;
-    font-weight: 600;
-  }
-}
-
-@media (max-width: 620px) {
-  .product-analytics-header,
-  .product-analytics-details-heading {
-    align-items: flex-start;
-  }
-
-  .product-analytics-metrics,
-  .product-analytics-steps,
-  .product-analytics-row:not(.product-analytics-table-head) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .product-analytics-metrics > div {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .product-analytics-metrics > div:last-child {
-    border-bottom: 0;
-  }
-
-  .product-analytics-step {
-    grid-template-columns: 24px minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
-    min-height: 0;
-  }
-
-  .product-analytics-step-number {
-    grid-row: 1 / 4;
-  }
-
-  .product-analytics-row:not(.product-analytics-table-head) > * {
-    padding: 6px 4px;
-  }
-}
-
-/* PAGE-118 customer health: compact six-signal workbench with stable desktop and mobile tracks. */
-.customer-health-panel {
-  min-width: 0;
-}
-
-.customer-health-header,
-.customer-health-summary-heading,
-.customer-health-section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.customer-health-header h2,
-.customer-health-summary h3,
-.customer-health-signals h3,
-.customer-health-actions h3,
-.customer-health-activation h3 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.customer-health-header h2 {
-  font-size: 1.35rem;
-}
-
-.customer-health-kicker {
-  margin: 0 0 3px;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.customer-health-refresh {
-  flex: 0 0 38px;
-  width: 38px;
-  height: 38px;
-  padding: 0;
-  font-size: 1.15rem;
-}
-
-.customer-health-loading,
-.customer-health-error {
-  display: grid;
-  align-content: center;
-  gap: 6px;
-  min-height: 210px;
-  margin-top: 18px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-}
-
-.customer-health-error {
-  color: var(--danger);
-}
-
-.customer-health-error span,
-.customer-health-error code {
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.customer-health-notice {
-  margin: 14px 0 0;
-  padding: 9px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.customer-health-notice.is-stale {
-  color: var(--warning);
-}
-
-.customer-health-summary,
-.customer-health-signals,
-.customer-health-actions,
-.customer-health-activation {
-  min-width: 0;
-  margin-top: 20px;
-}
-
-.customer-health-summary h3,
-.customer-health-signals h3,
-.customer-health-actions h3,
-.customer-health-activation h3 {
-  font-size: 0.95rem;
-}
-
-.customer-health-risk,
-.customer-health-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.customer-health-risk.is-healthy,
-.customer-health-status.is-healthy {
-  color: var(--ok);
-}
-
-.customer-health-risk.is-watch,
-.customer-health-status.is-watch {
-  color: var(--warning);
-}
-
-.customer-health-risk.is-at_risk,
-.customer-health-status.is-at_risk,
-.customer-health-risk.is-critical,
-.customer-health-status.is-critical {
-  color: var(--danger);
-}
-
-.customer-health-status.is-unknown {
-  color: var(--muted);
-}
-
-.customer-health-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-.customer-health-metrics > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px 14px;
-  border-right: 1px solid var(--line);
-}
-
-.customer-health-metrics > div:last-child {
-  border-right: 0;
-}
-
-.customer-health-metrics span {
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
-.customer-health-metrics strong {
-  overflow-wrap: anywhere;
-  font-size: 1.05rem;
-}
-
-.customer-health-progress {
-  display: block;
-  width: 100%;
-  height: 7px;
-  margin-top: 10px;
-  accent-color: var(--accent);
-}
-
-.customer-health-progress.is-healthy {
-  accent-color: var(--ok);
-}
-
-.customer-health-progress.is-watch {
-  accent-color: var(--warning);
-}
-
-.customer-health-progress.is-at_risk,
-.customer-health-progress.is-critical {
-  accent-color: var(--danger);
-}
-
-.customer-health-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.customer-health-tags li {
-  padding: 3px 7px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--danger);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.customer-health-tags.is-empty {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.customer-health-section-heading time {
-  color: var(--muted);
-  font-size: 0.76rem;
-  overflow-wrap: anywhere;
-}
-
-.customer-health-table {
-  display: grid;
-  min-width: 0;
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.customer-health-row {
-  display: grid;
-  grid-template-columns:
-    minmax(108px, 0.9fr)
-    minmax(86px, 0.7fr)
-    minmax(58px, 0.5fr)
-    minmax(58px, 0.5fr)
-    minmax(66px, 0.55fr)
-    minmax(190px, 1.7fr);
-  align-items: center;
-  min-width: 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.customer-health-row > * {
-  min-width: 0;
-  padding: 9px 8px;
-  overflow-wrap: anywhere;
-  font-size: 0.8rem;
-}
-
-.customer-health-table-head {
-  color: var(--muted);
-  background: #f8fafc;
-  font-weight: 700;
-}
-
-.customer-health-actions ul {
-  display: grid;
-  margin: 10px 0 0;
-  padding: 0;
-  border-top: 1px solid var(--line);
-  list-style: none;
-}
-
-.customer-health-actions li {
-  min-width: 0;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
-  font-size: 0.82rem;
-}
-
-.customer-health-actions li > span {
-  color: var(--muted);
-}
-
-.customer-health-actions a {
-  color: var(--accent);
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.customer-health-activation p {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-@media (max-width: 900px) {
-  .customer-health-table-head {
-    display: none;
-  }
-
-  .customer-health-row:not(.customer-health-table-head) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 8px 0;
-  }
-
-  .customer-health-row:not(.customer-health-table-head) > * {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    text-align: right;
-  }
-
-  .customer-health-row:not(.customer-health-table-head) > *::before {
-    content: attr(data-label);
-    flex: 0 0 42%;
-    color: var(--muted);
-    text-align: left;
-    font-size: 0.74rem;
-    font-weight: 600;
-  }
-}
-
-@media (max-width: 620px) {
-  .customer-health-header,
-  .customer-health-summary-heading,
-  .customer-health-section-heading {
-    align-items: flex-start;
-  }
-
-  .customer-health-metrics,
-  .customer-health-row:not(.customer-health-table-head) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .customer-health-metrics > div {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .customer-health-metrics > div:last-child {
-    border-bottom: 0;
-  }
-
-  .customer-health-row:not(.customer-health-table-head) > * {
-    padding: 6px 4px;
-  }
 }
 
 /* PAGE-114 MCP governance workspace: compact tables on desktop, single-layer rows on mobile. */
@@ -12362,255 +11330,6 @@ h3 {
   .model-quality-buttons button,
   .model-quality-pager button {
     width: 100%;
-  }
-}
-
-/* PRD-041 竞品对比：保持帮助中心为密集工作页，表格局部滚动，根节点不产生横向溢出。 */
-.competitor-comparison,
-.competitor-comparison * {
-  min-width: 0;
-}
-
-.competitor-comparison {
-  display: grid;
-  gap: 18px;
-  overflow-x: hidden;
-}
-
-.competitor-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 20px;
-  align-items: start;
-}
-
-.competitor-heading > div {
-  display: grid;
-  gap: 6px;
-}
-
-.competitor-heading p,
-.competitor-note,
-.competitor-sources p {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.competitor-version {
-  margin: 0;
-  border-left: 3px solid #2563eb;
-  padding: 2px 0 2px 10px;
-  white-space: nowrap;
-}
-
-.competitor-version dt {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.competitor-version dd {
-  margin: 3px 0 0;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.competitor-event-warning,
-.competitor-boundary,
-.competitor-decision {
-  border: 1px solid #bfdbfe;
-  padding: 12px;
-  background: #eff6ff;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.competitor-event-warning {
-  border-color: #fde68a;
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.competitor-boundary {
-  border-left: 4px solid var(--accent);
-  background: #f0fdfa;
-}
-
-.competitor-boundary p {
-  margin-top: 3px;
-}
-
-.competitor-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--line);
-}
-
-.competitor-tabs button {
-  min-height: 40px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.competitor-tabs button[aria-selected="true"] {
-  border-bottom-color: var(--accent);
-  color: var(--accent-dark);
-}
-
-.competitor-tabs button:focus-visible,
-.competitor-nav-link:focus-visible,
-.competitor-sources a:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 2px;
-}
-
-[data-competitor-panel] {
-  display: grid;
-  gap: 14px;
-}
-
-.competitor-table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--line);
-}
-
-.competitor-table {
-  width: 100%;
-  min-width: 820px;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.competitor-table th,
-.competitor-table td {
-  padding: 10px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-  line-height: 1.55;
-}
-
-.competitor-table thead th {
-  background: #f2f5f9;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.competitor-table tbody th {
-  background: #fbfcfe;
-  white-space: nowrap;
-}
-
-.competitor-table tr:last-child th,
-.competitor-table tr:last-child td {
-  border-bottom: 0;
-}
-
-.competitor-mappings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.competitor-nav-link {
-  border: 0;
-  border-bottom: 1px solid currentColor;
-  padding: 2px 0;
-  background: transparent;
-  color: #1d4ed8;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.competitor-mapping-empty {
-  color: var(--muted);
-}
-
-.competitor-sources {
-  display: grid;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.competitor-sources ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-}
-
-.competitor-sources a {
-  color: #1d4ed8;
-}
-
-.competitor-sales-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  border: 1px solid var(--line);
-}
-
-.competitor-sales-grid section {
-  padding: 14px;
-}
-
-.competitor-sales-grid section + section {
-  border-left: 1px solid var(--line);
-}
-
-.competitor-sales-grid h3 {
-  margin-bottom: 8px;
-}
-
-.competitor-sales-grid ul,
-.competitor-decision ol {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.competitor-decision strong {
-  display: block;
-  margin-bottom: 7px;
-}
-
-@media (max-width: 720px) {
-  .competitor-heading,
-  .competitor-sales-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .competitor-version {
-    width: max-content;
-  }
-
-  .competitor-sales-grid section + section {
-    border-top: 1px solid var(--line);
-    border-left: 0;
-  }
-}
-
-@media (max-width: 390px) {
-  .competitor-tabs button {
-    flex: 1 1 0;
-    padding-inline: 6px;
-  }
-
-  .competitor-table {
-    min-width: 760px;
   }
 }
 
@@ -26908,24 +25627,22 @@ h3 {
   }
 }
 
-/* PAGE-110/111 套餐与额度：紧凑表格、CAS 表单和仅驻留内存的调整 Dialog。 */
-.plans-panel,
+/* Workspace quota：紧凑表格和仅驻留内存的调整 Dialog。 */
 .quota-buckets-panel,
-.plan-billing-workspace {
+.workspace-quota {
   min-width: 0;
 }
 
-.plan-billing-workspace {
+.workspace-quota {
   display: grid;
   gap: 18px;
 }
 
-.plan-billing-toolbar,
-.plan-billing-section-heading,
-.plan-billing-actions,
-.plan-billing-dialog header,
-.plan-billing-dialog-actions,
-.quota-plan-line,
+.workspace-quota-toolbar,
+.workspace-quota-section-heading,
+.workspace-quota-dialog header,
+.workspace-quota-dialog-actions,
+.quota-entitlement-line,
 .quota-overage {
   display: flex;
   align-items: center;
@@ -26933,21 +25650,21 @@ h3 {
   gap: 12px;
 }
 
-.plan-billing-toolbar h2,
-.plan-billing-section-heading h3,
-.plan-billing-dialog h3 {
+.workspace-quota-toolbar h2,
+.workspace-quota-section-heading h3,
+.workspace-quota-dialog h3 {
   margin: 0;
   letter-spacing: 0;
 }
 
-.plan-billing-toolbar h2 {
+.workspace-quota-toolbar h2 {
   font-size: 1.35rem;
 }
 
-.plan-billing-toolbar > div > span,
-.plan-billing-section-heading > span,
-.quota-plan-line > span,
-.quota-plan-line code,
+.workspace-quota-toolbar > div > span,
+.workspace-quota-section-heading > span,
+.quota-entitlement-line > span,
+.quota-entitlement-line code,
 .quota-adjustment-row > span,
 .quota-adjustment-row code,
 .quota-overage small {
@@ -26955,7 +25672,7 @@ h3 {
   font-size: 0.84rem;
 }
 
-.plan-billing-icon-command {
+.workspace-quota-icon-command {
   display: inline-grid;
   place-items: center;
   width: 38px;
@@ -26968,37 +25685,35 @@ h3 {
   font-size: 1.2rem;
 }
 
-.plan-billing-feedback,
-.plan-billing-live,
-.plan-billing-readonly,
-.plan-billing-error,
-.plan-billing-empty {
+.workspace-quota-feedback,
+.workspace-quota-live,
+.workspace-quota-error,
+.workspace-quota-empty {
   min-height: 22px;
   overflow-wrap: anywhere;
 }
 
-.plan-billing-feedback {
+.workspace-quota-feedback {
   color: var(--accent-dark);
   font-size: 0.86rem;
 }
 
-.plan-billing-feedback.is-error {
+.workspace-quota-feedback.is-error {
   color: var(--danger);
 }
 
-.plan-billing-live,
-.plan-billing-readonly,
-.plan-billing-empty {
+.workspace-quota-live,
+.workspace-quota-empty {
   color: var(--muted);
   font-size: 0.88rem;
 }
 
-.plan-billing-live.is-error,
-.plan-billing-error {
+.workspace-quota-live.is-error,
+.workspace-quota-error {
   color: var(--danger);
 }
 
-.plan-billing-error {
+.workspace-quota-error {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
@@ -27007,41 +25722,10 @@ h3 {
   border-block: 1px solid #efc7c3;
 }
 
-.plan-billing-error code {
+.workspace-quota-error code {
   color: inherit;
 }
 
-.plan-summary-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(110px, 1fr));
-  margin: 0;
-  border-block: 1px solid var(--line);
-}
-
-.plan-summary-strip > div {
-  min-width: 0;
-  padding: 12px;
-  border-right: 1px solid var(--line);
-}
-
-.plan-summary-strip > div:last-child {
-  border-right: 0;
-}
-
-.plan-summary-strip dt,
-.plan-confirm-summary dt {
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.plan-summary-strip dd,
-.plan-confirm-summary dd {
-  margin: 5px 0 0;
-  overflow-wrap: anywhere;
-  font-weight: 700;
-}
-
-.plan-editor,
 .quota-table-section,
 .quota-adjustment-history {
   display: grid;
@@ -27049,14 +25733,13 @@ h3 {
   min-width: 0;
 }
 
-.plan-editor form,
 .quota-adjustment-dialog form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
-.plan-billing-field {
+.workspace-quota-field {
   display: grid;
   align-content: start;
   gap: 6px;
@@ -27065,9 +25748,9 @@ h3 {
   font-size: 0.82rem;
 }
 
-.plan-billing-field input,
-.plan-billing-field select,
-.plan-billing-field textarea {
+.workspace-quota-field input,
+.workspace-quota-field select,
+.workspace-quota-field textarea {
   box-sizing: border-box;
   width: 100%;
   min-height: 40px;
@@ -27081,69 +25764,17 @@ h3 {
   letter-spacing: 0;
 }
 
-.plan-billing-field textarea {
+.workspace-quota-field textarea {
   min-height: 96px;
   resize: vertical;
 }
 
-.plan-editor .span-2 {
-  grid-column: 1 / -1;
-}
-
-.plan-status-segmented {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-  margin: 0;
-  border: 0;
-  padding: 0;
-}
-
-.plan-status-segmented legend {
-  width: 100%;
-  margin-bottom: 6px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.plan-status-segmented label {
-  position: relative;
-}
-
-.plan-status-segmented input {
-  position: absolute;
-  opacity: 0;
-}
-
-.plan-status-segmented span {
-  display: inline-flex;
-  min-width: 84px;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #c7d0da;
-  border-radius: 6px;
-  background: #fff;
-  color: var(--text);
-  padding: 6px 12px;
-}
-
-.plan-status-segmented input:checked + span {
-  border-color: var(--accent);
-  background: #e8f5f2;
-  color: var(--accent-dark);
-  font-weight: 700;
-}
-
-.plan-billing-actions,
-.plan-billing-dialog-actions {
+.workspace-quota-dialog-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
 }
 
-.plan-billing-actions button,
-.plan-billing-dialog-actions button,
+.workspace-quota-dialog-actions button,
 .quota-action-cell button {
   min-height: 38px;
   border: 1px solid #bfc9d4;
@@ -27154,34 +25785,30 @@ h3 {
   font-weight: 700;
 }
 
-.plan-billing-actions .primary,
-.plan-billing-dialog-actions .primary {
+.workspace-quota-dialog-actions .primary {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
 }
 
-.plan-billing-actions button:disabled,
-.plan-billing-dialog-actions button:disabled,
-.plan-billing-icon-command:disabled,
+.workspace-quota-dialog-actions button:disabled,
+.workspace-quota-icon-command:disabled,
 .quota-action-cell button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }
 
-.plan-billing-icon-command:focus-visible,
-.plan-billing-actions button:focus-visible,
-.plan-billing-dialog button:focus-visible,
-.plan-billing-field input:focus-visible,
-.plan-billing-field select:focus-visible,
-.plan-billing-field textarea:focus-visible,
-.plan-status-segmented input:focus-visible + span,
+.workspace-quota-icon-command:focus-visible,
+.workspace-quota-dialog button:focus-visible,
+.workspace-quota-field input:focus-visible,
+.workspace-quota-field select:focus-visible,
+.workspace-quota-field textarea:focus-visible,
 .quota-action-cell button:focus-visible {
   outline: 3px solid rgba(15, 118, 110, 0.24);
   outline-offset: 2px;
 }
 
-.quota-plan-line {
+.quota-entitlement-line {
   justify-content: flex-start;
   flex-wrap: wrap;
   padding-block: 10px;
@@ -27268,7 +25895,7 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.plan-billing-dialog {
+.workspace-quota-dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   overflow: auto;
@@ -27280,24 +25907,12 @@ h3 {
   padding: 18px;
 }
 
-.plan-billing-dialog::backdrop {
+.workspace-quota-dialog::backdrop {
   background: rgba(19, 28, 38, 0.58);
 }
 
-.plan-billing-dialog header {
+.workspace-quota-dialog header {
   margin-bottom: 16px;
-}
-
-.plan-confirm-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0 0 16px;
-  border-block: 1px solid var(--line);
-}
-
-.plan-confirm-summary > div {
-  min-width: 0;
-  padding: 10px;
 }
 
 .quota-unknown-result {
@@ -27309,42 +25924,14 @@ h3 {
   color: #8a3f08;
 }
 
-@media (max-width: 1100px) {
-  .plan-summary-strip {
-    grid-template-columns: repeat(3, minmax(110px, 1fr));
-  }
-
-  .plan-summary-strip > div:nth-child(3) {
-    border-right: 0;
-  }
-}
-
 @media (max-width: 720px) {
-  .plan-billing-toolbar,
-  .plan-billing-section-heading {
+  .workspace-quota-toolbar,
+  .workspace-quota-section-heading {
     align-items: flex-start;
   }
 
-  .plan-summary-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .plan-summary-strip > div:nth-child(3) {
-    border-right: 1px solid var(--line);
-  }
-
-  .plan-summary-strip > div:nth-child(even) {
-    border-right: 0;
-  }
-
-  .plan-editor form,
-  .quota-adjustment-dialog form,
-  .plan-confirm-summary {
+  .quota-adjustment-dialog form {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plan-editor .span-2 {
-    grid-column: auto;
   }
 
   .quota-table-scroll {
@@ -27408,35 +25995,19 @@ h3 {
   }
 }
 
-/* 套餐与额度工作区在极窄视口下改为单列控件，避免操作按钮和状态文本重叠。 */
+/* 额度工作区在极窄视口下改为单列控件，避免操作按钮和状态文本重叠。 */
 @media (max-width: 390px) {
-  .plan-billing-workspace {
+  .workspace-quota {
     gap: 14px;
   }
 
-  .plan-summary-strip {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .plan-summary-strip > div,
-  .plan-summary-strip > div:nth-child(3) {
-    border-right: 0;
-  }
-
-  .plan-billing-actions,
-  .plan-billing-dialog-actions {
+  .workspace-quota-dialog-actions {
     align-items: stretch;
     flex-direction: column-reverse;
   }
 
-  .plan-billing-actions button,
-  .plan-billing-dialog-actions button {
+  .workspace-quota-dialog-actions button {
     width: 100%;
-  }
-
-  .plan-status-segmented label,
-  .plan-status-segmented span {
-    flex: 1 1 120px;
   }
 }
 

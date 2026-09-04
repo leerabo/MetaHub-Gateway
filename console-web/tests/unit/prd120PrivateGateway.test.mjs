@@ -359,9 +359,11 @@ test("Platform direct Fleet hash survives session refresh and ignores unrelated 
   assert.doesNotMatch(root.innerHTML, /01\/01/u);
 
   permissions = ["platform.status.read"];
-  assert.equal(await controller.refresh(), true);
+  assert.equal(await controller.refresh(), false);
   assert.equal(fleetReads, 1);
-  assert.match(root.innerHTML, /平台工作台/u);
+  assert.equal(statusReads, 1);
+  assert.match(root.innerHTML, /class="platform-shell"/u);
+  assert.doesNotMatch(root.innerHTML, /Private Gateway fleet/u);
   assert.doesNotMatch(root.innerHTML, /edp_[a-z0-9]+/u);
   controller.destroy();
 });

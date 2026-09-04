@@ -96,24 +96,28 @@ test("competitor tabs own complete ARIA relationships and keyboard mapping", () 
   assert.equal(competitorTabForKey("sales", "Tab"), null);
 });
 
-test("developer start dispatches comparison for every role with console.basic.read", () => {
+test("legacy comparison renderer remains testable while the production dispatcher stays retired", () => {
   for (const role of ["admin", "developer", "viewer"]) {
+    const authContext = withPermissionSnapshot(
+      { user: { role } },
+      [PERMISSIONS.CONSOLE_BASIC_READ],
+    );
+    assert.match(renderCompetitorComparison({
+      comparison: buildCompetitorComparison({ consoleShellState: shellState() }),
+      authContext,
+    }), /data-competitor-comparison-root/);
     const container = { innerHTML: "" };
     renderDeveloperStart(container, {
       consoleShellState: shellState(),
-      authContext: withPermissionSnapshot(
-        { user: { role } },
-        [PERMISSIONS.CONSOLE_BASIC_READ],
-      ),
+      authContext,
     });
-    assert.match(container.innerHTML, /data-competitor-comparison-root/);
+    assert.doesNotMatch(container.innerHTML, /data-competitor-comparison-root/);
   }
-  const denied = { innerHTML: "" };
-  renderDeveloperStart(denied, {
-    consoleShellState: shellState(),
+  const denied = renderCompetitorComparison({
+    comparison: buildCompetitorComparison({ consoleShellState: shellState() }),
     authContext: withPermissionSnapshot({ user: { role: "admin" } }, []),
   });
-  assert.doesNotMatch(denied.innerHTML, /data-competitor-comparison-root/);
+  assert.equal(denied, "");
   const anonymous = renderCompetitorComparison({ comparison: buildCompetitorComparison({ consoleShellState: shellState() }), authContext: null });
   assert.equal(anonymous, "");
 });
@@ -188,10 +192,7 @@ test("provider UI exposes only generic migration adapter and never competitor pr
   assert.doesNotMatch(html, /value="silicon_?flow"/i);
 });
 
-test("responsive CSS bounds the page root and localizes table scrolling", async () => {
+test("production CSS omits the retired competitor runtime selectors", async () => {
   const css = await readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8");
-  assert.match(css, /\.competitor-comparison\s*\{[^}]*overflow-x:\s*hidden/s);
-  assert.match(css, /\.competitor-table-wrap\s*\{[^}]*overflow-x:\s*auto/s);
-  assert.match(css, /@media \(max-width: 720px\)[\s\S]*?\.competitor-heading,[\s\S]*?\.competitor-sales-grid\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*?\.competitor-tabs button/);
+  assert.doesNotMatch(css, /\.competitor-/u);
 });

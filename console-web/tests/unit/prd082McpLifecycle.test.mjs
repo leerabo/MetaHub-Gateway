@@ -385,7 +385,7 @@ test("main lifecycle clears PAGE-114 before logout await and feature code never 
 
 test("hashchange and pagehide synchronously destroy PAGE-114 before asynchronous navigation refresh", async () => {
   const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  const hashAnchor = main.indexOf("adminAssistantPageState.leave();");
+  const hashAnchor = main.indexOf("workspaceConsoleExperienceController.leave();");
   const hashStart = main.lastIndexOf('window.addEventListener("hashchange", () => {', hashAnchor);
   const genericRefresh = main.indexOf("bindNavigationHashRefresh(window, refresh)", hashStart);
   const hashCondition = main.indexOf('if (nextItemId !== "mcp-tools")', hashStart);

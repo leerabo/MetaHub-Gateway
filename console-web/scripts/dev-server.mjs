@@ -10,7 +10,10 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = process.env.METAHUB_CONSOLE_ROOT
+  ? path.resolve(process.env.METAHUB_CONSOLE_ROOT)
+  : defaultRoot;
 const port = Number(process.env.METAHUB_CONSOLE_PORT ?? 5173);
 
 const contentTypes = {

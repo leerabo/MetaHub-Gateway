@@ -57,6 +57,15 @@ class PlatformJobFailure(Exception):
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class PlatformJobOuterFence:
+    scheduler_code: str
+    partition_code: str
+    lease_token: str
+    fencing_generation: int
+    registry_generation: int
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class PlatformJobLease:
     job_id: str
     attempt_id: str
@@ -68,6 +77,7 @@ class PlatformJobLease:
     expires_at: datetime
     input_envelope: str
     input_sha256: str
+    outer_fence: PlatformJobOuterFence | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -215,6 +225,7 @@ def claim_platform_job(
     *,
     worker_code: str,
     lease_seconds: int | None = None,
+    outer_fence: PlatformJobOuterFence | None = None,
 ) -> PlatformJobLease | None:
     if _WORKER_RE.fullmatch(worker_code) is None:
         raise ApiError("platform_job.request_invalid")
@@ -225,6 +236,8 @@ def claim_platform_job(
     try:
         connection.execute("BEGIN IMMEDIATE")
         now = _database_now(connection)
+        if outer_fence is not None:
+            _live_outer_fence(connection, config, outer_fence, now=now)
         _recover_expired_leases(connection, now)
         job = connection.execute(
             """
@@ -250,6 +263,8 @@ def claim_platform_job(
         if job is None:
             connection.commit()
             return None
+        if job["type_code"] == "console.domain.migrate" and outer_fence is None:
+            raise ApiError("platform_job.lease_lost")
         generation = int(job["generation"]) + 1
         attempt_number = int(job["attempt_count"]) + 1
         attempt_id = _id("pja_")
@@ -321,6 +336,7 @@ def claim_platform_job(
             expires_at=expires,
             input_envelope=str(job["input_envelope"]),
             input_sha256=str(job["input_sha256"]),
+            outer_fence=outer_fence,
         )
     except ApiError:
         _rollback(connection)
@@ -363,13 +379,31 @@ def heartbeat_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
         connection.close()
 
 
-def run_platform_job_once(config: AppConfig, *, worker_code: str) -> bool:
+def run_platform_job_once(
+    config: AppConfig,
+    *,
+    worker_code: str,
+    outer_fence: PlatformJobOuterFence | None = None,
+) -> bool:
     with database_request_scope(reuse_connections=True):
-        return _run_platform_job_once_scoped(config, worker_code=worker_code)
+        return _run_platform_job_once_scoped(
+            config,
+            worker_code=worker_code,
+            outer_fence=outer_fence,
+        )
 
 
-def _run_platform_job_once_scoped(config: AppConfig, *, worker_code: str) -> bool:
-    lease = claim_platform_job(config, worker_code=worker_code)
+def _run_platform_job_once_scoped(
+    config: AppConfig,
+    *,
+    worker_code: str,
+    outer_fence: PlatformJobOuterFence | None,
+) -> bool:
+    lease = claim_platform_job(
+        config,
+        worker_code=worker_code,
+        outer_fence=outer_fence,
+    )
     if lease is None:
         return False
     try:
@@ -746,6 +780,8 @@ def _live_lease(
     *,
     require_unexpired: bool = True,
 ):
+    if lease.outer_fence is not None:
+        _live_outer_fence(connection, config, lease.outer_fence)
     row = connection.execute(
         """SELECT job.*,active_lease.expires_at FROM platform_jobs job
            JOIN platform_scheduler_leases active_lease
@@ -770,6 +806,45 @@ def _live_lease(
     if row["status"] not in {"leased", "running", "cancel_requested"}:
         raise ApiError("platform_job.lease_lost")
     return row
+
+
+def _live_outer_fence(
+    connection,
+    config: AppConfig,
+    fence: PlatformJobOuterFence,
+    *,
+    now: datetime | None = None,
+) -> None:
+    current = now or _database_now(connection)
+    row = connection.execute(
+        """SELECT lease.fencing_generation,head.generation registry_generation
+           FROM scheduler_leases lease
+           JOIN scheduler_registry_heads head ON head.head_key='production'
+           WHERE lease.scheduler_code=? AND lease.partition_code=?
+             AND lease.fencing_generation=? AND lease.lease_token_hmac=?
+             AND unixepoch(lease.lease_deadline_at)>unixepoch(?)""",
+        (
+            fence.scheduler_code,
+            fence.partition_code,
+            fence.fencing_generation,
+            _scheduler_lease_hmac(config, fence.lease_token),
+            _db_time(current),
+        ),
+    ).fetchone()
+    if row is None or int(row["registry_generation"]) != fence.registry_generation:
+        raise ApiError("platform_job.lease_lost")
+
+
+def require_platform_job_outer_fence(
+    connection,
+    config: AppConfig,
+    fence: PlatformJobOuterFence,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Validate a platform-job registry fence inside a caller-owned transaction."""
+
+    _live_outer_fence(connection, config, fence, now=now)
 
 
 def _latest_checkpoint(config: AppConfig, lease: PlatformJobLease) -> object | None:
@@ -869,6 +944,14 @@ def _lease_hmac(config: AppConfig | None, token: str) -> str:
     ).hexdigest()
 
 
+def _scheduler_lease_hmac(config: AppConfig, token: str) -> str:
+    return hmac.new(
+        config.platform_session_secret.encode(),
+        f"prd147/scheduler/lease/v1\x00{token}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def _digest(value: object) -> str:
     try:
         canonical = json.dumps(
@@ -924,9 +1007,11 @@ __all__ = [
     "PlatformJobContext",
     "PlatformJobFailure",
     "PlatformJobLease",
+    "PlatformJobOuterFence",
     "PlatformJobRetry",
     "claim_platform_job",
     "fence_platform_worker",
     "heartbeat_platform_job",
+    "require_platform_job_outer_fence",
     "run_platform_job_once",
 ]

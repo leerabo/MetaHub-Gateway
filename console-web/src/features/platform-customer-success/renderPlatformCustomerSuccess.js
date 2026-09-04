@@ -122,13 +122,13 @@ function healthTab(state) {
   const health = state.health;
   if (!health) return loadingOrEmpty(state, "health", "健康投影尚不可用。");
   const score = Number(health.score_bps ?? 0);
-  return `<section class="platform-customer-health" aria-label="健康投影">
-    <div class="platform-customer-health-score">
+  return `<section class="platform-success-health" aria-label="健康投影">
+    <div class="platform-success-health-score">
       <span>${status(health.risk_level)}</span>
       ${health.score_bps === undefined ? "" : `<strong>${number(score / 100)}</strong><small>/ 100</small>`}
       <p>${escapeHtml(label(health.freshness))} · sequence ${number(health.source_sequence)}</p>
     </div>
-    <div class="platform-customer-health-factors">
+    <div class="platform-success-health-factors">
       ${health.factors.map((factor) => `<div><span>${escapeHtml(label(factor.code))}</span><strong>${factor.score_bps === null ? "-" : `${number(factor.score_bps / 100)}%`}</strong><small>贡献 ${number(factor.contribution_bps / 100)}%</small></div>`).join("")}
     </div>
     <div class="platform-customer-codes"><span>Risk</span>${health.risk_codes.map(code).join("") || "-"}<span>Action</span>${health.action_codes.map(code).join("") || "-"}</div>

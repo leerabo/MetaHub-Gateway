@@ -280,6 +280,10 @@ test("PRD-140 Platform shell loads only the dedicated customer-success model", a
         id: "customer-success",
         label: "Customer success",
         href: "/platform.html#customer-success",
+      }, {
+        id: "overview",
+        label: "Overview",
+        href: "/platform.html#overview",
       }],
     }),
     customerAccounts: async ({ filters }) => {

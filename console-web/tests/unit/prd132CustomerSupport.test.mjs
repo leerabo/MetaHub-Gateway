@@ -225,7 +225,10 @@ test("Platform support controller drops late queues and commits only current int
   const api = {
     session: async () => platformState().session,
     navigation: async () => ({
-      items: [{ id: "support", label: "Support", href: "/platform.html#support" }],
+      items: [
+        { id: "support", label: "Support", href: "/platform.html#support" },
+        { id: "overview", label: "Overview", href: "/platform.html#overview" },
+      ],
       request_id: REQUEST_ID,
       trace_id: TRACE_ID,
     }),

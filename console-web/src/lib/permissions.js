@@ -29,6 +29,8 @@ export const PERMISSIONS = Object.freeze({
   PROVIDER_HEALTH_PROBE: "provider.health.probe",
   PROVIDER_ERROR_MAP_READ: "provider_error_map.read",
   PROVIDER_ERROR_MAP_WRITE: "provider_error_map.write",
+  WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ: "workspace.provider_error_override.read",
+  WORKSPACE_PROVIDER_ERROR_OVERRIDE_MANAGE: "workspace.provider_error_override.manage",
   MODEL_READ: "model.read",
   MODEL_WRITE: "model.write",
   MODEL_PRICE_READ: "model_price.read",

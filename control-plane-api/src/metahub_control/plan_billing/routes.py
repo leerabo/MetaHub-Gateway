@@ -140,6 +140,12 @@ async def post_quota_adjustment(
     return result
 
 
+runtime_router = APIRouter()
+runtime_router.routes.extend(
+    route for route in router.routes if getattr(route, "path", None) != "/plans"
+)
+
+
 def _reject_query(request: Request, error_code: str) -> None:
     """四个接口均无查询参数；拒绝 tenant_id 和任何未来含糊输入。"""
 

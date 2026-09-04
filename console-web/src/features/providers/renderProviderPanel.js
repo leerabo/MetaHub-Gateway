@@ -90,8 +90,13 @@ export function renderProviderPanel(providersState, authContext) {
   const providers = providersState.providers ?? [];
   const providerKeysByProviderId = providersState.providerKeysByProviderId ?? {};
   const providerEngineering = providersState.providerEngineering ?? null;
+  const canReadEngineering = hasPermission(
+    authContext,
+    PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,
+  );
   const selectedEngineeringProvider = providers.find(
-    (provider) => provider.provider_id === providerEngineering?.providerId,
+    (provider) => canReadEngineering
+      && provider.provider_id === providerEngineering?.providerId,
   ) ?? null;
   const canWrite = hasPermission(authContext, PERMISSIONS.PROVIDER_WRITE);
   return `
@@ -158,17 +163,18 @@ export function renderProviderPanel(providersState, authContext) {
                 provider,
                 providerKeysByProviderId[provider.provider_id],
                 canWrite,
+                canReadEngineering,
                 provider.provider_id === selectedEngineeringProvider?.provider_id,
               ))
               .join("")
           : renderEmptyRow()
       }
     </div>
-    <div data-workspace-provider-engineering-host>
+    ${canReadEngineering ? `<div data-workspace-provider-engineering-host>
       ${selectedEngineeringProvider
         ? renderWorkspaceProviderEngineering(providerEngineering, selectedEngineeringProvider)
         : ""}
-    </div>
+    </div>` : ""}
   `;
 }
 
@@ -178,7 +184,7 @@ export function renderProviderPanel(providersState, authContext) {
  * 行内只展示 Endpoint 元数据和健康状态；启用/禁用通过隐藏字段提交目标状态，后端
  * 负责二次校验。
  */
-function renderProviderRow(provider, keyState, canWrite, engineeringSelected) {
+function renderProviderRow(provider, keyState, canWrite, canReadEngineering, engineeringSelected) {
   const nextStatus = provider.status === "active" ? "disabled" : "active";
   const statusLabel = provider.status === "active" ? "禁用" : "启用";
   return `
@@ -202,8 +208,8 @@ function renderProviderRow(provider, keyState, canWrite, engineeringSelected) {
         ${escapeHtml(formatDateTime(provider.last_tested_at))}
       </span>
       <div class="provider-row-actions">
-        <button type="button" data-workspace-provider-engineering-open="${escapeAttribute(provider.provider_id)}"
-          aria-expanded="${engineeringSelected ? "true" : "false"}">兼容与错误规则</button>
+        ${canReadEngineering ? `<button type="button" data-workspace-provider-engineering-open="${escapeAttribute(provider.provider_id)}"
+          aria-expanded="${engineeringSelected ? "true" : "false"}">兼容与错误规则</button>` : ""}
         ${canWrite ? `<form data-provider-test-form data-provider-id="${escapeAttribute(provider.provider_id)}">
           <button type="submit">测试</button>
         </form>

@@ -22,6 +22,29 @@ export function renderWorkspaceProviderEngineering(state = {}, provider = {}) {
   </section>`;
 }
 
+export function renderWorkspaceProviderErrorMaps(state = {}) {
+  const response = state.response;
+  const overrides = response?.overrides ?? [];
+  const head = response?.head ?? null;
+  return `<section class="panel workspace-provider-engineering workspace-provider-error-maps"
+    data-workspace-provider-error-maps-root data-workspace-provider-engineering-root
+    aria-labelledby="workspace-provider-error-maps-title">
+    <header class="workspace-provider-engineering-heading">
+      <div><p>Workspace scope / Provider engineering</p>
+        <h2 id="workspace-provider-error-maps-title">Provider error overrides</h2>
+        <span>Review and govern bounded error mappings without restoring the retired Error Maps runtime.</span></div>
+      <div class="workspace-provider-engineering-heading-actions">
+        <button type="button" data-workspace-provider-engineering-action="refresh"
+          ${state.loading ? "disabled" : ""}>Refresh</button>
+      </div>
+    </header>
+    ${notice(state)}
+    ${response
+      ? overrideWorkspace(state, overrides, head, { globalScope: true })
+      : '<div class="empty-state">Loading Workspace Provider error overrides.</div>'}
+  </section>`;
+}
+
 function compatibilityView(item, head) {
   return `<section class="workspace-provider-compatibility" aria-label="Provider compatibility">
     <div><span>Compatibility</span>${status(item.compatibility_status)}<small>${escapeHtml((item.reason_codes ?? []).join(" · ") || "verified")}</small></div>
@@ -32,20 +55,28 @@ function compatibilityView(item, head) {
   </section>`;
 }
 
-function overrideWorkspace(state, overrides, head) {
+function overrideWorkspace(state, overrides, head, { globalScope = false } = {}) {
   const filters = state.filters ?? {};
   return `<section class="workspace-provider-overrides" aria-labelledby="workspace-provider-overrides-title">
     <div class="workspace-provider-overrides-title"><div><p>Bounded matcher conditions</p>
       <h4 id="workspace-provider-overrides-title">Error overrides</h4></div>
       <span>${number(overrides.length)} rules · head ${number(head?.revision)}</span></div>
     <form class="workspace-provider-override-filters" data-workspace-provider-override-filter-form>
+      ${globalScope ? `<label><span>Provider ID</span><input name="providerId" maxlength="128"
+        value="${escapeAttribute(filters.provider_id ?? "")}" /></label>` : ""}
       <label><span>Status</span><select name="status">${options(filters.status, [["", "All"], ["active", "Active"], ["disabled", "Disabled"], ["archived", "Archived"]])}</select></label>
       <label><span>Output code</span><input name="outputErrorCode" maxlength="128"
         value="${escapeAttribute(filters.output_error_code ?? "")}" /></label>
       <button type="submit" ${state.loading ? "disabled" : ""}>Apply</button>
     </form>
     <div class="workspace-provider-override-list">
-      ${overrides.map((item) => overrideRow(item, state.canManage, head?.revision, state.loading)).join("")
+      ${overrides.map((item) => overrideRow(
+        item,
+        state.canManage,
+        head?.revision,
+        state.loading,
+        globalScope,
+      )).join("")
         || '<div class="empty-state">No Workspace override matches this Provider and filter.</div>'}
     </div>
     <div class="workspace-provider-override-pagination">
@@ -56,14 +87,16 @@ function overrideWorkspace(state, overrides, head) {
           ${state.response?.next_cursor && !state.loading ? "" : "disabled"}>Next</button>
       </div>
     </div>
-    ${state.canManage ? createForm(state.providerId, head?.revision, state.loading) : ""}
+    ${state.canManage
+      ? createForm(state.providerId, head?.revision, state.loading, globalScope)
+      : ""}
   </section>`;
 }
 
-function overrideRow(item, canManage, headRevision, busy) {
+function overrideRow(item, canManage, headRevision, busy, showProvider = false) {
   return `<article class="workspace-provider-override" data-workspace-provider-override="${escapeAttribute(item.provider_error_override_id)}">
     <header><div><strong>${escapeHtml(item.output_error_code)}</strong>
-      <span>Priority ${number(item.priority)} · version ${number(item.version)}</span></div>${status(item.status)}</header>
+      <span>${showProvider ? `${escapeHtml(item.provider_name ?? item.provider_code ?? "Workspace default")} · ` : ""}Priority ${number(item.priority)} · version ${number(item.version)}</span></div>${status(item.status)}</header>
     <dl>
       <div><dt>HTTP</dt><dd>${escapeHtml(item.http_statuses.join(", ") || item.http_status_class || "-")}</dd></div>
       <div><dt>Field</dt><dd>${escapeHtml([item.error_field, item.field_operator].filter(Boolean).join(" · ") || "-")}</dd></div>
@@ -102,10 +135,13 @@ function updateForm(item, headRevision, busy) {
     </form></details>`;
 }
 
-function createForm(providerId, headRevision, busy) {
+function createForm(providerId, headRevision, busy, globalScope = false) {
   return `<details class="workspace-provider-override-create"><summary>Create override</summary>
     <form data-workspace-provider-override-create-form autocomplete="off">
-      <input type="hidden" name="providerId" value="${escapeAttribute(providerId)}" />
+      ${globalScope
+        ? `<label><span>Provider ID</span><input name="providerId" maxlength="128"
+          pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,127}" required /></label>`
+        : `<input type="hidden" name="providerId" value="${escapeAttribute(providerId)}" />`}
       <input type="hidden" name="headRevision" value="${number(headRevision)}" />
       ${conditionFields({ priority: 500, http_statuses: [], output_error_code: "provider_error" })}
       ${stepUpFields()}

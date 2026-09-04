@@ -43,8 +43,12 @@ ARTIFACTS = {
         "capacity.run",
         "data.retention.delete",
         "fleet.rollout.advance",
+        "console.domain.migrate",
     )
 }
+ARTIFACTS["console.domain.migrate"] = hashlib.sha256(
+    b"console.domain.migrate:v1:migration_id,operation_generation,result_revision,action,target_generation"
+).hexdigest()
 _HANDLERS: dict[str, JobHandlerDefinition] = {}
 _LOCK = threading.RLock()
 

@@ -109,21 +109,23 @@ test("Platform SaaS client sends the exact catalog payload under Platform CSRF",
   assert.equal("Authorization" in calls[1].options.headers, false);
 });
 
-test("Workspace renderer exposes subscription commands only to owner and finance roles", () => {
+test("Identity renderer never revives the retired Workspace subscription surface", () => {
   const ownerRoot = { innerHTML: "" };
-  renderIdentitySecurityPage(ownerRoot, identityState("owner"));
-  assert.match(ownerRoot.innerHTML, /id="identity-subscription-title"/u);
-  assert.match(ownerRoot.innerHTML, /data-saas-subscription-create-form/u);
-  assert.doesNotMatch(ownerRoot.innerHTML, /Team <safe>/u);
+  renderIdentitySecurityPage(ownerRoot, identityState("owner", subscriptionPayload()));
 
   const financeRoot = { innerHTML: "" };
   renderIdentitySecurityPage(financeRoot, identityState("finance_admin", subscriptionPayload()));
-  assert.match(financeRoot.innerHTML, /data-saas-subscription-change-form/u);
-  assert.match(financeRoot.innerHTML, /当前权益/u);
 
   const developerRoot = { innerHTML: "" };
-  renderIdentitySecurityPage(developerRoot, identityState("developer"));
-  assert.doesNotMatch(developerRoot.innerHTML, /identity-subscription-title|data-saas-subscription/u);
+  renderIdentitySecurityPage(developerRoot, identityState("developer", subscriptionPayload()));
+
+  for (const root of [ownerRoot, financeRoot, developerRoot]) {
+    assert.doesNotMatch(
+      root.innerHTML,
+      /identity-subscription|identity-saas-plan|data-saas-subscription|catalog\/plans|subscriptions\/current/iu,
+    );
+    assert.doesNotMatch(root.innerHTML, /Team &lt;safe&gt;|当前权益/u);
+  }
 });
 
 test("Platform billing view lists immutable versions and prunes publishing without catalog.write", () => {

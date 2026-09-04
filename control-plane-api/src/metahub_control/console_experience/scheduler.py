@@ -73,9 +73,7 @@ def install_console_experience_scheduler(app: FastAPI) -> None:
             finally:
                 stop.set()
                 try:
-                    await asyncio.wait_for(
-                        asyncio.shield(task), timeout=SHUTDOWN_TIMEOUT_SECONDS
-                    )
+                    await asyncio.wait_for(asyncio.shield(task), timeout=SHUTDOWN_TIMEOUT_SECONDS)
                 except TimeoutError:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
@@ -263,9 +261,7 @@ def _release(config: AppConfig, lease: _SchedulerLease, *, worked: bool) -> None
         connection.close()
 
 
-def _release_after_failure(
-    config: AppConfig, lease: _SchedulerLease, error_code: str
-) -> None:
+def _release_after_failure(config: AppConfig, lease: _SchedulerLease, error_code: str) -> None:
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -446,9 +442,7 @@ def _refresh_platform_dashboard(config: AppConfig) -> bool:
                  USING(platform_dashboard_projection_id,generation)
                WHERE head.head_key='platform'"""
         ).fetchone()
-        if current is not None and hmac.compare_digest(
-            current["content_sha256"], content_sha256
-        ):
+        if current is not None and hmac.compare_digest(current["content_sha256"], content_sha256):
             connection.commit()
             return False
         generation = 1 if current is None else int(current["generation"]) + 1
@@ -520,9 +514,10 @@ def _refresh_workspace_dashboards(config: AppConfig) -> bool:
         ).fetchall()
         changed = False
         for owner in owners:
-            changed = _refresh_workspace_dashboard(
-                connection, owner["workspace_id"], owner["tenant_id"]
-            ) or changed
+            changed = (
+                _refresh_workspace_dashboard(connection, owner["workspace_id"], owner["tenant_id"])
+                or changed
+            )
         connection.commit()
         return changed
     except (sqlite3.Error, ValueError, TypeError):
@@ -549,9 +544,7 @@ def _refresh_workspace_dashboard(
            WHERE head.workspace_id=? AND head.tenant_id=?""",
         (workspace_id, tenant_id),
     ).fetchone()
-    if current is not None and hmac.compare_digest(
-        current["content_sha256"], content_sha256
-    ):
+    if current is not None and hmac.compare_digest(current["content_sha256"], content_sha256):
         return False
     generation = 1 if current is None else int(current["generation"]) + 1
     head_revision = 1 if current is None else int(current["revision"]) + 1
@@ -745,29 +738,21 @@ def _project_workspace_approval(config: AppConfig) -> bool:
         ).fetchall()
         stamp = _db_time(_now())
         for row in rows:
-            source_id_digest = _pseudonym(
-                config, "workspace-approval-source", row["source_id"]
-            )
-            projection_id = _stable_id(
-                "wdq_", f"workspace-approval:{row['approval_task_id']}"
-            )
+            source_id_digest = _pseudonym(config, "workspace-approval-source", row["source_id"])
+            projection_id = _stable_id("wdq_", f"workspace-approval:{row['approval_task_id']}")
             status = (
                 "expired"
                 if row["status"] == "pending" and row["expires_at"] <= stamp
                 else row["status"]
             )
             applicant_id = row["creator_account_id"] or row["created_by_id"]
-            applicant_domain = (
-                "workspace" if row["created_by_type"] == "user" else "service"
-            )
+            applicant_domain = "workspace" if row["created_by_type"] == "user" else "service"
             applicant_pseudonym = _pseudonym(config, applicant_domain, applicant_id)
             projection = {
                 "applicant_domain": applicant_domain,
                 "applicant_pseudonym": applicant_pseudonym,
                 "deadline_at": row["expires_at"],
-                "decision_contract_code": (
-                    f"{row['target_type']}.{row['target_action']}"
-                ),
+                "decision_contract_code": (f"{row['target_type']}.{row['target_action']}"),
                 "required_permission_code": row["required_permission_code"],
                 "risk_band": row["risk_level"],
                 "source_domain": row["source_type"],
@@ -784,9 +769,7 @@ def _project_workspace_approval(config: AppConfig) -> bool:
                    WHERE workspace_approval_projection_id=?""",
                 (projection_id,),
             ).fetchone()
-            if current is not None and int(current["source_revision"]) > int(
-                row["state_revision"]
-            ):
+            if current is not None and int(current["source_revision"]) > int(row["state_revision"]):
                 rejected = connection.execute(
                     """INSERT OR IGNORE INTO workspace_domain_approval_rejections(
                          rejection_id,workspace_id,tenant_id,source_domain,source_type,
@@ -930,11 +913,14 @@ def _refresh_workspace_deployment_diagnostic(config: AppConfig) -> bool:
                 "ddp_",
                 f"deployment-diagnostic:{row['edge_deployment_id']}:{revision}",
             )
-            if connection.execute(
-                """SELECT 1 FROM workspace_deployment_diagnostic_versions
+            if (
+                connection.execute(
+                    """SELECT 1 FROM workspace_deployment_diagnostic_versions
                    WHERE deployment_diagnostic_projection_id=?""",
-                (projection_id,),
-            ).fetchone() is not None:
+                    (projection_id,),
+                ).fetchone()
+                is not None
+            ):
                 continue
             health_state = {
                 "healthy": "healthy",
@@ -1132,9 +1118,7 @@ def _drain_outbox(config: AppConfig, worker_kind: str) -> bool:
         ),
     }
     try:
-        outbox_table, outbox_id_column, event_table, event_id_column = contracts[
-            worker_kind
-        ]
+        outbox_table, outbox_id_column, event_table, event_id_column = contracts[worker_kind]
     except KeyError:
         raise ApiError("platform.unavailable") from None
     connection = _connect(config)

@@ -390,8 +390,7 @@ test("PAGE-085 is wired into the authorized shell and navigation failures stay c
   assert.doesNotMatch(denied.innerHTML, /role-permission-matrix/);
 
   const mainSource = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(mainSource, /authorizeNavigationSnapshot\(navigation, authSession\.context\)/);
-  assert.match(mainSource, /loadRolePermissionState\(consoleShellState, refreshId\)/);
+  assert.match(mainSource, /case "role-permissions":[\s\S]*loadRolePermissionState\(consoleShellState, refreshId\)/);
   assert.match(mainSource, /bindRolePermissionInteractions\(consoleShellState\)/);
   assert.match(mainSource, /clearRolePermissionStateOnIdentityChange/);
 });

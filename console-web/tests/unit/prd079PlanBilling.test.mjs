@@ -5,33 +5,37 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  canonicalCnyInput,
   datetimeLocalToUtc,
-  installPlanBillingBusyEscapeGuard,
   planRequestFromFormData,
-  quotaAdjustmentRequestFromFormData,
-  trapPlanBillingDialogFocus,
 } from "../../src/features/plan-billing/bindPlanBilling.js";
 import {
   createPlanPageState,
-  createQuotaPageState,
   planPageOwner,
-  quotaPageOwner,
 } from "../../src/features/plan-billing/planBillingPageState.js";
+import { renderPlanManagement } from "../../src/features/plan-billing/renderPlanBilling.js";
 import {
-  renderPlanManagement,
-  renderQuotaManagement,
-} from "../../src/features/plan-billing/renderPlanBilling.js";
+  canonicalCnyInput,
+  installWorkspaceQuotaBusyEscapeGuard as installPlanBillingBusyEscapeGuard,
+  quotaAdjustmentRequestFromFormData,
+  trapWorkspaceQuotaDialogFocus as trapPlanBillingDialogFocus,
+} from "../../src/features/workspace-quota/bindWorkspaceQuota.js";
+import {
+  createQuotaPageState,
+  quotaPageOwner,
+} from "../../src/features/workspace-quota/workspaceQuotaPageState.js";
+import { renderWorkspaceQuota } from "../../src/features/workspace-quota/renderWorkspaceQuota.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import {
-  createQuotaAdjustment,
   getCurrentPlan,
-  getQuotaBuckets,
   normalizePlanResponse,
-  normalizeQuotaAdjustmentResponse,
-  normalizeQuotaBucketsResponse,
   patchCurrentPlan,
 } from "../../src/lib/planBilling.js";
+import {
+  createQuotaAdjustment,
+  getQuotaBuckets,
+  normalizeQuotaAdjustmentResponse,
+  normalizeQuotaBucketsResponse,
+} from "../../src/lib/workspaceQuota.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 // 固定租户、套餐和完整权限集合用于构造可重复的授权边界测试样本。
@@ -595,7 +599,7 @@ test("rendering prunes write commands and never renders the private adjustment r
     traceId: "trace_quota_retry_b",
   }), quotaWriter);
   quotaState.finishAdjustment(operation);
-  const quotaHtml = renderQuotaManagement(quotaState.snapshot(), context, quotaShell);
+  const quotaHtml = renderWorkspaceQuota(quotaState.snapshot(), context, quotaShell);
   assert.match(quotaHtml, /data-quota-adjustment-retry/);
   assert.doesNotMatch(quotaHtml, /private_dialog_reason|private-key/);
 });
@@ -640,14 +644,14 @@ test("busy Dialog Escape guard survives node replacement and leaves idle Escape 
   assert.equal(prevented, false);
 });
 
-test("main lifecycle contains all PAGE-110/111 strong cleanup and no-storage boundaries", async () => {
+test("main lifecycle retires PAGE-110 while preserving Workspace quota cleanup and no-storage boundaries", async () => {
   const [mainSource, stateSource] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
-    readFile(new URL("../../src/features/plan-billing/planBillingPageState.js", import.meta.url), "utf8"),
+    readFile(new URL("../../src/features/workspace-quota/workspaceQuotaPageState.js", import.meta.url), "utf8"),
   ]);
-  assert.match(mainSource, /clearPlanBillingStateOnIdentityChange/);
-  assert.match(mainSource, /nextItemId !== "plans"/);
+  assert.match(mainSource, /clearWorkspaceQuotaStateOnIdentityChange/);
   assert.match(mainSource, /itemId !== "quota-buckets"/);
   assert.match(mainSource, /blocksShellDomReplacement\(\)/);
+  assert.doesNotMatch(mainSource, /planManagementPageState|loadPlanManagementState|\/plans/);
   assert.doesNotMatch(stateSource, /localStorage|sessionStorage|indexedDB/);
 });

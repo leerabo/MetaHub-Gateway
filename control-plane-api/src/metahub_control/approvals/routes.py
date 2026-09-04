@@ -210,4 +210,12 @@ async def post_internal_approval_route(
     )
 
 
-__all__ = ["router"]
+runtime_router = APIRouter()
+runtime_router.routes.extend(
+    route
+    for route in router.routes
+    if getattr(route, "path", None) == "/internal/tenants/{tenant_id}/approvals"
+)
+
+
+__all__ = ["router", "runtime_router"]

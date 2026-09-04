@@ -7,7 +7,10 @@ import { createPlatformProviderEngineeringStore } from "../../src/features/platf
 import { renderPlatformProviderEngineering } from "../../src/features/platform-provider-engineering/renderPlatformProviderEngineering.js";
 import { createWorkspaceProviderEngineeringController } from "../../src/features/workspace-provider-engineering/workspaceProviderEngineeringController.js";
 import { createWorkspaceProviderEngineeringStore } from "../../src/features/workspace-provider-engineering/workspaceProviderEngineeringStore.js";
-import { renderWorkspaceProviderEngineering } from "../../src/features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
+import {
+  renderWorkspaceProviderEngineering,
+  renderWorkspaceProviderErrorMaps,
+} from "../../src/features/workspace-provider-engineering/renderWorkspaceProviderEngineering.js";
 import { AuthApiError } from "../../src/lib/auth.js";
 import { PlatformApiError } from "../../src/lib/platform.js";
 import {
@@ -329,6 +332,36 @@ test("controllers discard late owner responses across Platform leave and Workspa
   assert.equal(workspace.snapshot().response.compatibility.provider_id, PROVIDER_ID_B);
 });
 
+test("restored error-maps navigation uses the Workspace override contract without provider.read", async () => {
+  const filters = [];
+  const controller = createWorkspaceProviderEngineeringController({
+    api: {
+      workspaceSession: async () => workspaceSession(),
+      providerErrorOverrides: async (input) => {
+        filters.push(input.filters);
+        return workspaceList(PROVIDER_ID, { compatibility: null });
+      },
+    },
+  });
+  assert.equal(await controller.open({
+    authContext: workspaceAuthContext([
+      PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,
+      PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_MANAGE,
+    ]),
+    activeNavigationItemId: "error-maps",
+    providerId: "",
+  }), true);
+  assert.deepEqual(filters, [{ status: "", output_error_code: "" }]);
+  const snapshot = controller.snapshot();
+  assert.equal(snapshot.activeNavigationItemId, "error-maps");
+  assert.equal(snapshot.canManage, true);
+  const html = renderWorkspaceProviderErrorMaps(snapshot);
+  assert.match(html, /data-workspace-provider-error-maps-root/u);
+  assert.match(html, /Provider error overrides/u);
+  assert.match(html, /data-workspace-provider-override-create-form/u);
+  assert.doesNotMatch(html, /data-error-map|\/error-maps/u);
+});
+
 test("failed intents reuse idempotency keys while step-up grants remain one-shot", async () => {
   const platformKeys = [];
   const platformGrants = [];
@@ -465,8 +498,10 @@ test("legacy enterprise routes, DOM, imports, and persistence hooks are absent f
     readFile(new URL("../../src/features/workspace-provider-engineering/workspaceProviderEngineeringStore.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/workspace-provider-engineering/workspaceProviderEngineeringController.js", import.meta.url), "utf8"),
   ]);
-  const activeRuntime = `${entry}\n${developerRenderer}\n${requestLogRenderer}\n${consoleService}`;
-  assert.doesNotMatch(activeRuntime, /adapter-specs|adapter-contract-runs|#error-maps|data-provider-error-map-jump/u);
+  const activeRuntime = `${entry}\n${developerRenderer}\n${requestLogRenderer}`;
+  assert.doesNotMatch(activeRuntime, /adapter-specs|adapter-contract-runs/u);
+  assert.match(activeRuntime, /case "error-maps":[\s\S]*renderWorkspaceProviderErrorMaps/u);
+  assert.match(consoleService, /WORKSPACE_NAVIGATION_EXCLUDED_IDS[\s\S]*adapter-specs[\s\S]*adapter-contract-runs/u);
   assert.doesNotMatch(entry, /lib\/(?:adapterSpecs|adapterContractRuns|errorMaps)|features\/(?:adapter-specs|adapter-contract-runs|error-maps)/u);
   assert.match(client, /\/platform\/provider-adapters/u);
   assert.match(client, /\/workspace\/provider-error-overrides/u);
@@ -736,7 +771,11 @@ function platformContext(permissions = [
   };
 }
 
-function workspaceAuthContext() {
+function workspaceAuthContext(permissions = [
+  PERMISSIONS.PROVIDER_READ,
+  PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,
+  PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_MANAGE,
+]) {
   return withPermissionSnapshot({
     user: {
       tenant_id: "tenant_prd143",
@@ -745,7 +784,7 @@ function workspaceAuthContext() {
       role: "developer",
     },
     session: { session_id: "ses_prd143", session_revision: 3 },
-  }, [PERMISSIONS.PROVIDER_READ], {
+  }, permissions, {
     permissionRevision: 8,
     authorizationFingerprint: "workspace-provider-engineering-fingerprint",
   });

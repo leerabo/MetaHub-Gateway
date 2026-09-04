@@ -23,7 +23,7 @@ export function createWorkspaceProviderEngineeringController({
     activationController = new AbortController();
     activationContext = { authContext, activeNavigationItemId, providerId };
     workspaceSession = null;
-    store.prepare(providerId);
+    store.prepare(providerId, activeNavigationItemId);
     try {
       const session = await api.workspaceSession({ signal: activationController.signal });
       if (currentActivation !== activation || activationController.signal.aborted) return false;
@@ -32,7 +32,7 @@ export function createWorkspaceProviderEngineeringController({
       return load();
     } catch (error) {
       if (error?.name === "AbortError" || currentActivation !== activation) return false;
-      store.activationFailed(providerId, error);
+      store.activationFailed(providerId, error, activeNavigationItemId);
       if (Number(error?.status) === 401) onSessionInvalid(error);
       if (Number(error?.status) === 403) onPermissionRevoked(error);
       return false;
@@ -73,20 +73,23 @@ export function createWorkspaceProviderEngineeringController({
 
   async function load() {
     const snapshot = store.snapshot();
-    if (!snapshot.providerId || !workspaceSession) return false;
+    if (!workspaceSession) return false;
     const ticket = store.begin("read");
     try {
       const response = await api.providerErrorOverrides({
         filters: {
-          provider_id: snapshot.providerId,
+          ...(snapshot.providerId ? { provider_id: snapshot.providerId } : {}),
           ...snapshot.filters,
         },
         cursor: snapshot.cursor,
         limit: 50,
         signal: ticket.controller.signal,
       });
-      if (response.compatibility?.provider_id !== snapshot.providerId
-        || response.overrides.some((item) => item.provider_id !== snapshot.providerId)) {
+      if (snapshot.providerId
+        && (response.compatibility?.provider_id !== snapshot.providerId
+          || response.overrides.some(
+            (item) => item.provider_id !== null && item.provider_id !== snapshot.providerId,
+          ))) {
         throw invalidOwner();
       }
       return store.accept(ticket, { response });
@@ -129,8 +132,9 @@ export function createWorkspaceProviderEngineeringController({
         signal: ticket.controller.signal,
       });
       grant = "";
-      if (response.override.provider_id !== snapshot.providerId
-        || response.compatibility.provider_id !== snapshot.providerId) throw invalidOwner();
+      if (response.override.provider_id !== response.compatibility.provider_id
+        || (snapshot.providerId
+          && response.compatibility.provider_id !== snapshot.providerId)) throw invalidOwner();
       if (!store.accept(ticket, { response: mergeResponse(snapshot.response, response) })) {
         return false;
       }

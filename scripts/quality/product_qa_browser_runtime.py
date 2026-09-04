@@ -28,7 +28,14 @@ from metahub_shared.db.security import hash_password  # noqa: E402
 
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 NODE = Path(r"C:\Program Files\nodejs\node.exe")
-BROWSER_SCRIPT = ROOT / "tests" / "product_qa" / "web" / "realBrowserJourneys.mjs"
+BROWSER_SCRIPTS = {
+    "workspace": ROOT / "tests" / "product_qa" / "web" / "realBrowserJourneys.mjs",
+    "prd147-platform": ROOT
+    / "tests"
+    / "product_qa"
+    / "web"
+    / "prd147PlatformJourney.mjs",
+}
 ARTIFACT_ROOT = Path(
     os.environ.get("METAHUB_QA_ARTIFACT_ROOT", ROOT / ".artifacts" / "product-qa")
 ).resolve()
@@ -149,9 +156,18 @@ def main() -> int:
     ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
     browser_name = os.environ.get("METAHUB_QA_BROWSER", "chromium").lower()
     scale_name = os.environ.get("METAHUB_QA_SCALE", "1").replace(".", "_")
-    evidence_path = ARTIFACT_ROOT / f"browser-real-{browser_name}-scale-{scale_name}.json"
+    journey_name = os.environ.get("METAHUB_QA_JOURNEY", "workspace").lower()
+    try:
+        browser_script = BROWSER_SCRIPTS[journey_name]
+    except KeyError:
+        raise RuntimeError("product_qa_journey_invalid") from None
+    evidence_prefix = "browser-real" if journey_name == "workspace" else journey_name
+    evidence_path = ARTIFACT_ROOT / (
+        f"{evidence_prefix}-{browser_name}-scale-{scale_name}.json"
+    )
     database_url = f"sqlite:///{(run_root / 'runtime.db').as_posix()}"
     passwords = {role: secrets.token_urlsafe(32) for role in ("admin", "developer", "viewer")}
+    ephemeral_secrets = [*passwords.values()]
     database_facts = _prepare_database(database_url, passwords)
     if database_facts["integrity_check"] != "ok" or database_facts["foreign_key_violations"] != 0:
         raise RuntimeError("product_qa_database_invalid")
@@ -189,6 +205,16 @@ def main() -> int:
             "METAHUB_QA_VIEWER_PASSWORD": passwords["viewer"],
         }
     )
+    if journey_name == "prd147-platform":
+        bootstrap_recovery_secret = secrets.token_urlsafe(48)
+        ephemeral_secrets.append(bootstrap_recovery_secret)
+        environment.update(
+            {
+                "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "true",
+                "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": bootstrap_recovery_secret,
+                "METAHUB_QA_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": bootstrap_recovery_secret,
+            }
+        )
     control_log = (run_root / "control.log").open("wb")
     gateway_log = (run_root / "gateway.log").open("wb")
     console_log = (run_root / "console.log").open("wb")
@@ -244,7 +270,7 @@ def main() -> int:
         _wait_http(f"http://127.0.0.1:{gateway_port}/health", gateway)
         _wait_http(f"http://127.0.0.1:{console_port}/", console)
         browser_run = subprocess.run(
-            [str(NODE), str(BROWSER_SCRIPT)],
+            [str(NODE), str(browser_script)],
             cwd=ROOT,
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -256,7 +282,7 @@ def main() -> int:
         if browser_run.returncode != 0:
             diagnostic = browser_run.stderr.decode("utf-8", errors="replace")
             for private_value in (
-                *passwords.values(),
+                *ephemeral_secrets,
                 environment["METAHUB_QA_ADMIN_EMAIL"],
                 environment["METAHUB_QA_DEVELOPER_EMAIL"],
                 environment["METAHUB_QA_VIEWER_EMAIL"],
@@ -277,7 +303,10 @@ def main() -> int:
         )
         combined_logs = control_log.name
         del combined_logs
-        print(json.dumps({"journeys": len(browser_facts["journeys"]), "passed": True}))
+        journey_count = (
+            len(browser_facts["journeys"]) if "journeys" in browser_facts else 1
+        )
+        print(json.dumps({"journeys": journey_count, "passed": True}))
         return 0
     finally:
         _stop(console)
@@ -286,7 +315,7 @@ def main() -> int:
         console_log.close()
         gateway_log.close()
         control_log.close()
-        for secret in passwords.values():
+        for secret in ephemeral_secrets:
             for log_path in (
                 run_root / "control.log",
                 run_root / "gateway.log",

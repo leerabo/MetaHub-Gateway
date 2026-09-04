@@ -352,7 +352,7 @@ test("renderer keeps setup RBAC, historical usage, post-link commission, currenc
   renderDeveloperStart(container, {
     authContext: auth, consoleShellState: nav, partnerPortalState: state.snapshot(), i18n: createI18n("en-US"),
   });
-  assert.match(container.innerHTML, /class="panel partner-portal-panel"/);
+  assert.doesNotMatch(container.innerHTML, /class="panel partner-portal-panel"/);
   assert.match(container.innerHTML, /data-active-navigation="partner-portal"/);
 
   const readOnlyAuth = context([READ], TENANT_ID, "partner_readonly");

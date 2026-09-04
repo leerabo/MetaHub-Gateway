@@ -185,15 +185,10 @@ test("restore rejects disconnected, disabled, outside-panel and non-button targe
   }), panel.createTarget);
 });
 
-test("main validates the live owner before opening state and consumes restore state once", async () => {
+test("main retires the legacy dialog owner and uses Workspace Provider Engineering", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(
-    source,
-    /const restoreState = errorMapDialogRestoreState;[\s\S]*errorMapDialogRestoreState = null;[\s\S]*ownerIdentity: owner\.identity[\s\S]*navigation: owner\.navigation/,
-  );
-  assert.match(
-    source,
-    /const restoreState = captureCurrentErrorMapDialogRestoreState\(button, identity\)[\s\S]*if \(!restoreState\)[\s\S]*if \(errorMapPageMemory\.openEdit[\s\S]*errorMapDialogRestoreState = restoreState/,
-  );
-  assert.doesNotMatch(source, /errorMapDialogRestoreTarget\s*=/);
+  assert.doesNotMatch(source, /errorMapDialogRestoreState|errorMapPageMemory|lib\/errorMaps|features\/error-maps/);
+  assert.match(source, /createWorkspaceProviderEngineeringController/);
+  assert.match(source, /bindWorkspaceProviderEngineeringInteractions/);
+  assert.match(source, /workspaceProviderEngineeringController\.close\(\)/);
 });

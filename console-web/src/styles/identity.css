@@ -553,7 +553,6 @@ a {
 .identity-summary,
 .identity-mfa,
 .identity-onboarding,
-.identity-subscription,
 .identity-billing,
 .identity-invoices,
 .identity-business-verification,
@@ -581,8 +580,7 @@ a {
   font-weight: 800;
 }
 
-.identity-icon-command:disabled,
-.identity-subscription-command button:disabled {
+.identity-icon-command:disabled {
   cursor: default;
   opacity: 0.55;
 }
@@ -1896,42 +1894,12 @@ a {
   font-size: 0.62rem;
 }
 
-.identity-subscription-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0;
-  border-block: 1px solid var(--identity-line);
-}
-
-.identity-subscription-summary > div {
-  min-width: 0;
-  padding: 14px 16px;
-}
-
-.identity-subscription-summary > div:not(:nth-child(3n + 1)) {
-  border-left: 1px solid var(--identity-line);
-}
-
-.identity-subscription-summary > div:nth-child(n + 4) {
-  border-top: 1px solid var(--identity-line);
-}
-
-.identity-subscription-summary dt,
-.identity-entitlement-strip span,
-.identity-saas-plan-row span,
-.identity-subscription-empty span {
+.identity-empty-strip span {
   color: var(--identity-muted);
   font-size: 0.76rem;
 }
 
-.identity-subscription-summary dd {
-  margin: 5px 0 0;
-  overflow-wrap: anywhere;
-  font-size: 0.88rem;
-  font-weight: 750;
-}
-
-.identity-subscription-empty {
+.identity-empty-strip {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -1939,92 +1907,7 @@ a {
   padding: 15px 4px;
 }
 
-.identity-entitlement-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  border-bottom: 1px solid var(--identity-line);
-}
-
-.identity-entitlement-strip > div {
-  min-width: 0;
-  padding: 13px 14px;
-}
-
-.identity-entitlement-strip > div + div {
-  border-left: 1px solid var(--identity-line);
-}
-
-.identity-entitlement-strip strong,
-.identity-saas-plan-row strong,
-.identity-saas-plan-row span {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.identity-entitlement-strip strong,
-.identity-saas-plan-row span {
-  margin-top: 4px;
-}
-
-.identity-saas-plan-list {
-  margin-top: 18px;
-  border-top: 1px solid var(--identity-line);
-}
-
-.identity-saas-plan-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(130px, 0.8fr)) minmax(80px, 0.45fr);
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-  border-bottom: 1px solid var(--identity-line);
-  padding: 14px 4px;
-}
-
-.identity-saas-plan-row > div {
-  min-width: 0;
-}
-
-.identity-plan-marker {
-  display: inline-block !important;
-  width: fit-content;
-  margin: 0 !important;
-  border: 1px solid #9dcbb8;
-  border-radius: 4px;
-  background: #edf8f2;
-  color: #146c4c !important;
-  padding: 4px 7px;
-  font-weight: 750;
-}
-
-.identity-subscription-command {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-  align-items: end;
-  gap: 14px;
-  margin-top: 18px;
-}
-
-.identity-subscription-command > label:first-child {
-  display: grid;
-  gap: 7px;
-  color: #3e4955;
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-
-.identity-subscription-command select {
-  width: 100%;
-  min-width: 0;
-  min-height: 40px;
-  border: 1px solid #bbc5d0;
-  border-radius: 6px;
-  background: #fff;
-  color: var(--identity-text);
-  padding: 7px 9px;
-}
-
-.identity-subscription-trial {
+.identity-confirmation-checkbox {
   display: flex;
   min-height: 40px;
   align-items: center;
@@ -2034,7 +1917,7 @@ a {
   font-weight: 650;
 }
 
-.identity-subscription-trial input {
+.identity-confirmation-checkbox input {
   width: 17px;
   height: 17px;
   margin: 0;
@@ -2093,8 +1976,7 @@ a {
 }
 
 .identity-billing-table-wrap,
-.identity-invoice-table-wrap,
-.identity-payment-table-wrap {
+.identity-invoice-table-wrap {
   contain: inline-size paint;
 }
 
@@ -2159,7 +2041,7 @@ a {
   overflow-wrap: anywhere;
 }
 
-.identity-invoice-table td > span:not(.identity-commerce-status),
+.identity-invoice-table td > span:not(.identity-invoice-status),
 .identity-current-invoice span,
 .identity-current-invoice small {
   margin-top: 3px;
@@ -2232,17 +2114,6 @@ a {
   border-top: 1px solid var(--identity-line);
 }
 
-.identity-subscription-actions {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.identity-subscription-actions .identity-subscription-command {
-  flex: 1 1 auto;
-}
-
 .identity-danger-command {
   min-height: 40px;
   flex: 0 0 auto;
@@ -2260,44 +2131,7 @@ a {
   opacity: 0.55;
 }
 
-.identity-payment-table-wrap {
-  width: 100%;
-  max-width: 100%;
-  overflow-x: auto;
-}
-
-.identity-payment-table {
-  width: 100%;
-  min-width: 760px;
-  border-collapse: collapse;
-  font-size: 0.8rem;
-}
-
-.identity-payment-table th,
-.identity-payment-table td {
-  border-bottom: 1px solid var(--identity-line);
-  padding: 11px 8px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.identity-payment-table td:first-child {
-  max-width: 210px;
-}
-
-.identity-payment-table td strong,
-.identity-payment-table td span {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.identity-payment-table td > span:not(.identity-commerce-status) {
-  margin-top: 3px;
-  color: var(--identity-muted);
-  font-size: 0.72rem;
-}
-
-.identity-commerce-status {
+.identity-invoice-status {
   display: inline-flex !important;
   width: fit-content;
   min-height: 24px;
@@ -2310,130 +2144,23 @@ a {
   font-weight: 700;
 }
 
-.identity-commerce-status.is-paid,
-.identity-commerce-status.is-fulfilled,
-.identity-commerce-status.is-succeeded {
+.identity-invoice-status.is-issued,
+.identity-invoice-status.is-delivered,
+.identity-invoice-status.is-succeeded {
   background: #e8f6ef;
   color: #156544;
 }
 
-.identity-commerce-status.is-past_due,
-.identity-commerce-status.is-failed,
-.identity-commerce-status.is-rejected {
+.identity-invoice-status.is-failed,
+.identity-invoice-status.is-voided {
   background: #fff0ed;
   color: #9b352c;
 }
 
-.identity-commerce-status.is-processing,
-.identity-commerce-status.is-requested,
-.identity-commerce-status.is-pending_payment,
-.identity-commerce-status.is-partially_refunded {
+.identity-invoice-status.is-processing,
+.identity-invoice-status.is-requested {
   background: #fff5dc;
   color: #795815;
-}
-
-.identity-payment-history,
-.identity-dunning-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-bottom: 1px solid var(--identity-line);
-}
-
-.identity-payment-history {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 14px;
-  border-top: 1px solid var(--identity-line);
-}
-
-.identity-payment-history > div,
-.identity-dunning-strip > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-}
-
-.identity-payment-history > div + div,
-.identity-dunning-strip > div + div {
-  border-left: 1px solid var(--identity-line);
-}
-
-.identity-payment-history span,
-.identity-payment-history small,
-.identity-dunning-strip span {
-  color: var(--identity-muted);
-  font-size: 0.74rem;
-}
-
-.identity-payment-history strong,
-.identity-payment-history small,
-.identity-dunning-strip strong {
-  overflow-wrap: anywhere;
-}
-
-.identity-payment-commands {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 26px;
-  margin-top: 20px;
-}
-
-.identity-payment-commands form,
-.identity-payment-command-empty {
-  min-width: 0;
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.identity-payment-commands form + form,
-.identity-payment-command-empty + form,
-.identity-payment-commands form + .identity-payment-command-empty,
-.identity-payment-command-empty + .identity-payment-command-empty {
-  border-left: 1px solid var(--identity-line);
-  padding-left: 26px;
-}
-
-.identity-payment-commands form > div,
-.identity-payment-command-empty {
-  display: grid;
-  gap: 4px;
-}
-
-.identity-payment-commands form > div span,
-.identity-payment-command-empty span {
-  color: var(--identity-muted);
-  font-size: 0.76rem;
-}
-
-.identity-payment-commands label {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  color: #3e4955;
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.identity-payment-commands input,
-.identity-payment-commands select {
-  width: 100%;
-  min-width: 0;
-  min-height: 40px;
-  border: 1px solid #bbc5d0;
-  border-radius: 6px;
-  background: #fff;
-  color: var(--identity-text);
-  padding: 7px 9px;
-}
-
-.identity-payment-commands .identity-subscription-trial {
-  display: flex;
-}
-
-.identity-payment-commands .identity-subscription-trial input {
-  width: 17px;
-  min-height: 17px;
 }
 
 .identity-business-facts {
@@ -3160,10 +2887,7 @@ a {
 .identity-memberships select:focus-visible,
 .identity-workspace-selector input:focus-visible,
 .identity-workspace-selector summary:focus-visible,
-.identity-icon-command:focus-visible,
-.identity-subscription-command select:focus-visible,
-.identity-subscription-command input:focus-visible,
-.identity-subscription-command button:focus-visible {
+.identity-icon-command:focus-visible {
   outline: 3px solid rgba(8, 120, 111, 0.25);
   outline-offset: 2px;
 }
@@ -3408,41 +3132,6 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .identity-subscription-summary,
-  .identity-entitlement-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .identity-subscription-summary > div,
-  .identity-subscription-summary > div:not(:nth-child(3n + 1)),
-  .identity-entitlement-strip > div,
-  .identity-entitlement-strip > div + div {
-    border-top: 0;
-    border-left: 0;
-  }
-
-  .identity-subscription-summary > div:nth-child(even),
-  .identity-entitlement-strip > div:nth-child(even) {
-    border-left: 1px solid var(--identity-line);
-  }
-
-  .identity-subscription-summary > div:nth-child(n + 3),
-  .identity-entitlement-strip > div:nth-child(n + 3) {
-    border-top: 1px solid var(--identity-line);
-  }
-
-  .identity-saas-plan-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .identity-subscription-command {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .identity-subscription-command > label:first-child {
-    grid-column: 1 / -1;
-  }
-
   .identity-onboarding-steps {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3522,31 +3211,6 @@ a {
 
   .identity-summary-list {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .identity-subscription-summary,
-  .identity-entitlement-strip,
-  .identity-saas-plan-row,
-  .identity-subscription-command {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .identity-subscription-summary > div:nth-child(even),
-  .identity-entitlement-strip > div:nth-child(even) {
-    border-left: 0;
-  }
-
-  .identity-subscription-summary > div + div,
-  .identity-entitlement-strip > div + div {
-    border-top: 1px solid var(--identity-line);
-  }
-
-  .identity-subscription-command > label:first-child {
-    grid-column: auto;
-  }
-
-  .identity-subscription-command button {
-    width: 100%;
   }
 
   .identity-onboarding-heading {
@@ -3692,48 +3356,6 @@ a {
 
   .identity-security-main {
     width: min(100% - 20px, 1040px);
-  }
-}
-
-@media (max-width: 720px) {
-  .identity-subscription-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .identity-subscription-actions .identity-danger-command {
-    width: 100%;
-  }
-
-  .identity-payment-commands {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .identity-payment-commands form + form,
-  .identity-payment-command-empty + form,
-  .identity-payment-commands form + .identity-payment-command-empty,
-  .identity-payment-command-empty + .identity-payment-command-empty {
-    border-top: 1px solid var(--identity-line);
-    border-left: 0;
-    padding-top: 22px;
-    padding-left: 0;
-  }
-}
-
-@media (max-width: 520px) {
-  .identity-payment-history,
-  .identity-dunning-strip {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .identity-payment-history > div + div,
-  .identity-dunning-strip > div + div {
-    border-top: 1px solid var(--identity-line);
-    border-left: 0;
-  }
-
-  .identity-payment-commands button {
-    width: 100%;
   }
 }
 

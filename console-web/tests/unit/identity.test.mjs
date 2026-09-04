@@ -720,8 +720,10 @@ test("identity page keeps keyboard, focus, and mobile layout contracts", async (
   assert.match(css, /:focus-visible/u);
   assert.match(css, /@media \(max-width: 520px\)/u);
   assert.match(css, /min-width: 320px/u);
-  assert.match(css, /\.identity-billing-table-wrap,\s*\.identity-invoice-table-wrap,\s*\.identity-payment-table-wrap\s*\{[^}]*contain:\s*inline-size paint/su);
-  assert.match(css, /\.identity-(?:payment|billing|invoice)-table-wrap\s*\{[^}]*overflow-x:\s*auto/su);
+  assert.match(css, /\.identity-billing-table-wrap,\s*\.identity-invoice-table-wrap\s*\{[^}]*contain:\s*inline-size paint/su);
+  assert.match(css, /\.identity-billing-table-wrap\s*\{[^}]*overflow-x:\s*auto/su);
+  assert.match(css, /\.identity-invoice-table-wrap\s*\{[^}]*overflow-x:\s*auto/su);
+  assert.doesNotMatch(css, /\.identity-payment-/u);
   assert.match(root.innerHTML, /type="button" data-identity-action="logout"/u);
   assert.match(root.innerHTML, /type="submit"/u);
 });

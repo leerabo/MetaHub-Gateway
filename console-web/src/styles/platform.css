@@ -1675,19 +1675,19 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
 .platform-customer-tabs button { min-width: 0; padding: 7px 8px; font-size: 11px; }
 .platform-customer-tabs button[aria-selected="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
 .platform-customer-tab-panel { min-width: 0; min-height: 310px; }
-.platform-customer-health { display: grid; min-width: 0; grid-template-columns: 145px minmax(0, 1fr); gap: 18px; }
-.platform-customer-health-score { padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
-.platform-customer-health-score > strong { display: inline-block; margin-top: 18px; font-size: 34px; }
-.platform-customer-health-score > small { color: var(--muted); }
-.platform-customer-health-score p { margin: 12px 0 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
-.platform-customer-health-factors { display: grid; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); }
-.platform-customer-health-factors > div { min-width: 0; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.platform-customer-health-factors span,
-.platform-customer-health-factors strong,
-.platform-customer-health-factors small { display: block; overflow-wrap: anywhere; }
-.platform-customer-health-factors span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
-.platform-customer-health-factors strong { margin-top: 6px; font-size: 18px; }
-.platform-customer-health-factors small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.platform-success-health { display: grid; min-width: 0; grid-template-columns: 145px minmax(0, 1fr); gap: 18px; }
+.platform-success-health-score { padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
+.platform-success-health-score > strong { display: inline-block; margin-top: 18px; font-size: 34px; }
+.platform-success-health-score > small { color: var(--muted); }
+.platform-success-health-score p { margin: 12px 0 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.platform-success-health-factors { display: grid; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.platform-success-health-factors > div { min-width: 0; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.platform-success-health-factors span,
+.platform-success-health-factors strong,
+.platform-success-health-factors small { display: block; overflow-wrap: anywhere; }
+.platform-success-health-factors span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.platform-success-health-factors strong { margin-top: 6px; font-size: 18px; }
+.platform-success-health-factors small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 .platform-customer-codes { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .platform-customer-codes > span { color: var(--muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
 .platform-customer-codes code { overflow-wrap: anywhere; }
@@ -1772,8 +1772,8 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-customer-records article dl > div:nth-child(n + 3),
   .platform-customer-contact-list dl > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
   .platform-customer-tabs { grid-template-columns: repeat(5, minmax(58px, 1fr)); overflow-x: auto; }
-  .platform-customer-health { grid-template-columns: minmax(0, 1fr); }
-  .platform-customer-health-factors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .platform-success-health { grid-template-columns: minmax(0, 1fr); }
+  .platform-success-health-factors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-customer-codes { grid-column: auto; }
   .platform-customer-contact-list { grid-template-columns: minmax(0, 1fr); }
   .platform-customer-renewal-table,
@@ -1796,7 +1796,7 @@ th:last-child, td:last-child { width: 190px; text-align: right; }
   .platform-customer-row { grid-template-columns: minmax(0, 1fr) 72px; }
   .platform-customer-row > span:nth-child(3) { display: none; }
   .platform-customer-tabs { grid-template-columns: repeat(5, 68px); }
-  .platform-customer-health-factors { grid-template-columns: minmax(0, 1fr); }
+  .platform-success-health-factors { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* PRD-141 Platform Growth workbench */

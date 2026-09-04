@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.background import BackgroundTasks
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
 
 from .config import (
     AppConfig,
@@ -221,8 +222,13 @@ def create_service_app(
             or request.url.path == "/mcp"
             or request.url.path.startswith("/mcp/")
             or (request.method == "POST" and request.url.path.rstrip("/") == "/invitations")
-            or request.url.path == "/billing-disputes"
-            or request.url.path.startswith("/billing-disputes/")
+            or (
+                (
+                    request.url.path == "/billing-disputes"
+                    or request.url.path.startswith("/billing-disputes/")
+                )
+                and _request_matches_registered_route(request)
+            )
             or (
                 request.method == "POST"
                 and request.url.path.rstrip("/") == "/security/classify-intent"
@@ -237,6 +243,7 @@ def create_service_app(
                 request.method == "POST"
                 and request.url.path.startswith("/approvals/")
                 and request.url.path.rsplit("/", 1)[-1] in {"step-up", "approve", "reject"}
+                and _request_matches_registered_route(request)
             )
         )
         incoming_request_id = (
@@ -309,7 +316,9 @@ def create_service_app(
         边界：后续修改必须同时考虑租户隔离、request_id 追踪和敏感信息脱敏。
         """
 
-        return _error_response(request, ApiError("infra.not_found"))
+        response = _error_response(request, ApiError("infra.not_found"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(405)
     async def method_not_allowed_handler(
@@ -574,20 +583,26 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # Batch responses expose tenant-private job, task, cost and result state. Apply the
         # private cache boundary to success and every middleware-generated error response.
         response.headers["Cache-Control"] = "no-store, private"
-    elif path == "/billing-disputes" or path.startswith("/billing-disputes/"):
+    elif (
+        path == "/billing-disputes" or path.startswith("/billing-disputes/")
+    ) and _request_matches_registered_route(request):
         # Dispute detail contains tenant-private billing evidence and authorized free text.
         # Authentication, validation and unhandled failures must share the same boundary.
         response.headers["Cache-Control"] = "no-store, private"
     elif path == "/local-endpoints" or path.startswith("/local-endpoints/"):
         # Local endpoint state is tenant-private, including authentication and unhandled failures.
         response.headers["Cache-Control"] = "no-store, private"
-    elif path.rstrip("/") == "/admin-assistant/query":
+    elif path.rstrip("/") == "/admin-assistant/query" and _request_matches_registered_route(
+        request
+    ):
         # 管理助手的成功、认证拒绝、wire 错误和最外层未捕获异常都可能关联租户私有查询。
         # 统一在共享异常出口补齐 exact Header，避免 500 绕过 Control 层用户中间件。
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
         response.headers["Vary"] = "Authorization"
-    elif path == "/approvals" or path.startswith("/approvals/"):
+    elif (
+        path == "/approvals" or path.startswith("/approvals/")
+    ) and _request_matches_registered_route(request):
         # 审批列表、详情、密码二次验证与决策都属于租户私有治理状态。认证、权限、
         # wire 校验和未捕获异常可能早于路由 Header，因此最外层统一覆盖所有状态码。
         response.headers["Cache-Control"] = "no-store, private"
@@ -644,18 +659,31 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         # 再次施加 no-store，确保 400/401/403/409/413 等错误响应也不会进入共享缓存。
         response.headers["Cache-Control"] = "no-store"
     elif (
-        path == "/adapter-specs"
-        or path.startswith("/adapter-specs/")
-        or path.startswith("/internal/adapter-specs/")
+        path.startswith("/internal/adapter-specs/")
         or path == "/v1/adapter-contract-probes/identity"
-        or path == "/adapter-contract-runs"
-        or path.startswith("/adapter-contract-runs/")
         or (path.startswith("/internal/tenants/") and path.endswith("/adapter-contract-runs"))
+        or (
+            (
+                path == "/adapter-specs"
+                or path.startswith("/adapter-specs/")
+                or path == "/adapter-contract-runs"
+                or path.startswith("/adapter-contract-runs/")
+            )
+            and _request_matches_registered_route(request)
+        )
     ):
         # 目录正文、租户激活身份和 probe Key 归属证明都属于授权后的治理状态；权限、校验
         # 和未捕获异常响应也必须由同一最外层路径策略禁止缓存。合同报告还包含 CI 运行和
         # 失败摘要，不能只依赖成功路由设置 Header，否则 401/403/409/422/503 可能进入缓存。
         response.headers["Cache-Control"] = "no-store"
+
+
+def _request_matches_registered_route(request: Request) -> bool:
+    """Return whether the current method and path belong to an installed route."""
+
+    if request.scope.get("route") is not None:
+        return True
+    return any(route.matches(request.scope)[0] is Match.FULL for route in request.app.routes)
 
 
 def _invitation_path_credential(path: str) -> str | None:

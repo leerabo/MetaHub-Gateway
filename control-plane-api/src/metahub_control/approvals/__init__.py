@@ -2,7 +2,7 @@
 集中导出 PRD-078 审批控制面入口，公开符号不得绕过服务端租户与权限校验。
 """
 
-from .routes import router
+from .routes import router, runtime_router
 from .scheduler import install_approval_scheduler
 
-__all__ = ["install_approval_scheduler", "router"]
+__all__ = ["install_approval_scheduler", "router", "runtime_router"]

@@ -34,6 +34,29 @@ SQLITE_BUSY_TIMEOUT_MILLISECONDS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
 _MAX_IDLE_CONNECTIONS_PER_DATABASE = 4
 _MAX_IDLE_DATABASES = 4
 DatabaseBackend = Literal["sqlite", "postgresql"]
+DatabaseCommitGuard = Callable[[Any], None]
+
+_DATABASE_COMMIT_GUARD: ContextVar[DatabaseCommitGuard | None] = ContextVar(
+    "metahub_database_commit_guard",
+    default=None,
+)
+
+
+@contextmanager
+def database_commit_guard(guard: DatabaseCommitGuard) -> Iterator[None]:
+    """Require a caller-provided authority check before transactional commits."""
+
+    token = _DATABASE_COMMIT_GUARD.set(guard)
+    try:
+        yield
+    finally:
+        _DATABASE_COMMIT_GUARD.reset(token)
+
+
+def _require_commit_authority(connection: Any) -> None:
+    guard = _DATABASE_COMMIT_GUARD.get()
+    if guard is not None and connection.in_transaction:
+        guard(connection)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +187,8 @@ class _PostgresConnection:
     def execute(self, sql: str, parameters: object | None = None) -> _PostgresCursor:
         if self._closed:
             raise RuntimeError("Cannot operate on a closed database.")
+        if re.fullmatch(r"\s*(?:COMMIT|END)\s*;?\s*", sql, flags=re.I):
+            _require_commit_authority(self)
         statement = _postgres_sql(sql)
         cursor = None
         try:
@@ -198,6 +223,7 @@ class _PostgresConnection:
         return _PostgresCursor(cursor)
 
     def commit(self) -> None:
+        _require_commit_authority(self)
         try:
             self._connection.commit()
         except Exception as exc:
@@ -238,6 +264,24 @@ class _PostgresConnection:
 
 _POSTGRES_POOL_LOCK = threading.Lock()
 _POSTGRES_POOLS: dict[str, Any] = {}
+
+
+class _SqliteConnection(sqlite3.Connection):
+    def execute(self, sql: str, parameters=(), /):
+        if re.fullmatch(r"\s*(?:COMMIT|END)\s*;?\s*", sql, flags=re.I):
+            _require_commit_authority(self)
+        return super().execute(sql, parameters)
+
+    def commit(self) -> None:
+        _require_commit_authority(self)
+        super().commit()
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        return False
 
 
 class _IdleConnectionPool:
@@ -674,6 +718,7 @@ def _open_sqlite_connection(
         database,
         timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
         check_same_thread=check_same_thread,
+        factory=_SqliteConnection,
     )
     connection.row_factory = sqlite3.Row
     connection.create_function(

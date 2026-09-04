@@ -569,12 +569,12 @@ test("main lifecycle and CSS contain PAGE-112 cleanup plus 1280/mobile layout co
     readFile(new URL("../../src/features/billing-disputes/billingDisputePageState.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
   ]);
-  assert.match(mainSource, /clearBillingDisputeStateOnIdentityChange/);
-  assert.match(mainSource, /nextItemId !== "billing-disputes"/);
-  assert.match(mainSource, /itemId !== "billing-disputes"/);
-  assert.match(mainSource, /billingDisputePageState\.blocksShellDomReplacement\(\)/);
+  assert.doesNotMatch(mainSource, /billingDisputePageState|loadBillingDisputesState|lib\/billingDisputes/);
+  assert.match(mainSource, /WORKSPACE_COMMERCIAL_NAVIGATION_IDS[\s\S]*"billing-disputes"/);
+  assert.match(mainSource, /case "billing-disputes":[\s\S]*workspaceCommercialAccountingController\.open/);
+  assert.match(mainSource, /workspaceCommercialAccountingController\.close\(\)/);
   assert.doesNotMatch(stateSource, /localStorage|sessionStorage|indexedDB/);
-  assert.match(cssSource, /@media \(max-width: 1360px\)[\s\S]*\.billing-dispute-layout\.has-detail/);
-  assert.match(cssSource, /@media \(max-width: 390px\)[\s\S]*\.billing-dispute-filters/);
-  assert.match(cssSource, /max-width: 100%[\s\S]*overflow-x: auto/);
+  assert.match(cssSource, /\.workspace-commercial-accounting[\s\S]*\.commercial-page-heading/);
+  assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*\.commercial-summary/);
+  assert.match(cssSource, /@media \(max-width: 600px\)[\s\S]*\.commercial-filter/);
 });

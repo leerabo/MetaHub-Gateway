@@ -2,10 +2,12 @@
 
 import {
   authorizationIdentitySnapshot,
+  hasPermission,
   PERMISSIONS,
 } from "../../lib/permissions.js";
 
 const READ_ROLES = new Set(["owner", "admin", "developer", "security_admin"]);
+const NAVIGATION_IDS = new Set(["providers", "error-maps"]);
 
 export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } = {}) {
   let epoch = 0;
@@ -15,21 +17,27 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
 
   function publish() { onChange(snapshot()); }
 
-  function prepare(providerId) {
+  function prepare(providerId, activeNavigationItemId = "") {
     abortAll();
     epoch += 1;
     owner = "";
-    state = { ...initialState(), providerId: String(providerId ?? ""), phase: "loading" };
+    state = {
+      ...initialState(),
+      activeNavigationItemId: String(activeNavigationItemId),
+      providerId: String(providerId ?? ""),
+      phase: "loading",
+    };
     publish();
   }
 
-  function activationFailed(providerId, error) {
+  function activationFailed(providerId, error, activeNavigationItemId = "") {
     abortAll();
     epoch += 1;
     owner = "";
     const status = Number(error?.status) || 0;
     state = {
       ...initialState(),
+      activeNavigationItemId: String(activeNavigationItemId),
       providerId: String(providerId ?? ""),
       phase: status === 401 ? "session_invalid"
         : status === 403 ? "permission_revoked"
@@ -56,9 +64,13 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
       owner = signature;
       state = {
         ...initialState(),
+        activeNavigationItemId: String(activeNavigationItemId),
         providerId: String(providerId),
         workspaceId: String(workspaceSession.context.workspace_id),
-        canManage: new Set(["owner", "admin", "developer"]).has(workspaceSession.context.role),
+        canManage: hasPermission(
+          authContext,
+          PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_MANAGE,
+        ),
       };
       publish();
     }
@@ -118,6 +130,7 @@ export function createWorkspaceProviderEngineeringStore({ onChange = () => {} } 
       abortAll();
       state = {
         ...initialState(),
+        activeNavigationItemId: state.activeNavigationItemId,
         providerId: state.providerId,
         phase: status === 403 ? "permission_revoked" : "session_invalid",
         error: safeError(error),
@@ -215,22 +228,31 @@ export function workspaceProviderEngineeringOwner({
   activeNavigationItemId,
   providerId,
 } = {}) {
-  const identity = authorizationIdentitySnapshot(authContext, PERMISSIONS.PROVIDER_READ);
+  const overrideIdentity = authorizationIdentitySnapshot(
+    authContext,
+    PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ,
+  );
+  const providerIdentity = activeNavigationItemId === "providers"
+    ? authorizationIdentitySnapshot(authContext, PERMISSIONS.PROVIDER_READ)
+    : "";
   const context = workspaceSession?.context;
   const id = String(providerId ?? "");
-  if (!identity
-    || activeNavigationItemId !== "providers"
+  if (!overrideIdentity
+    || !NAVIGATION_IDS.has(activeNavigationItemId)
+    || (activeNavigationItemId === "providers" && !providerIdentity)
     || !/^wsp_[0-9a-f]{32}$/u.test(String(context?.workspace_id ?? ""))
     || context?.session_status !== "active"
     || !READ_ROLES.has(String(context?.role ?? ""))
-    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(id)) return "";
+    || (id && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(id))
+    || (activeNavigationItemId === "providers" && !id)) return "";
   return JSON.stringify({
-    identity,
+    override_identity: overrideIdentity,
+    provider_identity: providerIdentity,
     workspace_id: context.workspace_id,
     workspace_role: context.role,
     expires_at: context.expires_at,
     provider_id: id,
-    navigation: "providers",
+    navigation: activeNavigationItemId,
   });
 }
 
@@ -238,6 +260,7 @@ function initialState() {
   return {
     phase: "idle",
     loading: false,
+    activeNavigationItemId: "",
     providerId: "",
     workspaceId: "",
     canManage: false,

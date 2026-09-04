@@ -817,37 +817,24 @@ test("Console shell renders approvals only from the exact backend navigation own
 test("main lifecycle and CSS freeze cleanup, detail refresh and 1280/390 layouts", async () => {
   const [main, css, binder, renderer, pageState] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
-    readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
+    readFile(new URL("../../src/styles/console-experience.css", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/approvals/bindApprovals.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/approvals/renderApprovals.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/approvals/approvalPageState.js", import.meta.url), "utf8"),
   ]);
 
-  assert.match(main, /addEventListener\("hashchange"[\s\S]*nextItemId !== "approvals"[\s\S]*approvalPageState\.clear\(\)/);
-  assert.match(main, /pagehide[\s\S]*approvalPageState\.clear\(\)/);
-  assert.match(main, /function renderLogin[\s\S]*approvalPageState\.clear\(\)/);
-  assert.match(main, /logoutButton\?\.addEventListener[\s\S]*approvalPageState\.clear\(\)[\s\S]*logoutAdmin\(/);
-  assert.match(main, /itemId !== "approvals"[\s\S]*approvalPageState\.clear\(\)/);
-  assert.match(main, /function clearApprovalStateOnIdentityChange[\s\S]*approvalReadIdentitySnapshot[\s\S]*approvalPageState\.clear\(\)/);
-  assert.ok((main.match(/clearApprovalStateOnIdentityChange\(authSession\.context, context\)/g) ?? []).length >= 2);
-  assert.match(main, /function refreshApprovalPanel[\s\S]*state\.selectedApprovalId[\s\S]*loadApprovalDetailState/);
-  assert.match(main, /async onSelect\(approvalId\)[\s\S]*refreshApprovalDetail\(consoleShellState, \+\+refreshSequence\)/);
-  assert.match(main, /async function refreshApprovalDetail[\s\S]*renderCurrentApprovalPanel\(consoleShellState\)[\s\S]*loadApprovalDetailState\(consoleShellState, refreshId\)[\s\S]*refreshId === refreshSequence/);
-  assert.match(main, /function submitApprovalAction[\s\S]*stepUpApproval\([\s\S]*decideApproval\(/);
-  assert.equal((main.match(/stepUpApproval\(/g) ?? []).length, 1);
-  assert.equal((main.match(/decideApproval\(/g) ?? []).length, 1);
+  assert.doesNotMatch(main, /approvalPageState|loadApprovalsState|lib\/approvals/);
+  assert.match(main, /addEventListener\("hashchange"[\s\S]*workspaceConsoleExperienceController\.leave\(\)[\s\S]*bindNavigationHashRefresh/);
+  assert.match(main, /pagehide[\s\S]*workspaceConsoleExperienceController\.leave\(\)/);
+  assert.match(main, /case "approvals":[\s\S]*loadWorkspaceConsoleExperienceState\([\s\S]*"approvals"/);
+  assert.match(main, /onApprovalFilter\(filters\)[\s\S]*workspaceConsoleExperienceController\.configureApprovals\(filters\)/);
   assert.match(pageState, /clearDom\(\)[\s\S]*operation\.controller\.abort\(\)/);
   assert.match(binder, /passwordInput\.value\s*=\s*""[\s\S]*onSubmitAction/);
   assert.match(binder, /addEventListener\("cancel", requestClose\)/);
   assert.match(binder, /dialog\.showModal\(\)/);
   assert.match(binder, /event\.key === "Tab"[\s\S]*trapDialogFocus/);
   assert.doesNotMatch(renderer, /<dialog[^`\n>]*\sopen(?:\s|=|>)/);
-  assert.match(main, /approvalActionFocusReturn[\s\S]*approvalFocusOwnerKey[\s\S]*restoreApprovalActionFocus/);
-  assert.match(css, /\.approval-layout\s*\{[^}]*grid-template-columns:\s*minmax\(300px, 0\.78fr\) minmax\(0, 1\.22fr\)/s);
-  assert.match(css, /\.approval-toolbar \.icon-command,[\s\S]*width:\s*36px;[\s\S]*height:\s*36px/s);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.approval-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*?\.approval-workspace\.mode-mobile-card \.approval-detail/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*?\.approval-actions\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/s);
-  assert.match(css, /\.approval-list-item > span,[\s\S]*overflow-wrap:\s*anywhere/);
-  assert.match(css, /\.approval-dialog\[open\]\s*\{[^}]*width:\s*min\(520px, calc\(100vw - 32px\)\)[^}]*max-height:\s*calc\(100dvh - 32px\)/s);
+  assert.match(css, /\.console-experience-table-wrap\s*\{[^}]*overflow-x:\s*auto/s);
+  assert.match(css, /\.console-experience-pagination button\s*\{[^}]*width:\s*36px;[^}]*min-width:\s*36px/s);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.console-experience-filter\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
 });

@@ -85,9 +85,11 @@ Scheduler。G6 失败时只允许完成设计，不开始 S7 migration 或业务
 
 ## 5. 64 项导航处置与源码差异
 
-源码当前有 66 个 `NAVIGATION_DEFINITIONS`，Excel 64 项全部存在；后续合法新增项为
-`migration-operations` 和 `support-tickets`，两项都保留在 Workspace。以下 D01..D22 是 Excel
-原文处置的唯一编码，不允许同一 navigation_id 出现第二种结论：
+0137 源码实际有 63 个 `NAVIGATION_DEFINITIONS`：Excel 64 项中存在 59 项，缺少的 5 项为
+`growth-analytics`、`branding`、`adapter-specs`、`adapter-contract-runs`、`error-maps`；前述三个迁出项已先行从旧源码
+移除，`branding` 与 `error-maps` 由 0138 的 detail/advanced route 恢复。合法后增项为 `migration-operations`、
+`support-tickets`、`workspace-subscription` 和 `internal-finops`；后两项是 PRD-144 对 `plans`/`finops-ledger` 的 canonical
+replacement。以下 D01..D22 是 Excel 原文处置的唯一编码，不允许同一 navigation_id 出现第二种结论：
 
 | Code | Excel 处置 |
 | --- | --- |
@@ -265,7 +267,7 @@ G7 至少用两个 app replica 证明：每个 queue partition 同时只有一�
 每条 PRD 依次提交：`docs/prd/PRD-<id>-*.md`、013x up/down、模块代码、受影响测试、
 `docs/testing/PRD-<id>-tests.md` 和敏感审计结果。提交不得混入其他 PRD 或用户未跟踪文件。
 
-G7 必须统一证明：0130..0139 fresh/逐级/往返/down guard；64 项 Excel 导航和 2 项后增导航均有
+G7 必须统一证明：0130..0139 fresh/逐级/往返/down guard；64 项 Excel 导航和 4 项后增导航均有
 唯一处置；平台运营/品牌/Provider 工程/商业账务分域；所有历史行数/hash/outbox/Scheduler/审计
 水位保真；企业旧入口、DOM、预取和 API 为零；Platform/Workspace/Partner/Support/Device 五域
 负载矩阵失败关闭；41 -> 36 installer 映射、第 37 个 platform-job、逐 queue partition leader/fencing 和

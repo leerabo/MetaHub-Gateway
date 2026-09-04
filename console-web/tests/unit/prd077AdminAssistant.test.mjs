@@ -613,44 +613,11 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
     readFile(new URL("../../src/features/admin-assistant/adminAssistantPageState.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/admin-assistant/renderAdminAssistant.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/admin-assistant/bindAdminAssistant.js", import.meta.url), "utf8"),
-    readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
+    readFile(new URL("../../src/styles/console-experience.css", import.meta.url), "utf8"),
   ]);
-  assert.match(main, /addEventListener\("hashchange"[\s\S]*adminAssistantPageState\.leave\(\)[\s\S]*bindNavigationHashRefresh/);
-  assert.doesNotMatch(main, /nextItemId !== "admin-assistant"[\s\S]{0,160}adminAssistantPageState\.leave\(\)/);
-  assert.match(main, /pagehide[\s\S]*adminAssistantPageState\.leave\(\)/);
-  assert.match(main, /clearAdminAssistantStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(main, /isBackgroundRefresh[\s\S]*adminAssistantPageState\.blocksShellDomReplacement\(\)/);
-  assert.doesNotMatch(main, /window\.setInterval\(\(\) => \{[\s\S]*?void refresh\(\);/);
-  assert.match(main, /itemId !== "admin-assistant"[\s\S]*adminAssistantPageState\.leave\(\)/);
-  assert.match(main, /adminAssistantPageState\.leave\(\)[\s\S]*switchConsoleNavigation/);
-  const shellLoadIndex = main.indexOf("const consoleShellState = await loadConsoleShellState();");
-  const shellOwnerGuardIndex = main.indexOf("if (!refreshOwnerCurrent())", shellLoadIndex);
-  const firstShellMutationIndex = main.indexOf(
-    'if (consoleShellState?.activeNavigationItemId !== "enterprise-chat")',
-    shellLoadIndex,
-  );
-  assert.ok(shellLoadIndex >= 0);
-  assert.ok(shellOwnerGuardIndex > shellLoadIndex);
-  assert.ok(firstShellMutationIndex > shellOwnerGuardIndex);
-  assert.match(
-    main,
-    /!workspaceConsoleExperienceView\(consoleShellState\?\.activeNavigationItemId\)[\s\S]*adminAssistantPageState\.blocksShellDomReplacement/,
-  );
-  const assistantLifecycleIndex = main.indexOf(
-    'if (consoleShellState?.activeNavigationItemId !== "admin-assistant")',
-    firstShellMutationIndex,
-  );
-  const lateOwnerGuardIndex = main.lastIndexOf(
-    "if (!refreshOwnerCurrent())",
-    assistantLifecycleIndex,
-  );
-  assert.ok(assistantLifecycleIndex > firstShellMutationIndex);
-  assert.ok(lateOwnerGuardIndex > firstShellMutationIndex);
-  assert.ok(lateOwnerGuardIndex < assistantLifecycleIndex);
-  assert.match(
-    main,
-    /activeConsoleNavigationCount \+= 1;[\s\S]*?try \{[\s\S]*?finally \{\s*activeConsoleNavigationCount -= 1;/,
-  );
+  assert.doesNotMatch(main, /adminAssistantPageState|loadAdminAssistantState|lib\/adminAssistant/);
+  assert.match(main, /addEventListener\("hashchange"[\s\S]*workspaceConsoleExperienceController\.leave\(\)[\s\S]*bindNavigationHashRefresh/);
+  assert.match(main, /pagehide[\s\S]*workspaceConsoleExperienceController\.leave\(\)/);
   assert.match(main, /case "admin-assistant":[\s\S]*loadWorkspaceConsoleExperienceState\([\s\S]*"admin-assistant"/);
   assert.match(main, /function loadWorkspaceConsoleExperienceState[\s\S]*workspaceConsoleExperienceController\.enter/);
   assert.match(main, /onAssistantSubmit\(\)[\s\S]*workspaceConsoleExperienceController\.submitAssistant\(\)/);
@@ -661,9 +628,8 @@ test("main lifecycle and responsive CSS freeze revoke cleanup, no prefetch and 1
   assert.match(renderer, /\.textContent\s*=/);
   assert.match(renderer, /textarea\.value\s*=/);
   assert.doesNotMatch(renderer, /innerHTML\s*=/);
-  assert.match(css, /\.admin-assistant-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(300px, 0\.82fr\) minmax\(0, 1\.18fr\)/s);
-  assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.admin-assistant-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*?\.admin-assistant-form-actions/s);
-  assert.match(css, /\.admin-assistant-icon-command\s*\{[^}]*width:\s*36px;[^}]*min-width:\s*36px;[^}]*height:\s*36px/s);
-  assert.match(css, /\.admin-assistant-sources strong,[\s\S]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.console-experience-assistant textarea\s*\{[^}]*min-height:\s*112px/s);
+  assert.match(css, /\.console-experience-heading button,[\s\S]*\.console-experience-pagination button\s*\{[^}]*min-height:\s*36px/s);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.console-experience-metrics,[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+  assert.match(css, /overflow-wrap:\s*anywhere/);
 });

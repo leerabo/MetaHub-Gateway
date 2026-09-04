@@ -156,6 +156,10 @@ test("controller keeps approve independent and cancels late feature refresh on l
         id: "feature-rollouts",
         label: "Feature rollouts",
         href: "/platform.html#feature-rollouts",
+      }, {
+        id: "overview",
+        label: "Overview",
+        href: "/platform.html#overview",
       }] }),
       featureFlags: async () => {
         featureCall += 1;
@@ -189,7 +193,7 @@ test("controller keeps approve independent and cancels late feature refresh on l
   controller.selectView("overview");
   resolveLate(listResponse());
   assert.equal(await refresh, false);
-  assert.match(root.innerHTML, /平台工作台/u);
+  assert.match(root.innerHTML, /class="platform-shell"/u);
 });
 
 function platformState(permissions) {

@@ -195,8 +195,8 @@ test("PRD-139 Partner entry uses only the Partner projection and rejects Platfor
   assert.equal((client.match(/\/partner\/workspaces/gu) ?? []).length, 1);
   assert.equal(
     (workspaceEntry.match(/loadPartnerPortalState\(consoleShellState, refreshId\)/gu) ?? []).length,
-    1,
-    "the legacy loader definition may remain until PRD-147, but Workspace must not call it",
+    0,
+    "PRD-147 removes the legacy Workspace Partner portal loader",
   );
   assert.doesNotMatch(workspaceEntry, /case "partner-portal":/u);
 });
@@ -256,7 +256,10 @@ test("PRD-139 controller hashes sensitive intent, reuses retry key, aborts, and 
       operator: { display_name: "Channel Ops", roles: ["platform_channel"] },
     } }),
     navigation: async () => ({ items: serverPermissions.includes("platform.channel.statement.read")
-      ? [{ id: "channels", label: "Channels", href: "/platform.html#channels" }] : [] }),
+      ? [
+        { id: "channels", label: "Channels", href: "/platform.html#channels" },
+        { id: "overview", label: "Overview", href: "/platform.html#overview" },
+      ] : [] }),
     channelPartners: async ({ signal }) => {
       activeSignal = signal;
       if (holdReads) return new Promise((resolve, reject) => {

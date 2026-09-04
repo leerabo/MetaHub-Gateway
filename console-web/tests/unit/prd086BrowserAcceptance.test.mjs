@@ -65,22 +65,20 @@ test("strict client freezes the six-factor DTO and never composes source-domain 
   assert.doesNotMatch(client, /\/(usage|budgets|users|cost-anomalies)(?:["'`/?])/);
 });
 
-test("renderer and CSS keep the six-column workbench safe at 1440/1280 and single-column at 390", async () => {
+test("legacy Customer Health renderer stays testable while production CSS and navigation stay retired", async () => {
   const [renderer, shell, css, messages] = await Promise.all([
     readFile(new URL("../../src/features/customer-health/renderCustomerHealth.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8"),
     readFile(new URL("../../src/i18n/messages.js", import.meta.url), "utf8"),
   ]);
-  assert.match(shell, /case "customer-health"/);
-  assert.match(shell, /class="panel customer-health-panel"/);
+  assert.doesNotMatch(shell, /case "customer-health"/);
+  assert.doesNotMatch(shell, /class="panel customer-health-panel"/);
   assert.match(renderer, /authorizedActionTarget\(action\.target_navigation_item_id, consoleShellState\)/);
   assert.match(renderer, /item\?\.target_section === normalized[\s\S]*item\?\.visible === true[\s\S]*item\?\.disabled === false/);
   assert.match(renderer, /escapeHtml\(error\?\.code[\s\S]*escapeHtml\(error\?\.requestId/);
   assert.doesNotMatch(renderer, /innerHTML\s*=|insertAdjacentHTML/);
-  assert.match(css, /\.customer-health-row\s*\{[\s\S]*grid-template-columns:[\s\S]*minmax\(190px, 1\.7fr\)/);
-  assert.match(css, /@media \(max-width: 620px\)[\s\S]*\.customer-health-row:not\(\.customer-health-table-head\)[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(css, /\.customer-health-row > \*[\s\S]*overflow-wrap: anywhere/);
-  assert.match(messages, /"nav\.customer-health"/);
+  assert.doesNotMatch(css, /\.customer-health-/u);
+  assert.doesNotMatch(messages, /"nav\.customer-health"/u);
   assert.match(messages, /"customer_health\.action\.connect_support_ticket_source"/);
 });

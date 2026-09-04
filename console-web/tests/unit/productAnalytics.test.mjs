@@ -333,7 +333,7 @@ test("loading, registration-only, and escaped fixed error states are complete", 
   assert.doesNotMatch(errorHtml, /<unsafe>/);
 });
 
-test("PRD-141 disconnects PAGE-117 runtime entrypoints while retaining inert legacy assets", async () => {
+test("PRD-147 retires PAGE-117 production entrypoints, styling, and navigation", async () => {
   const [main, renderer, css, messages] = await Promise.all([
     readFile(new URL("../../src/app/main.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
@@ -342,9 +342,7 @@ test("PRD-141 disconnects PAGE-117 runtime entrypoints while retaining inert leg
   ]);
   assert.doesNotMatch(main, /productAnalytics|ProductAnalytics|growth-analytics|product-analytics/u);
   assert.doesNotMatch(renderer, /renderProductAnalytics|growth-analytics|product-analytics/u);
-  assert.match(messages, /"nav\.growth-analytics"/);
+  assert.doesNotMatch(messages, /"nav\.growth-analytics"/u);
   assert.match(messages, /"product_analytics\.stage\.request_logs_viewed"/);
-  assert.match(css, /\.product-analytics-steps\s*\{[\s\S]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
-  assert.match(css, /@media \(max-width: 620px\)[\s\S]*\.product-analytics-steps[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(css, /\.product-analytics-row > \*[\s\S]*overflow-wrap: anywhere/);
+  assert.doesNotMatch(css, /\.product-analytics-/u);
 });

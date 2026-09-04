@@ -158,13 +158,10 @@ test("Platform refund client binds status, Platform CSRF, revision, and fixed de
   );
 });
 
-test("payment renderers expose commands only inside finance permission boundaries", () => {
+test("Identity payment commands stay retired while Platform refunds remain permission-gated", () => {
   const financeRoot = { innerHTML: "" };
   renderIdentitySecurityPage(financeRoot, identityState("finance_admin"));
-  assert.match(financeRoot.innerHTML, /id="identity-payment-commerce-title"/u);
-  assert.match(financeRoot.innerHTML, /data-payment-intent-form/u);
-  assert.match(financeRoot.innerHTML, /data-refund-request-form/u);
-  assert.match(financeRoot.innerHTML, /data-identity-action="cancel-subscription"/u);
+  assert.doesNotMatch(financeRoot.innerHTML, /identity-payment-commerce-title|data-payment-intent-form|data-refund-request-form|cancel-subscription/u);
   assert.doesNotMatch(financeRoot.innerHTML, new RegExp(CLIENT_TOKEN, "u"));
 
   const developerRoot = { innerHTML: "" };

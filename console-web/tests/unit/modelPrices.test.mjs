@@ -192,8 +192,17 @@ test("developer start renders active model price navigation", () => {
     },
     modelsState,
     modelPricesState: { state: "ok", ...pricePayload, filters: {} },
+    workspaceCommercialAccountingState: {
+      phase: "ready",
+      loading: [],
+      rates: { rates: [], next_cursor: null },
+      rateFilters: {},
+      rateHistory: [],
+      canManageRates: true,
+    },
   });
 
-  assert.match(container.innerHTML, /model-prices-panel/);
-  assert.match(container.innerHTML, /manual-202607/);
+  assert.match(container.innerHTML, /data-workspace-commercial-root="internal-finops"/);
+  assert.match(container.innerHTML, /企业内部 FinOps/);
+  assert.doesNotMatch(container.innerHTML, /model-prices-panel|manual-202607/);
 });

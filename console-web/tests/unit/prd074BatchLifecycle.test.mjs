@@ -277,8 +277,8 @@ test("PRD-074 assistant output is one-shot textContent and is synchronously eras
 
 test("PRD-074 main application wires loader, bind, identity cleanup and result hydration", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(source, /const batchJobsState = await loadBatchJobsState\(consoleShellState, refreshId/);
-  assert.match(source, /batchJobsState,/);
+  assert.match(source, /case "batch-jobs":[\s\S]*state\.batchJobsState = await loadBatchJobsState\(consoleShellState, refreshId/);
+  assert.match(source, /state\.batchJobsState = await loadBatchJobsState/);
   assert.match(source, /bindBatchJobsPageInteractions\(consoleShellState\)/);
   assert.match(source, /clearBatchJobStateOnIdentityChange\(authSession\.context, context\)/);
   assert.match(source, /hydrateBatchResultText\(globalThis\.document/);

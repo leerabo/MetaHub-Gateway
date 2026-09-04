@@ -29,7 +29,7 @@ export function createWorkspaceCommercialAccountingController({
       if (currentActivation !== activation || activationController.signal.aborted) return false;
       if (!store.enter({ ...activationContext, workspaceSession: session })) return false;
       workspaceSession = session;
-      return activeNavigationItemId === "workspace-subscription"
+      return isSubscriptionNavigation(activeNavigationItemId)
         ? loadSubscription()
         : loadRates();
     } catch (error) {
@@ -54,13 +54,13 @@ export function createWorkspaceCommercialAccountingController({
 
   async function refresh() {
     if (!workspaceSession || !activationContext) return false;
-    return activationContext.activeNavigationItemId === "workspace-subscription"
+    return isSubscriptionNavigation(activationContext.activeNavigationItemId)
       ? loadSubscription()
       : loadRates();
   }
 
   async function loadSubscription() {
-    if (!workspaceSession || activationContext?.activeNavigationItemId !== "workspace-subscription") {
+    if (!workspaceSession || !isSubscriptionNavigation(activationContext?.activeNavigationItemId)) {
       return false;
     }
     const ticket = store.begin("subscription");
@@ -80,7 +80,7 @@ export function createWorkspaceCommercialAccountingController({
   }
 
   async function loadRates() {
-    if (!workspaceSession || activationContext?.activeNavigationItemId !== "internal-finops") {
+    if (!workspaceSession || !isRateNavigation(activationContext?.activeNavigationItemId)) {
       return false;
     }
     const snapshot = store.snapshot();
@@ -103,7 +103,7 @@ export function createWorkspaceCommercialAccountingController({
   }
 
   async function configureRates(filters = {}) {
-    if (!workspaceSession || activationContext?.activeNavigationItemId !== "internal-finops") {
+    if (!workspaceSession || !isRateNavigation(activationContext?.activeNavigationItemId)) {
       return false;
     }
     store.configureRates(filters);
@@ -118,7 +118,7 @@ export function createWorkspaceCommercialAccountingController({
 
   async function submitDispute({ command, expectedSourceRevision }, stepUp) {
     const snapshot = store.snapshot();
-    if (!workspaceSession || snapshot.navigation !== "workspace-subscription"
+    if (!workspaceSession || !isSubscriptionNavigation(snapshot.navigation)
       || !snapshot.canSubmitDispute) return false;
     const fingerprint = JSON.stringify({ command, expectedSourceRevision });
     return mutate({
@@ -144,7 +144,7 @@ export function createWorkspaceCommercialAccountingController({
 
   async function applyRate({ command, expectedHeadRevision, resourceId }, stepUp) {
     const snapshot = store.snapshot();
-    if (!workspaceSession || snapshot.navigation !== "internal-finops"
+    if (!workspaceSession || !isRateNavigation(snapshot.navigation)
       || !snapshot.canManageRates) return false;
     const target = String(resourceId ?? rateResourceId(command));
     const fingerprint = JSON.stringify({ command, expectedHeadRevision, resourceId: target });
@@ -264,6 +264,14 @@ function rateResourceId(command) {
     String(command?.model_id ?? ""),
     String(command?.currency ?? ""),
   ].join(":");
+}
+
+function isSubscriptionNavigation(value) {
+  return value === "workspace-subscription" || value === "billing-disputes";
+}
+
+function isRateNavigation(value) {
+  return value === "internal-finops" || value === "model-prices";
 }
 
 function compactObject(value) {

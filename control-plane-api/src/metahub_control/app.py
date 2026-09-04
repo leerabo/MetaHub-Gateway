@@ -18,14 +18,12 @@ from starlette.requests import Request
 from .adapter_contracts import internal_router as adapter_contracts_internal_router
 from .adapter_specs.routes import internal_router as adapter_specs_internal_router
 from .admin_assistant import install_admin_assistant_scheduler
-from .admin_assistant import router as admin_assistant_router
 from .approvals import install_approval_scheduler
-from .approvals import router as approvals_router
+from .approvals import runtime_router as approvals_router
 from .audit import install_audit_export_scheduler
 from .audit.routes import router as audit_router
 from .auth.routes import router as auth_router
 from .batch_jobs import router as batch_jobs_router
-from .billing_disputes import router as billing_disputes_router
 from .brand_domains import install_brand_domain_scheduler
 from .brand_domains import router as brand_domains_router
 from .budgets.routes import router as budgets_router
@@ -37,17 +35,16 @@ from .commercial_accounting import install_commercial_accounting_scheduler
 from .commercial_accounting import router as commercial_accounting_router
 from .compliance_center import install_compliance_scheduler
 from .compliance_center import router as compliance_center_router
-from .config.routes import router as config_router
 from .config_distribution import router as config_distribution_router
 from .config_transfer.routes import router as config_transfer_router
-from .console.routes import router as console_router
 from .console_experience import install_console_experience_scheduler
 from .console_experience import router as console_experience_router
+from .console_migration import router as console_migration_router
+from .console_migration.manifest import configured_installer_definitions
 from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
 from .customer_support.routes import router as customer_support_router
 from .customer_support.scheduler import install_customer_support_scheduler
-from .dashboard.routes import router as dashboard_router
 from .data_governance import install_data_governance_scheduler
 from .data_governance import router as data_governance_router
 from .debug_console.routes import router as debug_console_router
@@ -82,7 +79,6 @@ from .mcp_governance import install_mcp_scheduler
 from .mcp_governance import router as mcp_governance_router
 from .migration_operations.routes import router as migration_operations_router
 from .model_aliases.routes import router as model_aliases_router
-from .model_prices.routes import router as model_prices_router
 from .model_quality_scores.routes import router as model_quality_scores_router
 from .models.routes import router as models_router
 from .notifications import install_notification_scheduler
@@ -91,7 +87,7 @@ from .observability import install_observability_scheduler
 from .observability import router as observability_router
 from .payment_commerce import router as payment_commerce_router
 from .permissions.routes import router as permissions_router
-from .plan_billing import router as plan_billing_router
+from .plan_billing import runtime_router as plan_billing_router
 from .platform_access.routes import router as platform_access_router
 from .platform_billing import router as platform_billing_router
 from .platform_customer_success import install_platform_customer_success_scheduler
@@ -103,6 +99,7 @@ from .platform_growth import router as platform_growth_router
 from .platform_infrastructure import router as platform_infrastructure_router
 from .platform_jobs import install_platform_job_supervisor
 from .platform_jobs import router as platform_jobs_router
+from .platform_jobs.supervisor import SchedulerInstallerBinding
 from .policies.routes import router as policies_router
 from .policy_snapshots.routes import router as policy_snapshots_router
 from .policy_templates.routes import router as policy_templates_router
@@ -140,7 +137,6 @@ from .tenant_data.routes import router as tenant_data_router
 from .tenants.routes import router as tenant_router
 from .usage.routes import router as usage_router
 from .usage.scheduler import install_usage_export_scheduler
-from .user_preferences.routes import router as user_preferences_router
 from .users.routes import router as users_router
 from .virtual_keys.routes import router as virtual_keys_router
 from .webhooks import install_webhook_replay_scheduler
@@ -206,21 +202,15 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         in {
             "/cache-policies",
             "/cache/invalidate",
-            "/admin-assistant/query",
-            "/plans",
             "/quota-buckets",
             "/quota-adjustments",
-            "/product-analytics/funnel",
         }
-        or request.url.path == "/billing-disputes"
-        or request.url.path.startswith("/billing-disputes/")
         or request.url.path == "/notifications"
         or request.url.path.startswith("/notifications/")
         or request.url.path == "/notification-preferences"
         or request.url.path == "/local-endpoints"
         or request.url.path.startswith("/local-endpoints/")
-        or request.url.path == "/branding"
-        or request.url.path.startswith("/branding/")
+        or request.url.path == "/branding/public"
         or request.url.path
         in {
             "/identity/workspaces",
@@ -247,7 +237,11 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         or request.url.path.startswith("/workspace/support-grants/")
         or request.url.path.startswith("/workspace/break-glass-sessions/")
         or request.url.path == "/subscriptions"
-        or request.url.path.startswith("/subscriptions/")
+        or (
+            request.url.path.startswith("/subscriptions/")
+            and request.url.path != "/subscriptions/current"
+            and not request.url.path.startswith("/subscriptions/current/")
+        )
         or request.url.path == "/billing/summary"
         or request.url.path == "/billing/usage"
         or request.url.path == "/billing/reconciliation-export"
@@ -301,9 +295,6 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Vary"] = "Authorization"
-    if request.url.path == "/admin-assistant/query":
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Vary"] = "Authorization"
     return response
 
 
@@ -325,6 +316,7 @@ app.include_router(customer_support_router)
 app.include_router(business_verification_router)
 app.include_router(commercial_accounting_router)
 app.include_router(console_experience_router)
+app.include_router(console_migration_router)
 app.include_router(invoice_reconciliation_router)
 app.include_router(notifications_router)
 app.include_router(observability_router)
@@ -341,18 +333,13 @@ app.include_router(platform_infrastructure_router)
 app.include_router(platform_gateway_router)
 app.include_router(platform_jobs_router)
 app.include_router(payment_commerce_router)
-app.include_router(admin_assistant_router)
 app.include_router(approvals_router)
 app.include_router(batch_jobs_router)
-app.include_router(billing_disputes_router)
 app.include_router(adapter_contracts_internal_router)
 app.include_router(adapter_specs_internal_router)
 app.include_router(audit_router)
-app.include_router(console_router)
 app.include_router(cost_anomalies_router)
-app.include_router(dashboard_router)
 app.include_router(data_governance_router)
-app.include_router(config_router)
 app.include_router(config_distribution_router)
 app.include_router(config_transfer_router)
 app.include_router(debug_console_router)
@@ -370,7 +357,6 @@ app.include_router(file_security_router)
 app.include_router(finops_router)
 app.include_router(tenant_router)
 app.include_router(tenant_data_router)
-app.include_router(user_preferences_router)
 app.include_router(users_router)
 app.include_router(invitations_router)
 app.include_router(intent_security_router)
@@ -385,7 +371,6 @@ app.include_router(projects_router)
 app.include_router(prompt_templates_router)
 app.include_router(provider_keys_router)
 app.include_router(models_router)
-app.include_router(model_prices_router)
 app.include_router(model_aliases_router)
 app.include_router(model_quality_scores_router)
 app.include_router(mcp_governance_router)
@@ -405,48 +390,55 @@ app.include_router(usage_router)
 app.include_router(budgets_router)
 app.include_router(webhooks_router)
 # A single supervisor owns startup and reverse-order shutdown for every Control worker.
-_scheduler_installers = [install_status_publication_scheduler]
-if app.state.config.gateway_placement_enabled:
-    _scheduler_installers.append(install_gateway_snapshot_scheduler)
-if app.state.config.control_background_schedulers_enabled:
-    _scheduler_installers.extend(
-        (
-            install_admin_assistant_scheduler,
-            install_provider_health_scheduler,
-            install_usage_export_scheduler,
-            install_cost_anomaly_scheduler,
-            install_platform_customer_success_scheduler,
-            install_customer_support_scheduler,
-            install_developer_contract_scheduler,
-            install_privacy_scheduler,
-            install_compliance_scheduler,
-            install_supply_chain_scheduler,
-            install_security_assurance_scheduler,
-            install_launch_governance_scheduler,
-            install_request_explanation_scheduler,
-            install_request_log_query_event_scheduler,
-            install_platform_provider_engineering_scheduler,
-            install_audit_export_scheduler,
-            install_webhook_replay_scheduler,
-            install_file_security_event_scheduler,
-            install_experiment_scheduler,
-            install_response_cache_outbox_scheduler,
-            install_platform_growth_scheduler,
-            install_approval_scheduler,
-            install_commercial_accounting_scheduler,
-            install_console_experience_scheduler,
-            install_notification_scheduler,
-            install_observability_scheduler,
-            install_risk_scheduler,
-            install_channel_scheduler,
-            install_brand_domain_scheduler,
-            install_security_event_scheduler,
-            install_mcp_scheduler,
-            install_tenant_data_scheduler,
-            install_data_governance_scheduler,
-            install_edge_support_bundle_scheduler,
-        )
+_scheduler_installers_by_name = {
+    installer.__name__: installer
+    for installer in (
+        install_status_publication_scheduler,
+        install_gateway_snapshot_scheduler,
+        install_admin_assistant_scheduler,
+        install_provider_health_scheduler,
+        install_usage_export_scheduler,
+        install_cost_anomaly_scheduler,
+        install_platform_customer_success_scheduler,
+        install_customer_support_scheduler,
+        install_developer_contract_scheduler,
+        install_privacy_scheduler,
+        install_compliance_scheduler,
+        install_supply_chain_scheduler,
+        install_security_assurance_scheduler,
+        install_launch_governance_scheduler,
+        install_request_explanation_scheduler,
+        install_request_log_query_event_scheduler,
+        install_platform_provider_engineering_scheduler,
+        install_audit_export_scheduler,
+        install_webhook_replay_scheduler,
+        install_file_security_event_scheduler,
+        install_experiment_scheduler,
+        install_response_cache_outbox_scheduler,
+        install_platform_growth_scheduler,
+        install_approval_scheduler,
+        install_commercial_accounting_scheduler,
+        install_notification_scheduler,
+        install_observability_scheduler,
+        install_risk_scheduler,
+        install_channel_scheduler,
+        install_brand_domain_scheduler,
+        install_security_event_scheduler,
+        install_mcp_scheduler,
+        install_tenant_data_scheduler,
+        install_data_governance_scheduler,
+        install_edge_support_bundle_scheduler,
+        install_console_experience_scheduler,
     )
+}
+_scheduler_installers = tuple(
+    SchedulerInstallerBinding(
+        definition.code,
+        _scheduler_installers_by_name[definition.installer_name],
+    )
+    for definition in configured_installer_definitions(app.state.config)
+    if definition.installer_name is not None
+)
 install_platform_job_supervisor(app, scheduler_installers=_scheduler_installers)
 # Risk facts persist from a bounded background queue; request paths never wait on SQLite writes.
 install_risk_runtime(app, sink=persistence_sink(app.state.config))

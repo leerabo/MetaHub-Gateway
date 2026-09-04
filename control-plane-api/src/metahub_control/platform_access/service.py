@@ -113,6 +113,12 @@ _NAVIGATION = (
         "/platform.html#approvals",
     ),
     (
+        "platform.console_migration.read",
+        "console-migration",
+        "Console migration",
+        "/platform.html#console-migration",
+    ),
+    (
         "platform.infrastructure.read",
         "infrastructure",
         "Infrastructure",
@@ -294,6 +300,7 @@ _PERMISSION_EXTENSION_TABLES = (
     "platform_provider_engineering_role_permissions",
     "platform_commercial_role_permissions",
     "platform_console_role_permissions",
+    "platform_console_migration_role_permissions",
 )
 
 

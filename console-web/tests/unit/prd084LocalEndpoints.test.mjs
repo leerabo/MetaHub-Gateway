@@ -397,7 +397,9 @@ test("main, navigation, privacy, and responsive source contracts are wired witho
     readFile(new URL("../../src/i18n/messages.js", import.meta.url), "utf8"),
   ]);
   assert.match(main, /loadLocalEndpointsState\(consoleShellState, refreshId\)/);
-  assert.match(main, /activeNavigationItemId === "local-models"[\s\S]{0,80}\? null[\s\S]{0,80}: await loadProvidersState\(\)/);
+  assert.match(main, /case "local-models":[\s\S]*load\("localEndpointsState", \(\) => loadLocalEndpointsState\(consoleShellState, refreshId\)\)/);
+  const activeLoader = main.slice(main.indexOf('case "local-models":'), main.indexOf('case "private-gateways":'));
+  assert.doesNotMatch(activeLoader, /loadProvidersState/);
   assert.match(main, /handleLocalEndpointAuthenticationFailure/);
   assert.match(main, /localEndpointPageState\.clear\(\)/);
   assert.match(main, /isLoadCurrent\(operation, currentOwner, refreshId\)/);

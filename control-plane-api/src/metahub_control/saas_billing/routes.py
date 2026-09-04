@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.convertors import Convertor, register_url_convertor
 
 from metahub_control.identity.service import valid_opaque_value
 from metahub_control.platform_access.constants import (
@@ -47,6 +48,21 @@ from .service import (
     list_platform_plans,
     list_public_plans,
 )
+
+
+class _SubscriptionIdConvertor(Convertor[str]):
+    regex = r"sub_[0-9a-f]{32}"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        if re.fullmatch(self.regex, value) is None:
+            raise ValueError("invalid subscription id")
+        return value
+
+
+register_url_convertor("saas_subscription_id", _SubscriptionIdConvertor())
 
 router = APIRouter(tags=["saas-billing"])
 _MAX_BODY_BYTES = 8 * 1024
@@ -429,11 +445,27 @@ def _trace_id(request: Request) -> str:
 # The PRD-144 runtime owns both Platform plan methods. Keep the full router for
 # isolated PRD-098 compatibility tests until PRD-147 removes the legacy surface.
 runtime_router = APIRouter()
-runtime_router.routes.extend(
-    route
-    for route in router.routes
-    if not (
-        getattr(route, "path", None) == "/platform/plans"
-        and bool(getattr(route, "methods", set()) & {"GET", "POST"})
-    )
-)
+for route in router.routes:
+    if (
+        (
+            getattr(route, "path", None) == "/platform/plans"
+            and bool(getattr(route, "methods", set()) & {"GET", "POST"})
+        )
+        or getattr(route, "path", None)
+        in {
+            "/subscriptions/current",
+            "/subscriptions/current/change-plan",
+            "/subscriptions/{subscription_id}",
+        }
+    ):
+        continue
+    runtime_router.routes.append(route)
+
+# The production router must not let retired literal aliases such as `current` fall
+# through to the surviving object endpoint. The compatibility router keeps its original
+# unconstrained path for the isolated PRD-098 contract suite.
+runtime_router.patch(
+    "/subscriptions/{subscription_id:saas_subscription_id}",
+    response_model=SubscriptionResponse,
+    tags=["saas-billing"],
+)(patch_subscription)

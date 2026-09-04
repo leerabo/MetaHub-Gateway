@@ -66,9 +66,7 @@ CapacityRunnerMode = Literal["disabled", "test_loopback", "isolated_http"]
 DEFAULT_CACHE_AFFINITY_HMAC_SECRET = "dev-only-change-me-metahub-cache-affinity-hmac-secret"
 DEFAULT_IDENTITY_SESSION_SECRET = "dev-only-change-me-metahub-identity-session-secret-2026"
 DEFAULT_IDENTITY_CHALLENGE_SECRET = "dev-only-change-me-metahub-identity-challenge-secret-2026"
-DEFAULT_ENTERPRISE_SSO_HMAC_SECRET = (
-    "dev-only-change-me-metahub-enterprise-sso-hmac-secret-2026"
-)
+DEFAULT_ENTERPRISE_SSO_HMAC_SECRET = "dev-only-change-me-metahub-enterprise-sso-hmac-secret-2026"
 DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET = (
     "dev-only-change-me-metahub-enterprise-sso-encryption-secret-2026"
 )
@@ -538,14 +536,10 @@ class AppConfig(BaseModel):
     gateway_placement_enabled: bool = False
     gateway_cell_code: str | None = None
     gateway_placement_signing_version: int = 1
-    gateway_placement_signing_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    gateway_placement_signing_secret: str | None = Field(default=None, exclude=True, repr=False)
     gateway_placement_snapshot_ttl_seconds: int = 30
     edge_snapshot_signing_version: int = 1
-    edge_snapshot_signing_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    edge_snapshot_signing_secret: str | None = Field(default=None, exclude=True, repr=False)
     gateway_capacity_tenant_limit: int = 100
     gateway_capacity_workspace_limit: int = 50
     gateway_capacity_key_limit: int = 10
@@ -560,9 +554,7 @@ class AppConfig(BaseModel):
     payment_webhook_previous_key_version: int | None = None
     payment_webhook_previous_secret: str | None = Field(default=None, exclude=True, repr=False)
     payment_receipt_encryption_key_version: int = 1
-    payment_receipt_encryption_secret: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    payment_receipt_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     payment_receipt_storage_root: str = Field(
         default=".data/payment-receipts", exclude=True, repr=False
     )
@@ -592,9 +584,7 @@ class AppConfig(BaseModel):
     kms_provider: Literal["disabled", "aws", "test"] = "disabled"
     kms_key_id: str | None = Field(default=None, exclude=True, repr=False)
     kms_test_master_key: str | None = Field(default=None, exclude=True, repr=False)
-    config_distribution_signing_key_id: str | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    config_distribution_signing_key_id: str | None = Field(default=None, exclude=True, repr=False)
     status_bundle_root: str = Field(default=".data/status-page", exclude=True, repr=False)
     status_bundle_ttl_seconds: int = 86_400
     edge_support_bundle_root: str = Field(
@@ -853,9 +843,7 @@ class AppConfig(BaseModel):
         default=".data/private-gateway/local-keystore.json", exclude=True, repr=False
     )
     local_secret_deployment_id: str | None = None
-    local_secret_admin_handoff_secret: bytes | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    local_secret_admin_handoff_secret: bytes | None = Field(default=None, exclude=True, repr=False)
     local_management_allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173"]
     )
@@ -1108,21 +1096,15 @@ def load_app_config(service_name: str) -> AppConfig:
     identity_session_secret = _value(values, "METAHUB_IDENTITY_SESSION_SECRET")
     identity_challenge_secret = _value(values, "METAHUB_IDENTITY_CHALLENGE_SECRET")
     enterprise_sso_hmac_secret = _value(values, "METAHUB_ENTERPRISE_SSO_HMAC_SECRET")
-    enterprise_sso_encryption_secret = _value(
-        values, "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET"
-    )
+    enterprise_sso_encryption_secret = _value(values, "METAHUB_ENTERPRISE_SSO_ENCRYPTION_SECRET")
     workspace_session_secret = _value(values, "METAHUB_WORKSPACE_SESSION_SECRET")
     platform_session_secret = _value(values, "METAHUB_PLATFORM_SESSION_SECRET")
     support_session_secret = _value(values, "METAHUB_SUPPORT_SESSION_SECRET")
-    identity_mfa_encryption_secret = _value(
-        values, "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET"
-    )
+    identity_mfa_encryption_secret = _value(values, "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET")
     platform_bootstrap_recovery_secret = _value(
         values, "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET"
     )
-    identity_pii_encryption_secret = _value(
-        values, "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET"
-    )
+    identity_pii_encryption_secret = _value(values, "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET")
     identity_challenge_delivery_mode = (
         _value(values, "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE").strip().lower()
     )
@@ -1136,9 +1118,7 @@ def load_app_config(service_name: str) -> AppConfig:
         values, "METAHUB_GATEWAY_PLACEMENT_SIGNING_SECRET"
     )
     gateway_placement_signing_secret = configured_gateway_placement_secret or (
-        DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET
-        if environment in {"dev", "test"}
-        else None
+        DEFAULT_GATEWAY_PLACEMENT_SIGNING_SECRET if environment in {"dev", "test"} else None
     )
     if gateway_placement_enabled and (
         gateway_placement_signing_secret is None
@@ -1174,12 +1154,13 @@ def load_app_config(service_name: str) -> AppConfig:
             ),
         )
 
-    if gateway_placement_enabled and service_name == "gateway-data-plane" and (
-        gateway_cell_code is None
-        or re.fullmatch(
-            r"[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?", gateway_cell_code
+    if (
+        gateway_placement_enabled
+        and service_name == "gateway-data-plane"
+        and (
+            gateway_cell_code is None
+            or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?", gateway_cell_code) is None
         )
-        is None
     ):
         raise ConfigError(
             code="infra.config_invalid",
@@ -1194,9 +1175,7 @@ def load_app_config(service_name: str) -> AppConfig:
         values, "METAHUB_BUSINESS_VERIFICATION_ENCRYPTION_SECRET"
     )
     business_verification_encryption_secret = configured_business_verification_secret or (
-        DEFAULT_BUSINESS_VERIFICATION_ENCRYPTION_SECRET
-        if environment in {"dev", "test"}
-        else None
+        DEFAULT_BUSINESS_VERIFICATION_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
     if business_verification_encryption_secret is not None:
         try:
@@ -1245,9 +1224,7 @@ def load_app_config(service_name: str) -> AppConfig:
         DEFAULT_PAYMENT_WEBHOOK_SECRET if environment in {"dev", "test"} else None
     )
     payment_receipt_encryption_secret = configured_payment_receipt_secret or (
-        DEFAULT_PAYMENT_RECEIPT_ENCRYPTION_SECRET
-        if environment in {"dev", "test"}
-        else None
+        DEFAULT_PAYMENT_RECEIPT_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
     if (payment_webhook_previous_key_version is None) != (
         payment_webhook_previous_secret is None
@@ -1352,17 +1329,13 @@ def load_app_config(service_name: str) -> AppConfig:
         or not 32 <= len(enterprise_sso_encryption_secret.encode("utf-8")) <= 512
         or _secret_reused(enterprise_sso_hmac_secret, enterprise_sso_forbidden_secrets)
         or _secret_reused(enterprise_sso_encryption_secret, enterprise_sso_forbidden_secrets)
-        or hmac.compare_digest(
-            enterprise_sso_hmac_secret, enterprise_sso_encryption_secret
-        )
+        or hmac.compare_digest(enterprise_sso_hmac_secret, enterprise_sso_encryption_secret)
     )
     invalid_enterprise_sso_secret = invalid_enterprise_sso_secret or (
         service_name == "control-plane-api"
         and environment == "prod"
         and (
-            hmac.compare_digest(
-                enterprise_sso_hmac_secret, DEFAULT_ENTERPRISE_SSO_HMAC_SECRET
-            )
+            hmac.compare_digest(enterprise_sso_hmac_secret, DEFAULT_ENTERPRISE_SSO_HMAC_SECRET)
             or hmac.compare_digest(
                 enterprise_sso_encryption_secret,
                 DEFAULT_ENTERPRISE_SSO_ENCRYPTION_SECRET,
@@ -1403,8 +1376,7 @@ def load_app_config(service_name: str) -> AppConfig:
         raise ConfigError(
             code="infra.config_invalid",
             message=(
-                "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET is not an independent production "
-                "secret."
+                "METAHUB_IDENTITY_PII_ENCRYPTION_SECRET is not an independent production secret."
             ),
             suggestion="Configure a unique Identity PII secret of at least 32 characters.",
         )
@@ -1606,9 +1578,7 @@ def load_app_config(service_name: str) -> AppConfig:
     tenant_data_encryption_secret = configured_tenant_data_encryption_secret or (
         DEFAULT_TENANT_DATA_ENCRYPTION_SECRET if environment in {"dev", "test"} else None
     )
-    edge_snapshot_signing_version = _positive_int(
-        values, "METAHUB_EDGE_SNAPSHOT_SIGNING_VERSION"
-    )
+    edge_snapshot_signing_version = _positive_int(values, "METAHUB_EDGE_SNAPSHOT_SIGNING_VERSION")
     configured_edge_snapshot_signing_secret = _raw_optional_value(
         values, "METAHUB_EDGE_SNAPSHOT_SIGNING_SECRET"
     )
@@ -2160,12 +2130,8 @@ def load_app_config(service_name: str) -> AppConfig:
             suggestion="Disable METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK in production.",
         )
 
-    local_secret_management_enabled = _boolean(
-        values, "METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED"
-    )
-    local_secret_deployment_id = _optional_value(
-        values, "METAHUB_LOCAL_SECRET_DEPLOYMENT_ID"
-    )
+    local_secret_management_enabled = _boolean(values, "METAHUB_LOCAL_SECRET_MANAGEMENT_ENABLED")
+    local_secret_deployment_id = _optional_value(values, "METAHUB_LOCAL_SECRET_DEPLOYMENT_ID")
     local_management_allowed_origins = _local_management_origins(
         _value(values, "METAHUB_LOCAL_MANAGEMENT_ALLOWED_ORIGINS"),
         environment=environment,
@@ -2174,9 +2140,7 @@ def load_app_config(service_name: str) -> AppConfig:
     local_management_allowed_client_cidrs = _canonical_network_list(
         _value(values, "METAHUB_LOCAL_MANAGEMENT_ALLOWED_CLIENT_CIDRS")
     )
-    local_management_allow_loopback = _boolean(
-        values, "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK"
-    )
+    local_management_allow_loopback = _boolean(values, "METAHUB_LOCAL_MANAGEMENT_ALLOW_LOOPBACK")
     local_secret_database_path = _value(values, "METAHUB_LOCAL_SECRET_DATABASE_PATH")
     local_secret_keystore_path = _value(values, "METAHUB_LOCAL_SECRET_KEYSTORE_PATH")
     edge_backup_root = _value(values, "METAHUB_EDGE_BACKUP_ROOT")
@@ -2212,16 +2176,12 @@ def load_app_config(service_name: str) -> AppConfig:
         or re.fullmatch(r"edp_[0-9a-f]{32}", local_secret_deployment_id) is None
         or local_secret_admin_handoff_secret is None
         or not 32 <= len(local_secret_admin_handoff_secret) <= 512
-        or any(
-            character < 33 or character > 126
-            for character in local_secret_admin_handoff_secret
-        )
+        or any(character < 33 or character > 126 for character in local_secret_admin_handoff_secret)
         or not set(local_management_allowed_origins).issubset(
             _split_origins(_value(values, "METAHUB_ALLOWED_ORIGINS"))
         )
         or (not local_management_allow_loopback and not local_management_allowed_client_cidrs)
-        or Path(local_secret_database_path).resolve()
-        == Path(local_secret_keystore_path).resolve()
+        or Path(local_secret_database_path).resolve() == Path(local_secret_keystore_path).resolve()
     ):
         raise ConfigError(
             code="infra.config_invalid",
@@ -2466,9 +2426,7 @@ def load_app_config(service_name: str) -> AppConfig:
         object_store_endpoint_url=_optional_value(values, "METAHUB_OBJECT_STORE_ENDPOINT_URL"),
         object_store_region=_optional_value(values, "METAHUB_OBJECT_STORE_REGION"),
         object_store_bucket=_optional_value(values, "METAHUB_OBJECT_STORE_BUCKET"),
-        object_store_access_key_id=_optional_value(
-            values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"
-        ),
+        object_store_access_key_id=_optional_value(values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"),
         object_store_secret_access_key=_optional_value(
             values, "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY"
         ),
@@ -2476,9 +2434,7 @@ def load_app_config(service_name: str) -> AppConfig:
         kms_key_id=_optional_value(values, "METAHUB_KMS_KEY_ID"),
         kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
         backup_worker_enabled=backup_worker_enabled,
-        backup_restore_database_url=_optional_value(
-            values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"
-        ),
+        backup_restore_database_url=_optional_value(values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"),
     )
 
     return AppConfig(
@@ -2569,8 +2525,7 @@ def load_app_config(service_name: str) -> AppConfig:
             "gateway_placement_enabled": gateway_placement_enabled,
             "local_secret_management_enabled": local_secret_management_enabled,
             "payment_commerce_enabled": (
-                payment_webhook_secret is not None
-                and payment_receipt_encryption_secret is not None
+                payment_webhook_secret is not None and payment_receipt_encryption_secret is not None
             ),
         },
         config_items=config_items,
@@ -2583,20 +2538,14 @@ def load_app_config(service_name: str) -> AppConfig:
         database_statement_timeout_ms=database_statement_timeout_ms,
         database_lock_timeout_ms=database_lock_timeout_ms,
         infrastructure_probe_timeout_seconds=infrastructure_probe_timeout_seconds,
-        object_store_endpoint_url=_optional_value(
-            values, "METAHUB_OBJECT_STORE_ENDPOINT_URL"
-        ),
+        object_store_endpoint_url=_optional_value(values, "METAHUB_OBJECT_STORE_ENDPOINT_URL"),
         object_store_region=_optional_value(values, "METAHUB_OBJECT_STORE_REGION"),
         object_store_bucket=_optional_value(values, "METAHUB_OBJECT_STORE_BUCKET"),
-        object_store_access_key_id=_optional_value(
-            values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"
-        ),
+        object_store_access_key_id=_optional_value(values, "METAHUB_OBJECT_STORE_ACCESS_KEY_ID"),
         object_store_secret_access_key=_optional_value(
             values, "METAHUB_OBJECT_STORE_SECRET_ACCESS_KEY"
         ),
-        object_store_force_path_style=_boolean(
-            values, "METAHUB_OBJECT_STORE_FORCE_PATH_STYLE"
-        ),
+        object_store_force_path_style=_boolean(values, "METAHUB_OBJECT_STORE_FORCE_PATH_STYLE"),
         kms_provider=kms_provider,
         kms_key_id=_optional_value(values, "METAHUB_KMS_KEY_ID"),
         kms_test_master_key=_optional_value(values, "METAHUB_KMS_TEST_MASTER_KEY"),
@@ -2613,9 +2562,7 @@ def load_app_config(service_name: str) -> AppConfig:
         backup_worker_enabled=backup_worker_enabled,
         backup_poll_interval_seconds=backup_poll_interval_seconds,
         backup_default_retention_days=backup_default_retention_days,
-        backup_restore_database_url=_optional_value(
-            values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"
-        ),
+        backup_restore_database_url=_optional_value(values, "METAHUB_BACKUP_RESTORE_DATABASE_URL"),
         capacity_runner_mode=capacity_runner_mode,
         capacity_runner_base_url=capacity_runner_base_url,
         capacity_runner_internal_token=capacity_runner_internal_token,
@@ -5220,9 +5167,10 @@ def _validate_production_infrastructure_config(
             message="S3-compatible object store configuration is incomplete.",
             suggestion="Configure endpoint, region, bucket, access key, and secret together.",
         )
-    if object_store_bucket and re.fullmatch(
-        r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", object_store_bucket
-    ) is None:
+    if (
+        object_store_bucket
+        and re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", object_store_bucket) is None
+    ):
         raise ConfigError(
             code="infra.config_invalid",
             message="Object store bucket name is invalid.",
@@ -5261,10 +5209,7 @@ def _validate_production_infrastructure_config(
         not database_url
         or not all(object_values)
         or kms_provider == "disabled"
-        or (
-            database_scheme in {"postgres", "postgresql"}
-            and not backup_restore_database_url
-        )
+        or (database_scheme in {"postgres", "postgresql"} and not backup_restore_database_url)
     ):
         raise ConfigError(
             code="infra.config_invalid",
@@ -5361,11 +5306,7 @@ def _local_management_origins(
             or parsed.query
             or parsed.fragment
             or port == 0
-            or (
-                enabled
-                and parsed.scheme == "http"
-                and (environment == "prod" or not loopback)
-            )
+            or (enabled and parsed.scheme == "http" and (environment == "prod" or not loopback))
         ):
             raise ConfigError(
                 code="infra.config_invalid",
@@ -5400,13 +5341,9 @@ def _workspace_allowed_regions(raw: str | None) -> tuple[str, ...]:
 
 def _workspace_residency_policy_version(raw: str | None) -> str:
     value = (raw or "").strip()
-    if (
-        len(value) not in range(1, 81)
-        or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-            for character in value
-        )
+    if len(value) not in range(1, 81) or any(
+        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in value
     ):
         raise ConfigError(
             code="infra.config_invalid",

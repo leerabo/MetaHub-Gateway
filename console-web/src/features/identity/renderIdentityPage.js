@@ -237,8 +237,6 @@ export function renderIdentitySecurityPage(container, state) {
         ${renderError(state.error)}
         ${renderAccountPreferences(state.accountPreferenceState)}
         ${renderOnboardingSection(state)}
-        ${renderSaasSubscriptionSection(state)}
-        ${renderPaymentCommerceSection(state)}
         ${renderWorkspaceBillingSection(state)}
         ${renderInvoiceSection(state)}
         ${renderBusinessVerificationSection(state)}
@@ -547,46 +545,6 @@ function renderOnboardingSection(state) {
   `;
 }
 
-function renderSaasSubscriptionSection(state) {
-  const context = state.workspaceContext ?? null;
-  if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
-  const plans = Array.isArray(state.saasCatalog?.plans) ? state.saasCatalog.plans : [];
-  const versions = plans.flatMap((plan) => (plan.versions ?? []).map((version) => ({
-    ...version,
-    plan_code: plan.plan_code,
-    display_name: plan.display_name,
-  })));
-  const response = state.subscription ?? {};
-  const current = response.subscription ?? null;
-  const entitlement = response.entitlement ?? null;
-  const trial = response.trial ?? null;
-  const order = response.latest_order ?? null;
-  const currentPlan = versions.find((version) => version.plan_version_id === current?.plan_version_id);
-  const pendingPlan = versions.find(
-    (version) => version.plan_version_id === current?.pending_plan_version_id,
-  );
-  const candidates = versions.filter((version) => (
-    version.status === "published"
-    && version.plan_version_id !== current?.plan_version_id
-    && version.plan_version_id !== current?.pending_plan_version_id
-  ));
-  return `
-    <section class="identity-subscription" aria-labelledby="identity-subscription-title">
-      <div class="identity-section-heading">
-        <div><p>SaaS 商业化</p><h2 id="identity-subscription-title">套餐与权益</h2></div>
-        <button class="identity-icon-command" type="button" data-identity-action="refresh-subscription" aria-label="刷新套餐与权益" title="刷新套餐与权益" ${state.subscriptionBusy ? "disabled" : ""}>↻</button>
-      </div>
-      ${state.subscriptionError ? renderError(state.subscriptionError) : ""}
-      ${current ? renderCurrentSubscription(current, currentPlan, pendingPlan, trial, order) : renderNoSubscription()}
-      ${entitlement ? renderEntitlementFacts(entitlement.entitlements) : ""}
-      <div class="identity-saas-plan-list" aria-label="可用套餐">
-        ${plans.map((plan) => renderSaasPlan(plan, current?.plan_version_id, current?.pending_plan_version_id)).join("") || '<p class="identity-empty">当前没有已发布套餐。</p>'}
-      </div>
-      ${renderSubscriptionCommand(current, candidates, state.subscriptionBusy)}
-    </section>
-  `;
-}
-
 function renderWorkspaceBillingSection(state) {
   const context = state.workspaceContext ?? null;
   if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
@@ -638,7 +596,7 @@ function renderStatementTable(statements, invoice, busy) {
             <td data-label="税率">${formatTaxRate(statement.tax_rate_basis_points)}</td>
             <td data-label="原币金额"><strong>${escapeHtml(formatMinorMoney(statement.total_minor, statement.currency))}</strong><span>未税 ${escapeHtml(formatMinorMoney(statement.subtotal_minor, statement.currency))} · 税 ${escapeHtml(formatMinorMoney(statement.tax_minor, statement.currency))}</span></td>
             <td data-label="发票申请">${current
-              ? `<span class="identity-commerce-status is-${escapeAttribute(invoice.status)}">${escapeHtml(invoiceStatusLabel(invoice.status))}</span>`
+              ? `<span class="identity-invoice-status is-${escapeAttribute(invoice.status)}">${escapeHtml(invoiceStatusLabel(invoice.status))}</span>`
               : `<form class="identity-invoice-request" data-invoice-request-form>
                   <input name="billingStatementId" type="hidden" value="${escapeAttribute(statement.billing_statement_id)}" />
                   <label><span class="identity-visually-hidden">发票类型</span><select name="invoiceType" aria-label="发票类型"><option value="electronic_general">电子普票</option><option value="electronic_special">电子专票</option></select></label>
@@ -666,102 +624,6 @@ function renderCurrentInvoice(invoice, busy) {
         </div>`).join("") || '<p class="identity-empty">Provider 正在生成发票产物。</p>'}
       </div>
     </div>
-  `;
-}
-
-function renderPaymentCommerceSection(state) {
-  const context = state.workspaceContext ?? null;
-  if (!context || !new Set(["owner", "finance_admin"]).has(context.role)) return "";
-  const response = state.billingOrders ?? {};
-  const orders = Array.isArray(response.orders) ? response.orders : [];
-  const intents = Array.isArray(response.payment_intents) ? response.payment_intents : [];
-  const refunds = Array.isArray(response.refunds) ? response.refunds : [];
-  const dunning = Array.isArray(response.dunning_cases) ? response.dunning_cases : [];
-  const payable = orders.filter((order) => order.status === "pending_payment" && !intents.some(
-    (intent) => intent.order_id === order.order_id
-      && new Set(["requires_action", "processing", "succeeded"]).has(intent.status),
-  ));
-  const refundable = orders.filter(
-    (order) => order.captured_amount_minor > order.refunded_amount_minor,
-  );
-  return `
-    <section class="identity-payment-commerce" aria-labelledby="identity-payment-commerce-title" aria-busy="${state.paymentBusy === true}">
-      <div class="identity-section-heading">
-        <div><p>商业交易</p><h2 id="identity-payment-commerce-title">订单、支付与退款</h2></div>
-        <button class="identity-icon-command" type="button" data-identity-action="refresh-payment-commerce" aria-label="刷新订单与支付" title="刷新订单与支付" ${state.paymentBusy ? "disabled" : ""}>↻</button>
-      </div>
-      ${state.paymentError ? renderError(state.paymentError) : ""}
-      ${dunning.length ? renderDunningFacts(dunning) : ""}
-      ${orders.length ? renderOrderTable(orders) : '<p class="identity-empty">当前没有订阅订单。</p>'}
-      ${intents.length || refunds.length ? renderPaymentHistory(intents, refunds) : ""}
-      <div class="identity-payment-commands">
-        ${renderPaymentIntentForm(payable, state.paymentBusy)}
-        ${renderRefundForm(refundable, state.paymentBusy)}
-      </div>
-    </section>
-  `;
-}
-
-function renderOrderTable(orders) {
-  return `
-    <div class="identity-payment-table-wrap">
-      <table class="identity-payment-table">
-        <thead><tr><th>订单</th><th>类型</th><th>状态</th><th>应付</th><th>实收</th><th>已退</th></tr></thead>
-        <tbody>${orders.map((order) => `
-          <tr>
-            <td data-label="订单"><strong>${escapeHtml(order.order_id)}</strong><span>${escapeHtml(formatIdentityDate(order.created_at))}</span></td>
-            <td data-label="类型">${escapeHtml(orderKindLabel(order.order_kind))}</td>
-            <td data-label="状态"><span class="identity-commerce-status is-${escapeAttribute(order.status)}">${escapeHtml(commerceStatusLabel(order.status))}</span></td>
-            <td data-label="应付">${escapeHtml(formatMinorMoney(order.amount_minor, order.currency))}</td>
-            <td data-label="实收">${escapeHtml(formatMinorMoney(order.captured_amount_minor, order.currency))}</td>
-            <td data-label="已退">${escapeHtml(formatMinorMoney(order.refunded_amount_minor, order.currency))}</td>
-          </tr>`).join("")}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderPaymentHistory(intents, refunds) {
-  return `
-    <div class="identity-payment-history">
-      <div><span>支付意图</span><strong>${formatIdentityNumber(intents.length)}</strong><small>${escapeHtml(latestCommerceState(intents, "暂无支付"))}</small></div>
-      <div><span>退款申请</span><strong>${formatIdentityNumber(refunds.length)}</strong><small>${escapeHtml(latestCommerceState(refunds, "暂无退款"))}</small></div>
-    </div>
-    ${refunds.length ? `<div class="identity-payment-table-wrap"><table class="identity-payment-table identity-refund-table"><thead><tr><th>退款</th><th>订单</th><th>原因</th><th>金额</th><th>状态</th></tr></thead><tbody>${refunds.map((refund) => `<tr><td data-label="退款"><strong>${escapeHtml(refund.refund_id)}</strong><span>${escapeHtml(formatIdentityDate(refund.requested_at))}</span></td><td data-label="订单">${escapeHtml(refund.order_id)}</td><td data-label="原因">${escapeHtml(refundReasonLabel(refund.reason_code))}</td><td data-label="金额">${escapeHtml(formatMinorMoney(refund.amount_minor, refund.currency))}</td><td data-label="状态"><span class="identity-commerce-status is-${escapeAttribute(refund.status)}">${escapeHtml(commerceStatusLabel(refund.status))}</span></td></tr>`).join("")}</tbody></table></div>` : ""}
-  `;
-}
-
-function renderDunningFacts(cases) {
-  const active = cases.filter((item) => item.status === "open");
-  return `<div class="identity-dunning-strip"><div><span>催收案件</span><strong>${formatIdentityNumber(cases.length)}</strong></div><div><span>待处理</span><strong>${formatIdentityNumber(active.length)}</strong></div><div><span>下一动作</span><strong>${escapeHtml(formatIdentityDate(active[0]?.next_action_at))}</strong></div></div>`;
-}
-
-function renderPaymentIntentForm(orders, busy) {
-  if (!orders.length) return '<div class="identity-payment-command-empty"><strong>支付意图</strong><span>当前没有可发起支付的订单。</span></div>';
-  return `
-    <form data-payment-intent-form autocomplete="off">
-      <div><strong>发起支付</strong><span>一次性渠道凭据不会保存在页面状态中。</span></div>
-      <label><span>待支付订单</span><select name="orderId" required>${orders.map((order) => `<option value="${escapeAttribute(order.order_id)}">${escapeHtml(orderKindLabel(order.order_kind))} · ${escapeHtml(formatMinorMoney(order.amount_minor, order.currency))}</option>`).join("")}</select></label>
-      <label><span>支付渠道</span><select name="provider"><option value="mockpay">MockPay</option><option value="cloudpay">CloudPay</option></select></label>
-      <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>创建支付意图</button>
-    </form>
-  `;
-}
-
-function renderRefundForm(orders, busy) {
-  if (!orders.length) return '<div class="identity-payment-command-empty"><strong>申请退款</strong><span>当前没有可退款的已收款订单。</span></div>';
-  const maximum = Math.max(...orders.map(
-    (order) => order.captured_amount_minor - order.refunded_amount_minor,
-  ));
-  return `
-    <form data-refund-request-form autocomplete="off">
-      <div><strong>申请退款</strong><span>金额使用原币最小单位，提交后由平台账务审核。</span></div>
-      <label><span>已收款订单</span><select name="orderId" required>${orders.map((order) => `<option value="${escapeAttribute(order.order_id)}">可退 ${escapeHtml(formatMinorMoney(order.captured_amount_minor - order.refunded_amount_minor, order.currency))} · ${escapeHtml(order.order_id)}</option>`).join("")}</select></label>
-      <label><span>退款金额（最小单位）</span><input name="amountMinor" type="number" min="1" max="${maximum}" step="1" required /></label>
-      <label><span>原因</span><select name="reasonCode"><option value="customer_request">客户申请</option><option value="service_failure">服务故障</option><option value="duplicate_charge">重复扣款</option></select></label>
-      <label class="identity-subscription-trial"><input name="confirmed" type="checkbox" required /><span>确认提交审核</span></label>
-      <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>提交退款申请</button>
-    </form>
   `;
 }
 
@@ -869,122 +731,7 @@ function renderWorkspaceMeterRow(meter) {
 }
 
 function renderNoBillingCycle() {
-  return '<div class="identity-subscription-empty"><strong>暂无计量周期</strong><span>首条可计量 Usage 到达后会生成账单周期</span></div>';
-}
-
-function renderNoSubscription() {
-  return '<div class="identity-subscription-empty"><strong>尚未订阅</strong><span>未创建 Workspace 订阅记录</span></div>';
-}
-
-function renderCurrentSubscription(current, currentPlan, pendingPlan, trial, order) {
-  return `
-    <dl class="identity-subscription-summary">
-      <div><dt>当前套餐</dt><dd>${escapeHtml(currentPlan?.display_name ?? current.plan_version_id)}</dd></div>
-      <div><dt>订阅状态</dt><dd>${escapeHtml(subscriptionStatusLabel(current.status))}</dd></div>
-      <div><dt>周期结束</dt><dd>${escapeHtml(formatIdentityDate(current.current_period_ends_at))}</dd></div>
-      <div><dt>待生效套餐</dt><dd>${escapeHtml(pendingPlan?.display_name ?? (current.pending_plan_version_id ? "已登记" : "无"))}</dd></div>
-      <div><dt>试用结束</dt><dd>${escapeHtml(formatIdentityDate(trial?.ends_at))}</dd></div>
-      <div><dt>最近订单</dt><dd>${escapeHtml(order ? subscriptionStatusLabel(order.status) : "无")}</dd></div>
-    </dl>
-  `;
-}
-
-function renderEntitlementFacts(entitlements = {}) {
-  return `
-    <div class="identity-entitlement-strip" aria-label="当前权益">
-      ${entitlementFact("月请求", formatIdentityNumber(entitlements.gateway_requests_per_month))}
-      ${entitlementFact("席位", formatIdentityNumber(entitlements.workspace_seats))}
-      ${entitlementFact("模型别名", formatIdentityNumber(entitlements.model_aliases))}
-      ${entitlementFact("留存", `${formatIdentityNumber(entitlements.retention_days)} 天`)}
-      ${entitlementFact("优先支持", entitlements.priority_support ? "包含" : "不包含")}
-    </div>
-  `;
-}
-
-function entitlementFact(label, value) {
-  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
-}
-
-function renderSaasPlan(plan, currentPlanVersionId, pendingPlanVersionId) {
-  const version = (plan.versions ?? []).find((item) => item.status === "published")
-    ?? plan.versions?.[0];
-  if (!version) return "";
-  const marker = version.plan_version_id === currentPlanVersionId
-    ? "当前"
-    : version.plan_version_id === pendingPlanVersionId ? "待生效" : "";
-  return `
-    <article class="identity-saas-plan-row">
-      <div><strong>${escapeHtml(plan.display_name)}</strong><span>${escapeHtml(plan.plan_code)} · v${formatIdentityNumber(version.version_number)}</span></div>
-      <div><strong>${escapeHtml(formatPlanPrice(version))}</strong><span>${escapeHtml(billingPeriodLabel(version.billing_period))}</span></div>
-      <div><strong>${formatIdentityNumber(version.entitlements?.workspace_seats)} 席位</strong><span>${formatIdentityNumber(version.entitlements?.gateway_requests_per_month)} 次/月</span></div>
-      <div>${marker ? `<span class="identity-plan-marker">${escapeHtml(marker)}</span>` : `<span>${formatIdentityNumber(version.trial_days)} 天试用</span>`}</div>
-    </article>
-  `;
-}
-
-function renderSubscriptionCommand(current, candidates, busy) {
-  if (candidates.length === 0 && !current) return "";
-  const create = !current;
-  return `
-    <div class="identity-subscription-actions">
-      ${candidates.length ? `<form class="identity-subscription-command" ${create ? "data-saas-subscription-create-form" : "data-saas-subscription-change-form"}>
-        <label><span>目标套餐</span><select name="planVersionId" required>${candidates.map((version) => `<option value="${escapeAttribute(version.plan_version_id)}">${escapeHtml(version.display_name)} · ${escapeHtml(formatPlanPrice(version))}</option>`).join("")}</select></label>
-        ${create ? '<label class="identity-subscription-trial"><input name="startTrial" type="checkbox" /><span>使用可用试用期</span></label>' : ""}
-        <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}>${create ? "创建订阅" : "登记套餐变更"}</button>
-      </form>` : ""}
-      ${current && !new Set(["canceled", "expired"]).has(current.status) ? `<button class="identity-danger-command" type="button" data-identity-action="cancel-subscription" ${busy ? "disabled" : ""}>取消订阅</button>` : ""}
-    </div>
-  `;
-}
-
-function formatPlanPrice(version) {
-  if (version.billing_period === "none" || version.unit_price === "0.00") return "免费";
-  return `${version.currency} ${version.unit_price}`;
-}
-
-function billingPeriodLabel(value) {
-  return ({ none: "无周期", monthly: "每月", yearly: "每年" })[value] ?? String(value ?? "-");
-}
-
-function subscriptionStatusLabel(value) {
-  return ({
-    pending: "待支付",
-    active: "生效中",
-    trialing: "试用中",
-    past_due: "逾期",
-    canceled: "已取消",
-    expired: "已到期",
-    pending_payment: "待支付",
-    not_required: "无需支付",
-    scheduled: "已排期",
-  })[value] ?? String(value ?? "-").replaceAll("_", " ");
-}
-
-function orderKindLabel(value) {
-  return ({ create: "创建订阅", upgrade: "升级", downgrade: "降级", renewal: "续费" })[value]
-    ?? String(value ?? "-").replaceAll("_", " ");
-}
-
-function commerceStatusLabel(value) {
-  return ({
-    pending_payment: "待支付", paid: "已支付", fulfilled: "已履约", past_due: "逾期",
-    canceled: "已取消", refunded: "已全额退款", partially_refunded: "部分退款",
-    requires_action: "等待操作", processing: "处理中", succeeded: "已成功", failed: "失败",
-    requested: "待审核", rejected: "已拒绝", open: "催收中", recovered: "已恢复",
-    closed: "已关闭",
-  })[value] ?? String(value ?? "-").replaceAll("_", " ");
-}
-
-function refundReasonLabel(value) {
-  return ({
-    customer_request: "客户申请",
-    service_failure: "服务故障",
-    duplicate_charge: "重复扣款",
-  })[value] ?? String(value ?? "-").replaceAll("_", " ");
-}
-
-function latestCommerceState(items, empty) {
-  return items.length ? commerceStatusLabel(items[0].status) : empty;
+  return '<div class="identity-empty-strip"><strong>暂无计量周期</strong><span>首条可计量 Usage 到达后会生成账单周期</span></div>';
 }
 
 function formatMinorMoney(value, currency) {

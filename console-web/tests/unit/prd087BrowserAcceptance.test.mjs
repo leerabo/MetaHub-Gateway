@@ -24,17 +24,9 @@ test("PAGE-119 freezes mobile, desktop, and wide acceptance evidence names", () 
   assert.ok(SCREENSHOTS.every((name) => /^page-119-[a-z0-9-]+\.png$/.test(name)));
 });
 
-test("main owns PAGE-119 independently and clears identity, navigation, login, logout, and pagehide boundaries", async () => {
+test("main retires the enterprise Partner portal runtime", async () => {
   const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
-  assert.match(main, /createPartnerPortalPageState\(\{[\s\S]*clearPartnerPortalDom[\s\S]*clearPartnerPortalBranding/);
-  assert.match(main, /pagehide[\s\S]*partnerPortalPageState\.clear\(\)/);
-  assert.match(main, /function renderLogin[\s\S]*partnerPortalPageState\.clear\(\)/);
-  assert.match(main, /logoutButton[\s\S]*partnerPortalPageState\.clear\(\)/);
-  assert.match(main, /clearPartnerPortalStateOnIdentityChange\(authSession\.context, context\)/);
-  assert.match(main, /activeNavigationItemId !== "partner-portal"[\s\S]*partnerPortalPageState\.clear\(\)/);
-  assert.match(main, /itemId !== "partner-portal"[\s\S]*partnerPortalPageState\.clear\(\)/);
-  assert.match(main, /loadPartnerPortalState\(consoleShellState, refreshId\)/);
-  assert.match(main, /partnerPortalState: null,/);
+  assert.doesNotMatch(main, /createPartnerPortalPageState|partnerPortalPageState|loadPartnerPortalState|partnerPortalState:|lib\/partnerPortal/);
 });
 
 test("owner and seven lanes drop late responses before authentication handling", async () => {
@@ -45,10 +37,7 @@ test("owner and seven lanes drop late responses before authentication handling",
   assert.match(state, /"profile", "projects", "customers", "commission", "mutation", "export", "delivery"/);
   assert.match(state, /clearBranding\(\);[\s\S]*clearDom\(\);[\s\S]*pending\.forEach\(\(ticket\) => ticket\?\.controller\.abort\(\)\)/);
   assert.match(state, /operations\[lane\] === ticket[\s\S]*ticket\.generation === generations\[lane\][\s\S]*!ticket\.controller\.signal\.aborted/);
-  assert.match(main, /!partnerPortalPageState\.isCurrent\("profile"[\s\S]*isPartnerPortalAbortError\(error\)[\s\S]*handlePartnerPortalAuthenticationFailure/);
-  assert.match(main, /!partnerPortalPageState\.isCurrent\("customers"[\s\S]*handlePartnerPortalAuthenticationFailure/);
-  assert.match(main, /!partnerPortalPageState\.isCurrent\("commission"[\s\S]*handlePartnerPortalAuthenticationFailure/);
-  assert.match(main, /!partnerPortalPageState\.isCurrent\(lane[\s\S]*handlePartnerPortalAuthenticationFailure/);
+  assert.doesNotMatch(main, /partnerPortalPageState|handlePartnerPortalAuthenticationFailure|isPartnerPortalAbortError/);
 });
 
 test("strict client freezes exact DTOs and attachment validation before Blob URL creation", async () => {
@@ -67,7 +56,7 @@ test("strict client freezes exact DTOs and attachment validation before Blob URL
   assert.doesNotMatch(client, /localStorage|sessionStorage|console\.(?:log|debug|info|warn|error)/);
 });
 
-test("renderer and CSS preserve the workbench at 1440/1280 and data-label rows at 390", async () => {
+test("legacy Partner Portal renderer stays testable while production CSS and navigation stay retired", async () => {
   const [renderer, shell, css, messages, permissions] = await Promise.all([
     readFile(new URL("../../src/features/partner-portal/renderPartnerPortal.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/features/developer-start/renderDeveloperStart.js", import.meta.url), "utf8"),
@@ -75,17 +64,15 @@ test("renderer and CSS preserve the workbench at 1440/1280 and data-label rows a
     readFile(new URL("../../src/i18n/messages.js", import.meta.url), "utf8"),
     readFile(new URL("../../src/lib/permissions.js", import.meta.url), "utf8"),
   ]);
-  assert.match(shell, /case "partner-portal"/);
-  assert.match(shell, /class="panel partner-portal-panel"/);
+  assert.doesNotMatch(shell, /case "partner-portal"/);
+  assert.doesNotMatch(shell, /class="panel partner-portal-panel"/);
   assert.match(renderer, /type="color"/);
   assert.match(renderer, /data-partner-customer-disable/);
   assert.match(renderer, /data-partner-commission-export/);
   assert.match(renderer, /usage_history_notice/);
   assert.match(renderer, /commission_notice/);
-  assert.match(css, /\.partner-portal-layout\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) minmax\(270px, 320px\)/);
-  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.partner-portal-row:not\(\.partner-portal-table-head\) > \*[\s\S]*content: attr\(data-label\)/);
-  assert.match(css, /\.partner-portal-row > \*[\s\S]*overflow-wrap: anywhere/);
-  assert.match(messages, /"nav\.partner-portal"/);
+  assert.doesNotMatch(css, /\.partner-portal-/u);
+  assert.doesNotMatch(messages, /"nav\.partner-portal"/u);
   for (const code of [
     "partner_portal.read", "partner_portal.configure", "partner_customer.manage",
     "partner_branding.manage", "partner_commission.export", "partner_delivery.download",
