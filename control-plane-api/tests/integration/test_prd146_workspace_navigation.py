@@ -85,7 +85,7 @@ def _config(database_url: str) -> AppConfig:
 def runtime(tmp_path_factory: pytest.TempPathFactory):
     database = tmp_path_factory.mktemp("prd146-api") / "prd146.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0138"
+    assert apply_migrations(database_url).applied[-1] == "0139"
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         seed = apply_seed_data(database_url)
@@ -509,6 +509,17 @@ async def test_navigation_catalog_task_truth_and_placement(
     monkeypatch: pytest.MonkeyPatch,
     runtime,
 ) -> None:
+    with closing(connect_database(runtime["config"].database_url)) as connection:
+        connection.execute(
+            "UPDATE account_preferences SET locale='en-US' WHERE account_id=?",
+            (runtime["workspace"].account_id,),
+        )
+        connection.execute(
+            """UPDATE user_preferences SET locale='zh-CN'
+               WHERE tenant_id=? AND user_id=?""",
+            (runtime["workspace"].tenant_id, runtime["workspace"].legacy_user_id),
+        )
+        connection.commit()
     app = _api_app(monkeypatch, runtime)
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -538,6 +549,13 @@ async def test_navigation_catalog_task_truth_and_placement(
         assert response.headers["etag"].startswith('"')
         assert response.headers["x-permission-fingerprint"]
     body = navigation.json()
+    assert body["account_locale"] == "en-US"
+    with closing(connect_database(runtime["config"].database_url)) as connection:
+        expected_locale = connection.execute(
+            "SELECT locale FROM account_preferences WHERE account_id=? AND status='active'",
+            (runtime["workspace"].account_id,),
+        ).fetchone()[0]
+    assert body["account_locale"] == expected_locale
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://control",

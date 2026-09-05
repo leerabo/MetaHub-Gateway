@@ -110,6 +110,7 @@ def get_workspace_navigation(
         )
         result = WorkspaceNavigationResponse(
             owner_ref=_owner_ref(config, actor.workspace_id, actor.tenant_id),
+            account_locale=_account_locale(connection, actor.account_id),
             contract_snapshot_id=str(contract["navigation_contract_snapshot_id"]),
             contract_version=_CONTRACT_VERSION,
             contract_generation=int(contract["generation"]),
@@ -1463,6 +1464,17 @@ def _identity_membership(
     if len(rows) != 1:
         raise ApiError("workspace.not_found")
     return rows[0]
+
+
+def _account_locale(connection: sqlite3.Connection, account_id: str) -> str:
+    rows = connection.execute(
+        """SELECT locale FROM account_preferences
+           WHERE account_id=? AND status='active'""",
+        (account_id,),
+    ).fetchall()
+    if len(rows) != 1 or str(rows[0]["locale"]) not in {"zh-CN", "en-US"}:
+        raise ApiError("workspace_session.unavailable")
+    return str(rows[0]["locale"])
 
 
 def _membership_revision(connection: sqlite3.Connection, membership_id: str) -> int:

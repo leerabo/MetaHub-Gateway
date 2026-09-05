@@ -659,7 +659,7 @@ function renderBusinessVerificationSection(state) {
         <label class="is-wide"><span>法定名称</span><input name="legalName" maxlength="240" autocomplete="off" required /></label>
         <label class="is-wide"><span>登记号</span><input name="registrationNumber" maxlength="128" autocomplete="off" required /></label>
         <label><span>证据类型</span><select name="evidenceType"><option value="business_license">营业执照</option><option value="registration_certificate">登记证书</option><option value="authorization_letter">授权文件</option></select></label>
-        <label class="is-wide"><span>受控对象引用</span><input name="objectReference" pattern="obj_[A-Za-z0-9._:-]+" maxlength="256" autocomplete="off" required /></label>
+        <label class="is-wide"><span>受控对象引用</span><input name="objectReference" pattern="obj_[A-Za-z0-9._:\\-]+" maxlength="256" autocomplete="off" required /></label>
         <label class="is-wide"><span>内容 SHA-256</span><input name="contentSha256" pattern="[0-9a-f]{64}" maxlength="64" autocomplete="off" required /></label>
         <label><span>MIME</span><select name="mimeType"><option value="application/pdf">PDF</option><option value="image/png">PNG</option><option value="image/jpeg">JPEG</option></select></label>
         <label><span>大小（bytes）</span><input name="sizeBytes" type="number" min="1" max="10485760" required /></label>
@@ -1069,7 +1069,7 @@ function renderGovernancePolicyForm(state, draft, classifications) {
       <form data-data-governance-policy-form autocomplete="off">
         <div class="identity-governance-policy-grid">
           <label class="is-wide"><span>允许驻留组</span><textarea name="allowedResidencyGroups" rows="2" spellcheck="false" ${canManage ? "" : "disabled"} required>${escapeHtml(draft.allowedResidencyGroups.join("\n"))}</textarea></label>
-          <label><span>Primary group</span><input name="primaryResidencyGroup" value="${escapeAttribute(draft.primaryResidencyGroup)}" pattern="[a-z0-9][a-z0-9-]{2,39}" maxlength="40" ${canManage ? "" : "disabled"} required /></label>
+          <label><span>Primary group</span><input name="primaryResidencyGroup" value="${escapeAttribute(draft.primaryResidencyGroup)}" pattern="[a-z0-9][a-z0-9\\-]{2,39}" maxlength="40" ${canManage ? "" : "disabled"} required /></label>
           <label><span>跨区模式</span><select name="crossRegionMode" ${canManage ? "" : "disabled"}>${renderOption("deny", "禁止跨组", draft.crossRegionMode)}${renderOption("same_group", "仅允许同组", draft.crossRegionMode)}</select></label>
           <label><span>变更原因</span><select name="reasonCode" ${canManage ? "" : "disabled"}>${governanceReasonOptions(draft.reasonCode)}</select></label>
         </div>
@@ -1809,7 +1809,7 @@ function renderMachineAccountForm(busy) {
         <h3>创建 Service Account</h3>
       </div>
       <label><span>名称</span><input name="name" type="text" minlength="2" maxlength="80"
-        pattern="[a-z0-9][a-z0-9_-]+" autocomplete="off" required /></label>
+        pattern="[a-z0-9][a-z0-9_\\-]+" autocomplete="off" required /></label>
       <label><span>显示名称</span><input name="displayName" type="text" minlength="2"
         maxlength="120" autocomplete="off" required /></label>
       <label><span>Scope 模板</span><select name="scopeTemplate" required>
@@ -2398,7 +2398,7 @@ function renderWorkspaceCreateForm(draft = {}) {
             </label>
             <label>
               <span>空间标识</span>
-              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required />
+              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9\\-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required />
             </label>
           `
           : ""

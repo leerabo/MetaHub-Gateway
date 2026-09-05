@@ -44,6 +44,13 @@ def _url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def _copy_migrations(target: Path, maximum: int) -> None:
+    target.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4].isdigit() and int(source.name[:4]) <= maximum:
+            shutil.copy2(source, target / source.name)
+
+
 def _config(database_url: str) -> AppConfig:
     return AppConfig(
         service_name="control-plane-api",
@@ -452,5 +459,7 @@ def test_legacy_six_table_backfill_hash_fence_and_down_guard(
 
 def test_fresh_schema_installs_prd139_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0132"
+    migrations = tmp_path / "migrations-0131"
+    _copy_migrations(migrations, 131)
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0131"
     _healthy(database_url)

@@ -100,18 +100,22 @@ if ($Group -in @("All", "Web")) {
 
 if ($RunLivePerformance -and $Group -in @("All", "Performance")) {
   $liveOutput = Join-Path $artifactRoot "performance-live.json"
-  $tasks += Add-Task "PERF-loopback-smoke" $Python @(
-    (Join-Path $Root "scripts\quality\product_qa_performance.py"),
+  $liveTask = Add-Task "PERF-loopback-smoke" $Python @(
+    (Join-Path $Root "scripts\quality\product_qa_performance_runtime.py"),
     "--requests", "30", "--concurrency", "3", "--output", $liveOutput
   ) (Join-Path $artifactRoot "performance-live.out")
+  $tasks += $liveTask
+  Wait-TaskProcess -Process $liveTask.Process
 }
 if ($RunPressure -and $Group -in @("All", "Performance")) {
   $pressureOutput = Join-Path $artifactRoot "performance-pressure.json"
-  $tasks += Add-Task "PERF-loopback-pressure" $Python @(
-    (Join-Path $Root "scripts\quality\product_qa_performance.py"),
+  $pressureTask = Add-Task "PERF-loopback-pressure" $Python @(
+    (Join-Path $Root "scripts\quality\product_qa_performance_runtime.py"),
     "--requests", "$PressureRequests", "--concurrency", "$PressureConcurrency",
     "--duration-seconds", "$PressureDurationSeconds", "--output", $pressureOutput
   ) (Join-Path $artifactRoot "performance-pressure.out")
+  $tasks += $pressureTask
+  Wait-TaskProcess -Process $pressureTask.Process
 }
 
 foreach ($task in $tasks) {

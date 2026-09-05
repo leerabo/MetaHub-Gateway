@@ -6,10 +6,11 @@ import hashlib
 import json
 import secrets
 import shutil
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
+from metahub_control.auth import service as auth_service
 from metahub_control.auth.service import _load_permission_snapshot
 from metahub_shared.db import (
     apply_migrations,
@@ -18,6 +19,7 @@ from metahub_shared.db import (
     rollback_last_migration,
 )
 from metahub_shared.db.errors import DbError
+from metahub_shared.runtime import rbac_snapshot
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
 SCHEDULER_JOBS = {
@@ -79,6 +81,52 @@ def _healthy(database_url: str) -> None:
     with closing(connect_database(database_url)) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@contextmanager
+def _database_rbac_catalog(database_url: str):
+    with closing(connect_database(database_url)) as connection:
+        permission_rows = connection.execute(
+            "SELECT permission_code,catalog_revision FROM rbac_permission_templates"
+        ).fetchall()
+        role_rows = connection.execute(
+            "SELECT role_code,permission_code FROM rbac_role_permission_templates"
+        ).fetchall()
+    permission_codes = frozenset(str(row["permission_code"]) for row in permission_rows)
+    role_permissions: dict[str, set[str]] = {}
+    for row in role_rows:
+        role_permissions.setdefault(str(row["role_code"]), set()).add(
+            str(row["permission_code"])
+        )
+    role_codes = frozenset(role_permissions)
+    grantable = {role: frozenset(codes) for role, codes in role_permissions.items()}
+    catalog_revisions = {int(row["catalog_revision"]) for row in permission_rows}
+    assert len(catalog_revisions) == 1
+    catalog_revision = next(iter(catalog_revisions))
+
+    def canonical(values):
+        normalized = list(values)
+        if len(normalized) != len(set(normalized)) or any(
+            type(code) is not str or code not in permission_codes for code in normalized
+        ):
+            raise ValueError("rbac.permission_code_invalid")
+        return tuple(sorted(normalized))
+
+    def matrix_sha256(values):
+        payload = json.dumps(
+            canonical(values), ensure_ascii=True, separators=(",", ":")
+        ).encode("ascii")
+        return hashlib.sha256(payload).hexdigest()
+
+    with pytest.MonkeyPatch.context() as patch:
+        for module in (auth_service, rbac_snapshot):
+            patch.setattr(module, "PERMISSION_CODES", permission_codes)
+            patch.setattr(module, "ROLE_CODES", role_codes)
+            patch.setattr(module, "ROLE_GRANTABLE_PERMISSIONS", grantable)
+            patch.setattr(module, "CATALOG_REVISION", catalog_revision)
+            patch.setattr(module, "canonical_permission_codes", canonical)
+            patch.setattr(module, "permission_matrix_sha256", matrix_sha256)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -211,13 +259,14 @@ def test_legacy_product_event_fidelity_permission_contract_and_down_guard(
             "SELECT user_id,tenant_id,role FROM users WHERE role='admin' LIMIT 1"
         ).fetchone()
         assert user is not None
-        snapshot = _load_permission_snapshot(
-            connection,
-            tenant_id=user["tenant_id"],
-            user_id=user["user_id"],
-            role_code=user["role"],
-            unavailable_error_code="rbac.unavailable",
-        )
+        with _database_rbac_catalog(database_url):
+            snapshot = _load_permission_snapshot(
+                connection,
+                tenant_id=user["tenant_id"],
+                user_id=user["user_id"],
+                role_code=user["role"],
+                unavailable_error_code="rbac.unavailable",
+            )
         assert "product_analytics.read" not in snapshot.permission_codes
     with pytest.raises(DbError) as blocked:
         rollback_last_migration(

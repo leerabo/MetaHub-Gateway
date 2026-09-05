@@ -1574,6 +1574,7 @@ async function performRefresh(options = {}) {
   if (!consoleShellState || !authSession.token) {
     return;
   }
+  currentI18n = createI18n(consoleShellState.locale);
   const providerEngineeringSnapshot = workspaceProviderEngineeringController.snapshot();
   if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(
     consoleShellState.activeNavigationItemId,
@@ -10738,6 +10739,7 @@ async function loadConsoleShellState() {
       preferences: { preference: navigation.preference },
       workspaceContext: loaded.context,
       workspaceNavigationContract: true,
+      locale: navigation.account_locale,
       activeNavigationItemId: resolvedNavigation.active_navigation_item_id,
       activeRouteCode: resolution.routeCode,
       sidebarExpandedGroupKey: expandedConsoleGroupKey,

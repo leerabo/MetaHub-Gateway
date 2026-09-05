@@ -137,7 +137,8 @@ page.on("console", (message) => {
     try { return new URL(message.location().url).pathname || "/"; } catch { return "unknown"; }
   })();
   if (status === "401" && new Set(["/identity/me", "/workspace/session"]).has(source)) return;
-  consoleErrors.push(`${status}:${source}`);
+  const detail = text.replace(/\s+/gu, " ").trim().slice(0, 240);
+  consoleErrors.push(`${status}:${source}:${detail || "empty"}`);
 });
 page.on("requestfailed", (request) => {
   const reason = request.failure()?.errorText ?? "";
@@ -199,6 +200,14 @@ try {
   assert.equal(await page.locator('[data-platform-view="console-migration"].is-active').count(), 1);
 
   const responseCountBeforeRefresh = statusResponses.length;
+  const refreshButton = page.locator("[data-console-migration-refresh]");
+  assert.equal(await refreshButton.getAttribute("aria-label"), "刷新");
+  await refreshButton.focus();
+  assert.equal(
+    await refreshButton.evaluate((element) => element === document.activeElement),
+    true,
+    "migration_refresh_focus_missing",
+  );
   const refreshResponse = page.waitForResponse((response) => {
     try {
       return new URL(response.url()).pathname === "/platform/console-migration/status";
@@ -206,13 +215,17 @@ try {
       return false;
     }
   }, { timeout: 10_000 });
-  await page.locator("[data-console-migration-refresh]").click();
+  await refreshButton.press("Enter");
   assert.equal((await refreshResponse).status(), 200, "migration_refresh_failed");
   assert.ok(statusResponses.length > responseCountBeforeRefresh, "migration_refresh_missing");
   assert.ok(statusResponses.every((status) => status === 200), "migration_status_failed");
 
   const viewports = [];
-  for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+  ]) {
     const facts = await layoutFacts(page, viewport);
     assert.equal(facts.horizontal_overflow_px, 0, `horizontal_overflow:${facts.viewport}`);
     assert.equal(facts.clipped_control_count, 0, `clipped_controls:${facts.viewport}`);

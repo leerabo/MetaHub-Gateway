@@ -36,6 +36,7 @@ class NavigationPreferenceProjection(StrictModel):
 
 class WorkspaceNavigationResponse(StrictModel):
     owner_ref: str = Field(min_length=64, max_length=64)
+    account_locale: Literal["zh-CN", "en-US"]
     contract_snapshot_id: str = Field(min_length=36, max_length=36)
     contract_version: Literal["workspace-navigation-v1"]
     contract_generation: int = Field(ge=1)

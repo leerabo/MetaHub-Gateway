@@ -33,7 +33,8 @@ def _migration_subset(destination: Path, maximum_version: int) -> Path:
 
 def test_prd146_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd146-fresh.sqlite3")
-    result = apply_migrations(database_url)
+    migrations_0138 = _migration_subset(tmp_path / "migrations-0138", 138)
+    result = apply_migrations(database_url, migrations_dir=migrations_0138)
     assert result.applied[-1] == "0138"
     with closing(connect_database(database_url)) as connection:
         assert (
@@ -80,6 +81,7 @@ def test_prd146_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
         rollback_last_migration(
             database_url,
             expected_version="0138",
+            migrations_dir=migrations_0138,
         ).rolled_back
         == "0138"
     )
@@ -93,11 +95,12 @@ def test_prd146_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
             ).fetchone()[0]
             == 0
         )
-    assert apply_migrations(database_url).applied == ["0138"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0138).applied == ["0138"]
 
 
 def test_prd146_upgrades_0137_and_refuses_non_pristine_down(tmp_path: Path) -> None:
     migrations_0137 = _migration_subset(tmp_path / "migrations-0137", 137)
+    migrations_0138 = _migration_subset(tmp_path / "migrations-0138", 138)
     database_url = _url(tmp_path / "prd146-upgrade.sqlite3")
     assert (
         apply_migrations(
@@ -106,7 +109,7 @@ def test_prd146_upgrades_0137_and_refuses_non_pristine_down(tmp_path: Path) -> N
         ).applied[-1]
         == "0137"
     )
-    assert apply_migrations(database_url).applied == ["0138"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0138).applied == ["0138"]
     with closing(connect_database(database_url)) as connection:
         connection.execute(
             """UPDATE workspace_navigation_scheduler_state
@@ -115,4 +118,8 @@ def test_prd146_upgrades_0137_and_refuses_non_pristine_down(tmp_path: Path) -> N
         )
         connection.commit()
     with pytest.raises(DbError, match="Rollback failed"):
-        rollback_last_migration(database_url, expected_version="0138")
+        rollback_last_migration(
+            database_url,
+            expected_version="0138",
+            migrations_dir=migrations_0138,
+        )

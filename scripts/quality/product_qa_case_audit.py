@@ -25,8 +25,9 @@ EXPECTED_COUNTS = {
     "SEC": 7,
     "FLOW": 10,
 }
-EXPECTED_APPLIED_MIGRATIONS = 130
-EXPECTED_LATEST_MIGRATION = "0130"
+EXPECTED_APPLIED_MIGRATIONS = 139
+EXPECTED_LATEST_MIGRATION = "0139"
+EXPECTED_PRESSURE_REQUESTS = 600
 MINIMUM_WEB_TESTS = 16
 SENSITIVE_JSON_KEYS = {
     "access_token",
@@ -294,8 +295,8 @@ def audit(evidence_dir: Path, long_stability_path: Path) -> dict[str, Any]:
         "live": live.get("requests") == 30
         and live.get("successes") == 30
         and live.get("errors") == 0,
-        "pressure": pressure.get("requests") == 120
-        and pressure.get("successes") == 120
+        "pressure": pressure.get("requests") == EXPECTED_PRESSURE_REQUESTS
+        and pressure.get("successes") == EXPECTED_PRESSURE_REQUESTS
         and pressure.get("errors") == 0,
         "long": long_clean,
         "chromium": browser_clean

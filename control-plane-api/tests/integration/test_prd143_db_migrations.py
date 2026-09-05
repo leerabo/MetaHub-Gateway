@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from contextlib import closing
 from pathlib import Path
 
@@ -13,14 +14,26 @@ from metahub_shared.db import (
 )
 from metahub_shared.db.errors import DbError
 
+MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "infra" / "migrations"
+
 
 def _url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def _migration_subset(destination: Path) -> Path:
+    destination.mkdir(parents=True, exist_ok=False)
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        version = source.name[:4]
+        if version.isdigit() and int(version) <= 135:
+            shutil.copy2(source, destination / source.name)
+    return destination
+
+
 def test_prd143_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd143-fresh.sqlite3")
-    result = apply_migrations(database_url)
+    migrations = _migration_subset(tmp_path / "migrations-0135")
+    result = apply_migrations(database_url, migrations_dir=migrations)
     assert result.applied[-1] == "0135"
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
@@ -38,14 +51,15 @@ def test_prd143_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert rollback_last_migration(
-        database_url, expected_version="0135"
+        database_url, expected_version="0135", migrations_dir=migrations
     ).rolled_back == "0135"
-    assert apply_migrations(database_url).applied == ["0135"]
+    assert apply_migrations(database_url, migrations_dir=migrations).applied == ["0135"]
 
 
 def test_prd143_down_refuses_target_domain_fact(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd143-guard.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0135"
+    migrations = _migration_subset(tmp_path / "migrations-0135")
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0135"
     with closing(connect_database(database_url)) as connection:
         connection.execute(
             """
@@ -64,4 +78,6 @@ def test_prd143_down_refuses_target_domain_fact(tmp_path: Path) -> None:
         )
         connection.commit()
     with pytest.raises(DbError):
-        rollback_last_migration(database_url, expected_version="0135")
+        rollback_last_migration(
+            database_url, expected_version="0135", migrations_dir=migrations
+        )

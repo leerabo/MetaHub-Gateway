@@ -570,6 +570,7 @@ function ownerTransferPayload() {
 function navigationPayload() {
   return {
     account_action_codes: ["identity.preferences"],
+    account_locale: "en-US",
     advanced_tools_available: false,
     contract_generation: 1,
     contract_snapshot_id: `ncs_${"1".repeat(32)}`,

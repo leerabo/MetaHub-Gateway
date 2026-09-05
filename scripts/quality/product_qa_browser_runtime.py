@@ -132,6 +132,20 @@ def _prepare_database(database_url: str, passwords: dict[str, str]) -> dict[str,
                 """,
                 (f"upr_product_qa_{secrets.token_hex(8)}", seed.tenant_id, admin_user["user_id"]),
             )
+        account_locale_update = connection.execute(
+            """
+            UPDATE account_preferences
+               SET locale='en-US',source='identity',confirmation_state='confirmed',
+                   updated_at=datetime('now')
+             WHERE account_id=(
+               SELECT account_id FROM account_identity_links
+                WHERE legacy_tenant_id=? AND legacy_user_id=? AND status='active'
+             )
+            """,
+            (seed.tenant_id, admin_user["user_id"]),
+        )
+        if account_locale_update.rowcount != 1:
+            raise RuntimeError("product_qa_admin_account_preference_missing")
         connection.commit()
         migration_count = connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE status='applied'"

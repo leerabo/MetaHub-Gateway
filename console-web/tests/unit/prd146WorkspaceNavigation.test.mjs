@@ -600,6 +600,7 @@ function workspaceSession(workspaceId = WORKSPACE_ONE, role = "owner") {
 function navigationPayload() {
   return {
     account_action_codes: ["identity.preferences"],
+    account_locale: "en-US",
     advanced_tools_available: true,
     contract_generation: 4,
     contract_snapshot_id: SNAPSHOT,

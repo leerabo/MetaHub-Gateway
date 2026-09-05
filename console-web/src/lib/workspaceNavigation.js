@@ -184,7 +184,7 @@ export function createWorkspaceNavigationIdempotencyKey(namespace = "navigation"
 
 export function normalizeWorkspaceNavigation(value) {
   exact(value, [
-    "account_action_codes", "advanced_tools_available", "contract_generation",
+    "account_action_codes", "account_locale", "advanced_tools_available", "contract_generation",
     "contract_snapshot_id", "contract_version", "detail_route_codes",
     "developer_route_codes", "groups", "item_set_digest", "membership_revision",
     "navigation_epoch", "observed_at", "owner_ref", "permission_fingerprint",
@@ -207,6 +207,7 @@ export function normalizeWorkspaceNavigation(value) {
     detail_route_codes: routeArray(value.detail_route_codes, 20, "detail"),
     developer_route_codes: routeArray(value.developer_route_codes, 10, "developer_center"),
     account_action_codes: routeArray(value.account_action_codes, 10, "account"),
+    account_locale: choice(value.account_locale, ["zh-CN", "en-US"]),
     advanced_tools_available: value.advanced_tools_available,
     preference: normalizePreferenceProjection(value.preference),
     item_set_digest: digest(value.item_set_digest),

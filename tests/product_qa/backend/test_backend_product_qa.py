@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -21,8 +22,6 @@ from metahub_control.usage.export_service import _safe_text_cell
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.fastapi_app import create_service_app
-
-TEST_PASSWORD = "ProductQaPassword!2026"
 
 
 def _sqlite_url(path: Path) -> str:
@@ -47,12 +46,13 @@ def qa_database(tmp_path_factory: pytest.TempPathFactory):
         "METAHUB_AUTH_TOKEN_SECRET",
     )
     previous = {name: os.environ.get(name) for name in names}
+    password = secrets.token_urlsafe(32)
     os.environ["METAHUB_DATABASE_URL"] = database_url
-    os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = TEST_PASSWORD
-    os.environ["METAHUB_AUTH_TOKEN_SECRET"] = "product-qa-auth-secret"
+    os.environ["METAHUB_SEED_ADMIN_PASSWORD"] = password
+    os.environ["METAHUB_AUTH_TOKEN_SECRET"] = secrets.token_urlsafe(48)
     apply_migrations(database_url)
     seed = apply_seed_data(database_url)
-    yield database_url, seed.tenant_id
+    yield database_url, seed.tenant_id, password
     for name, value in previous.items():
         if value is None:
             os.environ.pop(name, None)
@@ -60,13 +60,13 @@ def qa_database(tmp_path_factory: pytest.TempPathFactory):
             os.environ[name] = value
 
 
-async def _login(client: AsyncClient) -> str:
+async def _login(client: AsyncClient, password: str) -> str:
     response = await client.post(
         "/auth/login",
         json={
             "tenant_slug": "default",
             "email": "admin@metahub.local",
-            "password": TEST_PASSWORD,
+            "password": password,
         },
         headers={"X-Request-ID": "qa-login-request"},
     )
@@ -77,7 +77,7 @@ async def _login(client: AsyncClient) -> str:
 
 @pytest.mark.anyio
 async def test_api_unified_error_contract_preserves_client_request_id(
-    qa_database: tuple[str, str],
+    qa_database: tuple[str, str, str],
 ) -> None:
     """API-01/SEC-01: public error paths always expose code, request, and trace IDs."""
 
@@ -107,11 +107,11 @@ async def test_api_unified_error_contract_preserves_client_request_id(
 
 @pytest.mark.anyio
 async def test_black_box_tenant_update_uses_authenticated_tenant_not_request_payload(
-    qa_database: tuple[str, str],
+    qa_database: tuple[str, str, str],
 ) -> None:
     """BB-03/SEC-01: an authenticated admin cannot target another tenant by payload."""
 
-    database_url, tenant_id = qa_database
+    database_url, tenant_id, password = qa_database
     connection = connect_database(database_url)
     connection.execute(
         """
@@ -125,7 +125,7 @@ async def test_black_box_tenant_update_uses_authenticated_tenant_not_request_pay
 
     transport = ASGITransport(app=_build_app())
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        token = await _login(client)
+        token = await _login(client, password)
         response = await client.patch(
             "/tenant/current",
             json={"tenant_id": "product-qa-other", "name": "Unauthorized target"},
@@ -149,11 +149,11 @@ async def test_black_box_tenant_update_uses_authenticated_tenant_not_request_pay
 
 @pytest.mark.anyio
 async def test_rbac_drift_fails_closed_before_session_issuance(
-    qa_database: tuple[str, str],
+    qa_database: tuple[str, str, str],
 ) -> None:
     """BB-03/GR-03: partial legacy role drift cannot mint an inconsistent session."""
 
-    database_url, _ = qa_database
+    database_url, _, password = qa_database
     connection = connect_database(database_url)
     connection.execute("UPDATE users SET role='viewer' WHERE email='admin@metahub.local'")
     connection.commit()
@@ -166,7 +166,7 @@ async def test_rbac_drift_fails_closed_before_session_issuance(
             json={
                 "tenant_slug": "default",
                 "email": "admin@metahub.local",
-                "password": TEST_PASSWORD,
+                "password": password,
             },
             headers={"X-Request-ID": "qa-rbac-drift"},
         )
@@ -179,12 +179,12 @@ async def test_rbac_drift_fails_closed_before_session_issuance(
 
 @pytest.mark.anyio
 async def test_grey_box_login_failure_does_not_echo_sensitive_input(
-    qa_database: tuple[str, str], caplog: pytest.LogCaptureFixture
+    qa_database: tuple[str, str, str], caplog: pytest.LogCaptureFixture
 ) -> None:
     """GR-08/SEC-06: failed authentication keeps private input out of response and logs."""
 
     private_email = "product-qa-private@example.invalid"
-    private_password = "not-a-real-secret-product-qa"
+    private_password = secrets.token_urlsafe(32)
     transport = ASGITransport(app=_build_app())
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.post(

@@ -148,6 +148,11 @@ test("PRD-117 Identity renderer exposes governance controls by exact permissions
   assert.match(root.innerHTML, /name="confirmed" type="checkbox" required/u);
   assert.match(root.innerHTML, /data-legal-hold-create-form/u);
   assert.match(root.innerHTML, /最近删除终态/u);
+  const residencyPattern = root.innerHTML.match(
+    /name="primaryResidencyGroup"[^>]*pattern="([^"]+)"/u,
+  )?.[1];
+  assert.equal(residencyPattern, "[a-z0-9][a-z0-9\\-]{2,39}");
+  assert.doesNotThrow(() => new RegExp(`^(?:${residencyPattern})$`, "v"));
   assert.doesNotMatch(root.innerHTML, new RegExp(`rgp_${"3".repeat(32)}`, "u"));
   assert.doesNotMatch(root.innerHTML, new RegExp(HOLD_ID, "u"));
   assert.doesNotMatch(root.innerHTML, /selector_sha256|object_key|prompt_body|response_body/u);

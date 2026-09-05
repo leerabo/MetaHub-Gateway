@@ -174,6 +174,7 @@ async function createJourneyPage(browser, viewport) {
   let consoleErrorCount = 0;
   const consoleErrorKinds = [];
   let authProbeActive = true;
+  const authProbeResponsePaths = new Set();
   const expectedAuthProbeConsoleErrorKinds = [];
   let expectedFaultConsoleErrorCount = 0;
   let expectedFaultActive = false;
@@ -203,6 +204,15 @@ async function createJourneyPage(browser, viewport) {
         consoleErrorKinds.push(kind);
       }
     }
+  });
+  page.on("response", (response) => {
+    if (!authProbeActive || response.status() !== 401) return;
+    try {
+      const path = new URL(response.url()).pathname;
+      if (new Set(["/identity/me", "/workspace/session"]).has(path)) {
+        authProbeResponsePaths.add(path);
+      }
+    } catch { /* invalid URLs cannot satisfy an authentication probe */ }
   });
   page.on("requestfailed", (request) => {
     const errorText = request.failure()?.errorText ?? "";
@@ -247,6 +257,8 @@ async function createJourneyPage(browser, viewport) {
     facts: () => ({
       console_error_count: consoleErrorCount,
       console_error_kinds: consoleErrorKinds,
+      auth_probe_response_count: authProbeResponsePaths.size,
+      auth_probe_response_paths: [...authProbeResponsePaths].sort(),
       expected_auth_probe_console_error_count: expectedAuthProbeConsoleErrorKinds.length,
       expected_auth_probe_console_error_kinds: expectedAuthProbeConsoleErrorKinds,
       expected_fault_console_error_count: expectedFaultConsoleErrorCount,
@@ -258,7 +270,7 @@ async function createJourneyPage(browser, viewport) {
     clearServiceFault() { expectedFaultActive = false; },
     finishAuthProbes() {
       authProbeActive = false;
-      return [...expectedAuthProbeConsoleErrorKinds].sort();
+      return [...authProbeResponsePaths].sort();
     },
   };
 }
@@ -290,10 +302,7 @@ async function establishScopedSessions(page, email, password) {
 async function login(runtime, email, password, locale) {
   const { page } = runtime;
   await establishScopedSessions(page, email, password);
-  assert.deepEqual(runtime.finishAuthProbes(), [
-    "resource:401:/identity/me",
-    "resource:401:/workspace/session",
-  ]);
+  assert.deepEqual(runtime.finishAuthProbes(), ["/identity/me", "/workspace/session"]);
   await page.goto(consoleUrl, { waitUntil: "domcontentloaded" });
   const form = page.locator("#login-form");
   assert.equal(await form.evaluate((element) => element.checkValidity()), false);
@@ -344,7 +353,7 @@ async function login(runtime, email, password, locale) {
     values: Object.fromEntries([
       "contract_version", "contract_generation", "projection_generation",
       "projection_status", "navigation_epoch", "membership_revision",
-      "permission_revision", "advanced_tools_available",
+      "permission_revision", "advanced_tools_available", "account_locale",
     ].map((key) => [key, navigationPayload[key]])),
     groups: Array.isArray(navigationPayload.groups)
       ? navigationPayload.groups.map((group) => ({

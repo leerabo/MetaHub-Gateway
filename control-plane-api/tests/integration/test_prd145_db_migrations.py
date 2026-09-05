@@ -36,7 +36,8 @@ def _migration_subset(destination: Path, maximum_version: int) -> Path:
 
 def test_prd145_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "prd145-fresh.sqlite3")
-    result = apply_migrations(database_url)
+    migrations_0137 = _migration_subset(tmp_path / "migrations-0137", 137)
+    result = apply_migrations(database_url, migrations_dir=migrations_0137)
     assert result.applied[-1] == "0137"
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
@@ -71,7 +72,7 @@ def test_prd145_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert rollback_last_migration(
-        database_url, expected_version="0137"
+        database_url, expected_version="0137", migrations_dir=migrations_0137
     ).rolled_back == "0137"
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
@@ -79,13 +80,14 @@ def test_prd145_fresh_matrix_and_pristine_roundtrip(tmp_path: Path) -> None:
                WHERE name IN('account_preferences',
                  'trg_global_account_preference_insert_prd145')"""
         ).fetchone()[0] == 0
-    assert apply_migrations(database_url).applied == ["0137"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0137).applied == ["0137"]
 
 
 def test_prd145_backfills_locale_and_refuses_fact_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     migrations_0136 = _migration_subset(tmp_path / "migrations-0136", 136)
+    migrations_0137 = _migration_subset(tmp_path / "migrations-0137", 137)
     database_url = _url(tmp_path / "prd145-backfill.sqlite3")
     assert apply_migrations(database_url, migrations_dir=migrations_0136).applied[-1] == "0136"
     monkeypatch.setenv(
@@ -118,7 +120,7 @@ def test_prd145_backfills_locale_and_refuses_fact_loss(
             ),
         )
         connection.commit()
-    assert apply_migrations(database_url).applied == ["0137"]
+    assert apply_migrations(database_url, migrations_dir=migrations_0137).applied == ["0137"]
     with closing(connect_database(database_url)) as connection:
         preference = connection.execute(
             "SELECT * FROM account_preferences WHERE account_id=?",
@@ -143,4 +145,8 @@ def test_prd145_backfills_locale_and_refuses_fact_loss(
         assert tuple(created) == ("zh-CN", 1, "identity")
         connection.commit()
     with pytest.raises(DbError, match="Rollback failed"):
-        rollback_last_migration(database_url, expected_version="0137")
+        rollback_last_migration(
+            database_url,
+            expected_version="0137",
+            migrations_dir=migrations_0137,
+        )

@@ -344,3 +344,22 @@ test("workspace active dispatcher never invokes legacy overview, assistant or ap
     /loadRoleDashboardState|loadAdminAssistantState|loadApprovalsState/,
   );
 });
+
+test("workspace shell applies the current global account locale before rendering", async () => {
+  const main = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const loaderStart = main.indexOf("async function loadConsoleShellState");
+  const loaderEnd = main.indexOf("\nasync function ", loaderStart + 1);
+  const loader = main.slice(loaderStart, loaderEnd);
+  assert.doesNotMatch(loader, /getAccountPreferences/u);
+  assert.match(loader, /locale: navigation\.account_locale/u);
+
+  const refreshStart = main.indexOf("async function performRefresh");
+  const ownerCheck = main.indexOf("if (!refreshOwnerCurrent())", refreshStart);
+  const localeApply = main.indexOf(
+    "currentI18n = createI18n(consoleShellState.locale);",
+    ownerCheck,
+  );
+  const render = main.indexOf("await loadAndRenderActiveNavigation", localeApply);
+  assert.ok(refreshStart >= 0 && ownerCheck > refreshStart);
+  assert.ok(localeApply > ownerCheck && render > localeApply);
+});

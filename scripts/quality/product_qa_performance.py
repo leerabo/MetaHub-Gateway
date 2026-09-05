@@ -289,7 +289,11 @@ def run_loopback_smoke(
 
     def worker() -> None:
         nonlocal last_observation_completed, max_observation_gap_seconds, next_index
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             ready.wait()
             start_gate.wait()
             while True:

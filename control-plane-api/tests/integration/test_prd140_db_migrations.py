@@ -285,5 +285,7 @@ def test_workspace_health_projection_drift_blocks_cutover(
 
 def test_fresh_schema_installs_prd140_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0132"
+    migrations = tmp_path / "migrations-0132"
+    _copy_migrations(migrations, 132)
+    assert apply_migrations(database_url, migrations_dir=migrations).applied[-1] == "0132"
     _healthy(database_url)

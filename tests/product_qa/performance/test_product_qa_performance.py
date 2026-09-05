@@ -143,10 +143,19 @@ def test_perf_runner_rejects_non_loopback_or_credential_targets() -> None:
             _safe_target(raw)
 
 
-def test_perf_real_loopback_http_smoke() -> None:
+def test_perf_real_loopback_http_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     """PERF-01/COMP-06 exercises a real isolated loopback HTTP socket without credentials."""
 
-    from scripts.quality.product_qa_performance import run_loopback_smoke
+    from scripts.quality import product_qa_performance
+
+    real_client = product_qa_performance.httpx.Client
+    trust_env_values: list[object] = []
+
+    def direct_client(*args: object, **kwargs: object) -> httpx.Client:
+        trust_env_values.append(kwargs.get("trust_env"))
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(product_qa_performance.httpx, "Client", direct_client)
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
@@ -162,7 +171,7 @@ def test_perf_real_loopback_http_smoke() -> None:
     thread.start()
     try:
         port = int(server.server_address[1])
-        report = run_loopback_smoke(
+        report = product_qa_performance.run_loopback_smoke(
             [_safe_target(f"isolated=http://127.0.0.1:{port}/health")],
             requests=8,
             concurrency=2,
@@ -175,3 +184,4 @@ def test_perf_real_loopback_http_smoke() -> None:
         thread.join(timeout=3)
     assert report["errors"] == 0
     assert report["requests"] == 8
+    assert trust_env_values and all(value is False for value in trust_env_values)
