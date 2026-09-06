@@ -448,19 +448,19 @@ async def test_multi_queue_partitions_are_fairly_split_between_replicas(tmp_path
         assert second_partitions
         assert first_partitions.isdisjoint(second_partitions)
         assert first_partitions | second_partitions == expected
+        # Once either replica stops, the survivor may legitimately take over its queues.
+        connection = sqlite3.connect(database)
+        try:
+            assert connection.execute(
+                """SELECT count(DISTINCT lease_owner_pseudonym)
+                   FROM scheduler_leases WHERE scheduler_code=?""",
+                (scheduler_code,),
+            ).fetchone()[0] == 2
+        finally:
+            connection.close()
     finally:
         await second.__aexit__(None, None, None)
         await first.__aexit__(None, None, None)
-
-    connection = sqlite3.connect(database)
-    try:
-        assert connection.execute(
-            """SELECT count(DISTINCT lease_owner_pseudonym)
-               FROM scheduler_leases WHERE scheduler_code=?""",
-            (scheduler_code,),
-        ).fetchone()[0] == 2
-    finally:
-        connection.close()
 
 
 @pytest.mark.anyio

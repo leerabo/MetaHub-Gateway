@@ -14,8 +14,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 - 新路线图从 PRD-090 重新开始，不限定需求总数或最终编号。当前已细化 PRD-090 至 PRD-148；后续需求从当前末尾连续追加。
 - PRD-090 起的唯一权威计划是 [SaaS 增量开发计划 Excel](企业级AI_Gateway_SaaS增量开发计划_PRD090起.xlsx) 和
   [SaaS 路线图说明](docs/planning/MetaHub-SaaS-PRD-090-onward.md)，冲突时以 Excel `01_PRD总表` 为准。
-- 新 `PRD-090` 至 `PRD-140 - SaaS平台客户管理、健康与续费协同` 已完成；当前下一条未完成项是
-  `PRD-141 - SaaS平台增长漏斗、活动与转化归因`。
+- 新 `PRD-090` 至 `PRD-147 - 存量控制台全面分域迁移与旧入口归零` 的实现及 G7 分域专项验收已完成；
+  G6 真实 72 小时观测仍待补齐，`PRD-148 - SaaS公开发布、迁移终验与全产品最终门禁` 尚未启动。
 - 新计划状态为 `saas_incremental_roadmap_complete=false`；兼容旧口径继续保持 `all_108_prds_complete=false`。
 
 ## 当前状态
@@ -114,6 +114,13 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
 
 最近进展：
 
+- S7/G7 补充验证完成：PostgreSQL 17.11 原生业务合同 `20/20`、新版 baseline/native delta
+  `22/22`、Windows 迁移业务 `14/14`、Linux Console `1286/1286` 通过。新增真实 PostgreSQL
+  运行测试修复了 seed/权限/对账的 SQLite 专用查询、JSON 规范化和四张间接 owner 表的漏计。
+  Linux 修正复验 `47/47` 与最终 SQLite 增量 `12/12`、Windows IAM `3/3`、敏感审计均通过。
+  G7 专项目标通过不代表 G6 的 72 小时缺口已补齐，不声明 GA。详见
+  [S7/G7 报告](docs/testing/S7-G7-report.md) 和
+  [基础设施补充验证](docs/testing/G7-infrastructure-remediation.md)。
 - `PRD-140 - SaaS平台客户管理、健康与续费协同` 已完成：0132、客户运营安全投影、客户目录、可解释
   健康、成功计划、跟进任务与批量审批、续费管道、QBR 摘要、五个固定 Platform API 和独立 Customer
   Success 工作台均已交付；旧企业 `customer-health` 导航、DOM、预取和生产路由已卸载。Migration `8/8`、
@@ -131,8 +138,8 @@ MetaHub 是面向中国境内企业用户的企业级 AI Gateway + 治理控制�
   event/outbox，以及 Platform Launch Gates 工作台均已交付。Migration `4/4`、后端 API/服务 `7/7`、Console
   `5/5`、关联回归 `24/24`、lint `414 files`、Ruff 和真实 Desktop/Mobile Browser 通过。详见
   [PRD-138 设计](docs/prd/PRD-138-saas-release-candidate-launch-gates.md) 和
-  [PRD-138 测试记录](docs/testing/PRD-138-tests.md)。S6 完整 G6 已在后续独立提交通过，结论仍只是
-  release candidate。
+  [PRD-138 测试记录](docs/testing/PRD-138-tests.md)。后续 G6 报告仅支持当时可用环境的
+  release candidate：Windows/SQLite 和四小时长稳已验证，未完成真实 72 小时验收，不能称为完整 G6。
 - `PRD-137 - 租户隔离持续验证与安全攻防` 已完成：0129、签名版本化 profile、10 个固定 owner-registry
   场景、隔离 runner lease/fencing、缺失或撤权失败关闭、不可变 finding、独立 remediation 复验、Workspace
   owner/security_admin 双批与 Platform review 风险接受，以及 Platform Security Assurance 工作台均已交付。
@@ -1079,9 +1086,14 @@ PRD-028 后，研发和试点客户可以使用 Compose 在单台服务器启动
 
 默认 profile 为 `local-sqlite`，使用显式 SQLite volume 保存本地数据。PRD-100 后，`compose-full` 还会启动
 PostgreSQL 16、无持久化 Redis、MinIO、bucket 初始化和独立 Backup Worker；生产适配器使用有界 psycopg
-连接池、S3-compatible 对象存储和 KMS 信封加密，基础设施故障不会回退到 SQLite。历史迁移链尚未提供
-PostgreSQL-native bundle，标准迁移 CLI 会以 `db.migration_backend_unsupported` 失败关闭；当前 Compose
-应用数据库仍固定使用 SQLite，不能把依赖服务已启动误判为 PostgreSQL 生产发布已放行。
+连接池、S3-compatible 对象存储和 KMS 信封加密，基础设施故障不会回退到 SQLite。原生迁移提供
+0001..0139 的可复现 PostgreSQL baseline 和后续独立 native delta，校验源码摘要、对象与迁移历史；
+未完成的 bootstrap 失败关闭。Compose 默认仍为 SQLite，原生迁移通过不等于全产品 PostgreSQL
+业务验收或生产发布已放行。基线不支持原地 down，恢复必须使用隔离数据库和已复核备份。
+
+Control 的宿主 8001 端口由独立 Nginx `control-ingress:prd147-v1` 提供，后端 `control-api:8001`
+不再发布宿主端口。旧 Console 路径和 API 文档在入口返回普通 no-store 404；`/branding/public` 与
+新分域 API 保持可用。应用 N/N-1 切换及回滚不得降低入口退休规则版本，也不得绕过入口发布后端端口。
 
 常用命令：
 

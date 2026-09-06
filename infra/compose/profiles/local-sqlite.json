@@ -5,7 +5,8 @@
   "env_file": "infra/compose/.env.compose",
   "services": {
     "gateway": { "enabled": true, "port": 8000, "health": "/health/live" },
-    "control-api": { "enabled": true, "port": 8001, "health": "/health/live" },
+    "control-api": { "enabled": true, "ports": [], "health": "/health/live", "network": "internal-only" },
+    "control-ingress": { "enabled": true, "port": 8001, "health": "/health/live" },
     "capacity-runner": { "enabled": true, "ports": [], "health": "/health", "network": "internal-only" },
     "status-page": { "enabled": true, "port": 8002, "health": "/health" },
     "mcp-scheduler-worker": { "enabled": true, "ports": [], "health": null },

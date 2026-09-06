@@ -340,3 +340,53 @@ def test_postgresql_driver_errors_are_mapped_without_provider_text() -> None:
         connection.execute("INSERT INTO facts(value) VALUES(?)", ("value",))
     assert str(exc.value) == "Database integrity constraint failed."
     assert exc.value.__cause__ is None
+
+
+def test_postgresql_no_parameter_sql_preserves_question_mark_operators() -> None:
+    class RecordingCursor:
+        description = None
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object | None, bool | None]] = []
+
+        def execute(
+            self,
+            statement: str,
+            parameters: object | None = None,
+            *,
+            prepare: bool | None = None,
+        ) -> None:
+            self.calls.append((statement, parameters, prepare))
+
+        def close(self) -> None:
+            pass
+
+    class Info:
+        transaction_status = "IDLE"
+
+    class RecordingConnection:
+        info = Info()
+
+        def __init__(self, cursor: RecordingCursor) -> None:
+            self.recording_cursor = cursor
+
+        def cursor(self) -> RecordingCursor:
+            return self.recording_cursor
+
+    class Pool:
+        def putconn(self, _connection) -> None:
+            pass
+
+    cursor = RecordingCursor()
+    connection = _PostgresConnection(RecordingConnection(cursor), Pool())
+    connection.execute("SELECT payload ? 'key', $$body ? text$$").close()
+    connection.execute("SELECT ?", ("value",)).close()
+    connection.execute("SELECT ? % 3, '100%', 'literal ?'", (8,)).close()
+    connection.execute("SELECT 8 % 3, '100%'").close()
+
+    assert cursor.calls == [
+        ("SELECT payload ? 'key', $$body ? text$$", None, False),
+        ("SELECT %s", ("value",), None),
+        ("SELECT %s %% 3, '100%%', 'literal ?'", (8,), None),
+        ("SELECT 8 % 3, '100%'", None, False),
+    ]

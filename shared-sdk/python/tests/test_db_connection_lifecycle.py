@@ -160,3 +160,17 @@ def test_reusable_request_scope_keeps_schema_handle_warm_and_resets_connection_s
         assert opened == 1
     finally:
         _close_idle_database_connections()
+
+
+def test_absolute_sqlite_url_uses_the_requested_filesystem_path(tmp_path):
+    database = tmp_path / "absolute-path.db"
+    database_url = f"sqlite:///{database.as_posix()}"
+
+    connection = connect_database(database_url)
+    try:
+        connection.execute("CREATE TABLE path_probe(value TEXT NOT NULL)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert database.is_file()

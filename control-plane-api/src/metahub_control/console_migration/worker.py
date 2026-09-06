@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
+from metahub_shared.db.schema import foreign_key_violation_count, table_columns, table_exists
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -55,6 +56,8 @@ class _OwnerEvidenceTable:
     owner_hash_column: str | None = None
     valid_column: str | None = None
     valid_values: frozenset[str] = frozenset()
+    owner_table: str | None = None
+    owner_key: str | None = None
 
 
 _OWNER_EVIDENCE_TABLES = {
@@ -125,7 +128,10 @@ _OWNER_EVIDENCE_TABLES = {
         ),
         _OwnerEvidenceTable("workspace_deployment_diagnostic_heads"),
         _OwnerEvidenceTable("workspace_console_events"),
-        _OwnerEvidenceTable("workspace_console_event_outbox"),
+        _OwnerEvidenceTable(
+            "workspace_console_event_outbox", owner_table="workspace_console_events",
+            owner_key="workspace_console_event_id",
+        ),
     ),
     "workspace_navigation": (
         _OwnerEvidenceTable("workspace_navigation_contract_snapshots"),
@@ -133,13 +139,23 @@ _OWNER_EVIDENCE_TABLES = {
         _OwnerEvidenceTable("workspace_navigation_projection_heads"),
         _OwnerEvidenceTable("workspace_navigation_projection_sources"),
         _OwnerEvidenceTable("workspace_role_task_home_heads"),
-        _OwnerEvidenceTable("workspace_role_task_home_sources"),
+        _OwnerEvidenceTable(
+            "workspace_role_task_home_sources", owner_table="workspace_role_task_home_versions",
+            owner_key="role_task_home_version_id",
+        ),
         _OwnerEvidenceTable("workspace_navigation_preferences"),
         _OwnerEvidenceTable("workspace_navigation_preference_source_mappings"),
         _OwnerEvidenceTable("workspace_advanced_tool_entitlement_heads"),
-        _OwnerEvidenceTable("workspace_advanced_tool_entitlement_sources"),
+        _OwnerEvidenceTable(
+            "workspace_advanced_tool_entitlement_sources",
+            owner_table="workspace_advanced_tool_entitlement_versions",
+            owner_key="advanced_tool_entitlement_id",
+        ),
         _OwnerEvidenceTable("workspace_navigation_events"),
-        _OwnerEvidenceTable("workspace_navigation_event_outbox"),
+        _OwnerEvidenceTable(
+            "workspace_navigation_event_outbox", owner_table="workspace_navigation_events",
+            owner_key="workspace_navigation_event_id",
+        ),
     ),
 }
 
@@ -467,14 +483,9 @@ def _source_evidence(
     table: str,
     migration: sqlite3.Row,
 ) -> _SourceEvidence:
-    if connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)
-    ).fetchone() is None:
+    if not table_exists(connection, table):
         raise ApiError("console_migration.contract_not_ready")
-    columns = tuple(
-        str(row["name"])
-        for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
-    )
+    columns = table_columns(connection, table)
     rows = connection.execute(f'SELECT * FROM "{table}" ORDER BY 1').fetchall()
     batch_rows = [
         (table, tuple((column, _evidence_cell(row[column])) for column in columns))
@@ -526,31 +537,44 @@ def _owner_evidence_rows(
     ]
     target_rows = list(source_rows)
     for spec in specs:
-        if connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (spec.table,)
-        ).fetchone() is None:
+        if not table_exists(connection, spec.table):
+            raise ApiError("console_migration.contract_not_ready")
+        columns = table_columns(connection, spec.table)
+        owner_columns = columns
+        owner_alias = "evidence"
+        source = f'"{spec.table}" evidence'
+        if spec.owner_table is not None:
+            if spec.owner_key not in columns or not table_exists(connection, spec.owner_table):
+                raise ApiError("console_migration.contract_not_ready")
+            owner_columns = table_columns(connection, spec.owner_table)
+            if spec.owner_key not in owner_columns:
+                raise ApiError("console_migration.contract_not_ready")
+            source += (
+                f' JOIN "{spec.owner_table}" owner'
+                f' ON owner."{spec.owner_key}"=evidence."{spec.owner_key}"'
+            )
+            owner_alias = "owner"
+        required = (spec.workspace_column, spec.tenant_column, spec.owner_hash_column)
+        if any(column is not None and column not in owner_columns for column in required):
+            raise ApiError("console_migration.contract_not_ready")
+        if spec.valid_column is not None and spec.valid_column not in columns:
             raise ApiError("console_migration.contract_not_ready")
         predicates: list[str] = []
         parameters: list[object] = []
         if spec.workspace_column is not None:
-            predicates.append(f'"{spec.workspace_column}"=?')
+            predicates.append(f'{owner_alias}."{spec.workspace_column}"=?')
             parameters.append(workspace_id)
         if spec.tenant_column is not None:
-            predicates.append(f'"{spec.tenant_column}"=?')
+            predicates.append(f'{owner_alias}."{spec.tenant_column}"=?')
             parameters.append(tenant_id)
         if spec.owner_hash_column is not None:
-            predicates.append(f'"{spec.owner_hash_column}"=metahub_sha256(?)')
+            predicates.append(f'{owner_alias}."{spec.owner_hash_column}"=metahub_sha256(?)')
             parameters.append(tenant_id)
         if not predicates:
             raise ApiError("console_migration.contract_not_ready")
-        columns = tuple(
-            str(row["name"])
-            for row in connection.execute(
-                f'PRAGMA table_info("{spec.table}")'
-            ).fetchall()
-        )
+        ordering = ",".join(f'evidence."{column}"' for column in columns)
         rows = connection.execute(
-            f'SELECT * FROM "{spec.table}" WHERE {" AND ".join(predicates)} ORDER BY 1',
+            f'SELECT evidence.* FROM {source} WHERE {" AND ".join(predicates)} ORDER BY {ordering}',
             parameters,
         ).fetchall()
         for row in rows:
@@ -783,7 +807,7 @@ def _reconciliation_facts(
     release = connection.execute(
         "SELECT generation FROM console_contract_release_heads WHERE head_key='production'"
     ).fetchone()
-    foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+    foreign_key_violations = foreign_key_violation_count(connection)
     owner_binding_count = int(
         connection.execute(
             """SELECT count(*) FROM workspace_tenant_bindings
@@ -946,10 +970,10 @@ def _verify_route_tombstones(
     ).fetchall():
         route_id = str(route["legacy_route_id"])
         connection.execute(
-            """INSERT OR IGNORE INTO workspace_legacy_route_tombstones(
+            """INSERT INTO workspace_legacy_route_tombstones(
                workspace_legacy_route_tombstone_id,workspace_id,tenant_id,legacy_route_id,
                contract_generation,status,zero_check_digest,revision,created_at,updated_at)
-               VALUES(?,?,?,?,?,'planned',NULL,1,?,?)""",
+               VALUES(?,?,?,?,?,'planned',NULL,1,?,?) ON CONFLICT DO NOTHING""",
             (
                 _id("wlt_"),
                 migration["workspace_id"],
@@ -970,10 +994,10 @@ def _verify_route_tombstones(
         )
         if route["owner_domain"] == "platform":
             connection.execute(
-                """INSERT OR IGNORE INTO platform_legacy_route_retirements(
+                """INSERT INTO platform_legacy_route_retirements(
                    platform_legacy_route_retirement_id,legacy_route_id,contract_generation,
                    status,zero_check_digest,revision,created_at,updated_at)
-                   VALUES(?,?,?,'planned',NULL,1,?,?)""",
+                   VALUES(?,?,?,'planned',NULL,1,?,?) ON CONFLICT DO NOTHING""",
                 (_id("plt_"), route_id, generation, stamp, stamp),
             )
             _advance_tombstone(
@@ -1041,11 +1065,11 @@ def _emit_event(
         "schema_version": 1,
     }
     inserted = connection.execute(
-        """INSERT OR IGNORE INTO platform_console_migration_events(
+        """INSERT INTO platform_console_migration_events(
            platform_console_migration_event_id,workspace_id,tenant_id,aggregate_ref,
            event_type,schema_version,domain_code,operation_generation,contract_generation,
            reconciliation_digest,payload_json,occurred_at)
-           VALUES(?,?,?,?,?,1,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,1,?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
         (
             event_id,
             migration["workspace_id"],

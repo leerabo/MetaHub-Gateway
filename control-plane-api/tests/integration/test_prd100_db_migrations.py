@@ -136,24 +136,53 @@ def test_backup_fact_blocks_0092_down(
 def test_fresh_schema_installs_current_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
     result = apply_migrations(database_url)
-    assert result.applied[-1] == "0093"
+    assert result.applied[-1] == "0139"
     _healthy(database_url)
 
 
-def test_postgresql_migrations_fail_before_driver_or_sql(
+def test_postgresql_migrations_dispatch_to_native_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def unexpected_connection(_database_url: str) -> None:
-        raise AssertionError("PostgreSQL migration attempted to open a connection")
+    calls: list[tuple[str, object]] = []
+
+    class Connection:
+        def close(self) -> None:
+            calls.append(("close", self))
+
+    connection = Connection()
+
+    def connect(_database_url: str) -> Connection:
+        return connection
+
+    def apply_native(active_connection, **_kwargs):
+        calls.append(("apply", active_connection))
+        return migration_runtime.MigrationResult(
+            run_id="dbm_test",
+            applied=["0139"],
+            skipped=[],
+        )
+
+    def rollback_native(active_connection, **_kwargs):
+        calls.append(("rollback", active_connection))
+        return migration_runtime.MigrationResult(
+            run_id="dbr_test",
+            applied=[],
+            skipped=[],
+            rolled_back="0140",
+        )
 
     monkeypatch.setenv("METAHUB_ENV", "test")
-    monkeypatch.setattr(migration_runtime, "connect_database", unexpected_connection)
+    monkeypatch.setattr(migration_runtime, "connect_database", connect)
+    monkeypatch.setattr(migration_runtime, "_apply_postgresql_migrations", apply_native)
+    monkeypatch.setattr(migration_runtime, "_rollback_postgresql_migration", rollback_native)
     database_url = "postgresql://database.test/metahub?sslmode=require"
 
-    for operation in (apply_migrations, rollback_last_migration):
-        with pytest.raises(DbError) as unsupported:
-            operation(database_url)
-        assert unsupported.value.code == "db.migration_backend_unsupported"
-        projection = f"{unsupported.value.message} {unsupported.value.suggestion}"
-        assert database_url not in projection
-        assert "database.test" not in projection
+    assert apply_migrations(database_url).applied == ["0139"]
+    assert rollback_last_migration(database_url).rolled_back == "0140"
+    assert [name for name, _connection in calls] == [
+        "apply",
+        "close",
+        "rollback",
+        "close",
+    ]
+    assert all(active is connection for _name, active in calls)

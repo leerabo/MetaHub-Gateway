@@ -76,8 +76,8 @@ services:
       METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN: ${METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN:?set METAHUB_CAPACITY_RUNNER_INTERNAL_TOKEN in .env.compose}
       METAHUB_CAPACITY_RUNNER_PERMIT_SECRET: ${METAHUB_CAPACITY_RUNNER_PERMIT_SECRET:?set METAHUB_CAPACITY_RUNNER_PERMIT_SECRET in .env.compose}
       METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS: ${METAHUB_CAPACITY_RUNNER_HTTP_TIMEOUT_SECONDS:-30}
-    ports:
-      - "${METAHUB_CONTROL_BIND:-127.0.0.1}:${METAHUB_CONTROL_PORT:-8001}:8001"
+    expose:
+      - "8001"
     volumes:
       - metahub-sqlite:/app/.data/compose
       - metahub-logs:/app/.logs
@@ -100,6 +100,31 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    restart: unless-stopped
+
+  control-ingress:
+    build:
+      context: ../..
+      dockerfile: infra/docker/control-ingress.Dockerfile
+    # This policy version is independent of METAHUB_IMAGE_TAG and survives app rollback.
+    image: ${METAHUB_IMAGE_PREFIX:-metahub}/control-ingress:prd147-v1
+    ports:
+      - "${METAHUB_CONTROL_BIND:-127.0.0.1}:${METAHUB_CONTROL_PORT:-8001}:8080"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   capacity-runner:

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from metahub_control.app import response_cache_private_cache_boundary
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.identity import service as identity_service
 from metahub_control.identity.delivery import (
@@ -91,6 +92,7 @@ def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, migrated_database:
         extra_cors_allow_headers=("If-Match", "X-CSRF-Token"),
         cors_allow_credentials=True,
     )
+    app.middleware("http")(response_cache_private_cache_boundary)
     app.include_router(auth_router)
     app.include_router(identity_router)
     app.include_router(workspaces_router)
@@ -302,7 +304,8 @@ async def test_platform_mfa_bootstrap_dual_approval_and_support_boundary(
         navigation = await owner.get("/platform/navigation")
         assert navigation.status_code == 200
         navigation_ids = {item["id"] for item in navigation.json()["items"]}
-        assert len(navigation_ids) == 27
+        assert len(navigation_ids) == 40
+        assert "console-migration" in navigation_ids
         assert "edge-fleet" in navigation_ids
         assert "job-runtime" in navigation_ids
         assert "feature-rollouts" in navigation_ids

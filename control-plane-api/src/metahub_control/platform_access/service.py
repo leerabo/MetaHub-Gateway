@@ -2427,10 +2427,17 @@ def _authority(
         ).fetchall()
     )
     placeholders = ",".join("?" for _ in _PERMISSION_EXTENSION_TABLES)
+    extension_lookup = (
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema=current_schema() AND table_type='BASE TABLE' "
+        f"AND table_name IN ({placeholders})"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else f"SELECT name FROM sqlite_schema WHERE type='table' AND name IN ({placeholders})"
+    )
     extension_tables = {
         row[0]
         for row in connection.execute(
-            f"SELECT name FROM sqlite_schema WHERE type='table' AND name IN ({placeholders})",
+            extension_lookup,
             _PERMISSION_EXTENSION_TABLES,
         ).fetchall()
     }

@@ -11,6 +11,8 @@ rfc8785>=0.1.4,<0.2
 # database, Redis is disposable coordination/cache state, and boto3 targets
 # S3-compatible object stores plus KMS without exposing provider credentials.
 psycopg[binary,pool]>=3.2,<4.0
+# Parse PostgreSQL-native deltas before execution so SQL cannot commit the runner transaction.
+pglast>=7,<8
 redis>=5.2,<7.0
 boto3>=1.35,<2.0
 argon2-cffi>=23.1,<26.0

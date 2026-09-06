@@ -18,6 +18,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from ..rbac import ROLE_CODES
 from .connection import connect_database
 from .errors import DbError
+from .schema import table_columns, table_exists
 from .security import (
     configured_secret,
     hash_password,
@@ -174,19 +175,14 @@ def _upsert_tenant(connection: sqlite3.Connection, tenant_id: str, tenant: dict[
 
 
 def _ensure_workspace_operational_states(connection: sqlite3.Connection, tenant_id: str) -> None:
-    if (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='workspace_operational_states'"
-        ).fetchone()
-        is None
-    ):
+    if not table_exists(connection, "workspace_operational_states"):
         return
     connection.execute(
         """
-        INSERT OR IGNORE INTO workspace_operational_states(
+        INSERT INTO workspace_operational_states(
           workspace_operational_state_id,workspace_id,tenant_id,status,revision,risk_revision,
           source,suspended_reason_code,suspended_by_operator_id,suspended_at,created_at,updated_at)
-        SELECT 'wos_'||lower(hex(randomblob(16))),workspace.workspace_id,binding.tenant_id,
+        SELECT ?,workspace.workspace_id,binding.tenant_id,
           CASE WHEN workspace.status='active' AND binding.status='active'
               AND tenant.status='active' AND data_state.lifecycle_status='active'
             THEN 'active' ELSE 'migration_conflict' END,
@@ -197,8 +193,9 @@ def _ensure_workspace_operational_states(connection: sqlite3.Connection, tenant_
         JOIN tenants tenant ON tenant.tenant_id=binding.tenant_id
         JOIN tenant_data_states data_state ON data_state.tenant_id=binding.tenant_id
         WHERE binding.tenant_id=?
+        ON CONFLICT(workspace_id) DO NOTHING
         """,
-        (tenant_id,),
+        ("wos_" + uuid4().hex, tenant_id),
     )
 
 
@@ -209,7 +206,7 @@ def _upsert_roles(connection: sqlite3.Connection, tenant_id: str) -> None:
     tenant 初始化触发器原子创建，这里只复核六角色，禁止 seed 更新不可变角色或恢复已撤销权限。
     """
 
-    columns = {row["name"] for row in connection.execute("PRAGMA table_info(roles)").fetchall()}
+    columns = table_columns(connection, "roles")
     if "matrix_sha256" in columns:
         _validate_permission_roles(connection, tenant_id)
         return
@@ -453,10 +450,7 @@ def _upsert_commercial_provider_cost_rate(
     provider_id: str,
     model: dict[str, str],
 ) -> None:
-    if connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' "
-        "AND name='workspace_provider_cost_rates'"
-    ).fetchone() is None:
+    if not table_exists(connection, "workspace_provider_cost_rates"):
         return
     owner = connection.execute(
         """

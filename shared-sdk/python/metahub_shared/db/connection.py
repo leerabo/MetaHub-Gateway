@@ -189,12 +189,12 @@ class _PostgresConnection:
             raise RuntimeError("Cannot operate on a closed database.")
         if re.fullmatch(r"\s*(?:COMMIT|END)\s*;?\s*", sql, flags=re.I):
             _require_commit_authority(self)
-        statement = _postgres_sql(sql)
+        statement = _postgres_sql(sql, translate_placeholders=parameters is not None)
         cursor = None
         try:
             cursor = self._connection.cursor()
             if parameters is None:
-                cursor.execute(statement)
+                cursor.execute(statement, prepare=False)
             else:
                 cursor.execute(statement, parameters)
         except Exception as exc:
@@ -205,6 +205,39 @@ class _PostgresConnection:
                     pass
             _raise_postgres_error(exc)
         return _PostgresCursor(cursor)
+
+    def executescript(self, sql: str) -> None:
+        """Run a reviewed bootstrap script containing explicit transaction batches."""
+
+        if self._closed:
+            raise RuntimeError("Cannot operate on a closed database.")
+        if self.in_transaction:
+            raise sqlite3.ProgrammingError(
+                "PostgreSQL bootstrap requires an idle connection."
+            )
+        previous_autocommit = self._connection.autocommit
+        cursor = None
+        try:
+            self._connection.autocommit = True
+            cursor = self._connection.cursor()
+            cursor.execute(sql, prepare=False)
+        except Exception as exc:
+            try:
+                self._connection.rollback()
+            except Exception:
+                pass
+            failure = exc
+        else:
+            failure = None
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            self._connection.autocommit = previous_autocommit
+        if failure is not None:
+            _raise_postgres_error(failure)
 
     def executemany(self, sql: str, parameters) -> _PostgresCursor:
         if self._closed:
@@ -681,10 +714,14 @@ def _raise_postgres_error(error: Exception) -> NoReturn:
     raise sqlite3.DatabaseError("Database operation failed.") from None
 
 
-def _postgres_sql(sql: str) -> str:
+def _postgres_sql(sql: str, *, translate_placeholders: bool = True) -> str:
     """Translate the narrow DB-API surface without rewriting SQL structure."""
 
     normalized = re.sub(r"^\s*BEGIN\s+IMMEDIATE\s*;?\s*$", "BEGIN", sql, flags=re.I)
+    if translate_placeholders:
+        # Psycopg parses percent placeholders even inside SQL strings/comments.
+        # Existing callers use qmark parameters, so every source percent is literal.
+        normalized = normalized.replace("%", "%%")
     output: list[str] = []
     index = 0
     quote: str | None = None
@@ -701,7 +738,7 @@ def _postgres_sql(sql: str) -> str:
         elif character in {"'", '"'}:
             quote = character
             output.append(character)
-        elif character == "?":
+        elif character == "?" and translate_placeholders:
             output.append("%s")
         else:
             output.append(character)
@@ -749,6 +786,8 @@ def _sqlite_path(raw_path: str) -> str:
 
     if raw_path in {"", "/", "/:memory:"}:
         return ":memory:"
+    if raw_path.startswith("//"):
+        return raw_path[1:]
     if len(raw_path) >= 4 and raw_path[0] == "/" and raw_path[2] == ":":
         return raw_path[1:]
     return raw_path.lstrip("/")

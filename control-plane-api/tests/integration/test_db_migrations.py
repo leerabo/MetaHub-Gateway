@@ -5,9 +5,11 @@
 """
 
 import json
+import shutil
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import metahub_shared.db.migrate as migration_module
 import metahub_shared.db.seed as seed_module
@@ -16,10 +18,14 @@ from metahub_shared.db import apply_migrations as apply_current_migrations
 from metahub_shared.db import apply_seed_data, connect_database, rollback_last_migration
 from metahub_shared.db.errors import DbError
 
-# 历史总迁移套件冻结在 0040，但 0041 由下方单独覆盖。新增正式迁移后仍要先
-# 完整执行 up，再依据本次真实结果逐版回退，避免维护静态栈顶时漏掉新版本。
-ROLLBACK_BOUNDARY_VERSION = "0041"
-"""通用历史断言开始前保留并单独验证的最后一个正式迁移版本。"""
+# 历史专项固定使用当时的迁移范围；当前 head 的 fresh/repeat 由独立测试验证，
+# 各新增 PRD 的事实保护与 owner-specific down 不应被夹具当作初始化步骤绕过。
+HISTORICAL_HEAD_VERSION = "0040"
+MIGRATIONS_ROOT = Path(__file__).resolve().parents[3] / "infra" / "migrations"
+CURRENT_MIGRATION_VERSIONS = sorted(
+    source.name[:4] for source in MIGRATIONS_ROOT.glob("*.sql")
+    if not source.name.endswith(".down.sql")
+)
 
 # PRD-042 起生产 Delivery ID 始终是 ``whd_`` 加 32 位小写十六进制；历史迁移
 # 夹具也必须遵守该应用合同，0047 才能确定性派生同根 DeadLetter ID。
@@ -35,47 +41,16 @@ def apply_migrations(
     *,
     migrations_dir: Path | None = None,
 ) -> migration_module.MigrationResult:
-    """执行历史迁移套件，并在默认目录上把数据库稳定恢复到该套件冻结的 0040。"""
+    """构造 0040 历史夹具；当前 head 与自定义迁移仍由真实入口单独验证。"""
 
-    result = apply_current_migrations(database_url, migrations_dir=migrations_dir)
-    # 自定义目录用于迁移框架专项，版本号与主迁移链无关，必须原样返回真实结果。
     if migrations_dir is not None:
-        return result
-    # 只信任迁移器本次报告的实际版本，并按零填充版本号逆序回退；这样后续新增
-    # 0059+ 时不会错误地把当前栈顶当成旧的固定版本。
-    later_migrations = tuple(
-        sorted(
-            {
-                version
-                for version in (*result.applied, *result.skipped)
-                if version > ROLLBACK_BOUNDARY_VERSION
-            },
-            reverse=True,
-        )
-    )
-    for version in later_migrations:
-        # 回滚结果必须逐项等于预期栈顶；错序会掩盖 migration history 漂移。
-        rolled_back = rollback_last_migration(database_url)
-        assert rolled_back.rolled_back == version
-    if "0041" not in result.applied and "0041" not in result.skipped:
-        excluded = set(later_migrations)
-        return migration_module.MigrationResult(
-            run_id=result.run_id,
-            applied=[version for version in result.applied if version not in excluded],
-            skipped=[version for version in result.skipped if version not in excluded],
-            rolled_back=result.rolled_back,
-        )
-
-    # 本文件的历史断言冻结在 0040；0041 及更高版本均由各 PRD 专项覆盖后逐版回退。
-    rollback = rollback_last_migration(database_url)
-    assert rollback.rolled_back == "0041"
-    excluded = set(later_migrations) | {"0041"}
-    return migration_module.MigrationResult(
-        run_id=result.run_id,
-        applied=[version for version in result.applied if version not in excluded],
-        skipped=[version for version in result.skipped if version not in excluded],
-        rolled_back=result.rolled_back,
-    )
+        return apply_current_migrations(database_url, migrations_dir=migrations_dir)
+    with TemporaryDirectory(prefix="metahub-historical-migrations-") as directory:
+        historical = Path(directory)
+        for source in MIGRATIONS_ROOT.glob("*.sql"):
+            if source.name[:4] <= HISTORICAL_HEAD_VERSION:
+                shutil.copy2(source, historical / source.name)
+        return apply_current_migrations(database_url, migrations_dir=historical)
 
 
 def table_count(database_url: str, table: str) -> int:
@@ -353,85 +328,16 @@ def test_migrate_empty_database_and_repeat_is_idempotent(tmp_path: Path) -> None
     first = apply_current_migrations(database_url)
     second = apply_current_migrations(database_url)
 
-    expected_versions = [
-        "0001",
-        "0002",
-        "0003",
-        "0004",
-        "0005",
-        "0006",
-        "0007",
-        "0008",
-        "0009",
-        "0010",
-        "0011",
-        "0012",
-        "0013",
-        "0014",
-        "0015",
-        "0016",
-        "0017",
-        "0018",
-        "0019",
-        "0020",
-        "0021",
-        "0022",
-        "0023",
-        "0024",
-        "0025",
-        "0026",
-        "0027",
-        "0028",
-        "0029",
-        "0030",
-        "0031",
-        "0032",
-        "0033",
-        "0034",
-        "0035",
-        "0036",
-        "0037",
-        "0038",
-        "0039",
-        "0040",
-        "0041",
-        "0042",
-        "0043",
-        "0044",
-        "0045",
-        "0046",
-        "0047",
-        "0048",
-        "0049",
-        "0050",
-        "0051",
-        "0052",
-        "0053",
-        "0054",
-        "0055",
-        "0056",
-        "0057",
-        "0058",
-        "0059",
-        "0060",
-        "0061",
-        "0062",
-        "0063",
-        "0064",
-        "0065",
-        "0066",
-        "0067",
-        "0068",
-        "0069",
-        "0070",
-        "0071",
+    expected_versions = CURRENT_MIGRATION_VERSIONS
+    assert expected_versions == [
+        f"{version:04d}" for version in range(1, int(expected_versions[-1]) + 1)
     ]
     assert first.applied == expected_versions
     assert second.applied == []
     assert second.skipped == expected_versions
     assert table_count(database_url, "tenants") == 0
     assert table_count(database_url, "roles") == 0
-    assert table_count(database_url, "schema_migrations") == 71
+    assert table_count(database_url, "schema_migrations") == len(expected_versions)
     columns = {
         row["name"]
         for row in connect_database(database_url).execute("PRAGMA table_info(virtual_keys)").fetchall()
@@ -3787,15 +3693,19 @@ def test_webhook_replay_migration_preserves_original_and_drops_replay_on_rollbac
 
     # 0047 会为该 failed original 建立治理事实；完整升级后必须停在当前头，不能绕过 down guard。
     reapplied = apply_current_migrations(database_url)
-    # 该用例从真实 0030 历史重新升级，必须走到当前正式迁移头 0070；
-    # 固定完整连续区间可同时防止后续迁移被静默跳过或出现版本断档。
-    assert reapplied.applied == [f"{version:04d}" for version in range(31, 68)]
+    # 真实 0030 历史必须升级到仓库 head；不能把旧测试编写时的版本当成新迁移上界。
+    assert reapplied.applied == [
+        version for version in CURRENT_MIGRATION_VERSIONS if version > "0030"
+    ]
     assert connection.execute(
         "SELECT delivery_kind, secret_version FROM webhook_deliveries WHERE webhook_delivery_id='whd_00000000000000000000000000420001'"
     ).fetchone()["delivery_kind"] == "original"
 
 
-def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_ownership(tmp_path: Path) -> None:
+@pytest.mark.parametrize("current_head", [False, True], ids=["historical", "current"])
+def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_ownership(
+    tmp_path: Path, current_head: bool,
+) -> None:
     """PRD-042 正向升级：真实 0030 original/attempt 完整保留，0031 触发器阻止归属错配。"""
 
     database_url = sqlite_url(tmp_path / "metahub.db")
@@ -3856,9 +3766,13 @@ def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_owners
     connection.commit()
 
     # 历史失败投递在 0047 被接管为死信后属于正式治理事实，测试应保留当前完整栈顶。
-    upgraded = apply_current_migrations(database_url)
-    # 升级结果必须覆盖 0031 到当前正式迁移头 0070，不能继续沿用 PRD-049 时的旧上界。
-    assert upgraded.applied == [f"{version:04d}" for version in range(31, 68)]
+    upgraded = (
+        apply_current_migrations(database_url) if current_head else apply_migrations(database_url)
+    )
+    target_head = CURRENT_MIGRATION_VERSIONS[-1] if current_head else HISTORICAL_HEAD_VERSION
+    assert upgraded.applied == [
+        version for version in CURRENT_MIGRATION_VERSIONS if "0030" < version <= target_head
+    ]
     delivery = connection.execute(
         "SELECT delivery_kind, secret_version, status FROM webhook_deliveries WHERE webhook_delivery_id='whd_00000000000000000000000000420003'"
     ).fetchone()
@@ -3883,24 +3797,38 @@ def test_webhook_replay_migration_upgrades_real_0030_history_and_enforces_owners
         (seed.tenant_id, user_id, user_id),
     )
     connection.commit()
-    with pytest.raises(sqlite3.IntegrityError, match="webhook_delivery_owner_mismatch"):
+    # 0074 同样检查来源 Endpoint，当前版本先由 wire guard 拒绝；历史版本仍验证 0031。
+    expected_error = (
+        "webhook_delivery_wire_invalid" if current_head else "webhook_delivery_owner_mismatch"
+    )
+    wire_columns = (
+        ", payload_format, wire_body_text, security_event_rate_limit_per_minute"
+        if current_head else ""
+    )
+    with pytest.raises(sqlite3.IntegrityError, match=expected_error):
         # 来源属于第一个 Endpoint，数据库触发器必须拒绝把 replay 挂到第二个 Endpoint。
         connection.execute(
-            """
+            f"""
             INSERT INTO webhook_deliveries(
               webhook_delivery_id, tenant_id, webhook_endpoint_id, event_id, event_type,
               event_timestamp, payload_json, status, attempt_count, max_attempts,
               delivery_kind, replayed_from_delivery_id, replay_idempotency_key,
-              replayed_by, replayed_at, secret_version, created_at, updated_at
+              replayed_by, replayed_at, secret_version, created_at, updated_at{wire_columns}
             )
-            VALUES('whd_00000000000000000000000000420004', ?, 'wh_prd042_second', 'evt_prd042_0030',
-                   'gateway.request_failed', '2026-07-16T00:10:00Z', '{}', 'pending', 0, 3,
+            SELECT 'whd_00000000000000000000000000420004', tenant_id, 'wh_prd042_second', event_id,
+                   event_type, event_timestamp, payload_json, 'pending', 0, 3,
                    'replay', 'whd_00000000000000000000000000420003', 'bad_owner_key', ?, '2026-07-16T01:00:00Z',
-                   1, '2026-07-16T01:00:00Z', '2026-07-16T01:00:00Z')
+                   1, '2026-07-16T01:00:00Z', '2026-07-16T01:00:00Z'{wire_columns}
+            FROM webhook_deliveries
+            WHERE webhook_delivery_id='whd_00000000000000000000000000420003' AND tenant_id=?
             """,
-            (seed.tenant_id, user_id),
+            (user_id, seed.tenant_id),
         )
     connection.rollback()
+    assert connection.execute(
+        "SELECT 1 FROM webhook_deliveries "
+        "WHERE webhook_delivery_id='whd_00000000000000000000000000420004'"
+    ).fetchone() is None
 
 
 def _insert_completed_usage_export_job(

@@ -14,6 +14,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from .connection import connect_database, database_backend
@@ -27,6 +28,10 @@ BEGIN IMMEDIATE;"""
 EXPECTED_VERSION_ROLLBACK_SUFFIX = "COMMIT;\nPRAGMA foreign_keys = ON;\n"
 TOP_LEVEL_BEGIN_RE = re.compile(r"(?m)^BEGIN(?: IMMEDIATE)?;[ \t]*$")
 TOP_LEVEL_COMMIT_RE = re.compile(r"(?m)^COMMIT;[ \t]*$")
+POSTGRESQL_BASELINE_VERSION = "0139"
+POSTGRESQL_BASELINE_NAME = "postgresql_baseline"
+POSTGRESQL_BASELINE_STATE = "metahub_bootstrap.baseline_state"
+POSTGRESQL_BASELINE_GENERATOR_REVISION = 4
 
 
 @dataclass(frozen=True)
@@ -71,9 +76,14 @@ def apply_migrations(
 
     run_id = f"dbm_{uuid4().hex}"
     configured_url = database_url or os.getenv("METAHUB_DATABASE_URL")
-    _require_supported_migration_backend(configured_url)
     connection = connect_database(configured_url)
     try:
+        if database_backend(configured_url) == "postgresql":
+            return _apply_postgresql_migrations(
+                connection,
+                run_id=run_id,
+                migrations_dir=migrations_dir,
+            )
         return _apply_migrations_with_connection(
             connection,
             run_id=run_id,
@@ -139,9 +149,15 @@ def rollback_last_migration(
         _validate_expected_version(expected_version)
     run_id = f"dbr_{uuid4().hex}"
     configured_url = database_url or os.getenv("METAHUB_DATABASE_URL")
-    _require_supported_migration_backend(configured_url)
     connection = connect_database(configured_url)
     try:
+        if database_backend(configured_url) == "postgresql":
+            return _rollback_postgresql_migration(
+                connection,
+                run_id=run_id,
+                migrations_dir=migrations_dir,
+                expected_version=expected_version,
+            )
         return _rollback_last_migration_with_connection(
             connection,
             run_id=run_id,
@@ -310,16 +326,380 @@ def _validate_expected_version(expected_version: str) -> None:
         )
 
 
-def _require_supported_migration_backend(database_url: str | None) -> None:
-    """Reject PostgreSQL before any SQLite migration SQL reaches the driver."""
+def _apply_postgresql_migrations(
+    connection: Any,
+    *,
+    run_id: str,
+    migrations_dir: Path | None,
+) -> MigrationResult:
+    """Install the reviewed baseline, then apply PostgreSQL-native deltas."""
 
-    if database_backend(database_url) != "postgresql":
-        return
-    raise DbError(
-        "db.migration_backend_unsupported",
-        "PostgreSQL migrations are not available in this migration runner.",
-        "Use a reviewed PostgreSQL-native migration bundle before starting application services.",
+    root, native_directory = _postgresql_migration_directories(migrations_dir)
+    source_migrations = _postgresql_baseline_sources(root)
+    native_migrations = _load_migration_files(native_directory)
+    baseline = next(
+        (
+            migration
+            for migration in native_migrations
+            if migration.version == POSTGRESQL_BASELINE_VERSION
+            and migration.name == POSTGRESQL_BASELINE_NAME
+        ),
+        None,
     )
+    if baseline is None:
+        raise DbError(
+            "db.migration_failed",
+            "The reviewed PostgreSQL baseline is missing.",
+            "Restore the generated 0139 PostgreSQL baseline before deployment.",
+        )
+
+    applied: list[str] = []
+    skipped: list[str] = []
+    state = _postgresql_baseline_state(connection)
+    if state is None:
+        public_tables = connection.execute(
+            "SELECT count(*) FROM pg_tables WHERE schemaname='public'"
+        ).fetchone()[0]
+        connection.rollback()
+        if public_tables:
+            raise DbError(
+                "db.migration_failed",
+                "PostgreSQL baseline requires an empty public schema.",
+                "Use a fresh database or complete the reviewed recovery procedure.",
+            )
+        try:
+            connection.executescript(baseline.sql)
+        except sqlite3.Error as exc:
+            raise DbError(
+                "db.migration_failed",
+                "PostgreSQL baseline installation failed.",
+                "Inspect the non-ready bootstrap state and database migration logs.",
+            ) from exc
+        _verify_postgresql_baseline(connection, source_migrations)
+        applied.extend(migration.version for migration in source_migrations)
+    else:
+        _verify_postgresql_baseline(connection, source_migrations, state=state)
+        skipped.extend(migration.version for migration in source_migrations)
+
+    connection.rollback()
+    for migration in native_migrations:
+        if migration.version <= POSTGRESQL_BASELINE_VERSION:
+            continue
+        if _apply_one_postgresql_migration(connection, migration):
+            applied.append(migration.version)
+        else:
+            skipped.append(migration.version)
+    return MigrationResult(run_id=run_id, applied=applied, skipped=skipped)
+
+
+def _rollback_postgresql_migration(
+    connection: Any,
+    *,
+    run_id: str,
+    migrations_dir: Path | None,
+    expected_version: str | None,
+) -> MigrationResult:
+    """Rollback only post-baseline native deltas under one advisory lock."""
+
+    root, native_directory = _postgresql_migration_directories(migrations_dir)
+    _verify_postgresql_baseline(connection, _postgresql_baseline_sources(root))
+    row = connection.execute(
+        "SELECT version,name FROM schema_migrations "
+        "WHERE status='applied' ORDER BY version DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        connection.rollback()
+        if expected_version is not None:
+            raise _migration_version_mismatch()
+        return MigrationResult(run_id=run_id, applied=[], skipped=[], rolled_back=None)
+    if expected_version is not None and row["version"] != expected_version:
+        connection.rollback()
+        raise _migration_version_mismatch()
+    if row["version"] <= POSTGRESQL_BASELINE_VERSION:
+        connection.rollback()
+        raise DbError(
+            "db.migration_failed",
+            "The PostgreSQL baseline cannot be rolled back in place.",
+            "Restore a reviewed backup into an isolated database for baseline rollback.",
+        )
+
+    down_path = native_directory / f"{row['version']}_{row['name']}.down.sql"
+    if not down_path.exists():
+        connection.rollback()
+        raise DbError(
+            "db.migration_failed",
+            f"Rollback script not found for migration {row['version']}.",
+            "Create a reviewed PostgreSQL-native down migration.",
+        )
+    down_sql = down_path.read_text(encoding="utf-8")
+    _require_transaction_body(down_sql)
+    version = row["version"]
+    connection.rollback()
+    started = time.perf_counter()
+    try:
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('metahub.schema.migration',0))"
+        ).close()
+        locked = connection.execute(
+            "SELECT version FROM schema_migrations "
+            "WHERE status='applied' ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if locked is None or locked["version"] != version:
+            raise _migration_version_mismatch()
+        connection.execute(down_sql).close()
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        cursor = connection.execute(
+            "UPDATE schema_migrations SET status='rolled_back',"
+            "applied_at=metahub_utc_now(),execution_time_ms=?,error_message=NULL "
+            "WHERE version=? AND status='applied'",
+            (elapsed_ms, version),
+        )
+        if cursor.rowcount != 1:
+            raise sqlite3.DatabaseError("Migration state update failed.")
+        cursor.close()
+        connection.commit()
+    except DbError:
+        connection.rollback()
+        raise
+    except sqlite3.Error as exc:
+        connection.rollback()
+        raise DbError(
+            "db.migration_failed",
+            f"Rollback failed for migration {version}.",
+            "Inspect the reviewed PostgreSQL rollback and database state.",
+        ) from exc
+    return MigrationResult(run_id=run_id, applied=[], skipped=[], rolled_back=version)
+
+
+def _postgresql_migration_directories(
+    migrations_dir: Path | None,
+) -> tuple[Path, Path]:
+    root = migrations_dir or _default_migrations_dir()
+    if root.name == "postgresql":
+        return root.parent, root
+    return root, root / "postgresql"
+
+
+def _postgresql_baseline_sources(root: Path) -> list[MigrationFile]:
+    migrations = [
+        migration
+        for migration in _load_migration_files(root)
+        if migration.version <= POSTGRESQL_BASELINE_VERSION
+    ]
+    if (
+        len(migrations) != 139
+        or not migrations
+        or migrations[-1].version != POSTGRESQL_BASELINE_VERSION
+        or len({migration.version for migration in migrations}) != len(migrations)
+    ):
+        raise DbError(
+            "db.migration_failed",
+            "The SQLite source manifest for the PostgreSQL baseline is incomplete.",
+            "Restore the reviewed 0001 through 0139 migration chain.",
+        )
+    return migrations
+
+
+def _postgresql_manifest_sha256(migrations: list[MigrationFile]) -> str:
+    digest = hashlib.sha256()
+    for migration in migrations:
+        digest.update(
+            f"{migration.version}\0{migration.name}\0{migration.checksum}\n".encode()
+        )
+    return digest.hexdigest()
+
+
+def _postgresql_baseline_state(connection: Any):
+    exists = connection.execute(
+        "SELECT to_regclass('metahub_bootstrap.baseline_state')"
+    ).fetchone()[0]
+    if exists is None:
+        return None
+    rows = connection.execute(
+        "SELECT baseline_version,source_manifest_sha256,generator_revision,status,"
+        "application_table_count,check_constraint_count,foreign_key_count,"
+        "trigger_count,seed_row_count,completed_at "
+        f"FROM {POSTGRESQL_BASELINE_STATE}"
+    ).fetchall()
+    if len(rows) != 1:
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL baseline state is invalid.",
+            "Recover from the reviewed baseline backup before startup.",
+        )
+    return rows[0]
+
+
+def _verify_postgresql_baseline(
+    connection: Any,
+    source_migrations: list[MigrationFile],
+    *,
+    state: Any | None = None,
+) -> None:
+    state = state or _postgresql_baseline_state(connection)
+    expected_manifest = _postgresql_manifest_sha256(source_migrations)
+    if (
+        state is None
+        or state["status"] != "ready"
+        or state["baseline_version"] != POSTGRESQL_BASELINE_VERSION
+        or state["source_manifest_sha256"] != expected_manifest
+        or state["generator_revision"] != POSTGRESQL_BASELINE_GENERATOR_REVISION
+        or state["completed_at"] is None
+    ):
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL baseline is not ready or its source manifest changed.",
+            "Do not start services; recover or regenerate the reviewed baseline.",
+        )
+
+    live = connection.execute(
+        "SELECT "
+        "(SELECT count(*) FROM pg_tables WHERE schemaname='public') AS tables,"
+        "(SELECT count(*) FROM pg_constraint c JOIN pg_namespace n "
+        " ON n.oid=c.connamespace WHERE n.nspname='public' AND c.contype='c' "
+        " AND c.convalidated) AS checks,"
+        "(SELECT count(*) FROM pg_constraint c JOIN pg_namespace n "
+        " ON n.oid=c.connamespace WHERE n.nspname='public' AND c.contype='f' "
+        " AND c.convalidated) AS foreign_keys,"
+        "(SELECT count(*) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+        " JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public' "
+        " AND NOT t.tgisinternal AND t.tgenabled='O') AS triggers,"
+        "(SELECT count(*) FROM pg_constraint c JOIN pg_namespace n "
+        " ON n.oid=c.connamespace WHERE n.nspname='public' "
+        " AND c.contype IN('c','f') AND NOT c.convalidated) AS invalid_constraints,"
+        "(SELECT count(*) FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+        " JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname='public' "
+        " AND NOT t.tgisinternal AND t.tgenabled!='O') AS disabled_triggers"
+    ).fetchone()
+    expected_counts = (
+        state["application_table_count"],
+        state["check_constraint_count"],
+        state["foreign_key_count"],
+        state["trigger_count"],
+    )
+    live_counts = tuple(live)
+    if (
+        any(
+            actual < expected
+            for actual, expected in zip(live_counts[:4], expected_counts, strict=True)
+        )
+        or live_counts[4:] != (0, 0)
+    ):
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL baseline object validation failed.",
+            "Do not start services; restore the reviewed schema state.",
+        )
+
+    rows = connection.execute(
+        "SELECT version,name,checksum,status FROM schema_migrations "
+        "WHERE version<=? ORDER BY version",
+        (POSTGRESQL_BASELINE_VERSION,),
+    ).fetchall()
+    expected_rows = [
+        (migration.version, migration.name, migration.checksum, "applied")
+        for migration in source_migrations
+    ]
+    if [tuple(row) for row in rows] != expected_rows:
+        raise DbError(
+            "db.migration_checksum_changed",
+            "PostgreSQL baseline migration history changed.",
+            "Restore the reviewed source migrations and database history.",
+        )
+
+
+def _apply_one_postgresql_migration(connection: Any, migration: MigrationFile) -> bool:
+    _require_transaction_body(migration.sql)
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('metahub.schema.migration',0))"
+    ).close()
+    existing = connection.execute(
+        "SELECT checksum,status FROM schema_migrations WHERE version=?",
+        (migration.version,),
+    ).fetchone()
+    if existing is not None and existing["status"] == "applied":
+        if existing["checksum"] != migration.checksum:
+            connection.rollback()
+            raise DbError(
+                "db.migration_checksum_changed",
+                f"Migration {migration.version} checksum changed.",
+                "Do not edit applied PostgreSQL migrations; create a new migration.",
+            )
+        connection.commit()
+        return False
+
+    started = time.perf_counter()
+    try:
+        connection.execute(migration.sql).close()
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        connection.execute(
+            "INSERT INTO schema_migrations(version,name,checksum,status,applied_at,"
+            "execution_time_ms,error_message) VALUES(?,?,?,'applied',metahub_utc_now(),?,NULL) "
+            "ON CONFLICT(version) DO UPDATE SET name=excluded.name,checksum=excluded.checksum,"
+            "status='applied',applied_at=excluded.applied_at,"
+            "execution_time_ms=excluded.execution_time_ms,error_message=NULL",
+            (migration.version, migration.name, migration.checksum, elapsed_ms),
+        ).close()
+        connection.commit()
+    except sqlite3.Error as exc:
+        connection.rollback()
+        _record_failed_postgresql_migration(connection, migration, started)
+        raise DbError(
+            "db.migration_failed",
+            f"Migration {migration.version} failed.",
+            "Fix the reviewed PostgreSQL-native migration and rerun db:migrate.",
+        ) from exc
+    return True
+
+
+def _record_failed_postgresql_migration(
+    connection: Any, migration: MigrationFile, started: float
+) -> None:
+    try:
+        # A retry can win after the failed DDL releases its transaction lock.
+        # Serialize history again and never overwrite that retry's terminal fact.
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('metahub.schema.migration',0))"
+        ).close()
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        connection.execute(
+            "INSERT INTO schema_migrations(version,name,checksum,status,applied_at,"
+            "execution_time_ms,error_message) VALUES(?,?,?,'failed',metahub_utc_now(),?,NULL) "
+            "ON CONFLICT(version) DO UPDATE SET name=excluded.name,checksum=excluded.checksum,"
+            "status='failed',applied_at=excluded.applied_at,"
+            "execution_time_ms=excluded.execution_time_ms,error_message=NULL "
+            "WHERE schema_migrations.status='failed'",
+            (migration.version, migration.name, migration.checksum, elapsed_ms),
+        ).close()
+        connection.commit()
+    except sqlite3.Error:
+        connection.rollback()
+
+
+def _require_transaction_body(sql: str) -> None:
+    try:
+        from pglast import ast, parse_sql
+        from pglast.parser import ParseError
+    except ImportError as exc:
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL migration parser is unavailable.",
+            "Install the reviewed PostgreSQL runtime dependencies before migration.",
+        ) from exc
+    try:
+        statements = parse_sql(sql)
+    except ParseError as exc:
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL delta cannot be parsed.",
+            "Review the native SQL before running the migration.",
+        ) from exc
+    if any(isinstance(statement.stmt, ast.TransactionStmt) for statement in statements):
+        raise DbError(
+            "db.migration_failed",
+            "PostgreSQL delta contains a transaction boundary.",
+            "Let the migration runner own the native delta transaction.",
+        )
 
 
 def _migration_version_mismatch() -> DbError:

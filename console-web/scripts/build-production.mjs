@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { productionAssetBytes } from "./production-asset-bytes.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(await readFile(path.join(root, "production-surface-manifest.json"), "utf8"));
@@ -27,8 +29,8 @@ for (const relative of assets) {
   if (!sourceStat.isFile()) throw new Error(`production asset is not a file: ${relative}`);
   const destination = path.join(output, relative);
   await mkdir(path.dirname(destination), { recursive: true });
-  await copyFile(source, destination);
-  const content = await readFile(source);
+  const content = productionAssetBytes(relative, await readFile(source));
+  await writeFile(destination, content);
   records.push(Object.freeze({
     path: normalize(relative),
     bytes: content.byteLength,

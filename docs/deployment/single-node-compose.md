@@ -5,14 +5,15 @@
 ## 范围
 
 - 默认部署 profile：`local-sqlite`。
-- 默认启动服务：`gateway`、`control-api`、`mcp-scheduler-worker`、`mcp-sandbox`、`batch-worker`、`console`。
+- 默认启动服务包括 `gateway`、`control-api`、`control-ingress`、`status-page`、`capacity-runner`、
+  `mcp-scheduler-worker`、`mcp-sandbox`、`batch-worker`、`console`。
 - 可选基础设施 profile：`compose-full`，额外启动 `redis`、`postgres`、`minio`、bucket 初始化和独立
   `backup-worker`。
 - 应用包含显式 `sqlite://` 本地/测试后端和 `postgresql://` 连接池适配器；不会在 PostgreSQL 故障时回退
-  SQLite。历史迁移尚无 PostgreSQL-native bundle，标准 migrate/rollback CLI 会在连接前以
-  `db.migration_backend_unsupported` 失败关闭，因此当前 Compose 发布仍使用 SQLite 数据库。生产
-  PostgreSQL、Redis 和对象存储必须启用 TLS。
-- 不包含 Kubernetes Helm、高可用、TLS、域名、反向代理和生产密钥托管。
+  SQLite。原生迁移支持空库 baseline 0001..0139 和后续独立 PostgreSQL delta；未完成 bootstrap、
+  源码摘要漂移和缺失原生 bundle 均失败关闭。默认 Compose 仍使用 SQLite。生产 PostgreSQL、Redis
+  和对象存储必须启用 TLS，迁移验证不能代替全产品业务验收。
+- 包含 Control Nginx 入口与退休规则，不包含 Kubernetes Helm、高可用、TLS 终止、域名和生产密钥托管。
 
 ## 前置条件
 
@@ -30,7 +31,7 @@
 
 1. 生成 `infra/compose/.env.compose`。
 2. 创建本地持久化目录和部署日志目录。
-3. 构建 `gateway`、`control-api`、`mcp-sandbox`、`console` 镜像。
+3. 构建应用、隔离 Worker、`control-ingress` 和 Console 镜像。
 4. 启动 Compose 服务。
 5. 在 `control-api` 容器内执行数据库迁移和 seed。
 6. 轮询 Gateway、Control API、MCP Sandbox 和 Console 健康检查。
@@ -75,6 +76,22 @@ Smoke 检查包含：
 - `GET http://localhost:8001/health/live`
 - `GET http://localhost:5173/`
 - 使用 `.env.compose` 中的默认管理员账号执行登录检查，但不输出密码。
+
+## Control 入口与回滚
+
+宿主机的 `METAHUB_CONTROL_PORT`（默认 8001）现在转发到 Nginx 的 8080，而不是直接发布 Control。
+后端 8001 仅供 Compose 内部服务访问。入口以非 root、只读根文件系统、独立临时目录运行，不挂载
+应用密钥或数据库，不记录请求 URL、Cookie 和请求头。
+
+`infra/ingress/retired-console-routes.conf` 从 PRD-147 的固定清单生成，执行
+`python scripts/deploy/generate_control_ingress.py --check` 可检测漂移。退休规则覆盖所有 HTTP 方法、
+URL 解码、重复斜杠及尾斜杠；请求改写到普通未知路径，由后端生成标准 404，入口统一加 `no-store`。
+`/branding/public` 和新分域路由不被退休规则拦截。`/openapi.json`、`/docs`、`/redoc` 只允许内部访问，
+避免旧版本从 API 文档重新披露退休操作。
+
+入口镜像固定为 `control-ingress:prd147-v1`，不使用应用的 `METAHUB_IMAGE_TAG`。升级或回滚只切换
+应用镜像，保留当前入口与退休规则；不得恢复旧 Compose 文件中的 Control 端口发布。外部 TLS/LB
+必须指向入口端口，不得指向后端服务地址。直接本地开发启动器不构成公开发布入口。
 
 ## MCP Sandbox
 
@@ -121,9 +138,11 @@ Provider API、配置导入、Compose tenant 环境变量或前端表单放宽�
 ```
 
 该 profile 会额外启动 Redis 7、PostgreSQL 16、MinIO、bucket 初始化和独立 Backup Worker。模板仍以显式
-SQLite 保证默认本地 profile 可运行；PostgreSQL 服务当前只用于连接池、健康探测和故障边界集成，不得把
-应用 `METAHUB_DATABASE_URL` 切换到 PostgreSQL 后执行标准安装流程。必须先交付覆盖全部历史版本的
-PostgreSQL-native migration bundle；在此之前迁移 CLI 固定失败关闭。生产环境的 URL 必须包含
+SQLite 保证默认本地 profile 可运行。原生迁移的执行器与 baseline 已提供，首次执行要求空 `public`
+schema；已存在的部分 bootstrap 不会被自动覆盖。每次迁移都验证 0139 源码清单与 bootstrap 终态，
+后续原生 delta 的 DDL 和版本登记在同一事务中提交，delta 不得自带事务边界。基线不允许原地回滚，
+应从已复核备份恢复到隔离数据库；后续 delta 支持 owner-specific down。切换应用数据库之前仍须
+完成对应业务、兼容与故障恢复验收。生产环境的 URL 必须包含
 `sslmode=require|verify-ca|verify-full`，Redis 使用 `rediss://`，对象存储使用 HTTPS。
 
 Backup Worker 要求完整的对象存储和 KMS 配置。`METAHUB_KMS_PROVIDER=test` 只允许 dev/test；生产必须使用
@@ -139,7 +158,7 @@ Backup Worker 要求完整的对象存储和 KMS 配置。`METAHUB_KMS_PROVIDER=
 - Provider Key 和 Virtual Key 明文仍只允许在首次创建/本地 env 中出现，不得进入日志。
 - MCP Endpoint、Bearer、permit、Sandbox internal/envelope/response secret 不得进入部署事件、容器日志、
   health response 或验收证据。
-- 默认端口绑定到 `127.0.0.1`；公网暴露、TLS 和反向代理不属于本 PRD。
+- 默认端口绑定到 `127.0.0.1`；Control 只能经附带的入口代理访问，公网 TLS 终止仍由部署环境提供。
 
 ## 错误码
 

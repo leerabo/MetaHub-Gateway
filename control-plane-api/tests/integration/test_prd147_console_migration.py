@@ -12,7 +12,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from metahub_control.console_migration import outbox as migration_outbox
 from metahub_control.console_migration import routes, service, worker
+from metahub_control.console_migration import scheduler as migration_scheduler
 from metahub_control.console_migration.manifest import MANDATORY_RECONCILIATION_CHECKS
 from metahub_control.console_migration.outbox import (
     claim_console_migration_event,
@@ -43,6 +45,71 @@ from metahub_shared.runtime.fastapi_app import create_service_app
 ORIGIN = "http://localhost:5173"
 NOW = datetime.now(UTC).replace(microsecond=0)
 STAMP = NOW.isoformat().replace("+00:00", "Z")
+INDIRECT_OWNER_TABLES = (
+    "workspace_console_event_outbox",
+    "workspace_role_task_home_sources",
+    "workspace_advanced_tool_entitlement_sources",
+    "workspace_navigation_event_outbox",
+)
+
+
+def _assert_indirect_owner_evidence(connection, monkeypatch, table):
+    domain, spec = next(
+        (domain, spec)
+        for domain, specs in worker._OWNER_EVIDENCE_TABLES.items()
+        for spec in specs if spec.table == table
+    )
+    monkeypatch.setitem(worker._OWNER_EVIDENCE_TABLES, domain, (spec,))
+    connection.execute(
+        "CREATE TABLE workspace_tenant_bindings(workspace_id TEXT,tenant_id TEXT,status TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO workspace_tenant_bindings VALUES('own','tenant-a','active'),"
+        "('foreign','tenant-b','active')"
+    )
+    connection.execute(
+        f'CREATE TABLE "{spec.owner_table}"("{spec.owner_key}" TEXT PRIMARY KEY,'
+        'workspace_id TEXT,tenant_id TEXT)'
+    )
+    connection.execute(
+        f'INSERT INTO "{spec.owner_table}" VALUES'
+        "('p1','own','tenant-a'),('p2','foreign','tenant-b')"
+    )
+    connection.execute(
+        f'CREATE TABLE "{spec.table}"("{spec.owner_key}" TEXT REFERENCES '
+        f'"{spec.owner_table}"("{spec.owner_key}"),source_code TEXT,watermark TEXT,'
+        f'PRIMARY KEY("{spec.owner_key}",source_code))'
+    )
+    connection.execute(
+        f'INSERT INTO "{spec.table}" VALUES'
+        "('p1','b','own-b'),('p2','a','foreign-marker'),('p1','a','own-a')"
+    )
+    source, target = worker._owner_evidence_rows(connection, domain, "own", "tenant-a")
+    assert source == target
+    assert [dict(row[1])["watermark"] for row in source[1:]] == ["own-a", "own-b"]
+    connection.execute(
+        f'UPDATE "{spec.table}" SET watermark=? WHERE "{spec.owner_key}"=?',
+        ("foreign-change", "p2"),
+    )
+    assert worker._owner_evidence_rows(connection, domain, "own", "tenant-a") == (source, target)
+    connection.execute(
+        f'UPDATE "{spec.table}" SET watermark=? WHERE "{spec.owner_key}"=?',
+        ("own-change", "p1"),
+    )
+    changed, changed_target = worker._owner_evidence_rows(connection, domain, "own", "tenant-a")
+    assert changed == changed_target and changed != source
+    monkeypatch.setitem(
+        worker._OWNER_EVIDENCE_TABLES, domain, (replace(spec, workspace_column="missing_owner"),)
+    )
+    with pytest.raises(ApiError) as missing:
+        worker._owner_evidence_rows(connection, domain, "own", "tenant-a")
+    assert missing.value.code == "console_migration.contract_not_ready"
+
+
+@pytest.mark.parametrize("table", INDIRECT_OWNER_TABLES)
+def test_indirect_owner_evidence_excludes_other_workspaces(monkeypatch, table):
+    with closing(connect_database("sqlite:///:memory:")) as connection:
+        _assert_indirect_owner_evidence(connection, monkeypatch, table)
 
 
 def _url(path) -> str:
@@ -1426,7 +1493,16 @@ async def test_cutover_sod_reconciliation_and_rollback_fail_closed(
         assert revoked.json()["code"] == "console_migration.permission_revoked"
 
 
-def test_event_outbox_recovers_expired_claim_and_stops_after_sent(runtime) -> None:
+def _outbox_clock(monkeypatch):
+    clock = [datetime.now(UTC).replace(microsecond=0)]
+    # Exercise deadline boundaries independently of native/emulated database speed.
+    monkeypatch.setattr(migration_outbox, "_database_now", lambda _connection: clock[0])
+    monkeypatch.setattr(migration_scheduler, "_database_now", lambda _connection: clock[0])
+    return clock
+
+
+def test_event_outbox_recovers_expired_claim_and_stops_after_sent(runtime, monkeypatch) -> None:
+    _outbox_clock(monkeypatch)
     worker_config = runtime["config"].model_copy(
         update={"control_background_schedulers_enabled": True}
     )
@@ -1610,7 +1686,8 @@ def _outer_fence(lease) -> PlatformJobOuterFence:
     )
 
 
-def test_event_outbox_retries_sink_failure_after_backoff(runtime) -> None:
+def test_event_outbox_retries_sink_failure_after_backoff(runtime, monkeypatch) -> None:
+    clock = _outbox_clock(monkeypatch)
     config = runtime["config"].model_copy(
         update={"control_background_schedulers_enabled": True}
     )
@@ -1654,13 +1731,7 @@ def test_event_outbox_retries_sink_failure_after_backoff(runtime) -> None:
         outer_fence=outer_fence,
         sink=lambda *_event: pytest.fail("backoff was bypassed"),
     )
-    with closing(connect_database(config.database_url)) as connection:
-        connection.execute(
-            """UPDATE platform_console_migration_event_outbox SET next_attempt_at=?
-               WHERE platform_console_migration_event_outbox_id=?""",
-            ("2000-01-01T00:00:00Z", outbox_id),
-        )
-        connection.commit()
+    clock[0] += timedelta(seconds=2)
 
     delivered: list[tuple[str, str, dict[str, object]]] = []
     assert dispatch_console_migration_event_once(
@@ -1682,7 +1753,8 @@ def test_event_outbox_retries_sink_failure_after_backoff(runtime) -> None:
     assert release_scheduler_lease(config, registry_lease, replica_code=replica)
 
 
-def test_event_outbox_does_not_finalize_after_outer_fence_loss(runtime) -> None:
+def test_event_outbox_does_not_finalize_after_outer_fence_loss(runtime, monkeypatch) -> None:
+    _outbox_clock(monkeypatch)
     config = runtime["config"].model_copy(
         update={"control_background_schedulers_enabled": True}
     )
