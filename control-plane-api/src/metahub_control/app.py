@@ -73,6 +73,7 @@ from .invitations.routes import router as invitations_router
 from .invoice_reconciliation import router as invoice_reconciliation_router
 from .launch_governance import install_launch_governance_scheduler
 from .launch_governance import router as launch_governance_router
+from .launch_governance.verifier import install_launch_evidence_verifier
 from .local_endpoints import router as local_endpoints_router
 from .machine_identity import router as machine_identity_router
 from .mcp_governance import install_mcp_scheduler
@@ -182,6 +183,7 @@ app = create_service_app(
     ),
 )
 
+install_launch_evidence_verifier(app)
 
 @app.middleware("http")
 async def response_cache_private_cache_boundary(request: Request, call_next):

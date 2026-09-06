@@ -38,8 +38,9 @@ Platform Launch Gates Console 已交付；本条保留独立设计、聚焦测�
 
 ## 敏感审计与临时证据
 
-- 正式结论只保存在本文、设计文档和 Git；pytest basetemp、SQLite 副本、代理脚本、截图缓存和过程输出均为
-  可重现临时证据，`C:\MetaHub\.tmp` 可整体删除，不作为正式交付事实。
+- 历史专项的 pytest basetemp 和截图缓存可按需重建，但不能据此整体删除 `C:\MetaHub\.tmp`。
+  2026-09-07 起该目录还承载连续观测冻结源码、启动器、运行日志及可复用基础设施和数据库；清理必须逐项
+  核对进程引用与恢复用途。正式测试结论和证据索引保存在本文、设计文档、`.artifacts` 和 Git 中。
 - 本地管理员账号、密码和 TOTP 仅用于 localhost 真实浏览器验证，不打印、不写入文档、日志、DOM、Storage、
   URL 或提交；测试完成后输入值已清空。
 - 审计不得输出 Token、Cookie、client secret、step-up grant、evidence signature、私钥、Provider Key、客户正文、
@@ -54,3 +55,31 @@ Platform Launch Gates Console 已交付；本条保留独立设计、聚焦测�
 S6 批次在本条独立提交后统一运行 `0123 -> 0130` 全数据库矩阵、集成、FLOW、三浏览器三缩放、性能、安全、
 代理/断网、Windows/Linux、SQLite/PostgreSQL、N/N-1、四波试点、灾备、支付/Edge 演练和 72 小时长稳。
 即使 G6 全部通过，也只能形成 `release_candidate`；公开 GA 仍由 PRD-139..148 后续范围承接。
+
+## 2026-09-07 G6 验签接线补充
+
+复核发现正式应用没有安装 `launch_evidence_verifier`。上面的历史 API 用例注入了恒真 verifier，
+因此只能证明 DTO、权限和状态机合同，不能证明正式密码学验签可用。现已补入部署方只读公钥信任、
+用途隔离 Ed25519、17 字段 canonical envelope 共享计算和正式 app 接线。配置和轮换合同见
+`docs/deployment/launch-evidence-trust.md`，签名格式见 `docs/api/launch-evidence.md`。
+
+- 加密单元合同：34/34 通过，包括 owner/policy/result/time 绑定、用途隔离、公钥失效/移除/替换、
+  错 gate、重复/未知/超限信任、非 canonical 编码、缺配置关闭、配置摘要脱敏和子进程正式 app 接线。
+- 受影响 API/服务：10/10 通过。新增三项真实 Ed25519 签名用例分别拒绝错误签名、移除的公钥和损坏
+  信任文件；失败不改变 candidate/evidence/event/outbox/action 事实，修复后同一请求成功且只存摘要。
+  新用例独立构造外部签名 envelope，没有调用服务的摘要 helper 代替签名端合同验证。
+- 合并运行：44 passed，263.51 秒；证据 `.artifacts/g6-verifier-20260907/api-crypto-r1-junit.xml`。
+  首次默认 pytest 临时目录被 Windows ACL 拒绝，44 项在初始化阶段出错，记录保留在
+  `api-crypto-junit.xml`；改用全新工作区 basetemp 后重跑，没有修改系统权限或覆盖旧失败记录。
+- 受影响 6 个 Python 文件 Ruff 全规则通过；`git diff --check` 通过。本次不改 Console 合同或迁移，
+  没有重复跑全产品回归，也没有把历史浏览器、性能或 G7 结果改称本次测试结果。
+- 两轮实施复核：第一轮确认每个签名字段均被绑定、失败无治理写入、缺信任不能回退替身；第二轮确认
+  生产接线、信任轮换重读、私有配置投影、签名只存摘要和幂等重放边界。移除公钥不追溯撤销已入库事实，
+  追溯撤销需替换候选并重新收集证据和会签。
+- 敏感审计范围为本批 11 个实现/测试/文档文件和本批 JUnit；私钥只在测试进程内生成使用。
+  采用高可信密钥/云凭据/带密码数据库 URL 模式扫描，并人工复核请求/响应/持久化边界；索引保存在
+  `.artifacts/g6-verifier-20260907/source-sensitive-audit.json`，不将模式扫描视为全产品安全验收。
+
+这些 API 用例仍替换登录与 step-up，状态机用例仍使用合成 73 小时时间和测试账号；它们不是实际
+72 小时业务运行、六名独立责任人的会签或真实四波试点。本次新实现也不在正在运行的 `e6bbce1`
+冻结版本中。G6 未通过，PRD-148 未启动，发布治理原生 PostgreSQL 业务覆盖仍待补齐。

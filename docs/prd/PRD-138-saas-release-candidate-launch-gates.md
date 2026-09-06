@@ -112,3 +112,22 @@ Platform Launch Gates Console 由后端权限投影决定导航和动作，展�
 
 第二轮修正后无未关闭 P0/P1。专项结果、真实浏览器记录和敏感审计见
 `docs/testing/PRD-138-tests.md`；下一权威项为 PRD-139。
+
+## 9. G6 补充：正式证据验签接线
+
+2026-09-07 复核发现，HTTP 接口只读取 `app.state.launch_evidence_verifier`，正式应用未安装实现，
+历史合同测试使用恒真替身。因此签名 DTO 和状态机测试不证明正式验签可用，必须补齐该实现后再做真实演练。
+
+配置 `METAHUB_LAUNCH_EVIDENCE_TRUST_BUNDLE_PATH` 指向部署方只读公钥 JSON。沿用现有 Ed25519 库，
+公钥条目按 gate/verifier/version 绑定，并有 key ID 和 UTC 生效/失效时间；不在 Control 保存签名私钥。
+签名内容为固定用途前缀 `metahub.launch-evidence.v1`、零字节和 canonical envelope 的 32 字节 SHA-256。
+签名编码沿用现有 DTO 可接受的无填充 base64url，不增加公开路由或更改数据库事实结构。
+
+第一轮编码前自审：拒绝请求自带公钥、错 gate/version、未知 JSON 字段、重复键或 key ID、非法编码、
+过大文件和过期信任。服务与验签器共享 envelope 摘要计算，避免 owner、时间或数字规范化分歧。
+没有配置时保持 `launch.verifier_unavailable`；错误信任或错误签名不能退回测试替身。
+
+第二轮编码前自审：每次提交重读信任文件，轮换/移除影响后续验签，不用缓存延长旧钥信任。
+此前已入库证据只保留签名摘要，不能虚称能够追溯重验原始签名；追溯撤销应使候选失效并重新收集。
+路径不进入配置摘要、repr 或响应。真实加密测试不能被记为真实 QA 证据或六方签核。
+本轮范围不涉及 PRD-148，也不把正在运行的旧冻结版本健康采样称为新验签实现的长稳证据。

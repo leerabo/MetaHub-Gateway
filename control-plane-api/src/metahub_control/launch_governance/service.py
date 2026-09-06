@@ -10,7 +10,7 @@ import re
 import secrets
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -100,6 +100,14 @@ class EvidenceVerificationRequest:
 
 
 EvidenceVerifier = Callable[[EvidenceVerificationRequest, str], bool]
+
+
+def evidence_envelope_sha256(request: EvidenceVerificationRequest) -> str:
+    payload = asdict(request)
+    payload.pop("envelope_sha256")
+    payload["started_at"] = _db_time(_as_utc(request.started_at))
+    payload["finished_at"] = _db_time(_as_utc(request.finished_at))
+    return _digest(payload)
 
 
 def list_launch_gates(
@@ -1290,25 +1298,6 @@ def _evidence_preflight(
             raise ApiError("launch.evidence_conflict")
         now = _utcnow()
         _validate_evidence_time(command, gate, now)
-        envelope_payload = {
-            "launch_candidate_id": candidate["launch_candidate_id"],
-            "candidate_sha256": candidate["candidate_sha256"],
-            "launch_gate_id": gate["launch_gate_id"],
-            "gate_code": gate["gate_code"],
-            "policy_sha256": gate["policy_sha256"],
-            "workspace_id": artifact["workspace_id"],
-            "tenant_id": artifact["tenant_id"],
-            "artifact_sha256": artifact["artifact_sha256"],
-            "verifier_code": command.verifier_code,
-            "verifier_version": command.verifier_version,
-            "outcome": command.outcome,
-            "metric_value": command.metric_value,
-            "metric_unit": command.metric_unit,
-            "environment_sha256": command.environment_sha256,
-            "provenance_sha256": command.provenance_sha256,
-            "started_at": _db_time(_as_utc(command.started_at)),
-            "finished_at": _db_time(_as_utc(command.finished_at)),
-        }
         verification = EvidenceVerificationRequest(
             launch_candidate_id=candidate["launch_candidate_id"],
             candidate_sha256=candidate["candidate_sha256"],
@@ -1327,7 +1316,10 @@ def _evidence_preflight(
             provenance_sha256=command.provenance_sha256,
             started_at=_as_utc(command.started_at),
             finished_at=_as_utc(command.finished_at),
-            envelope_sha256=_digest(envelope_payload),
+            envelope_sha256="",
+        )
+        verification = replace(
+            verification, envelope_sha256=evidence_envelope_sha256(verification)
         )
         connection.commit()
         return actor, verification

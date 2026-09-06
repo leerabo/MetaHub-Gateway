@@ -93,6 +93,12 @@ URL 解码、重复斜杠及尾斜杠；请求改写到普通未知路径，由�
 应用镜像，保留当前入口与退休规则；不得恢复旧 Compose 文件中的 Control 端口发布。外部 TLS/LB
 必须指向入口端口，不得指向后端服务地址。直接本地开发启动器不构成公开发布入口。
 
+## 发布证据公钥信任
+
+For PRD-138 release-candidate evidence, configure the Control-only public trust
+mount described in [Launch evidence trust](launch-evidence-trust.md). The default
+Compose installation does not provision signing trust or private signing keys.
+
 ## MCP Sandbox
 
 PRD-083 后，生产 MCP 网络执行拆分为独立 `mcp-scheduler-worker` 与 `mcp-sandbox`：

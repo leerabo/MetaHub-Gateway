@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import secrets
@@ -12,9 +13,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from httpx import ASGITransport, AsyncClient
 from metahub_control.launch_governance import routes, service
 from metahub_control.launch_governance.routes import router as launch_router
+from metahub_control.launch_governance.verifier import install_launch_evidence_verifier
 from metahub_control.platform_access import service as platform_access_service
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
@@ -123,7 +126,9 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd138-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0130"
+    applied = apply_migrations(database_url).applied
+    assert "0130" in applied
+    assert apply_migrations(database_url).applied == []
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -466,6 +471,105 @@ async def test_four_routes_strict_body_and_missing_verifier_fail_closed(
         ("/platform/launches", "POST"),
         ("/platform/launches/{launch_candidate_id}/rollback", "POST"),
     }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("rejection", ["wrong_signature", "removed_key", "invalid_trust"])
+async def test_real_signature_api_rejects_without_writes_and_persists_only_digests(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rejection: str
+) -> None:
+    # Authentication/step-up remain fixture doubles; the signer and verifier are real.
+    private = Ed25519PrivateKey.generate()
+    trust_path = tmp_path / "deployment-public-trust.json"
+    config = runtime.config.model_copy(update={
+        "launch_evidence_trust_bundle_path": str(trust_path),
+    })
+    app = _app(monkeypatch, replace(runtime, config=config), verifier=None)
+    install_launch_evidence_verifier(app)
+    now = datetime.now(UTC)
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    def facts():
+        with closing(connect_database(config.database_url)) as connection:
+            return {
+                table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                for table in (
+                    "launch_candidates", "launch_evidence", "launch_events",
+                    "launch_event_outbox", "launch_action_commands",
+                )
+            }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        candidate = await _create_candidate(client, runtime)
+        response = await client.get(
+            "/platform/launch-gates", headers=_headers(runtime.tokens["test"])
+        )
+        assert response.status_code == 200
+        gate = next(item for item in response.json()["gates"] if item["gate_code"] == "api")
+        bundle = {"schema_version": "metahub.launch-evidence-trust.v1", "keys": [{
+            "key_id": "api-test", "gate_code": "api", "verifier_code": gate["verifier_code"],
+            "verifier_version": gate["verifier_version"],
+            "public_key": b64(private.public_key().public_bytes_raw()),
+            "not_before": (now - timedelta(hours=1)).isoformat(),
+            "not_after": (now + timedelta(hours=1)).isoformat(),
+        }]}
+        body = {
+            "launch_candidate_id": candidate["launch_candidate_id"],
+            "expected_revision": candidate["revision"], "workspace_id": runtime.workspace_id,
+            "artifact_sha256": _sha("artifact:api"), "verifier_code": gate["verifier_code"],
+            "verifier_version": gate["verifier_version"], "outcome": "passed",
+            "metric_value": 1.0, "metric_unit": "pass_ratio",
+            "environment_sha256": _sha("test-environment"),
+            "provenance_sha256": _sha("test-provenance"),
+            "started_at": (now - timedelta(minutes=1)).isoformat(),
+            "finished_at": now.isoformat(), "confirmed": True,
+        }
+        # Build the external signer envelope independently of the service helper.
+        envelope = {key: value for key, value in body.items()
+                    if key not in {"expected_revision", "confirmed"}}
+        envelope.update({
+            "candidate_sha256": candidate["candidate_sha256"],
+            "launch_gate_id": gate["launch_gate_id"], "gate_code": gate["gate_code"],
+            "policy_sha256": gate["policy_sha256"], "tenant_id": runtime.tenant_id,
+        })
+        for key in ("started_at", "finished_at"):
+            envelope[key] = datetime.fromisoformat(body[key]).isoformat(
+                timespec="milliseconds"
+            ).replace("+00:00", "Z")
+        envelope_sha = _digest(envelope)
+        signature = b64(private.sign(b"metahub.launch-evidence.v1\0" + bytes.fromhex(envelope_sha)))
+        body["signature"] = signature
+        trust_path.write_text(json.dumps(bundle), encoding="utf-8")
+        if rejection == "wrong_signature":
+            body["signature"] = b64(Ed25519PrivateKey.generate().sign(b"wrong signer"))
+        elif rejection == "removed_key":
+            trust_path.write_text(json.dumps({**bundle, "keys": []}), encoding="utf-8")
+        else:
+            trust_path.write_text('{"keys":[],"keys":[]}', encoding="utf-8")
+        before = facts()
+        url = f"/platform/launch-gates/{gate['launch_gate_id']}/evidence"
+        headers = _headers(runtime.tokens["test"], "prd138-real-signature-0001")
+        rejected = await client.post(url, headers=headers, json=body)
+        assert rejected.json()["code"] == "launch.verifier_invalid", rejected.text
+        assert rejected.status_code == 403
+        assert facts() == before
+        assert str(trust_path) not in rejected.text
+        trust_path.write_text(json.dumps(bundle), encoding="utf-8")
+        body["signature"] = signature
+        accepted = await client.post(url, headers=headers, json=body)
+        assert accepted.status_code == 201, accepted.text
+        assert signature not in accepted.text
+        assert accepted.json()["candidate"]["revision"] == candidate["revision"] + 1
+        with closing(connect_database(config.database_url)) as connection:
+            evidence = connection.execute("SELECT * FROM launch_evidence").fetchall()
+        assert len(evidence) == 1
+        stored = dict(evidence[0])
+        assert stored["envelope_sha256"] == envelope_sha
+        assert stored["signature_sha256"] == _sha(signature)
+        assert "signature" not in stored
+        assert signature not in json.dumps(facts())
 
 
 @pytest.mark.anyio
