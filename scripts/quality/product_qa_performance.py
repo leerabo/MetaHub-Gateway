@@ -360,6 +360,9 @@ def run_loopback_smoke(
         observation_bucket_seconds=observation_bucket_seconds,
     )
     report["max_observation_gap_seconds"] = round(max_observation_gap_seconds, 3)
+    offsets = [sample.observed_offset_seconds for sample in samples]
+    report["first_observation_offset_seconds"] = min(offsets) if offsets else None
+    report["last_observation_offset_seconds"] = max(offsets) if offsets else None
     return report
 
 

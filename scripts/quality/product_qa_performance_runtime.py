@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[2]
 for source_root in reversed(
@@ -32,7 +32,7 @@ from scripts.quality.product_qa_performance import (  # noqa: E402
     run_loopback_smoke,
 )
 
-PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON = Path(sys.executable)
 NODE = Path(r"C:\Program Files\nodejs\node.exe")
 TEMP_ROOT = ROOT / ".tmp" / "product-qa-performance"
 
@@ -45,11 +45,12 @@ def _free_port() -> int:
 
 def _wait_http(url: str, process: subprocess.Popen[bytes]) -> None:
     deadline = time.monotonic() + 35
+    opener = build_opener(ProxyHandler({}))
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError("product_qa_performance_service_exited")
         try:
-            with urlopen(url, timeout=1) as response:  # noqa: S310 - fixed loopback URL
+            with opener.open(url, timeout=1) as response:  # fixed loopback URL
                 if response.status == 200:
                     return
         except (OSError, URLError):
@@ -61,7 +62,15 @@ def _wait_http(url: str, process: subprocess.Popen[bytes]) -> None:
 def _stop(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
+    if os.name == "nt":
+        # Windows venv launchers can own a separate interpreter process.
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    else:
+        process.terminate()
     try:
         process.wait(timeout=8)
     except subprocess.TimeoutExpired:
@@ -75,7 +84,13 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, required=True)
     parser.add_argument("--duration-seconds", type=float, default=0)
     parser.add_argument("--output", type=Path, required=True)
-    return parser.parse_args()
+    parser.add_argument("--observation-dir", type=Path)
+    parser.add_argument("--source-revision")
+    parser.add_argument("--diagnostic", action="store_true")
+    args = parser.parse_args()
+    if args.observation_dir and not args.source_revision:
+        parser.error("--observation-dir requires --source-revision")
+    return args
 
 
 def main() -> int:
@@ -181,17 +196,29 @@ def main() -> int:
         _wait_http(f"http://127.0.0.1:{control_port}/health", control)
         _wait_http(f"http://127.0.0.1:{gateway_port}/health", gateway)
         _wait_http(f"http://127.0.0.1:{console_port}/", console)
-        report = run_loopback_smoke(
-            [
-                _safe_target(f"control=http://127.0.0.1:{control_port}/health"),
-                _safe_target(f"gateway=http://127.0.0.1:{gateway_port}/health"),
-                _safe_target(f"console=http://127.0.0.1:{console_port}/"),
-            ],
-            requests=args.requests,
-            concurrency=args.concurrency,
-            duration_seconds=args.duration_seconds,
-            timeout_seconds=3,
-        )
+        raw_targets = [
+            f"control=http://127.0.0.1:{control_port}/health",
+            f"gateway=http://127.0.0.1:{gateway_port}/health",
+            f"console=http://127.0.0.1:{console_port}/",
+        ]
+        if args.observation_dir:
+            from scripts.quality.product_qa_continuous_stability import observe
+
+            report = observe(
+                raw_targets=raw_targets, output_dir=args.observation_dir,
+                revision=args.source_revision, duration_seconds=args.duration_seconds,
+                diagnostic=args.diagnostic,
+            )
+            passed = report["status"] in {"passed", "diagnostic_passed"}
+        else:
+            report = run_loopback_smoke(
+                [_safe_target(target) for target in raw_targets],
+                requests=args.requests,
+                concurrency=args.concurrency,
+                duration_seconds=args.duration_seconds,
+                timeout_seconds=3,
+            )
+            passed = report["errors"] == 0
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(report, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
@@ -201,13 +228,13 @@ def main() -> int:
             json.dumps(
                 {
                     "errors": report["errors"],
-                    "passed": report["errors"] == 0,
+                    "passed": passed,
                     "requests": report["requests"],
                 },
                 sort_keys=True,
             )
         )
-        return 0 if report["errors"] == 0 else 1
+        return 0 if passed else 1
     finally:
         for process in reversed(processes):
             _stop(process)
