@@ -37,8 +37,8 @@
 
 ## 敏感审计与临时证据
 
-- 正式结论只保存在本文和 Git；pytest basetemp、SQLite 副本、缓存与过程输出均为可重现临时证据，`.tmp`
-  可整体删除，不作为正式交付事实。
+- 正式结论保存在本文和 Git，原始测试结果按运行独立保留。`.tmp` 还包含冻结源码、基础设施和持久
+  VM 磁盘，不能整体删除；只可单独核验已停止、无依赖的可重建测试目录后处理。
 - 审计只输出规则命中计数，不输出密码、Token、Cookie、client secret、TOTP、step-up grant、签名值、私钥、
   Provider Key、漏洞 exploit、客户正文、对象 URL 或本地管理员凭据；本地测试凭据只在进程内使用，不打印
   或持久化。
@@ -54,3 +54,17 @@
 全数据库矩阵、集成、FLOW、真实三浏览器/三缩放、性能、安全、代理/断网、Windows/Linux、
 SQLite/PostgreSQL、N/N-1、四波试点、灾备/支付/Edge 演练和 72 小时长稳统一留到 PRD-138 独立提交后执行。
 G6 只能形成 `release_candidate`，不能公开 GA；本条专项结果不替代这些批次证据。
+
+## 2026-09-07 原生修复复验
+
+同 PRD-134/135/137 合批。worker 领取与补丁批准/发布/回退均使用对应 UPDATE 游标的 rowcount，
+不依赖 SQLite `changes()` 或前序语句累计写入。保留状态、owner、revision 和原有失败码。
+
+- PostgreSQL：`g6-security-09c8ecef524c4521b168228d57388585-junit.xml` 中本条 2/2 通过，
+  包含 attestation、扫描/双控例外、patch 生命周期和严格读取。该整轮另有 6 项失败，不能说整轮通过。
+- SQLite：`sqlite-r1-junit.xml` 中本条 2/2，整次 16/16，592.741 秒。
+- Console：`console-unit-junit.xml` 中本条 5/5。
+
+证据位于 `.artifacts/g6-security-20260907/`，独立敏感审计为 `prd-136-sensitive-audit.json`。
+两轮复核见本条 PRD 第 8 节。数据库事务和状态合同通过，不等于真实漏洞扫描服务、供应链环境、
+独立审批、三浏览器或 G6 总体验收通过。

@@ -607,7 +607,7 @@ def process_supply_chain_once(config: AppConfig, *, worker_id: str, limit: int =
         _require_schema(connection)
         now = _utcnow()
         stamp = _db_time(now)
-        connection.execute(
+        claimed = connection.execute(
             """UPDATE supply_chain_scheduler_state
                   SET lease_owner_id=?,lease_token_sha256=?,lease_expires_at=?,
                       fencing_generation=fencing_generation+1,revision=revision+1,updated_at=?
@@ -620,7 +620,7 @@ def process_supply_chain_once(config: AppConfig, *, worker_id: str, limit: int =
                 stamp,
             ),
         )
-        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        if claimed.rowcount != 1:
             raise ApiError("supply_chain.worker_fenced")
         connection.execute(
             """UPDATE supply_chain_security_exceptions
@@ -803,13 +803,13 @@ def _approve_patch(connection, actor, finding_id, command, now) -> str:
         raise ApiError("supply_chain.self_approval_denied")
     _verify_patch_target(connection, row, require_active_finding=True)
     stamp = _db_time(now)
-    connection.execute(
+    updated = connection.execute(
         """UPDATE patch_releases
               SET status='approved',approver_operator_id=?,revision=revision+1,updated_at=?
             WHERE patch_release_id=? AND status='proposed' AND revision=?""",
         (actor.operator_id, stamp, row["patch_release_id"], command.expected_revision),
     )
-    if connection.execute("SELECT changes()").fetchone()[0] != 1:
+    if updated.rowcount != 1:
         raise ApiError("supply_chain.revision_conflict")
     return str(row["patch_release_id"])
 
@@ -820,13 +820,13 @@ def _release_patch(connection, finding_id, command, request_id, trace_id, now) -
     _require_patch_transition(row, finding_id, "approved", command.expected_revision)
     _verify_patch_target(connection, row, require_active_finding=True)
     stamp = _db_time(now)
-    connection.execute(
+    updated = connection.execute(
         """UPDATE patch_releases
               SET status='released',released_at=?,revision=revision+1,updated_at=?
             WHERE patch_release_id=? AND status='approved' AND revision=?""",
         (stamp, stamp, row["patch_release_id"], command.expected_revision),
     )
-    if connection.execute("SELECT changes()").fetchone()[0] != 1:
+    if updated.rowcount != 1:
         raise ApiError("supply_chain.revision_conflict")
     revision = command.expected_revision + 1
     _event(
@@ -853,13 +853,13 @@ def _rollback_patch(connection, finding_id, command, now) -> str:
     _require_patch_transition(row, finding_id, "released", command.expected_revision)
     _verify_patch_target(connection, row, require_active_finding=False, require_trusted_fixed=False)
     stamp = _db_time(now)
-    connection.execute(
+    updated = connection.execute(
         """UPDATE patch_releases
               SET status='rolled_back',revision=revision+1,updated_at=?
             WHERE patch_release_id=? AND status='released' AND revision=?""",
         (stamp, row["patch_release_id"], command.expected_revision),
     )
-    if connection.execute("SELECT changes()").fetchone()[0] != 1:
+    if updated.rowcount != 1:
         raise ApiError("supply_chain.revision_conflict")
     return str(row["patch_release_id"])
 

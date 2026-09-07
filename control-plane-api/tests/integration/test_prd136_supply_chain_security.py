@@ -37,6 +37,7 @@ from metahub_control.supply_chain_security.models import PatchReleaseCommand
 from metahub_control.supply_chain_security.routes import router as supply_chain_router
 from metahub_shared.config_distribution import canonical_json_bytes
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.schema import foreign_key_violation_count
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.fastapi_app import create_service_app
 
@@ -83,7 +84,8 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd136-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0128"
+    assert "0128" in apply_migrations(database_url).applied
+    assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -96,7 +98,10 @@ def runtime(
 ) -> tuple[AppConfig, PlatformContext, PlatformContext, AuthContext, str]:
     database = tmp_path / "prd136.sqlite3"
     shutil.copy2(base_database, database)
-    config = _config(_url(database))
+    return _runtime(_config(_url(database)))
+
+
+def _runtime(config: AppConfig):
     stamp = "2026-08-31T00:00:00.000Z"
     with closing(connect_database(config.database_url)) as connection:
         primary_account = str(
@@ -647,7 +652,7 @@ async def test_attestation_reports_scan_and_dual_control_exception(
             ).fetchone()[0]
             >= 7
         )
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert foreign_key_violation_count(connection) == 0
 
 
 @pytest.mark.anyio
