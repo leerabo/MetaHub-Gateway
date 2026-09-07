@@ -466,7 +466,7 @@ def patch_ticket(
             last_customer = now_db
         else:
             last_platform = now_db
-        connection.execute(
+        updated = connection.execute(
             """UPDATE support_tickets
                SET status=?,platform_assignee_operator_id=?,revision=?,
                    last_customer_activity_at=?,last_platform_activity_at=?,
@@ -485,7 +485,7 @@ def patch_ticket(
                 expected_revision,
             ),
         )
-        if connection.total_changes < 1:
+        if updated.rowcount != 1:
             raise ApiError("support.revision_conflict")
 
         message_id: str | None = None

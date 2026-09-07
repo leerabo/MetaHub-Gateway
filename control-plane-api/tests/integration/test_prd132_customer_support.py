@@ -75,7 +75,8 @@ def _config(database_url: str, storage_root: Path) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd132-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0132"
+    assert "0124" in apply_migrations(database_url).applied
+    assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)
@@ -89,6 +90,10 @@ def runtime(
     database = tmp_path / "prd132.sqlite3"
     shutil.copy2(base_database, database)
     config = _config(_url(database), tmp_path / "file-storage")
+    return _runtime(config)
+
+
+def _runtime(config: AppConfig) -> tuple[AppConfig, WorkspaceSessionContext, PlatformContext]:
     owner = _owner_actor(config)
     with closing(connect_database(config.database_url)) as connection:
         connection.execute(
@@ -133,11 +138,11 @@ def _owner_actor(config: AppConfig) -> WorkspaceSessionContext:
         row = connection.execute(
             """SELECT membership.workspace_membership_id,membership.workspace_id,
                       membership.tenant_id,membership.account_id,membership.legacy_user_id,
-                      tenant.slug,tenant.name,user.email,user.display_name
+                      tenant.slug,tenant.name,legacy_user.email,legacy_user.display_name
                  FROM workspace_memberships membership
                  JOIN tenants tenant ON tenant.tenant_id=membership.tenant_id
-                 JOIN users user ON user.user_id=membership.legacy_user_id
-                  AND user.tenant_id=membership.tenant_id
+                 JOIN users legacy_user ON legacy_user.user_id=membership.legacy_user_id
+                  AND legacy_user.tenant_id=membership.tenant_id
                 WHERE membership.role_code='owner' AND membership.status='active'
                 ORDER BY membership.workspace_id LIMIT 1"""
         ).fetchone()

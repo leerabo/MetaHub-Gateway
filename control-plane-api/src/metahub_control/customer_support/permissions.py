@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.errors import ApiError
 
 CUSTOMER_SUPPORT_ROLE_PERMISSIONS = {
@@ -27,8 +28,8 @@ def load_verified_workspace_customer_support_permissions(
     catalog_table = "workspace_customer_support_permission_extensions"
     assignment_table = "workspace_customer_support_role_permissions"
     try:
-        catalog_available = _table_exists(connection, catalog_table)
-        assignments_available = _table_exists(connection, assignment_table)
+        catalog_available = table_exists(connection, catalog_table)
+        assignments_available = table_exists(connection, assignment_table)
         if not catalog_available and not assignments_available:
             return ()
         if catalog_available != assignments_available:
@@ -62,15 +63,6 @@ def load_verified_workspace_customer_support_permissions(
         raise
     except sqlite3.Error as exc:
         raise ApiError(unavailable_error_code) from exc
-
-
-def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)
-        ).fetchone()
-        is not None
-    )
 
 
 __all__ = [
