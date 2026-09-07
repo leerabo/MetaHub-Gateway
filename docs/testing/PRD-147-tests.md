@@ -229,3 +229,49 @@ $selection = 'environment_alias_resolution_and_resource_binding or provider_crea
 进程内存；不提交数据库、`.artifacts`、`.tmp`、用户 PRD-101..105 文档或 outputs。模式扫描
 不是独立安全会签。PostgreSQL 并发撤权锁定、Provider 网络探测、前端 owner 和统一批次 QA
 仍未完成，G6/G7/G8 不变，PRD-148 未开始。
+
+## 2026-09-08 Provider 连通性授权与条件写回
+
+继续基础资源与业务页 owner 批次，补齐前次明确排除的 `POST /providers/{id}/test`。
+独立两轮编码前自审见设计同名补充，不另开批次 QA。第一笔只读短事务恢复实际会话、核对
+provider.write 和 Shared spec，复制配置及健康水位后关闭连接；原有无 Key 探测在事务外执行。
+第二笔事务再次鉴权，以配置 generation、健康时间、排期及 lease token/until 原子条件写回，
+提交前再次复核，成功提交后才写 health_checked 日志。路由通过线程池执行同步服务，因此
+网络等待期间同进程的 logout 和 Membership 降权仍能完成。没有更改全局鉴权、权限默认值、
+SSRF/DNS 策略或健康任务的凭据读取合同，也没有新 migration。
+
+正式证据目录：`.artifacts/g6-security-20260907/`。所有历史轮次保留，不拼接为一轮成功：
+
+| 报告 | 结果 | 实际证明范围 |
+| --- | --- | --- |
+| `prd147-provider-probe-red-r1-junit.xml` | 6 项产品反例失败，63.755 秒 | 实际 logout 后仍探测并提交；Endpoint 修改、改回原值、Provider 禁用和新增 Key 后仍提交旧结果；同秒新结果被覆盖 |
+| `prd147-provider-probe-green-r1-junit.xml` | 6/6，66.428 秒 | 对应反例均拒绝，变更后的四张业务/健康日志/审计表摘要不变；连接关闭 |
+| `prd147-provider-probe-boundary-r1-junit.xml` | 5 通过、3 失败，87.684 秒 | 提交期过期/故障和三种真实 worker lease 场景通过；三个 HTTP 用例在正确响应后，测试从事件循环跨线程检查 SQLite 连接，触发线程限制，不能据此宣称连接关闭已验证 |
+| `prd147-provider-probe-final-r1-junit.xml` | 同轮 15/15，292.318 秒；无失败/错误/跳过 | 修正连接检查线程后，14 项新用例及 1 项原有 Legacy HTTP 主流程全部通过 |
+
+最终轮覆盖：实际 Identity logout 的出网前拒绝；真实 HTTP 网络等待期间 logout/成员降为
+viewer 的终态 401；Cookie 正常、匿名 401、CSRF/Origin 403、混合凭据 400、异空间 404；
+Endpoint/ABA/启停/Key 变更；同秒内竞争结果；已有租约出网前拒绝、在途领取和 worker 完成后
+旧结果拒绝；提交前过期与注入 commit 故障的回滚、连接关闭和不发成功日志。
+配置和 Key 变化通过原服务执行，worker 竞争使用真实 `_claim_provider`/`_complete_probe`。
+配置代次不变但健康水位变化也必须拒绝，NULL 条件参数显式 CAST 为 TEXT，避免 PostgreSQL
+空参数无法推断类型；尚未把这一 SQL 兼容写法当作 PostgreSQL 运行证据。
+
+新增测试使用实际注册、Workspace 与 Cookie 夹具，没有替换认证 dependency。网络函数只在
+明确的边界暂停或返回受控 Attempt，不据此证明真实 DNS/上游行为；原有 Legacy 冒烟使用真实
+本地 HTTP Server，并沿用它已有的测试专用 URL 策略替换，验证正常、404 fallback、401 摘要
+和禁用流程，不是 SSRF 验收。其空库迁移夹具耗时 141.262 秒，不是 API 性能结论。
+连接观察包装器转发原始 SQL 和认证，在实际所属线程执行 close 并验证 closed 异常，然后把
+关闭事实带回事件循环；不关闭 SQLite 的线程安全检查，不把线程错误当作已关闭。
+
+```powershell
+$env:METAHUB_TEST_MIGRATED_BASELINE = 'C:\MetaHub\.tmp\pytest-g6-security-sqlite-r2\prd134-api-base0\base.sqlite3'
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_prd147_provider_probe_transactions.py control-plane-api/tests/integration/test_providers.py -q --tb=short --show-capture=no -o junit_family=xunit1 -k 'probe or provider_create_list_test_and_disable_flow' --basetemp=.tmp/pytest-prd147-provider-probe-final-r1 --junitxml=.artifacts/g6-security-20260907/prd147-provider-probe-final-r1-junit.xml
+```
+
+新测试完整 ruff check、两份受影响生产源码 F 类检查与 `git diff --check` 通过。独立敏感审计
+报告 `prd-147-provider-probe-transactions-sensitive-audit.json` 检查五项精确暂存文件、四份原始
+JUnit、严格 UTF-8、高置信凭据模式及受保护公共基线摘要；模式扫描不等于独立安全会签。
+不提交测试数据库、`.tmp`、`.artifacts`、用户 PRD-101..105 文档或 outputs。Excel 仅按表格
+技能只读核对，没有修改完成状态；前端 Cookie/owner 消费端、PostgreSQL 并发撤权锁定和批次
+完整 QA 仍未完成，G6/G7/G8 不变，PRD-148 未开始，也未重新等待 72 小时。

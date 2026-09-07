@@ -566,14 +566,25 @@ def test_provider_connection(
     该旧入口也必须在任何 DNS/HTTP 前复用 Shared spec 的 type/auth 门禁和健康探测安全策略。
     """
 
-    connection = _connect(config)
-    provider = _load_provider(connection, context.user.tenant_id, provider_id)
-    _reject_local_endpoint_provider(provider)
-    # 历史 custom_header 或损坏组合必须在 import 健康模块、DNS、lease 和网络 I/O 前失败关闭。
-    adapter_spec = _validate_provider_auth_combination(
-        provider.provider_type,
-        provider.auth_type,
-    )
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        context = transaction.context
+        snapshot = transaction.connection.execute(
+            "SELECT * FROM providers WHERE tenant_id=? AND provider_id=?",
+            (context.user.tenant_id, provider_id),
+        ).fetchone()
+        if snapshot is None:
+            raise ApiError("provider.not_found")
+        provider = _provider_info(snapshot)
+        _reject_local_endpoint_provider(provider)
+        # 历史 custom_header 或损坏组合必须在 DNS 和网络 I/O 前失败关闭。
+        adapter_spec = _validate_provider_auth_combination(
+            provider.provider_type,
+            provider.auth_type,
+        )
+        lease_until = _parse_optional_db_time(snapshot["probe_lease_until"])
+        if lease_until is not None and lease_until > _utcnow():
+            raise ApiError("provider_health.probe_in_progress")
+    # The read-only transaction and its connection are closed before upstream I/O.
     timeout_seconds = _normalize_timeout(payload.timeout_seconds)
     # 本地导入避免 provider_health 在模块加载时复用本模块校验函数形成循环依赖。
     from metahub_control.provider_health.service import probe_provider_reachability
@@ -608,8 +619,12 @@ def test_provider_connection(
         message=message,
         checked_at=attempt.checked_at,
     )
-    _record_health(connection, context, provider.provider_id, result)
-    provider = _load_provider(connection, context.user.tenant_id, provider_id)
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _record_health(connection, context, provider.provider_id, result, snapshot=snapshot)
+        provider = _load_provider(connection, context.user.tenant_id, provider_id)
+        transaction.commit()
     _log_health_checked(context, provider, result, request_id, trace_id)
     return ProviderTestResponse(
         provider=provider,
@@ -624,25 +639,42 @@ def _record_health(
     context: AuthContext,
     provider_id: str,
     result: ProviderTestResult,
+    *,
+    snapshot: sqlite3.Row,
 ) -> None:
-    """在 Provider 与 KeyPool 管理 内部复用 record health 辅助逻辑，集中处理边界值和错误映射。
-    
-    边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
-    """
+    """Conditionally write the captured health generation; the caller owns commit."""
 
-
+    previous_check = _parse_optional_db_time(snapshot["last_tested_at"])
+    if previous_check is not None and result.checked_at <= previous_check:
+        raise ApiError("provider_health.probe_superseded")
     health_status = "healthy" if result.status == "success" else "unhealthy"
     last_error = None if result.status == "success" else result.message[:240]
-    now = _to_db_time(result.checked_at)
-    connection.execute(
+    checked_at = (
+        result.checked_at.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    )
+    updated = connection.execute(
         """
         UPDATE providers
         SET health_status=?, last_tested_at=?, last_test_error=?, updated_at=?
-        WHERE tenant_id=? AND provider_id=?
+        WHERE tenant_id=? AND provider_id=? AND health_generation=?
+          AND (last_tested_at=? OR (last_tested_at IS NULL AND CAST(? AS TEXT) IS NULL))
+          AND (health_updated_at=? OR (health_updated_at IS NULL AND CAST(? AS TEXT) IS NULL))
+          AND (next_probe_at=? OR (next_probe_at IS NULL AND CAST(? AS TEXT) IS NULL))
+          AND (probe_lease_token=? OR (probe_lease_token IS NULL AND CAST(? AS TEXT) IS NULL))
+          AND (probe_lease_until=? OR (probe_lease_until IS NULL AND CAST(? AS TEXT) IS NULL))
         """,
-        (health_status, now, last_error, now, context.user.tenant_id, provider_id),
+        (
+            health_status, checked_at, last_error, _to_db_time(_utcnow()),
+            context.user.tenant_id, provider_id, snapshot["health_generation"],
+            snapshot["last_tested_at"], snapshot["last_tested_at"],
+            snapshot["health_updated_at"], snapshot["health_updated_at"],
+            snapshot["next_probe_at"], snapshot["next_probe_at"],
+            snapshot["probe_lease_token"], snapshot["probe_lease_token"],
+            snapshot["probe_lease_until"], snapshot["probe_lease_until"],
+        ),
     )
-    connection.commit()
+    if updated.rowcount != 1:
+        raise ApiError("provider_health.probe_superseded")
 
 
 def _reset_provider_health(

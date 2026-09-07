@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
@@ -134,7 +135,8 @@ async def post_provider_test(
     ``tenant_id`` 操作当前租户数据；前端隐藏按钮不构成授权边界。
     """
 
-    return test_provider_connection(
+    return await run_in_threadpool(
+        test_provider_connection,
         request.app.state.config,
         context,
         provider_id,

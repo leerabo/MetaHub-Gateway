@@ -754,3 +754,21 @@ connection-test 的外部请求与结果写回单独处理，不能因其他 16 
 输入而非去掉所有权校验。先用实际注册、撤销/降权后的上下文验证 16 项写入、事件与审计均不
 提交，再跑受影响 Legacy 相邻测试。PostgreSQL 并发撤权锁定、网络探测和整组真实业务页流程
 仍须独立验证，未取得证据前维持未完成；不开始 PRD-148，不重启 72 小时等待。
+
+### 2026-09-08 Provider 连通性探测补充自审
+
+第一轮（授权和网络边界）：复用 ResourceWriteTransaction，在第一笔短事务中用真实会话
+复核 provider.write，并一次读取 Provider 配置和健康水位。退出时回滚只读事务并关闭连接，
+然后执行原有无 Key 连通性探测。第二笔短事务重新鉴权，在写回及提交前检查权限；中途 logout、
+成员降权或过期均不得提交健康结果。同步探测通过既有 FastAPI 线程池执行，避免上游等待阻塞
+同进程 logout/配置变更。继续保留 Shared spec、SSRF/DNS、认证失败固定摘要和 Legacy 合同。
+
+第二轮（竞争、精度和失败退出）：仅比较 provider.updated_at 不够，它是秒级且不是独立配置
+版本。写回使用原有 health_generation、last_tested_at、health_updated_at、next_probe_at 和
+probe_lease_token/until 的空值安全条件更新；配置改回原值仍因 generation 递增而拒绝。
+已有未过期健康探测租约在出网前拒绝，在途租约或健康水位变化返回现有 probe_superseded。
+此入口不抢占或清除健康任务租约，不产生失败后需要清理的初始写入。连通性结果保存原始 UTC
+微秒时间；不晚于已保存 last_tested_at 的结果拒绝，不能用秒级截断掩盖同秒内的新结果。
+任何 CAS、鉴权或提交失败都回滚且关闭连接，只有成功提交后才能写 health_checked 日志。
+受影响测试覆盖实际注册、撤销/降权、配置/Key 变更、同秒竞争、租约、提交故障和原有网络冒烟。
+本增量不替代 PostgreSQL 并发撤权锁定、前端 owner 消费端或全批次 QA，Excel 不修改完成状态。
