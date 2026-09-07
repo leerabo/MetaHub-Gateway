@@ -95,3 +95,32 @@ Membership admin 降为 viewer、旧 WorkspaceSession 重放及严格输入拒�
 传输负例只验证失败行为。集成使用 ASGI 进程内 HTTP 合同，不能作为真实 HTTPS、隔离部署、环境度量、
 独立安全验收或清理证明。cache/queue/object/metrics/late-response 明确返回 scenario_not_implemented；
 实际 worker、全 owner registry、持久化短租约、fixture 创建/清理和原始签名回执归档仍未完成。
+
+## 2026-09-07 持久化租约与排队恢复
+
+已实现协调器 30 秒短租约、剩余 15 秒内 CAS 续租、当前权限和 owner 复核、整体 deadline 上限、
+永久 fencing、最终 generation 比较与保存、过期 running 回收。补充复现并修复了入队后撤权留下
+永久 queued 的问题；启动上限 30 秒，超时 queued 经同一认领路径记录失败，不调用 runner。
+部署 callable 已更新为 `runner(request, lease) -> bytes`。设计与两轮自审见本条 PRD 第 10 节。
+
+- `lease-r1-junit.xml`：早期租约单元和服务定向 15/15，另有 9 项未选。
+- `lease-r2-junit.xml`：当时持久化协调 1 项、capability 单元 11 项、探针边界 32 项和签名 43 项，
+  共 87/87。受控 runner 内部检查均有完成标记，不能以预期失败吞掉的断言冒充成功。
+- `g6-lease-d137fab14ec6497f840df2062897322d`：原生尝试出现 13 个 setup error，随后磁盘耗尽。
+  JUnit 只有 38 字节 XML 声明，报告不完整，不能计为通过，也不能从它推断完整失败原因分布。
+- `queue-red-r1-junit.xml`：新增排队撤权、中断、迟到启动用例 3/3 先失败，确认产品缺陷。
+- `queue-green-r1-junit.xml`：修复后 2 通过、2 失败；后两项是首次 outbox 投递数错误地断言为零，
+  已修正为先完成失败事件投递，再验证重复调度为零，未跳过持久化终态和 runner 零调用检查。
+- `queue-green-r2-junit.xml`：排队恢复、Workspace/tenant/账号登录停用、同 token 的 generation
+  接管 7/7。停用后恢复也不能复活原 capability；旧结果不落库，超时后只生成一次失败事实。
+- `lease-final-r1-junit.xml`：最终 SQLite/API/回执/HTTP 探针/capability 定向 109/109；新增双调度器
+  同时认领同一超时 queued，最终只有一个 lease、10 个 error run、10 个 finding，且没有伪造 cleanup。
+- `g6-lease-e1664b43329741e4a1cb85ac4ec68f12-junit.xml`：原生 PostgreSQL 21/21，370.17 秒。
+  使用独立 SCRAM 测试实例、真实迁移及 seed 模板，覆盖原编排 12 项、持久化短租约 1 项、排队恢复
+  3 项、owner/登录撤权 3 项、同 token 接管 1 项与双调度器竞争 1 项。实例已正常停止。
+- 本次相关 Python Ruff 和 `git diff --check` 通过。独立敏感审计为
+  `prd-137-lease-sensitive-audit.json`，精确限定本条暂存文件；原始记录均保留在同一证据目录。
+
+租约和撤权测试使用受控平台认证及合成签名，属于持久化协调合同；同次 HTTP 探针仍使用真实注册和
+会话认证，但为进程内 ASGI。上述结果不证明隔离 worker、完整 owner 矩阵、真实外部网络或实际清理。
+远程许可传输、剩余五种场景、真实制品/环境度量、fixture 创建/清理与原始签名不可变归档仍未完成。

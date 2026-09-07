@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import secrets
 import shutil
 from contextlib import closing
@@ -91,6 +92,11 @@ def _config(database_url: str) -> AppConfig:
 
 @pytest.fixture(scope="module")
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    supplied = os.environ.get("METAHUB_TEST_MIGRATED_BASELINE")
+    if supplied:
+        baseline = Path(supplied).resolve(strict=True)
+        assert baseline.is_file()
+        return baseline
     database = tmp_path_factory.mktemp("prd137-api-base") / "base.sqlite3"
     database_url = _url(database)
     assert "0129" in apply_migrations(database_url).applied
@@ -401,11 +407,15 @@ def _passed_results(request) -> tuple[ScenarioExecution, ...]:
     )
 
 
-def _passed_runner(request) -> bytes:
+def _passed_runner(request, lease=None) -> bytes:
+    if lease is not None:
+        assert lease.check()
     return sign_receipt(synthetic_receipt(request, _passed_results(request)))
 
 
-def _failed_runner(request) -> bytes:
+def _failed_runner(request, lease=None) -> bytes:
+    if lease is not None:
+        assert lease.check()
     results = list(_passed_results(request))
     first = request.scenarios[0]
     results[0] = ScenarioExecution(
@@ -490,7 +500,8 @@ async def test_missing_runner_fails_closed(
 @pytest.mark.anyio
 @pytest.mark.parametrize("mode", ["bare_results", "tampered", "wrong_binding", "trust_removed"])
 async def test_untrusted_runner_cannot_pass_or_claim_cleanup(runtime, monkeypatch, mode):
-    def untrusted_runner(request):
+    def untrusted_runner(request, lease):
+        assert lease.check()
         if mode == "bare_results":
             return _passed_results(request)
         if mode == "wrong_binding":
@@ -524,7 +535,8 @@ async def test_untrusted_runner_cannot_pass_or_claim_cleanup(runtime, monkeypatc
 
 @pytest.mark.anyio
 async def test_signed_cleanup_failure_prevents_assessment_pass(runtime, monkeypatch):
-    def cleanup_failed_runner(request):
+    def cleanup_failed_runner(request, lease):
+        assert lease.check()
         receipt = synthetic_receipt(request, _passed_results(request))
         run = receipt.runs[0]
         failed = run.fixtures[0].model_copy(update={"cleanup_status": "failed"})
@@ -915,7 +927,8 @@ async def test_workspace_dual_approval_platform_review_and_expiry(
 async def test_permission_revision_change_fails_late_runner_results(
     runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def revision_changing_runner(request):
+    def revision_changing_runner(request, lease):
+        assert lease.check()
         with closing(connect_database(runtime.config.database_url)) as connection:
             connection.execute(
                 """UPDATE platform_operators
@@ -952,7 +965,8 @@ async def test_permission_revision_change_fails_late_runner_results(
 async def test_stale_runner_is_fenced_after_lease_takeover(
     runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def takeover_runner(request):
+    def takeover_runner(request, lease):
+        assert lease.check()
         now = datetime.now(UTC)
         with closing(connect_database(runtime.config.database_url)) as connection:
             connection.execute(

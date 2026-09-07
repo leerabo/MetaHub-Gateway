@@ -29,6 +29,7 @@ from metahub_control.workspace_access.service import (
     authenticate_workspace_session_in_transaction,
 )
 
+from .leases import LEASE_SECONDS, RENEW_BEFORE_SECONDS, START_TIMEOUT_SECONDS, AssuranceLease
 from .models import (
     AssessmentCreateCommand,
     AssessmentResponse,
@@ -85,7 +86,7 @@ class AssessmentExecutionRequest:
     scenarios: tuple[RegisteredScenario, ...]
 
 
-AssuranceRunner = Callable[[AssessmentExecutionRequest], bytes]
+AssuranceRunner = Callable[[AssessmentExecutionRequest, AssuranceLease], bytes]
 
 
 def create_security_assessment(
@@ -300,12 +301,14 @@ def execute_security_assessment(
         assessment = _assessment_row(connection, assessment_id)
         if assessment["status"] != "queued":
             raise ApiError("security_assurance.assessment_conflict")
-        if not _requester_can_run(connection, assessment):
-            raise ApiError("security_assurance.permission_revoked")
+        requester_allowed = _requester_can_run(connection, assessment)
         maximum_duration_seconds = int(assessment["maximum_duration_seconds"])
         if maximum_duration_seconds not in {1800, 14_400}:
             raise ApiError("security_assurance.registry_invalid")
         now = _utcnow()
+        dispatch_allowed = requester_allowed and now < (
+            _parse_time(assessment["requested_at"]) + timedelta(seconds=START_TIMEOUT_SECONDS)
+        )
         stamp = _db_time(now)
         updated = connection.execute(
             """UPDATE security_assessments
@@ -325,9 +328,9 @@ def execute_security_assessment(
                 assessment_id,
                 assessment["workspace_id"],
                 assessment["tenant_id"],
-                "security-assurance-inline-v1",
+                "security-assurance-coordinator-v1",
                 lease_sha,
-                _db_time(now + timedelta(seconds=maximum_duration_seconds)),
+                _db_time(now + timedelta(seconds=LEASE_SECONDS)),
                 int(assessment["requester_revision"]),
                 stamp,
                 stamp,
@@ -362,13 +365,23 @@ def execute_security_assessment(
     finally:
         connection.close()
 
+    lease = AssuranceLease(lambda generation: _renew_assessment_lease(
+        config, execution_request, expected_fencing_generation=generation,
+    ))
     receipt = None
     try:
+        if not dispatch_allowed:
+            raise ValueError("execution dispatch expired or revoked")
         trust_path = config.assurance_receipt_trust_bundle_path
         if runner is None or not trust_path:
             raise ValueError("runner or receipt trust unavailable")
+        if not lease.check():
+            raise ValueError("execution lease unavailable")
+        content = runner(execution_request, lease)
+        if not lease.check():
+            raise ValueError("execution lease revoked")
         receipt = FileAssuranceReceiptVerifier(Path(trust_path))(
-            execution_request, runner(execution_request),
+            execution_request, content,
         )
         results = tuple(
             run.result if all(item.cleanup_status == "deleted" for item in run.fixtures)
@@ -379,27 +392,183 @@ def execute_security_assessment(
             for run in receipt.runs
         )
     except Exception:
-        results = tuple(
-            ScenarioExecution(
-                scenario_code=scenario.scenario_code,
-                outcome="error",
-                severity="p0",
-                duration_ms=0,
-                evidence_sha256=_digest(
-                    {"assessment": assessment_id, "scenario": scenario.scenario_code, "error": True}
-                ),
-            )
-            for scenario in execution_request.scenarios
-        )
+        receipt = None
+        results = _execution_errors(execution_request, "runner_error")
+    finally:
+        lease.close()
     _persist_execution(
         config,
         execution_request,
         results,
         receipt=receipt,
         lease_sha=lease_sha,
+        expected_fencing_generation=lease.fencing_generation,
         request_id=request_id,
         trace_id=trace_id,
     )
+
+
+def _renew_assessment_lease(
+    config: AppConfig, request: AssessmentExecutionRequest, *, expected_fencing_generation: int,
+) -> int:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        assessment = _assessment_row(connection, request.security_assessment_id)
+        lease = connection.execute(
+            "SELECT * FROM assurance_runner_leases WHERE security_assessment_id=?",
+            (request.security_assessment_id,),
+        ).fetchone()
+        now = _utcnow()
+        if (
+            not _execution_binding_matches(request, assessment, lease)
+            or int(lease["fencing_generation"]) != expected_fencing_generation
+            or not _parse_time(lease["updated_at"]) <= now < _parse_time(lease["lease_expires_at"])
+            or now >= request.deadline_at
+            or request.scenarios != _registered_scenarios(connection)
+            or not _requester_can_run(
+                connection, assessment, expected_revision=int(lease["permission_revision"]),
+            )
+        ):
+            raise ApiError("security_assurance.runner_fenced")
+        generation = expected_fencing_generation
+        expires_at = _parse_time(_db_time(min(
+            request.deadline_at, now + timedelta(seconds=LEASE_SECONDS),
+        )))
+        current_expiry = _parse_time(lease["lease_expires_at"])
+        if (
+            current_expiry - now <= timedelta(seconds=RENEW_BEFORE_SECONDS)
+            and expires_at > current_expiry
+        ):
+            stamp = _db_time(max(now, _parse_time(lease["updated_at"]) + timedelta(milliseconds=1)))
+            changed = connection.execute(
+                """UPDATE assurance_runner_leases
+                      SET lease_expires_at=?,fencing_generation=fencing_generation+1,updated_at=?
+                    WHERE security_assessment_id=? AND lease_token_sha256=?
+                      AND fencing_generation=? AND permission_revision=? AND lease_expires_at=?""",
+                (_db_time(expires_at), stamp, request.security_assessment_id,
+                 request.lease_challenge_sha256, generation, lease["permission_revision"],
+                 lease["lease_expires_at"]),
+            )
+            if changed.rowcount != 1:
+                raise ApiError("security_assurance.runner_fenced")
+            generation += 1
+        connection.commit()
+        return generation
+    except Exception:
+        _rollback(connection)
+        raise
+    finally:
+        connection.close()
+
+
+def _execution_binding_matches(request, assessment, lease) -> bool:
+    if lease is None or assessment["status"] != "running":
+        return False
+    fields = (
+        "security_assessment_id", "workspace_id", "tenant_id", "profile_code", "profile_version",
+        "profile_sha256", "profile_signature_sha256", "generation", "artifact_sha256",
+        "code_tree_sha256", "migration_set_sha256", "contract_set_sha256",
+    )
+    return (
+        all(getattr(request, key) == assessment[key] for key in fields)
+        and lease["workspace_id"] == request.workspace_id
+        and lease["tenant_id"] == request.tenant_id
+        and secrets.compare_digest(lease["lease_token_sha256"], request.lease_challenge_sha256)
+        and _db_time(request.started_at) == _db_time(_parse_time(assessment["started_at"]))
+        and _db_time(request.deadline_at) == _db_time(
+            _parse_time(assessment["started_at"])
+            + timedelta(seconds=int(assessment["maximum_duration_seconds"]))
+        )
+    )
+
+
+def _execution_errors(request, reason):
+    return tuple(ScenarioExecution(
+        scenario_code=scenario.scenario_code, outcome="error", severity="p0", duration_ms=0,
+        evidence_sha256=_digest({
+            "assessment": request.security_assessment_id, "scenario": scenario.scenario_code,
+            "reason": reason,
+        }),
+    ) for scenario in request.scenarios)
+
+
+def _expire_stalled_assessments(config: AppConfig) -> int:
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN")
+        _require_schema(connection)
+        now = _utcnow()
+        queued = connection.execute(
+            """SELECT security_assessment_id FROM security_assessments
+                WHERE status='queued' AND requested_at<=?
+                ORDER BY requested_at,security_assessment_id LIMIT 100""",
+            (_db_time(now - timedelta(seconds=START_TIMEOUT_SECONDS)),),
+        ).fetchall()
+        rows = connection.execute(
+            """SELECT lease.* FROM assurance_runner_leases lease
+                 JOIN security_assessments assessment
+                   ON assessment.security_assessment_id=lease.security_assessment_id
+                WHERE assessment.status='running' AND lease.lease_expires_at<=?
+                ORDER BY lease.lease_expires_at,lease.security_assessment_id LIMIT 100""",
+            (_db_time(now),),
+        ).fetchall()
+        pending = []
+        for lease in rows:
+            assessment = _assessment_row(connection, lease["security_assessment_id"])
+            started = _parse_time(assessment["started_at"])
+            fields = {
+                key: assessment[key] for key in (
+                    "security_assessment_id", "workspace_id", "tenant_id", "profile_code",
+                    "profile_version", "profile_sha256", "profile_signature_sha256", "generation",
+                    "artifact_sha256", "code_tree_sha256", "migration_set_sha256",
+                    "contract_set_sha256",
+                )
+            }
+            request = AssessmentExecutionRequest(
+                **fields, lease_challenge_sha256=lease["lease_token_sha256"], started_at=started,
+                deadline_at=started + timedelta(
+                    seconds=int(assessment["maximum_duration_seconds"]),
+                ),
+                scenarios=_registered_scenarios(connection),
+            )
+            pending.append((request, int(lease["fencing_generation"])))
+        connection.commit()
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, KeyError, TypeError, ValueError):
+        _rollback(connection)
+        raise ApiError("security_assurance.unavailable") from None
+    finally:
+        connection.close()
+    completed = 0
+    for assessment in queued:
+        try:
+            execute_security_assessment(
+                config, assessment["security_assessment_id"], runner=None,
+                request_id="assurance-queue-expiry", trace_id="assurance-queue-expiry",
+            )
+        except ApiError as error:
+            if error.code not in {
+                "security_assurance.assessment_conflict", "security_assurance.runner_fenced",
+            }:
+                raise
+        else:
+            completed += 1
+    for request, generation in pending:
+        try:
+            _persist_execution(
+                config, request, _execution_errors(request, "lease_expired"), receipt=None,
+                lease_sha=request.lease_challenge_sha256, expected_fencing_generation=generation,
+                request_id="assurance-lease-expiry", trace_id="assurance-lease-expiry",
+            )
+        except ApiError as error:
+            if error.code != "security_assurance.runner_fenced":
+                raise
+        else:
+            completed += 1
+    return completed
 
 
 def apply_remediation(
@@ -842,6 +1011,7 @@ def apply_risk_acceptance(
 def process_security_assurance_once(config: AppConfig, *, worker_id: str) -> int:
     if not 8 <= len(worker_id) <= 120:
         raise ApiError("security_assurance.worker_invalid")
+    expired_executions = _expire_stalled_assessments(config)
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -876,6 +1046,8 @@ def process_security_assurance_once(config: AppConfig, *, worker_id: str) -> int
         state = connection.execute(
             "SELECT * FROM security_assurance_scheduler_state WHERE singleton_id=1"
         ).fetchone()
+        now = max(now, _parse_time(state["updated_at"]) + timedelta(milliseconds=1))
+        stamp = _db_time(now)
         token_sha = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
         connection.execute(
             """UPDATE security_assurance_scheduler_state
@@ -892,7 +1064,7 @@ def process_security_assurance_once(config: AppConfig, *, worker_id: str) -> int
             ),
         )
         connection.commit()
-        return len(expiring) + int(delivered)
+        return expired_executions + len(expiring) + int(delivered)
     except ApiError:
         _rollback(connection)
         raise
@@ -910,6 +1082,7 @@ def _persist_execution(
     *,
     receipt: ExecutionReceipt | None,
     lease_sha: str,
+    expected_fencing_generation: int,
     request_id: str,
     trace_id: str,
 ) -> None:
@@ -922,33 +1095,20 @@ def _persist_execution(
             (request.security_assessment_id,),
         ).fetchone()
         if (
-            assessment["status"] != "running"
-            or lease is None
+            not _execution_binding_matches(request, assessment, lease)
             or lease["lease_token_sha256"] != lease_sha
-            or _parse_time(lease["lease_expires_at"]) <= _utcnow()
+            or int(lease["fencing_generation"]) != expected_fencing_generation
         ):
             raise ApiError("security_assurance.runner_fenced")
-        if not _requester_can_run(
-            connection,
-            assessment,
-            expected_revision=int(lease["permission_revision"]),
-        ):
-            results = tuple(
-                ScenarioExecution(
-                    scenario_code=scenario.scenario_code,
-                    outcome="error",
-                    severity="p0",
-                    duration_ms=0,
-                    evidence_sha256=_digest(
-                        {
-                            "assessment": request.security_assessment_id,
-                            "scenario": scenario.scenario_code,
-                            "permission_revoked": True,
-                        }
-                    ),
-                )
-                for scenario in request.scenarios
+        if (
+            _parse_time(lease["lease_expires_at"]) <= _utcnow()
+            or request.deadline_at <= _utcnow()
+            or not _requester_can_run(
+                connection, assessment, expected_revision=int(lease["permission_revision"]),
             )
+        ):
+            results = _execution_errors(request, "lease_expired_or_revoked")
+            receipt = None
         scenario_by_code = {item.scenario_code: item for item in request.scenarios}
         now = _utcnow()
         stamp = _db_time(now)
@@ -973,7 +1133,7 @@ def _persist_execution(
                      owner_registry_version,runner_image_sha256,seed_receipt_sha256,
                      cleanup_receipt_sha256,outcome,duration_ms,evidence_sha256,
                      fencing_generation,started_at,finished_at)
-                   VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?,1,?,?)""",
+                   VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)""",
                 (
                     run_id,
                     request.security_assessment_id,
@@ -988,6 +1148,7 @@ def _persist_execution(
                     result.outcome,
                     result.duration_ms,
                     result.evidence_sha256,
+                    expected_fencing_generation,
                     _db_time(started),
                     _db_time(finished),
                 ),
@@ -1321,13 +1482,22 @@ def _requester_can_run(connection, assessment, *, expected_revision: int | None 
     )
     return connection.execute(
         """SELECT 1 FROM platform_operators operator
+             JOIN global_accounts account ON account.account_id=operator.account_id
              JOIN platform_operator_role_bindings binding
                ON binding.operator_id=operator.operator_id AND binding.status='active'
              JOIN platform_security_assurance_role_permissions permission
                ON permission.role_code=binding.role_code
             WHERE operator.operator_id=? AND operator.status='active'
-              AND operator.revision=? AND permission.permission_code='platform.assurance.run'""",
-        (assessment["requester_operator_id"], revision),
+              AND account.status='active' AND account.login_enabled=1
+              AND operator.revision=? AND permission.permission_code='platform.assurance.run'
+              AND EXISTS(SELECT 1 FROM workspace_tenant_bindings owner_binding
+                JOIN workspaces workspace ON workspace.workspace_id=owner_binding.workspace_id
+                JOIN tenants tenant ON tenant.tenant_id=owner_binding.tenant_id
+                WHERE owner_binding.workspace_id=? AND owner_binding.tenant_id=?
+                  AND owner_binding.status='active'
+                  AND workspace.status='active' AND tenant.status='active')""",
+        (assessment["requester_operator_id"], revision,
+         assessment["workspace_id"], assessment["tenant_id"]),
     ).fetchone() is not None
 
 

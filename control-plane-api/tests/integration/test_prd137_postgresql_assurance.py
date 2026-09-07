@@ -5,6 +5,7 @@ from __future__ import annotations
 import g6_postgresql_support as native_support
 import pytest
 import test_postgresql_native_migrations as native_migrations
+import test_prd137_persistent_leases as persistent_leases
 import test_prd137_security_assurance as assurance
 
 pytestmark = native_migrations.pytestmark
@@ -37,3 +38,49 @@ async def test_postgresql_untrusted_receipt(native_business_database, monkeypatc
         assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
     )
     await assurance.test_untrusted_runner_cannot_pass_or_claim_cleanup(runtime, monkeypatch, mode)
+
+
+@pytest.mark.anyio
+async def test_postgresql_persistent_leases(
+    native_business_database, monkeypatch, tmp_path, record_property,
+):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await persistent_leases.test_persistent_short_lease_controls(
+        runtime, monkeypatch, record_property,
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["revoked_before_start", "abandoned_queue", "late_start"])
+async def test_postgresql_queued_recovery(native_business_database, monkeypatch, tmp_path, mode):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await persistent_leases.test_queued_assessment_recovery(runtime, monkeypatch, mode)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["tenant_disabled", "workspace_inactive", "login_disabled"])
+async def test_postgresql_owner_revocation(native_business_database, monkeypatch, tmp_path, mode):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await persistent_leases.test_owner_and_login_revocation(runtime, monkeypatch, mode)
+
+
+@pytest.mark.anyio
+async def test_postgresql_generation_only_takeover(native_business_database, monkeypatch, tmp_path):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await persistent_leases.test_generation_only_takeover(runtime, monkeypatch)
+
+
+@pytest.mark.anyio
+async def test_postgresql_competing_schedulers(native_business_database, monkeypatch, tmp_path):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await persistent_leases.test_queued_recovery_competing_schedulers(runtime, monkeypatch)

@@ -126,3 +126,31 @@ journal，environment receipt 为 NULL，旧 DTO 必填摘要使用全零表示�
 降为 viewer；严格输入按已存在的 422/identity.request_invalid 合同判断，不为探针修改服务端权限。
 当前真实注册/验证码/登录/邀请/空间创建与切换由集成测试提供，未做鉴权替换；ASGI 进程内运行不证明
 TLS、容器/VM 或网络隔离。租约回调的持久化协调、剩余五场景及全 owner registry 仍待实现。
+
+## 10. 持久化短租约设计与两轮自审
+
+单次执行许可为 30 秒，评估的 1800/14400 秒只作为整体 deadline。每个探针请求前后经协调器读取
+assurance_runner_leases、当前 requester 权限与 owner 状态，剩余 15 秒内用原 token、fencing generation、
+permission revision 和到期时间做 CAS 续租。新许可不得跨越评估 deadline，也不能复活过期租约。
+运行器回调只接收 lease capability，序列化请求不携带数据库配置；真实远程安全传输仍单独接入。
+
+第一轮自审：绑定 assessment/owner/profile/build/generation/challenge/起止时间，复核场景 registry。
+operator 禁用或版本变化、角色撤销、全局账号禁用及 Workspace/tenant 停用都停止许可；失败和取消后的
+capability 永久拒绝后续调用。不得用延长 profile deadline 或自动后台保活代替逐阶段检查。
+第二轮自审：所有续租按当前 fencing generation 比较，最终结果也保存并比较实际 generation；
+接管后旧实例不能落库。执行器失联后调度器将过期 running 评估落为 error/P0，保留失败事实，不伪造
+环境、fixture 或 cleanup。调度与结果提交之间必须重查绑定，竞态只允许一个终态，不允许重复事实。
+
+### 排队撤权与崩溃恢复补充复核
+
+2026-09-07 内存基线复现：入队事务提交后、创建租约前撤销 operator，原执行入口直接抛错，留下
+没有 lease 的 queued 评估；现有调度只处理 running，因此无法收尾。部署文档还保留了旧单参数
+runner 合同，需与本批接口一起更新。磁盘耗尽的原生测试未完成，不计为通过。
+
+第一轮自审：协调器先以 CAS 认领已有 queued 事实，再检查当前权限；失败只记录 error/P0，绝不
+调用 runner 或签发可用执行许可。排队启动上限固定为 30 秒，过期任务不得迟到启动攻击。认领记录
+不是环境或执行证明，所有未知度量仍为空或明确的未取得值，不生成 cleanup journal。
+第二轮自审：调度器每轮有界扫描过期 queued，使用同一认领和失败落库路径；与原请求竞争时只允许
+一个认领成功。认领后进程再次退出则由 running 短租约回收，恢复不依赖原请求或原账号继续有效。
+验证覆盖撤权发生在入队后、排队超时、迟到启动、重复调度、原 token 不变但 fencing generation
+已变化、Workspace/tenant 停用和禁用后恢复仍不能复活旧 capability。
