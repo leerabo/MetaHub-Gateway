@@ -28,6 +28,7 @@ from metahub_control.platform_access.constants import (
 )
 from metahub_control.platform_access.service import PlatformContext
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.schema import foreign_key_violation_count
 from metahub_shared.developer_contracts import sdk_signature_payload
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -76,7 +77,8 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd133-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0125"
+    assert "0125" in apply_migrations(database_url).applied
+    assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", _TEST_PASSWORD)
         apply_seed_data(database_url)
@@ -90,6 +92,10 @@ def runtime(
     database = tmp_path / "prd133.sqlite3"
     shutil.copy2(base_database, database)
     config = _config(_url(database))
+    return _runtime(config)
+
+
+def _runtime(config: AppConfig) -> tuple[AppConfig, PlatformContext, PlatformContext, AuthContext]:
     now = "2026-08-29T08:00:00.000Z"
     with closing(connect_database(config.database_url)) as connection:
         primary_account = str(
@@ -502,4 +508,4 @@ async def test_release_download_deprecation_scheduler_and_withdrawal(
             ).fetchone()[0]
             >= 2
         )
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert foreign_key_violation_count(connection) == 0

@@ -1133,10 +1133,11 @@ def _store_key(connection, signature, now):
     public_b64 = _b64(signature.public_key)
     public_sha = hashlib.sha256(signature.public_key).hexdigest()
     connection.execute(
-        """INSERT OR IGNORE INTO supply_chain_signing_keys(
+        """INSERT INTO supply_chain_signing_keys(
              key_id,purpose,algorithm,public_key_b64,public_key_sha256,status,
              not_before,not_after,created_at)
-           VALUES(?,'metahub.artifact.attestation/v1','ed25519',?,?,'active',?,?,?)""",
+           VALUES(?,'metahub.artifact.attestation/v1','ed25519',?,?,'active',?,?,?)
+           ON CONFLICT(key_id) DO NOTHING""",
         (
             signature.key_id,
             public_b64,

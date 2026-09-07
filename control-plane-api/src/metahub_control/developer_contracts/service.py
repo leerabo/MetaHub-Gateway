@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from metahub_shared.config_distribution import canonical_json_bytes
 from metahub_shared.db.connection import connect_database
+from metahub_shared.db.schema import table_exists
 from metahub_shared.developer_contracts import (
     PUBLIC_API_REGISTRY_VERSION,
     build_sdk_archive,
@@ -1490,10 +1491,11 @@ def _store_signing_key(
     public_b64 = unpadded_b64(signature.public_key)
     public_sha = _sha(signature.public_key)
     connection.execute(
-        """INSERT OR IGNORE INTO developer_contract_signing_keys(
+        """INSERT INTO developer_contract_signing_keys(
              key_id,purpose,algorithm,public_key_b64,public_key_sha256,status,
              not_before,not_after,created_at)
-           VALUES(?,'metahub.public-contract.release/v1','ed25519',?,?,'active',?,?,?)""",
+           VALUES(?,'metahub.public-contract.release/v1','ed25519',?,?,'active',?,?,?)
+           ON CONFLICT(key_id) DO NOTHING""",
         (
             signature.key_id,
             public_b64,
@@ -1837,15 +1839,7 @@ def _notice_row(connection: sqlite3.Connection, notice_id: str) -> sqlite3.Row:
 
 
 def _require_schema(connection: sqlite3.Connection) -> None:
-    placeholders = ",".join("?" for _ in _SCHEMA_TABLES)
-    found = {
-        str(row[0])
-        for row in connection.execute(
-            f"SELECT name FROM sqlite_schema WHERE type='table' AND name IN ({placeholders})",
-            tuple(_SCHEMA_TABLES),
-        ).fetchall()
-    }
-    if found != _SCHEMA_TABLES:
+    if not all(table_exists(connection, table) for table in sorted(_SCHEMA_TABLES)):
         raise ApiError("developer_contract.unavailable")
 
 
