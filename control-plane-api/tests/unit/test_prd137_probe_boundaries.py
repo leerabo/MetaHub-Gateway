@@ -32,6 +32,7 @@ async def _fixtures(handler):
                 httpx.AsyncClient(
                     base_url="https://assurance.test",
                     transport=httpx.MockTransport(handler),
+                    trust_env=False,
                     headers={"X-Test-Subject": label},
                 )
             )

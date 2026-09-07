@@ -17,11 +17,13 @@ from typing import Literal
 import httpx
 from metahub_shared.config_distribution import canonical_json_bytes
 
+from .transport import MAX_RESPONSE_BYTES as MAX_RESPONSE_BYTES
+from .transport import REQUEST_TIMEOUT_SECONDS as REQUEST_TIMEOUT_SECONDS
+from .transport import guarded_request
+
 GLOBAL_CSRF = "__Host-metahub-global-csrf"
 WORKSPACE_CSRF = "__Host-metahub-workspace-csrf"
 WORKSPACE_SESSION = "__Host-metahub-workspace-session"
-MAX_RESPONSE_BYTES = 262_144
-REQUEST_TIMEOUT_SECONDS = 10
 SCENARIOS = (
     "api_idor",
     "write_authorization",
@@ -77,6 +79,7 @@ class ProbeFixtures:
         if (
             self.source_workspace_id == self.target_workspace_id
             or self.source_project_id == self.target_project_id
+            or type(self.member_revision) is not int
             or self.member_revision < 1
             or not 1 <= len(self.target_project_name) <= 120
         ):
@@ -84,10 +87,27 @@ class ProbeFixtures:
         clients = (self.source, self.target, self.member, self.anonymous)
         if (
             len({id(client) for client in clients}) != 4
-            or any(client.base_url != self.source.base_url for client in clients)
+            or any(
+                client.base_url.copy_with(path="/") != self.source.base_url.copy_with(path="/")
+                or client.base_url.path != "/"
+                for client in clients
+            )
             or any(client.follow_redirects for client in clients)
+            or any(client.trust_env or client.is_closed or client.params for client in clients)
             or any(client.auth is not None for client in clients)
             or any("authorization" in client.headers for client in clients)
+            or any(
+                name in client.headers
+                for client in clients
+                for name in (
+                    "cookie",
+                    "proxy-authorization",
+                    "host",
+                    "forwarded",
+                    "x-forwarded-host",
+                    "x-forwarded-for",
+                )
+            )
             or bool(self.anonymous.cookies)
             or self.source.base_url.scheme != "https"
             or self.source.base_url.username
@@ -106,6 +126,7 @@ class ProbeFixtures:
             or parsed_origin.query
             or parsed_origin.fragment
             or parsed_origin.path not in {"", "/"}
+            or parsed_origin.copy_with(path="/") != self.source.base_url.copy_with(path="/")
         ):
             raise ValueError("invalid fixture origin")
 
@@ -237,36 +258,7 @@ class FixedProbeRunner:
             raise _ProbeFailure
 
     async def _request(self, client, method, path, **kwargs):
-        headers = {**kwargs.pop("headers", {}), "Accept-Encoding": "identity"}
-        async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-            await self._check_lease()
-            async with client.stream(
-                method,
-                path,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-                follow_redirects=False,
-                headers=headers,
-                **kwargs,
-            ) as response:
-                await self._check_lease()
-                # Reject compression before decoding so the byte cap also bounds memory.
-                if response.headers.get("content-encoding", "identity").lower() != "identity":
-                    raise ValueError("unsupported probe response encoding")
-                length = response.headers.get("content-length")
-                if length is not None and not 0 <= int(length) <= MAX_RESPONSE_BYTES:
-                    raise ValueError("probe response too large")
-                content = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=16_384):
-                    await self._check_lease()
-                    if len(content) + len(chunk) > MAX_RESPONSE_BYTES:
-                        raise ValueError("probe response too large")
-                    content.extend(chunk)
-                await self._check_lease()
-                return httpx.Response(
-                    response.status_code,
-                    headers=response.headers,
-                    content=bytes(content),
-                )
+        return await guarded_request(self._check_lease, client, method, path, **kwargs)
 
     def _headers(self, client, *, global_session=False):
         csrf = client.cookies.get(GLOBAL_CSRF if global_session else WORKSPACE_CSRF)

@@ -65,6 +65,29 @@ PostgreSQL 另以语句级触发器拒绝 TRUNCATE；非空归档拒绝 down 迁
 
 ## 未完成项
 
+已提供 `HttpFixtureBootstrap` 与 `DockerSandbox` 基础能力，尚未接入正式 app 的 runner。
+初始化器只在独立 sandbox 内调用现有注册、验证码验证、登录、邀请、Workspace、项目和应用接口；
+调用方须提供四个同 origin、无预置认证且 `trust_env=False` 的独占 HTTP 客户端。验证码适配器必须
+交付本次实际生成且目标邮箱匹配的 challenge；本地集成使用 test_capture，不代表已有 SMTP 服务。
+
+Docker SDK 仅安装到专用 supervisor：
+
+```powershell
+python -m pip install -r infra/docker/requirements.assurance-supervisor.txt
+```
+
+生产 Control 和 guest 不需要该依赖，也不能获得 Docker socket。部署配置固定专用 rootless socket
+`unix:///run/user/<uid>/metahub-assurance/docker.sock`、daemon ID 和 `sha256:<64hex>` 镜像 ID。
+daemon 须带 `metahub.assurance=dedicated-v1` 标记，启用 cgroup v2、资源限制能力与 builtin seccomp；
+未标记容器混用、镜像隐式 VOLUME、网络/宿主挂载/权限配置不符均拒绝启动。
+
+使用顺序为 create、start、finally cleanup(handle)，创建后启动失败时仍须取已记录的 handle 清理。
+cleanup 返回结构化观察，不是签名回执，也不是全部业务 fixture 的清理证明；close 仅关闭 SDK 连接。
+未取得 exact handle 的创建失败必须报告未知残留，不能按名称扫描删除。已验证的成功清理可幂等读取。
+该同步生命周期由独占 supervisor 串行调用；许可回调及 SDK 请求须保持有界，不把 supervisor 暴露为
+可接受任意镜像、命令或 URL 的公共接口。SDK 的连接工厂只在 Linux 启用。
+
 真实 worker 的无生产权限隔离部署、镜像/代码/迁移/合同度量、全部固定攻击场景、远程短租约传输、
-真实 fixture 创建与 exact cleanup 仍待实现和实测。数据库原文归档须随实际 runner 一并做部署验证。
+全 owner fixture 创建与 exact cleanup 仍待完整接线和实测。固定 guest 入口的实际模块与镜像尚未
+交付，当前不能独立运行完整 worker。数据库原文归档须随实际 runner 一并做部署验证。
 只有这些证据齐全后，才可把签名结果用于真实安全验收；目前不能解除 G6/G8。

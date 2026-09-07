@@ -160,3 +160,38 @@ fencing generation 与最终结果原子提交；无效签名不归档，有效�
 基线只在模块副本上应用增量；原始 `prd134-api-base0/base.sqlite3` 的 SHA256 仍为
 `572173fbf10027815ea1e1ecbdd201d3b7084f6335a86e436a762a68945f3db6`。
 归档测试使用受控认证和合成签名，不作为真实隔离或清理证据；G6/G8 未解除。
+
+## 2026-09-07 初始化与隔离生命周期
+
+设计及两轮自审见本条第 12 节。共享有界 HTTP transport 供初始化和五种已实现探针复用，真实
+注册/验证/登录/邀请/空间及资源创建已由 `HttpFixtureBootstrap` 执行，不再由集成测试重写业务流程。
+新建对象仅保存步骤、标识 SHA256 和观察时间。SDK 仅用于独立 supervisor，未注入正式 Control。
+
+- `bootstrap-smoke-r1-junit.xml`：33 失败，初始化前地址边界误拒绝；原因是仅规范化比较的一方。
+- `bootstrap-focused-r1-junit.xml`：75 通过、1 失败；实际 Workspace 接口拒绝超过 48 字符的 slug。
+  修正 runner 生成规则，未放宽服务端约束。
+- `bootstrap-api-r2-junit.xml`：真实认证 ASGI 集成 1/1，32.15 秒。
+- `sandbox-sdk-r1-junit.xml`：71 通过、1 失败；SDK 集合对象测试替身未命中实际调用，未当成部署失败。
+- `sandbox-sdk-r2-junit.xml`：78 通过、1 失败；SDK 序列化省略默认 Privileged=false，断言需区分
+  请求编码与 daemon inspect。实际 inspect 仍要求 Privileged=false。
+- `bootstrap-sandbox-unit-r3-junit.xml`：156 通过、1 失败；测试直接把含 name 的调用参数传入仅接收
+  容器配置的 SDK 方法。改用真实高层到低层转换链，仅替换最终传输，拒绝未替换的网络 I/O。
+- `sandbox-serialization-r4-junit.xml`：1 失败、79 未选；SDK 会补齐未使用的健康检查可选字段为 None。
+  改为验证禁用命令及其他字段未启用，不修改 guest 的禁用健康检查策略。
+- `bootstrap-final-r1-junit.xml`：158/158，25.85 秒；后续补充等价根地址互操作测试。
+- `bootstrap-final-r2-junit.xml`：最终定向覆盖 46 初始化边界、80 Docker SDK 合同、32 探针边界和
+  1 条真实鉴权集成，159/159 通过、0 跳过，23.96 秒。
+
+真实鉴权集成覆盖三账号、二 Workspace、二项目、一应用、一次邀请、空间切换和五场景共 59 检查点；
+初始化另有 13 条哈希观察。测试直接检查运行时生成的密码、邀请码、验证码、邮箱及 Cookie 不进入
+结果、观察记录、repr 或日志。ASGI 测试没有替换认证，但不证明 TLS/容器/网络隔离。
+
+Docker SDK 合同覆盖专用 daemon、rootless/seccomp/cgroup 能力、不可变镜像、无隐式卷、实际 inspect
+配置、撤权后不启动、启动失败保留 handle、owner 变化拒绝删除、API 异常和响应丢失不冒充已清理，以及
+确认删除后的原记录幂等。包含真实 SDK 参数转换，但没有连接真实 Docker daemon，不能计作部署验收。
+Windows 当前无 Docker/Podman 命令，完整 guest 模块/镜像、许可通道、余下五种场景和全 owner 覆盖
+仍待完成。未启动 72 小时等待，也未将本轮结果用于 G6/G8 放行。
+
+本轮不修改迁移、公共业务 DTO 或前端；因此只运行受影响的上述单元与 API 集成，不重复整批数据库、
+浏览器、性能套件。独立敏感审计为 `prd-137-bootstrap-sandbox-sensitive-audit.json`，包含精确暂存
+源码和所有成功/失败测试证据摘要。共享基线仍要求 SHA256 与前节一致。

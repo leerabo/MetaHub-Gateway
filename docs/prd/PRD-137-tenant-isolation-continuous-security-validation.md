@@ -181,3 +181,42 @@ running assessment 和当前 lease generation；UPDATE/DELETE 被数据库约束
 保护。SQLite 使用 sqlite_schema/pragma_table_info；原生 PostgreSQL 使用 pg_attribute、约束 DDL、
 触发器 DDL 及函数体计算本表摘要，不复制冻结 SQLite 哈希。本增量不宣称已改造 PRD-089 的全库原生
 删除验证器；全库历史清单迁移和实际租户删除仍须由所属业务范围独立验证。
+
+## 12. 隔离执行环境与真实初始化设计
+
+继续同一安全执行链，先将真实账号/Workspace/项目/应用/邀请的初始化从测试搬入 runner 能力，
+并实现专用 rootless Docker 的资源生命周期。初始化只调用现有 HTTP 业务接口；验证码经隔离邮箱
+适配器取得，再走真实验证和登录，不能直接写账号或伪造会话。初始化步骤同样逐请求检查许可、
+限制时间和响应大小；异常仅返回固定错误码，不暴露密码、Cookie、邮箱或接口响应。
+
+容器管理器使用 Docker SDK，不接受评估请求提供的镜像、命令、环境变量、路径或 URL。部署方固定
+不可变镜像 ID；daemon 必须为 Linux/rootless，带专用 assurance 标记且不得混用未标记容器。
+每个容器生成唯一 environment/owner marker，禁用网络、宿主挂载、额外权限及日志驱动，使用只读
+根文件系统、非 root UID、受限 tmpfs/CPU/内存/PID。创建后从实际 inspect 复核约束，不能把请求参数
+当成生效证明。清理只使用当前进程持有的 exact ID，并复核 marker 与镜像，不按名称或前缀扫描删除。
+
+第一轮自审：Docker 访问权仅属于独立隔离 supervisor，不授予生产 Control，也不传入 guest。
+初始化客户端必须同 HTTPS origin、无预置 Cookie/Authorization/代理信任，邮箱只能使用固定隔离
+域和本次唯一标识。响应中的账号/资源/成员 ID、角色与 owner 必须核对；部分初始化失败不能丢掉
+已有资源记录，更不能把未创建对象写成已清理。镜像声明的隐式 VOLUME 也须拒绝。
+
+第二轮自审：短许可在每次请求及响应阶段检查，失败后实例永久失效；秘密不进入 repr/异常/返回摘要。
+容器创建后启动失败仍保留 exact handle 供清理；owner marker 变化时拒绝删除并报告残留。删除后必须
+确认 exact ID 不存在，Docker 连接异常不能视为已清理。专用 daemon 标记是部署前置约束，不是独立
+OS/网络安全认证；本轮 API 初始化集成和 SDK 合同不冒充真实容器运行。
+
+该基础能力之后仍需 guest 打包、逐阶段远程许可、镜像/code/migration/contract 实测绑定、全部十场景
+及全 owner registry、真实部署与完整生命周期回执。未接齐前正式 app 继续失败关闭，G6 不放行。
+
+实施复核：HTTP 根地址在当前 httpx 中存在显式尾斜杠的比较差异，因此比较双方统一根路径，发送的
+Origin 统一不带路径；不能只规范化一方。Workspace slug 使用 asr 前缀，保留完整随机环境标识并满足
+既有 48 字符上限。成员 revision 拒绝 bool，邀请角色、资源状态、租户与项目归属均在下一步前核对。
+初始化成功产生 13 条哈希观察记录；记录只证明已收到相应创建响应，不表示这些对象已被清理。
+
+容器补充自审：rootless 本身不保证资源限额有效，daemon 还须报告 cgroup v2、内存/交换区/PID/CPU
+限制能力及 builtin seccomp。SDK 禁用用户 Docker 配置的代理注入；只读 inspect 复核实际容器配置。
+创建响应丢失、先前已缺失而本次未观察到删除、删除后的查询异常一律不产生清理成功；不扫描前缀补删。
+成功删除并确认 exact ID 不存在后保留原观察时间，幂等重试返回同一条记录，不生成新的删除事实。
+
+当前固定 guest 入口仅为待交付协议，guest 模块、镜像构建及许可传输未接入，不提供伪造通过结果的
+占位进程。Docker SDK 契约覆盖参数转换和失败路径，不能证明主机上的实际 cgroup、网络或容器隔离。
