@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from metahub_shared.db import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_columns
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -81,7 +82,7 @@ _GENERIC_ADAPTERS = {
     "ledger": (
         "finops_ledger_entries",
         "tenant_id",
-        ("ledger_entry_id", "entry_type", "status", "sequence_number", "revision"),
+        ("finops_ledger_entry_id", "entry_type", "ledger_sequence"),
     ),
     "audit": (
         "audit_logs",
@@ -157,9 +158,9 @@ def create_migration_assessment(
             connection.commit()
             return response
         _verify_adapter_catalog(connection, payload.domains)
-        write_watermark_before = connection.total_changes
+        write_watermark_before = _assessment_write_watermark(connection)
         snapshots = _capture_snapshots(connection, context, payload.domains)
-        write_watermark_after = connection.total_changes
+        write_watermark_after = _assessment_write_watermark(connection)
         if write_watermark_before != write_watermark_after:
             raise ApiError("migration.assessment_write_detected")
         permission_expansions = _permission_expansion_count(connection, context)
@@ -1017,10 +1018,11 @@ def _capture_domain(
         source = _projection(
             connection,
             """
-            SELECT user.user_id,
-              CASE user.role WHEN 'ops_admin' THEN 'admin' ELSE user.role END role_code,
-              user.status
-            FROM users user WHERE user.tenant_id=? ORDER BY user.user_id
+            SELECT legacy_user.user_id,
+              CASE legacy_user.role WHEN 'ops_admin' THEN 'admin'
+                ELSE legacy_user.role END role_code,
+              legacy_user.status
+            FROM users legacy_user WHERE legacy_user.tenant_id=? ORDER BY legacy_user.user_id
             """,
             (context.tenant_id,),
         )
@@ -1028,11 +1030,12 @@ def _capture_domain(
             connection,
             """
             SELECT member.legacy_user_id,
-              CASE user.role WHEN 'ops_admin' THEN 'admin' ELSE user.role END role_code,
+              CASE legacy_user.role WHEN 'ops_admin' THEN 'admin'
+                ELSE legacy_user.role END role_code,
               member.status
             FROM workspace_memberships member
-            JOIN users user ON user.tenant_id=member.tenant_id
-              AND user.user_id=member.legacy_user_id
+            JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
+              AND legacy_user.user_id=member.legacy_user_id
             WHERE member.workspace_id=? AND member.tenant_id=?
               AND member.legacy_user_id IS NOT NULL
             ORDER BY member.legacy_user_id
@@ -1104,10 +1107,20 @@ def _projection(
 def _table_columns(connection: sqlite3.Connection, table: str) -> frozenset[str]:
     if table not in {spec[0] for spec in _GENERIC_ADAPTERS.values()}:
         raise ApiError("migration.adapter_invalid")
-    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
-    if not rows:
+    columns = table_columns(connection, table)
+    if not columns:
         raise ApiError("migration.adapter_unavailable")
-    return frozenset(str(row[1]) for row in rows)
+    return frozenset(columns)
+
+
+def _assessment_write_watermark(connection: sqlite3.Connection) -> int:
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        # Transaction-local counters include trigger writes, not other sessions' work.
+        return int(connection.execute(
+            "SELECT COALESCE(SUM(n_tup_ins+n_tup_upd+n_tup_del),0) "
+            "FROM pg_stat_xact_user_tables"
+        ).fetchone()[0])
+    return connection.total_changes
 
 
 def _verify_adapter_catalog(connection: sqlite3.Connection, domains: Iterable[str]) -> None:
@@ -1131,10 +1144,10 @@ def _permission_expansion_count(
 ) -> int:
     rows = connection.execute(
         """
-        SELECT member.role_code,user.role legacy_role
+        SELECT member.role_code,legacy_user.role legacy_role
         FROM workspace_memberships member
-        JOIN users user ON user.tenant_id=member.tenant_id
-          AND user.user_id=member.legacy_user_id
+        JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
+          AND legacy_user.user_id=member.legacy_user_id
         WHERE member.workspace_id=? AND member.tenant_id=? AND member.status='active'
           AND member.legacy_user_id IS NOT NULL
         """,
@@ -1149,7 +1162,7 @@ def _permission_expansion_count(
 
 
 def _credential_reentry_count(connection: sqlite3.Connection, tenant_id: str) -> int:
-    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(provider_credentials)")}
+    columns = table_columns(connection, "provider_credentials")
     if "tenant_id" not in columns:
         return 0
     return int(

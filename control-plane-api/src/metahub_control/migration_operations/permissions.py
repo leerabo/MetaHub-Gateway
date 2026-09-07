@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.errors import ApiError
 
 MIGRATION_ROLE_PERMISSIONS = {
@@ -24,8 +25,8 @@ def load_verified_workspace_migration_permissions(
     catalog_table = "workspace_migration_permission_extensions"
     assignment_table = "workspace_migration_role_permissions"
     try:
-        catalog_available = _table_exists(connection, catalog_table)
-        assignments_available = _table_exists(connection, assignment_table)
+        catalog_available = table_exists(connection, catalog_table)
+        assignments_available = table_exists(connection, assignment_table)
         if not catalog_available and not assignments_available:
             return ()
         if catalog_available != assignments_available:
@@ -59,15 +60,6 @@ def load_verified_workspace_migration_permissions(
         raise
     except sqlite3.Error as exc:
         raise ApiError(unavailable_error_code) from exc
-
-
-def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)
-        ).fetchone()
-        is not None
-    )
 
 
 __all__ = ["MIGRATION_ROLE_PERMISSIONS", "load_verified_workspace_migration_permissions"]

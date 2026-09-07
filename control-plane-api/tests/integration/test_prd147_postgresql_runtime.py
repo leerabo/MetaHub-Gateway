@@ -90,7 +90,7 @@ def test_postgresql_foreign_key_check_rejects_unavailable_enforcement(postgresql
 
 
 def test_postgresql_seed_and_scheduler_fencing(postgresql_database, monkeypatch):
-    assert apply_migrations(postgresql_database).applied[-1] == "0139"
+    assert "0139" in apply_migrations(postgresql_database).applied
     with closing(connect_database(postgresql_database)) as connection:
         assert tuple(connection.execute(
             "SELECT strftime('%Y-%m-%dT%H:%M:%SZ',?),? % 3,'100%'",
@@ -186,7 +186,7 @@ def _drop_database(name):
 def native_runtime_template():
     name, database_url = _create_database()
     try:
-        assert apply_migrations(database_url).applied[-1] == "0139"
+        assert "0139" in apply_migrations(database_url).applied
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(48))
             seed = apply_seed_data(database_url)

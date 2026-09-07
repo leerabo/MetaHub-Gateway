@@ -78,10 +78,12 @@ def apply_seed_data(
 
     connection = connect_database(database_url or os.getenv("METAHUB_DATABASE_URL"))
     try:
-        _upsert_tenant(connection, tenant_id, tenant)
+        tenant_created = _upsert_tenant(connection, tenant_id, tenant)
         _upsert_roles(connection, tenant_id)
         _upsert_user(connection, user_id, tenant_id, admin)
-        _ensure_workspace_operational_states(connection, tenant_id)
+        _ensure_workspace_operational_states(
+            connection, tenant_id, initialize_new_tenant=tenant_created,
+        )
         _upsert_provider(connection, provider_id, tenant_id, provider)
         _upsert_provider_credential(
             connection, credential_id, tenant_id, provider_id, credential_secret
@@ -154,27 +156,33 @@ def _stable_uuid(value: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"https://metahub.local/{value}"))
 
 
-def _upsert_tenant(connection: sqlite3.Connection, tenant_id: str, tenant: dict[str, str]) -> None:
+def _upsert_tenant(connection: sqlite3.Connection, tenant_id: str, tenant: dict[str, str]) -> bool:
     """在 数据库基础设施 内部复用 upsert tenant 辅助逻辑，集中处理边界值和错误映射。
 
     边界：该函数不应绕过租户隔离、统一错误码或敏感信息脱敏约束。
     """
 
-    connection.execute(
+    inserted = connection.execute(
         """
         INSERT INTO tenants(tenant_id, slug, name, service_mode, status, created_at, updated_at)
         VALUES(?, ?, ?, ?, 'active', datetime('now'), datetime('now'))
-        ON CONFLICT(slug) DO UPDATE SET
-          name=excluded.name,
-          service_mode=excluded.service_mode,
-          status='active',
-          updated_at=datetime('now')
+        ON CONFLICT(slug) DO NOTHING
         """,
         (tenant_id, tenant["slug"], tenant["name"], tenant.get("service_mode", "internal_only")),
     )
+    if inserted.rowcount == 1:
+        return True
+    connection.execute(
+        """UPDATE tenants SET name=?,service_mode=?,status='active',updated_at=datetime('now')
+           WHERE slug=?""",
+        (tenant["name"], tenant.get("service_mode", "internal_only"), tenant["slug"]),
+    )
+    return False
 
 
-def _ensure_workspace_operational_states(connection: sqlite3.Connection, tenant_id: str) -> None:
+def _ensure_workspace_operational_states(
+    connection: sqlite3.Connection, tenant_id: str, *, initialize_new_tenant: bool = False,
+) -> None:
     if not table_exists(connection, "workspace_operational_states"):
         return
     connection.execute(
@@ -197,6 +205,26 @@ def _ensure_workspace_operational_states(connection: sqlite3.Connection, tenant_
         """,
         ("wos_" + uuid4().hex, tenant_id),
     )
+    if initialize_new_tenant:
+        # Seed's synchronous triggers may create the state before all new bindings settle.
+        connection.execute(
+            """UPDATE workspace_operational_states
+               SET status='active',revision=revision+1,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE tenant_id=? AND status='migration_conflict' AND source='workspace_creation'
+                 AND revision=1 AND risk_revision=1
+                 AND suspended_reason_code IS NULL AND suspended_by_operator_id IS NULL
+                 AND suspended_at IS NULL AND EXISTS(
+                   SELECT 1 FROM workspace_tenant_bindings binding
+                   JOIN workspaces workspace ON workspace.workspace_id=binding.workspace_id
+                   JOIN tenants tenant ON tenant.tenant_id=binding.tenant_id
+                   JOIN tenant_data_states data_state ON data_state.tenant_id=binding.tenant_id
+                   WHERE binding.workspace_id=workspace_operational_states.workspace_id
+                     AND binding.tenant_id=workspace_operational_states.tenant_id
+                     AND binding.status='active' AND workspace.status='active'
+                     AND tenant.status='active' AND data_state.lifecycle_status='active')""",
+            (tenant_id,),
+        )
 
 
 def _upsert_roles(connection: sqlite3.Connection, tenant_id: str) -> None:

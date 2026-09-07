@@ -29,7 +29,7 @@ pytestmark = native_migrations.pytestmark
 def native_launch_template():
     name, database_url = native_runtime_helpers._create_database()
     try:
-        assert apply_migrations(database_url).applied[-1] == "0139"
+        assert {"0130", "0139"} <= set(apply_migrations(database_url).applied)
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(48))
             apply_seed_data(database_url)

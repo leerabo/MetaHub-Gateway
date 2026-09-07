@@ -80,3 +80,43 @@ SQLite/PostgreSQL、N/N-1；敏感审计与静止终态。开发期只跑本条�
 实现已交付 0123、Workspace/Support JIT API、严格 DTO、固定来源适配器、持久切换/回退事实和 Migration
 Center；聚焦迁移/API、Console、必要导航权限回归和静态检查通过。真实数据库矩阵、FLOW、浏览器、性能、
 安全、兼容性和 72 小时长稳仍按批次规则留到 PRD-138 后统一执行，不能由本条专项结果替代。
+
+## 7. 2026-09-07 数据库兼容补充设计
+
+与 PRD-132/133 合批修复原生数据库入口，不等待长稳观测。复用共享 schema helper，保留固定来源
+表/列允许清单、复合 owner 和 assessment 零写水位检查；旧权限 helper 同步使用后端感知表检查。
+第一轮自审：列枚举不能接受请求表名，缺少必需列仍失败关闭，不能把跨租户全表扫描当作迁移评估。
+第二轮自审：schema 查询不提交事务、不改变水位；用真实 PostgreSQL 克隆运行原有 assessment、
+cutover/rollback、权限漂移与 Support JIT 合同。fixture 核验所需迁移而不固定旧 head。
+该批合同结果不代替实际迁移演练、全产品并发验证或长稳验收。
+
+实施复核发现旧 SQL 使用保留字 `user` 作为别名，改为 `legacy_user`。PostgreSQL 没有
+SQLite `total_changes`，评估水位改用 `pg_stat_xact_user_tables` 的当前事务写入统计；它包含
+触发器写入且不混入其他连接的提交。不在共享连接适配器伪造计数。增加故意写入的 adapter
+测试，要求评估拒绝、源行恢复、assessment/action 均不落库。
+
+原生测试进一步定位到主会话 `_switch_target` 使用的另一个 SQLite-only 表检查，已纳入共享入口
+修复与 Workspace 回归；这与已支持 PostgreSQL 的扩展权限目录不是同一函数，不能混淆结论。
+
+真实初始化探针还发现 PostgreSQL seed 的新空间保留了中间态 `migration_conflict`，而全部关联
+数据已 active。仅当本次 seed 新建 tenant、初始状态 revision/risk_revision 均为 1、来源为
+workspace_creation、没有暂停信息且所有父对象 active 时完成初始化收尾。已有 tenant 不走此
+修复分支，重复 seed 不能恢复其冲突或暂停状态；用原生重复 seed 负例保持该边界。
+
+原生增量 `0140_workspace_operational_identity_guard` 修复已验证的 PostgreSQL `ctid` 误用。
+第一轮迁移自审：SQLite rowid 是稳定行标识，PostgreSQL ctid 是物理元组位置，不能比较 NEW/OLD
+作为不可变业务标识。仅替换 operational-state 的触发器函数，保留 ID/复合 owner/创建时间不变、
+revision/risk_revision 互斥单步和时间单调条件，不改 0139 基线或其他触发器。
+第二轮迁移自审：原生 up/down 都保留数据；down 恢复旧函数也会恢复其合法更新受阻缺陷，不能
+作为正常运营回退。验证 up/down/up、幂等、事实未改写和七类非法更新拒绝；旧基线新装与已装实例
+均通过正式迁移器应用 0140，不能只在测试中热补函数。
+
+原生业务复验已越过初始化，随后定位到共享后台 RBAC 的 `sqlite_master` 查询。该路径由
+Workspace 权限快照直接调用，改为复用 `table_exists`，保留完整目录、矩阵摘要和授权上限校验。
+第一轮自审：五张必需目录表逐一缺失时仍拒绝授权，不能回退到静态管理员权限。
+第二轮自审：表检查不提交调用方事务，测试通过重命名并回滚逐一验证缺表边界。seed 的新建标志
+同时改为 INSERT 的实际 rowcount，避免预查询与并发插入之间的竞态误将已有租户视为新建。
+
+七域真实投影测试发现账本适配器误用不存在的 `ledger_entry_id`。按现有账本 schema 更正为
+`finops_ledger_entry_id` 与 `ledger_sequence`，保持固定字段允许清单及 tenant 过滤。两轮复核分别
+检查字段归属、摘要无正文，以及非连续账本序列、跨租户排除和零写；迁移主流程测试扩为全部七域。

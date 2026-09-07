@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from metahub_shared.db.schema import table_exists
 from metahub_shared.rbac import (
     ADMIN_ROLE,
     CATALOG_REVISION,
@@ -65,11 +66,11 @@ def require_actor_runtime_permissions(
     try:
         actor = connection.execute(
             """
-            SELECT user.role
-            FROM users user
-            JOIN tenants tenant ON tenant.tenant_id=user.tenant_id
-            WHERE user.tenant_id=? AND user.user_id=?
-              AND user.status='active' AND tenant.status='active'
+            SELECT legacy_user.role
+            FROM users legacy_user
+            JOIN tenants tenant ON tenant.tenant_id=legacy_user.tenant_id
+            WHERE legacy_user.tenant_id=? AND legacy_user.user_id=?
+              AND legacy_user.status='active' AND tenant.status='active'
             """,
             (tenant_id, user_id),
         ).fetchone()
@@ -115,12 +116,7 @@ def _load_permission_snapshot(
         "rbac_permission_templates",
         "rbac_role_permission_templates",
     }
-    placeholders = ",".join("?" for _ in required_tables)
-    table_rows = connection.execute(
-        f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-        tuple(sorted(required_tables)),
-    ).fetchall()
-    if {row["name"] for row in table_rows} != required_tables:
+    if not all(table_exists(connection, table) for table in sorted(required_tables)):
         # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
 

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_exists
 from metahub_shared.db.security import hash_token, verify_password
 from metahub_shared.rbac import PERMISSION_BY_CODE, authorization_fingerprint
 from metahub_shared.runtime.config import AppConfig
@@ -2018,8 +2019,8 @@ def _authenticate_workspace(
           member.revision current_membership_revision,member.role_code,
           member.status membership_status,member.account_id membership_account_id,
           member.workspace_id membership_workspace_id,member.tenant_id membership_tenant_id,
-          member.legacy_user_id,user.status user_status,user.role legacy_role,
-          user.email,user.display_name,workspace.status workspace_status,
+          member.legacy_user_id,legacy_user.status user_status,legacy_user.role legacy_role,
+          legacy_user.email,legacy_user.display_name,workspace.status workspace_status,
           workspace.revision current_workspace_revision,workspace.kind,
           COALESCE(organization.name,personal.display_label) workspace_name,
           organization.slug_normalized,binding.status binding_status,
@@ -2034,7 +2035,8 @@ def _authenticate_workspace(
           1 operational_projection_version
         FROM workspace_sessions session
         JOIN workspace_memberships member ON member.workspace_membership_id=session.membership_id
-        JOIN users user ON user.tenant_id=member.tenant_id AND user.user_id=member.legacy_user_id
+        JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
+          AND legacy_user.user_id=member.legacy_user_id
         JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
         JOIN workspace_tenant_bindings binding
           ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
@@ -2179,13 +2181,14 @@ def _switch_target(
           member.revision membership_revision,workspace.revision workspace_revision,
           workspace.kind,COALESCE(organization.name,personal.display_label) workspace_name,
           organization.slug_normalized,account.session_revision account_session_revision,
-          user.role legacy_role,user.status user_status,tenant.status tenant_status
+          legacy_user.role legacy_role,legacy_user.status user_status,tenant.status tenant_status
         FROM workspace_memberships member
         JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
         JOIN workspace_tenant_bindings binding
           ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
         JOIN global_accounts account ON account.account_id=member.account_id
-        JOIN users user ON user.tenant_id=member.tenant_id AND user.user_id=member.legacy_user_id
+        JOIN users legacy_user ON legacy_user.tenant_id=member.tenant_id
+          AND legacy_user.user_id=member.legacy_user_id
         JOIN tenants tenant ON tenant.tenant_id=member.tenant_id
         LEFT JOIN organization_profiles organization
           ON organization.workspace_id=workspace.workspace_id
@@ -2193,7 +2196,7 @@ def _switch_target(
         WHERE member.account_id=? AND member.workspace_id=? AND member.status='active'
           AND member.role_code!='service_account' AND workspace.status='active'
           AND binding.status='active' AND account.status='active' AND account.login_enabled=1
-          AND user.status='active' AND tenant.status='active'
+          AND legacy_user.status='active' AND tenant.status='active'
           {operational_filter}
         """,
         (account_id, workspace_id),
@@ -2644,13 +2647,7 @@ def _legacy_email_fingerprint(invitation_id: str, email: str) -> str:
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
-            (name,),
-        ).fetchone()
-        is not None
-    )
+    return table_exists(connection, name)
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
