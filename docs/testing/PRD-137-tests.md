@@ -72,3 +72,26 @@ journal；全零必填摘要只表示未知。已验签但清理失败也只能�
 两轮设计与复核见本条 PRD 第 8 节，部署合同见 `docs/deployment/security-assurance-receipts.md`。
 真实固定场景 worker、运行环境/制品度量、原始签名回执归档、逐阶段短租约与撤权、真实创建和 exact
 cleanup 仍未交付。本次只关闭“无可信回执也可声称通过和已清理”的路径，不标记 PRD-137 或 G6/G8 完成。
+
+## 2026-09-07 真实认证接口探针
+
+新增 `metahub_assurance_runner/probes.py`，固定执行 projects/applications 的跨空间读取与写入、
+Membership admin 降为 viewer、旧 WorkspaceSession 重放及严格输入拒绝。合法写入必须实际改名并
+回读；非法写入拒绝后确认项目投影未变。当前范围不等于全 owner registry 的隔离覆盖。
+
+集成测试新建三个账号、两个 organization Workspace、两个项目、一个应用和一个邀请成员，全程经过
+真实注册、验证码消费、密码登录、CSRF、邀请与切换接口，不替换认证依赖或直接写入业务主体。
+仅验证码投递使用非生产 test_capture 适配器。SQLite 从只读使用的迁移基线复制，测试仅修改副本。
+
+- `http-probes-r1-junit.xml`：1 项集成测试失败，内部场景 3 通过、2 失败；确认 developer 无项目
+  写权限、严格输入错误返回 422。属于探针配置/断言修正，未放宽产品权限或错误合同，保留原始失败。
+- `http-probes-r2-junit.xml`：修正后 1 项集成测试通过，5 个场景全部通过。
+- `probe-unit-r1-junit.xml`：首轮边界单元 28/28 通过。
+- `http-probes-r3-junit.xml`：第二轮增加合法写入真实生效、拒绝后无副作用、深层 JSON 和重复 Cookie
+  检查后 33/33 通过。其中 1 项集成测试的 5 场景共 59 个检查点，其余 32 项是受控传输边界测试。
+- 本轮 Python Ruff 和 diff whitespace 检查通过。敏感审计见 `prd-137-http-sensitive-audit.json`。
+
+以上证据位于 `.artifacts/g6-security-20260907/`。测试报告排除密码、邀请 token 和会话 Cookie，
+传输负例只验证失败行为。集成使用 ASGI 进程内 HTTP 合同，不能作为真实 HTTPS、隔离部署、环境度量、
+独立安全验收或清理证明。cache/queue/object/metrics/late-response 明确返回 scenario_not_implemented；
+实际 worker、全 owner registry、持久化短租约、fixture 创建/清理和原始签名回执归档仍未完成。
