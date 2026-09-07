@@ -81,11 +81,22 @@ python -m pip install -r infra/docker/requirements.assurance-supervisor.txt
 daemon 须带 `metahub.assurance=dedicated-v1` 标记，启用 cgroup v2、资源限制能力与 builtin seccomp；
 未标记容器混用、镜像隐式 VOLUME、网络/宿主挂载/权限配置不符均拒绝启动。
 
-使用顺序为 create、start、finally cleanup(handle)，创建后启动失败时仍须取已记录的 handle 清理。
+使用顺序为 create、lease_session（启动前核验并 attach）、start、await session.serve，最后无论成功
+失败均 finally cleanup(handle)。lease_session 使用 exact handle 自动绑定环境、deadline 和新通道
+nonce，不接受 guest 选择镜像、URL、命令或 owner；启动失败时仍须取已记录的 handle 清理。
 cleanup 返回结构化观察，不是签名回执，也不是全部业务 fixture 的清理证明；close 仅关闭 SDK 连接。
 未取得 exact handle 的创建失败必须报告未知残留，不能按名称扫描删除。已验证的成功清理可幂等读取。
 该同步生命周期由独占 supervisor 串行调用；许可回调及 SDK 请求须保持有界，不把 supervisor 暴露为
 可接受任意镜像、命令或 URL 的公共接口。SDK 的连接工厂只在 Linux 启用。
+
+固定 guest 的 stdin 现用于专用许可管道，TTY 和 shell 仍禁用，不开放网络端口。管道使用有界长度帧
+与严格 JSON，逐次检查执行绑定、序号、新挑战及最多一秒的消费窗口。现有初始化和五场景探针可直接
+使用 `GuestLease.guard`；supervisor 每次询问权威许可，不能缓存一次批准覆盖整个评估。
+取消、断流、拒绝或会话完成都会关闭管道并使容器管理实例失效；重放和迟到的许可不能重新启动它。
+
+该协议只适用于经过 owner 核验的独占管道，不提供开放 TCP 上的认证。正式 Control 到独立 supervisor
+的受认证远程许可通道尚未接入；测试中本地进程间调用的 AssuranceLease 不能作为该网络部署的替代。
+`report_announced` 仅说明对端发来报告摘要，不说明已读到报告、执行通过、签名有效或清理完成。
 
 真实 worker 的无生产权限隔离部署、镜像/代码/迁移/合同度量、全部固定攻击场景、远程短租约传输、
 全 owner fixture 创建与 exact cleanup 仍待完整接线和实测。固定 guest 入口的实际模块与镜像尚未

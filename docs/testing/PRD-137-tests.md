@@ -195,3 +195,31 @@ Windows 当前无 Docker/Podman 命令，完整 guest 模块/镜像、许可通�
 本轮不修改迁移、公共业务 DTO 或前端；因此只运行受影响的上述单元与 API 集成，不重复整批数据库、
 浏览器、性能套件。独立敏感审计为 `prd-137-bootstrap-sandbox-sensitive-audit.json`，包含精确暂存
 源码和所有成功/失败测试证据摘要。共享基线仍要求 SHA256 与前节一致。
+
+## 2026-09-07 Guest 与 Supervisor 许可管道
+
+设计及两轮自审见本条第 13 节。新增严格 4 KiB 帧、执行绑定、单次挑战/序号、短消费窗口、永久
+fencing 和独占 Docker attach。SDK 解复用限制底层单次读取并丢弃有总量上限的 stderr；未添加外网
+入口、任意命令、宿主挂载或 Docker 权限到生产 Control。固定 guest 的 stdin 只作协议管道。
+
+- `lease-channel-r1-junit.xml`：41 通过、1 失败。测试通过 model_copy 注入 bool 后又经模型序列化，
+  bool 被测试序列化器输出为 1，未实际测试 JSON true。改为直接用标准 JSON API 构造非法请求；
+  产品解析器仍拒绝 bool/字符串序号、未知字段、重复键、UTF-16、非标准数值及超长帧。
+- `lease-channel-r2-junit.xml`：135/135，7.62 秒，覆盖协议、SDK 流、生命周期及本地子进程管道。
+- `lease-channel-final-r1-junit.xml`：155/155，8.68 秒，加入真实进程重放、关闭失败及 capability 回归。
+- `lease-channel-final-r2-junit.xml`：234/234、0 跳过，31.82 秒。包含 45 协议边界、8 SDK 流、86
+  生命周期、11 capability、46 初始化边界、32 探针边界、5 子进程管道和 1 条真实鉴权集成。
+- `lease-channel-fencing-r3-junit.xml`：157/157，8.55 秒。会话关闭后同时 fence 容器管理实例，并
+  在迟到的同步权威回调返回后复查；只复验协议/SDK/生命周期/capability/子进程受影响范围。
+- `lease-channel-close-r4-junit.xml`：97/97，2.04 秒。关闭失败状态不因重试消失；同时关闭 SocketIO
+  和底层 socket，关闭异常不跳过容器精确清理。此次只复验 9 个流合同和 88 个生命周期用例。
+
+真实本地子进程通过 OS stdin/stdout 管道调用 GuestLease，覆盖连续许可、撤权、断流、非法请求及
+重放，使用真实 AssuranceLease capability 的受控续租回调。它不是完整 guest，也未执行租户攻击。
+注册/邀请/空间/资源的真实鉴权 ASGI 集成已改经 socketpair 许可协议，五场景的 59 检查点继续通过，
+并检查运行时凭据不会出现在结果、日志或观察记录；该集成仍不证明 TLS 或 Docker 部署。
+
+所有失败记录保留。Python Ruff、diff 检查及独立敏感扫描记录在本轮提交前核验，扫描记录为
+`prd-137-lease-channel-sensitive-audit.json`，只覆盖本条精确暂存文件与上述六份原始测试证据。
+共享 SQLite 基线未变。当前完整 guest 模块/镜像、真实构建度量、Control 与独立 supervisor 的认证
+通道、剩余五场景、全 owner registry 及真实签名回执仍待接齐，不能将本轮管道合同用于 G6/G8 放行。

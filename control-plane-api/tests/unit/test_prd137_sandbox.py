@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import socket
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
@@ -30,7 +32,7 @@ def _attrs(labels):
             "Volumes": None,
             "Healthcheck": {"Test": ["NONE"]},
             "NetworkDisabled": True,
-            "OpenStdin": False,
+            "OpenStdin": True,
             "Tty": False,
         },
         "HostConfig": {
@@ -236,7 +238,7 @@ def test_effective_host_policy_is_read_from_inspect(runtime, key, value):
         ("Volumes", {"/data": {}}),
         ("Healthcheck", {"Test": ["CMD", "curl", "outside"]}),
         ("NetworkDisabled", False),
-        ("OpenStdin", True),
+        ("OpenStdin", False),
         ("Tty", True),
     ],
 )
@@ -384,6 +386,7 @@ def test_real_sdk_serializes_restricted_creation_without_connecting(runtime, mon
         assert captured["Healthcheck"]["Test"] == ["NONE"]
         assert all(value is None for key, value in captured["Healthcheck"].items() if key != "Test")
         assert captured["NetworkDisabled"] is True
+        assert captured["OpenStdin"] is True
         assert not captured["HostConfig"].get("Privileged")
         assert not captured.get("Env")
     finally:
@@ -402,3 +405,116 @@ def test_connection_uses_explicit_socket_despite_host_environment(runtime, monke
     )
     connected.close()
     client.close.assert_called_once()
+
+
+def test_exact_attachment_is_single_use_and_closed_by_cleanup(runtime):
+    manager, client, container = runtime
+    handle = manager.create()
+    left, right = socket.socketpair()
+    container.attach_socket.return_value = left
+    try:
+        session = manager.lease_session(handle, "c" * 64, 2)
+        assert session.binding.environment_id == handle.environment_id
+        assert session.binding.assessment_generation == 2
+        assert session.binding.deadline_at == manager.deadline_at
+        container.attach_socket.assert_called_once_with(
+            params={
+                "stdin": True,
+                "stdout": True,
+                "stderr": True,
+                "stream": True,
+                "logs": False,
+            }
+        )
+        with pytest.raises(SandboxError):
+            manager.attach(handle)
+        client.containers.get.side_effect = [container, NotFound("gone")]
+        assert manager.cleanup(handle).removed
+        assert left.fileno() == -1
+    finally:
+        left.close()
+        right.close()
+
+
+@pytest.mark.parametrize("case", ["owner", "started", "revoked", "unknown"])
+def test_attachment_rejects_unowned_or_late_handle(runtime, case):
+    manager, _, container = runtime
+    handle = manager.create()
+    if case == "owner":
+        container.attrs["Config"]["Labels"][sandbox.LABEL_OWNER] = "f" * 64
+    elif case == "started":
+        container.attrs["State"]["Status"] = "running"
+    elif case == "revoked":
+        manager.check_lease = lambda: False
+    else:
+        handle = replace(handle)
+    with pytest.raises(SandboxError):
+        manager.attach(handle)
+    container.attach_socket.assert_not_called()
+
+
+def test_channel_close_failure_does_not_skip_container_cleanup(runtime):
+    manager, client, container = runtime
+    handle = manager.create()
+    manager._attachment = Mock()
+    manager._attachment.close.side_effect = OSError("private-socket-details")
+    client.containers.get.side_effect = [container, NotFound("gone")]
+    result = manager.cleanup(handle)
+    assert not result.removed and result.reason_code == "cleanup.channel_unverified"
+    assert "private-socket-details" not in repr(result)
+    container.remove.assert_called_once_with(v=False, force=False)
+    with pytest.raises(SandboxError, match="sandbox.close_failed"):
+        manager.close()
+    client.close.assert_called_once()
+
+
+def test_closed_lease_session_fences_container_start(runtime):
+    manager, _, container = runtime
+    handle = manager.create()
+    left, right = socket.socketpair()
+    container.attach_socket.return_value = left
+    try:
+        session = manager.lease_session(handle, "c" * 64, 1)
+        session.close()
+        with pytest.raises(SandboxError, match="start_failed"):
+            manager.start(handle)
+        container.start.assert_not_called()
+        assert manager._fenced
+    finally:
+        left.close()
+        right.close()
+
+
+def test_closing_session_during_slow_guard_prevents_late_grant(runtime):
+    manager, _, container = runtime
+    handle = manager.create()
+    left, right = socket.socketpair()
+    container.attach_socket.return_value = left
+    entered, release, rejected = threading.Event(), threading.Event(), threading.Event()
+    session = manager.lease_session(handle, "c" * 64, 1)
+
+    def slow_authority():
+        entered.set()
+        assert release.wait(3)
+        return True
+
+    def call_guard():
+        try:
+            manager._guard()
+        except SandboxError:
+            rejected.set()
+
+    manager.check_lease = slow_authority
+    worker = threading.Thread(target=call_guard)
+    try:
+        worker.start()
+        assert entered.wait(3)
+        session.close()
+        release.set()
+        worker.join(3)
+        assert not worker.is_alive() and rejected.is_set()
+    finally:
+        release.set()
+        worker.join(3)
+        left.close()
+        right.close()

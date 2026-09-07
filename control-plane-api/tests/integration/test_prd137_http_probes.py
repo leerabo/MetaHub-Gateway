@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import re
 import secrets
 import shutil
-from contextlib import AsyncExitStack
+import socket
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +19,12 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 from metahub_assurance_runner.bootstrap import HttpFixtureBootstrap
+from metahub_assurance_runner.lease_channel import (
+    GuestLease,
+    LeaseBinding,
+    StreamLeaseTransport,
+    SupervisorLeaseSession,
+)
 from metahub_assurance_runner.probes import IMPLEMENTED_SCENARIOS, FixedProbeRunner
 from metahub_control.identity.delivery import pop_test_identity_challenge
 from metahub_control.identity.routes import router as identity_router
@@ -26,6 +35,41 @@ from metahub_shared.db import apply_migrations, apply_seed_data
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 ORIGIN = "https://assurance.test"
+
+
+@asynccontextmanager
+async def _lease_pipe(authority, deadline):
+    left, right = socket.socketpair()
+    server_reader, server_writer = await asyncio.open_connection(sock=left)
+    guest_reader, guest_writer = await asyncio.open_connection(sock=right)
+    binding = LeaseBinding(
+        request_sha256=hashlib.sha256(b"in-process real-auth integration only").hexdigest(),
+        environment_id="aenv_" + uuid4().hex,
+        assessment_generation=1,
+        deadline_at=deadline,
+        channel_nonce=secrets.token_hex(32),
+    )
+    session = SupervisorLeaseSession(
+        StreamLeaseTransport(server_reader, server_writer),
+        binding,
+        authority,
+    )
+    task = asyncio.create_task(session.serve())
+    lease = None
+    try:
+        lease = await GuestLease.accept(StreamLeaseTransport(guest_reader, guest_writer))
+        yield lease, task
+    finally:
+        if lease is not None:
+            lease.close()
+        session.close()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        for writer in (server_writer, guest_writer):
+            writer.close()
+            await writer.wait_closed()
 
 
 @pytest.fixture(scope="module")
@@ -124,12 +168,15 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
             for _ in range(4)
         ]
         deadline = datetime.now(UTC) + timedelta(minutes=5)
+        lease, session_task = await stack.enter_async_context(
+            _lease_pipe(test_lease_guard, deadline)
+        )
         bootstrap = HttpFixtureBootstrap(
             *clients,
             origin=ORIGIN,
-            environment_id="aenv_" + uuid4().hex,
+            environment_id=lease.binding.environment_id,
             mailbox=mailbox,
-            lease_guard=test_lease_guard,
+            lease_guard=lease.guard,
             deadline_at=deadline,
         )
         fixtures = await bootstrap.run()
@@ -137,7 +184,7 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
         assert all(
             re.fullmatch(r"[0-9a-f]{64}", item.identity_sha256) for item in bootstrap.observations
         )
-        runner = FixedProbeRunner(fixtures, test_lease_guard, deadline)
+        runner = FixedProbeRunner(fixtures, lease.guard, deadline)
         results = [await runner.run(code) for code in IMPLEMENTED_SCENARIOS]
         serialized = json.dumps([asdict(result) for result in results], default=str)
         record_property("probe_results", serialized)
@@ -154,3 +201,8 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
             )
             for result in results
         ]
+        report_sha = hashlib.sha256(serialized.encode()).hexdigest()
+        assert await lease.finish(report_sha)
+        announced = await session_task
+        assert announced.report_sha256 == report_sha
+        assert announced.checks_permitted > 100

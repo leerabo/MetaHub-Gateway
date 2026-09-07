@@ -6,6 +6,7 @@ nor grants Control or the guest access to Docker. Guest packaging is separate.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import secrets
 import sys
@@ -17,6 +18,9 @@ from uuid import uuid4
 from docker import DockerClient
 from docker.errors import NotFound
 from docker.types import LogConfig
+
+from .docker_channel import DockerLeaseTransport
+from .lease_channel import LeaseBinding, SupervisorLeaseSession
 
 DAEMON_LABEL = "metahub.assurance=dedicated-v1"
 LABEL_KIND = "metahub.assurance.kind"
@@ -87,6 +91,7 @@ class DockerSandbox:
     _attempted: bool = field(default=False, init=False)
     _fenced: bool = field(default=False, init=False)
     _cleanup_result: CleanupObservation | None = field(default=None, init=False)
+    _attachment: DockerLeaseTransport | None = field(default=None, init=False)
 
     def __post_init__(self):
         if self.deadline_at.tzinfo is None or self.deadline_at.utcoffset() is None:
@@ -104,7 +109,21 @@ class DockerSandbox:
             raise SandboxError("sandbox.connection_unavailable") from None
 
     def close(self):
-        self.client.close()
+        closed = self._close_attachment()
+        try:
+            self.client.close()
+        except Exception:
+            closed = False
+        if not closed:
+            raise SandboxError("sandbox.close_failed")
+
+    def _close_attachment(self):
+        try:
+            if self._attachment is not None:
+                self._attachment.close()
+            return True
+        except Exception:
+            return False
 
     def _guard(self):
         if self._fenced or datetime.now(UTC) >= self.deadline_at:
@@ -114,7 +133,7 @@ class DockerSandbox:
             allowed = self.check_lease()
         except Exception:
             allowed = False
-        if allowed is not True or datetime.now(UTC) >= self.deadline_at:
+        if self._fenced or allowed is not True or datetime.now(UTC) >= self.deadline_at:
             self._fenced = True
             raise SandboxError("sandbox.lease_unavailable")
 
@@ -225,7 +244,7 @@ class DockerSandbox:
             or config.get("Volumes")
             or config.get("Healthcheck", {}).get("Test") != ["NONE"]
             or not config.get("NetworkDisabled")
-            or config.get("OpenStdin")
+            or config.get("OpenStdin") is not True
             or config.get("Tty")
         ):
             raise SandboxError("sandbox.effective_policy_mismatch")
@@ -276,7 +295,7 @@ class DockerSandbox:
                 healthcheck={"test": ["NONE"]},
                 use_config_proxy=False,
                 auto_remove=False,
-                stdin_open=False,
+                stdin_open=True,
                 tty=False,
             )
             if re.fullmatch(r"[0-9a-f]{64}", container.id) is None:
@@ -295,6 +314,34 @@ class DockerSandbox:
         except Exception:
             self._fenced = True
             raise SandboxError("sandbox.creation_failed") from None
+
+    def attach(self, handle: SandboxHandle) -> DockerLeaseTransport:
+        if handle is None or handle is not self.handle or self._attachment is not None:
+            raise SandboxError("sandbox.unknown_or_attached_handle")
+        try:
+            self._guard()
+            self._daemon()
+            container = self.client.containers.get(handle.container_id)
+            self._inspect(container, handle)
+            if container.attrs.get("State", {}).get("Status") != "created":
+                raise SandboxError("sandbox.invalid_state")
+            self._guard()
+            attachment = container.attach_socket(
+                params={
+                    "stdin": True,
+                    "stdout": True,
+                    "stderr": True,
+                    "stream": True,
+                    "logs": False,
+                }
+            )
+            self._attachment = DockerLeaseTransport(attachment)
+            self._guard()
+            return self._attachment
+        except Exception:
+            self._fenced = True
+            self._close_attachment()
+            raise SandboxError("sandbox.attach_failed") from None
 
     def start(self, handle: SandboxHandle):
         if handle is not self.handle or handle is None:
@@ -317,8 +364,32 @@ class DockerSandbox:
             self._fenced = True
             raise SandboxError("sandbox.start_failed") from None
 
+    def lease_session(self, handle: SandboxHandle, request_sha256: str, assessment_generation: int):
+        if handle is None or handle is not self.handle:
+            raise SandboxError("sandbox.unknown_handle")
+        binding = LeaseBinding(
+            request_sha256=request_sha256,
+            environment_id=handle.environment_id,
+            assessment_generation=assessment_generation,
+            deadline_at=self.deadline_at,
+            channel_nonce=secrets.token_hex(32),
+        )
+
+        async def authority():
+            try:
+                await asyncio.to_thread(self._guard)
+                return not self._fenced
+            except Exception:
+                return False
+
+        def fence_owner():
+            self._fenced = True
+
+        return SupervisorLeaseSession(self.attach(handle), binding, authority, on_close=fence_owner)
+
     def cleanup(self, handle: SandboxHandle | None) -> CleanupObservation:
         self._fenced = True
+        channel_closed = self._close_attachment()
         environment_id = self.handle.environment_id if self.handle else None
 
         def result(removed, reason):
@@ -347,7 +418,14 @@ class DockerSandbox:
             try:
                 self.client.containers.get(handle.container_id)
             except NotFound:
-                return result(True, "cleanup.deleted_and_absent")
+                return (
+                    result(True, "cleanup.deleted_and_absent")
+                    if channel_closed
+                    else result(
+                        False,
+                        "cleanup.channel_unverified",
+                    )
+                )
             return result(False, "cleanup.residue")
         except Exception:
             return result(False, "cleanup.unverified")
