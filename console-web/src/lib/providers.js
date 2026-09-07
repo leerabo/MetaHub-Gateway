@@ -1,11 +1,12 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户 Provider 列表。
  *
  * status/provider_type 是控制面过滤参数；租户范围由 Token 决定，前端不允许传 tenant_id。
  */
-export async function listProviders({ controlApiUrl, token, status, providerType, signal }) {
+export async function listProviders({ controlApiUrl, authentication, token, status, providerType, signal }) {
   const url = new URL(`${controlApiUrl}/providers`);
   if (status) {
     url.searchParams.set("status", status);
@@ -18,7 +19,7 @@ export async function listProviders({ controlApiUrl, token, status, providerType
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   return providersRequest(url.toString(), {
     signal,
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token,
   });
 }
 
@@ -27,10 +28,10 @@ export async function listProviders({ controlApiUrl, token, status, providerType
  *
  * 响应只包含 key_prefix/fingerprint 等脱敏字段，Provider Key 明文不会回到控制台。
  */
-export async function listProviderKeys({ controlApiUrl, token, providerId, signal }) {
+export async function listProviderKeys({ controlApiUrl, authentication, token, providerId, signal }) {
   return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}/keys`, {
     signal,
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token,
   });
 }
 
@@ -43,6 +44,8 @@ export async function listProviderKeys({ controlApiUrl, token, providerId, signa
 export async function createProvider({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   providerCode,
   name,
   providerType,
@@ -53,8 +56,8 @@ export async function createProvider({
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   return providersRequest(`${controlApiUrl}/providers`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -76,6 +79,8 @@ export async function createProvider({
 export async function createProviderKey({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   providerId,
   name,
   plainValue,
@@ -84,8 +89,8 @@ export async function createProviderKey({
   // 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
   return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}/keys`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -104,6 +109,8 @@ export async function createProviderKey({
 export async function updateProvider({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   providerId,
   name,
   providerType,
@@ -115,8 +122,8 @@ export async function updateProvider({
   // Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
   return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -138,6 +145,8 @@ export async function updateProvider({
 export async function updateProviderKey({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   providerKeyId,
   name,
   weight,
@@ -146,8 +155,8 @@ export async function updateProviderKey({
   // 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
   return providersRequest(`${controlApiUrl}/provider-keys/${encodeURIComponent(providerKeyId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -163,11 +172,11 @@ export async function updateProviderKey({
  *
  * timeoutSeconds 限制本地调试等待时间，避免控制台因为一个不可达 Endpoint 卡住。
  */
-export async function testProviderConnection({ controlApiUrl, token, providerId, timeoutSeconds = 5 }) {
+export async function testProviderConnection({ controlApiUrl, authentication, token, signal, providerId, timeoutSeconds = 5 }) {
   return providersRequest(`${controlApiUrl}/providers/${encodeURIComponent(providerId)}/test`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
@@ -180,7 +189,7 @@ export async function testProviderConnection({ controlApiUrl, token, providerId,
  * 所有请求都带 X-Request-ID，方便把控制台操作和控制面审计日志对应起来。
  */
 async function providersRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_providers_${Date.now()}`,
@@ -211,7 +220,8 @@ async function providersRequest(url, options = {}) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

@@ -1,11 +1,12 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户的 Virtual Key 列表。
  *
  * 列表只展示前缀、状态、环境等安全元数据；Virtual Key 明文绝不从后端返回。
  */
-export async function listVirtualKeys({ controlApiUrl, token, status, environmentId, environment }) {
+export async function listVirtualKeys({ controlApiUrl, authentication, token, signal, status, environmentId, environment }) {
   const url = new URL(`${controlApiUrl}/virtual-keys`);
   if (status) {
     url.searchParams.set("status", status);
@@ -18,7 +19,7 @@ export async function listVirtualKeys({ controlApiUrl, token, status, environmen
   }
   // 密钥相关分支只处理哈希、前缀或密文，禁止明文 Key 进入日志。
   return virtualKeysRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -27,11 +28,11 @@ export async function listVirtualKeys({ controlApiUrl, token, status, environmen
  *
  * 后端只在创建响应中返回一次明文 Key；调用方必须立即展示给用户，不能写入缓存。
  */
-export async function createVirtualKey({ controlApiUrl, token, name, environmentId, environment, description, projectId, applicationId }) {
+export async function createVirtualKey({ controlApiUrl, authentication, token, signal, name, environmentId, environment, description, projectId, applicationId }) {
   return virtualKeysRequest(`${controlApiUrl}/virtual-keys`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -50,11 +51,11 @@ export async function createVirtualKey({ controlApiUrl, token, name, environment
  *
  * 请求体不包含明文 Key，防止控制台编辑流程意外泄露调用凭证。
  */
-export async function updateVirtualKey({ controlApiUrl, token, virtualKeyId, name, environmentId, environment, description, status, projectId, applicationId }) {
+export async function updateVirtualKey({ controlApiUrl, authentication, token, signal, virtualKeyId, name, environmentId, environment, description, status, projectId, applicationId }) {
   return virtualKeysRequest(`${controlApiUrl}/virtual-keys/${encodeURIComponent(virtualKeyId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -77,6 +78,8 @@ export async function updateVirtualKey({ controlApiUrl, token, virtualKeyId, nam
 export async function updateVirtualKeyLimits({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   virtualKeyId,
   rpmLimit,
   tpmLimit,
@@ -85,8 +88,8 @@ export async function updateVirtualKeyLimits({
 }) {
   return virtualKeysRequest(`${controlApiUrl}/virtual-keys/${encodeURIComponent(virtualKeyId)}/limits`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -103,10 +106,10 @@ export async function updateVirtualKeyLimits({
  *
  * 当前实现是软禁用，历史调用日志仍可通过 key 前缀和 id 追溯，不做物理删除。
  */
-export async function disableVirtualKey({ controlApiUrl, token, virtualKeyId }) {
+export async function disableVirtualKey({ controlApiUrl, authentication, token, signal, virtualKeyId }) {
   return virtualKeysRequest(`${controlApiUrl}/virtual-keys/${encodeURIComponent(virtualKeyId)}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -116,7 +119,7 @@ export async function disableVirtualKey({ controlApiUrl, token, virtualKeyId }) 
  * 每次请求都带控制台 request_id，便于和后端审计日志对应。
  */
 async function virtualKeysRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_virtual_keys_${Date.now()}`,
@@ -147,7 +150,8 @@ async function virtualKeysRequest(url, options = {}) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

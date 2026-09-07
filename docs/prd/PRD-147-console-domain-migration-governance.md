@@ -695,3 +695,39 @@ tenant 查询和解析流程，不新增数据库迁移、权限默认授予或�
 旧 AuthContext 提交。Legacy 保持原事务复核，不修改全局 auth helper 的其他业务行为。单独验证
 双租户上传/读取、CSRF、混合凭据、Viewer、路由后撤权及 Legacy 相邻回归。此修复不代表文件安全
 扫描等其他旧入口已全部迁移，也不把专项测试扩张为 G7 完整复验。
+
+## 2026-09-07 主 Console 认证域接线批次
+
+与 PRD-094/146 批量复核：主 Console 仍使用旧 Bearer 启动和 auth_context，而身份与导航已改为
+Global/Workspace Cookie。先保留真实无旧 Token 登录后的入口失败证据，再完成消费端迁移；
+不增加 Legacy 密码登录夹具伪装 SaaS 已接通。
+
+第一轮自审：逐当前可达页面确认客户端凭据、服务端入口和写事务三者使用同一 domain/owner。
+已有 Workspace DTO/CSRF/权限 helper 优先复用；只给明确 Workspace 资源路由接线，不能一次
+放宽全局旧鉴权函数使平台、支持、机器或退休路由跨域。旧 Bearer 兼容仅按原合同保留，混合拒绝。
+
+第二轮自审：前端页面可见不等于业务 API 已迁移。实际双空间切换后旧读取、写入、失败回调、
+导航预取与浏览器存储均核对；服务端写事务在提交前再次恢复实际会话，不复用旧快照授权。
+PRD-146 拥有 Console 入口与导航状态，本条保留每个迁移资源的独立测试与审计记录；完整
+路由处置、历史保真及批次流程门禁仍需复验，不因首页能打开而宣称全域完成。
+
+### 基础资源客户端认证实施批次
+
+2026-09-07 核对项目/应用、Environment、Provider/Key、Model、Virtual Key 和 File 入口已使用
+既有 Workspace/Legacy 分域守卫，但前端六组客户端仍强制 Bearer，File 还固定 omit Cookie。
+本组连续迁移请求构造，共用显式认证传输，不修改后端全局守卫、DTO、权限默认值或写事务。
+
+第一轮自审：调用方必须显式选择 `authentication: "workspace"`，只能发送浏览器 Cookie；
+旧兼容调用只接收真实非空 token，禁止缺少 token 时自动回退 Cookie。两者混用、未知认证域或
+调用方插入 Cookie/Authorization/CSRF Header 均在出网前拒绝。Workspace 的 POST/PATCH/DELETE
+读取既有专用 CSRF Cookie；Legacy 显式 omit Cookie，防止同源环境把两个凭据域意外混发。
+
+第二轮自审：传输固定 no-store 和拒绝重定向，不记录 URL、凭据、正文或异常原文；AbortSignal
+贯穿所有读取和写入，不提供自动重试。Multipart 仍只含一个 file，不手工设置 Content-Type。
+每个客户端必须验证实际请求头、Cookie 策略、正文、取消和 Legacy 相邻合同；共用传输不是 owner
+证明，主页面仍必须使用真实 Cookie 会话和当前 owner 淘汰迟到响应。本增量为主入口接线准备
+完整基础资源请求接口，不单独宣称所有页面已迁移或 G6/G7 通过。
+
+实施复核补充：取消不仅可能发生在 fetch 等待时，也可能发生在 response.json 读取正文时。
+六组客户端原有 JSON 容错必须原样抛出 AbortError，不能把中途取消变为成功空对象或文件 DTO
+错误。保留非取消 JSON 解析失败的既有处理，定向覆盖全部 27 项资源操作的响应体取消。

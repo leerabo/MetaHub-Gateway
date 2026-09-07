@@ -1,11 +1,12 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户的模型目录。
  *
  * Provider、状态和能力都是后端过滤条件；前端不携带 tenant_id，避免跨租户查询入口。
  */
-export async function listModels({ controlApiUrl, token, status, providerId, capability }) {
+export async function listModels({ controlApiUrl, authentication, token, signal, status, providerId, capability }) {
   const url = new URL(`${controlApiUrl}/models`);
   if (status) {
     url.searchParams.set("status", status);
@@ -20,7 +21,7 @@ export async function listModels({ controlApiUrl, token, status, providerId, cap
   }
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelsRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -33,6 +34,8 @@ export async function listModels({ controlApiUrl, token, status, providerId, cap
 export async function createModel({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   internalModelId,
   providerId,
   providerModelId,
@@ -48,8 +51,8 @@ export async function createModel({
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelsRequest(`${controlApiUrl}/models`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -76,6 +79,8 @@ export async function createModel({
 export async function updateModel({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   modelId,
   providerId,
   providerModelId,
@@ -92,8 +97,8 @@ export async function updateModel({
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelsRequest(`${controlApiUrl}/models/${encodeURIComponent(modelId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -118,7 +123,7 @@ export async function updateModel({
  * 页面只处理 state/payload 或 AuthApiError，不直接解析多种后端错误形态。
  */
 async function modelsRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_models_${Date.now()}`,
@@ -149,7 +154,8 @@ async function modelsRequest(url, options = {}) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

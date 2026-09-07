@@ -5,17 +5,18 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户可见的项目列表。
  * status/search 只是筛选条件，不能影响后端从登录态恢复 tenant_id 的安全边界。
  */
-export async function listProjects({ controlApiUrl, token, status = "all", search } = {}) {
+export async function listProjects({ controlApiUrl, authentication, token, signal, status = "all", search } = {}) {
   const url = new URL(`${controlApiUrl}/projects`);
   setOptionalParam(url, "status", status);
   setOptionalParam(url, "search", search);
   return projectsRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -23,11 +24,11 @@ export async function listProjects({ controlApiUrl, token, status = "all", searc
  * 创建项目归属。
  * 项目编码会进入日志、用量和预算筛选口径，前端只负责提交原始表单值，合法性由后端统一错误码裁决。
  */
-export async function createProject({ controlApiUrl, token, projectCode, name, description }) {
+export async function createProject({ controlApiUrl, authentication, token, signal, projectCode, name, description }) {
   return projectsRequest(`${controlApiUrl}/projects`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(
@@ -44,11 +45,11 @@ export async function createProject({ controlApiUrl, token, projectCode, name, d
  * 更新项目元数据。
  * 该函数保留给后续编辑入口复用；即使前端隐藏编辑按钮，后端仍必须校验 admin 权限。
  */
-export async function updateProject({ controlApiUrl, token, projectId, name, description, ownerUserId, status }) {
+export async function updateProject({ controlApiUrl, authentication, token, signal, projectId, name, description, ownerUserId, status }) {
   return projectsRequest(`${controlApiUrl}/projects/${encodeURIComponent(projectId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(
@@ -66,13 +67,13 @@ export async function updateProject({ controlApiUrl, token, projectId, name, des
  * 查询当前租户可见的应用列表。
  * project_id 是业务筛选条件，不是安全边界；后端仍按登录态 tenant_id 过滤。
  */
-export async function listApplications({ controlApiUrl, token, projectId, status = "all", search } = {}) {
+export async function listApplications({ controlApiUrl, authentication, token, signal, projectId, status = "all", search } = {}) {
   const url = new URL(`${controlApiUrl}/applications`);
   setOptionalParam(url, "project_id", projectId);
   setOptionalParam(url, "status", status);
   setOptionalParam(url, "search", search);
   return projectsRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -80,11 +81,11 @@ export async function listApplications({ controlApiUrl, token, projectId, status
  * 创建项目下的应用归属。
  * 应用必须挂在项目下面，前端不允许绕过 project_id 提交独立应用。
  */
-export async function createApplication({ controlApiUrl, token, projectId, applicationCode, name, description }) {
+export async function createApplication({ controlApiUrl, authentication, token, signal, projectId, applicationCode, name, description }) {
   return projectsRequest(`${controlApiUrl}/applications`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(
@@ -102,11 +103,11 @@ export async function createApplication({ controlApiUrl, token, projectId, appli
  * 更新应用元数据或迁移所属项目。
  * 项目迁移会影响已绑定 Key 的后续归因，真实一致性修正必须由后端事务保证。
  */
-export async function updateApplication({ controlApiUrl, token, applicationId, projectId, name, description, status }) {
+export async function updateApplication({ controlApiUrl, authentication, token, signal, applicationId, projectId, name, description, status }) {
   return projectsRequest(`${controlApiUrl}/applications/${encodeURIComponent(applicationId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(
@@ -125,7 +126,7 @@ export async function updateApplication({ controlApiUrl, token, applicationId, p
  * 错误对象只展示 code/request_id/trace_id 等排障字段，不包含任何 Key 或租户外数据。
  */
 async function projectsRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_projects_${Date.now()}`,
@@ -173,7 +174,8 @@ function compactPayload(payload) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

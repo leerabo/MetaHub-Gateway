@@ -118,3 +118,42 @@ Workspace 会话重验。设计与两轮自审见本条文件域补充节；不�
 `prd-147-workspace-files-sensitive-audit.json` 核验上述精确暂存字节、UTF-8、凭据模式和受保护基线。
 未提交测试数据库、正文、Cookie、报告或用户既有未跟踪文档。文件安全扫描及其他旧入口仍需所属
 范围继续迁移验证，本轮不重新宣称 G7 全部通过，也不解除 G6/G8。
+
+## 2026-09-07 基础资源客户端认证迁移
+
+项目/应用、Environment、Provider/Key、Model、Virtual Key 和 File 六组客户端共 27 项操作
+统一接入显式 Workspace/Legacy 请求传输，并贯穿 AbortSignal。Workspace Cookie 写入读取既有
+专用 CSRF Cookie；Legacy 强制 omit Cookie。缺少 Token 不自动转为 Cookie，混合凭据、未知域
+和调用方凭据 Header 在出网前拒绝。传输强制 no-store、redirect error，无自动重试；文件上传
+仍为单 file multipart，响应 DTO 校验不放宽。未修改服务端授权、会话 DTO 或主入口启动逻辑。
+
+开发期间只运行本次新增测试和六组客户端的既有单元测试：
+
+```text
+node --test --test-reporter=junit --test-reporter-destination=../.artifacts/g6-security-20260907/prd147-resource-auth-r4-junit.xml tests/unit/prd147ResourceAuthentication.test.mjs tests/unit/projects.test.mjs tests/unit/environments.test.mjs tests/unit/providers.test.mjs tests/unit/models.test.mjs tests/unit/virtualKeys.test.mjs tests/unit/files.test.mjs
+node scripts/lint.mjs
+node scripts/verify-production-surface.mjs
+```
+
+在 console-web 目录使用 bundled Node 执行，证据均保留在 `.artifacts/g6-security-20260907/`：
+
+- `prd147-resource-auth-r1-junit.xml`：36 项，31 通过、5 失败，共用 Headers 小写序列化破坏旧测试
+  约定。修正传输保留既有标准 Header 名称，不修改旧合同。
+- `prd147-resource-auth-r2-junit.xml`：95 项，91 通过、4 失败。新增 failed FileInfo 夹具把
+  match_count 写成 null，已有 DTO 要求整数 0..100；只修正夹具为 0。
+- `prd147-resource-auth-r3-junit.xml`：95/95 通过。
+- `prd147-resource-auth-body-red-r1-junit.xml`：两项，1 通过、1 失败。新增响应体取消回归在
+  第一项资源操作复现旧容错吞掉 AbortError；另一个传输选项覆盖防护测试通过。
+- `prd147-resource-auth-r4-junit.xml`：最终 97/97，无失败、错误或跳过。包含 27 操作乘两种
+  凭据模式、全部操作混合凭据拒绝、全部操作正文读取取消、文件上传取消、CSRF 非法/重复/错域、
+  缺失/非法 Token、未知域/Header 注入，以及请求选项不能覆盖 Cookie/cache/redirect 策略。
+- lint：765 files；production surface：259 modules / 273 shipped sources。没有重复全套 QA。
+
+两轮设计复核与实施取消补充见本条设计。独立敏感审计
+`prd-147-resource-auth-sensitive-audit.json` 覆盖 10 个精确暂存源码/文档和上述五份原始测试报告，
+核验 UTF-8、凭据模式、索引字节及受保护 SQLite 基线 SHA-256。凭据仅为测试内存值，不提交
+报告、数据库或 `.tmp`。模式扫描不替代独立安全验收。
+
+此提交交付资源客户端认证能力，不证明主 Console Cookie 启动或全部页面消费端已接通。
+真实入口已有 console-entry-r5 两视口失败证据；PRD-146/147 消费端与 owner 迁移继续推进，
+G6/G7/G8 未通过，PRD-148 未开始。

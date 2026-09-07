@@ -5,6 +5,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 当前 PAGE-101 冻结默认 20 MiB 体验上限；后端仍会按部署配置再次执行权威字节限制。
 export const FILE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -106,6 +107,7 @@ const ERROR_MESSAGES = Object.freeze({
 export async function listFiles({
   controlApiUrl,
   token,
+  authentication,
   status = "",
   limit = 25,
   cursor = null,
@@ -131,7 +133,7 @@ export async function listFiles({
   }
 
   const payload = await fileRequest(url.toString(), {
-    headers: authorizationHeaders(token),
+    authentication, token,
     signal,
   });
   const normalized = normalizeFileListResponse(payload);
@@ -148,7 +150,7 @@ export async function listFiles({
  *
  * file ID 只作为受限路径段；tenant 仍只能由后端 Session 恢复，跨租户与不存在保持同形 404。
  */
-export async function getFile({ controlApiUrl, token, fileId, signal }) {
+export async function getFile({ controlApiUrl, authentication, token, fileId, signal }) {
   const normalizedFileId = String(fileId ?? "").trim();
   // 非规范路径 ID 在出网前同形拒绝，避免斜杠或编码变体探测其他资源。
   if (!/^file_[0-9a-f]{32}$/.test(normalizedFileId)) {
@@ -156,7 +158,7 @@ export async function getFile({ controlApiUrl, token, fileId, signal }) {
   }
   const payload = await fileRequest(
     `${controlApiUrl}/files/${encodeURIComponent(normalizedFileId)}`,
-    { headers: authorizationHeaders(token), signal },
+    { authentication, token, signal },
   );
   const normalized = normalizeFileResponse(payload);
   // 详情成功响应同样执行 exact-key 校验，不能比列表放宽隐私字段。
@@ -172,14 +174,14 @@ export async function getFile({ controlApiUrl, token, fileId, signal }) {
  *
  * FormData 恰好包含一个 ``file`` part；代码不得手工设置 Content-Type/boundary，也不得自动重试。
  */
-export async function uploadFile({ controlApiUrl, token, file, signal }) {
+export async function uploadFile({ controlApiUrl, authentication, token, file, signal }) {
   validateSelectedFile(file);
   const body = new FormData();
   // 文件名只能作为 multipart 标准 filename 交给后端；不得复制到 query、自定义 Header 或错误消息。
   body.append("file", file, file.name);
   const payload = await fileRequest(`${controlApiUrl}/files`, {
     method: "POST",
-    headers: authorizationHeaders(token),
+    authentication, token,
     body,
     signal,
   });
@@ -247,15 +249,14 @@ export function isSupportedUploadName(value) {
 async function fileRequest(url, options = {}) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await authenticatedResourceFetch(url, {
       ...options,
       cache: "no-store",
-      credentials: "omit",
       headers: options.headers ?? {},
     });
   } catch (error) {
     // 主动 Abort 属于 owner 生命周期控制，必须原样交给状态机静默丢弃。
-    if (error?.name === "AbortError") throw error;
+    if (error?.name === "AbortError" || error instanceof AuthApiError) throw error;
     // 网络异常对象可能携带代理 URL 或本机细节，只转换为固定存储不可用错误。
     throw fileClientError("file.storage_unavailable", 503);
   }
@@ -385,19 +386,12 @@ function normalizeExtract(value, extension) {
   });
 }
 
-/** 认证 Header 只驻留单次请求栈，不复制到响应、页面状态或 DOM。 */
-function authorizationHeaders(token) {
-  return {
-    Accept: "application/json",
-    Authorization: `Bearer ${token}`,
-  };
-}
-
 /** 解析 JSON 失败返回空对象；代理 HTML 或正文不得进入异常 message。 */
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }
