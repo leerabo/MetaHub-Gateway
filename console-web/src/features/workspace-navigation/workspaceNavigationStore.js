@@ -22,6 +22,10 @@ function validExpiry(value) {
   return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value));
 }
 
+export function isWorkspaceNavigationOwner(owner) {
+  return Boolean(ownerKey(owner));
+}
+
 // Public session handles fence browser state only; they are never request credentials.
 export function workspaceNavigationOwner(identity, session) {
   if (identity?.account?.status !== "active" || identity?.current_session?.is_current !== true

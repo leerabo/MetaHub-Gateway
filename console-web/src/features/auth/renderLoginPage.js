@@ -49,6 +49,21 @@ export function renderLoginPage(container, options = {}) {
   `;
 }
 
+export function renderWorkspaceSessionPrompt(container, { error, requestId, pending = false } = {}) {
+  if (!container) return;
+  container.innerHTML = `
+    <main class="login-shell">
+      <section class="login-panel" aria-labelledby="login-title">
+        <div class="login-brand"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><p class="eyebrow">MetaHub</p><h1 id="login-title">MetaHub 控制台</h1></div></div>
+        <p role="status">${pending ? "正在退出账号..." : "请登录账号并选择 Workspace。"}</p>
+        ${error ? `<p class="login-error" role="alert">${escapeHtml(error)}</p>` : ""}
+        ${requestId && requestId !== "-" ? `<small>request_id: ${escapeHtml(requestId)}</small>` : ""}
+        ${pending ? "" : '<p><a href="/identity.html">账号与 Workspace</a></p><button type="button" data-console-session-retry>重新验证</button>'}
+      </section>
+    </main>`;
+}
+
 /** 白标公开投影仍需在渲染边界做长度和控制字符保护。 */
 function boundedText(value, max) {
   const text = String(value ?? "");

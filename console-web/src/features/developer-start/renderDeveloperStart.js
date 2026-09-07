@@ -72,6 +72,7 @@ import { renderSdkExamples } from "../python-sdk-examples/renderPythonSdkExample
 import { buildMigrationGuide, renderMigrationGuide } from "../migration-guide/renderMigrationGuide.js";
 import { renderRolePermissionMatrix } from "../role-permissions/renderRolePermissionMatrix.js";
 import { hasEveryPermission, hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { hasWorkspaceConsoleSession, isConsoleRefreshOwnerCurrent } from "../../lib/workspaceConsoleSession.js";
 
 // 开发者首页默认状态用于接口加载前的安全占位，避免把未知配置误展示为已完成。
 const DEFAULT_STATUSES = [
@@ -98,6 +99,9 @@ const STATE_LABELS = {
  * 新页面，Token 维度则阻止登出或换 Session 后的迟到 401 清除新登录态。
  */
 export function isConsoleNavigationOwnerCurrent(owner, current) {
+  if (owner && Object.hasOwn(owner, "session")) {
+    return isConsoleRefreshOwnerCurrent(owner, current) && hasWorkspaceConsoleSession(owner.session);
+  }
   return Boolean(
     owner
     && current

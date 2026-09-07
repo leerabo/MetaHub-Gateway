@@ -179,3 +179,44 @@ production surface 258 模块/272 来源和 `git diff --check` 通过。
 PRD-137 夹具、PRD-147 文档、用户 PRD-101..105 或 outputs。模式扫描不等于独立安全会签。
 工作簿本轮只读，已有完成格不作为补充缺口已关闭的证据。G6/G7 全量验收、主 Console 真实入口、
 全部资源客户端及跨页 DOM 生命周期仍需继续，PRD-148 不启动。
+
+## 2026-09-07 主 Console Cookie 启动增量
+
+本节接续 13.2 的设计及两轮实施复核，取代上一增量中“主入口守卫仍未修复”的现状描述，
+不追改历史测试结论。启动清理旧认证槽位，通过真实 Identity/Workspace/navigation 建立只含
+公共 owner 与冻结授权 DTO 的内存 session，不调用旧 auth/me，也不显示第二套租户密码表单。
+账号、空间与角色菜单使用当前 shell 的公开 DTO，不构造旧 tenant/user/session 镜像。
+
+刷新和导航回调同时核对代次与内存 session 归属。新 owner 通过共用清理销毁旧页面状态、正文、
+草稿、cursor、下载元数据、控制器和流，但保留本次刚验证的导航。退出立即清 DOM，调用真实
+Identity Cookie logout，并在 HTTP 前后发送无身份内容的跨标签失效消息。注销中不重复登出，
+不因刷新或 peer 消息重新使用仍有效的 Cookie；注销失败不伪称服务器已撤销。
+
+侧栏、分组、导航及偏好回调拒绝过期 shell，旧成功/错误不影响新 owner。当前 401/403/409
+触发会话重验与统一清理。匿名或网络故障提供 Identity 入口和重试，不签发 Legacy Token。
+
+原始报告位于 `.artifacts/g6-security-20260907/`，没有覆盖失败原件：
+
+| 报告 | 结果及解释 |
+| --- | --- |
+| `prd146-cookie-entry-r1-junit.xml` | 8 条旧源码结构断言失败，不能作为新生命周期行为的反证 |
+| `prd146-cookie-entry-r2-junit.xml` | 105 项中 1 条新夹具缺少 content/navigation 字段 |
+| `prd146-cookie-entry-r3-junit.xml` | 105/105 通过 |
+| `prd146-cookie-entry-affected-r1-junit.xml` | 6 条旧清理位置断言失败，随后按共用清理入口修正 |
+| `prd146-cookie-entry-r4-junit.xml` | 242/242 通过，包含注销中刷新/广播及旧控件回调 |
+| `prd146-cookie-entry-render-r1-junit.xml` | 42/42 通过，覆盖 shell、Console experience、Workspace access、branding |
+
+新 `prd146ConsoleEntry.test.mjs` 读取并隔离执行完整生产 start、performRefresh、清理、退出与
+导航函数，Promise 交错由测试控制，不重写一套生命周期模型。覆盖不完整/混合/过期 owner、
+权限 DTO 冻结、首个 Cookie 启动、重叠刷新、迟到成功和错误、当前失效、注销 pending、旧完成
+回调以及共用状态清理。相邻测试只更正生命周期结构断言，未放宽来源权限或后端鉴权。
+
+前端 lint 768 files、production surface 260 modules / 274 shipped sources 和 diff-check 通过。
+后续只读复核确认 r4 为 242 项、render-r1 为 42 项，失败/错误/跳过均为零；不为文档补录重跑
+整套 QA。PRD-137 真实桌面入口 r8 的十五项通过另有记录，同轮移动端失败原件保留；该单元增量
+不声称全部浏览器、64 项导航、业务客户端、PostgreSQL、性能或 G6/G7/G8 已通过。
+
+独立审计 `prd-146-cookie-entry-final-sensitive-audit.json` 核对本条 17 个精确暂存文件及六份原始报告，
+检查严格 UTF-8、高置信凭据模式、SHA-256、暂存字节和受保护原基线。仅提交六个源码、九个
+测试和两份设计/测试文档，不纳入 PRD-137 夹具与证据记录、PRD-145 服务修复、用户未跟踪文档
+或 outputs。Excel 只读；仍依赖旧 token 的可达业务页及页面翻译键必须继续按域修复。

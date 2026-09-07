@@ -3,7 +3,7 @@ async function loadPublicBrandingPreview(generation, hydrate) {
   const ownerGeneration = Number(generation);
   try {
     const result = await getHostPublicBranding({ controlApiUrl: workspaceControlApiUrl });
-    if (ownerGeneration !== publicBrandingGeneration || authSession.token) return false;
+    if (ownerGeneration !== publicBrandingGeneration || hasWorkspaceConsoleSession(authSession)) return false;
     publicBrandingLogoUrl = result.branding.logo_path ?? "";
     publicBrandingPreview = result.branding;
     applyPublicBrandingDocument(result.branding);
@@ -17,7 +17,7 @@ async function loadPublicBrandingPreview(generation, hydrate) {
 
 /** 将公开品牌投影写入现有登录 DOM，不重建表单，避免清除用户正在输入的密码。 */
 function hydrateLoginBranding() {
-  if (authSession.token || !globalThis.document) return;
+  if (hasWorkspaceConsoleSession(authSession) || !globalThis.document) return;
   const branding = publicBrandingPreview;
   const productName = String(branding?.product_name ?? "MetaHub");
   const loginTitle = String(branding?.login_title ?? "MetaHub 控制台登录");
@@ -228,7 +228,7 @@ import {
 } from "../features/webhook-dead-letters/webhookDeadLetterPageState.js";
 import { renderWebhookDeadLetters } from "../features/webhook-dead-letters/renderWebhookDeadLetters.js";
 import { applyWebhookFormatMode } from "../features/webhooks/renderWebhookPanel.js";
-import { renderLoginPage } from "../features/auth/renderLoginPage.js";
+import { renderWorkspaceSessionPrompt } from "../features/auth/renderLoginPage.js";
 import {
   createEnterpriseChatPageState,
   enterpriseChatIdentitySnapshot,
@@ -271,12 +271,13 @@ import { createI18n, DEFAULT_LOCALE } from "../i18n/messages.js";
 import {
   AuthApiError,
   clearAuthSession,
-  getCurrentUser,
-  loginAdmin,
-  logoutAdmin,
-  readAuthSession,
-  saveAuthSession,
 } from "../lib/auth.js";
+import {
+  hasWorkspaceConsoleSession,
+  isConsoleRefreshOwnerCurrent,
+  sameWorkspaceConsoleSession,
+  workspaceConsoleSessionFromShell,
+} from "../lib/workspaceConsoleSession.js";
 import {
   downloadDeveloperSdk,
   getDeveloperContractWorkspace,
@@ -512,6 +513,7 @@ import {
   createIdentityStepUpGrant,
   getIdentityMe,
   getWebAuthnAssertion,
+  logoutIdentity,
 } from "../lib/identity.js";
 import { getCurrentWorkspaceSession } from "../lib/workspaces.js";
 import {
@@ -748,9 +750,8 @@ const consoleUrl = globalThis.window?.location?.origin ?? "";
 const publicInvitationRoute = globalThis.window
   ? captureInvitationRoute(globalThis.window)
   : null;
-let authSession = publicInvitationRoute?.isPublicMode()
-  ? { token: null, context: null }
-  : readAuthSession();
+let authSession = { context: null, owner: null };
+let consoleLogoutPending = false;
 let consoleShellActionError = null;
 let publicBrandingPreview = null;
 let publicBrandingGeneration = 0;
@@ -760,6 +761,7 @@ let currentI18n = createI18n(DEFAULT_LOCALE);
 let gatewayDebugState = {};
 // 0138 分组状态只来自当前 Workspace 的服务端偏好；默认全部折叠。
 let expandedConsoleGroupKey = null;
+let sidebarGroupSequence = 0;
 let workspaceAdvancedToolsDialogState = null;
 let workspaceAdvancedToolsDialogController = null;
 let workspaceAdvancedToolsDialogTrigger = null;
@@ -958,8 +960,6 @@ let developerContractDownloadController = null;
 let developerContractSecurityController = null;
 let developerContractDownloadMetadata = new Map();
 let consoleWorkspaceContextChannel = null;
-// 登录使用独立代次；页面替换、重复提交或新 Session 建立都会淘汰更早的凭据请求回调。
-let loginGeneration = 0;
 // 完整控制台刷新包含多组租户接口，慢环境下可能超过定时周期；计数用于阻止定时器制造永不落地的刷新饥饿。
 let activeRefreshCount = 0;
 let tenantDataDeletionTrigger = null;
@@ -1239,6 +1239,8 @@ if (app && globalThis.window) {
     bindNavigationHashRefresh(window, refresh);
     // 浏览器关闭、刷新或离开页面时同步 abort 活动流并销毁全部一次性凭据。
     window.addEventListener("pagehide", () => {
+      refreshSequence += 1;
+      authSession = { context: null, owner: null };
       closeConsoleWorkspaceContextInvalidation();
       gatewayDebugLifecycle.leave();
       invitationPageState.clear();
@@ -1363,51 +1365,8 @@ function renderPublicInvitation(state = null) {
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 async function start() {
-  if (!authSession.token) {
-    renderLogin();
-    return;
-  }
-  try {
-    const context = await getCurrentUser({ controlApiUrl, token: authSession.token });
-    clearBudgetStateOnIdentityChange(authSession.context, context);
-    clearWebhookStateOnIdentityChange(authSession.context, context);
-    clearUsageExportStateOnIdentityChange(authSession.context, context);
-    clearAuditExportStateOnIdentityChange(authSession.context, context);
-    clearCostAnomalyStateOnIdentityChange(authSession.context, context);
-    clearSessionRiskStateOnIdentityChange(authSession.context, context);
-    clearFileStateOnIdentityChange(authSession.context, context);
-    clearFileSecurityStateOnIdentityChange(authSession.context, context);
-    clearBatchJobStateOnIdentityChange(authSession.context, context);
-    clearMcpToolStateOnIdentityChange(authSession.context, context);
-    clearLocalEndpointStateOnIdentityChange(authSession.context, context);
-    clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
-    clearMigrationOperationStateOnIdentityChange(authSession.context, context);
-    clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearExperimentStateOnIdentityChange(authSession.context, context);
-    clearResponseCacheStateOnIdentityChange(authSession.context, context);
-    clearWorkspaceQuotaStateOnIdentityChange(authSession.context, context);
-    clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
-    clearPolicyStateOnIdentityChange(authSession.context, context);
-    clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
-    clearPolicyDryRunStateOnIdentityChange(authSession.context, context);
-    clearIntentSecurityStateOnIdentityChange(authSession.context, context);
-    clearRoutingPolicyStateOnIdentityChange(authSession.context, context);
-    clearModelQualityScoreStateOnIdentityChange(authSession.context, context);
-    clearRequestLogStateOnIdentityChange(authSession.context, context);
-    clearRequestExplanationStateOnIdentityChange(authSession.context, context);
-    clearRequestFeedbackSummaryStateOnIdentityChange(authSession.context, context);
-    clearRolePermissionStateOnIdentityChange(authSession.context, context);
-    clearPromptTemplateStateOnIdentityChange(authSession.context, context);
-    clearPolicyTemplateLibraryStateOnIdentityChange(authSession.context, context);
-    clearEnterpriseChatStateOnIdentityChange(authSession.context, context);
-    saveAuthSession(authSession.token, context);
-    authSession = { token: authSession.token, context };
-    await refresh();
-  } catch (error) {
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error?.requestId);
-  }
+  clearAuthSession();
+  await refresh();
 }
 
 /**
@@ -1467,24 +1426,11 @@ export function bindConsoleWorkspaceContextInvalidation({
 
 /** Fence old Cookie-scoped Edge work before any server-authoritative reload can begin. */
 function handleConsoleWorkspaceContextInvalidation() {
+  if (consoleLogoutPending) return;
   refreshSequence += 1;
-  workspaceNavigationController.leave();
-  workspaceConsoleExperienceShellState = null;
-  workspaceConsoleExperienceController.leave();
-  closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
-  providersLoadController?.abort();
-  providersLoadController = null;
-  consoleSidebarController?.abort();
-  consoleSidebarController = null;
-  privateGatewayPageState.clear();
-  privateGatewayBrandingShellState = null;
-  deploymentBrandingController.clear();
-  migrationOperationPageState.clear();
-  supportTicketPageState.clear();
-  workspaceProviderEngineeringProviders = [];
-  workspaceProviderEngineeringController.close();
-  workspaceCommercialNavigationItems = [];
-  workspaceCommercialAccountingController.close();
+  clearConsoleSessionState();
+  authSession = { context: null, owner: null };
+  app?.replaceChildren();
   void refresh();
 }
 
@@ -1498,89 +1444,51 @@ export function closeConsoleWorkspaceContextInvalidation() {
   }
 }
 
+function broadcastConsoleWorkspaceContextInvalidation() {
+  try {
+    consoleWorkspaceContextChannel?.postMessage?.({
+      type: "context-invalidated", generation: Math.max(1, refreshSequence),
+    });
+  } catch {
+    // Local notification failure does not change the server logout result.
+  }
+}
+
 /**
  * 执行单轮控制台数据读取和渲染。
  * refresh 外层必须用 finally 维护活动计数，确保认证失败或任一提前返回都不会永久关闭定时刷新。
  */
 async function performRefresh(options = {}) {
+  if (consoleLogoutPending) return;
   const refreshId = ++refreshSequence;
   clearDeveloperContractSecurityLoad();
   providersLoadController?.abort();
   providersLoadController = null;
   const isBackgroundRefresh = nextRefreshIsBackground;
   nextRefreshIsBackground = false;
-  // Token 与刷新序号共同构成本轮 owner；只冻结公开的会话句柄，不复制用户上下文或任何业务敏感数据。
-  const refreshToken = authSession.token;
-  // 刷新入口仍以有效登录态为第一边界，序号不能替代认证校验。
-  if (!refreshToken) {
-    renderLogin();
-    return;
-  }
-  const refreshOwner = Object.freeze({ generation: refreshId, token: refreshToken });
-  const refreshOwnerCurrent = () => isConsoleNavigationOwnerCurrent(
-    refreshOwner,
-    { generation: refreshSequence, token: authSession.token },
+  let refreshSession = authSession;
+  const refreshOwnerCurrent = () => isConsoleRefreshOwnerCurrent(
+    { generation: refreshId, session: refreshSession },
+    { generation: refreshSequence, session: authSession },
   );
-  try {
-    // 登录刚完成时，调用方已经用同一个新 Token 完成了一次 /auth/me。
-    // 复用该响应可避免首屏再次发起相同认证查询；后续刷新不传此值，仍完整复核 Session/RBAC。
-    const context = options.initialContext ?? await getCurrentUser({
-      controlApiUrl,
-      token: refreshToken,
-    });
-    // 注销、新登录或更新一轮刷新都会让旧 owner 失效；必须在写 Storage、身份内存和租户页面状态前丢弃迟到响应。
-    if (!refreshOwnerCurrent()) {
-      return;
-    }
-    clearBudgetStateOnIdentityChange(authSession.context, context);
-    clearWebhookStateOnIdentityChange(authSession.context, context);
-    clearUsageExportStateOnIdentityChange(authSession.context, context);
-    clearAuditExportStateOnIdentityChange(authSession.context, context);
-    clearCostAnomalyStateOnIdentityChange(authSession.context, context);
-    clearSessionRiskStateOnIdentityChange(authSession.context, context);
-    clearFileStateOnIdentityChange(authSession.context, context);
-    clearFileSecurityStateOnIdentityChange(authSession.context, context);
-    clearBatchJobStateOnIdentityChange(authSession.context, context);
-    clearMcpToolStateOnIdentityChange(authSession.context, context);
-    clearLocalEndpointStateOnIdentityChange(authSession.context, context);
-    clearPrivateGatewayStateOnIdentityChange(authSession.context, context);
-    clearMigrationOperationStateOnIdentityChange(authSession.context, context);
-    clearSupportTicketStateOnIdentityChange(authSession.context, context);
-    clearExperimentStateOnIdentityChange(authSession.context, context);
-    clearResponseCacheStateOnIdentityChange(authSession.context, context);
-    clearWorkspaceQuotaStateOnIdentityChange(authSession.context, context);
-    clearWebhookDeadLetterStateOnIdentityChange(authSession.context, context);
-    clearFinOpsStateOnIdentityChange(authSession.context, context);
-    clearPolicyStateOnIdentityChange(authSession.context, context);
-    clearPolicySnapshotStateOnIdentityChange(authSession.context, context);
-    clearPolicyDryRunStateOnIdentityChange(authSession.context, context);
-    clearIntentSecurityStateOnIdentityChange(authSession.context, context);
-    clearRoutingPolicyStateOnIdentityChange(authSession.context, context);
-    clearModelQualityScoreStateOnIdentityChange(authSession.context, context);
-    clearRequestLogStateOnIdentityChange(authSession.context, context);
-    clearRequestExplanationStateOnIdentityChange(authSession.context, context);
-    clearRequestFeedbackSummaryStateOnIdentityChange(authSession.context, context);
-    clearRolePermissionStateOnIdentityChange(authSession.context, context);
-    saveAuthSession(refreshToken, context);
-    authSession = { token: refreshToken, context };
-  } catch (error) {
-    // 旧请求的认证错误不能清除注销后新建的会话，也不能覆盖当前登录页或新身份页面。
-    if (!refreshOwnerCurrent()) {
-      return;
-    }
-    clearAuthSession();
-    authSession = { token: null, context: null };
-    renderLogin(authErrorMessage(error), error?.requestId);
-    return;
-  }
   const consoleShellState = await loadConsoleShellState(refreshOwnerCurrent);
   // 导航读取期间可能发生来源跳转、侧栏切换或新 Session 登录；旧 shell 快照不得清理新页面 owner。
   if (!refreshOwnerCurrent()) {
     return;
   }
-  if (!consoleShellState || !authSession.token) {
+  if (!consoleShellState) return;
+  const session = workspaceConsoleSessionFromShell(consoleShellState);
+  if (!session) {
+    renderLogin(consoleShellState.error ? authErrorMessage(consoleShellState.error) : undefined,
+      consoleShellState.error?.requestId);
     return;
   }
+  if (!sameWorkspaceConsoleSession(authSession, session)) {
+    clearConsoleSessionState({ clearNavigation: false });
+    app?.replaceChildren();
+  }
+  authSession = session;
+  refreshSession = session;
   currentI18n = createI18n(consoleShellState.locale);
   const providerEngineeringSnapshot = workspaceProviderEngineeringController.snapshot();
   if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(
@@ -1596,7 +1504,7 @@ async function performRefresh(options = {}) {
     workspaceCommercialAccountingController.close();
   }
   consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
-  if (!authSession.token || !refreshOwnerCurrent()) {
+  if (!hasWorkspaceConsoleSession(authSession) || !refreshOwnerCurrent()) {
     return;
   }
   if (consoleShellState?.activeNavigationItemId !== "enterprise-chat") {
@@ -1620,7 +1528,7 @@ async function performRefresh(options = {}) {
   // 邀请弹窗必须同时属于当前 Session、授权指纹和后端确认的 users 导航；任一漂移立即清除密文。
   invitationPageState.syncOwner({
     authContext: authSession.context,
-    token: refreshToken,
+    token: null,
     activeNavigation: consoleShellState?.activeNavigationItemId,
   });
   if (consoleShellState?.activeNavigationItemId !== "budgets") {
@@ -1792,8 +1700,7 @@ async function performRefresh(options = {}) {
   if (consoleShellState?.activeNavigationItemId !== "role-permissions") {
     rolePermissionPageState.clear();
   }
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!authSession.token) {
+  if (!hasWorkspaceConsoleSession(authSession)) {
     return;
   }
   await loadAndRenderActiveNavigation({
@@ -2132,7 +2039,7 @@ async function loadAndRenderActiveNavigation({
       break;
   }
 
-  if (!authSession.token || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;
+  if (!hasWorkspaceConsoleSession(authSession) || refreshId !== refreshSequence || !refreshOwnerCurrent()) return;
 
   developerContractDownloadMetadata = activeNavigationId === "api-docs"
     ? new Map((state.developerContractState?.sdk_releases ?? []).map((release) => [
@@ -2182,17 +2089,37 @@ async function loadAndRenderActiveNavigation({
  * 边界：前端隐藏按钮只改善体验，不能替代后端 RBAC 和租户校验。
  */
 function renderLogin(error, requestId) {
-  // 每次重建登录页都先推进代次，旧表单的迟到成功或失败不能再改写当前认证状态。
-  loginGeneration += 1;
+  refreshSequence += 1;
+  clearAuthSession();
+  authSession = { context: null, owner: null };
+  clearConsoleSessionState();
+  renderWorkspaceSessionPrompt(app, { error, requestId, branding: publicBrandingPreview });
+  const retry = document.querySelector("[data-console-session-retry]");
+  if (retry) retry.onclick = () => refresh();
+  void loadPublicBrandingPreview(publicBrandingGeneration, true);
+}
+
+function clearConsoleSessionState({ clearNavigation = true } = {}) {
+  providersLoadController?.abort();
+  providersLoadController = null;
+  consoleSidebarController?.abort();
+  consoleSidebarController = null;
+  cancelPendingConsoleNavigationSideEffects();
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
-  workspaceNavigationController.leave();
+  if (clearNavigation) workspaceNavigationController.leave();
+  privateGatewayBrandingShellState = null;
+  deploymentBrandingController.clear();
+  workspaceProviderEngineeringProviders = [];
+  workspaceProviderEngineeringController.close();
+  workspaceCommercialNavigationItems = [];
+  workspaceCommercialAccountingController.close();
+  finOpsPageState.clear();
   closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   clearDeveloperContractDownload();
   clearDeveloperContractSecurityLoad();
   developerContractDownloadMetadata = new Map();
   clearPublicBrandingPreview();
-  const loginBrandingGeneration = publicBrandingGeneration;
   // 登录态变化等同于离开调试页，必须取消旧流并使尚未返回的回调失效。
   gatewayDebugLifecycle.leave();
   gatewayDebugState = {};
@@ -2258,63 +2185,6 @@ function renderLogin(error, requestId) {
   providerStatusFilters = { limit: 50, offset: 0 };
   providerStatusEventWarning = null;
   providerStatusEntrySource = readActiveNavigationHash() === "provider-health" ? "direct_hash" : "sidebar";
-  renderLoginPage(app, {
-    error,
-    requestId,
-    tenantSlug: "default",
-    branding: publicBrandingPreview,
-  });
-  // 公开品牌加载失败时保持安全默认登录页；成功只在本次登录页 owner 仍有效时替换品牌 DOM。
-  void loadPublicBrandingPreview(loginBrandingGeneration, true);
-  const form = document.querySelector("#login-form");
-  form?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const loginOwner = Object.freeze({ generation: ++loginGeneration });
-    // 当前提交必须同时持有最新登录代次且尚无新 Session；Token 一旦建立，所有旧回调立即失效。
-    const loginOwnerCurrent = () => (
-      loginOwner.generation === loginGeneration
-      && !authSession.token
-    );
-    const data = new FormData(form);
-    const button = form.querySelector("button[type='submit']");
-    button.disabled = true;
-    button.textContent = "登录中";
-    try {
-      const login = await loginAdmin({
-        controlApiUrl,
-        tenantSlug: data.get("tenantSlug"),
-        email: data.get("email"),
-        password: data.get("password"),
-      });
-      // 页面替换、更新提交或其他登录成功都会淘汰本次 owner；不得继续读取或提交旧 Token。
-      if (!loginOwnerCurrent()) {
-        return;
-      }
-      const loginToken = login.access_token;
-      const context = await getCurrentUser({ controlApiUrl, token: loginToken });
-      // /auth/me 返回后重新核对 owner，避免迟到身份覆盖更新一轮登录建立的 Session。
-      if (!loginOwnerCurrent()) {
-        return;
-      }
-      // Storage 与内存身份写入前执行最终门禁；提交成功后立即淘汰本次及更早登录 owner。
-      if (!loginOwnerCurrent()) {
-        return;
-      }
-      saveAuthSession(loginToken, context);
-      authSession = { token: loginToken, context };
-      loginGeneration += 1;
-      refreshSequence += 1;
-      await refresh({ initialContext: context });
-    } catch (err) {
-      // 旧登录失败不得清理更新登录刚写入的 Storage、内存 Session 或已渲染页面。
-      if (!loginOwnerCurrent()) {
-        return;
-      }
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(err), err?.requestId);
-    }
-  });
 }
 
 /** 生成当前邀请弹窗 owner 输入；真实权限仍由后端创建接口再次校验。 */
@@ -2550,90 +2420,25 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const logoutButton = document.querySelector("#logout-button");
   logoutButton?.addEventListener("click", async () => {
-    // 注销是强认证边界：冻结推进后的 owner，既淘汰旧刷新，也约束迟到注销响应不能覆盖后续新会话。
+    if (consoleLogoutPending) return;
+    consoleLogoutPending = true;
     const logoutGeneration = ++refreshSequence;
-    workspaceConsoleExperienceShellState = null;
-    workspaceConsoleExperienceController.leave();
-    providersLoadController?.abort();
-    providersLoadController = null;
-    consoleSidebarController?.abort();
-    consoleSidebarController = null;
-    cancelPendingConsoleNavigationSideEffects();
-    // 退出登录前先关闭可能携带当前租户 Virtual Key 的活动连接，不能等待登出 API 返回。
-    gatewayDebugLifecycle.leave();
-    gatewayDebugState = {};
-    clearDeveloperContractDownload();
-    clearDeveloperContractSecurityLoad();
-    developerContractDownloadMetadata = new Map();
-    // 注销请求发出前清除企业 Chat，不能等待后端撤销 Session 后再处理浏览器正文。
-    clearEnterpriseChatSessionState();
-    // 注销请求发出前同步清空模板正文、变量草稿和所有请求 lane。
-    clearPromptTemplateSessionState();
-    // 策略模板的 nonce、双 CAS、绑定和确认原因同样必须在注销请求前销毁。
-    clearPolicyTemplateLibrarySessionState();
-    // 登出在网络请求前就结束迁移 visit，避免失效 Session 的异步事件完成后污染下一次登录。
-    migrationGuideVisitTracker.leave();
-    providerStatusPageState.clear();
-    providerStatusVisitTracker.leave();
-    workspaceProviderEngineeringProviders = [];
-    workspaceProviderEngineeringController.close();
-    workspaceCommercialNavigationItems = [];
-    workspaceCommercialAccountingController.close();
-    const token = authSession.token;
-    // 一次性 Secret 必须在发起登出请求前从状态和 DOM 清除，不能等待网络响应后再处理。
-    clearWebhookSessionState();
-    clearUsageExportSessionState();
-    clearAuditExportSessionState();
-    finOpsPageState.clear();
-    costAnomalyPageState.clear();
-    sessionRiskPageState.clear();
-    filePageState.clear();
-    fileSecurityPageState.clear();
-    batchJobPageState.clear();
-    mcpToolPageState.clear();
-    localEndpointPageState.clear();
-    privateGatewayPageState.clear();
-    migrationOperationPageState.clear();
-    supportTicketPageState.clear();
-    experimentPageState.clear();
-    responseCachePageState.clear();
-    quotaManagementPageState.clear();
-    webhookDeadLetterPageState.clear();
-    clearPolicyEditorSessionState();
-    clearPolicySnapshotSessionState();
-    clearPolicyDryRunSessionState();
-    clearIntentSecuritySessionState();
-    clearRoutingPolicySessionState();
-    clearModelQualityScoreSessionState();
-    clearRequestLogSessionState();
-    clearRequestExplanationSessionState();
-    clearRequestFeedbackSummarySessionState();
-    rolePermissionPageState.clear();
-    invitationPageState.clear();
-    document.querySelector(".webhook-secret-box")?.remove();
+    clearConsoleSessionState();
     clearAuthSession();
-    authSession = { token: null, context: null };
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (token) {
-      try {
-        await logoutAdmin({ controlApiUrl, token });
-      } catch (error) {
-        // 用户可能已通过其他认证路径建立新 owner；旧注销错误不得覆盖新 Session 的页面。
-        if (logoutGeneration !== refreshSequence || authSession.token) {
-          return;
-        }
-        // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-        if (!(error instanceof AuthApiError) || error.status !== 401) {
-          renderLogin(authErrorMessage(error), error?.requestId);
-          return;
-        }
-      }
+    authSession = { context: null, owner: null };
+    renderWorkspaceSessionPrompt(app, { pending: true });
+    broadcastConsoleWorkspaceContextInvalidation();
+    let failure = null;
+    try {
+      await logoutIdentity({ controlApiUrl: workspaceControlApiUrl });
+    } catch (error) {
+      if (Number(error?.status) !== 401) failure = error;
+    } finally {
+      consoleLogoutPending = false;
+      broadcastConsoleWorkspaceContextInvalidation();
     }
-    // 注销等待期间若产生更新代次或新 Token，本轮只完成后端撤销，不再改写当前前端身份。
-    if (logoutGeneration !== refreshSequence || authSession.token) {
-      return;
-    }
-    renderLogin();
+    if (logoutGeneration !== refreshSequence || hasWorkspaceConsoleSession(authSession)) return;
+    renderLogin(failure ? authErrorMessage(failure) : undefined, failure?.requestId);
   });
 
   for (const navigationButton of document.querySelectorAll("[data-console-nav]")) {
@@ -2704,7 +2509,6 @@ function bindAuthenticatedEvents(consoleShellState) {
           ...result.tenant,
         },
       };
-      saveAuthSession(token, authSession.context);
       await refresh();
     } catch (error) {
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
@@ -10787,12 +10591,12 @@ async function loadConsoleShellState(isCurrent = () => true) {
  * 关键边界：这里不传 tenant_id/user_id，后端只能使用当前登录态写入当前租户数据。
  */
 async function switchConsoleNavigation(button, consoleShellState) {
-  const token = authSession.token;
-  // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-  if (!token) {
+  const session = authSession;
+  if (!hasWorkspaceConsoleSession(session)) {
     renderLogin();
     return;
   }
+  if (!sameWorkspaceConsoleSession(session, workspaceConsoleSessionFromShell(consoleShellState))) return;
   const itemId = button.dataset.consoleNav;
   const routeCode = button.dataset.consoleRoute
     || WORKSPACE_SOURCE_ROUTE_REGISTRY[itemId];
@@ -10806,16 +10610,16 @@ async function switchConsoleNavigation(button, consoleShellState) {
   closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   cancelPendingConsoleNavigationSideEffects();
   // 导航 owner 在任何 await 前冻结；后续点击、全页刷新或换 Session 任一发生都会使它失效。
-  // Token 只在闭包内做等值判断，绝不能进入 DOM、遥测、日志或错误消息。
+  // 已验证的内存 Session 只用于本地回调隔离，不进入 DOM、遥测或请求凭据。
   const navigationOwner = Object.freeze({
     generation: ++refreshSequence,
-    token,
+    session,
   });
   const navigationOwnerCurrent = () => isConsoleNavigationOwnerCurrent(
     navigationOwner,
     {
       generation: refreshSequence,
-      token: authSession.token,
+      session: authSession,
     },
   );
   // errorOwner 初始等于导航 owner；调用 refresh 时会同步切换为该 refresh 自己推进后的代次。
@@ -10825,7 +10629,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     errorOwner,
     {
       generation: refreshSequence,
-      token: authSession.token,
+      session: authSession,
     },
   );
   // 任意导航跳转都视为调试组件销毁：取消活动流、使旧回调失效，并清除仅驻留页面内存的预览。
@@ -11029,9 +10833,8 @@ async function switchConsoleNavigation(button, consoleShellState) {
     if (!navigationOwnerCurrent() || !authorizedProjectedState) {
       return;
     }
-    // The login/bootstrap response already supplied this backend-authorized navigation snapshot.
-    // Each active-page API still validates Session, tenant, and RBAC independently, so a menu
-    // click can hydrate only the selected page without repeating /auth/me and /console/navigation.
+    // Each page API revalidates Cookie authentication and RBAC independently; a menu click
+    // can reuse the already authorized navigation snapshot for route-only hydration.
     await loadAndRenderActiveNavigation({
       consoleShellState: authorizedProjectedState,
       refreshId: navigationOwner.generation,
@@ -11046,7 +10849,6 @@ async function switchConsoleNavigation(button, consoleShellState) {
       itemId,
       routeCode,
       targetSection,
-      token,
       navigationOwnerCurrent,
     });
   } catch (error) {
@@ -11055,7 +10857,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
       return;
     }
     // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
+    if (Number(error?.status) === 401) {
       clearAuthSession();
       authSession = { token: null, context: null };
       renderLogin(authErrorMessage(error), error.requestId);
@@ -11204,7 +11006,6 @@ function scheduleConsoleNavigationSideEffects({
   itemId,
   routeCode,
   targetSection,
-  token,
   navigationOwnerCurrent,
 }) {
   cancelPendingConsoleNavigationSideEffects();
@@ -11216,7 +11017,12 @@ function scheduleConsoleNavigationSideEffects({
       if (new Set(["primary", "task_home"]).has(canonical.placement)) {
         const result = await workspaceNavigationController.savePreference({
           last_primary_route_code: routeCode,
-        }).catch(() => null);
+        }).catch((error) => {
+          if (navigationOwnerCurrent() && [401, 403, 409].includes(Number(error?.status))) {
+            handleConsoleWorkspaceContextInvalidation();
+          }
+          return null;
+        });
         if (!navigationOwnerCurrent()) return;
         if (result?.navigation) {
           expandedConsoleGroupKey = result.navigation.preference.expanded_group_code;
@@ -11224,36 +11030,17 @@ function scheduleConsoleNavigationSideEffects({
       }
       return;
     }
-    await updateConsolePreferences({
-      controlApiUrl,
-      token,
-      activeNavigationItemId: itemId,
-    }).catch(() => null);
-    if (!navigationOwnerCurrent()) return;
-    if (
-      ["overview", "migration-guide", "request-explanations"].includes(itemId)
-      || itemId === "provider-health"
-    ) {
-      return;
-    }
-    await recordConsolePageView({
-      controlApiUrl,
-      token,
-      navigationItemId: itemId,
-      targetSection,
-      path: currentNavigationPath(itemId),
-      eventType: "console.page_viewed",
-      payload: {
-        source: "sidebar",
-        hash: `#${itemId}`,
-        viewport_class: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop",
-      },
-    }).catch(() => null);
   }, CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS);
 }
 
 /** 分组手风琴只保存当前 Workspace 的服务端 UI 偏好，失败时恢复已确认 revision。 */
 async function toggleConsoleSidebarGroup(button, consoleShellState) {
+  const session = authSession;
+  const refreshId = refreshSequence;
+  const groupId = ++sidebarGroupSequence;
+  const current = () => hasWorkspaceConsoleSession(session) && session === authSession
+    && refreshId === refreshSequence && groupId === sidebarGroupSequence;
+  if (!current() || !sameWorkspaceConsoleSession(session, workspaceConsoleSessionFromShell(consoleShellState))) return;
   const key = String(button?.dataset?.sidebarGroupToggle ?? "").trim();
   const group = button?.closest?.("[data-sidebar-group]");
   const items = group?.querySelector?.(".sidebar-group-items");
@@ -11269,6 +11056,7 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
     const result = await workspaceNavigationController.savePreference({
       expanded_group_code: next,
     });
+    if (!current()) return;
     expandedConsoleGroupKey = result.navigation.preference.expanded_group_code;
     consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
     consoleShellState.navigation = projectWorkspaceNavigationForConsole(
@@ -11277,6 +11065,11 @@ async function toggleConsoleSidebarGroup(button, consoleShellState) {
       workspaceNavigationController.snapshot().advancedTools,
     );
   } catch (error) {
+    if (!current()) return;
+    if ([401, 403, 409].includes(Number(error?.status))) {
+      handleConsoleWorkspaceContextInvalidation();
+      return;
+    }
     expandedConsoleGroupKey = previous;
     consoleShellState.sidebarExpandedGroupKey = previous;
     applyExpandedConsoleGroup(previous);
@@ -11342,12 +11135,16 @@ function renderConsoleNavigationTransition(button, consoleShellState, itemId) {
  * 切换侧栏的纯 UI 偏好。布局先即时响应，持久化仍由后端按当前 Session 写入，失败时回滚。
  */
 async function toggleConsoleSidebar(button, consoleShellState) {
-  const token = authSession.token;
+  const session = authSession;
+  const refreshId = refreshSequence;
+  const current = () => session === authSession && refreshId === refreshSequence
+    && hasWorkspaceConsoleSession(session);
   const shell = button?.closest?.(".console-shell");
-  if (!token) {
+  if (!current() || consoleShellState?.workspaceNavigationContract !== true) {
     renderLogin();
     return;
   }
+  if (!sameWorkspaceConsoleSession(session, workspaceConsoleSessionFromShell(consoleShellState))) return;
   if (!shell || button.disabled) {
     return;
   }
@@ -11365,35 +11162,20 @@ async function toggleConsoleSidebar(button, consoleShellState) {
   const controller = new AbortController();
   consoleSidebarController = controller;
   try {
-    const result = consoleShellState?.workspaceNavigationContract === true
-      ? await workspaceNavigationController.savePreference({
-        sidebar_collapsed: next,
-      })
-      : await updateConsolePreferences({
-        controlApiUrl,
-        token,
-        sidebarCollapsed: next,
-        signal: controller.signal,
-      });
+    const result = await workspaceNavigationController.savePreference({ sidebar_collapsed: next });
     // 保留本轮已确认的偏好，后续导航重绘时不会短暂回到旧状态。
-    if (shell.isConnected && authSession.token === token) {
-      if (consoleShellState.workspaceNavigationContract === true) {
-        consoleShellState.navigation = projectWorkspaceNavigationForConsole(
-          result.navigation,
-          consoleShellState.activeRouteCode,
-          workspaceNavigationController.snapshot().advancedTools,
-        );
-        consoleShellState.preferences = { preference: result.navigation.preference };
-      } else {
-        consoleShellState.preferences = result;
-      }
+    if (shell.isConnected && current() && consoleSidebarController === controller) {
+      consoleShellState.navigation = projectWorkspaceNavigationForConsole(
+        result.navigation,
+        consoleShellState.activeRouteCode,
+        workspaceNavigationController.snapshot().advancedTools,
+      );
+      consoleShellState.preferences = { preference: result.navigation.preference };
     }
   } catch (error) {
-    if (isAbortError(error) || consoleSidebarController !== controller) return;
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
+    if (!current() || isAbortError(error) || consoleSidebarController !== controller) return;
+    if ([401, 403, 409].includes(Number(error?.status))) {
+      handleConsoleWorkspaceContextInvalidation();
       return;
     }
     if (shell.isConnected) {

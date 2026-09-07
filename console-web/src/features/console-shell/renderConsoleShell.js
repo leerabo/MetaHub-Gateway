@@ -56,7 +56,7 @@ export function renderConsoleShell({
         <p class="eyebrow">${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.eyebrow", "中国境内企业级 AI Gateway")))}</p>
         <h1>${escapeHtml(brandingText(branding?.product_name, t(i18n, "shell.title", "MetaHub 控制台")))}</h1>
       </div>
-      ${renderUserMenu(authContext, i18n, consoleShellState?.navigation)}
+      ${renderUserMenu(authContext, i18n, consoleShellState?.navigation, consoleShellState)}
     </section>
 
     <section class="console-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}" data-active-navigation="${escapeAttribute(activeItem.id)}" data-active-route="${escapeAttribute(activeItem.route_code ?? activeItem.id)}" data-sidebar-collapsed="${sidebarCollapsed ? "true" : "false"}">
@@ -64,7 +64,7 @@ export function renderConsoleShell({
         <div class="sidebar-title">
           <div class="sidebar-title-copy">
             <strong>${escapeHtml(t(i18n, "shell.sidebar_title", "治理入口"))}</strong>
-            <span>${escapeHtml(authContext?.user?.role ?? t(i18n, "shell.guest", "guest"))}</span>
+            <span>${escapeHtml(consoleShellState?.workspaceContext?.role ?? authContext?.user?.role ?? t(i18n, "shell.guest", "guest"))}</span>
           </div>
           <button
             type="button"
@@ -307,7 +307,19 @@ function renderShellMessage(consoleShellState, i18n) {
 /**
  * 渲染顶部用户菜单，展示当前租户、角色和 Session 到期时间。
  */
-function renderUserMenu(authContext, i18n, navigation) {
+function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
+  if (consoleShellState?.workspaceNavigationContract === true) {
+    const identity = consoleShellState.workspaceIdentity;
+    const workspace = consoleShellState.workspaceContext;
+    if (identity?.account?.status !== "active" || workspace?.session_status !== "active") return "";
+    return `<div class="user-menu" aria-label="${escapeAttribute(t(i18n, "shell.user_menu_aria", "个人菜单"))}">
+      <div><strong>${escapeHtml(identity.account.display_name || identity.account.email || "")}</strong>
+        <span>${escapeHtml(workspace.name ?? "")} · ${escapeHtml(workspace.role)}</span>
+        <span>${escapeHtml(t(i18n, "shell.session_expires", "Session 到期：{value}", { value: workspace.expires_at }))}</span></div>
+      <a class="user-menu-preferences" href="/identity.html">账号与 Workspace</a>
+      <button id="logout-button" type="button">${escapeHtml(t(i18n, "shell.logout", "登出"))}</button>
+    </div>`;
+  }
   if (!authContext?.user) {
     return `<div class="version-pill">${escapeHtml(t(i18n, "shell.guest", "未登录"))}</div>`;
   }

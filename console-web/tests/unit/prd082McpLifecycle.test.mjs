@@ -372,13 +372,17 @@ test("main lifecycle clears PAGE-114 before logout await and feature code never 
     readFile(new URL("../../src/lib/mcpTools.js", import.meta.url), "utf8"),
   ]);
   const logoutStart = main.indexOf('logoutButton?.addEventListener("click"');
-  const clearIndex = main.indexOf("mcpToolPageState.clear();", logoutStart);
-  const awaitIndex = main.indexOf("await logoutAdmin", logoutStart);
+  const clearIndex = main.indexOf("clearConsoleSessionState();", logoutStart);
+  const awaitIndex = main.indexOf("await logoutIdentity", logoutStart);
   assert.ok(logoutStart >= 0 && clearIndex > logoutStart && clearIndex < awaitIndex);
   const loginStart = main.indexOf("function renderLogin(");
-  const loginClear = main.indexOf("mcpToolPageState.clear();", loginStart);
-  const loginRender = main.indexOf("renderLoginPage(app", loginStart);
+  const loginClear = main.indexOf("clearConsoleSessionState();", loginStart);
+  const loginRender = main.indexOf("renderWorkspaceSessionPrompt(app", loginStart);
   assert.ok(loginStart >= 0 && loginClear > loginStart && loginClear < loginRender);
+  const cleanupStart = main.indexOf("function clearConsoleSessionState(");
+  const cleanupEnd = main.indexOf("function invitationOwnerInput(", cleanupStart);
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart);
+  assert.match(main.slice(cleanupStart, cleanupEnd), /mcpToolPageState\.clear\(\)/);
   assert.ok(binding.indexOf("eraseRegistrationInputs(form)") < binding.indexOf("callbacks.onSubmitRegister"));
   assert.doesNotMatch(`${binding}\n${state}\n${client}`, /localStorage|sessionStorage|location\.hash/);
 });

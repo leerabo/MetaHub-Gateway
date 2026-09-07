@@ -298,8 +298,13 @@ test("PRD-145 main binds all Cookie origins and clears experience state on peer 
   const start = main.indexOf("function handleConsoleWorkspaceContextInvalidation()");
   const end = main.indexOf("export function closeConsoleWorkspaceContextInvalidation", start);
   const invalidation = main.slice(start, end);
-  assert.match(invalidation, /workspaceConsoleExperienceShellState = null;/u);
-  assert.match(invalidation, /workspaceConsoleExperienceController\.leave\(\);/u);
+  assert.match(invalidation, /clearConsoleSessionState\(\);/u);
+  const cleanupStart = main.indexOf("function clearConsoleSessionState(");
+  const cleanupEnd = main.indexOf("function invitationOwnerInput(", cleanupStart);
+  assert.ok(cleanupStart > 0 && cleanupEnd > cleanupStart);
+  const cleanup = main.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /workspaceConsoleExperienceShellState = null;/u);
+  assert.match(cleanup, /workspaceConsoleExperienceController\.leave\(\);/u);
   const renderStart = main.indexOf("function renderCurrentWorkspaceConsoleExperience()");
   const renderEnd = main.indexOf("function bindWorkspaceConsoleExperiencePageInteractions", renderStart);
   assert.match(main.slice(renderStart, renderEnd), /bindWorkspaceConsoleExperience\(panel, \{ onRefresh: \(\) => refresh\(\) \}\)/u);
