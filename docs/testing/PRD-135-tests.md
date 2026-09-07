@@ -47,8 +47,8 @@ PRD-138 独立提交后统一执行并形成正式批次结论。
 
 ## 敏感审计与临时证据
 
-- 正式结论只保存在本文和 Git；pytest basetemp、SQLite 副本、缓存与过程输出均为可重现临时证据，`.tmp`
-  可整体删除，不作为正式交付事实。
+- 正式结论保存在本文和 Git，原始测试结果按运行独立保留。`.tmp` 还包含冻结源码、基础设施和持久
+  VM 磁盘，不能整体删除；只可单独核验已停止、无依赖的可重建测试目录后处理。
 - 审计只输出规则命中计数，不输出密码、Token、Cookie、client secret、TOTP、step-up grant、evidence
   receipt、签名值、私钥、Provider Key、客户正文、对象 URL 或本地管理员凭据；本地测试凭据只在进程内使用，
   不打印或持久化。
@@ -64,3 +64,20 @@ PRD-138 独立提交后统一执行并形成正式批次结论。
 全数据库矩阵、集成、FLOW、真实三浏览器/三缩放、性能、安全、代理/断网、Windows/Linux、
 SQLite/PostgreSQL、N/N-1、四波试点、灾备/支付/Edge 演练和 72 小时长稳统一留到 PRD-138 独立提交后执行。
 G6 只能形成 `release_candidate`，不能公开 GA；本条专项结果不替代这些批次证据。
+
+## 2026-09-07 原生修复复验
+
+同 PRD-134/136/137 合批。真实 OAuth 流程定位到 PostgreSQL 保留字 `grant` 别名，报告生成定位到
+SQLite `rowid` 水位。分别改为 `token_grant` 与 owner 限定的 `SUM(revision)`；记录不可删除、
+版本单调递增约束不变，批准和过期都触发水位变化。时间比较也按入库毫秒精度处理。
+
+- PostgreSQL：`g6-security-c693a109613341cbb02892f3d7ae60da-junit.xml` 中本条 3/3 通过，包含
+  真实 OAuth/machine collector、证据重放与 owner 边界、双人例外和调度。首轮三项失败保存在
+  `g6-security-09c8ecef524c4521b168228d57388585-junit.xml`，未抹去或改为通过。
+- SQLite：`sqlite-r2-junit.xml` 中本条 3/3 通过。
+- 水位/时间：`timestamp-watermark-r1-junit.xml` 中本条 7/7，最终
+  `receipt-config-unit-r2-junit.xml` 再覆盖；Console `console-unit-junit.xml` 中本条 5/5。
+
+证据位于 `.artifacts/g6-security-20260907/`，独立敏感审计为 `prd-135-sensitive-audit.json`。
+两轮复核见本条 PRD 第 8 节。机器认证是真实应用 OAuth；合规 evidence 与审批角色仍为测试场景，
+不构成外部合规认证或独立责任人批准。既有 PRD-118 性能残差本轮未复测、不改原阈值。

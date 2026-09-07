@@ -1142,9 +1142,10 @@ def _evidence_watermark(connection, workspace_id: str, tenant_id: str) -> int:
 
 
 def _exception_watermark(connection, workspace_id: str, tenant_id: str) -> int:
+    # Rows cannot be deleted and revisions increase on approval and expiry.
     return int(
         connection.execute(
-            "SELECT COALESCE(MAX(rowid),0) FROM compliance_exceptions "
+            "SELECT COALESCE(SUM(revision),0) FROM compliance_exceptions "
             "WHERE workspace_id=? AND tenant_id=?",
             (workspace_id, tenant_id),
         ).fetchone()[0]
@@ -1397,7 +1398,8 @@ def _database_now(connection) -> datetime:
 
 def _changed_time(now: datetime, previous: object) -> datetime:
     prior = _time(previous)
-    return now if now > prior else prior + timedelta(milliseconds=1)
+    candidate = _time(_db_time(now))
+    return candidate if candidate > prior else prior + timedelta(milliseconds=1)
 
 
 def _db_time(value: datetime) -> str:

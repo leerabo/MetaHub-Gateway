@@ -1138,7 +1138,7 @@ def authenticate_machine_request(
     try:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            """SELECT grant.*,account.status account_status,
+            """SELECT token_grant.*,account.status account_status,
                       account.catalog_revision account_catalog_revision,
                       account.constraint_sha256,
                       account.constraint_generation account_constraint_generation,
@@ -1152,14 +1152,14 @@ def authenticate_machine_request(
                       credential.expires_at credential_expires_at,
                       credential.grace_expires_at,
                       credential.last_used_at credential_last_used_at
-                 FROM access_token_grants grant
+                 FROM access_token_grants token_grant
                  JOIN service_accounts account
-                   ON account.service_account_id=grant.service_account_id
-                 JOIN oauth_clients client ON client.oauth_client_id=grant.oauth_client_id
+                   ON account.service_account_id=token_grant.service_account_id
+                 JOIN oauth_clients client ON client.oauth_client_id=token_grant.oauth_client_id
                  JOIN client_credentials credential
-                   ON credential.oauth_client_id=grant.oauth_client_id
-                  AND credential.generation=grant.credential_generation
-                WHERE grant.token_hash=?""",
+                   ON credential.oauth_client_id=token_grant.oauth_client_id
+                  AND credential.generation=token_grant.credential_generation
+                WHERE token_grant.token_hash=?""",
             (token_hash,),
         ).fetchone()
         if row is None:

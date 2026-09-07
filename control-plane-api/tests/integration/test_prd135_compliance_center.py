@@ -81,7 +81,8 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd135-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0127"
+    assert "0127" in apply_migrations(database_url).applied
+    assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -94,7 +95,10 @@ def runtime(
 ) -> tuple[AppConfig, WorkspaceSessionContext, MachineAuthContext, dict[str, PlatformContext]]:
     database = tmp_path / "prd135.sqlite3"
     shutil.copy2(base_database, database)
-    config = _config(_url(database))
+    return _runtime(_config(_url(database)), monkeypatch)
+
+
+def _runtime(config: AppConfig, monkeypatch: pytest.MonkeyPatch):
     stamp = "2026-08-30T00:00:00.000Z"
     with closing(connect_database(config.database_url)) as connection:
         owner = connection.execute(

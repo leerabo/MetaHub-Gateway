@@ -89,3 +89,17 @@ route、owner、control version、collector identity/version、artifact digest�
 `compliance.collect` 使用完整扩展权限校验。修正后无未关闭 P0/P1，两轮实施自审均通过。
 
 专项结果、敏感审计与批次门禁边界见 `docs/testing/PRD-135-tests.md`；下一权威项为 PRD-136。
+
+## 8. 2026-09-07 合批原生验证设计
+
+与 PRD-134/136/137 合批复用基线与运行时构造，保留受信 collector、机器 OAuth、证据 envelope、
+报告 owner、双人例外和 freshness 调度全流程。fixture 核验所需 0127 和迁移幂等，不固定旧 head。
+第一轮自审：不能用伪造机器身份替代已有真实 OAuth 用例；签名、scope、replay 与 owner 校验保持
+原样，合规 outcome 不能扩大成外部认证声明。
+第二轮自审：同一证据重放、不同证据 generation、例外独立审批与过期必须在真实数据库中运行；
+失败和重试分别保留，不把发布/隔离安全的测试结果混入本条。独立记录、审计与提交。
+
+原生实测修复：机器认证的 SQL `grant` 别名改为 `token_grant`；例外水位从 SQLite `rowid`
+改为当前 owner 的 `SUM(revision)`，批准和过期均递增、不可删除约束保持；时间比较统一为入库毫秒精度。
+第一轮复核保持真实 OAuth、动态权限、凭据轮换及 IP/mTLS 约束原样；第二轮验证不同 owner 不改变
+本空间水位，新增/批准/过期逐次失效，使用 WITHOUT ROWID 表检测物理行号依赖不会复发。
