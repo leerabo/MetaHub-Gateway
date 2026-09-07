@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -175,7 +176,7 @@ def apply_launch_command(
     key_sha = hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor = _platform_actor(
             connection,
             config,
@@ -284,7 +285,7 @@ def submit_launch_evidence(
 
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         current_actor = _platform_actor(
             connection,
             config,
@@ -439,7 +440,7 @@ def apply_launch_rollback(
     key_sha = hashlib.sha256(idempotency_key.encode("ascii")).hexdigest()
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor = _platform_actor(
             connection,
             config,
@@ -507,7 +508,7 @@ def process_launch_governance_once(config: AppConfig, *, worker_id: str) -> int:
         raise ApiError("launch.worker_invalid")
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         _require_schema(connection)
         now = _utcnow()
         state = connection.execute(
@@ -1856,25 +1857,29 @@ def _require_schema(connection: sqlite3.Connection) -> None:
         "launch_action_commands",
         "launch_scheduler_state",
     }
-    tables = {
-        row[0]
-        for row in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type='table'"
-        ).fetchall()
-    }
+    tables_present = all(table_exists(connection, table) for table in sorted(required))
     applied = connection.execute(
         "SELECT 1 FROM schema_migrations WHERE version='0130' AND status='applied'"
     ).fetchone()
-    if applied is None or not required <= tables:
+    if applied is None or not tables_present:
         raise ApiError("launch.unavailable")
     if connection.execute("SELECT COUNT(*) FROM launch_gate_policies").fetchone()[0] != 20:
         raise ApiError("launch.gate_registry_invalid")
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:
-    connection = connect_database(config.database_url)
-    connection.execute("PRAGMA foreign_keys=ON")
-    return connection
+    return connect_database(config.database_url)
+
+
+def _begin_write(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        # Serialize this module's writers before reading revisions or replay facts.
+        state = connection.execute(
+            "SELECT singleton_id FROM launch_scheduler_state WHERE singleton_id=1 FOR UPDATE"
+        ).fetchone()
+        if state is None:
+            raise ApiError("launch.unavailable")
 
 
 def _digest(value: object) -> str:

@@ -81,5 +81,34 @@ S6 批次在本条独立提交后统一运行 `0123 -> 0130` 全数据库矩阵�
   `.artifacts/g6-verifier-20260907/source-sensitive-audit.json`，不将模式扫描视为全产品安全验收。
 
 这些 API 用例仍替换登录与 step-up，状态机用例仍使用合成 73 小时时间和测试账号；它们不是实际
-72 小时业务运行、六名独立责任人的会签或真实四波试点。本次新实现也不在正在运行的 `e6bbce1`
-冻结版本中。G6 未通过，PRD-148 未启动，发布治理原生 PostgreSQL 业务覆盖仍待补齐。
+72 小时业务运行、六名独立责任人的会签或真实四波试点。本次新实现也不在 `e6bbce1`
+冻结版本中；其观测已因 09-07 08:52 主机重启中断。G6 未通过，PRD-148 未启动；
+后续原生 PostgreSQL 补充结果见下一节。
+
+## 2026-09-07 G6 原生发布治理补充
+
+在 `f953b51` 验签接线之后，真实 PostgreSQL 探针复现 `_connect` 的 SQLite PRAGMA 语法错误。
+修复后连接设置由共享工厂负责，schema guard 复用 backend-aware helper；四个治理写入入口在
+PostgreSQL 上锁住现有 scheduler singleton 行后才读权限、revision、候选或幂等事实。SQLite 仍用
+`BEGIN IMMEDIATE`，没有修改迁移、全局连接 SQL 翻译或固定门禁阈值。
+
+- 修复前：原生列表探针 1 failed，113.98 秒，失败保留在
+  `.artifacts/g6-launch-postgresql-20260907/g6-launch-f3d53b21aeaa4762970732b66e0de673-junit.xml`。
+- 修复后：PostgreSQL 17.11 原生 13/13 passed，408.41 秒。覆盖列表、缺 verifier、真实 Ed25519
+  三种拒绝路径、六类会签、动态撤权、四波 RC-only、独立回滚、实际锁等待、commit/rollback 后释放
+  以及两个同时创建请求只形成一个候选和一次幂等重放。证据为同目录
+  `g6-launch-1763ccf623c44a228e4a2e841681f275-junit.xml`。
+- Windows/SQLite 受影响 API 回归：10/10 passed，329.13 秒；证据为 `sqlite-api-r1-junit.xml`。
+  验签器本体未在此批改动，未重复运行整套产品回归。
+- Linux 原运行产物已从持久磁盘恢复：43 passed / 1 failed，2370.58 秒；10 项 API 均通过。
+  唯一失败是正式 app 接线测试的子进程导入超过 45 秒，不能记为 44/44。原始 `linux-junit.xml`、
+  `linux.log`、`linux.exit` 和恢复传输包均保留；该单项复验尚未完成，不阻塞其他域继续开发。
+- 每个原生用例使用独立测试数据库克隆，测试结束回收本次克隆与模板并关闭本次临时 PostgreSQL
+  实例；不触碰现有业务数据库、G7 基础设施或 72 小时观测进程。
+- 权威工作簿仅更正 `00_变更说明!B5` 的总体描述，不改变各 PRD 状态和 G0..G7 前置条件。
+  前后渲染确认文字完整可见，12 张表的值/公式核对及 ZIP/XML 结构检查通过，其余 11 个 sheet XML、
+  样式和原生特性不变；保存的变更范围证据为 `workbook-scope-verification.json`。
+
+原生状态机测试沿用受控鉴权/step-up 替身、合成时间与合成证据；其中三项密码学测试使用真实签名，
+仍不代表实际 QA 结果。事务行锁只串行化本模块写入，不证明全产品 IAM/业务跨模块并发矩阵已通过。
+S6 其余数据库和执行器缺口以及 G6 的真实证据要求见 `G6-remediation-status.md`。

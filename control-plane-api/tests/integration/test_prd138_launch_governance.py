@@ -139,7 +139,11 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def runtime(base_database: Path, tmp_path: Path) -> Runtime:
     database = tmp_path / "prd138.sqlite3"
     shutil.copy2(base_database, database)
-    config = _config(_url(database))
+    return _runtime(_url(database))
+
+
+def _runtime(database_url: str) -> Runtime:
+    config = _config(database_url)
     stamp = "2026-08-31T00:00:00.000Z"
     tokens: dict[str, str] = {}
     contexts: dict[str, PlatformContext] = {}
