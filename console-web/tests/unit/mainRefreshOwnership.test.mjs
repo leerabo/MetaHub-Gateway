@@ -1,11 +1,12 @@
 /**
  * 测试职责：锁定控制台注销与迟到刷新之间的认证 owner 顺序，防止旧请求恢复已清理的登录态。
- * 安全边界：测试只读取源码结构，不启动网络、浏览器或真实 Session，也不接触租户业务数据。
+ * 安全边界：源码结构和隔离函数测试不启动网络、浏览器或真实 Session，不接触租户业务数据。
  */
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 
 /** 从主应用源码中提取两个顶层函数之间的固定片段，缺失边界时立即失败。 */
@@ -80,7 +81,7 @@ test("navigation refresh authorizes the target before route-only hydration", asy
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const refresh = sourceSection(source, "async function performRefresh(options = {})", "function renderLogin(");
   const ownerIndex = refresh.indexOf("const refreshOwner = Object.freeze");
-  const shellIndex = refresh.indexOf("const consoleShellState = await loadConsoleShellState();");
+  const shellIndex = refresh.indexOf("const consoleShellState = await loadConsoleShellState(refreshOwnerCurrent);");
   const ownerGateIndex = refresh.indexOf("if (!refreshOwnerCurrent())", shellIndex);
   const dispatcherIndex = refresh.indexOf("await loadAndRenderActiveNavigation({", ownerGateIndex);
   const dispatcherReturnIndex = refresh.indexOf("return;", dispatcherIndex);
@@ -143,7 +144,7 @@ test("workspace navigation preferences come only from the current canonical resp
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const shellLoader = sourceSection(
     source,
-    "async function loadConsoleShellState()",
+    "async function loadConsoleShellState(",
     "async function switchConsoleNavigation",
   );
   assert.match(shellLoader, /workspaceNavigationController\.loadNavigation\(\)/);
@@ -157,6 +158,73 @@ test("workspace navigation preferences come only from the current canonical resp
     source,
     /function renderLogin[\s\S]*workspaceNavigationController\.leave\(\)/,
   );
+});
+
+test("shell loader discards stale authentication failures before clearing the current session", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const shellLoader = sourceSection(source, "async function loadConsoleShellState(",
+    "async function switchConsoleNavigation");
+  for (const status of [401, 403, 500]) {
+    let reject;
+    let current = true;
+    const pending = new Promise((_resolve, fail) => { reject = fail; });
+    const effects = [];
+    const authSession = { context: { current: true } };
+    const scope = {
+      authSession,
+      readNavigationHashState: () => ({ value: "", rejected: false }),
+      workspaceNavigationController: { loadNavigation: () => pending },
+      clearAuthSession: () => effects.push("clear"),
+      renderLogin: () => effects.push("login"),
+      authErrorMessage: () => "session unavailable",
+    };
+    const load = runInNewContext(`${shellLoader}\nloadConsoleShellState;`, scope);
+    const loading = load(() => current);
+    current = false;
+    reject({ status, requestId: "old-request" });
+    assert.equal(await loading, null);
+    assert.equal(scope.authSession, authSession);
+    assert.deepEqual(effects, []);
+  }
+});
+
+test("shell loader discards stale navigation success before changing the route or preferences", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const shellLoader = sourceSection(source, "async function loadConsoleShellState(",
+    "async function switchConsoleNavigation");
+  let resolve;
+  let current = true;
+  const pending = new Promise((accept) => { resolve = accept; });
+  const scope = {
+    readNavigationHashState: () => ({ value: "old-route", rejected: true }),
+    workspaceNavigationController: { loadNavigation: () => pending },
+    expandedConsoleGroupKey: "current-group",
+  };
+  const load = runInNewContext(`${shellLoader}\nloadConsoleShellState;`, scope);
+  const loading = load(() => current);
+  current = false;
+  resolve({ navigation: { preference: { expanded_group_code: "old-group" } } });
+  assert.equal(await loading, null);
+  assert.equal(scope.expandedConsoleGroupKey, "current-group");
+});
+
+test("shell loader still clears a current 401 instead of suppressing authentication failure", async () => {
+  const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
+  const shellLoader = sourceSection(source, "async function loadConsoleShellState(",
+    "async function switchConsoleNavigation");
+  const effects = [];
+  const scope = {
+    authSession: { context: { current: true } },
+    readNavigationHashState: () => ({ value: "", rejected: false }),
+    workspaceNavigationController: { loadNavigation: async () => { throw { status: 401 }; } },
+    clearAuthSession: () => effects.push("clear"),
+    renderLogin: () => effects.push("login"),
+    authErrorMessage: () => "session unavailable",
+  };
+  const load = runInNewContext(`${shellLoader}\nloadConsoleShellState;`, scope);
+  assert.equal(await load(() => true), null);
+  assert.equal(scope.authSession.context, null);
+  assert.deepEqual(effects, ["clear", "login"]);
 });
 
 

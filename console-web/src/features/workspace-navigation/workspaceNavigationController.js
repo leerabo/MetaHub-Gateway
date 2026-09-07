@@ -1,7 +1,7 @@
-import { createWorkspaceNavigationStore } from "./workspaceNavigationStore.js";
+import { createWorkspaceNavigationStore, workspaceNavigationOwner } from "./workspaceNavigationStore.js";
 
 export function createWorkspaceNavigationController({ api, createIdempotencyKey }) {
-  if (!api || typeof api.workspaceSession !== "function"
+  if (!api || typeof api.identitySession !== "function" || typeof api.workspaceSession !== "function"
     || typeof api.navigation !== "function"
     || typeof api.gettingStarted !== "function"
     || typeof api.advancedTools !== "function"
@@ -18,48 +18,44 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
   async function loadNavigation() {
     const sequence = ++workspaceSessionSequence;
     workspaceSessionController?.abort();
+    store.cancel("navigation");
     const sessionController = new AbortController();
     workspaceSessionController = sessionController;
-    let session;
+    const current = () => !sessionController.signal.aborted && sequence === workspaceSessionSequence;
+    let ticket = null;
     try {
-      session = await api.workspaceSession({ signal: sessionController.signal });
+      const identity = await api.identitySession({ signal: sessionController.signal });
+      if (!current()) throw conflictError();
+      const session = await api.workspaceSession({ signal: sessionController.signal });
+      if (!current()) throw conflictError();
+      const nextOwner = workspaceNavigationOwner(identity, session);
+      const previousGeneration = store.snapshot().generation;
+      if (!store.enter(nextOwner)) {
+        throw new TypeError("workspace session owner is invalid");
+      }
+      if (store.snapshot().generation !== previousGeneration) {
+        preferenceTail = Promise.resolve();
+        pendingAdvancedOpen = null;
+      }
+      ticket = store.begin("navigation");
+      if (!ticket) throw new TypeError("workspace navigation ticket is unavailable");
+      const navigation = await api.navigation({ signal: ticket.controller.signal });
+      if (!current() || !store.accept(ticket, navigation)) throw conflictError();
+      return Object.freeze({ identity, context: session.context,
+        authorization: session.authorization, ...store.snapshot() });
+    } catch (error) {
+      // Superseded failures must not look like a current 401/403 to the shell.
+      if (!current()) throw conflictError();
+      if (ticket) {
+        if (!store.reject(ticket, error)) throw conflictError();
+      } else {
+        store.leave();
+      }
+      throw error;
     } finally {
       if (workspaceSessionController === sessionController) {
         workspaceSessionController = null;
       }
-    }
-    if (sessionController.signal.aborted || sequence !== workspaceSessionSequence) {
-      throw conflictError();
-    }
-    const context = session?.context;
-    const previousOwner = store.snapshot().owner;
-    const nextOwner = {
-      workspaceId: context?.workspace_id,
-      role: context?.role,
-    };
-    const ownerChanged = previousOwner?.workspaceId !== nextOwner.workspaceId
-      || previousOwner?.role !== nextOwner.role;
-    if (!store.enter({
-      workspaceId: nextOwner.workspaceId,
-      role: nextOwner.role,
-    })) {
-      throw new TypeError("workspace session owner is invalid");
-    }
-    if (ownerChanged) {
-      preferenceTail = Promise.resolve();
-      pendingAdvancedOpen = null;
-    }
-    const ticket = store.begin("navigation");
-    if (!ticket) throw new TypeError("workspace navigation ticket is unavailable");
-    try {
-      const navigation = await api.navigation({ signal: ticket.controller.signal });
-      if (!store.accept(ticket, navigation)) {
-        throw conflictError();
-      }
-      return Object.freeze({ context, ...store.snapshot() });
-    } catch (error) {
-      store.reject(ticket, error);
-      throw error;
     }
   }
 
@@ -94,7 +90,7 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
         if (!store.acceptPreference(ticket, response)) throw conflictError();
         return store.snapshot();
       } catch (error) {
-        store.rejectPreference(ticket, error);
+        if (!store.rejectPreference(ticket, error)) throw conflictError();
         throw error;
       }
     };
@@ -135,7 +131,7 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
       pendingAdvancedOpen = null;
       return response;
     } catch (error) {
-      store.reject(ticket, error);
+      if (!store.reject(ticket, error)) throw conflictError();
       throw error;
     }
   }
@@ -149,7 +145,7 @@ export function createWorkspaceNavigationController({ api, createIdempotencyKey 
       if (!store.accept(ticket, response)) throw conflictError();
       return store.snapshot()[property];
     } catch (error) {
-      store.reject(ticket, error);
+      if (!store.reject(ticket, error)) throw conflictError();
       throw error;
     }
   }

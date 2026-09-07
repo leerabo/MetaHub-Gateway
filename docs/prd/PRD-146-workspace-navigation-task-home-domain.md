@@ -538,3 +538,37 @@ PRD-097 onboarding 权威事实，不实施 PRD-147 外部 router tombstone、�
 
 第二轮结论：交互、直接 URL、任务终态、event/outbox、失败恢复、三项 SLO 和批次证据均可执行验收；无未解决 P0/P1，
 可以在 G6 通过后进入 S7 连续编码。
+
+## 13. 主控制台 Cookie 入口与跨页 owner 补充批次
+
+2026-09-07 主 Console 启动检查仍依赖 Legacy sessionStorage 和 `/auth/me`，而导航已要求
+Workspace Cookie，身份页也不建立旧 Bearer。与 PRD-094/147 同批修复真实进入链路，不将旧 Token
+注入测试来绕过缺口。PRD-137 先以真实注册/登录和无旧槽位的新标签回归确认断点。
+
+第一轮自审：Console 启动、刷新、切换和退出必须使用服务器确认的 WorkspaceSession，来源域
+显式，不伪造旧 token 或用 Workspace ID 充当凭据。身份/owner 仅驻留内存，导航与后续页面
+必须同 owner；账号失效回真实 Identity 登录，空间未选择回真实选择器。不能将旧 `/auth/me`
+静默放宽为任意域认证，也不能仅让首页绕开旧登录而留下其他页面继续依赖旧 Token。
+
+第二轮自审：批量核对主页面状态机和请求客户端：导航立即清空/中止、旧成功与旧失败均不能
+覆盖新 owner；各业务域只向当前实际授权的 API 发起请求，不预取迁出的平台资源。保留已有
+Legacy 专项兼容合同，由 PRD-147 独立处理迁移边界。单元、真实 Cookie API 和桌面/移动
+流程逐层验证，批次完成再统一回归。入口通过不代替完整 64 项处置或 G6/G7 全部通过。
+
+### 13.1 Cookie 导航共享 owner 的实施复核
+
+主入口迁移先修正现有导航控制器的共享会话边界。导航读取复用真实 `/identity/me` 和
+`/workspace/session` 客户端，不签发或缓存 Legacy Token。内存 owner 纳入 GlobalSession
+公开句柄、撤销代次、两个会话到期时间、Workspace、角色及三项授权证据；不把 Workspace ID
+映射成旧 tenant/user/session ID。该 owner 只用于前端迟到响应隔离，不能充当服务端凭据。
+
+第一轮自审：仅比较 workspace/role 会把同角色的新账号会话及权限变化视为同一 owner。
+改为完整公开会话 owner，导航返回的 permission revision/fingerprint/membership revision
+必须与当前 WorkspaceSession 一致。过期回调的 401/403 不得清除后来建立的会话；旧偏好
+成功不得让新的 ready 状态变为 conflict。新导航加载开始即淘汰旧导航读取，不能等认证返回。
+
+第二轮自审：已确认的撤权或合同冲突必须清空导航、任务、高级工具及活动请求，不能只改
+status 继续保留旧 action。临时偏好失败仍保留原幂等键用于相同 owner 重试。真实切换由
+现有跨页广播同步失效；多个独立 HTTP 响应不声称具有跨请求原子快照。main 在处理导航失败
+前再次核对当前刷新 owner。本增量不宣称修复 index.html 的 Legacy 启动守卫，后续仍须完成
+主入口及所有可达业务客户端的 Cookie 接线，并复验真实无旧存储的进入流程。

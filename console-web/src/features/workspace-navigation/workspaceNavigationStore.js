@@ -2,10 +2,42 @@ function ownerKey(owner) {
   const workspaceId = String(owner?.workspaceId ?? "");
   const role = String(owner?.role ?? "");
   if (!/^wsp_[0-9a-f]{32}$/u.test(workspaceId)
-    || !/^(?:owner|admin|developer|security_admin|finance_admin|legal_admin|auditor|viewer)$/u.test(role)) {
+    || !/^(?:owner|admin|developer|security_admin|finance_admin|legal_admin|auditor|viewer)$/u.test(role)
+    || typeof owner.globalSessionId !== "string"
+    || !/^[a-zA-Z0-9_-]{1,160}$/u.test(owner.globalSessionId)
+    || !Number.isSafeInteger(owner.revokeGeneration) || owner.revokeGeneration < 0
+    || !Number.isSafeInteger(owner.permissionRevision) || owner.permissionRevision < 1
+    || !Number.isSafeInteger(owner.membershipRevision) || owner.membershipRevision < 1
+    || typeof owner.permissionFingerprint !== "string"
+    || !/^[0-9a-f]{64}$/u.test(owner.permissionFingerprint)
+    || !validExpiry(owner.globalExpiresAt) || !validExpiry(owner.workspaceExpiresAt)) {
     return "";
   }
-  return workspaceId + ":" + role;
+  return JSON.stringify([workspaceId, role, owner.globalSessionId, owner.revokeGeneration,
+    owner.globalExpiresAt, owner.workspaceExpiresAt, owner.permissionRevision,
+    owner.membershipRevision, owner.permissionFingerprint]);
+}
+
+function validExpiry(value) {
+  return typeof value === "string" && value.length <= 64 && Number.isFinite(Date.parse(value));
+}
+
+// Public session handles fence browser state only; they are never request credentials.
+export function workspaceNavigationOwner(identity, session) {
+  if (identity?.account?.status !== "active" || identity?.current_session?.is_current !== true
+    || session?.context?.session_status !== "active") return null;
+  const owner = {
+    workspaceId: session.context.workspace_id,
+    role: session.context.role,
+    globalSessionId: identity.current_session.session_id,
+    revokeGeneration: identity.current_session.revoke_generation,
+    globalExpiresAt: identity.current_session.expires_at,
+    workspaceExpiresAt: session.context.expires_at,
+    permissionRevision: session.authorization?.permission_revision,
+    membershipRevision: session.authorization?.membership_revision,
+    permissionFingerprint: session.authorization?.permission_fingerprint,
+  };
+  return ownerKey(owner) ? Object.freeze(owner) : null;
 }
 
 export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
@@ -28,6 +60,13 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
     owner = Object.freeze({
       workspaceId: String(nextOwner.workspaceId),
       role: String(nextOwner.role),
+      globalSessionId: nextOwner.globalSessionId,
+      revokeGeneration: nextOwner.revokeGeneration,
+      globalExpiresAt: nextOwner.globalExpiresAt,
+      workspaceExpiresAt: nextOwner.workspaceExpiresAt,
+      permissionRevision: nextOwner.permissionRevision,
+      membershipRevision: nextOwner.membershipRevision,
+      permissionFingerprint: nextOwner.permissionFingerprint,
     });
     generation += 1;
     status = "loading";
@@ -106,7 +145,14 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
     if (!current(ticket)) return false;
     active.delete(ticket);
     if (ticket.lane === "navigation") {
+      if (!payload || payload.permission_revision !== owner.permissionRevision
+        || payload.membership_revision !== owner.membershipRevision
+        || payload.permission_fingerprint !== owner.permissionFingerprint) return conflict();
       if (navigation && regressed(payload, navigation)) return conflict();
+      if (navigation && !compatible(navigation, payload)) {
+        clearProjection();
+        pendingPreference = null;
+      }
       navigation = payload;
       taskHome = compatible(taskHome, payload) ? taskHome : null;
       advancedTools = compatible(advancedTools, payload) ? advancedTools : null;
@@ -129,6 +175,9 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   function reject(ticket, nextError) {
     if (!current(ticket)) return false;
     active.delete(ticket);
+    if (ticket.lane === "navigation" || [401, 403, 409, 412].includes(Number(nextError?.status))) {
+      clearProjection();
+    }
     error = nextError ?? { code: "workspace_navigation.request_failed" };
     status = Number(nextError?.status) === 403
       ? "permission-revoked"
@@ -169,8 +218,9 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   }
 
   function acceptPreference(ticket, response) {
+    if (!current(ticket)) return false;
     const revisionDelta = response?.revision - ticket?.revision;
-    if (!current(ticket) || ticket.lane !== "preference" || !navigation
+    if (ticket.lane !== "preference" || !navigation
       || response.contract_snapshot_id !== ticket.contractSnapshotId
       || response.permission_fingerprint !== navigation.permission_fingerprint
       || response.permission_revision !== navigation.permission_revision
@@ -197,14 +247,7 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
 
   function rejectPreference(ticket, nextError) {
     if (!current(ticket) || ticket.lane !== "preference") return false;
-    active.delete(ticket);
-    error = nextError ?? { code: "workspace_navigation.request_failed" };
-    status = Number(nextError?.status) === 409 || Number(nextError?.status) === 412
-      ? "conflict"
-      : Number(nextError?.status) === 403
-        ? "permission-revoked"
-        : "error";
-    return true;
+    return reject(ticket, nextError);
   }
 
   function snapshot() {
@@ -221,9 +264,19 @@ export function createWorkspaceNavigationStore({ createIdempotencyKey } = {}) {
   }
 
   function conflict() {
+    clearProjection();
     status = "conflict";
     error = { code: "workspace_navigation.response_conflict" };
     return false;
+  }
+
+  function clearProjection() {
+    for (const ticket of active) ticket.controller.abort();
+    active.clear();
+    navigation = null;
+    taskHome = null;
+    advancedTools = null;
+    generation += 1;
   }
 
   function conflictTicket(ticket) {
@@ -259,7 +312,8 @@ function compatible(candidate, navigation) {
 }
 
 function regressed(candidate, previous) {
-  return candidate.contract_generation < previous.contract_generation
+  return candidate.owner_ref !== previous.owner_ref
+    || candidate.contract_generation < previous.contract_generation
     || candidate.projection_generation < previous.projection_generation
     || candidate.navigation_epoch < previous.navigation_epoch
     || candidate.membership_revision < previous.membership_revision

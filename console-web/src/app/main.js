@@ -510,6 +510,7 @@ import {
 import {
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
+  getIdentityMe,
   getWebAuthnAssertion,
 } from "../lib/identity.js";
 import { getCurrentWorkspaceSession } from "../lib/workspaces.js";
@@ -843,6 +844,10 @@ const workspaceProviderEngineeringController = createWorkspaceProviderEngineerin
 });
 const workspaceNavigationController = createWorkspaceNavigationController({
   api: {
+    identitySession: (input) => getIdentityMe({
+      controlApiUrl: workspaceControlApiUrl,
+      ...input,
+    }),
     workspaceSession: (input) => getCurrentWorkspaceSession({
       controlApiUrl: workspaceControlApiUrl,
       ...input,
@@ -1566,7 +1571,7 @@ async function performRefresh(options = {}) {
     renderLogin(authErrorMessage(error), error?.requestId);
     return;
   }
-  const consoleShellState = await loadConsoleShellState();
+  const consoleShellState = await loadConsoleShellState(refreshOwnerCurrent);
   // 导航读取期间可能发生来源跳转、侧栏切换或新 Session 登录；旧 shell 快照不得清理新页面 owner。
   if (!refreshOwnerCurrent()) {
     return;
@@ -10707,10 +10712,11 @@ function bindRolePermissionInteractions(consoleShellState) {
  * 读取控制台导航、偏好和当前 active item。
  * 安全：active item 只是 UI 候选值，后端仍会按登录态角色确认是否可见。
  */
-async function loadConsoleShellState() {
+async function loadConsoleShellState(isCurrent = () => true) {
   const hashState = readNavigationHashState();
   try {
     const loaded = await workspaceNavigationController.loadNavigation();
+    if (!isCurrent()) return null;
     const navigation = loaded.navigation;
     const requestedRegistry = WORKSPACE_ROUTE_REGISTRY[hashState.value];
     let advancedTools = null;
@@ -10720,6 +10726,7 @@ async function loadConsoleShellState() {
     ) {
       advancedTools = await workspaceNavigationController.loadAdvancedTools();
     }
+    if (!isCurrent()) return null;
     const resolution = resolveWorkspaceNavigationRoute(navigation, hashState.value, {
       requestedRejected: hashState.rejected,
       advancedTools,
@@ -10738,6 +10745,9 @@ async function loadConsoleShellState() {
       navigation: resolvedNavigation,
       preferences: { preference: navigation.preference },
       workspaceContext: loaded.context,
+      workspaceIdentity: loaded.identity,
+      workspaceAuthorization: loaded.authorization,
+      workspaceOwner: loaded.owner,
       workspaceNavigationContract: true,
       locale: navigation.account_locale,
       activeNavigationItemId: resolvedNavigation.active_navigation_item_id,
@@ -10749,6 +10759,7 @@ async function loadConsoleShellState() {
       actionError: consoleShellActionError,
     };
   } catch (error) {
+    if (!isCurrent()) return null;
     if (Number(error?.status) === 401) {
       clearAuthSession();
       authSession = { token: null, context: null };

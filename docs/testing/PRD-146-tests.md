@@ -140,3 +140,42 @@ API 与状态机覆盖：
 - `B57:B59` 的计算样式保持一致，`styleId=3`；只修改 `B58` 的值。
 - 12 张工作表顶部与 PRD-146 聚焦范围共 13 张 PNG 均非空，聚焦预览已人工查看，无明显覆盖或裁切。
 - 正式工作簿验证记录位于 `.artifacts/prd146/workbook-closeout/verification.json`。
+
+## 2026-09-07 主 Console Cookie 导航 owner 补充
+
+设计及两轮实施前自审见 PRD-146 第 13、13.1 节，与 PRD-147 消费端迁移同批推进。
+当前主入口的旧 Token 启动守卫仍未修复；本条只交付已接入 main 的导航共享生命周期修正，
+不将其记成真实 Cookie 入口或全部可达业务页面迁移完成。
+
+- 控制器使用既有 Cookie 客户端读取 `/identity/me`、`/workspace/session`、`/workspace/navigation`。
+  owner 绑定实际 GlobalSession 公开句柄、撤销代次、两类会话到期时间、Workspace、角色和三项
+  授权证据，返回账号/Workspace 事实供后续主入口使用；不生成 Legacy Token 或旧内部 ID。
+- 新导航读取开始就中止旧导航；当前响应的 permission revision/fingerprint/membership revision
+  必须与 WorkspaceSession 一致。同角色新会话、授权变化和新导航 epoch 淘汰旧私有请求。
+- 迟到成功/401/403 都不能改写新状态。旧偏好成功不再把新的 ready 状态改成 conflict；当前
+  撤权或合同冲突则清空导航、任务、高级工具及活动请求。相同 owner 的临时写失败仍复用原幂等键。
+- main 传递当前刷新 owner，在导航返回、高级工具返回及错误分支写状态前均重验。隔离执行实际
+  shell loader 的单元验证：旧 401/403/500 不清新会话，旧成功不改 hash/偏好，当前 401 仍清理。
+
+原始 JUnit 独立保留在 `.artifacts/g6-security-20260907/`：
+
+| 记录 | 结果 | 说明 |
+| --- | --- | --- |
+| `prd146-navigation-owner-red-r1-junit.xml` | 23 项，13 通过、10 失败 | 修复前记录；8 项揭示产品缺口，2 项因新增 deferred 夹具缺少 reject，不能算产品复现 |
+| `prd146-navigation-owner-r1-junit.xml` | 23 项，9 通过、14 失败 | 初次实现；夹具误将 navigation epoch/permission/membership 版本混用，并仍缺 reject；保留，不认定产品回归通过 |
+| `prd146-navigation-owner-r2-junit.xml` | 23/23 | 修正夹具版本为现有 DTO 的 permission=10、membership=9，并补 reject |
+| `prd146-navigation-owner-r3-junit.xml` | 83 项，81 通过、2 失败 | 扩展 owner/epoch 边界通过；两条旧源码结构断言仍硬编码无参数 shell loader |
+| `prd146-navigation-owner-r4-junit.xml` | 86/86 | 更新结构断言，新增实际 shell loader 隔离执行测试 |
+| `prd146-navigation-owner-r5-junit.xml` | 86/86 | 最终控制器对已失效导航 ticket 的错误也转换为 conflict |
+
+最终命令为 `node --test --test-reporter=junit --test-reporter-destination=<上述 r5 路径>`，输入仅为
+`prd146WorkspaceNavigation.test.mjs`、`mainRefreshOwnership.test.mjs`、`consoleShell.test.mjs`、
+`prd094WorkspaceAccess.test.mjs`、`prd145ConsoleExperience.test.mjs`、`auth.test.mjs`。
+这是受影响的前端单元及相邻回归，不是数据库/API/真实浏览器或完整批次 QA。前端 lint 763 文件、
+production surface 258 模块/272 来源和 `git diff --check` 通过。
+
+独立审计 `prd-146-navigation-owner-sensitive-audit.json` 核验本条 7 个精确暂存文件及上述 6 份
+原始记录，使用严格 UTF-8、高置信凭据模式及暂存字节校验；不改变或提交数据库、截图、临时材料、
+PRD-137 夹具、PRD-147 文档、用户 PRD-101..105 或 outputs。模式扫描不等于独立安全会签。
+工作簿本轮只读，已有完成格不作为补充缺口已关闭的证据。G6/G7 全量验收、主 Console 真实入口、
+全部资源客户端及跨页 DOM 生命周期仍需继续，PRD-148 不启动。

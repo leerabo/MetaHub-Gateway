@@ -12,6 +12,7 @@ import {
 } from "../../src/features/workspace-navigation/workspaceNavigationController.js";
 import {
   createWorkspaceNavigationStore,
+  workspaceNavigationOwner,
 } from "../../src/features/workspace-navigation/workspaceNavigationStore.js";
 import {
   WORKSPACE_ROUTE_REGISTRY,
@@ -233,7 +234,7 @@ test("PRD-146 store supersedes lane tickets and changes route without losing nav
   const store = createWorkspaceNavigationStore({
     createIdempotencyKey: () => "preference:test-key",
   });
-  assert.equal(store.enter({ workspaceId: WORKSPACE_ONE, role: "owner" }), true);
+  assert.equal(store.enter(workspaceNavigationOwner(identitySession(), workspaceSession())), true);
   const navigation = normalizeWorkspaceNavigation(navigationPayload());
   const navigationTicket = store.begin("navigation");
   assert.equal(store.accept(navigationTicket, navigation), true);
@@ -272,7 +273,7 @@ test("PRD-146 store accepts only exact changed and unchanged preference revision
   const store = createWorkspaceNavigationStore({
     createIdempotencyKey: () => "preference:test-key",
   });
-  assert.equal(store.enter({ workspaceId: WORKSPACE_ONE, role: "owner" }), true);
+  assert.equal(store.enter(workspaceNavigationOwner(identitySession(), workspaceSession())), true);
   const navigation = normalizeWorkspaceNavigation(navigationPayload());
   assert.equal(store.accept(store.begin("navigation"), navigation), true);
 
@@ -392,8 +393,10 @@ test("PRD-146 late WorkspaceSession cannot replace the newer Workspace owner", a
     (value) => ({ value }),
     (error) => ({ error }),
   );
+  await new Promise((resolve) => setImmediate(resolve));
   const second = controller.loadNavigation();
   assert.equal(signals[0].aborted, true);
+  await new Promise((resolve) => setImmediate(resolve));
   sessions[1].resolve(workspaceSession(WORKSPACE_TWO, "admin"));
   const current = await second;
   sessions[0].resolve(workspaceSession(WORKSPACE_ONE, "owner"));
@@ -433,6 +436,200 @@ test("PRD-146 task home and advanced tools load only through their explicit rout
   await controller.loadAdvancedTools();
   assert.deepEqual(calls, { navigation: 1, tasks: 1, advanced: 1 });
 });
+
+test("PRD-146 navigation binds the actual GlobalSession and Workspace authorization", async () => {
+  let identityReads = 0;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:stable-key",
+    api: completeApi({ identitySession: async () => {
+      identityReads += 1;
+      return identitySession();
+    } }),
+  });
+  const loaded = await controller.loadNavigation();
+  assert.equal(identityReads, 1);
+  assert.equal(loaded.owner.globalSessionId, "identity-session-one");
+  assert.equal(loaded.owner.permissionFingerprint, FINGERPRINT);
+  assert.equal(loaded.owner.membershipRevision, 9);
+  assert.equal(loaded.identity.current_session.session_id, "identity-session-one");
+  assert.equal(loaded.authorization.permission_revision, 10);
+});
+
+test("PRD-146 a new navigation load fences old bytes while new authentication is pending", async () => {
+  const oldNavigation = deferred();
+  const nextIdentity = deferred();
+  let identityCalls = 0;
+  let navigationCalls = 0;
+  let oldSignal;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:stable-key",
+    api: completeApi({
+      identitySession: () => ++identityCalls === 1 ? identitySession() : nextIdentity.promise,
+      navigation: ({ signal }) => {
+        if (++navigationCalls !== 1) return normalizeWorkspaceNavigation(navigationPayload());
+        oldSignal = signal;
+        return oldNavigation.promise;
+      },
+    }),
+  });
+  const first = controller.loadNavigation().catch((error) => error);
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = controller.loadNavigation();
+  assert.equal(oldSignal.aborted, true);
+  oldNavigation.resolve(normalizeWorkspaceNavigation(navigationPayload()));
+  assert.equal((await first).status, 409);
+  assert.equal(controller.snapshot().navigation, null);
+  nextIdentity.resolve(identitySession());
+  assert.equal((await second).status, "ready");
+});
+
+for (const field of ["globalSessionId", "revokeGeneration", "globalExpiresAt", "workspaceExpiresAt",
+  "permissionRevision", "membershipRevision", "permissionFingerprint"]) {
+  test(`PRD-146 changing owner ${field} invalidates every outstanding lane`, () => {
+    const store = createWorkspaceNavigationStore({ createIdempotencyKey: () => "preference:stable-key" });
+    const owner = workspaceNavigationOwner(identitySession(), workspaceSession());
+    assert.equal(store.enter(owner), true);
+    assert.equal(store.accept(store.begin("navigation"), normalizeWorkspaceNavigation(navigationPayload())), true);
+    const tickets = ["task-home", "advanced-tools", "advanced-open"].map(store.begin);
+    tickets.push(store.beginPreference({ sidebar_collapsed: true }));
+    const replacements = {
+      globalSessionId: "identity-session-two", revokeGeneration: 2,
+      globalExpiresAt: "2026-09-10T00:00:00Z", workspaceExpiresAt: "2026-09-10T00:00:00Z",
+      permissionRevision: 11, membershipRevision: 10, permissionFingerprint: "e".repeat(64),
+    };
+    assert.equal(store.enter({ ...owner, [field]: replacements[field] }), true);
+    for (const ticket of tickets) assert.equal(ticket.controller.signal.aborted, true);
+    assert.equal(store.snapshot().navigation, null);
+    assert.equal(store.snapshot().taskHome, null);
+    assert.equal(store.snapshot().advancedTools, null);
+  });
+}
+
+test("PRD-146 malformed or inactive session owners cannot reuse an earlier navigation", async () => {
+  for (const change of [
+    (identity) => { identity.account.status = "disabled"; },
+    (identity) => { identity.current_session.is_current = false; },
+    (identity) => { delete identity.current_session.session_id; },
+    (_identity, session) => { session.context.role = "service_account"; },
+    (_identity, session) => { session.context.session_status = "revoked"; },
+    (_identity, session) => { delete session.authorization; },
+  ]) {
+    const identity = identitySession();
+    const session = workspaceSession();
+    const controller = createWorkspaceNavigationController({
+      createIdempotencyKey: () => "preference:stable-key",
+      api: completeApi({ identitySession: async () => identity, workspaceSession: async () => session }),
+    });
+    await controller.loadNavigation();
+    change(identity, session);
+    await assert.rejects(controller.loadNavigation(), TypeError);
+    assert.equal(controller.snapshot().navigation, null);
+    assert.equal(controller.snapshot().owner, null);
+  }
+});
+
+test("PRD-146 new navigation epochs retire old task success and failure without poisoning ready state", () => {
+  const store = createWorkspaceNavigationStore({ createIdempotencyKey: () => "preference:stable-key" });
+  store.enter(workspaceNavigationOwner(identitySession(), workspaceSession()));
+  store.accept(store.begin("navigation"), normalizeWorkspaceNavigation(navigationPayload()));
+  const task = store.begin("task-home");
+  const advanced = store.begin("advanced-tools");
+  const navigation = normalizeWorkspaceNavigation({ ...navigationPayload(), navigation_epoch: 9 });
+  assert.equal(store.accept(store.begin("navigation"), navigation), true);
+  assert.equal(task.controller.signal.aborted, true);
+  assert.equal(advanced.controller.signal.aborted, true);
+  assert.equal(store.accept(task, normalizeWorkspaceGettingStarted(taskHomePayload())), false);
+  assert.equal(store.reject(advanced, { status: 401 }), false);
+  assert.equal(store.snapshot().navigation, navigation);
+  assert.equal(store.snapshot().status, "ready");
+  assert.equal(store.snapshot().error, null);
+});
+
+test("PRD-146 a same-role GlobalSession replacement aborts old private lanes", async () => {
+  let identity = identitySession();
+  const pending = deferred();
+  let signal;
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:stable-key",
+    api: completeApi({
+      identitySession: async () => identity,
+      gettingStarted: (input) => { signal = input.signal; return pending.promise; },
+    }),
+  });
+  await controller.loadNavigation();
+  const old = controller.loadGettingStarted().catch((error) => error);
+  identity = identitySession("identity-session-two");
+  await controller.loadNavigation();
+  assert.equal(signal.aborted, true);
+  pending.resolve(normalizeWorkspaceGettingStarted(taskHomePayload()));
+  assert.equal((await old).status, 409);
+  assert.equal(controller.snapshot().taskHome, null);
+  assert.equal(controller.snapshot().owner.globalSessionId, "identity-session-two");
+});
+
+test("PRD-146 stale preference success cannot poison a newer ready snapshot", async () => {
+  const pending = deferred();
+  const controller = createWorkspaceNavigationController({
+    createIdempotencyKey: () => "preference:stable-key",
+    api: completeApi({ updatePreference: () => pending.promise }),
+  });
+  await controller.loadNavigation();
+  const saving = controller.savePreference({ expanded_group_code: "gateway" }).catch((error) => error);
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.changeRoute();
+  await controller.loadNavigation();
+  pending.resolve(normalizeWorkspaceNavigationPreference(preferencePayload()));
+  assert.equal((await saving).status, 409);
+  assert.equal(controller.snapshot().status, "ready");
+  assert.equal(controller.snapshot().error, null);
+  assert.equal(controller.snapshot().navigation.preference.expanded_group_code, null);
+});
+
+for (const status of [401, 403]) {
+  test(`PRD-146 superseded session ${status} is a conflict, not a new authentication failure`, async () => {
+    const pending = deferred();
+    let calls = 0;
+    const controller = createWorkspaceNavigationController({
+      createIdempotencyKey: () => "preference:stable-key",
+      api: completeApi({ workspaceSession: () => ++calls === 1 ? pending.promise : workspaceSession() }),
+    });
+    const old = controller.loadNavigation().catch((error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    await controller.loadNavigation();
+    pending.reject(Object.assign(new Error("old session failed"), { status }));
+    assert.equal((await old).status, 409);
+    assert.equal(controller.snapshot().status, "ready");
+  });
+
+  test(`PRD-146 current task ${status} clears protected navigation and actions`, async () => {
+    const controller = createWorkspaceNavigationController({
+      createIdempotencyKey: () => "preference:stable-key",
+      api: completeApi({ gettingStarted: async () => {
+        throw Object.assign(new Error("permission no longer available"), { status });
+      } }),
+    });
+    await controller.loadNavigation();
+    await controller.loadAdvancedTools();
+    await assert.rejects(controller.loadGettingStarted(), (error) => error.status === status);
+    assert.equal(controller.snapshot().navigation, null);
+    assert.equal(controller.snapshot().advancedTools, null);
+    assert.equal(controller.snapshot().busy, false);
+  });
+}
+
+for (const field of ["permission_fingerprint", "permission_revision", "membership_revision"]) {
+  test(`PRD-146 navigation rejects WorkspaceSession ${field} mismatch`, async () => {
+    const session = workspaceSession();
+    session.authorization[field] = field.endsWith("fingerprint") ? "e".repeat(64) : 99;
+    const controller = createWorkspaceNavigationController({
+      createIdempotencyKey: () => "preference:stable-key",
+      api: completeApi({ workspaceSession: async () => session }),
+    });
+    await assert.rejects(controller.loadNavigation(), (error) => error.status === 409);
+    assert.equal(controller.snapshot().navigation, null);
+    assert.equal(controller.snapshot().status, "conflict");
+  });
+}
 
 test("PRD-146 closing advanced tools aborts its private request lane", async () => {
   const pending = deferred();
@@ -578,6 +775,7 @@ test("PRD-146 main fences route, logout, Workspace invalidation, and pagehide li
 
 function completeApi(overrides = {}) {
   return {
+    identitySession: async () => identitySession(),
     workspaceSession: async () => workspaceSession(),
     navigation: async () => normalizeWorkspaceNavigation(navigationPayload()),
     gettingStarted: async () => normalizeWorkspaceGettingStarted(taskHomePayload()),
@@ -593,8 +791,18 @@ function workspaceSession(workspaceId = WORKSPACE_ONE, role = "owner") {
     context: {
       workspace_id: workspaceId,
       role,
+      session_status: "active",
+      expires_at: "2026-09-08T00:00:00Z",
     },
+    authorization: { permission_codes: ["console.basic.read"], permission_revision: 10,
+      permission_fingerprint: FINGERPRINT, membership_revision: 9 },
   };
+}
+
+function identitySession(sessionId = "identity-session-one") {
+  return { account: { status: "active" }, current_session: {
+    session_id: sessionId, revoke_generation: 1, is_current: true, expires_at: "2026-09-09T00:00:00Z",
+  } };
 }
 
 function navigationPayload() {
@@ -809,8 +1017,10 @@ function privateResponse(payload, etag, overrides = {}) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((accept) => {
+  let reject;
+  const promise = new Promise((accept, fail) => {
     resolve = accept;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
