@@ -102,3 +102,27 @@ CAS/幂等、owner job 与 scheduler 租约接管、Legal Hold generation、取�
 原生实测暴露同一毫秒内 `identity_verified -> collecting` 被严格时间约束拒绝：
 比较前先按入库毫秒精度归一化，再确保至少递增 1ms。第一轮复核确认不改状态机或数据库约束；
 第二轮以 6 组微秒边界和连续转换回归验证，不以放宽时间约束掩盖错误。
+
+## 9. Owner Job 租约边界补充设计
+
+2026-09-07 真实队列场景接线前发现：完成路径仅检查 token，未检查到期或 worker/复合 owner；
+失败收尾仅检查 running，旧 worker 的迟到失败可清除新 worker 的租约。改用隐藏 repr 的不可变
+领取对象，返回实际已提交的 owner/请求/域/adapter/attempt/revision/worker/token/expiry。
+完成与失败共用事务内实时校验，不接受过期、接管、跨 owner 或字段被替换的领取对象。
+
+第一轮自审：校验 DB 当前时间而非调用方时间；首次执行前和提交前都检查完整领取绑定，长时间
+adapter 执行若越过期限，整个事务回滚。拒绝旧失败不能改变新 worker 的状态、revision 或租约。
+租约不是重新签发主体权限；既有经 step-up 受理的法定请求与短登录会话生命周期不同，不擅自
+因为原登录会话轮换而取消已受理请求。请求取消和保留/删除规则维持已有事务边界。
+
+第二轮自审：claim 返回值不可包含旧的未更新 lease_owner/revision；token 不进入 repr/日志。
+异步队列探针只在 Guest 私有副本创建真实 export 请求，通过真实 MFA/step-up 后受理并生成
+七域 job，不直接插队列行或用空同步导出冒充执行。对 forged owner、旧 token、接管、过期、
+完成后重放与迟到失败逐项检查无副作用；既有 SQLite/原生 PostgreSQL 合同独立记录和提交。
+
+本轮复核补充：制品组装、取消收尾、失败更新之后且提交之前再次检查期限。PostgreSQL 使用
+`clock_timestamp()`，SQLite 使用毫秒级 `strftime`，不能使用事务开始后不前进的时间。
+复用发布治理模块的单例行写锁模式，所有隐私事务在读取 revision 前锁定本模块 scheduler 行，
+避免 PostgreSQL 将 `BEGIN IMMEDIATE` 仅转换成 BEGIN 后丢失 SQLite 原有串行写保证。
+第八次崩溃且租约已过期的 job 直接终止并标记请求失败，不递增到非法的第九次；每次领取最多
+处理八个已耗尽项后返回，后续轮次继续，不无限循环或让一个坏项永久堵住其它请求。

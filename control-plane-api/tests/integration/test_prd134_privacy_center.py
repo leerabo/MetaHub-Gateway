@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 import shutil
 from contextlib import closing
@@ -64,6 +65,11 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd134-api-base") / "base.sqlite3"
     database_url = _url(database)
+    supplied = os.environ.get("METAHUB_TEST_MIGRATED_BASELINE")
+    if supplied:
+        shutil.copy2(Path(supplied).resolve(strict=True), database)
+        apply_migrations(database_url)
+        return database
     assert "0126" in apply_migrations(database_url).applied
     assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:

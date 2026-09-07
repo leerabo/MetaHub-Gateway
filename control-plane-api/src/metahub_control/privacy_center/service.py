@@ -82,6 +82,22 @@ class IdentityExportDownload:
     receipt_sha256: str
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class PrivacyOwnerJobLease:
+    owner_job_id: str
+    workspace_id: str
+    tenant_id: str
+    account_id: str
+    data_subject_request_id: str
+    owner_domain: str
+    adapter_version: int
+    attempt_count: int
+    revision: int
+    lease_owner_id: str
+    lease_token: str
+    lease_expires_at: datetime
+
+
 def get_privacy_preferences(
     config: AppConfig,
     *,
@@ -92,7 +108,7 @@ def get_privacy_preferences(
 ) -> PrivacyPreferenceResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -128,7 +144,7 @@ def update_privacy_preferences(
 ) -> PrivacyPreferenceResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -286,7 +302,7 @@ def create_data_subject_request(
 ) -> DataSubjectRequestResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -440,7 +456,7 @@ def list_data_subject_requests(
 ) -> DataSubjectRequestListResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, _now = _owner_context(
             connection,
             config,
@@ -481,7 +497,7 @@ def get_data_subject_request(
 ) -> DataSubjectRequestResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, _now = _owner_context(
             connection,
             config,
@@ -518,7 +534,7 @@ def cancel_data_subject_request(
 ) -> DataSubjectRequestResponse:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -627,7 +643,7 @@ def issue_export_receipt(
     connection = _connect(config)
     raw_receipt = ""
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -758,7 +774,7 @@ def download_identity_export(
     connection = _connect(config)
     plaintext = b""
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         actor, now = _owner_context(
             connection,
             config,
@@ -937,7 +953,7 @@ def _scan_deadlines_and_exports(config: AppConfig, *, worker_id: str) -> int:
     lease_token = secrets.token_urlsafe(32)
     lease_hash = hashlib.sha256(lease_token.encode("ascii")).hexdigest()
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         now = _database_now(connection)
         state = connection.execute(
             "SELECT * FROM privacy_scheduler_state WHERE singleton_id=1"
@@ -968,7 +984,7 @@ def _scan_deadlines_and_exports(config: AppConfig, *, worker_id: str) -> int:
         )
         connection.commit()
 
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         now = _database_now(connection)
         live = connection.execute(
             "SELECT * FROM privacy_scheduler_state WHERE singleton_id=1"
@@ -1065,18 +1081,24 @@ def _scan_deadlines_and_exports(config: AppConfig, *, worker_id: str) -> int:
         connection.close()
 
 
-def _claim_owner_job(config: AppConfig, worker_id: str) -> dict[str, object] | None:
+def _claim_owner_job(config: AppConfig, worker_id: str) -> PrivacyOwnerJobLease | None:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        _begin_write(connection)
         now = _database_now(connection)
-        row = connection.execute(
-            """SELECT * FROM data_subject_request_owner_jobs
-                 WHERE (status='pending' AND next_attempt_at<=?)
-                    OR(status='running' AND lease_expires_at<=?)
-                 ORDER BY next_attempt_at,owner_job_id LIMIT 1""",
-            (_db_time(now), _db_time(now)),
-        ).fetchone()
+        row = None
+        for _ in range(8):
+            row = connection.execute(
+                """SELECT * FROM data_subject_request_owner_jobs
+                     WHERE (status='pending' AND next_attempt_at<=?)
+                        OR(status='running' AND lease_expires_at<=?)
+                     ORDER BY next_attempt_at,owner_job_id LIMIT 1""",
+                (_db_time(now), _db_time(now)),
+            ).fetchone()
+            if row is None or int(row["attempt_count"]) < 8:
+                break
+            _record_owner_failure(connection, row, now)
+            row = None
         if row is None:
             connection.commit()
             return None
@@ -1101,41 +1123,67 @@ def _claim_owner_job(config: AppConfig, worker_id: str) -> dict[str, object] | N
         if changed != 1:
             connection.rollback()
             return None
-        result = {key: row[key] for key in row.keys()}
-        result["lease_token"] = token
-        result["attempt_count"] = int(row["attempt_count"]) + 1
+        result = PrivacyOwnerJobLease(
+            owner_job_id=str(row["owner_job_id"]),
+            workspace_id=str(row["workspace_id"]),
+            tenant_id=str(row["tenant_id"]),
+            account_id=str(row["account_id"]),
+            data_subject_request_id=str(row["data_subject_request_id"]),
+            owner_domain=str(row["owner_domain"]),
+            adapter_version=int(row["adapter_version"]),
+            attempt_count=int(row["attempt_count"]) + 1,
+            revision=int(row["revision"]) + 1,
+            lease_owner_id=worker_id,
+            lease_token=token,
+            lease_expires_at=_time(_db_time(now + timedelta(minutes=2))),
+        )
         connection.commit()
         return result
     finally:
         connection.close()
 
 
-def _process_owner_job(config: AppConfig, claim: dict[str, object]) -> None:
+def _live_owner_job(connection, claim: PrivacyOwnerJobLease):
+    if not isinstance(claim, PrivacyOwnerJobLease):
+        raise ApiError("privacy.worker_fenced")
+    job = connection.execute(
+        "SELECT * FROM data_subject_request_owner_jobs WHERE owner_job_id=?",
+        (claim.owner_job_id,),
+    ).fetchone()
+    now = _database_now(connection)
+    fields = (
+        "workspace_id", "tenant_id", "account_id", "data_subject_request_id",
+        "owner_domain", "adapter_version", "attempt_count", "revision", "lease_owner_id",
+    )
+    if (
+        job is None or job["status"] != "running"
+        or any(job[name] != getattr(claim, name) for name in fields)
+        or not isinstance(claim.lease_token, str)
+        or not hmac.compare_digest(
+            str(job["lease_token_sha256"]),
+            hashlib.sha256(claim.lease_token.encode("utf-8")).hexdigest(),
+        )
+        or _time(job["lease_expires_at"]) != claim.lease_expires_at
+        or now >= claim.lease_expires_at
+    ):
+        raise ApiError("privacy.worker_fenced")
+    return job, now
+
+
+def _process_owner_job(config: AppConfig, claim: PrivacyOwnerJobLease) -> None:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        job = connection.execute(
-            "SELECT * FROM data_subject_request_owner_jobs WHERE owner_job_id=?",
-            (claim["owner_job_id"],),
-        ).fetchone()
-        if (
-            job is None
-            or job["status"] != "running"
-            or not hmac.compare_digest(
-                str(job["lease_token_sha256"]),
-                hashlib.sha256(str(claim["lease_token"]).encode("ascii")).hexdigest(),
-            )
-        ):
-            raise ApiError("privacy.worker_fenced")
+        _begin_write(connection)
+        job, now = _live_owner_job(connection, claim)
         request_row = connection.execute(
             "SELECT * FROM data_subject_requests WHERE data_subject_request_id=?",
             (job["data_subject_request_id"],),
         ).fetchone()
         if request_row is None:
             raise ApiError("privacy.request_not_found")
-        now = _database_now(connection)
         if request_row["status"] == "cancelled":
             _complete_cancelled_job(connection, job, now)
+            _check_owner_lease_time(connection, claim)
             connection.commit()
             return
         request_row = _advance_request_to_collecting(connection, request_row, now)
@@ -1165,6 +1213,8 @@ def _process_owner_job(config: AppConfig, claim: dict[str, object]) -> None:
                 "hold_generation": hold_generation,
             }
         )
+        # Adapter work may outlive the lease; roll back its effects before committing.
+        job, now = _live_owner_job(connection, claim)
         stamp = _changed_time(now, job["updated_at"])
         connection.execute(
             """UPDATE data_subject_request_owner_jobs
@@ -1185,6 +1235,7 @@ def _process_owner_job(config: AppConfig, claim: dict[str, object]) -> None:
             ),
         )
         _finalize_request_if_ready(connection, request_row, config, stamp)
+        _check_owner_lease_time(connection, claim)
         connection.commit()
     except ApiError:
         _rollback(connection)
@@ -1193,57 +1244,61 @@ def _process_owner_job(config: AppConfig, claim: dict[str, object]) -> None:
         connection.close()
 
 
-def _fail_owner_job(config: AppConfig, claim: dict[str, object], error_code: str) -> None:
+def _fail_owner_job(config: AppConfig, claim: PrivacyOwnerJobLease, error_code: str) -> None:
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        job = connection.execute(
-            "SELECT * FROM data_subject_request_owner_jobs WHERE owner_job_id=?",
-            (claim["owner_job_id"],),
-        ).fetchone()
-        if job is None or job["status"] != "running":
-            connection.commit()
-            return
-        now = _database_now(connection)
-        stamp = _changed_time(now, job["updated_at"])
-        terminal = int(job["attempt_count"]) >= 8
-        connection.execute(
-            """UPDATE data_subject_request_owner_jobs
-                  SET status=?,checkpoint_code=?,next_attempt_at=?,lease_owner_id=NULL,
-                      lease_token_sha256=NULL,lease_expires_at=NULL,revision=revision+1,
-                      completed_at=?,updated_at=?
-                WHERE owner_job_id=? AND status='running'""",
-            (
-                "failed" if terminal else "pending",
-                "owner_failed" if terminal else "retry_scheduled",
-                _db_time(now + timedelta(seconds=min(300, 2 ** int(job["attempt_count"])))),
-                _db_time(stamp) if terminal else None,
-                _db_time(stamp),
-                job["owner_job_id"],
-            ),
-        )
-        if terminal:
-            request_row = connection.execute(
-                "SELECT * FROM data_subject_requests WHERE data_subject_request_id=?",
-                (job["data_subject_request_id"],),
-            ).fetchone()
-            if request_row is not None and request_row["status"] not in _DSR_TERMINAL:
-                request_stamp = _changed_time(stamp, request_row["updated_at"])
-                connection.execute(
-                    "UPDATE data_subject_requests SET status='failed',revision=revision+1,"
-                    "terminal_reason_code='owner_failed',terminal_at=?,updated_at=? "
-                    "WHERE data_subject_request_id=?",
-                    (
-                        _db_time(request_stamp),
-                        _db_time(request_stamp),
-                        job["data_subject_request_id"],
-                    ),
-                )
+        _begin_write(connection)
+        job, now = _live_owner_job(connection, claim)
+        _record_owner_failure(connection, job, now)
+        _check_owner_lease_time(connection, claim)
         connection.commit()
-    except (sqlite3.Error, DbError, ValueError, TypeError, KeyError):
+    except (ApiError, sqlite3.Error, DbError, ValueError, TypeError, KeyError):
         _rollback(connection)
     finally:
         connection.close()
+
+
+def _record_owner_failure(connection, job, now: datetime) -> None:
+    stamp = _changed_time(now, job["updated_at"])
+    terminal = int(job["attempt_count"]) >= 8
+    connection.execute(
+        """UPDATE data_subject_request_owner_jobs
+              SET status=?,checkpoint_code=?,next_attempt_at=?,lease_owner_id=NULL,
+                  lease_token_sha256=NULL,lease_expires_at=NULL,revision=revision+1,
+                  completed_at=?,updated_at=?
+            WHERE owner_job_id=? AND revision=? AND status IN('pending','running')""",
+        (
+            "failed" if terminal else "pending",
+            "owner_failed" if terminal else "retry_scheduled",
+            _db_time(now + timedelta(seconds=min(300, 2 ** int(job["attempt_count"])))),
+            _db_time(stamp) if terminal else None,
+            _db_time(stamp),
+            job["owner_job_id"],
+            job["revision"],
+        ),
+    )
+    if terminal:
+        request_row = connection.execute(
+            "SELECT * FROM data_subject_requests WHERE data_subject_request_id=?",
+            (job["data_subject_request_id"],),
+        ).fetchone()
+        if request_row is not None and request_row["status"] not in _DSR_TERMINAL:
+            request_stamp = _changed_time(stamp, request_row["updated_at"])
+            connection.execute(
+                "UPDATE data_subject_requests SET status='failed',revision=revision+1,"
+                "terminal_reason_code='owner_failed',terminal_at=?,updated_at=? "
+                "WHERE data_subject_request_id=?",
+                (
+                    _db_time(request_stamp),
+                    _db_time(request_stamp),
+                    job["data_subject_request_id"],
+                ),
+            )
+
+
+def _check_owner_lease_time(connection, claim: PrivacyOwnerJobLease) -> None:
+    if _database_now(connection) >= claim.lease_expires_at:
+        raise ApiError("privacy.worker_fenced")
 
 
 def _advance_request_to_collecting(connection, row, now: datetime):
@@ -2064,6 +2119,17 @@ def _rollback(connection) -> None:
         connection.rollback()
 
 
+def _begin_write(connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        # Preserve SQLite's serial write boundary for revisions and owner leases.
+        state = connection.execute(
+            "SELECT singleton_id FROM privacy_scheduler_state WHERE singleton_id=1 FOR UPDATE"
+        ).fetchone()
+        if state is None:
+            raise ApiError("privacy.unavailable")
+
+
 def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
@@ -2073,7 +2139,12 @@ def _digest(value: object) -> str:
 
 
 def _database_now(connection) -> datetime:
-    return _time(connection.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+    query = (
+        "SELECT clock_timestamp()"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+    )
+    return _time(connection.execute(query).fetchone()[0])
 
 
 def _changed_time(now: datetime, previous: object) -> datetime:
