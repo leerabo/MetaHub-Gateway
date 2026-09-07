@@ -249,7 +249,6 @@ async def test_unimplemented_scenarios_remain_errors():
     async with _fixtures(lambda request: requests.append(request)) as fixtures:
         runner = _runner(fixtures)
         for code in (
-            "queue_owner",
             "late_response",
         ):
             result = await runner.run(code)
@@ -262,7 +261,7 @@ async def test_resource_scenarios_require_actual_local_observer():
     requests = []
     async with _fixtures(lambda request: requests.append(request)) as fixtures:
         runner = _runner(fixtures)
-        for code in ("cache_owner", "object_prefix", "metrics_labels"):
+        for code in ("cache_owner", "queue_owner", "object_prefix", "metrics_labels"):
             result = await runner.run(code)
             assert (result.outcome, result.reason_code) == (
                 "error",

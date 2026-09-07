@@ -43,7 +43,9 @@ async def _bootstrap(handler=None, **kwargs):
             case "/identity/verifications":
                 body = {}
             case "/identity/login":
-                body = {"account": {"email": payload["email"], "status": "active"}}
+                body = {"account": {
+                    "email": payload["email"], "status": "active",
+                }}
                 cookie = GLOBAL_CSRF
             case "/workspaces":
                 assert len(payload["slug"]) <= 48

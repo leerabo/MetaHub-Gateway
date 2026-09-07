@@ -120,6 +120,10 @@ async def test_fixed_guest_real_process_https_and_report(
                     pass
         if mode in ("revoked_during_resources", "tampered_object") and not injected_fault:
             for target in tmp_path.glob("metahub-assurance-*/control.sqlite3"):
+                # Avoid parsing the whole SQLite schema at every queue lease
+                # check before this private guest has produced any file bytes.
+                if not any((target.parent / "file-storage" / "objects").glob("*/*/original.bin")):
+                    continue
                 try:
                     with closing(
                         sqlite3.connect(
@@ -156,13 +160,13 @@ async def test_fixed_guest_real_process_https_and_report(
             request_sha256="1" * 64,
             environment_id="aenv_" + "2" * 32,
             assessment_generation=1,
-            deadline_at=datetime.now(UTC) + timedelta(minutes=3),
+            deadline_at=datetime.now(UTC) + timedelta(minutes=5),
             channel_nonce="3" * 64,
         ),
         authority,
     )
     try:
-        result = await asyncio.wait_for(session.serve(), 180)
+        result = await asyncio.wait_for(session.serve(), 300)
         await asyncio.wait_for(process.wait(), 10)
         diagnostic = (await process.stderr.read()).decode("utf-8")
         if mode in ("revoked_during_bootstrap", "revoked_during_resources"):
@@ -191,11 +195,12 @@ async def test_fixed_guest_real_process_https_and_report(
         assert not report["full_owner_coverage"]
         assert [run["scenario_code"] for run in report["runs"]] == list(SCENARIOS)
         assert len(report["creations"]) == 13
-        assert len(report["resources"]) == (8 if mode == "tampered_object" else 12)
+        assert len(report["resources"]) == (28 if mode == "tampered_object" else 32)
         assert {item["resource_code"] for item in report["resources"]} == (
-            {"cached_projection", "metric_bucket"}
+            {"cached_projection", "metric_bucket", "privacy_owner_job", "privacy_owner_lease"}
             if mode == "tampered_object"
-            else {"cached_projection", "object_artifact", "metric_bucket"}
+            else {"cached_projection", "object_artifact", "metric_bucket",
+                  "privacy_owner_job", "privacy_owner_lease"}
         )
         assert all(passed for item in report["resources"] for _, passed in item["checks"])
         for run in report["runs"]:

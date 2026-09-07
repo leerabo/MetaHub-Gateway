@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import httpx
 
-from .probes import GLOBAL_CSRF, WORKSPACE_CSRF, LeaseGuard, ProbeFixtures
+from .probes import GLOBAL_CSRF, WORKSPACE_CSRF, LeaseGuard, ProbeAccount, ProbeFixtures
 from .transport import REQUEST_TIMEOUT_SECONDS, guarded_request
 
 Mailbox = Callable[[str, str], Awaitable[str]]
@@ -188,6 +188,7 @@ class HttpFixtureBootstrap:
         if logged_in["account"]["email"] != email or logged_in["account"]["status"] != "active":
             raise BootstrapError("bootstrap.account_mismatch")
         self._record(f"{label}.verified_account", email)
+        return ProbeAccount(email, password)
 
     async def _switch(self, client, workspace_id, role):
         result = await self._request(
@@ -257,8 +258,8 @@ class HttpFixtureBootstrap:
             remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
             async with asyncio.timeout(max(0, remaining)):
                 await self._guard()
-                await self._register(self.source, "source")
-                await self._register(self.target, "target")
+                source_account = await self._register(self.source, "source")
+                target_account = await self._register(self.target, "target")
                 source_workspace, source_project = await self._workspace(self.source, "source")
                 target_workspace, target_project = await self._workspace(self.target, "target")
                 if source_project["tenant_id"] == target_project["tenant_id"]:
@@ -350,6 +351,8 @@ class HttpFixtureBootstrap:
                     target_project_name=target_project["name"],
                     member_membership_id=membership_id,
                     member_revision=membership["revision"],
+                    source_account=source_account,
+                    target_account=target_account,
                 )
         except asyncio.CancelledError:
             self._fenced = True

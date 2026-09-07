@@ -321,3 +321,29 @@ persisted 收敛，再冻结 ingest watermark；执行已知数量的 source/tar
 窗口开始/结束、等待 flush 与每个请求均持续检查短许可，超时/掉数/后端故障不判通过。
 两窗口共用现有资源观察报告，不升级 isolation/cleanup/full-owner attestations；queue 和真实
 浏览器 late-response 仍按第 15 节继续开发，不能通过修改场景清单把它们移出总目标。
+
+### 队列实施前两轮复核
+
+2026-09-07 延续资源批次。采用 PRD-134 隐私导出的真实异步 owner job：双租户以真实注册密码
+完成 TOTP 注册验证，再取得正式 recovery code 和一次性 step-up grant，经 HTTP 创建 export。
+密码、TOTP/recovery/step-up 材料仅在 repr-hidden Python 夹具内存存活，不能进入报告或协议。
+固定执行器在独立工作线程调用生产 claim/process/failure 路径，只允许本次私有数据库中的本次
+两项请求，不直写测试队列，不替换权限，也不启动无关后台调度器。
+
+第一轮复核：只读核对每个请求的 7 个真实非空 owner job、复合身份、attempt/revision/lease，
+执行时逐次核对评估许可；对实际领取对象分别交换 tenant/workspace/account/request/worker/
+token/revision，完成与失败均不能改变当前租约。合法完成必须生成真实 identity/membership
+fragment 与 owner-bound 加密制品，解密内容与实际注册账号/空间相符，不能仅比较报告摘要。
+
+第二轮复核：API 交叉读取/取消/下载不能跨主体；合法消费下载回执后重放拒绝。过期、接管及
+迟到失败由独立产品事务测试补充，生产 worker 使用真实数据库时间，不靠修改产品超时通过。
+线程取消须等底层工作结束才清私有目录，评估撤权后不得再报告；完整资源清理仍由 supervisor
+独立证明。该路径代表真实隐私队列，不替代全部 batch/webhook/platform queue owner 覆盖。
+
+实施复核：公开 GlobalAccount DTO 不暴露内部 account ID，初始化夹具仅保存本次真实注册的
+邮箱和随机密码；私有观察器按邮箱、Workspace、tenant、有效 owner Membership 只读恢复
+内部 `gac_` 身份，再核对实际受理请求的复合 owner。不得为了测试增加公开账号字段。
+真实 14 项队列工作全部经生产 worker 函数在线程执行，首次领取按双主体分别做七类篡改；
+每项验证完成后重放与迟到失败无副作用。独立验证 fragment/receipt/manifest/密文及实际下载
+的摘要一致性，不仅检查非空。单独进程的三分钟测试预算已不足以覆盖新增真实队列工作，
+测试总预算改为五分钟；产品两分钟 job lease、逐步许可和永久 fencing 不变。

@@ -25,6 +25,7 @@ from metahub_assurance_runner.lease_channel import (
     StreamLeaseTransport,
     SupervisorLeaseSession,
 )
+from metahub_assurance_runner.privacy_queue import LocalPrivacyQueue
 from metahub_assurance_runner.probes import (
     IMPLEMENTED_SCENARIOS,
     RESOURCE_SCENARIOS,
@@ -34,6 +35,7 @@ from metahub_assurance_runner.resources import LocalResourceInspector
 from metahub_control.files.routes import router as files_router
 from metahub_control.identity.delivery import pop_test_identity_challenge
 from metahub_control.identity.routes import router as identity_router
+from metahub_control.privacy_center.routes import router as privacy_router
 from metahub_control.projects.routes import router as projects_router
 from metahub_control.workspace_access.routes import router as access_router
 from metahub_control.workspace_navigation.routes import router as navigation_router
@@ -119,6 +121,8 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         "IDENTITY_SESSION",
         "IDENTITY_CHALLENGE",
         "IDENTITY_PII_ENCRYPTION",
+        "IDENTITY_MFA_ENCRYPTION",
+        "TENANT_DATA_ENCRYPTION",
         "WORKSPACE_SESSION",
         "FILE_ENCRYPTION",
         "PLATFORM_SESSION",
@@ -139,6 +143,7 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         projects_router,
         files_router,
         navigation_router,
+        privacy_router,
     ):
         app.include_router(router)
     assert not app.dependency_overrides
@@ -147,10 +152,14 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("scenarios", [
+    ("queue_owner",), (*RESOURCE_SCENARIOS, *IMPLEMENTED_SCENARIOS),
+], ids=["queue", "combined"])
 async def test_fixed_probes_with_registered_accounts_and_real_authorization(
     runtime,
     caplog,
     record_property,
+    scenarios,
 ):
     sensitive = []
     lease_checks = 0
@@ -170,8 +179,21 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
         if request.headers.get("content-type") == "application/json":
             payload = json.loads(request.content)
             sensitive.extend(
-                payload[key] for key in ("password", "invitation_token") if key in payload
-            )
+                    payload[key] for key in (
+                        "password", "invitation_token", "current_password", "code", "step_up_grant",
+                    ) if key in payload
+                )
+        if request.headers.get("X-Privacy-Export-Receipt"):
+            sensitive.append(request.headers["X-Privacy-Export-Receipt"])
+
+    async def capture_response_secrets(response):
+        if response.request.url.path in (
+            "/identity/mfa/totp/enrollments", "/identity/mfa/enrollments", "/identity/step-up",
+        ):
+            await response.aread()
+            payload = response.json()
+            sensitive.extend(payload[key] for key in ("secret", "grant") if payload.get(key))
+            sensitive.extend(payload.get("recovery_codes") or ())
 
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(runtime.router.lifespan_context(runtime))
@@ -182,7 +204,8 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
                     base_url=ORIGIN,
                     follow_redirects=False,
                     trust_env=False,
-                    event_hooks={"request": [capture_test_secrets]},
+                        event_hooks={"request": [capture_test_secrets],
+                                     "response": [capture_response_secrets]},
                 )
             )
             for _ in range(4)
@@ -211,8 +234,11 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
             runtime.state.telemetry_runtime,
             runtime.state.config.platform_session_secret,
         )
-        runner = FixedProbeRunner(fixtures, lease.guard, deadline, resources=resources)
-        results = [await runner.run(code) for code in (*RESOURCE_SCENARIOS, *IMPLEMENTED_SCENARIOS)]
+        runner = FixedProbeRunner(
+            fixtures, lease.guard, deadline, resources=resources,
+            privacy_queue=LocalPrivacyQueue(runtime.state.config, resources),
+        )
+        results = [await runner.run(code) for code in scenarios]
         serialized = json.dumps([asdict(result) for result in results], default=str)
         record_property("probe_results", serialized)
         assert lease_checks > 100

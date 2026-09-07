@@ -32,6 +32,7 @@ from pydantic import TypeAdapter
 
 from .bootstrap import CreationObservation, HttpFixtureBootstrap
 from .lease_channel import GuestLease, LeaseChannelError, LeaseTransport
+from .privacy_queue import LocalPrivacyQueue
 from .probes import SCENARIOS, FixedProbeRunner, ProbeResult
 from .resources import LocalResourceInspector, ResourceObservation
 
@@ -64,6 +65,8 @@ def _configure(database: Path, origin: str) -> None:
         "IDENTITY_SESSION",
         "IDENTITY_CHALLENGE",
         "IDENTITY_PII_ENCRYPTION",
+        "IDENTITY_MFA_ENCRYPTION",
+        "TENANT_DATA_ENCRYPTION",
         "WORKSPACE_SESSION",
         "FILE_ENCRYPTION",
         "PLATFORM_SESSION",
@@ -238,6 +241,7 @@ async def execute_workload(
                     lease.guard,
                     lease.binding.deadline_at,
                     resources=resources,
+                    privacy_queue=LocalPrivacyQueue(app.state.config, resources),
                 )
                 results = []
                 for code in SCENARIOS:

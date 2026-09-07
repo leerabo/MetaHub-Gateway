@@ -19,6 +19,7 @@ from typing import Literal
 import httpx
 from metahub_shared.config_distribution import canonical_json_bytes
 
+from .privacy_queue import LocalPrivacyQueue, run_queue_probe
 from .resources import (
     LocalResourceInspector,
     ResourceContractViolation,
@@ -51,8 +52,24 @@ IMPLEMENTED_SCENARIOS = (
     "replay_fencing",
     "input_fuzz",
 )
-RESOURCE_SCENARIOS = ("cache_owner", "object_prefix", "metrics_labels")
+RESOURCE_SCENARIOS = ("cache_owner", "queue_owner", "object_prefix", "metrics_labels")
 LeaseGuard = Callable[[], Awaitable[bool]]
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProbeAccount:
+    email: str
+    password: str
+
+    def __post_init__(self):
+        if (
+            not isinstance(self.email, str)
+            or re.fullmatch(
+                r"(?:source|target|member)-[0-9a-f]{32}@example\.test", self.email,
+            ) is None
+            or not isinstance(self.password, str) or not 32 <= len(self.password) <= 128
+        ):
+            raise ValueError("invalid isolated account material")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -72,6 +89,8 @@ class ProbeFixtures:
     target_project_name: str
     member_membership_id: str
     member_revision: int
+    source_account: ProbeAccount | None = None
+    target_account: ProbeAccount | None = None
 
     def __post_init__(self):
         for prefix, value in (
@@ -89,6 +108,15 @@ class ProbeFixtures:
                 or value == prefix + "_" + "0" * 32
             ):
                 raise ValueError("invalid isolated fixture identity")
+        if (
+            (self.source_account is None) != (self.target_account is None)
+            or (self.source_account is not None and (
+                not isinstance(self.source_account, ProbeAccount)
+                or not isinstance(self.target_account, ProbeAccount)
+                or self.source_account.email == self.target_account.email
+            ))
+        ):
+            raise ValueError("invalid isolated account pair")
         if (
             self.source_workspace_id == self.target_workspace_id
             or self.source_tenant_id == self.target_tenant_id
@@ -181,6 +209,7 @@ class FixedProbeRunner:
     lease_guard: LeaseGuard = field(repr=False)
     deadline_at: datetime
     resources: LocalResourceInspector | None = field(default=None, repr=False)
+    privacy_queue: LocalPrivacyQueue | None = field(default=None, repr=False)
     resource_observations: list[ResourceObservation] = field(default_factory=list, init=False)
     _checks: list[ProbeCheck] = field(default_factory=list, init=False, repr=False)
     _running: bool = field(default=False, init=False)
@@ -210,6 +239,7 @@ class FixedProbeRunner:
                     "cache_owner": self._cache_owner,
                     "object_prefix": self._object_prefix,
                     "metrics_labels": self._metrics_labels,
+                    "queue_owner": self._queue_owner,
                 }[scenario_code]
                 remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
                 async with asyncio.timeout(max(0, remaining)):
@@ -387,6 +417,11 @@ class FixedProbeRunner:
             self.resources.telemetry_window, "metrics.revoked", before, after,
             ((f.source_tenant_id, "2xx", 1), (f.target_tenant_id, "2xx", 1), (None, "4xx", 1)),
         )
+
+    async def _queue_owner(self):
+        if self.privacy_queue is None:
+            raise ResourceUnavailable("resource.privacy_queue_missing")
+        await run_queue_probe(self, self.privacy_queue)
 
     async def _cache_owner(self):
         if self.resources is None:

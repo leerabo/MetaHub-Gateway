@@ -126,8 +126,12 @@ guest 清除继承配置，在空的私有工作目录装配应用。stdout 只�
 原文/抽取密文、合法解密、owner/字段交换、路径及覆盖拒绝。遥测经真实中间件/后台工作器落盘，
 两个有界水位窗口逐项核对双租户伪名、计数、闭集标签、匿名输入和旧会话撤销。Guest 独立生成
 用于伪名化的平台会话域密钥，观察器只读实际 bucket，报告增加两个 metric_bucket 摘要。
-已实现的八类代表场景不表示全部响应缓存、队列、外部对象存储、Gateway 遥测或 owner registry
-验收；queue_owner/late_response 仍返回 error。resources 只包含检查码/布尔/时间/标识与状态摘要，
+队列增量经真实注册账号的 MFA 与 step-up 受理双租户隐私导出，实际领取并执行 14 个七域 job；
+线程执行前后检查许可，取消时等待线程退出。只读核对实际领取绑定、fragment/receipt/manifest/
+密文，真实一次下载及跨主体拒绝，增加 privacy_owner_job 与 privacy_owner_lease 摘要。Guest
+独立随机生成 MFA 和租户导出密钥，不继承本地测试或生产密码；公开 DTO 不增加内部账号 ID。
+已实现的九类代表场景不表示全部响应缓存、队列、外部对象存储、Gateway 遥测或 owner registry
+验收；真实浏览器 late_response 仍返回 error。resources 只包含检查码/布尔/时间/标识与状态摘要，
 不含真实 ID、对象键或正文，
 也不是 fixture 删除证明。v2 原文依然不能直接作为正式签名回执，isolation/cleanup/full_owner
 标记继续为 false，须由后续独立 supervisor 度量、完整执行与清理证据完成签名组装。

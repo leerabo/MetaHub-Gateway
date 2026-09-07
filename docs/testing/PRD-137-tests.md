@@ -327,3 +327,56 @@ queue、真实浏览器 late-response、Gateway/外部遥测后端及全 owner�
 完整签名归档仍待开发和实测。Ruff/diff 通过；JUnit property 警告保留，不宣称 XSD/全域性能验收。
 独立敏感审计 `prd-137-telemetry-probes-sensitive-audit.json` 核对本次精确暂存字节及上述原始
 证据，不覆盖此前资源增量的独立审计，也不把两次不同范围的通过结果拼成全产品门禁通过。
+
+## 真实隐私队列增量 (2026-09-07)
+
+延续第 15 节资源批次设计和两轮复核，生产队列租约漏洞由 PRD-134 独立提交 `39398e5`
+修复。此处不替换鉴权：真实注册密码完成 TOTP 注册、验证、recovery code 和一次性 step-up，
+双租户分别经 HTTP 受理 export，再由独立线程调用生产 claim/process/failure 路径处理 14 项
+七域 job。初始化只保留 repr-hidden 注册材料，内部 gac_ ID 从私有数据库只读匹配，不扩张公开 DTO。
+
+两主体均验证 workspace/tenant/account/request/worker/token/revision 七类替换后的完成拒绝与
+失败无副作用；14 项合法完成分别验证完成回放和迟到失败。只读观察真实非空 identity/membership
+fragment、owner-bound 密文、七域 executor receipt 与 manifest；实际下载与密文解密摘要相符，
+跨主体 GET/DELETE/download 拒绝，消费回执只能下载一次。每步检查评估许可，取消后先 join
+数据库线程，再清理 Guest 目录；连续两次取消同样不能提前返回。
+
+以下原始结果按运行独立保留于 `.artifacts/g6-security-20260907/`：
+
+- `queue-http-r1-junit.xml`：1 失败，初始化误以为公开登录 DTO 含 account ID；未修改产品 DTO。
+- `queue-http-r2-junit.xml`：1 失败，MFA/step-up/export 受理已成功，但观察器误用 acc_ 前缀。
+  修正为实际 gac_，不据此宣称此轮完整队列通过。
+- `queue-http-r3-junit.xml`：仅队列场景 1/1，122.26 秒、188 检查点；其它场景未选。
+- `queue-http-r4-junit.xml`：九场景真实 HTTP 联合 1/1，175.97 秒、468 检查点，包含增强后的
+  队列 196 项。请求及响应钩子捕获本次随机密码/TOTP/recovery/step-up/下载回执，只比较报告与
+  日志是否含明文，不把这些材料写入测试 property。
+- `queue-unit-r1-junit.xml`：95 通过、1 失败，旧配置测试仍期待七个随机密钥，新增 MFA 和导出
+  后应为九个。失败断言展开了未被任何连接或资源使用的一次性测试配置随机值，原件保留但排除于
+  可发布无明文证据；不声称该原件通过敏感审计。断言已改为只比较数字计数。
+- `queue-unit-r2-junit.xml`：96/96，4.17 秒。
+- `queue-final-unit-r1-junit.xml`：125/125，6.83 秒。包含队列 14、初始化 46、Guest 边界 7、
+  探针边界 36、缓存/对象观察 14、遥测观察 8。受控替换 rows 的故障单元与真实队列执行区分。
+- `queue-cancel-r1-junit.xml`：取消增强后仅队列 15/15，2.93 秒，新增连续两次取消。
+- `queue-cancel-r2-junit.xml`：最终线程 join 实现仅队列 15/15，2.91 秒；完成后读取线程异常，
+  避免后台异常未取回，连续取消不提前清理数据库目录。
+- `queue-process-r1-junit.xml`：正常 Guest 首轮 1 失败，原三分钟测试总预算耗尽，其他四模式未选。
+  单独队列实测新增约 106 秒，故调整测试总预算为五分钟；未改变产品 job/评估短租约或撤权。
+- `queue-process-r2-junit.xml`：五模式整轮 3 通过、2 失败，817.65 秒。正常模式 192.102 秒、
+  启动前撤权 3.462 秒、注册后撤权 15.683 秒均通过；资源创建后撤权 300.472 秒超时，密文篡改
+  302.673 秒以退出码 1 结束且未形成通过证据。逐许可读取完整 SQLite schema 的测试观察开销
+  耗尽预算；本轮保留为混合失败，不用已通过的正常模式证明两个故障模式。
+- `queue-resource-r3-junit.xml`：只重验上述两个故障模式，2/2，376.25 秒，其他 3 模式未选。
+  观察器先确认私有目录已出现原文密文，再进行实际只读 SQL 核对；没有修改产品授权或短租约。
+  资源创建后撤权 172.268 秒，拒绝回传报告；密文篡改 201.490 秒，真实位翻转导致对象场景失败，
+  其余已实现场景通过。每个子进程退出后确认私有目录为空、源基线哈希不变。
+
+正常完整 Guest 报告为九个 passed 场景、468 检查点、13 条创建与 32 条资源观察；队列新增
+20 条观察，涵盖 14 个实际领取租约和两主体各 pending/ready/downloaded。late_response 仍为
+error，isolation_attested、cleanup_attested、full_owner_coverage 均 false。这些计数来自
+`queue-process-r2-junit.xml` 的实际报告原文，不代表全部场景通过或完整隔离部署。
+
+独立敏感审计为 `prd-137-privacy-queue-sensitive-audit.json`，核验本条 14 个精确暂存文件和
+11 份原始成功/失败证据，明确排除上述 `queue-unit-r1-junit.xml` 原件。此前资源汇总的
+125 通过、1 失败继续保留，不将多次定向通过拼成一次全绿批次。当前不宣称真实浏览器
+late_response、全部 owner、Docker/Linux、远程 Control 认证、镜像度量、完整清理签名或
+正式归档端到端完成。G6/G8 保持未通过，不启动 PRD-148，不重启 72 小时等待。
