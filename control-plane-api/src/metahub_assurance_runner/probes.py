@@ -1,7 +1,8 @@
-"""Run fixed HTTP isolation probes with real sessions and per-request fencing.
+"""Run fixed isolation probes with real sessions and per-operation fencing.
 
 This module does not provision or attest an environment. Its clients and fixture
 manifest must come from the isolated coordinator, never an assessment HTTP body.
+Resource scenarios additionally require the private guest's fixed local inspector.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -17,6 +19,12 @@ from typing import Literal
 import httpx
 from metahub_shared.config_distribution import canonical_json_bytes
 
+from .resources import (
+    LocalResourceInspector,
+    ResourceContractViolation,
+    ResourceObservation,
+    ResourceUnavailable,
+)
 from .transport import MAX_RESPONSE_BYTES as MAX_RESPONSE_BYTES
 from .transport import REQUEST_TIMEOUT_SECONDS as REQUEST_TIMEOUT_SECONDS
 from .transport import guarded_request
@@ -43,6 +51,7 @@ IMPLEMENTED_SCENARIOS = (
     "replay_fencing",
     "input_fuzz",
 )
+RESOURCE_SCENARIOS = ("cache_owner", "object_prefix")
 LeaseGuard = Callable[[], Awaitable[bool]]
 
 
@@ -55,6 +64,8 @@ class ProbeFixtures:
     origin: str
     source_workspace_id: str
     target_workspace_id: str
+    source_tenant_id: str
+    target_tenant_id: str
     source_project_id: str
     target_project_id: str
     target_application_id: str
@@ -66,6 +77,8 @@ class ProbeFixtures:
         for prefix, value in (
             ("wsp", self.source_workspace_id),
             ("wsp", self.target_workspace_id),
+            ("ten", self.source_tenant_id),
+            ("ten", self.target_tenant_id),
             ("prj", self.source_project_id),
             ("prj", self.target_project_id),
             ("app", self.target_application_id),
@@ -78,6 +91,7 @@ class ProbeFixtures:
                 raise ValueError("invalid isolated fixture identity")
         if (
             self.source_workspace_id == self.target_workspace_id
+            or self.source_tenant_id == self.target_tenant_id
             or self.source_project_id == self.target_project_id
             or type(self.member_revision) is not int
             or self.member_revision < 1
@@ -166,6 +180,8 @@ class FixedProbeRunner:
     fixtures: ProbeFixtures = field(repr=False)
     lease_guard: LeaseGuard = field(repr=False)
     deadline_at: datetime
+    resources: LocalResourceInspector | None = field(default=None, repr=False)
+    resource_observations: list[ResourceObservation] = field(default_factory=list, init=False)
     _checks: list[ProbeCheck] = field(default_factory=list, init=False, repr=False)
     _running: bool = field(default=False, init=False)
     _fenced: bool = field(default=False, init=False)
@@ -182,7 +198,7 @@ class FixedProbeRunner:
         self._running = True
         outcome, reason = "error", "scenario_not_implemented"
         try:
-            if scenario_code in IMPLEMENTED_SCENARIOS:
+            if scenario_code in (*IMPLEMENTED_SCENARIOS, *RESOURCE_SCENARIOS):
                 if self._fenced:
                     raise _LeaseRevoked
                 operation = {
@@ -191,6 +207,8 @@ class FixedProbeRunner:
                     "dynamic_revocation": self._dynamic_revocation,
                     "replay_fencing": self._replay_fencing,
                     "input_fuzz": self._input_fuzz,
+                    "cache_owner": self._cache_owner,
+                    "object_prefix": self._object_prefix,
                 }[scenario_code]
                 remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
                 async with asyncio.timeout(max(0, remaining)):
@@ -207,6 +225,10 @@ class FixedProbeRunner:
         except _LeaseRevoked:
             self._fenced = True
             reason = "lease_revoked"
+        except ResourceUnavailable:
+            reason = "resource_observation_unavailable"
+        except ResourceContractViolation:
+            outcome, reason = "failed", "resource_contract_violation"
         except _ProbeFailure:
             outcome, reason = "failed", "contract_violation"
         except (
@@ -286,6 +308,239 @@ class FixedProbeRunner:
         if not isinstance(cookie, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", cookie) is None:
             raise ValueError("fixture session missing")
         return cookie
+
+    async def _observe(self, operation, label, *args):
+        await self._check_lease()
+        observation = operation(*args)
+        await self._check_lease()
+        self.resource_observations.append(observation)
+        for code, satisfied in observation.checks:
+            self._check(f"{label}.{code}", satisfied)
+        return observation
+
+    def _attack_headers(self, client, *, global_session=False):
+        # Expected rejection can clear cookies. Keep the authenticated control
+        # client's jar intact while sending its actual credentials on the probe.
+        return {
+            **self._headers(client, global_session=global_session),
+            "Cookie": client.build_request("GET", "/").headers["cookie"],
+        }
+
+    async def _cache_owner(self):
+        if self.resources is None:
+            raise ResourceUnavailable
+        f = self.fixtures
+        before = {}
+        snapshots = {}
+        for label, client, workspace_id, tenant_id in (
+            ("source", f.source, f.source_workspace_id, f.source_tenant_id),
+            ("target", f.target, f.target_workspace_id, f.target_tenant_id),
+        ):
+            await self._owner(client, workspace_id, label)
+            response = await self._request(client, "GET", "/workspace/navigation")
+            self._check(f"{label}.navigation_read", response.status_code == 200, response)
+            self._check(
+                f"{label}.private_cache",
+                (
+                    "no-store" in response.headers.get("cache-control", "")
+                    and "private" in response.headers.get("cache-control", "")
+                    and "cookie" in response.headers.get("vary", "").lower()
+                ),
+            )
+            before[label] = response
+            snapshots[label] = await self._observe(
+                self.resources.projection,
+                label,
+                workspace_id,
+                tenant_id,
+                response.json(),
+            )
+        source, target = before["source"].json(), before["target"].json()
+        self._check("cache.distinct_owners", source["owner_ref"] != target["owner_ref"])
+        self._check(
+            "cache.distinct_projections",
+            (
+                snapshots["source"].identity_sha256 != snapshots["target"].identity_sha256
+                and source["contract_snapshot_id"] != target["contract_snapshot_id"]
+            ),
+        )
+        collapsed = not source["preference"]["sidebar_collapsed"]
+        changed = await self._request(
+            f.source,
+            "PATCH",
+            "/identity/preferences/navigation",
+            json={
+                "workspace_id": f.source_workspace_id,
+                "contract_snapshot_id": source["contract_snapshot_id"],
+                "sidebar_collapsed": collapsed,
+            },
+            headers={
+                **self._headers(f.source, global_session=True),
+                "If-Match": f'"{source["preference"]["revision"]}"',
+                "Idempotency-Key": secrets.token_hex(16),
+            },
+        )
+        self._check("source.preference_write", changed.status_code == 200, changed)
+        foreign = await self._request(
+            f.anonymous,
+            "PATCH",
+            "/identity/preferences/navigation",
+            json={
+                "workspace_id": f.target_workspace_id,
+                "contract_snapshot_id": target["contract_snapshot_id"],
+                "sidebar_collapsed": not target["preference"]["sidebar_collapsed"],
+            },
+            headers={
+                **self._attack_headers(f.source, global_session=True),
+                "If-Match": f'"{target["preference"]["revision"]}"',
+                "Idempotency-Key": secrets.token_hex(16),
+            },
+        )
+        self._check("foreign.preference_denied", foreign.status_code in (403, 404), foreign)
+        injected = await self._request(
+            f.anonymous,
+            "GET",
+            "/workspace/navigation",
+            params={"workspace_id": f.target_workspace_id},
+            headers=self._attack_headers(f.source),
+        )
+        self._check(
+            "foreign.navigation_query_denied",
+            (
+                injected.status_code == 422
+                and injected.json()["code"] == "workspace_session.request_invalid"
+            ),
+            injected,
+        )
+        for label, client, workspace_id, tenant_id, other in (
+            ("source", f.source, f.source_workspace_id, f.source_tenant_id, "target"),
+            ("target", f.target, f.target_workspace_id, f.target_tenant_id, "source"),
+        ):
+            for attempt in range(2):
+                response = await self._request(
+                    client,
+                    "GET",
+                    "/workspace/navigation",
+                    headers={"If-None-Match": before[other].headers["etag"]},
+                )
+                self._check(f"{label}.warm_read_{attempt}", response.status_code == 200, response)
+                public = response.json()
+                self._check(
+                    f"{label}.warm_owner_{attempt}",
+                    (
+                        public["owner_ref"] == before[label].json()["owner_ref"]
+                        and public["contract_snapshot_id"]
+                        == before[label].json()["contract_snapshot_id"]
+                    ),
+                )
+                self._check(
+                    f"{label}.preference_isolated_{attempt}",
+                    (
+                        public["preference"]["sidebar_collapsed"] == collapsed
+                        if label == "source"
+                        else public["preference"] == target["preference"]
+                    ),
+                )
+                snapshot = await self._observe(
+                    self.resources.projection,
+                    label,
+                    workspace_id,
+                    tenant_id,
+                    public,
+                )
+                self._check(
+                    f"{label}.projection_unchanged_{attempt}",
+                    (
+                        snapshot.identity_sha256 == snapshots[label].identity_sha256
+                        and snapshot.state_sha256 == snapshots[label].state_sha256
+                    ),
+                )
+
+    async def _object_prefix(self):
+        if self.resources is None:
+            raise ResourceUnavailable
+        f = self.fixtures
+        files = {}
+        for label, client, workspace_id, tenant_id, foreign_tenant_id in (
+            ("source", f.source, f.source_workspace_id, f.source_tenant_id, f.target_tenant_id),
+            ("target", f.target, f.target_workspace_id, f.target_tenant_id, f.source_tenant_id),
+        ):
+            await self._owner(client, workspace_id, label)
+            content = f"Assurance {label} object {secrets.token_hex(16)}".encode("ascii")
+            response = await self._request(
+                client,
+                "POST",
+                "/files",
+                headers=self._headers(client),
+                files={"file": ("assurance.txt", content, "text/plain")},
+            )
+            self._check(f"{label}.file_uploaded", response.status_code == 201, response)
+            uploaded = response.json()["file"]
+            self._check(f"{label}.file_ready", uploaded["status"] == "ready")
+            snapshot = await self._observe(
+                self.resources.file,
+                label,
+                tenant_id,
+                uploaded["file_id"],
+                foreign_tenant_id,
+                content,
+            )
+            files[label] = (uploaded, content, snapshot)
+        self._check(
+            "files.distinct", files["source"][0]["file_id"] != files["target"][0]["file_id"]
+        )
+        for label, client, tenant_id, foreign_tenant_id, other in (
+            ("source", f.source, f.source_tenant_id, f.target_tenant_id, "target"),
+            ("target", f.target, f.target_tenant_id, f.source_tenant_id, "source"),
+        ):
+            own, content, snapshot = files[label]
+            attack_headers = self._attack_headers(client)
+            foreign = await self._request(
+                f.anonymous,
+                "GET",
+                f"/files/{files[other][0]['file_id']}",
+                headers=attack_headers,
+            )
+            absent = await self._request(
+                f.anonymous,
+                "GET",
+                "/files/file_" + "0" * 32,
+                headers=attack_headers,
+            )
+            self._check(
+                f"{label}.foreign_file_denied",
+                (
+                    foreign.status_code == absent.status_code == 404
+                    and all(
+                        foreign.json()[key] == absent.json()[key] for key in ("code", "message")
+                    )
+                ),
+                foreign,
+            )
+            listed = await self._request(client, "GET", "/files")
+            self._check(f"{label}.files_listed", listed.status_code == 200, listed)
+            ids = {item["file_id"] for item in listed.json()["files"]}
+            self._check(
+                f"{label}.list_owner_bound",
+                (own["file_id"] in ids and files[other][0]["file_id"] not in ids),
+            )
+            detail = await self._request(client, "GET", f"/files/{own['file_id']}")
+            self._check(
+                f"{label}.file_unchanged",
+                (detail.status_code == 200 and detail.json()["file"] == own),
+                detail,
+            )
+            current = await self._observe(
+                self.resources.file,
+                label,
+                tenant_id,
+                own["file_id"],
+                foreign_tenant_id,
+                content,
+            )
+            self._check(
+                f"{label}.stored_objects_unchanged", current.state_sha256 == snapshot.state_sha256
+            )
 
     async def _api_idor(self):
         f = self.fixtures

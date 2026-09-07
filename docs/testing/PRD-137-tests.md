@@ -259,3 +259,42 @@ asyncio.to_thread 会终止底层线程。Linux stdio 入口、实际 Docker 镜
 上述四份成功/失败证据。未修改数据库迁移、生产认证、公共 DTO 或前端，因此没有重复批次全量回归。
 真实构建度量、远程 Control 认证、剩余场景及全 owner、fixture 与容器清理回执、签名和正式归档端到端
 仍待接齐，G6/G8 未通过。本轮临时目录删除只证明这些本地测试目录消失，不是正式租户数据清理验收。
+
+## 2026-09-07 持久导航缓存与加密文件资源探针
+
+设计与两轮自审见第 15 节，五类剩余场景保持同一目标。本轮落地固定本地资源观察器、真实缓存和
+文件链，初始化补充真实 tenant ID。观察器使用只读 SQLite 及有界固定查询，文件密钥独立随机，
+只操作 Guest 私有存储；没有新增 HTTP 测试后门或替换权限。实际上传暴露的 Workspace 接线缺口
+由 PRD-147 独立实现、测试、审计并提交为 `5fcc654`，不混入本条代码提交。
+
+以下原始证据均在 `.artifacts/g6-security-20260907/`：
+
+- `resources-r1-junit.xml`：88 通过、1 失败。拒绝响应清 Cookie 污染合法对照客户端，导致后续
+  请求失去登录态；调整攻击客户端携带真实会话，保持产品鉴权与清 Cookie 行为不变。
+- `resources-r2-junit.xml`：1 失败。非法导航 query 预期应为既有 422 而不是 400；文件上传仍被
+  旧 Bearer 守卫拒绝。分别修正探针合同断言与上述 PRD-147 产品接线，未把失败改记为通过。
+- `resources-r3-junit.xml`：真实注册/权限/资源 API 集成 1/1，65.81 秒，七场景检查通过。
+- `resource-unit-r1-junit.xml`：观察器 14/14，1.92 秒。覆盖实际密文字节/只读连接、错误密钥、
+  字段交换、磁盘位翻转、错误 owner/缺失文件、投影 owner/版本/空项/伪造或空公共项、路径和正文
+  对照。这些使用受控最小表，不冒充实际产品表迁移或真实 API 证据。
+- `resource-process-r1-junit.xml`：混合 5 项中 4 通过、1 失败。本条正常/启动前撤权/注册后撤权
+  三个完整 Guest 进程通过；失败属于 PRD-147 混合凭据状态码测试，详见其独立记录。
+- `resource-final-r2-junit.xml`：126 项中 125 通过、1 失败，340.07 秒，0 errors/0 skips。范围为
+  探针/初始化/Guest/观察器/报告分块边界、真实鉴权集成及 5 个真实 Guest 进程。正常进程七场景
+  均通过；新增资源已创建后撤权拒绝报告并清空私有目录。磁盘篡改确实导致 object_prefix failed，
+  但同次 cache_owner 暖读出现 probe_unavailable，故整次运行保留失败，未认定全绿。
+- `resource-fault-r3-junit.xml`：仅复验磁盘篡改用例 1/1，119.76 秒，4 项未选。其他已实现场景
+  正常，实际原文密文位翻转触发 resource_contract_violation。未修改或放宽产品超时以通过。
+
+正常完整 app/真实 TLS 进程的十个有序结果为：api_idor 9、write_authorization 15、cache_owner 53、
+object_prefix 135、dynamic_revocation 19、replay_fencing 6、input_fuzz 10，共七场景/247 检查点。
+queue_owner、metrics_labels、late_response 仍明确 error。另外保留 13 条初始化观察与 10 条资源
+观察，后者对应双租户导航投影和双文件在操作前后的检查，不是十个不同对象或已删除证明。
+
+报告 v2 只新增闭集资源摘要，密钥/正文/Cookie/对象键不出现在报告、repr 或公共 DTO。
+isolation_attested、cleanup_attested、full_owner_coverage 继续为 false。每次实际子进程退出后
+检查私有目录为空和基线哈希不变；未覆盖真实 Docker/Linux/外部存储、全 owner、远程认证、度量、
+完整签名和正式归档。pytest 保留 xunit2 property 兼容性警告，不宣称独立 XSD 验证或 G6 放行。
+
+本条独立敏感审计 `prd-137-resource-probes-sensitive-audit.json` 核验精确暂存字节、UTF-8、凭据
+模式及上述成功/失败原始证据。未重复整批浏览器、性能或全数据库验收；这些仍在批次完成后统一执行。

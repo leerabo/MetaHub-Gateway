@@ -342,6 +342,8 @@ class HttpFixtureBootstrap:
                     origin=self.origin,
                     source_workspace_id=source_workspace,
                     target_workspace_id=target_workspace,
+                    source_tenant_id=source_project["tenant_id"],
+                    target_tenant_id=target_project["tenant_id"],
                     source_project_id=source_project["project_id"],
                     target_project_id=target_project["project_id"],
                     target_application_id=application_id,

@@ -33,9 +33,11 @@ from pydantic import TypeAdapter
 from .bootstrap import CreationObservation, HttpFixtureBootstrap
 from .lease_channel import GuestLease, LeaseChannelError, LeaseTransport
 from .probes import SCENARIOS, FixedProbeRunner, ProbeResult
+from .resources import LocalResourceInspector, ResourceObservation
 
 _RESULTS = TypeAdapter(tuple[ProbeResult, ...])
 _OBSERVATIONS = TypeAdapter(tuple[CreationObservation, ...])
+_RESOURCES = TypeAdapter(tuple[ResourceObservation, ...])
 
 
 def _configure(database: Path, origin: str) -> None:
@@ -54,6 +56,7 @@ def _configure(database: Path, origin: str) -> None:
             "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "test_capture",
             "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1",
             "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "false",
+            "METAHUB_FILE_STORAGE_ROOT": str(database.parent / "file-storage"),
         }
     )
     for name in (
@@ -62,6 +65,7 @@ def _configure(database: Path, origin: str) -> None:
         "IDENTITY_CHALLENGE",
         "IDENTITY_PII_ENCRYPTION",
         "WORKSPACE_SESSION",
+        "FILE_ENCRYPTION",
     ):
         os.environ[f"METAHUB_{name}_SECRET"] = secrets.token_urlsafe(48)
     logging.disable(logging.CRITICAL)
@@ -221,7 +225,17 @@ async def execute_workload(
                     deadline_at=lease.binding.deadline_at,
                 )
                 fixtures = await bootstrap.run()
-                runner = FixedProbeRunner(fixtures, lease.guard, lease.binding.deadline_at)
+                resources = LocalResourceInspector(
+                    directory / "control.sqlite3",
+                    directory / "file-storage",
+                    app.state.config.file_encryption_secret,
+                )
+                runner = FixedProbeRunner(
+                    fixtures,
+                    lease.guard,
+                    lease.binding.deadline_at,
+                    resources=resources,
+                )
                 results = []
                 for code in SCENARIOS:
                     await _guard(lease)
@@ -229,7 +243,7 @@ async def execute_workload(
                 await _guard(lease)
                 return canonical_json_bytes(
                     {
-                        "schema_version": "metahub.assurance-guest-report.v1",
+                        "schema_version": "metahub.assurance-guest-report.v2",
                         "profile": "sqlite_https_v1",
                         "binding": lease.binding.model_dump(mode="json"),
                         "started_at": started.isoformat(),
@@ -238,6 +252,9 @@ async def execute_workload(
                         "runs": _RESULTS.dump_python(tuple(results), mode="json"),
                         "creations": _OBSERVATIONS.dump_python(
                             tuple(bootstrap.observations), mode="json"
+                        ),
+                        "resources": _RESOURCES.dump_python(
+                            tuple(runner.resource_observations), mode="json"
                         ),
                         "isolation_attested": False,
                         "cleanup_attested": False,

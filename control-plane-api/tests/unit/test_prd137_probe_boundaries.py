@@ -45,6 +45,8 @@ async def _fixtures(handler):
             origin="https://assurance.test",
             source_workspace_id="wsp_" + "1" * 32,
             target_workspace_id="wsp_" + "2" * 32,
+            source_tenant_id="ten_" + "7" * 32,
+            target_tenant_id="ten_" + "8" * 32,
             source_project_id="prj_" + "3" * 32,
             target_project_id="prj_" + "4" * 32,
             target_application_id="app_" + "5" * 32,
@@ -247,14 +249,26 @@ async def test_unimplemented_scenarios_remain_errors():
     async with _fixtures(lambda request: requests.append(request)) as fixtures:
         runner = _runner(fixtures)
         for code in (
-            "cache_owner",
             "queue_owner",
-            "object_prefix",
             "metrics_labels",
             "late_response",
         ):
             result = await runner.run(code)
             assert (result.outcome, result.reason_code) == ("error", "scenario_not_implemented")
+        assert not requests
+
+
+@pytest.mark.anyio
+async def test_resource_scenarios_require_actual_local_observer():
+    requests = []
+    async with _fixtures(lambda request: requests.append(request)) as fixtures:
+        runner = _runner(fixtures)
+        for code in ("cache_owner", "object_prefix"):
+            result = await runner.run(code)
+            assert (result.outcome, result.reason_code) == (
+                "error",
+                "resource_observation_unavailable",
+            )
         assert not requests
 
 
@@ -265,6 +279,8 @@ async def test_unimplemented_scenarios_remain_errors():
         {"source_project_id": "../project"},
         {"target_project_id": "prj_" + "0" * 32},
         {"source_workspace_id": "wsp_" + "2" * 32},
+        {"source_tenant_id": "ten_" + "8" * 32},
+        {"source_tenant_id": "ten_" + "0" * 32},
         {"origin": "http://assurance.test"},
         {"origin": "https://user:password@assurance.test"},
         {"origin": "https://assurance.test/path"},

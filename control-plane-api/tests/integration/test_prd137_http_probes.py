@@ -25,11 +25,18 @@ from metahub_assurance_runner.lease_channel import (
     StreamLeaseTransport,
     SupervisorLeaseSession,
 )
-from metahub_assurance_runner.probes import IMPLEMENTED_SCENARIOS, FixedProbeRunner
+from metahub_assurance_runner.probes import (
+    IMPLEMENTED_SCENARIOS,
+    RESOURCE_SCENARIOS,
+    FixedProbeRunner,
+)
+from metahub_assurance_runner.resources import LocalResourceInspector
+from metahub_control.files.routes import router as files_router
 from metahub_control.identity.delivery import pop_test_identity_challenge
 from metahub_control.identity.routes import router as identity_router
 from metahub_control.projects.routes import router as projects_router
 from metahub_control.workspace_access.routes import router as access_router
+from metahub_control.workspace_navigation.routes import router as navigation_router
 from metahub_control.workspaces.routes import router as workspaces_router
 from metahub_shared.db import apply_migrations, apply_seed_data
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -104,6 +111,7 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "test_capture",
         "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1",
         "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED": "false",
+        "METAHUB_FILE_STORAGE_ROOT": str(tmp_path / "file-storage"),
     }
     for key in (
         "AUTH_TOKEN",
@@ -111,6 +119,7 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         "IDENTITY_CHALLENGE",
         "IDENTITY_PII_ENCRYPTION",
         "WORKSPACE_SESSION",
+        "FILE_ENCRYPTION",
     ):
         settings[f"METAHUB_{key}_SECRET"] = secrets.token_urlsafe(48)
     for key, value in settings.items():
@@ -121,7 +130,14 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         extra_cors_allow_headers=("If-Match", "X-CSRF-Token"),
         cors_allow_credentials=True,
     )
-    for router in (identity_router, access_router, workspaces_router, projects_router):
+    for router in (
+        identity_router,
+        access_router,
+        workspaces_router,
+        projects_router,
+        files_router,
+        navigation_router,
+    ):
         app.include_router(router)
     assert not app.dependency_overrides
     return app
@@ -184,8 +200,13 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
         assert all(
             re.fullmatch(r"[0-9a-f]{64}", item.identity_sha256) for item in bootstrap.observations
         )
-        runner = FixedProbeRunner(fixtures, lease.guard, deadline)
-        results = [await runner.run(code) for code in IMPLEMENTED_SCENARIOS]
+        resources = LocalResourceInspector(
+            Path(runtime.state.config.file_storage_root).parent / "probe.sqlite3",
+            Path(runtime.state.config.file_storage_root),
+            runtime.state.config.file_encryption_secret,
+        )
+        runner = FixedProbeRunner(fixtures, lease.guard, deadline, resources=resources)
+        results = [await runner.run(code) for code in (*RESOURCE_SCENARIOS, *IMPLEMENTED_SCENARIOS)]
         serialized = json.dumps([asdict(result) for result in results], default=str)
         record_property("probe_results", serialized)
         assert lease_checks > 100

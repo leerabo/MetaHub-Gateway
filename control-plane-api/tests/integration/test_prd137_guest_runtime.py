@@ -17,9 +17,10 @@ from metahub_assurance_runner.lease_channel import (
     StreamLeaseTransport,
     SupervisorLeaseSession,
 )
-from metahub_assurance_runner.probes import IMPLEMENTED_SCENARIOS, SCENARIOS
+from metahub_assurance_runner.probes import IMPLEMENTED_SCENARIOS, RESOURCE_SCENARIOS, SCENARIOS
 from metahub_shared.db.migrate import apply_migrations
 from metahub_shared.db.seed import apply_seed_data
+from metahub_shared.files.storage import file_object_key
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -37,7 +38,16 @@ def guest_baseline(tmp_path_factory):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("mode", ["normal", "revoked_before_start", "revoked_during_bootstrap"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "normal",
+        "revoked_before_start",
+        "revoked_during_bootstrap",
+        "revoked_during_resources",
+        "tampered_object",
+    ],
+)
 async def test_fixed_guest_real_process_https_and_report(
     guest_baseline,
     tmp_path,
@@ -49,6 +59,7 @@ async def test_fixed_guest_real_process_https_and_report(
         baseline_registrations = database.execute(
             "SELECT COUNT(*) FROM registration_intents"
         ).fetchone()[0]
+        baseline_files = {row[0] for row in database.execute("SELECT file_id FROM uploaded_files")}
     environment = {
         key: os.environ[key]
         for key in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP")
@@ -85,9 +96,11 @@ async def test_fixed_guest_real_process_https_and_report(
     )
     calls = 0
     observed_creation = False
+    observed_resource = False
+    injected_fault = False
 
     async def authority():
-        nonlocal calls, observed_creation
+        nonlocal calls, observed_creation, observed_resource, injected_fault
         calls += 1
         if mode == "revoked_before_start":
             return calls < 2
@@ -103,6 +116,36 @@ async def test_fixed_guest_real_process_https_and_report(
                     if count > baseline_registrations:
                         observed_creation = True
                         return False
+                except sqlite3.OperationalError:
+                    pass
+        if mode in ("revoked_during_resources", "tampered_object") and not injected_fault:
+            for target in tmp_path.glob("metahub-assurance-*/control.sqlite3"):
+                try:
+                    with closing(
+                        sqlite3.connect(
+                            target.as_uri() + "?mode=ro",
+                            uri=True,
+                            timeout=0.1,
+                        )
+                    ) as database:
+                        created = [
+                            row[0]
+                            for row in database.execute(
+                                "SELECT file_id FROM uploaded_files WHERE status='ready' LIMIT 20"
+                            )
+                            if row[0] not in baseline_files
+                        ]
+                    if created:
+                        observed_resource = True
+                        if mode == "revoked_during_resources":
+                            return False
+                        blob = (
+                            target.parent / "file-storage" / file_object_key(created[0], "original")
+                        )
+                        assert blob.resolve(strict=True).is_relative_to(tmp_path.resolve())
+                        ciphertext = blob.read_bytes()
+                        blob.write_bytes(ciphertext[:-1] + bytes([ciphertext[-1] ^ 1]))
+                        injected_fault = True
                 except sqlite3.OperationalError:
                     pass
         return True
@@ -122,20 +165,24 @@ async def test_fixed_guest_real_process_https_and_report(
         result = await asyncio.wait_for(session.serve(), 180)
         await asyncio.wait_for(process.wait(), 10)
         diagnostic = (await process.stderr.read()).decode("utf-8")
-        if mode == "revoked_during_bootstrap":
-            assert observed_creation
-            assert diagnostic.splitlines()[0] == "BootstrapError", diagnostic
+        if mode in ("revoked_during_bootstrap", "revoked_during_resources"):
+            assert observed_creation if mode == "revoked_during_bootstrap" else observed_resource
+            assert diagnostic.splitlines()[0] == (
+                "BootstrapError" if mode == "revoked_during_bootstrap" else "LeaseChannelError"
+            ), diagnostic
         else:
             assert not diagnostic, diagnostic
         assert hashlib.sha256(guest_baseline.read_bytes()).hexdigest() == baseline_before
         assert not list(tmp_path.iterdir())
-        if mode != "normal":
+        if mode.startswith("revoked_"):
             assert process.returncode == 1 and result.report_bytes is None
             record_property("revocation_after_observed_creation", observed_creation)
+            record_property("revocation_after_observed_resource", observed_resource)
             return
         assert process.returncode == 0
         assert result.reason_code == "report_received", result
         report = json.loads(result.report_bytes)
+        assert report["schema_version"] == "metahub.assurance-guest-report.v2"
         assert report["profile"] == "sqlite_https_v1"
         assert report["binding"] == session.binding.model_dump(mode="json")
         assert report["baseline_sha256"] == baseline_before
@@ -144,12 +191,28 @@ async def test_fixed_guest_real_process_https_and_report(
         assert not report["full_owner_coverage"]
         assert [run["scenario_code"] for run in report["runs"]] == list(SCENARIOS)
         assert len(report["creations"]) == 13
+        assert len(report["resources"]) == (6 if mode == "tampered_object" else 10)
+        assert {item["resource_code"] for item in report["resources"]} == (
+            {"cached_projection"}
+            if mode == "tampered_object"
+            else {"cached_projection", "object_artifact"}
+        )
+        assert all(passed for item in report["resources"] for _, passed in item["checks"])
         for run in report["runs"]:
+            if mode == "tampered_object" and run["scenario_code"] == "object_prefix":
+                assert observed_resource and injected_fault
+                assert run["outcome"] == "failed"
+                assert run["reason_code"] == "resource_contract_violation"
+                continue
             assert run["outcome"] == (
-                "passed" if run["scenario_code"] in IMPLEMENTED_SCENARIOS else "error"
+                "passed"
+                if run["scenario_code"] in (*IMPLEMENTED_SCENARIOS, *RESOURCE_SCENARIOS)
+                else "error"
             ), run
         assert b"example.test" not in result.report_bytes and b"Pr0be!" not in result.report_bytes
         assert b"__Host-" not in result.report_bytes and b"must-not-be" not in result.report_bytes
+        assert b"Assurance source object" not in result.report_bytes
+        record_property("storage_fault_injected", injected_fault)
     finally:
         session.close()
         if process.returncode is None:
