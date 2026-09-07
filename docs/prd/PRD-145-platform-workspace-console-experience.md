@@ -1,6 +1,7 @@
 # PRD-145 Platform / Workspace 控制台体验分域
 
-状态：实现完成，单 PRD 聚焦测试通过；S7 批次 G7 在 PRD-147 完成后统一执行。
+状态：既有实现的聚焦测试曾通过，但 2026-09-07 真实入口复核发现 Cookie 消费端缺口。
+本条五视图 owner 与 API origin 已补修；主入口启动及批次真实流程仍未验收，S7/G7 未通过。
 
 PRD-145 将 Platform 运营控制台、Workspace 管理控制台和 GlobalAccount 偏好拆成三个独立边界。同名页面
 不得共享路由、DTO、client、store、AbortController、navigation epoch 或权限 owner；页面切换只加载当前

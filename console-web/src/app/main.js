@@ -1049,10 +1049,10 @@ const quotaManagementPageState = createQuotaPageState({ clearDom: clearWorkspace
 let workspaceConsoleExperienceShellState = null;
 const workspaceConsoleExperienceController = createWorkspaceConsoleExperienceController({
   api: {
-    consoleOverview: (input) => getWorkspaceConsoleOverview({ controlApiUrl, ...input }),
-    consoleAssistant: (input) => queryWorkspaceConsoleAssistant({ controlApiUrl, ...input }),
-    consoleApprovals: (input) => listWorkspaceConsoleApprovals({ controlApiUrl, ...input }),
-    deploymentSummary: (input) => getWorkspaceDeploymentSummary({ controlApiUrl, ...input }),
+    consoleOverview: (input) => getWorkspaceConsoleOverview({ controlApiUrl: workspaceControlApiUrl, ...input }),
+    consoleAssistant: (input) => queryWorkspaceConsoleAssistant({ controlApiUrl: workspaceControlApiUrl, ...input }),
+    consoleApprovals: (input) => listWorkspaceConsoleApprovals({ controlApiUrl: workspaceControlApiUrl, ...input }),
+    deploymentSummary: (input) => getWorkspaceDeploymentSummary({ controlApiUrl: workspaceControlApiUrl, ...input }),
   },
   onChange(snapshot) {
     if (snapshot.status !== "draft") renderCurrentWorkspaceConsoleExperience();
@@ -1064,7 +1064,7 @@ const workspaceConsoleExperienceController = createWorkspaceConsoleExperienceCon
   },
   onPermissionRevoked() {
     globalThis.queueMicrotask?.(() => {
-      if (authSession.token) void refresh();
+      if (workspaceConsoleExperienceShellState) void refresh();
     });
   },
 });
@@ -1469,6 +1469,8 @@ export function bindConsoleWorkspaceContextInvalidation({
 function handleConsoleWorkspaceContextInvalidation() {
   refreshSequence += 1;
   workspaceNavigationController.leave();
+  workspaceConsoleExperienceShellState = null;
+  workspaceConsoleExperienceController.leave();
   closeWorkspaceAdvancedToolsDialog({ restoreFocus: false });
   providersLoadController?.abort();
   providersLoadController = null;
@@ -8957,7 +8959,7 @@ function workspaceConsoleExperienceView(navigationId) {
 
 async function loadWorkspaceConsoleExperienceState(consoleShellState, view) {
   workspaceConsoleExperienceShellState = consoleShellState;
-  if (!workspaceConsoleExperienceController.enter(authSession.context, consoleShellState, view)) {
+  if (!workspaceConsoleExperienceController.enter(consoleShellState, view)) {
     return null;
   }
   if (view !== "admin-assistant") await workspaceConsoleExperienceController.load();
@@ -8968,7 +8970,13 @@ function renderCurrentWorkspaceConsoleExperience() {
   const consoleShellState = workspaceConsoleExperienceShellState;
   const view = workspaceConsoleExperienceView(consoleShellState?.activeNavigationItemId);
   const panel = globalThis.document?.querySelector?.(".workspace-console-experience-panel");
-  if (!panel || !view || !authSession.token) return false;
+  if (!panel || !view) return false;
+  if (!workspaceConsoleExperienceController.owns(consoleShellState, view)) {
+    panel.innerHTML = '<p class="console-experience-state is-error" role="alert">页面会话或权限已变化，请刷新后继续。</p>'
+      + '<button type="button" data-console-experience-action="refresh">刷新</button>';
+    bindWorkspaceConsoleExperience(panel, { onRefresh: () => refresh() });
+    return false;
+  }
   const state = workspaceConsoleExperienceController.snapshot();
   panel.innerHTML = renderWorkspaceConsoleExperience(state, view);
   hydrateWorkspaceConsoleAssistant(panel, state);
@@ -9003,7 +9011,7 @@ function bindWorkspaceConsoleExperiencePageInteractions(
       return workspaceConsoleExperienceController.nextApprovals();
     },
     onRefresh() {
-      return workspaceConsoleExperienceController.load();
+      return refresh();
     },
   });
 }

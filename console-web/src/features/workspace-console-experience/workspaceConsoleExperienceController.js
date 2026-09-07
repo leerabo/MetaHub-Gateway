@@ -1,4 +1,5 @@
 import { createWorkspaceConsoleExperienceStore } from "./workspaceConsoleExperienceStore.js";
+import { workspaceNavigationOwner } from "../workspace-navigation/workspaceNavigationStore.js";
 
 const VIEW_PERMISSIONS = Object.freeze({
   overview: ["workspace.console.overview.read"],
@@ -28,8 +29,8 @@ export function createWorkspaceConsoleExperienceController({
   const store = createWorkspaceConsoleExperienceStore();
   let owner = null;
 
-  function enter(authContext, consoleShellState, view) {
-    owner = workspaceConsoleExperienceOwner(authContext, consoleShellState, view);
+  function enter(consoleShellState, view) {
+    owner = workspaceConsoleExperienceOwner(consoleShellState, view);
     const accepted = store.enter(owner, view);
     publish();
     return accepted;
@@ -118,11 +119,18 @@ export function createWorkspaceConsoleExperienceController({
     return store.snapshot();
   }
 
+  function owns(consoleShellState, view) {
+    return store.owns(workspaceConsoleExperienceOwner(consoleShellState, view), view);
+  }
+
   async function handle(ticket, error) {
+    const failedOwner = owner;
     const accepted = store.reject(ticket, error, owner);
     publish();
-    if (accepted && error?.status === 401) onSessionInvalid(error);
-    else if (accepted && error?.status === 403) onPermissionRevoked(error);
+    if (accepted && owner === failedOwner) {
+      if (error?.status === 401) onSessionInvalid(error);
+      else if (error?.status === 403) onPermissionRevoked(error);
+    }
     return false;
   }
 
@@ -141,39 +149,46 @@ export function createWorkspaceConsoleExperienceController({
     previousApprovals,
     leave,
     snapshot,
+    owns,
   });
 }
 
-export function workspaceConsoleExperienceOwner(authContext, consoleShellState, view) {
+export function workspaceConsoleExperienceOwner(consoleShellState, view) {
   const requiredPermissions = VIEW_PERMISSIONS[view];
   const navigationId = VIEW_NAVIGATION[view];
-  const permissions = Array.isArray(authContext?.permission_codes)
-    ? authContext.permission_codes.map(String)
-    : [];
+  const authorization = consoleShellState?.workspaceAuthorization;
+  const permissions = authorization?.permission_codes;
+  const sessionOwner = workspaceNavigationOwner(consoleShellState?.workspaceIdentity, {
+    context: consoleShellState?.workspaceContext, authorization,
+  });
   const navigation = consoleShellState?.navigation;
   const item = Array.isArray(navigation?.navigation_items)
     ? navigation.navigation_items.find((candidate) => candidate?.id === navigationId)
     : null;
-  const accountId = String(authContext?.user?.user_id ?? "");
-  const tenantId = String(authContext?.tenant?.tenant_id ?? "");
-  const mirroredTenantId = String(authContext?.user?.tenant_id ?? "");
-  const sessionId = String(authContext?.session?.session_id ?? "");
-  const permissionRevision = Number(authContext?.permission_revision);
-  const permissionFingerprint = String(authContext?.authorization_fingerprint ?? "");
-  if (!requiredPermissions || !requiredPermissions.some((permission) => permissions.includes(permission))
+  if (!sessionOwner || !Array.isArray(permissions)
+    || !permissions.every((permission) => typeof permission === "string")
+    || !requiredPermissions || !requiredPermissions.some((permission) => permissions.includes(permission))
     || consoleShellState?.state !== "ok"
+    || consoleShellState.workspaceNavigationContract !== true
     || consoleShellState?.activeNavigationItemId !== navigationId
     || navigation?.active_navigation_item_id !== navigationId
+    || consoleShellState.activeRouteCode !== navigation.active_route_code
+    || item?.route_code !== navigation.active_route_code
     || !item || item.visible === false || item.disabled === true
-    || !accountId || !tenantId || tenantId !== mirroredTenantId || !sessionId
-    || !Number.isSafeInteger(permissionRevision) || permissionRevision < 1
-    || !/^[0-9a-f]{64}$/u.test(permissionFingerprint)) return null;
+    || Object.entries(sessionOwner).some(([key, value]) => consoleShellState.workspaceOwner?.[key] !== value)
+    || navigation.permission_revision !== sessionOwner.permissionRevision
+    || navigation.membership_revision !== sessionOwner.membershipRevision
+    || navigation.permission_fingerprint !== sessionOwner.permissionFingerprint
+    || !/^ncs_[0-9a-f]{32}$/u.test(navigation.contract_snapshot_id)
+    || !Number.isSafeInteger(navigation.contract_generation) || navigation.contract_generation < 1
+    || !Number.isSafeInteger(navigation.navigation_epoch) || navigation.navigation_epoch < 1
+    || Date.parse(sessionOwner.globalExpiresAt) <= Date.now()
+    || Date.parse(sessionOwner.workspaceExpiresAt) <= Date.now()) return null;
   return Object.freeze({
-    accountId,
-    tenantId,
-    sessionId,
-    permissionRevision,
-    permissionFingerprint,
+    ...sessionOwner,
+    contractSnapshotId: navigation.contract_snapshot_id,
+    contractGeneration: navigation.contract_generation,
+    navigationEpoch: navigation.navigation_epoch,
     permissions: Object.freeze([...permissions]),
   });
 }

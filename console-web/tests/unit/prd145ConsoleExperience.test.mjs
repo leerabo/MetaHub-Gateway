@@ -37,6 +37,16 @@ const FINGERPRINT = "a".repeat(64);
 const CSRF = "c".repeat(43);
 const NOW = "2026-09-03T00:00:00Z";
 
+function workspaceOwnerFixture(permissionRevision = 1) {
+  return {
+    workspaceId: `wsp_${"1".repeat(32)}`, role: "owner", globalSessionId: "session_1",
+    revokeGeneration: 0, globalExpiresAt: "2099-01-01T00:00:00Z", workspaceExpiresAt: "2099-01-01T00:00:00Z",
+    permissionRevision, membershipRevision: 1, permissionFingerprint: FINGERPRINT,
+    contractSnapshotId: `ncs_${"2".repeat(32)}`, contractGeneration: 1, navigationEpoch: 10,
+    permissions: ["workspace.console.overview.read"],
+  };
+}
+
 test.afterEach(() => {
   globalThis.fetch = ORIGINAL_FETCH;
   if (ORIGINAL_DOCUMENT === undefined) delete globalThis.document;
@@ -230,14 +240,7 @@ test("platform and workspace stores isolate owners, cursors and late responses",
     roles: ["platform_admin"],
     permissions: ["platform.console.overview.read"],
   };
-  const workspaceOwner = {
-    accountId: "account_1",
-    tenantId: "tenant_1",
-    sessionId: "session_1",
-    permissionRevision: 1,
-    permissionFingerprint: FINGERPRINT,
-    permissions: ["workspace.console.overview.read"],
-  };
+  const workspaceOwner = workspaceOwnerFixture();
 
   assert.equal(platform.enter(platformOwner, "overview"), true);
   assert.equal(workspace.enter(workspaceOwner, "overview"), true);
@@ -282,14 +285,7 @@ test("regressed console responses terminate busy state as a conflict", () => {
   assert.equal(platform.snapshot().error.code, "console_experience.response_regressed");
 
   const workspace = createWorkspaceConsoleExperienceStore();
-  const workspaceOwner = {
-    accountId: "account_1",
-    tenantId: "tenant_1",
-    sessionId: "session_1",
-    permissionRevision: 1,
-    permissionFingerprint: FINGERPRINT,
-    permissions: ["workspace.console.overview.read"],
-  };
+  const workspaceOwner = workspaceOwnerFixture(2);
   workspace.enter(workspaceOwner, "overview");
   assert.equal(workspace.accept(workspace.begin("overview"), overview("workspace", 2, 2), workspaceOwner), true);
   assert.equal(workspace.accept(workspace.begin("overview"), overview("workspace", 1, 1), workspaceOwner), false);

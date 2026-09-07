@@ -147,6 +147,7 @@ async function request(controlApiUrl, path, options) {
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       credentials: "include",
       cache: "no-store",
+      redirect: "error",
       signal: options.signal,
     });
   } catch (error) {
@@ -312,4 +313,12 @@ function deepFreeze(value) { if (value && typeof value === "object" && !Object.i
 function invalidRequest(codeValue = "workspace.console.request_invalid") { throw new WorkspaceConsoleExperienceError({ code: codeValue, message: "Workspace 控制台请求字段无效。" }); }
 function invalidResponse() { throw new WorkspaceConsoleExperienceError({ status: 502, code: "workspace.console.response_invalid", message: "Workspace 控制台响应格式无效。" }); }
 function apiError(status, payload) { return new WorkspaceConsoleExperienceError({ status, code: payload?.code, message: payload?.message, requestId: payload?.request_id, traceId: payload?.trace_id }); }
-async function json(response) { try { const value = await response.json(); return plain(value) ? value : {}; } catch { return {}; } }
+async function json(response) {
+  try {
+    const value = await response.json();
+    return plain(value) ? value : {};
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return {};
+  }
+}

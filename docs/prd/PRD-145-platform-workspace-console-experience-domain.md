@@ -465,3 +465,25 @@ PRD-146 navigation/getting-started/advanced-tools，不创建 PRD-147 tombstone/
 
 第二轮结论：八个 Excel API、四个事件、三个 SLO、失败恢复、前端生命周期和批次证据均有可执行验收；无未解决 P0/P1，
 可以在 G6 通过后进入 S7 连续编码。
+
+## 2026-09-07 Cookie 会话消费端补充设计
+
+主 Console 真实入口失败复核发现：本条四个 Workspace API 已只接受 Cookie，但 controller/store
+仍从旧 auth_context 提取内部 account/tenant/session ID；主应用绑定还使用与 Host-only Cookie
+不一致的 IPv4 origin。本组连续修正概览、系统状态、助手、审批、部署摘要五视图的 owner 与接线。
+主入口整体启动归 PRD-146，其他业务客户端归 PRD-147，不为通过首页而伪造旧 Token 或内部身份。
+
+第一轮自审：owner 从 shell 中真实 identity/me、workspace/session 和已校验的导航建立，复用
+workspaceNavigationOwner 的公开会话绑定，再核对 shell owner、permission/membership revision、
+fingerprint、当前路由和所需权限。store 使用公开 GlobalSession 句柄、撤销代次、会话有效期、
+Workspace/role、授权修订、导航 contract/epoch 及权限集合，不再接受旧 tenant/account owner。
+各 API 仅更正为既有 workspaceControlApiUrl，不增加凭据字段或修改服务端 DTO/授权。
+
+第二轮自审：第一份业务响应的 permission revision/fingerprint 就必须与请求 owner 一致，
+不能等已有响应后才防回退。PRD-145 的 response navigation_epoch 当前由权限修订生成，与
+PRD-146 的导航 epoch 是不同合同，不能强行相等；前者保持单调检查，后者进入请求 owner。
+切换 Workspace、GlobalSession、授权或导航 contract/epoch、离开视图以及当前 401/403/409
+同步清除正文、草稿、cursor 和在途请求；旧成功/失败均不能覆盖新 owner 或触发新会话退出。
+过期 owner 不再允许请求或接受响应。fetch 和 JSON 读取阶段保留取消，拒绝自动重定向。
+跨页失效通知同步销毁本条 controller，不依赖旧 Token guard。定向覆盖五视图、公开 owner
+各维度漂移、首响应错授权、撤权/冲突清理、取消和接线，批次完整浏览器/API门禁仍另行复验。

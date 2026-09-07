@@ -110,3 +110,38 @@ Ruff 首次发现 Workspace permission import 排序，机械修复后聚焦路�
 - 12 张工作表顶部和 PRD-145 聚焦范围均成功渲染；13 张 PNG 非空，采样颜色数为 7..24。
 - 本地图像查看接口无响应，computer-use 状态读取连续两次超时，因此不声称完成了人工视觉审图；
   自动渲染、像素非空、尺寸与样式一致性检查通过。S7 G7 将再次执行真实浏览器和人工页面复核。
+
+## 2026-09-07 Workspace Cookie 消费端补修
+
+此前“完成”描述不证明真实 SaaS Cookie 登录能够进入主 Console。PRD-137 console-entry-r5
+已记录桌面/移动两个入口失败；本次先修复本条五视图对旧 auth_context 的依赖，主入口启动仍归
+PRD-146 继续修改。本次没有更改 Excel、服务端授权、DTO、迁移或 Platform store。
+
+概览、系统状态、助手、审批、部署摘要现在只消费真实 shell 的 GlobalSession 公共句柄、撤销
+代次/有效期、Workspace/role、权限与成员修订、授权指纹及导航 contract/epoch。拒绝旧内部
+tenant/account/session owner，不把公开 Workspace ID 填进旧身份字段。四个客户端绑定
+workspaceControlApiUrl，Cookie/CSRF 继续由既有客户端读取，并拒绝重定向及保留正文读取取消。
+
+当前授权失败/冲突会清空事实、草稿、cursor 并要求重新验证。切换视图清空全部上一页私有状态，
+旧 UI 事件不能再次设置草稿或审批翻页。失效后只渲染固定提示和刷新入口，刷新重新加载真实
+会话与导航，不以失效 owner 重试业务 API。跨页通知先 leave，再执行主刷新。
+
+在 console-web 使用 bundled Node 执行四个受影响文件：
+
+```text
+node --test --test-reporter=junit --test-reporter-destination=../.artifacts/g6-security-20260907/prd145-cookie-owner-r3-junit.xml tests/unit/prd145WorkspaceCookieOwner.test.mjs tests/unit/prd145ConsoleExperience.test.mjs tests/unit/prd146WorkspaceNavigation.test.mjs tests/unit/mainRefreshOwnership.test.mjs
+node scripts/lint.mjs
+node scripts/verify-production-surface.mjs
+```
+
+原始报告均位于 `.artifacts/g6-security-20260907/`。r1 为 72/72；r2 增加同步渲染期间重入
+会话的退出回调防护，73/73；最终 r3 为 73/73，无失败、错误或跳过。覆盖五视图实际 controller
+分派、19 类无效会话/导航组合、13 个 owner 维度变化、旧成功/401/403/409、首响应授权不匹配、
+业务 epoch 回退、当前撤权清理、过期会话、旧视图事件、四个 Cookie 客户端正文取消，以及主
+应用 origin/失效/恢复接线。既有两条 Workspace store 测试改用公开会话 owner，不放宽校验。
+
+lint 为 766 files，production surface 为 259 modules / 273 shipped sources。没有运行或宣称
+全套 QA、浏览器入口成功或 G6/G7/G8 通过。独立设计和两轮自审见 domain 设计的 Cookie 补充节。
+独立审计 `prd-145-cookie-owner-sensitive-audit.json` 检查 9 个精确暂存源码/测试/文档、三份
+报告的 UTF-8、凭据模式、SHA-256 和受保护基线。只暂存本条文件，不混入 PRD-137 测试夹具、
+用户未跟踪文档、outputs 或机器证据。

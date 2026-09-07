@@ -4,6 +4,7 @@ const VIEWS = new Set([
 
 export function createWorkspaceConsoleExperienceStore() {
   let ownerKey = "";
+  let expiresAt = 0;
   let view = "overview";
   let generation = 0;
   let operation = null;
@@ -28,18 +29,20 @@ export function createWorkspaceConsoleExperienceStore() {
       leave();
       return false;
     }
-    if (ownerKey && ownerKey !== nextOwner) reset(true);
-    if (view !== nextView) {
-      abort();
-      clearVisibleFacts();
-    }
+    if (ownerKey !== nextOwner || view !== nextView) reset(true);
     ownerKey = nextOwner;
+    expiresAt = Math.min(Date.parse(owner.globalExpiresAt), Date.parse(owner.workspaceExpiresAt));
+    permissionRevision = owner.permissionRevision;
+    permissionFingerprint = owner.permissionFingerprint;
     view = nextView;
     return true;
   }
 
   function begin(kind) {
+    if (Date.now() >= expiresAt) { reset(true); return null; }
     if (!ownerKey || operation) return null;
+    if (kind !== (view === "admin-assistant" ? "assistant" : view)
+      || (kind === "assistant" && !assistantDraft.trim())) return null;
     generation += 1;
     status = "loading";
     error = null;
@@ -91,6 +94,7 @@ export function createWorkspaceConsoleExperienceStore() {
       status = "idle";
       return true;
     }
+    if ([401, 403, 409].includes(candidate?.status)) reset(true);
     status = candidate?.status === 403
       ? "permission-revoked"
       : candidate?.status === 409
@@ -108,7 +112,8 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function setAssistantDraft(owner, value) {
-    if (!ownerMatches(owner) || operation || typeof value !== "string" || [...value].length > 2000) return false;
+    if (view !== "admin-assistant" || !ownerMatches(owner) || operation
+      || typeof value !== "string" || [...value].length > 2000) return false;
     assistantDraft = value;
     if (!value.trim()) assistantResponse = null;
     status = value.trim() ? "draft" : "idle";
@@ -117,7 +122,7 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function clearAssistant(owner) {
-    if (!ownerMatches(owner)) return false;
+    if (view !== "admin-assistant" || !ownerMatches(owner)) return false;
     abort();
     assistantDraft = "";
     assistantResponse = null;
@@ -127,7 +132,7 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function configureApprovals(owner, filters) {
-    if (!ownerMatches(owner) || operation) return false;
+    if (view !== "approvals" || !ownerMatches(owner) || operation) return false;
     approvalFilters = {
       status: String(filters?.status ?? ""),
       risk: String(filters?.risk ?? ""),
@@ -143,7 +148,7 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function nextApprovals(owner) {
-    if (!ownerMatches(owner) || operation || !approvalNextCursor) return false;
+    if (view !== "approvals" || !ownerMatches(owner) || operation || !approvalNextCursor) return false;
     approvalHistory = [...approvalHistory, approvalCursor];
     approvalCursor = approvalNextCursor;
     approvalNextCursor = null;
@@ -153,7 +158,7 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function previousApprovals(owner) {
-    if (!ownerMatches(owner) || operation || approvalHistory.length === 0) return false;
+    if (view !== "approvals" || !ownerMatches(owner) || operation || approvalHistory.length === 0) return false;
     approvalCursor = approvalHistory.at(-1) ?? null;
     approvalHistory = approvalHistory.slice(0, -1);
     approvalNextCursor = null;
@@ -201,7 +206,7 @@ export function createWorkspaceConsoleExperienceStore() {
     navigationEpoch = 0;
     permissionRevision = 0;
     permissionFingerprint = "";
-    if (clearOwner) ownerKey = "";
+    if (clearOwner) { ownerKey = ""; expiresAt = 0; }
   }
 
   function clearVisibleFacts() {
@@ -221,6 +226,7 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function current(ticket, owner) {
+    if (Date.now() >= expiresAt) { reset(true); return false; }
     return Boolean(
       ticket
       && operation === ticket
@@ -236,13 +242,12 @@ export function createWorkspaceConsoleExperienceStore() {
   }
 
   function responseCanAdvance(value) {
-    const nextEpoch = Number(value?.navigation_epoch);
-    const nextRevision = Number(value?.permission_revision);
-    const nextFingerprint = String(value?.permission_fingerprint ?? "");
+    const nextEpoch = value?.navigation_epoch;
+    const nextRevision = value?.permission_revision;
+    const nextFingerprint = value?.permission_fingerprint;
     return Number.isSafeInteger(nextEpoch) && nextEpoch >= Math.max(1, navigationEpoch)
-      && Number.isSafeInteger(nextRevision) && nextRevision >= Math.max(1, permissionRevision)
-      && !(nextRevision === permissionRevision && permissionFingerprint
-        && nextFingerprint !== permissionFingerprint);
+      && nextRevision === permissionRevision
+      && nextFingerprint === permissionFingerprint;
   }
 
   return Object.freeze({
@@ -257,23 +262,32 @@ export function createWorkspaceConsoleExperienceStore() {
     previousApprovals,
     snapshot,
     leave,
+    owns: (owner, candidateView) => view === candidateView && ownerMatches(owner),
   });
 }
 
 function ownerKeyFor(owner) {
   if (!owner || typeof owner !== "object") return "";
-  const accountId = String(owner.accountId ?? "");
-  const tenantId = String(owner.tenantId ?? "");
-  const sessionId = String(owner.sessionId ?? "");
-  const permissionRevision = Number(owner.permissionRevision);
-  const permissionFingerprint = String(owner.permissionFingerprint ?? "");
-  const permissions = Array.isArray(owner.permissions) ? [...owner.permissions].sort() : [];
-  if (!accountId || !tenantId || !sessionId || permissions.length === 0
-    || !Number.isSafeInteger(permissionRevision) || permissionRevision < 1
-    || !/^[0-9a-f]{64}$/u.test(permissionFingerprint)) return "";
+  const permissions = owner.permissions;
+  if (!/^wsp_[0-9a-f]{32}$/u.test(owner.workspaceId)
+    || !/^(?:owner|admin|developer|security_admin|finance_admin|legal_admin|auditor|viewer)$/u.test(owner.role)
+    || typeof owner.globalSessionId !== "string" || !/^[a-zA-Z0-9_-]{1,160}$/u.test(owner.globalSessionId)
+    || !Number.isSafeInteger(owner.revokeGeneration) || owner.revokeGeneration < 0
+    || !Number.isSafeInteger(owner.permissionRevision) || owner.permissionRevision < 1
+    || !Number.isSafeInteger(owner.membershipRevision) || owner.membershipRevision < 1
+    || !/^[0-9a-f]{64}$/u.test(owner.permissionFingerprint)
+    || !/^ncs_[0-9a-f]{32}$/u.test(owner.contractSnapshotId)
+    || !Number.isSafeInteger(owner.contractGeneration) || owner.contractGeneration < 1
+    || !Number.isSafeInteger(owner.navigationEpoch) || owner.navigationEpoch < 1
+    || ![owner.globalExpiresAt, owner.workspaceExpiresAt].every((value) =>
+      typeof value === "string" && Number.isFinite(Date.parse(value)) && Date.parse(value) > Date.now())
+    || !Array.isArray(permissions) || permissions.length === 0
+    || !permissions.every((permission) => typeof permission === "string")) return "";
   return JSON.stringify([
-    accountId, tenantId, sessionId, permissionRevision,
-    permissionFingerprint, permissions,
+    owner.workspaceId, owner.role, owner.globalSessionId, owner.revokeGeneration,
+    owner.globalExpiresAt, owner.workspaceExpiresAt, owner.permissionRevision,
+    owner.membershipRevision, owner.permissionFingerprint,
+    owner.contractSnapshotId, owner.contractGeneration, owner.navigationEpoch, [...permissions].sort(),
   ]);
 }
 
