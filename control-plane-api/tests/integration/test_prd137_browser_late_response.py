@@ -31,6 +31,17 @@ def browser_baseline(tmp_path_factory):
 def test_real_identity_pages_fence_delayed_memberships(
     browser_baseline, tmp_path, width, record_property
 ):
+    _run_browser(browser_baseline, tmp_path, width, record_property, "identity")
+
+
+@pytest.mark.parametrize("width", [1440, 390], ids=["desktop", "mobile"])
+def test_real_identity_login_enters_console_without_legacy_token(
+    browser_baseline, tmp_path, width, record_property
+):
+    _run_browser(browser_baseline, tmp_path, width, record_property, "console-entry")
+
+
+def _run_browser(browser_baseline, tmp_path, width, record_property, journey):
     node = Path(os.environ.get("METAHUB_BROWSER_TEST_NODE", r"C:\Program Files\nodejs\node.exe"))
     browser = Path(
         os.environ.get("METAHUB_BROWSER_TEST_CHROMIUM", ROOT / ".tools/chrome-portable/chrome.exe")
@@ -67,7 +78,8 @@ def test_real_identity_pages_fence_delayed_memberships(
             str(node),
             str(browser),
             str(width),
-            str(tmp_path / "logged-out.png"),
+            str(tmp_path / ("logged-out.png" if journey == "identity" else "console-entry.png")),
+            journey,
         ],
         cwd=ROOT,
         env=environment,
@@ -82,7 +94,12 @@ def test_real_identity_pages_fence_delayed_memberships(
     assert result.returncode == 0, report
     assert report["status"] == "passed" and report["process_exited_successfully"]
     assert report["real_authentication"] and not report["synthetic_api_responses"]
+    if journey == "console-entry":
+        assert report["console_projection_scheduler_running"]
+        assert report["overview_screenshot_saved"]
     assert report["private_directory_removed"] and report["baseline_unchanged"]
+    if os.name == "nt":
+        assert report["child_processes_remaining"] == 0
     assert all(check["passed"] for check in report["checks"])
     assert report["stderr_empty"] and not diagnostic
     assert not list(scratch.iterdir())

@@ -372,3 +372,35 @@ localStorage/sessionStorage、CacheStorage 和 IndexedDB。所有检查
 错误响应清 Cookie 影响合法对照。r4 在两视口发现的 GlobalSession 退出竞态单独归属 PRD-094，
 提交 `7548e46` 后 r5 桌面/移动各 22 个检查点通过；五次原始运行和失败原因分别记录，不覆盖。
 账号页结果不设置 Guest 的 late_response passed，后续继续真实主控制台与评估许可集成。
+
+### 主控制台入口与竞态批次复核
+
+检查主 Console 发现 index.html 的启动门槛仍读取旧 auth_token/auth_context，实际身份页只建立
+Global/Workspace Cookie。先以同一真实注册和登录夹具验证进入链路，不注入 sessionStorage、
+不签发额外 Legacy Bearer。该入口回归与后续迟到导航/业务响应分别命名，不以入口通过冒充竞态通过。
+
+第一轮复核：身份页实际 WorkspaceSession、非空成员和 owner 为控制对照。新标签打开主 Console，
+必须读取真实 Workspace 上下文与导航后显示受保护内容，不允许再次要求租户级密码登录、兜底
+静态菜单或 Legacy Token。API 重定向仅限现有开发地址到本次私有 TLS，不构造任何响应体。
+
+第二轮复核：原认证槽位不存在不是伪造身份；测试不会写入它们。报表只输出固定检查码、阶段、
+已知端点状态及布尔页面状态。成功和失败均以遮罩输入框截图留证，实际进程和私有目录结束后
+复核原基线。后续主导航切换/退出/撤权、浏览器存储清空和 Guest 短许可仍为必需，不删减场景清单。
+
+入口数据复核第一轮：r6 已验证真实 Cookie 与导航进入，但总览返回 503。现有 Guest 初始化关闭
+全部后台调度，新增 Workspace 没有总览投影。仅本入口诊断安装生产 Console experience lifespan
+调度器，由其正常领取短租约并生成投影；不直接插入摘要、不替换鉴权、不伪造 HTTP 成功。
+
+入口数据复核第二轮：夹具通过真实源 Workspace HTTP 等待投影可读，确认命名调度任务存活，
+再运行浏览器实际总览、刷新与退出。保留调度器启用事实及原 r6 失败报告，不能把选择性调度
+等同所有后台服务或完整部署验收。退出必须验证原 Cookie 重放被拒绝及另一标签失效。
+
+入口运行时复核第一轮：r8 桌面十五项通过，移动端没有结构化结果，私有目录清理 PermissionError
+覆盖原异常，并遗留属于该次目录的 Chromium。报告必须在初始化时存在，运行阶段和异常类别
+先记录，清理失败另外记录，不能覆盖业务失败或将缺少截图/输出当作通过。
+
+入口运行时复核第二轮：复用 PRD-077 的 WindowsKillOnCloseJob，以实际 Popen 句柄绑定 Node，
+再经 stdin 发送测试输入。脚本在 stdin EOF 前不启动浏览器，因此其后代均属于本次 Job。
+退出时由 OS 终止本 Job 中残留进程并查询 ActiveProcesses=0，再清理精确临时目录；不按进程名
+结束其他浏览器。Chromium launch 纳入脚本 try/finally，启动失败也生成固定类别报告。
+真实子进程退出但后代仍存活的故障回归必须证明 Job 归零，不能只检查 Node returncode。

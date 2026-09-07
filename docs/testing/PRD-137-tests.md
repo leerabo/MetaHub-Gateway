@@ -417,3 +417,82 @@ Cookie 重放检查。敏感值仅经私有 stdin 传入，不进入命令行；
 原始证据，产品修复不混入本条提交。测试只证明账号页实际竞态；主 Console/navigation、评估
 短许可及固定 Guest 尚未集成，Guest 的 late_response 仍 error，不能将局部结果扩张为全部
 owner 或隔离部署通过。完整批次回归及 G6/G8 保持未完成，不启动 PRD-148，也不重启长稳等待。
+
+## 主 Console 入口回归发现 (2026-09-07，r1..r5 历史)
+
+账号页竞态增量已独立提交 `8c83011`。随后使用同一真实注册/TLS 夹具新增主 Console 入口
+回归，不设置旧 auth_token/auth_context，不进行额外 Legacy 登录。PRD-146/147 已先追加
+认证入口、导航 owner 和逐业务域 API 接线的设计与两轮自审。该补充回归仍失败，尚未交付产品修复。
+
+原始记录分别位于 `.artifacts/g6-security-20260907/`：
+
+- `console-entry-r1-junit.xml`：桌面/移动 2 失败，95.716 秒；子进程未返回完整 JSON，不能
+  据此确认产品失败原因。r2 仅桌面 1 失败，49.482 秒，同样无结构化浏览器报告。
+- `console-entry-r3-junit.xml`：桌面 1 失败，49.519 秒；异常清理被残留 Chromium 占用，
+  PermissionError 覆盖子进程诊断。增加固定错误类别/代码行号及清理错误的独立报告，不输出 stderr 原文。
+- `console-entry-r4-junit.xml`：桌面 1 失败，292.535 秒。首次获得结构化报告：真实 Workspace
+  Cookie 与无旧认证槽位检查通过，但 Console 仍显示旧登录表单，没有导航请求。截图已查看。
+  此轮路由收尾未完成，精确测试浏览器/Node 进程被人工结束，私有目录清理仍失败，不能认定清理通过。
+- `console-entry-r5-junit.xml`：修正 HTTP 到私有 HTTPS 的真实请求转发及路由取消后，桌面/移动
+  2 失败，162.151 秒。两者均通过真实 Cookie 验证和旧槽位不存在检查；console_authenticated_entry
+  为 false，legacy_login_visible 为 true，Authorization 请求数为 0，主 Console 已知认证/导航
+  端点响应为空。本次进程返回码 1 表示断言失败，stderr 为空、私有目录移除和基线不变均已独立核对。
+
+两个 r5 遮罩截图已查看，仍是租户标识/邮箱/密码的旧登录页。目录为
+`.tmp/pytest-prd137-console-entry-r5/test_real_identity_login_enter0/console-entry.png`
+及同级 `test_real_identity_login_enter1/console-entry.png`。r3/r4 遗留的私有浏览器目录无法
+按本轮清理命令删除（环境拒绝），保持原状；不改写原失败记录，不把后续清理当作当次成功。
+
+源码断点对应 main.js 的 readAuthSession/start/performRefresh/renderLogin，依赖旧 Bearer
+和 `/auth/me`；Workspace 导航与账号页则已使用 Cookie。下一步按 PRD-146/147 同批设计完成
+实际认证与消费端接线，再验证主导航迟到成功/失败、跨页切换/退出、受影响业务 API 与 Guest 许可。
+该未完成增量尚未独立提交或取得完成审计，不能用此前 identity-only 审计证明当前新增代码已完成。
+
+## 主 Console 入口与运行时修复 (2026-09-07，r6..r9)
+
+本节接续上节历史断点。PRD-146 `f22ee91` 已实现真实 Cookie 启动、公共 owner、共享清理与
+Identity 退出；PRD-145 `54bba10` 已修复八个读后写审计入口的 WAL 快照升级冲突。产品修改
+各自保留设计、自审、测试、审计和提交，不混入本条浏览器夹具提交。
+
+本条入口检查要求实际 overview sections 和对应 HTTP 200，不以 shell 可见或静态菜单为成功。
+随后点击实际刷新、确认当前 Workspace 仍有效、旧 Storage 不存在、请求不发送 Authorization，
+再点击退出，核验服务端响应、DOM 擦除、Identity 标签失效和原 Cookie 重放 401。每个通过的
+视口有十五个检查点。此入口场景不代替主导航/业务 API 的延迟响应隔离场景。
+
+原始 JUnit 均位于 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 真实结果 |
+| --- | --- |
+| `console-entry-r6-junit.xml` | 桌面/移动均失败；身份、Workspace、导航 200，但 overview 503，私有清理和基线验证通过 |
+| `console-entry-r7-junit.xml` | 移动十五项通过，桌面仍在 overview 失败；生产投影 scheduler 两者均存活 |
+| `console-entry-r8-junit.xml` | 桌面十五项通过；移动没有结构化报告，PermissionError 清理异常覆盖原诊断，不能证明其清理或原失败原因 |
+| `console-entry-r9-junit.xml` | 仅重跑移动，十五项通过；生产 scheduler 存活、无超时、stderr 空、Job 子进程为零、私有目录移除、原基线不变 |
+| `browser-owner-r1-junit.xml` | 新夹具失败：后代继承 stderr 管道使 communicate 等待，不认定产品回归反证 |
+| `browser-owner-r2-junit.xml` | 新夹具失败：固定 LF 断言与 Windows CRLF 不符 |
+| `browser-owner-r3-junit.xml` | 1/1 通过：实际启动器退出后仍存活的后代被独立 Windows Job 回收，占用文件可移除 |
+| `browser-launch-fault-r1-junit.xml` | 2/2 通过：两个实际 Node 脚本的不存在浏览器路径均产生有界 launch 失败 JSON，stderr 空、无密码和伪截图 |
+
+r6 复核发现 Guest 初始化关闭全部 scheduler，新增 Workspace 无投影。因此仅 console-entry
+安装生产 Console experience lifespan，通过源 Workspace 的真实 HTTP 等待 overview 200，并
+确认真实命名 task 存活后才启动浏览器。不直接插入投影，不伪造 API 或替换认证。
+
+r8 的运行时缺口修正：初始化即创建失败报告，记录固定阶段/错误类别，清理错误另列；两个
+脚本均将 Chromium launch 纳入 try/finally。Windows 复用仓库 PRD-077 WindowsKillOnCloseJob，
+实际 Node Popen 句柄先入 Job，再经私有 stdin 发送输入。脚本在 stdin EOF 前不启动 Chromium。
+即使 Node 提前退出，仍由 Job 终止后代并查询 ActiveProcesses=0，然后清理私有目录。300 秒
+子进程上限改为有界 180 秒；超时先回收本 Job 再取得输出，超时运行始终标记失败，不以等待
+结束证明通过。不按名称终止其他浏览器。Linux 的后代清理未获得本增量验证。
+
+桌面 r8 与移动 r9 不是同一整轮通过，r8 移动失败原件、旧失败私有现场继续保留，不追认清理。
+本次查看桌面 r8 总览、移动 r9 总览与退出截图，路径分别在对应 `.tmp/pytest-prd137-console-entry-*`
+目录中。网络与生命周期通过，但发现 `overview` / `nav.overview.description` 原始翻译键、
+中英文混合及移动折叠侧栏空白区域，不能据此声明完整视觉/可用性验收通过。
+
+独立敏感审计 `prd-137-console-entry-runtime-sensitive-audit.json` 校验八个精确暂存源码/测试/
+文档、入口 r1..r9 和四份新增进程/启动故障报告，检查严格 UTF-8、高置信凭据模式、SHA-256、
+暂存字节和原基线。Ruff、Node 语法检查、前端 lint/production surface 及 diff-check 通过。
+测试没有更改工作簿或提交 `.tmp`、`.artifacts`、用户 PRD-101..105 和 outputs。
+
+下一步继续按批次修正可达业务页面 Cookie 消费、导航文案和布局，再验证主 Console 跨页迟到
+成功/失败、评估短许可与固定 Guest 集成。Guest late_response、全 owner、Linux/部署认证、
+镜像及完整签名归档仍不完整，G6/G7/G8 未通过，PRD-148 不启动，不重新开启 72 小时等待。

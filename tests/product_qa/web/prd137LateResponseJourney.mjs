@@ -34,13 +34,14 @@ async function bounded(promise) {
     })]);
   } finally { clearTimeout(timer); }
 }
-const browser = await chromium.launch({ executablePath: input.browser, headless: true,
-  args: ["--ignore-certificate-errors-spki-list=" + input.spki] });
+let browser;
 let context;
 let held;
 let release = deferred();
 const responses = [];
 try {
+  browser = await chromium.launch({ executablePath: input.browser, headless: true, timeout: 30_000,
+    args: ["--ignore-certificate-errors-spki-list=" + input.spki] });
   context = await browser.newContext({ viewport: input.viewport, serviceWorkers: "block" });
   context.setDefaultTimeout(30_000);
   context.on("response", (response) => {
@@ -247,5 +248,5 @@ try {
 } finally {
   release.resolve();
   await context?.close();
-  await browser.close();
+  await browser?.close();
 }

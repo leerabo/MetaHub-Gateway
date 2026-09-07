@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -27,17 +30,47 @@ from starlette.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def _windows_child_job():
+    if os.name != "nt":
+        return None
+    name = "_metahub_prd137_browser_process_owner"
+    module = sys.modules.get(name)
+    if module is None:
+        specification = importlib.util.spec_from_file_location(
+            name, ROOT / "scripts/acceptance/prd077-browser-harness.py"
+        )
+        if specification is None or specification.loader is None:
+            raise RuntimeError("browser_process_owner_missing")
+        module = importlib.util.module_from_spec(specification)
+        sys.modules[name] = module
+        specification.loader.exec_module(module)
+    return module.WindowsKillOnCloseJob()
+
+
 async def main():
     baseline, scratch, node, browser = (Path(value).resolve(strict=True) for value in sys.argv[1:5])
     width = int(sys.argv[5])
     screenshot = Path(sys.argv[6]).resolve()
-    if width not in (1440, 390) or screenshot.parent != scratch.parent:
+    journey = sys.argv[7] if len(sys.argv) > 7 else "identity"
+    scripts = {
+        "identity": "prd137LateResponseJourney.mjs",
+        "console-entry": "prd137ConsoleEntryJourney.mjs",
+    }
+    if width not in (1440, 390) or screenshot.parent != scratch.parent or journey not in scripts:
         raise ValueError("browser_test_boundary")
     before = hashlib.sha256(baseline.read_bytes()).hexdigest()
     original = Path.cwd()
     child = None
+    child_job = None
     server = None
     server_task = None
+    runtime_stage = "initialize"
+    report = {
+        "schema": "metahub.browser-late-response.v1",
+        "status": "failed",
+        "checks": [],
+        "process_exited_successfully": False,
+    }
     private = tempfile.TemporaryDirectory(prefix="prd137-browser-", dir=scratch)
     directory = Path(private.name)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -53,6 +86,10 @@ async def main():
             origin,
             ROOT / "infra/migrations",
         )
+        if journey == "console-entry":
+            from metahub_control.console_experience import install_console_experience_scheduler
+
+            install_console_experience_scheduler(app)
         app.mount("/", StaticFiles(directory=ROOT / "console-web", html=True))
         server = uvicorn.Server(
             uvicorn.Config(
@@ -105,7 +142,24 @@ async def main():
                 lease_guard=allowed,
                 deadline_at=datetime.now(UTC) + timedelta(minutes=5),
             )
+            runtime_stage = "bootstrap"
             fixtures = await bootstrap.run()
+            projection_scheduler_running = False
+            if journey == "console-entry":
+                async with asyncio.timeout(60):
+                    while True:
+                        projection = await clients[0].get("/workspace/overview")
+                        if projection.status_code == 200:
+                            break
+                        if projection.status_code != 503:
+                            raise RuntimeError("console_projection_authentication_failed")
+                        await asyncio.sleep(0.25)
+                projection_scheduler_running = any(
+                    task.get_name() == "console-experience-scheduler" and not task.done()
+                    for task in asyncio.all_tasks()
+                )
+                if not projection_scheduler_running:
+                    raise RuntimeError("console_projection_scheduler_stopped")
             environment = {
                 key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ
             }
@@ -121,15 +175,20 @@ async def main():
                     )
                 ).digest()
             ).decode("ascii")
-            child = await asyncio.create_subprocess_exec(
-                str(node),
-                str(ROOT / "tests/product_qa/web/prd137LateResponseJourney.mjs"),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            runtime_stage = "browser_process"
+            child_job = _windows_child_job()
+            child = subprocess.Popen(
+                [str(node), str(ROOT / "tests/product_qa/web" / scripts[journey])],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=directory,
                 env=environment,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            # The script waits for stdin EOF before launch, so no browser can precede assignment.
+            if child_job is not None:
+                child_job.assign(child)
             payload = json.dumps(
                 {
                     "origin": origin,
@@ -142,26 +201,98 @@ async def main():
                     "screenshot": str(screenshot),
                 }
             ).encode("utf-8")
-            stdout, stderr = await asyncio.wait_for(child.communicate(payload), 300)
+            runtime_stage = "browser_journey"
+            browser_timed_out = False
+            try:
+                stdout, stderr = await asyncio.to_thread(child.communicate, payload, 180)
+            except subprocess.TimeoutExpired:
+                browser_timed_out = True
+                if child_job is not None:
+                    await asyncio.to_thread(child_job.terminate_and_wait, 10)
+                elif child.poll() is None:
+                    child.kill()
+                stdout, stderr = await asyncio.to_thread(child.communicate, None, 10)
             if len(stdout) > 32_768 or len(stderr) > 32_768:
                 raise RuntimeError("browser_report_unbounded")
             private_values = (fixtures.source_account.email, fixtures.source_account.password)
             if any(value.encode() in stdout + stderr for value in private_values):
                 raise RuntimeError("browser_report_private_material")
-            report = json.loads(stdout)
+            try:
+                report = json.loads(stdout)
+            except (UnicodeError, ValueError):
+                report = {
+                    "schema": "metahub.browser-late-response.v1",
+                    "status": "failed",
+                    "stage": "child_report_missing",
+                    "child_exit_code": child.returncode,
+                    "stderr_categories": [
+                        marker
+                        for marker in (
+                            "ERR_MODULE_NOT_FOUND",
+                            "SyntaxError",
+                            "ReferenceError",
+                            "TypeError",
+                            "TimeoutError",
+                            "browserType.launch",
+                            "Target page, context or browser has been closed",
+                            "ENOENT",
+                            "EACCES",
+                        )
+                        if marker.encode("ascii") in stderr
+                    ],
+                    "script_lines": [
+                        int(line)
+                        for line in re.findall(
+                            rb"prd137(?:ConsoleEntry|LateResponse)Journey\.mjs:(\d+):\d+",
+                            stderr,
+                        )[:8]
+                    ],
+                    "checks": [],
+                }
             if report.get("schema") != "metahub.browser-late-response.v1":
                 raise RuntimeError("browser_report_schema")
+            report["browser_timed_out"] = browser_timed_out
+            if browser_timed_out:
+                report["status"] = "failed"
             report["process_exited_successfully"] = child.returncode == 0
             report["stderr_empty"] = not stderr
+            report["console_projection_scheduler_running"] = projection_scheduler_running
+    except Exception as error:
+        report["status"] = "failed"
+        report["runtime_stage"] = runtime_stage
+        report["runtime_error_type"] = type(error).__name__
     finally:
-        if child is not None and child.returncode is None:
-            child.terminate()
-            await child.wait()
+        try:
+            if child_job is not None:
+                report["child_processes_remaining"] = await asyncio.to_thread(
+                    child_job.terminate_and_wait, 10
+                )
+            elif child is not None and child.poll() is None:
+                child.terminate()
+            if child is not None:
+                await asyncio.to_thread(child.wait, 10)
+        except Exception as error:
+            report["status"] = "failed"
+            report["child_cleanup_error"] = type(error).__name__
+        finally:
+            if child_job is not None:
+                try:
+                    child_job.close()
+                except Exception as error:
+                    report["status"] = "failed"
+                    report["child_job_close_error"] = type(error).__name__
+            if child is not None:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
         if server is not None:
             server.should_exit = True
         try:
             if server_task is not None:
                 await asyncio.wait_for(server_task, 10)
+        except Exception as error:
+            report["status"] = "failed"
+            report["server_cleanup_error"] = type(error).__name__
         finally:
             listener.close()
             from metahub_shared.db.connection import (
@@ -172,7 +303,11 @@ async def main():
             _close_idle_database_connections()
             close_database_pools()
             os.chdir(original)
-            private.cleanup()
+            try:
+                private.cleanup()
+            except OSError as cleanup_error:
+                report["status"] = "failed"
+                report["private_cleanup_error"] = type(cleanup_error).__name__
     report["private_directory_removed"] = not directory.exists()
     report["baseline_unchanged"] = hashlib.sha256(baseline.read_bytes()).hexdigest() == before
     print(json.dumps(report))
