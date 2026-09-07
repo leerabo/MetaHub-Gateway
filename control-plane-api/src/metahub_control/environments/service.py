@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.webhooks.service import dispatch_webhook_event
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
@@ -122,51 +123,53 @@ def create_environment(
     code = _normalize_code(payload.code)
     name = _normalize_name(payload.name)
     description = _normalize_description(payload.description)
-    connection = _connect(config)
-    environment_id = f"env_{uuid4().hex}"
-    now = _to_db_time(_utcnow())
-    event_payload = {"code": code, "name": name, "status": "active"}
-    try:
-        connection.execute(
-            """
-            INSERT INTO environments(
-              environment_id, tenant_id, code, name, description, status,
-              created_by, updated_by, created_at, updated_at
+    with ResourceWriteTransaction(_connect(config), config, context, "environment.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        environment_id = f"env_{uuid4().hex}"
+        now = _to_db_time(_utcnow())
+        event_payload = {"code": code, "name": name, "status": "active"}
+        try:
+            connection.execute(
+                """
+                INSERT INTO environments(
+                  environment_id, tenant_id, code, name, description, status,
+                  created_by, updated_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (
+                    environment_id,
+                    context.user.tenant_id,
+                    code,
+                    name,
+                    description,
+                    context.user.user_id,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-            """,
-            (
-                environment_id,
-                context.user.tenant_id,
-                code,
-                name,
-                description,
-                context.user.user_id,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-        _write_environment_event(
-            connection,
-            context,
-            environment_id=environment_id,
-            event_type="environment.created",
-            request_id=request_id,
-            trace_id=trace_id,
-            payload=event_payload,
-        )
-        connection.commit()
-    # 数据库唯一约束异常必须转换成稳定业务错误，禁止透出底层 SQL 文本。
-    except sqlite3.IntegrityError as exc:
-        # 唯一约束是重复环境代码的最终防线，原始 SQLite 文本不能穿透到 API。
-        connection.rollback()
-        raise ApiError("environment.code_conflict") from exc
+            _write_environment_event(
+                connection,
+                context,
+                environment_id=environment_id,
+                event_type="environment.created",
+                request_id=request_id,
+                trace_id=trace_id,
+                payload=event_payload,
+            )
+            transaction.commit()
+        # 数据库唯一约束异常必须转换成稳定业务错误，禁止透出底层 SQL 文本。
+        except sqlite3.IntegrityError as exc:
+            # 唯一约束是重复环境代码的最终防线，原始 SQLite 文本不能穿透到 API。
+            connection.rollback()
+            raise ApiError("environment.code_conflict") from exc
 
-    environment = _load_environment(connection, context.user.tenant_id, environment_id)
-    _log_environment_event(context, "environment.created", environment_id, request_id, trace_id, event_payload)
-    _dispatch_created_webhook(config, context, environment, request_id, trace_id)
-    return EnvironmentResponse(environment=environment, request_id=request_id, trace_id=trace_id)
+        environment = _load_environment(connection, context.user.tenant_id, environment_id)
+        _log_environment_event(context, "environment.created", environment_id, request_id, trace_id, event_payload)
+        _dispatch_created_webhook(config, context, environment, request_id, trace_id)
+        return EnvironmentResponse(environment=environment, request_id=request_id, trace_id=trace_id)
 
 
 def update_environment(
@@ -184,45 +187,47 @@ def update_environment(
     if not supplied:
         # 空 PATCH 会制造虚假的配置变更反馈和无意义审计记录，必须拒绝。
         raise ApiError("environment.update_empty")
-    connection = _connect(config)
-    before = _load_environment(connection, context.user.tenant_id, environment_id)
-    updates: list[str] = []
-    values: list[object | None] = []
-    if "name" in supplied:
-        updates.append("name=?")
-        values.append(_normalize_name(payload.name))
-    if "description" in supplied:
-        updates.append("description=?")
-        values.append(_normalize_description(payload.description))
-    if "status" in supplied:
-        updates.append("status=?")
-        values.append(_normalize_status(payload.status))
-    now = _to_db_time(_utcnow())
-    updates.extend(["updated_by=?", "updated_at=?"])
-    values.extend([context.user.user_id, now, context.user.tenant_id, environment_id])
-    connection.execute(
-        f"UPDATE environments SET {', '.join(updates)} WHERE tenant_id=? AND environment_id=?",
-        values,
-    )
-    after = _load_environment(connection, context.user.tenant_id, environment_id)
-    event_payload = {
-        "code": after.code,
-        "changed_fields": sorted(supplied),
-        "before_status": before.status,
-        "after_status": after.status,
-    }
-    _write_environment_event(
-        connection,
-        context,
-        environment_id=environment_id,
-        event_type="environment.updated",
-        request_id=request_id,
-        trace_id=trace_id,
-        payload=event_payload,
-    )
-    connection.commit()
-    _log_environment_event(context, "environment.updated", environment_id, request_id, trace_id, event_payload)
-    return EnvironmentResponse(environment=after, request_id=request_id, trace_id=trace_id)
+    with ResourceWriteTransaction(_connect(config), config, context, "environment.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_environment(connection, context.user.tenant_id, environment_id)
+        updates: list[str] = []
+        values: list[object | None] = []
+        if "name" in supplied:
+            updates.append("name=?")
+            values.append(_normalize_name(payload.name))
+        if "description" in supplied:
+            updates.append("description=?")
+            values.append(_normalize_description(payload.description))
+        if "status" in supplied:
+            updates.append("status=?")
+            values.append(_normalize_status(payload.status))
+        now = _to_db_time(_utcnow())
+        updates.extend(["updated_by=?", "updated_at=?"])
+        values.extend([context.user.user_id, now, context.user.tenant_id, environment_id])
+        connection.execute(
+            f"UPDATE environments SET {', '.join(updates)} WHERE tenant_id=? AND environment_id=?",
+            values,
+        )
+        after = _load_environment(connection, context.user.tenant_id, environment_id)
+        event_payload = {
+            "code": after.code,
+            "changed_fields": sorted(supplied),
+            "before_status": before.status,
+            "after_status": after.status,
+        }
+        _write_environment_event(
+            connection,
+            context,
+            environment_id=environment_id,
+            event_type="environment.updated",
+            request_id=request_id,
+            trace_id=trace_id,
+            payload=event_payload,
+        )
+        transaction.commit()
+        _log_environment_event(context, "environment.updated", environment_id, request_id, trace_id, event_payload)
+        return EnvironmentResponse(environment=after, request_id=request_id, trace_id=trace_id)
 
 
 def resolve_environment_binding(

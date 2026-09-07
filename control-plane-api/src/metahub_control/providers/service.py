@@ -33,6 +33,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     CreateProviderKeyRequest,
@@ -143,65 +144,67 @@ def create_provider(
     maintenance_note = _normalize_maintenance_note(payload.maintenance_note)
     provider_id = str(uuid4())
     now = _to_db_time(_utcnow())
-    connection = _connect(config)
-    try:
-        connection.execute(
-            """
-            INSERT INTO providers(
-              provider_id, tenant_id, provider_code, name, base_url, status,
-              provider_type, auth_type, description, maintenance_note, health_status,
-              created_by, created_at, updated_at,
-              next_probe_at
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        try:
+            connection.execute(
+                """
+                INSERT INTO providers(
+                  provider_id, tenant_id, provider_code, name, base_url, status,
+                  provider_type, auth_type, description, maintenance_note, health_status,
+                  created_by, created_at, updated_at,
+                  next_probe_at
+                )
+                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 'unknown', ?, ?, ?, ?)
+                """,
+                (
+                    provider_id,
+                    context.user.tenant_id,
+                    provider_code,
+                    name,
+                    base_url,
+                    provider_type,
+                    auth_type,
+                    description,
+                    maintenance_note,
+                    context.user.user_id,
+                    now,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 'unknown', ?, ?, ?, ?)
-            """,
-            (
-                provider_id,
-                context.user.tenant_id,
-                provider_code,
-                name,
-                base_url,
-                provider_type,
-                auth_type,
-                description,
-                maintenance_note,
-                context.user.user_id,
-                now,
-                now,
-                now,
-            ),
-        )
-        # Provider 与审计事实必须使用同一连接、同一事务；任一写入失败都不能留下无审计的配置变更。
-        provider = _load_provider(connection, context.user.tenant_id, provider_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="provider.created",
-            object_type="provider",
-            object_id=provider.provider_id,
-            object_name=provider.name,
-            before_summary={},
-            after_summary=_provider_audit_summary(provider),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        # 租户边界必须来自认证上下文或已校验记录，不能相信客户端传入的 tenant_id。
-        if "providers.tenant_id, providers.provider_code" in str(exc) or "UNIQUE" in str(exc):
-            raise ApiError("provider.code_exists") from exc
-        raise ApiError("provider.create_invalid") from exc
-    except Exception:
-        # 审计校验、审计落库或事务提交失败时必须显式回滚，禁止依赖连接析构的隐式行为。
-        connection.rollback()
-        raise
-    # Webhook 是提交后的外部副作用，投递失败只能记录安全错误，不能撤销已提交 Provider。
-    dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    _log_created(context, provider, request_id, trace_id)
-    return ProviderResponse(provider=provider, request_id=request_id, trace_id=trace_id)
+            # Provider 与审计事实必须使用同一连接、同一事务；任一写入失败都不能留下无审计的配置变更。
+            provider = _load_provider(connection, context.user.tenant_id, provider_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider.created",
+                object_type="provider",
+                object_id=provider.provider_id,
+                object_name=provider.name,
+                before_summary={},
+                after_summary=_provider_audit_summary(provider),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            # 租户边界必须来自认证上下文或已校验记录，不能相信客户端传入的 tenant_id。
+            if "providers.tenant_id, providers.provider_code" in str(exc) or "UNIQUE" in str(exc):
+                raise ApiError("provider.code_exists") from exc
+            raise ApiError("provider.create_invalid") from exc
+        except Exception:
+            # 审计校验、审计落库或事务提交失败时必须显式回滚，禁止依赖连接析构的隐式行为。
+            connection.rollback()
+            raise
+        # Webhook 是提交后的外部副作用，投递失败只能记录安全错误，不能撤销已提交 Provider。
+        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        _log_created(context, provider, request_id, trace_id)
+        return ProviderResponse(provider=provider, request_id=request_id, trace_id=trace_id)
 
 
 def update_provider(
@@ -245,68 +248,70 @@ def update_provider(
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("provider.update_empty")
 
-    connection = _connect(config)
-    before = _load_provider(connection, context.user.tenant_id, provider_id)
-    if before.provider_type == "local_endpoint":
-        raise ApiError("provider.local_endpoint_requires_local_api")
-    # PATCH 可能只修改 type 或 auth，必须用修改后的值与未修改的持久值组成完整候选再校验。
-    _validate_provider_auth_combination(
-        str(updates.get("provider_type", before.provider_type)),
-        str(updates.get("auth_type", before.auth_type)),
-    )
-    now = _to_db_time(_utcnow())
-    set_clauses = [f"{column}=?" for column in updates]
-    values = list(updates.values())
-    disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
-    reactivated = before.status == "disabled" and updates.get("status") == "active"
-    if disabled_event:
-        set_clauses.extend(["disabled_at=?", "disabled_by=?"])
-        values.extend([now, context.user.user_id])
-    elif reactivated:
-        set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
-    set_clauses.append("updated_at=?")
-    values.append(now)
-    values.extend([context.user.tenant_id, provider_id])
-    try:
-        connection.execute(
-            f"""
-            UPDATE providers
-            SET {', '.join(set_clauses)}
-            WHERE tenant_id=? AND provider_id=?
-            """,
-            values,
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_provider(connection, context.user.tenant_id, provider_id)
+        if before.provider_type == "local_endpoint":
+            raise ApiError("provider.local_endpoint_requires_local_api")
+        # PATCH 可能只修改 type 或 auth，必须用修改后的值与未修改的持久值组成完整候选再校验。
+        _validate_provider_auth_combination(
+            str(updates.get("provider_type", before.provider_type)),
+            str(updates.get("auth_type", before.auth_type)),
         )
-        # Endpoint、认证、类型或启停变化会使在途探测失效，必须在同一事务递增代际。
-        if {"provider_type", "base_url", "auth_type", "status"}.intersection(updates):
-            _reset_provider_health(
-                connection,
-                context.user.tenant_id,
-                provider_id,
-                active=updates.get("status", before.status) == "active",
-                now=now,
+        now = _to_db_time(_utcnow())
+        set_clauses = [f"{column}=?" for column in updates]
+        values = list(updates.values())
+        disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
+        reactivated = before.status == "disabled" and updates.get("status") == "active"
+        if disabled_event:
+            set_clauses.extend(["disabled_at=?", "disabled_by=?"])
+            values.extend([now, context.user.user_id])
+        elif reactivated:
+            set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
+        set_clauses.append("updated_at=?")
+        values.append(now)
+        values.extend([context.user.tenant_id, provider_id])
+        try:
+            connection.execute(
+                f"""
+                UPDATE providers
+                SET {', '.join(set_clauses)}
+                WHERE tenant_id=? AND provider_id=?
+                """,
+                values,
             )
-        provider = _load_provider(connection, context.user.tenant_id, provider_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="provider.updated",
-            object_type="provider",
-            object_id=provider.provider_id,
-            object_name=provider.name,
-            before_summary=_provider_audit_summary(before),
-            after_summary=_provider_audit_summary(provider),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    except Exception:
-        # Provider 更新与审计记录是一个原子管理操作，审计不可用时业务状态也必须回滚。
-        connection.rollback()
-        raise
-    if audit_record is not None:
-        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    return ProviderResponse(provider=provider, request_id=request_id, trace_id=trace_id)
+            # Endpoint、认证、类型或启停变化会使在途探测失效，必须在同一事务递增代际。
+            if {"provider_type", "base_url", "auth_type", "status"}.intersection(updates):
+                _reset_provider_health(
+                    connection,
+                    context.user.tenant_id,
+                    provider_id,
+                    active=updates.get("status", before.status) == "active",
+                    now=now,
+                )
+            provider = _load_provider(connection, context.user.tenant_id, provider_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider.updated",
+                object_type="provider",
+                object_id=provider.provider_id,
+                object_name=provider.name,
+                before_summary=_provider_audit_summary(before),
+                after_summary=_provider_audit_summary(provider),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        except Exception:
+            # Provider 更新与审计记录是一个原子管理操作，审计不可用时业务状态也必须回滚。
+            connection.rollback()
+            raise
+        if audit_record is not None:
+            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        return ProviderResponse(provider=provider, request_id=request_id, trace_id=trace_id)
 
 
 def list_provider_keys(
@@ -364,85 +369,87 @@ def create_provider_key(
     """
 
 
-    connection = _connect(config)
-    provider = _load_provider(connection, context.user.tenant_id, provider_id)
-    _reject_local_endpoint_provider(provider)
-    plain_value = _normalize_provider_key_plain_value(payload.plain_value)
-    key_prefix = secret_prefix(plain_value)
-    name = _normalize_provider_key_name(payload.name, default=f"{provider.provider_code}-{key_prefix}")
-    weight = _normalize_provider_key_weight(payload.weight)
-    provider_key_id = str(uuid4())
-    now = _to_db_time(_utcnow())
-    try:
-        encrypted_key = encrypt_provider_key(plain_value)
-    # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
-    except ValueError as exc:
-        # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-        raise ApiError("provider_key.encryption_failed") from exc
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        provider = _load_provider(connection, context.user.tenant_id, provider_id)
+        _reject_local_endpoint_provider(provider)
+        plain_value = _normalize_provider_key_plain_value(payload.plain_value)
+        key_prefix = secret_prefix(plain_value)
+        name = _normalize_provider_key_name(payload.name, default=f"{provider.provider_code}-{key_prefix}")
+        weight = _normalize_provider_key_weight(payload.weight)
+        provider_key_id = str(uuid4())
+        now = _to_db_time(_utcnow())
+        try:
+            encrypted_key = encrypt_provider_key(plain_value)
+        # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
+        except ValueError as exc:
+            # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
+            raise ApiError("provider_key.encryption_failed") from exc
 
-    try:
-        connection.execute(
-            """
-            INSERT INTO provider_credentials(
-              provider_credential_id, tenant_id, provider_id, key_fingerprint, encrypted_key,
-              name, key_prefix, weight, status, created_by, created_at, updated_at
+        try:
+            connection.execute(
+                """
+                INSERT INTO provider_credentials(
+                  provider_credential_id, tenant_id, provider_id, key_fingerprint, encrypted_key,
+                  name, key_prefix, weight, status, created_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                """,
+                (
+                    provider_key_id,
+                    context.user.tenant_id,
+                    provider_id,
+                    secret_fingerprint(plain_value),
+                    encrypted_key,
+                    name,
+                    key_prefix,
+                    weight,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-            """,
-            (
-                provider_key_id,
+            # KeyPool 新增会改变认证可用性，健康失效必须与 Key 和审计记录同事务提交。
+            _reset_provider_health(
+                connection,
                 context.user.tenant_id,
                 provider_id,
-                secret_fingerprint(plain_value),
-                encrypted_key,
-                name,
-                key_prefix,
-                weight,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-        # KeyPool 新增会改变认证可用性，健康失效必须与 Key 和审计记录同事务提交。
-        _reset_provider_health(
-            connection,
-            context.user.tenant_id,
-            provider_id,
-            active=provider.status == "active",
-            now=now,
-        )
-        # 审计摘要只接收脱敏 DTO；plain_value、encrypted_key 和完整指纹都不进入审计函数参数。
-        provider_key = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="provider_key.created",
-            object_type="provider_key",
-            object_id=provider_key.provider_key_id,
-            object_name=f"{provider_key.name} / {provider_key.key_prefix}",
-            before_summary={},
-            after_summary=_provider_key_audit_summary(provider_key),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        if "provider_credentials" in str(exc) or "UNIQUE" in str(exc):
-            # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-            raise ApiError("provider_key.duplicate") from exc
-        raise ApiError("provider_key.create_invalid") from exc
-    except Exception:
-        # 加密已在内存完成，但任何数据库或审计异常都必须回滚，不允许产生无法追溯的 Key。
-        connection.rollback()
-        raise
+                active=provider.status == "active",
+                now=now,
+            )
+            # 审计摘要只接收脱敏 DTO；plain_value、encrypted_key 和完整指纹都不进入审计函数参数。
+            provider_key = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider_key.created",
+                object_type="provider_key",
+                object_id=provider_key.provider_key_id,
+                object_name=f"{provider_key.name} / {provider_key.key_prefix}",
+                before_summary={},
+                after_summary=_provider_key_audit_summary(provider_key),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            if "provider_credentials" in str(exc) or "UNIQUE" in str(exc):
+                # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
+                raise ApiError("provider_key.duplicate") from exc
+            raise ApiError("provider_key.create_invalid") from exc
+        except Exception:
+            # 加密已在内存完成，但任何数据库或审计异常都必须回滚，不允许产生无法追溯的 Key。
+            connection.rollback()
+            raise
 
-    dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    _log_provider_key_created(context, provider, provider_key, request_id, trace_id)
-    # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-    return ProviderKeyResponse(provider_key=provider_key, request_id=request_id, trace_id=trace_id)
+        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        _log_provider_key_created(context, provider, provider_key, request_id, trace_id)
+        # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
+        return ProviderKeyResponse(provider_key=provider_key, request_id=request_id, trace_id=trace_id)
 
 
 def update_provider_key(
@@ -472,74 +479,76 @@ def update_provider_key(
         # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
         raise ApiError("provider_key.update_empty")
 
-    connection = _connect(config)
-    before = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
-    provider = _load_provider(connection, context.user.tenant_id, before.provider_id)
-    _reject_local_endpoint_provider(provider)
-    now = _to_db_time(_utcnow())
-    set_clauses = [f"{column}=?" for column in updates]
-    values = list(updates.values())
-    disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
-    reactivated = before.status != "active" and updates.get("status") == "active"
-    if disabled_event:
-        set_clauses.extend(["disabled_at=?", "disabled_by=?"])
-        values.extend([now, context.user.user_id])
-    elif reactivated:
-        set_clauses.extend(
-            [
-                "disabled_at=NULL",
-                "disabled_by=NULL",
-                "rate_limited_until=NULL",
-                "last_error_code=NULL",
-                "last_error_message=NULL",
-            ]
-        )
-    set_clauses.append("updated_at=?")
-    values.append(now)
-    values.extend([context.user.tenant_id, provider_key_id])
-    try:
-        connection.execute(
-            f"""
-            UPDATE provider_credentials
-            SET {', '.join(set_clauses)}
-            WHERE tenant_id=? AND provider_credential_id=?
-            """,
-            values,
-        )
-        # 只有启停影响候选集合；名称和权重变化不应制造无意义健康失效。
-        if "status" in updates:
-            _reset_provider_health(
-                connection,
-                context.user.tenant_id,
-                before.provider_id,
-                active=provider.status == "active",
-                now=now,
+    with ResourceWriteTransaction(_connect(config), config, context, "provider.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
+        provider = _load_provider(connection, context.user.tenant_id, before.provider_id)
+        _reject_local_endpoint_provider(provider)
+        now = _to_db_time(_utcnow())
+        set_clauses = [f"{column}=?" for column in updates]
+        values = list(updates.values())
+        disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
+        reactivated = before.status != "active" and updates.get("status") == "active"
+        if disabled_event:
+            set_clauses.extend(["disabled_at=?", "disabled_by=?"])
+            values.extend([now, context.user.user_id])
+        elif reactivated:
+            set_clauses.extend(
+                [
+                    "disabled_at=NULL",
+                    "disabled_by=NULL",
+                    "rate_limited_until=NULL",
+                    "last_error_code=NULL",
+                    "last_error_message=NULL",
+                ]
             )
-        provider_key = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="provider_key.updated",
-            object_type="provider_key",
-            object_id=provider_key.provider_key_id,
-            object_name=f"{provider_key.name} / {provider_key.key_prefix}",
-            before_summary=_provider_key_audit_summary(before),
-            after_summary=_provider_key_audit_summary(provider_key),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    except Exception:
-        # 状态/权重修改与审计必须一起成功，尤其不能出现“Key 已禁用但审计缺失”。
-        connection.rollback()
-        raise
-    if audit_record is not None:
-        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    if disabled_event:
-        _log_provider_key_disabled(context, provider, provider_key, request_id, trace_id)
-    # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
-    return ProviderKeyResponse(provider_key=provider_key, request_id=request_id, trace_id=trace_id)
+        set_clauses.append("updated_at=?")
+        values.append(now)
+        values.extend([context.user.tenant_id, provider_key_id])
+        try:
+            connection.execute(
+                f"""
+                UPDATE provider_credentials
+                SET {', '.join(set_clauses)}
+                WHERE tenant_id=? AND provider_credential_id=?
+                """,
+                values,
+            )
+            # 只有启停影响候选集合；名称和权重变化不应制造无意义健康失效。
+            if "status" in updates:
+                _reset_provider_health(
+                    connection,
+                    context.user.tenant_id,
+                    before.provider_id,
+                    active=provider.status == "active",
+                    now=now,
+                )
+            provider_key = _load_provider_key(connection, context.user.tenant_id, provider_key_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="provider_key.updated",
+                object_type="provider_key",
+                object_id=provider_key.provider_key_id,
+                object_name=f"{provider_key.name} / {provider_key.key_prefix}",
+                before_summary=_provider_key_audit_summary(before),
+                after_summary=_provider_key_audit_summary(provider_key),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        except Exception:
+            # 状态/权重修改与审计必须一起成功，尤其不能出现“Key 已禁用但审计缺失”。
+            connection.rollback()
+            raise
+        if audit_record is not None:
+            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        if disabled_event:
+            _log_provider_key_disabled(context, provider, provider_key, request_id, trace_id)
+        # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。
+        return ProviderKeyResponse(provider_key=provider_key, request_id=request_id, trace_id=trace_id)
 
 
 def test_provider_connection(

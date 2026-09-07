@@ -731,3 +731,26 @@ PRD-146 拥有 Console 入口与导航状态，本条保留每个迁移资源的
 实施复核补充：取消不仅可能发生在 fetch 等待时，也可能发生在 response.json 读取正文时。
 六组客户端原有 JSON 容错必须原样抛出 AbortError，不能把中途取消变为成功空对象或文件 DTO
 错误。保留非取消 JSON 解析失败的既有处理，定向覆盖全部 27 项资源操作的响应体取消。
+
+### 基础资源写事务与业务页 owner 连续实施批次
+
+2026-09-07 当前代码复核：五组基础资源服务的 16 项创建/更新/禁用操作只使用路由恢复的
+AuthContext，缺少实际写事务内的 Workspace 会话复核。Project/Application、Environment、
+Provider/Key、Model、Virtual Key 共享该缺口；File 的两笔写事务已经单独复核。先补写事务，
+随后连续接入同组前端读写，不把客户端支持 Cookie 当作业务页完成。
+
+第一轮自审（凭据、权限和事务）：只为明确迁移的资源写服务增加共用事务 owner。用真实
+Workspace token 重新恢复会话，核对 tenant/user/session/token_jti 并再次校验具体 write 权限；
+Legacy 使用既有 require_transaction_permission，不改全局路由守卫。事务在业务读取之前开始，
+提交之前再复核；业务、事件和已有审计保持同一提交。所有失败退出明确回滚并关闭连接，提交
+后的既有 webhook 仍不回滚已提交事实。随机 Virtual Key 冲突重试必须重新开启事务、重新鉴权
+并重读环境/项目绑定，不能把第一次成功鉴权复用于下一次尝试。
+
+第二轮自审（异步、证据和边界）：网络探测不能在持有数据库写锁时等待上游；Provider
+connection-test 的外部请求与结果写回单独处理，不能因其他 16 项已完成就宣称它已修复。
+前端使用真实 public owner、精确 Session 引用、刷新代次和后端导航，拒绝旧 DOM 发起请求，
+并丢弃迟到成功、401/403、finally 和刷新。切换 owner 同步清空表单反馈、选择、cursor 和
+一次性 Virtual Key；不伪造 tenant/user/session。File 保留专用分页/上传 ticket，迁移其 owner
+输入而非去掉所有权校验。先用实际注册、撤销/降权后的上下文验证 16 项写入、事件与审计均不
+提交，再跑受影响 Legacy 相邻测试。PostgreSQL 并发撤权锁定、网络探测和整组真实业务页流程
+仍须独立验证，未取得证据前维持未完成；不开始 PRD-148，不重启 72 小时等待。

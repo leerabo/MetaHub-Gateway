@@ -26,6 +26,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.environments.service import resolve_environment_binding
 
 from .models import (
@@ -136,83 +137,88 @@ def create_virtual_key(
 
     name = _normalize_name(payload.name)
     description = _normalize_description(payload.description)
-    connection = _connect(config)
-    environment_binding = resolve_environment_binding(
-        connection,
-        context.user.tenant_id,
-        environment_id=payload.environment_id,
-        environment_code=payload.environment,
-        invalid_code_error="virtual_key.environment_invalid",
-        mismatch_error="virtual_key.environment_mismatch",
-    )
-    project_id, application_id = _resolve_project_binding(
-        connection, context.user.tenant_id, payload.project_id, payload.application_id
-    )
-    now = _to_db_time(_utcnow())
-
-    for _attempt in range(5):
-        plain_value = _generate_virtual_key(environment_binding.code)
-        virtual_key_id = str(uuid4())
-        try:
-            connection.execute(
-                """
-                INSERT INTO virtual_keys(
-                  virtual_key_id, tenant_id, name, key_prefix, key_hash, status,
-                  environment, environment_id, description, project_id, application_id,
-                  created_by, created_at, updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    virtual_key_id,
-                    context.user.tenant_id,
-                    name,
-                    secret_prefix(plain_value),
-                    hash_secret(plain_value),
-                    environment_binding.code,
-                    environment_binding.environment_id,
-                    description,
-                    project_id,
-                    application_id,
-                    context.user.user_id,
-                    now,
-                    now,
-                ),
-            )
-            # 先用同一连接回读脱敏 DTO，再把业务行和审计行作为一个事务提交；明文只保留在响应变量中。
-            key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-            audit_record = record_audit_log(
+    with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        for _attempt in range(5):
+            # A collision rolls back the transaction, including its authorization snapshot.
+            if _attempt:
+                transaction.begin()
+                context = transaction.context
+            environment_binding = resolve_environment_binding(
                 connection,
-                context,
-                action="virtual_key.created",
-                object_type="virtual_key",
-                object_id=key.virtual_key_id,
-                object_name=f"{key.name} / {key.key_prefix}",
-                before_summary={},
-                after_summary=_virtual_key_audit_summary(key),
-                request_meta=_audit_request_meta(audit_request_meta),
-                request_id=request_id,
-                trace_id=trace_id,
+                context.user.tenant_id,
+                environment_id=payload.environment_id,
+                environment_code=payload.environment,
+                invalid_code_error="virtual_key.environment_invalid",
+                mismatch_error="virtual_key.environment_mismatch",
             )
-            commit_audited_transaction(connection)
-            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-            _log_created(context, key, request_id, trace_id)
-            return CreateVirtualKeyResponse(
-                virtual_key=key,
-                plain_value=plain_value,
-                request_id=request_id,
-                trace_id=trace_id,
+            project_id, application_id = _resolve_project_binding(
+                connection, context.user.tenant_id, payload.project_id, payload.application_id
             )
-        # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
-        except sqlite3.IntegrityError:
-            connection.rollback()
-            continue
-        except Exception:
-            # 审计或 commit 失败不能被当作随机 Key 冲突重试，否则可能掩盖持久化故障。
-            connection.rollback()
-            raise
-    # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
-    raise ApiError("virtual_key.create_invalid")
+            now = _to_db_time(_utcnow())
+            plain_value = _generate_virtual_key(environment_binding.code)
+            virtual_key_id = str(uuid4())
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO virtual_keys(
+                      virtual_key_id, tenant_id, name, key_prefix, key_hash, status,
+                      environment, environment_id, description, project_id, application_id,
+                      created_by, created_at, updated_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        virtual_key_id,
+                        context.user.tenant_id,
+                        name,
+                        secret_prefix(plain_value),
+                        hash_secret(plain_value),
+                        environment_binding.code,
+                        environment_binding.environment_id,
+                        description,
+                        project_id,
+                        application_id,
+                        context.user.user_id,
+                        now,
+                        now,
+                    ),
+                )
+                # 先用同一连接回读脱敏 DTO，再把业务行和审计行作为一个事务提交；明文只保留在响应变量中。
+                key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+                audit_record = record_audit_log(
+                    connection,
+                    context,
+                    action="virtual_key.created",
+                    object_type="virtual_key",
+                    object_id=key.virtual_key_id,
+                    object_name=f"{key.name} / {key.key_prefix}",
+                    before_summary={},
+                    after_summary=_virtual_key_audit_summary(key),
+                    request_meta=_audit_request_meta(audit_request_meta),
+                    request_id=request_id,
+                    trace_id=trace_id,
+                )
+                transaction.commit(commit_audited_transaction)
+                dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+                _log_created(context, key, request_id, trace_id)
+                return CreateVirtualKeyResponse(
+                    virtual_key=key,
+                    plain_value=plain_value,
+                    request_id=request_id,
+                    trace_id=trace_id,
+                )
+            # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
+            except sqlite3.IntegrityError:
+                connection.rollback()
+                continue
+            except Exception:
+                # 审计或 commit 失败不能被当作随机 Key 冲突重试，否则可能掩盖持久化故障。
+                connection.rollback()
+                raise
+        # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
+        raise ApiError("virtual_key.create_invalid")
 
 
 def update_virtual_key(
@@ -240,80 +246,82 @@ def update_virtual_key(
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("virtual_key.update_empty")
 
-    connection = _connect(config)
-    before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-    if environment_fields:
-        # 环境变更必须同时更新权威 ID 和兼容代码，二者冲突时拒绝静默覆盖。
-        environment_binding = resolve_environment_binding(
-            connection,
-            context.user.tenant_id,
-            environment_id=payload.environment_id,
-            environment_code=payload.environment,
-            allow_default=False,
-            invalid_code_error="virtual_key.environment_invalid",
-            mismatch_error="virtual_key.environment_mismatch",
-        )
-        updates["environment_id"] = environment_binding.environment_id
-        updates["environment"] = environment_binding.code
-    if binding_fields:
-        target_project_id = before.project_id
-        target_application_id = before.application_id
-        if "project_id" in binding_fields:
-            target_project_id = _normalize_optional_text(payload.project_id)
-            if target_project_id is None:
-                target_application_id = None
-        if "application_id" in binding_fields:
-            target_application_id = _normalize_optional_text(payload.application_id)
-        target_project_id, target_application_id = _resolve_project_binding(
-            connection, context.user.tenant_id, target_project_id, target_application_id
-        )
-        updates["project_id"] = target_project_id
-        updates["application_id"] = target_application_id
-    now = _to_db_time(_utcnow())
-    set_clauses = [f"{column}=?" for column in updates]
-    values = list(updates.values())
-    disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
-    reactivated = before.status == "disabled" and updates.get("status") == "active"
-    if disabled_event:
-        set_clauses.extend(["disabled_at=?", "disabled_by=?"])
-        values.extend([now, context.user.user_id])
-    elif reactivated:
-        set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
-    set_clauses.append("updated_at=?")
-    values.append(now)
-    values.extend([context.user.tenant_id, virtual_key_id])
-    try:
-        connection.execute(
-            f"""
-            UPDATE virtual_keys
-            SET {', '.join(set_clauses)}
-            WHERE tenant_id=? AND virtual_key_id=?
-            """,
-            values,
-        )
-        key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="virtual_key.updated",
-            object_type="virtual_key",
-            object_id=key.virtual_key_id,
-            object_name=f"{key.name} / {key.key_prefix}",
-            before_summary=_virtual_key_audit_summary(before),
-            after_summary=_virtual_key_audit_summary(key),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    except Exception:
-        # Key 元数据、状态与审计事实必须原子提交，审计不可用时不能留下已生效的 Key 变更。
-        connection.rollback()
-        raise
-    dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    if disabled_event:
-        _log_disabled(context, key, request_id, trace_id)
-    return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
+    with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        if environment_fields:
+            # 环境变更必须同时更新权威 ID 和兼容代码，二者冲突时拒绝静默覆盖。
+            environment_binding = resolve_environment_binding(
+                connection,
+                context.user.tenant_id,
+                environment_id=payload.environment_id,
+                environment_code=payload.environment,
+                allow_default=False,
+                invalid_code_error="virtual_key.environment_invalid",
+                mismatch_error="virtual_key.environment_mismatch",
+            )
+            updates["environment_id"] = environment_binding.environment_id
+            updates["environment"] = environment_binding.code
+        if binding_fields:
+            target_project_id = before.project_id
+            target_application_id = before.application_id
+            if "project_id" in binding_fields:
+                target_project_id = _normalize_optional_text(payload.project_id)
+                if target_project_id is None:
+                    target_application_id = None
+            if "application_id" in binding_fields:
+                target_application_id = _normalize_optional_text(payload.application_id)
+            target_project_id, target_application_id = _resolve_project_binding(
+                connection, context.user.tenant_id, target_project_id, target_application_id
+            )
+            updates["project_id"] = target_project_id
+            updates["application_id"] = target_application_id
+        now = _to_db_time(_utcnow())
+        set_clauses = [f"{column}=?" for column in updates]
+        values = list(updates.values())
+        disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
+        reactivated = before.status == "disabled" and updates.get("status") == "active"
+        if disabled_event:
+            set_clauses.extend(["disabled_at=?", "disabled_by=?"])
+            values.extend([now, context.user.user_id])
+        elif reactivated:
+            set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
+        set_clauses.append("updated_at=?")
+        values.append(now)
+        values.extend([context.user.tenant_id, virtual_key_id])
+        try:
+            connection.execute(
+                f"""
+                UPDATE virtual_keys
+                SET {', '.join(set_clauses)}
+                WHERE tenant_id=? AND virtual_key_id=?
+                """,
+                values,
+            )
+            key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="virtual_key.updated",
+                object_type="virtual_key",
+                object_id=key.virtual_key_id,
+                object_name=f"{key.name} / {key.key_prefix}",
+                before_summary=_virtual_key_audit_summary(before),
+                after_summary=_virtual_key_audit_summary(key),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        except Exception:
+            # Key 元数据、状态与审计事实必须原子提交，审计不可用时不能留下已生效的 Key 变更。
+            connection.rollback()
+            raise
+        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        if disabled_event:
+            _log_disabled(context, key, request_id, trace_id)
+        return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
 
 
 def update_virtual_key_limits(
@@ -349,79 +357,81 @@ def update_virtual_key_limits(
     if "status" in provided:
         updates["status"] = _normalize_limit_status(payload.status)
 
-    connection = _connect(config)
-    before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-    now = _to_db_time(_utcnow())
-    existing = connection.execute(
-        """
-        SELECT rate_limit_rule_id
-        FROM virtual_key_rate_limit_rules
-        WHERE tenant_id=? AND virtual_key_id=?
-        """,
-        (context.user.tenant_id, virtual_key_id),
-    ).fetchone()
-
-    if existing is None:
-        connection.execute(
+    with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        now = _to_db_time(_utcnow())
+        existing = connection.execute(
             """
-            INSERT INTO virtual_key_rate_limit_rules(
-              rate_limit_rule_id, tenant_id, virtual_key_id,
-              rpm_limit, tpm_limit, concurrency_limit, status,
-              created_by, updated_by, created_at, updated_at
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"rlr_{uuid4().hex}",
-                context.user.tenant_id,
-                virtual_key_id,
-                updates.get("rpm_limit"),
-                updates.get("tpm_limit"),
-                updates.get("concurrency_limit"),
-                updates.get("status", "active"),
-                context.user.user_id,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-    else:
-        set_clauses = [f"{column}=?" for column in updates]
-        values = list(updates.values())
-        set_clauses.extend(["updated_by=?", "updated_at=?"])
-        values.extend([context.user.user_id, now, context.user.tenant_id, virtual_key_id])
-        connection.execute(
-            f"""
-            UPDATE virtual_key_rate_limit_rules
-            SET {', '.join(set_clauses)}
+            SELECT rate_limit_rule_id
+            FROM virtual_key_rate_limit_rules
             WHERE tenant_id=? AND virtual_key_id=?
             """,
-            values,
-        )
+            (context.user.tenant_id, virtual_key_id),
+        ).fetchone()
 
-    try:
-        key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-        audit_record = record_audit_log(
-            connection,
-            context,
-            action="virtual_key.updated",
-            object_type="virtual_key",
-            object_id=key.virtual_key_id,
-            object_name=f"{key.name} / {key.key_prefix}",
-            before_summary=_virtual_key_audit_summary(before),
-            after_summary=_virtual_key_audit_summary(key),
-            request_meta=_audit_request_meta(audit_request_meta),
-            request_id=request_id,
-            trace_id=trace_id,
-        )
-        commit_audited_transaction(connection)
-    except Exception:
-        # 限流规则直接影响调用准入，必须与审计事实原子提交，不能形成无记录的治理变更。
-        connection.rollback()
-        raise
-    dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    _log_limits_updated(context, key, request_id, trace_id)
-    return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
+        if existing is None:
+            connection.execute(
+                """
+                INSERT INTO virtual_key_rate_limit_rules(
+                  rate_limit_rule_id, tenant_id, virtual_key_id,
+                  rpm_limit, tpm_limit, concurrency_limit, status,
+                  created_by, updated_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"rlr_{uuid4().hex}",
+                    context.user.tenant_id,
+                    virtual_key_id,
+                    updates.get("rpm_limit"),
+                    updates.get("tpm_limit"),
+                    updates.get("concurrency_limit"),
+                    updates.get("status", "active"),
+                    context.user.user_id,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            set_clauses = [f"{column}=?" for column in updates]
+            values = list(updates.values())
+            set_clauses.extend(["updated_by=?", "updated_at=?"])
+            values.extend([context.user.user_id, now, context.user.tenant_id, virtual_key_id])
+            connection.execute(
+                f"""
+                UPDATE virtual_key_rate_limit_rules
+                SET {', '.join(set_clauses)}
+                WHERE tenant_id=? AND virtual_key_id=?
+                """,
+                values,
+            )
+
+        try:
+            key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+            audit_record = record_audit_log(
+                connection,
+                context,
+                action="virtual_key.updated",
+                object_type="virtual_key",
+                object_id=key.virtual_key_id,
+                object_name=f"{key.name} / {key.key_prefix}",
+                before_summary=_virtual_key_audit_summary(before),
+                after_summary=_virtual_key_audit_summary(key),
+                request_meta=_audit_request_meta(audit_request_meta),
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+            transaction.commit(commit_audited_transaction)
+        except Exception:
+            # 限流规则直接影响调用准入，必须与审计事实原子提交，不能形成无记录的治理变更。
+            connection.rollback()
+            raise
+        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        _log_limits_updated(context, key, request_id, trace_id)
+        return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
 
 
 def disable_virtual_key(
@@ -438,44 +448,46 @@ def disable_virtual_key(
     不做物理删除，因为历史 request_logs/usage_ledger 需要继续追溯到这把 Key。
     """
 
-    connection = _connect(config)
-    before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-    if before.status != "disabled":
-        now = _to_db_time(_utcnow())
-        try:
-            connection.execute(
-                """
-                UPDATE virtual_keys
-                SET status='disabled', disabled_at=?, disabled_by=?, updated_at=?
-                WHERE tenant_id=? AND virtual_key_id=?
-                """,
-                (now, context.user.user_id, now, context.user.tenant_id, virtual_key_id),
-            )
-            key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
-            audit_record = record_audit_log(
-                connection,
-                context,
-                action="virtual_key.updated",
-                object_type="virtual_key",
-                object_id=key.virtual_key_id,
-                object_name=f"{key.name} / {key.key_prefix}",
-                before_summary=_virtual_key_audit_summary(before),
-                after_summary=_virtual_key_audit_summary(key),
-                request_meta=_audit_request_meta(audit_request_meta),
-                request_id=request_id,
-                trace_id=trace_id,
-            )
-            commit_audited_transaction(connection)
-        except Exception:
-            connection.rollback()
-            raise
-        dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
-    else:
-        # 重复禁用是幂等请求，不产生没有实际变化的审计行。
-        key = before
-    if before.status != "disabled":
-        _log_disabled(context, key, request_id, trace_id)
-    return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
+    with ResourceWriteTransaction(_connect(config), config, context, "virtual_key.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        if before.status != "disabled":
+            now = _to_db_time(_utcnow())
+            try:
+                connection.execute(
+                    """
+                    UPDATE virtual_keys
+                    SET status='disabled', disabled_at=?, disabled_by=?, updated_at=?
+                    WHERE tenant_id=? AND virtual_key_id=?
+                    """,
+                    (now, context.user.user_id, now, context.user.tenant_id, virtual_key_id),
+                )
+                key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+                audit_record = record_audit_log(
+                    connection,
+                    context,
+                    action="virtual_key.updated",
+                    object_type="virtual_key",
+                    object_id=key.virtual_key_id,
+                    object_name=f"{key.name} / {key.key_prefix}",
+                    before_summary=_virtual_key_audit_summary(before),
+                    after_summary=_virtual_key_audit_summary(key),
+                    request_meta=_audit_request_meta(audit_request_meta),
+                    request_id=request_id,
+                    trace_id=trace_id,
+                )
+                transaction.commit(commit_audited_transaction)
+            except Exception:
+                connection.rollback()
+                raise
+            dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
+        else:
+            # 重复禁用是幂等请求，不产生没有实际变化的审计行。
+            key = before
+        if before.status != "disabled":
+            _log_disabled(context, key, request_id, trace_id)
+        return VirtualKeyResponse(virtual_key=key, request_id=request_id, trace_id=trace_id)
 
 
 def _audit_request_meta(value: AuditRequestMeta | None) -> AuditRequestMeta:

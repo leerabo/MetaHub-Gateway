@@ -15,6 +15,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
@@ -127,53 +128,55 @@ def create_model(
     now = _to_db_time(_utcnow())
     disabled_at = now if status == "disabled" else None
     disabled_by = context.user.user_id if status == "disabled" else None
-    connection = _connect(config)
-    _require_provider(connection, context.user.tenant_id, provider_id)
-    try:
-        connection.execute(
-            """
-            INSERT INTO models(
-              model_id, tenant_id, provider_id, model_alias, upstream_model_name, provider_model_id,
-              display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k,
-              currency, price_schema_version, description, status, created_by, disabled_at, disabled_by,
-              created_at, updated_at
+    with ResourceWriteTransaction(_connect(config), config, context, "model.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _require_provider(connection, context.user.tenant_id, provider_id)
+        try:
+            connection.execute(
+                """
+                INSERT INTO models(
+                  model_id, tenant_id, provider_id, model_alias, upstream_model_name, provider_model_id,
+                  display_name, capabilities, context_window, input_price_per_1k, output_price_per_1k,
+                  currency, price_schema_version, description, status, created_by, disabled_at, disabled_by,
+                  created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model_id,
+                    context.user.tenant_id,
+                    provider_id,
+                    internal_model_id,
+                    provider_model_id,
+                    provider_model_id,
+                    display_name,
+                    json.dumps(capabilities, ensure_ascii=False, sort_keys=True),
+                    context_window,
+                    input_price,
+                    output_price,
+                    currency,
+                    price_schema_version,
+                    description,
+                    status,
+                    context.user.user_id,
+                    disabled_at,
+                    disabled_by,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                model_id,
-                context.user.tenant_id,
-                provider_id,
-                internal_model_id,
-                provider_model_id,
-                provider_model_id,
-                display_name,
-                json.dumps(capabilities, ensure_ascii=False, sort_keys=True),
-                context_window,
-                input_price,
-                output_price,
-                currency,
-                price_schema_version,
-                description,
-                status,
-                context.user.user_id,
-                disabled_at,
-                disabled_by,
-                now,
-                now,
-            ),
-        )
-        connection.commit()
-    # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        # 租户边界必须来自认证上下文或已校验记录，不能相信客户端传入的 tenant_id。
-        if "models.tenant_id, models.model_alias" in str(exc) or "UNIQUE" in str(exc):
-            raise ApiError("model.internal_id_exists") from exc
-        raise ApiError("model.create_invalid") from exc
-    model = _load_model(connection, context.user.tenant_id, model_id)
-    _log_updated(context, model, request_id, trace_id, action="created", changed_fields=list(_create_field_names()))
-    return ModelResponse(model=model, request_id=request_id, trace_id=trace_id)
+            transaction.commit()
+        # 数据解析失败只返回安全摘要，原始异常不直接暴露给用户。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            # 租户边界必须来自认证上下文或已校验记录，不能相信客户端传入的 tenant_id。
+            if "models.tenant_id, models.model_alias" in str(exc) or "UNIQUE" in str(exc):
+                raise ApiError("model.internal_id_exists") from exc
+            raise ApiError("model.create_invalid") from exc
+        model = _load_model(connection, context.user.tenant_id, model_id)
+        _log_updated(context, model, request_id, trace_id, action="created", changed_fields=list(_create_field_names()))
+        return ModelResponse(model=model, request_id=request_id, trace_id=trace_id)
 
 
 def update_model(
@@ -191,80 +194,82 @@ def update_model(
     """
 
 
-    connection = _connect(config)
-    before = _load_model(connection, context.user.tenant_id, model_id)
-    supplied_fields = _supplied_fields(payload)
-    updates: dict[str, object | None] = {}
+    with ResourceWriteTransaction(_connect(config), config, context, "model.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        before = _load_model(connection, context.user.tenant_id, model_id)
+        supplied_fields = _supplied_fields(payload)
+        updates: dict[str, object | None] = {}
 
-    # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
-    # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
-    if "provider_id" in supplied_fields:
-        provider_id = _normalize_provider_id(payload.provider_id)
-        _require_provider(connection, context.user.tenant_id, provider_id)
-        updates["provider_id"] = provider_id
-    # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
-    # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
-    if "provider_model_id" in supplied_fields:
-        provider_model_id = _normalize_provider_model_id(payload.provider_model_id)
-        updates["provider_model_id"] = provider_model_id
-        # M0 继续维护旧字段，确保 PRD-009 已验证的数据面转发路径不被破坏。
-        updates["upstream_model_name"] = provider_model_id
-    if "display_name" in supplied_fields:
-        updates["display_name"] = _normalize_display_name(payload.display_name)
-    if "capabilities" in supplied_fields:
-        updates["capabilities"] = json.dumps(
-            _normalize_capabilities(payload.capabilities),
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-    if "context_window" in supplied_fields:
-        updates["context_window"] = _normalize_context_window(payload.context_window)
-    if "input_price_per_1k" in supplied_fields:
-        updates["input_price_per_1k"] = _normalize_price(payload.input_price_per_1k)
-    if "output_price_per_1k" in supplied_fields:
-        updates["output_price_per_1k"] = _normalize_price(payload.output_price_per_1k)
-    # 成本与币种按模型目录口径处理，避免不同币种或估算值被混成一类。
-    if "currency" in supplied_fields:
-        updates["currency"] = _normalize_currency(payload.currency)
-    if "price_schema_version" in supplied_fields:
-        updates["price_schema_version"] = _normalize_optional_text(
-            payload.price_schema_version,
-            80,
-            "model.create_invalid",
-        )
-    if "description" in supplied_fields:
-        updates["description"] = _normalize_optional_text(payload.description, MAX_DESCRIPTION_LENGTH, "model.create_invalid")
-    if "status" in supplied_fields:
-        updates["status"] = _normalize_status(payload.status)
-    if not updates:
-        # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
-        raise ApiError("model.update_empty")
+        # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
+        # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
+        if "provider_id" in supplied_fields:
+            provider_id = _normalize_provider_id(payload.provider_id)
+            _require_provider(connection, context.user.tenant_id, provider_id)
+            updates["provider_id"] = provider_id
+        # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
+        # Provider 分支会影响上游选择和密钥池，必须显式保留决策边界。
+        if "provider_model_id" in supplied_fields:
+            provider_model_id = _normalize_provider_model_id(payload.provider_model_id)
+            updates["provider_model_id"] = provider_model_id
+            # M0 继续维护旧字段，确保 PRD-009 已验证的数据面转发路径不被破坏。
+            updates["upstream_model_name"] = provider_model_id
+        if "display_name" in supplied_fields:
+            updates["display_name"] = _normalize_display_name(payload.display_name)
+        if "capabilities" in supplied_fields:
+            updates["capabilities"] = json.dumps(
+                _normalize_capabilities(payload.capabilities),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        if "context_window" in supplied_fields:
+            updates["context_window"] = _normalize_context_window(payload.context_window)
+        if "input_price_per_1k" in supplied_fields:
+            updates["input_price_per_1k"] = _normalize_price(payload.input_price_per_1k)
+        if "output_price_per_1k" in supplied_fields:
+            updates["output_price_per_1k"] = _normalize_price(payload.output_price_per_1k)
+        # 成本与币种按模型目录口径处理，避免不同币种或估算值被混成一类。
+        if "currency" in supplied_fields:
+            updates["currency"] = _normalize_currency(payload.currency)
+        if "price_schema_version" in supplied_fields:
+            updates["price_schema_version"] = _normalize_optional_text(
+                payload.price_schema_version,
+                80,
+                "model.create_invalid",
+            )
+        if "description" in supplied_fields:
+            updates["description"] = _normalize_optional_text(payload.description, MAX_DESCRIPTION_LENGTH, "model.create_invalid")
+        if "status" in supplied_fields:
+            updates["status"] = _normalize_status(payload.status)
+        if not updates:
+            # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
+            raise ApiError("model.update_empty")
 
-    now = _to_db_time(_utcnow())
-    set_clauses = [f"{column}=?" for column in updates]
-    values = list(updates.values())
-    disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
-    reactivated = before.status == "disabled" and updates.get("status") == "active"
-    if disabled_event:
-        set_clauses.extend(["disabled_at=?", "disabled_by=?"])
-        values.extend([now, context.user.user_id])
-    elif reactivated:
-        set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
-    set_clauses.append("updated_at=?")
-    values.append(now)
-    values.extend([context.user.tenant_id, model_id])
-    connection.execute(
-        f"""
-        UPDATE models
-        SET {', '.join(set_clauses)}
-        WHERE tenant_id=? AND model_id=?
-        """,
-        values,
-    )
-    connection.commit()
-    model = _load_model(connection, context.user.tenant_id, model_id)
-    _log_updated(context, model, request_id, trace_id, action="updated", changed_fields=sorted(updates))
-    return ModelResponse(model=model, request_id=request_id, trace_id=trace_id)
+        now = _to_db_time(_utcnow())
+        set_clauses = [f"{column}=?" for column in updates]
+        values = list(updates.values())
+        disabled_event = before.status != "disabled" and updates.get("status") == "disabled"
+        reactivated = before.status == "disabled" and updates.get("status") == "active"
+        if disabled_event:
+            set_clauses.extend(["disabled_at=?", "disabled_by=?"])
+            values.extend([now, context.user.user_id])
+        elif reactivated:
+            set_clauses.extend(["disabled_at=NULL", "disabled_by=NULL"])
+        set_clauses.append("updated_at=?")
+        values.append(now)
+        values.extend([context.user.tenant_id, model_id])
+        connection.execute(
+            f"""
+            UPDATE models
+            SET {', '.join(set_clauses)}
+            WHERE tenant_id=? AND model_id=?
+            """,
+            values,
+        )
+        transaction.commit()
+        model = _load_model(connection, context.user.tenant_id, model_id)
+        _log_updated(context, model, request_id, trace_id, action="updated", changed_fields=sorted(updates))
+        return ModelResponse(model=model, request_id=request_id, trace_id=trace_id)
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:

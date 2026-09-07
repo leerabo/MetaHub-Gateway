@@ -157,3 +157,75 @@ node scripts/verify-production-surface.mjs
 此提交交付资源客户端认证能力，不证明主 Console Cookie 启动或全部页面消费端已接通。
 真实入口已有 console-entry-r5 两视口失败证据；PRD-146/147 消费端与 owner 迁移继续推进，
 G6/G7/G8 未通过，PRD-148 未开始。
+
+## 2026-09-08 基础资源写事务复核
+
+本增量完成 Project/Application、Environment、Provider/Key、Model、Virtual Key 五组共 16 项
+创建/更新/禁用的事务接线。两轮编码前自审见设计中的同名连续实施批次。共用
+`ResourceWriteTransaction` 在业务读取前开启事务，恢复实际 Workspace 或 Legacy 会话与具体
+write 权限，提交前再次复核。五项 owner 字段不允许由不同上下文拼接；未提交退出统一回滚和
+关闭连接。已有审计提交 helper 仍从所属服务传入，保留故障注入与既有错误映射。
+
+Virtual Key 随机冲突的重试重新开启事务、恢复会话、读取环境及项目绑定。没有增加业务请求
+自动重试。Provider connection-test 的网络与写回暂未迁移，不在这 16 项中；前端消费端仍待
+本批后续连续接线，不能把本次后端提交称为业务页或整批完成。
+
+正式证据均在 `.artifacts/g6-security-20260907/`，不同轮次分别保留：
+
+| 报告 | 结果 | 证明范围 |
+| --- | --- | --- |
+| `prd147-resource-write-red-r1-junit.xml` | 2 项夹具错误 | Environment 仅支持 dev/test/prod，夹具误用自定义代码，未进入产品反例 |
+| `prd147-resource-write-red-r2-junit.xml` | 2 项夹具错误 | Provider 编码不支持连字符，修正夹具，不放宽产品校验 |
+| `prd147-resource-write-red-r3-junit.xml` | 1 失败、1 通过 | 实际注册与 Cookie 登录后经 Identity logout 撤销；16 项旧上下文全部 unexpected_commit，当前会话对照通过 |
+| `prd147-resource-write-green-r1-junit.xml` | 2/2 | 同一反例的 16 项全部 workspace_session.revoked；11 张业务/事件/审计表内容摘要不变；当前会话 16 项正常 |
+| `prd147-resource-write-fault-r1-junit.xml` | 2 通过、1 失败 | 提交前模拟时钟过期与注入 commit 故障各覆盖全部 16 项，均回滚且关闭连接；冲突测试的手写撤销 SQL 未满足字段约束 |
+| `prd147-resource-write-collision-r2-junit.xml` | 3/3 | 改用既有撤销函数；真实唯一键冲突回滚后，撤销会话拒绝、已禁用环境拒绝、正常重试成功 |
+| `prd147-resource-write-http-r1-junit.xml` | 2/2 | 16 条实际 HTTP 正常写入、匿名 401、CSRF 403、混合凭据 400；五字段逐项混接两份真实会话均拒绝 |
+| `prd147-resource-write-unit-r1-junit.xml` | 7/7 | 真实 SQLite 的 begin/body/reauth/commit/成功退出、未知权限、无事务提交生命周期 |
+| `prd147-resource-write-concurrency-r1-junit.xml` | 1/1 | 实际写线程在读取资源前已持有 SQLite 写事务；独立连接撤销写入被锁阻止；完成后真实 logout 生效，旧上下文拒绝 |
+| `prd147-resource-write-legacy-r1-junit.xml` | 8/8 | 五组资源原有主流程、Key 限制、Application 搬迁逐 Key 审计与审计失败整体回滚；1098.412 秒，无失败/错误/跳过 |
+
+新集成文件的模块级迁移夹具复用既有 `migrated_baseline`，只复制受保护基线并对副本 apply 到
+当前迁移；账号、组织、成员、会话和初始资源经实际 HTTP 创建，不覆写认证 dependency。
+事务期过期只替换 Workspace 认证时钟，提交失败只替换 committer；冲突用内存 Key 生成器造成
+实际唯一约束失败，再用既有撤销函数或测试库环境状态变更插入重试间隙。生命周期单测替换
+认证方法，仅证明连接/事务控制流，不当作真实身份授权证据。
+双连接用例只在业务资源读取处设置线程屏障，不替换认证；竞争连接实际执行既有会话撤销
+SQL 并验证锁冲突，释放屏障后经真实 HTTP logout 再次验证旧上下文拒绝。未据此声明 PostgreSQL
+或跨进程/跨主机并发撤权已验证。
+
+聚焦运行命令（仓库根目录；每次使用不同 basetemp 和报告文件，旧报告不覆盖）：
+
+```powershell
+$env:METAHUB_TEST_MIGRATED_BASELINE = 'C:\MetaHub\.tmp\pytest-g6-security-sqlite-r2\prd134-api-base0\base.sqlite3'
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_prd147_workspace_resource_writes.py -q --tb=short --show-capture=no --basetemp=.tmp/pytest-prd147-resource-write-green-r1 --junitxml=.artifacts/g6-security-20260907/prd147-resource-write-green-r1-junit.xml
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/unit/test_prd147_resource_transaction_lifecycle.py -q --tb=short --show-capture=no --basetemp=.tmp/pytest-prd147-resource-write-unit-r1 --junitxml=.artifacts/g6-security-20260907/prd147-resource-write-unit-r1-junit.xml
+```
+
+green-r1 运行时文件只有两项；后续 fault-r1、collision-r2、http-r1 分别使用 `-k 'failures or
+collision'`、`-k collision`、`-k 'http_resource or owner_cannot'`。collision-r2 使用 xunit1；
+其余记录属性沿用 xunit2 并保留 pytest 警告，不声明独立 XSD 验证。
+concurrency-r1 单独选择 `-k serializes` 并使用 xunit1；新增三份 Python 文件完整 ruff check
+通过，六份受影响生产源码的 F 类静态检查通过，`git diff --check` 通过。没有格式化旧服务全文件。
+
+只对五组 Legacy 资源选择相邻主流程、Virtual Key 限制与 Application 搬迁审计/回滚冒烟，
+不执行整套数据库、浏览器、性能或安全 QA。八项最终全部通过；既有夹具每例从空库迁移，
+单例 132..142 秒，此耗时不是业务接口延迟或性能验收结论。期间没有重启同一测试运行。
+
+```powershell
+$legacyFiles = @(
+  'control-plane-api/tests/integration/test_environments.py'
+  'control-plane-api/tests/integration/test_providers.py'
+  'control-plane-api/tests/integration/test_models.py'
+  'control-plane-api/tests/integration/test_virtual_keys.py'
+  'control-plane-api/tests/integration/test_projects_applications.py'
+)
+$selection = 'environment_alias_resolution_and_resource_binding or provider_create_list_test_and_disable_flow or model_catalog_create_list_update_and_disable_flow or virtual_key_create_call_disable_flow or virtual_key_limit_settings_flow_and_permissions or project_application_key_usage_log_and_budget_flow or application_project_move'
+.venv\Scripts\python.exe -m pytest @legacyFiles -q --tb=short --show-capture=no -k $selection --basetemp=.tmp/pytest-prd147-resource-write-legacy-r1 --junitxml=.artifacts/g6-security-20260907/prd147-resource-write-legacy-r1-junit.xml
+```
+
+敏感审计使用独立 `prd-147-resource-write-transactions-sensitive-audit.json`，验证十项精确暂存
+源码/测试/文档、原始报告、严格 UTF-8、凭据模式及受保护基线摘要。测试凭据和 Key 仅驻留
+进程内存；不提交数据库、`.artifacts`、`.tmp`、用户 PRD-101..105 文档或 outputs。模式扫描
+不是独立安全会签。PostgreSQL 并发撤权锁定、Provider 网络探测、前端 owner 和统一批次 QA
+仍未完成，G6/G7/G8 不变，PRD-148 未开始。

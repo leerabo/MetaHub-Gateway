@@ -25,6 +25,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.virtual_keys.service import load_virtual_key_audit_snapshot
 
 from .models import (
@@ -122,51 +123,53 @@ def create_project(
     project_code = _normalize_code(payload.project_code, "project.code_invalid")
     name = _normalize_name(payload.name, "project.name_invalid")
     description = _normalize_description(payload.description)
-    connection = _connect(config)
-    owner_user_id = _normalize_optional_owner(connection, context.user.tenant_id, payload.owner_user_id)
-    now = _to_db_time(_utcnow())
-    project_id = f"prj_{uuid4().hex}"
-    try:
-        connection.execute(
-            """
-            INSERT INTO projects(
-              project_id, tenant_id, project_code, name, description, owner_user_id,
-              status, created_by, updated_by, created_at, updated_at
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        owner_user_id = _normalize_optional_owner(connection, context.user.tenant_id, payload.owner_user_id)
+        now = _to_db_time(_utcnow())
+        project_id = f"prj_{uuid4().hex}"
+        try:
+            connection.execute(
+                """
+                INSERT INTO projects(
+                  project_id, tenant_id, project_code, name, description, owner_user_id,
+                  status, created_by, updated_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    context.user.tenant_id,
+                    project_code,
+                    name,
+                    description,
+                    owner_user_id,
+                    context.user.user_id,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                context.user.tenant_id,
-                project_code,
-                name,
-                description,
-                owner_user_id,
-                context.user.user_id,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-        _write_project_event(
-            connection,
-            context,
-            project_id=project_id,
-            application_id=None,
-            event_type="project.created",
-            request_id=request_id,
-            trace_id=trace_id,
-            payload={"project_code": project_code, "name": name, "status": "active"},
-        )
-        connection.commit()
-    # SQLite 唯一约束是项目编码冲突的最终防线，异常分支必须回滚事务。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        # 编码唯一约束冲突需要映射成 409，避免泄露 SQLite 原始错误文本。
-        raise ApiError("project.code_conflict") from exc
-    project = _load_project(connection, context.user.tenant_id, project_id)
-    _log_project_event(context, "project.created", project_id, request_id, trace_id, {"project_code": project_code})
-    return ProjectResponse(project=project, request_id=request_id, trace_id=trace_id)
+            _write_project_event(
+                connection,
+                context,
+                project_id=project_id,
+                application_id=None,
+                event_type="project.created",
+                request_id=request_id,
+                trace_id=trace_id,
+                payload={"project_code": project_code, "name": name, "status": "active"},
+            )
+            transaction.commit()
+        # SQLite 唯一约束是项目编码冲突的最终防线，异常分支必须回滚事务。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            # 编码唯一约束冲突需要映射成 409，避免泄露 SQLite 原始错误文本。
+            raise ApiError("project.code_conflict") from exc
+        project = _load_project(connection, context.user.tenant_id, project_id)
+        _log_project_event(context, "project.created", project_id, request_id, trace_id, {"project_code": project_code})
+        return ProjectResponse(project=project, request_id=request_id, trace_id=trace_id)
 
 
 def update_project(
@@ -187,34 +190,36 @@ def update_project(
     if not provided:
         # 空更新会让审计和用户反馈都失去意义，因此统一拒绝。
         raise ApiError("project.update_empty")
-    connection = _connect(config)
-    _load_project(connection, context.user.tenant_id, project_id)
-    updates: list[str] = []
-    values: list[object | None] = []
-    if "name" in provided:
-        updates.append("name=?")
-        values.append(_normalize_name(payload.name, "project.name_invalid"))
-    if "description" in provided:
-        updates.append("description=?")
-        values.append(_normalize_description(payload.description))
-    if "owner_user_id" in provided:
-        updates.append("owner_user_id=?")
-        values.append(_normalize_optional_owner(connection, context.user.tenant_id, payload.owner_user_id))
-    if "status" in provided:
-        updates.append("status=?")
-        values.append(_normalize_status(payload.status, "project.status_invalid"))
-    updates.extend(["updated_by=?", "updated_at=?"])
-    values.extend([context.user.user_id, _to_db_time(_utcnow()), context.user.tenant_id, project_id])
-    connection.execute(
-        f"UPDATE projects SET {', '.join(updates)} WHERE tenant_id=? AND project_id=?",
-        values,
-    )
-    connection.commit()
-    return ProjectResponse(
-        project=_load_project(connection, context.user.tenant_id, project_id),
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        _load_project(connection, context.user.tenant_id, project_id)
+        updates: list[str] = []
+        values: list[object | None] = []
+        if "name" in provided:
+            updates.append("name=?")
+            values.append(_normalize_name(payload.name, "project.name_invalid"))
+        if "description" in provided:
+            updates.append("description=?")
+            values.append(_normalize_description(payload.description))
+        if "owner_user_id" in provided:
+            updates.append("owner_user_id=?")
+            values.append(_normalize_optional_owner(connection, context.user.tenant_id, payload.owner_user_id))
+        if "status" in provided:
+            updates.append("status=?")
+            values.append(_normalize_status(payload.status, "project.status_invalid"))
+        updates.extend(["updated_by=?", "updated_at=?"])
+        values.extend([context.user.user_id, _to_db_time(_utcnow()), context.user.tenant_id, project_id])
+        connection.execute(
+            f"UPDATE projects SET {', '.join(updates)} WHERE tenant_id=? AND project_id=?",
+            values,
+        )
+        transaction.commit()
+        return ProjectResponse(
+            project=_load_project(connection, context.user.tenant_id, project_id),
+            request_id=request_id,
+            trace_id=trace_id,
+        )
 
 
 def list_applications(
@@ -293,59 +298,61 @@ def create_application(
     application_code = _normalize_code(payload.application_code, "application.code_invalid")
     name = _normalize_name(payload.name, "application.name_invalid")
     description = _normalize_description(payload.description)
-    connection = _connect(config)
-    project = _load_project(connection, context.user.tenant_id, project_id)
-    _ensure_writable_parent_status(project.status)
-    now = _to_db_time(_utcnow())
-    application_id = f"app_{uuid4().hex}"
-    try:
-        connection.execute(
-            """
-            INSERT INTO applications(
-              application_id, tenant_id, project_id, application_code, name, description,
-              status, created_by, updated_by, created_at, updated_at
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        project = _load_project(connection, context.user.tenant_id, project_id)
+        _ensure_writable_parent_status(project.status)
+        now = _to_db_time(_utcnow())
+        application_id = f"app_{uuid4().hex}"
+        try:
+            connection.execute(
+                """
+                INSERT INTO applications(
+                  application_id, tenant_id, project_id, application_code, name, description,
+                  status, created_by, updated_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                """,
+                (
+                    application_id,
+                    context.user.tenant_id,
+                    project_id,
+                    application_code,
+                    name,
+                    description,
+                    context.user.user_id,
+                    context.user.user_id,
+                    now,
+                    now,
+                ),
             )
-            VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
-            """,
-            (
-                application_id,
-                context.user.tenant_id,
-                project_id,
-                application_code,
-                name,
-                description,
-                context.user.user_id,
-                context.user.user_id,
-                now,
-                now,
-            ),
-        )
-        _write_project_event(
-            connection,
+            _write_project_event(
+                connection,
+                context,
+                project_id=project_id,
+                application_id=application_id,
+                event_type="application.created",
+                request_id=request_id,
+                trace_id=trace_id,
+                payload={"application_code": application_code, "name": name, "project_id": project_id},
+            )
+            transaction.commit()
+        # 应用编码唯一约束由数据库兜底，异常分支需要回滚并转换成业务错误码。
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            # 同一项目下应用编码重复时返回应用域冲突错误，便于控制台定位字段。
+            raise ApiError("application.code_conflict") from exc
+        application = _load_application(connection, context.user.tenant_id, application_id)
+        _log_project_event(
             context,
-            project_id=project_id,
-            application_id=application_id,
-            event_type="application.created",
-            request_id=request_id,
-            trace_id=trace_id,
-            payload={"application_code": application_code, "name": name, "project_id": project_id},
+            "application.created",
+            application_id,
+            request_id,
+            trace_id,
+            {"application_code": application_code, "project_id": project_id},
         )
-        connection.commit()
-    # 应用编码唯一约束由数据库兜底，异常分支需要回滚并转换成业务错误码。
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        # 同一项目下应用编码重复时返回应用域冲突错误，便于控制台定位字段。
-        raise ApiError("application.code_conflict") from exc
-    application = _load_application(connection, context.user.tenant_id, application_id)
-    _log_project_event(
-        context,
-        "application.created",
-        application_id,
-        request_id,
-        trace_id,
-        {"application_code": application_code, "project_id": project_id},
-    )
-    return ApplicationResponse(application=application, request_id=request_id, trace_id=trace_id)
+        return ApplicationResponse(application=application, request_id=request_id, trace_id=trace_id)
 
 
 def update_application(
@@ -367,107 +374,107 @@ def update_application(
     if not provided:
         # 空 PATCH 不会改变应用归属或治理状态，必须返回明确错误让控制台停止误报保存成功。
         raise ApiError("application.update_empty")
-    connection = _connect(config)
-    audit_records = []
-    try:
-        # SQLite 没有 SELECT FOR UPDATE；BEGIN IMMEDIATE 在读取 Application 和 Key 快照前取得写锁，
-        # 防止并发改绑在“选中 Key 集合”和批量更新之间插入，保证每把受影响 Key 恰好审计一次。
-        connection.execute("BEGIN IMMEDIATE")
-        current = _load_application(connection, context.user.tenant_id, application_id)
-        updates: list[str] = []
-        values: list[object | None] = []
-        next_project_id = current.project_id
-        if "project_id" in provided:
-            next_project_id = _normalize_required_text(payload.project_id, "project.not_found")
-            project = _load_project(connection, context.user.tenant_id, next_project_id)
-            _ensure_writable_parent_status(project.status)
-            updates.append("project_id=?")
-            values.append(next_project_id)
-        if "name" in provided:
-            updates.append("name=?")
-            values.append(_normalize_name(payload.name, "application.name_invalid"))
-        if "description" in provided:
-            updates.append("description=?")
-            values.append(_normalize_description(payload.description))
-        if "status" in provided:
-            updates.append("status=?")
-            values.append(_normalize_status(payload.status, "application.status_invalid"))
+    with ResourceWriteTransaction(_connect(config), config, context, "project.write") as transaction:
+        connection = transaction.connection
+        context = transaction.context
+        audit_records = []
+        try:
+            # The outer resource transaction holds the SQLite write lock before these reads.
+            current = _load_application(connection, context.user.tenant_id, application_id)
+            updates: list[str] = []
+            values: list[object | None] = []
+            next_project_id = current.project_id
+            if "project_id" in provided:
+                next_project_id = _normalize_required_text(payload.project_id, "project.not_found")
+                project = _load_project(connection, context.user.tenant_id, next_project_id)
+                _ensure_writable_parent_status(project.status)
+                updates.append("project_id=?")
+                values.append(next_project_id)
+            if "name" in provided:
+                updates.append("name=?")
+                values.append(_normalize_name(payload.name, "application.name_invalid"))
+            if "description" in provided:
+                updates.append("description=?")
+                values.append(_normalize_description(payload.description))
+            if "status" in provided:
+                updates.append("status=?")
+                values.append(_normalize_status(payload.status, "application.status_invalid"))
 
-        project_changed = next_project_id != current.project_id
-        key_snapshots = (
-            _load_application_virtual_key_audit_snapshots(
-                connection,
-                context.user.tenant_id,
-                application_id,
-            )
-            if project_changed
-            else []
-        )
-        now = _to_db_time(_utcnow())
-        updates.extend(["updated_by=?", "updated_at=?"])
-        values.extend([context.user.user_id, now, context.user.tenant_id, application_id])
-        connection.execute(
-            f"UPDATE applications SET {', '.join(updates)} WHERE tenant_id=? AND application_id=?",
-            values,
-        )
-        if project_changed:
-            # Key 归属更新必须继续携带认证租户和已锁定 Application，
-            # 不能仅凭客户端提供的 ID 批量写入。
-            connection.execute(
-                """
-                UPDATE virtual_keys
-                SET project_id=?, updated_at=?
-                WHERE tenant_id=? AND application_id=?
-                """,
-                (next_project_id, now, context.user.tenant_id, application_id),
-            )
-            for virtual_key_id, object_name, before_summary in key_snapshots:
-                after_object_name, after_summary = load_virtual_key_audit_snapshot(
+            project_changed = next_project_id != current.project_id
+            key_snapshots = (
+                _load_application_virtual_key_audit_snapshots(
                     connection,
                     context.user.tenant_id,
-                    virtual_key_id,
+                    application_id,
                 )
-                audit_record = record_audit_log(
-                    connection,
-                    context,
-                    action="virtual_key.updated",
-                    object_type="virtual_key",
-                    object_id=virtual_key_id,
-                    object_name=after_object_name or object_name,
-                    before_summary=before_summary,
-                    after_summary=after_summary,
-                    request_meta=_audit_request_meta(audit_request_meta),
-                    request_id=request_id,
-                    trace_id=trace_id,
+                if project_changed
+                else []
+            )
+            now = _to_db_time(_utcnow())
+            updates.extend(["updated_by=?", "updated_at=?"])
+            values.extend([context.user.user_id, now, context.user.tenant_id, application_id])
+            connection.execute(
+                f"UPDATE applications SET {', '.join(updates)} WHERE tenant_id=? AND application_id=?",
+                values,
+            )
+            if project_changed:
+                # Key 归属更新必须继续携带认证租户和已锁定 Application，
+                # 不能仅凭客户端提供的 ID 批量写入。
+                connection.execute(
+                    """
+                    UPDATE virtual_keys
+                    SET project_id=?, updated_at=?
+                    WHERE tenant_id=? AND application_id=?
+                    """,
+                    (next_project_id, now, context.user.tenant_id, application_id),
                 )
-                if audit_record is None:
-                    # 已锁定快照中的 project_id 必然变化；缺失审计意味着合同失配，
-                    # 不能提交无证据迁移。
-                    raise ApiError("audit_log.record_unavailable")
-                audit_records.append(audit_record)
-            commit_audited_transaction(connection)
-        else:
-            connection.commit()
-        application = _load_application(connection, context.user.tenant_id, application_id)
-    except Exception:
-        # Application、全部 Key 与逐 Key 审计是一个治理事实，任一审计失败都必须整体回滚。
-        connection.rollback()
-        raise
+                for virtual_key_id, object_name, before_summary in key_snapshots:
+                    after_object_name, after_summary = load_virtual_key_audit_snapshot(
+                        connection,
+                        context.user.tenant_id,
+                        virtual_key_id,
+                    )
+                    audit_record = record_audit_log(
+                        connection,
+                        context,
+                        action="virtual_key.updated",
+                        object_type="virtual_key",
+                        object_id=virtual_key_id,
+                        object_name=after_object_name or object_name,
+                        before_summary=before_summary,
+                        after_summary=after_summary,
+                        request_meta=_audit_request_meta(audit_request_meta),
+                        request_id=request_id,
+                        trace_id=trace_id,
+                    )
+                    if audit_record is None:
+                        # 已锁定快照中的 project_id 必然变化；缺失审计意味着合同失配，
+                        # 不能提交无证据迁移。
+                        raise ApiError("audit_log.record_unavailable")
+                    audit_records.append(audit_record)
+                transaction.commit(commit_audited_transaction)
+            else:
+                transaction.commit()
+            application = _load_application(connection, context.user.tenant_id, application_id)
+        except Exception:
+            # Application、全部 Key 与逐 Key 审计是一个治理事实，任一审计失败都必须整体回滚。
+            connection.rollback()
+            raise
 
-    # 外部 Webhook 投递只能发生在数据库提交之后；单条投递失败由审计模块隔离，不反向撤销已提交事实。
-    for audit_record in audit_records:
-        dispatch_audit_recorded(
-            config,
-            context,
-            audit_record,
+        # 外部 Webhook 投递只能发生在数据库提交之后；单条投递失败由审计模块隔离，不反向撤销已提交事实。
+        for audit_record in audit_records:
+            dispatch_audit_recorded(
+                config,
+                context,
+                audit_record,
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+        return ApplicationResponse(
+            application=application,
             request_id=request_id,
             trace_id=trace_id,
         )
-    return ApplicationResponse(
-        application=application,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
 
 
 def _load_application_virtual_key_audit_snapshots(
