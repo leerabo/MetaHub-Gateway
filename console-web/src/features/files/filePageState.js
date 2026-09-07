@@ -13,6 +13,7 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
 
 // 导航 ID 同时进入后端 target_section 和页面 owner，手写其他 hash 不能复用文件状态。
 const NAVIGATION_ID = "files";
@@ -45,7 +46,17 @@ export function fileWriteIdentitySnapshot(authContext) {
  *
  * 前端 owner 只阻止无权预取和迟到回写，GET/POST 仍由 Control API 独立执行 RBAC 与 tenant 条件。
  */
-export function filePageOwner(authContext, consoleShellState, { requireWrite = false } = {}) {
+export function filePageOwner(authContext, consoleShellState, { requireWrite = false, session } = {}) {
+  if (session !== undefined) {
+    const permissions = [PERMISSIONS.FILE_READ, ...(requireWrite ? [PERMISSIONS.FILE_WRITE] : [])];
+    const owner = workspaceResourcePageOwner(session, consoleShellState, { navigationId: NAVIGATION_ID, permissions });
+    if (!owner || authContext !== session.context) return null;
+    const canWrite = hasPermission(authContext, PERMISSIONS.FILE_WRITE);
+    return Object.freeze({ authentication: "workspace", workspaceId: session.owner.workspaceId,
+      identity: JSON.stringify([session.owner, PERMISSIONS.FILE_READ]),
+      writeIdentity: canWrite ? JSON.stringify([session.owner, PERMISSIONS.FILE_WRITE]) : "",
+      navigation: NAVIGATION_ID, navigationOwner: owner.key, canWrite });
+  }
   const identity = fileReadIdentitySnapshot(authContext);
   const writeIdentity = fileWriteIdentitySnapshot(authContext);
   const tenantId = mirroredTenantId(authContext);
@@ -354,6 +365,7 @@ export function createFilePageState() {
     query,
     setStatus,
     resetStatus,
+    cancelList: invalidateList,
     beginListOperation,
     isListOperationCurrent,
     acceptPage,
@@ -380,14 +392,14 @@ export function isFileAbortError(error) {
 function keyFromOwner(owner) {
   if (
     !owner?.identity
-    || !owner?.tenantId
+    || (owner.authentication === "workspace" ? !owner.workspaceId : !owner.tenantId)
     || owner.navigation !== NAVIGATION_ID
     || !owner.navigationOwner
   ) return "";
   return JSON.stringify([
     owner.identity,
     owner.writeIdentity,
-    owner.tenantId,
+    owner.authentication === "workspace" ? ["workspace", owner.workspaceId] : ["legacy", owner.tenantId],
     owner.navigation,
     owner.navigationOwner,
     owner.canWrite === true,

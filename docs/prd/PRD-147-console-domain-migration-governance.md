@@ -772,3 +772,25 @@ probe_lease_token/until 的空值安全条件更新；配置改回原值仍因 g
 任何 CAS、鉴权或提交失败都回滚且关闭连接，只有成功提交后才能写 health_checked 日志。
 受影响测试覆盖实际注册、撤销/降权、配置/Key 变更、同秒竞争、租约、提交故障和原有网络冒烟。
 本增量不替代 PostgreSQL 并发撤权锁定、前端 owner 消费端或全批次 QA，Excel 不修改完成状态。
+
+### 2026-09-08 基础资源页面消费端补充自审
+
+范围为 Project/Application、Environment、Provider/Key（含目录入口）、Model、Virtual Key 和 File。
+共同消费既有 Workspace public session、导航投影和显式 Cookie 传输，不制造 Legacy 镜像。
+页面 owner 同时校验 shell/session 授权身份、active route/item/target、实时 hash 和具体权限。
+读 ticket 绑定刷新代次与独立 lane；DOM binding 绑定实际节点与渲染代次；写 ticket 绑定页面
+owner 和 binding。离页、换空间、撤权及 pagehide 同步取消并清除反馈、选择和一次性结果。
+
+第一轮自审（身份与刷新）：每次后台刷新重建相同 public owner 的 session 对象会误杀在途上传
+和一次性 Key 返回。只有完整 owner 与权限列表相同才复用原不可变 session 引用，其他变化仍
+清页。后台鉴权与导航复核照常运行；同 owner 有未决操作或用户编辑时不替换 DOM。旧读取在
+新刷新开始即取消，迟到列表、401/403 和 finally 不能影响新刷新。旧 DOM 的事件必须在读取
+FormData 或 File 前拒绝。提交只发一次，不因取消或网络结果未知自动重试。
+
+第二轮自审（依赖与证据）：Provider 页还读取 Catalog，必须同时迁移其四项客户端调用，保留
+幂等键同体复用、取消正文读取和 mixed credential 拒绝。Catalog 后端的历史 owner fallback
+及事务权限复核仍另记未完成，客户端接线不作为其安全完成证明。File 保留私有 cursor 和独立
+上传/list ticket，仅新增显式 Workspace owner 输入；不把 workspace_id 填到 tenantId。
+文件筛选、分页和延迟撤权刷新也必须校验旧 binding/session。测试执行生产主页面函数和绑定
+handler，覆盖六组请求、换 owner、断开 DOM、迟到成功/错误、同 owner 后台刷新及一次性结果。
+本组完成后再汇总整批 QA，不修改 Excel 完成状态，不提前开始 PRD-148。

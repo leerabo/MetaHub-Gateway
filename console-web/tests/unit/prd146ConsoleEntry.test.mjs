@@ -8,6 +8,7 @@ import { hasWorkspaceConsoleSession, isConsoleRefreshOwnerCurrent, sameWorkspace
 import { isConsoleNavigationOwnerCurrent } from "../../src/features/developer-start/renderDeveloperStart.js";
 import { renderWorkspaceSessionPrompt } from "../../src/features/auth/renderLoginPage.js";
 import { renderConsoleShell } from "../../src/features/console-shell/renderConsoleShell.js";
+import { createWorkspaceResourcePage } from "../../src/lib/workspaceResourcePage.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const EXPIRY = "2099-01-01T00:00:00Z";
@@ -23,6 +24,7 @@ function shell() {
     workspaceOwner: workspaceNavigationOwner(identity, { context, authorization }),
     activeNavigationItemId: "overview", activeRouteCode: "workspace.home.overview",
     navigation: { permission_revision: 1, membership_revision: 2, permission_fingerprint: "a".repeat(64),
+      active_navigation_item_id: "overview", active_route_code: "workspace.home.overview",
       navigation_items: [{ id: "overview", label: "Overview", target_section: "overview",
         route_code: "workspace.home.overview", visible: true, disabled: false }],
       preference: { sidebar_collapsed: false }, groups: [] } };
@@ -121,7 +123,7 @@ const cleanupFunctions = ["clearDeveloperContractSecurityLoad", "clearEnterprise
   "clearRequestLogSessionState", "clearRequestExplanationSessionState", "clearRequestFeedbackSummarySessionState",
   "clearUsageExportSessionState", "clearAuditExportSessionState", "clearWebhookSessionState",
   "clearDeveloperContractDownload", "clearPublicBrandingPreview", "closeWorkspaceAdvancedToolsDialog",
-  "cancelPendingConsoleNavigationSideEffects"];
+  "cancelPendingConsoleNavigationSideEffects", "clearBasicResourceSessionState"];
 const pageStates = ["providerStatusPageState", "finOpsPageState", "costAnomalyPageState", "sessionRiskPageState",
   "filePageState", "fileSecurityPageState", "batchJobPageState", "tenantDataLifecyclePageState", "mcpToolPageState",
   "localEndpointPageState", "privateGatewayPageState", "migrationOperationPageState", "supportTicketPageState",
@@ -134,11 +136,13 @@ function harness() {
   let click;
   const scope = {
     authSession: { context: null, owner: null }, refreshSequence: 1, consoleLogoutPending: false,
-    providersLoadController: null, consoleSidebarController: null, nextRefreshIsBackground: false,
+    resourcePageShellState: null, consoleSidebarController: null, nextRefreshIsBackground: false,
+    clearBasicResourceFeedback: () => effects.push("resource-feedback-clear"),
     expandedConsoleGroupKey: null, activeRefreshCount: 0,
     hasWorkspaceConsoleSession, sameWorkspaceConsoleSession, workspaceConsoleSessionFromShell,
     isConsoleRefreshOwnerCurrent, currentI18n: null, createI18n: () => ({}), DEFAULT_LOCALE: "zh-CN",
     WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS: new Set(), WORKSPACE_COMMERCIAL_NAVIGATION_IDS: new Set(),
+    RESOURCE_NAVIGATION_IDS: new Set(["projects", "environments", "providers", "models", "files", "virtual-keys"]),
     REQUEST_LOG_NAVIGATION_IDS: new Set(), usageExportState: { status: "idle" }, auditExportState: { status: "idle" },
     workspaceProviderEngineeringController: { snapshot: () => ({}), close() {} },
     workspaceCommercialAccountingController: { close() {} },
@@ -174,7 +178,12 @@ function harness() {
   for (const name of cleanupFunctions) scope[name] = () => effects.push(name);
   for (const name of pageStates) scope[name] = {
     clear: () => effects.push(name), syncOwner: (owner) => { assert.equal(owner.token, null); },
+    cancelList() {},
   };
+  scope.resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
+    session: scope.authSession, shell: scope.resourcePageShellState, hash: scope.readActiveNavigationHash(),
+    refreshGeneration: scope.refreshSequence,
+  }) });
   const lifecycle = section("async function performRefresh(", "async function loadAndRenderActiveNavigation(");
   const refresh = section("async function refresh(", "export function isConsoleWorkspaceContextInvalidation");
   const invalidate = section("function handleConsoleWorkspaceContextInvalidation()", "export function closeConsoleWorkspaceContextInvalidation");
@@ -195,17 +204,64 @@ test("PRD-146 startup authenticates real Cookie shell with no stored credential"
   assert.equal(effects.includes("signed-out"), false);
 });
 
-test("PRD-146 equivalent owner refresh keeps page drafts but uses a fresh request owner", async () => {
+test("PRD-146 equivalent owner refresh keeps the session reference while advancing request generation", async () => {
   const { scope, effects, api } = harness();
   scope.authSession = workspaceConsoleSessionFromShell(shell());
   const oldSession = scope.authSession;
   await api.refresh();
   assert.equal(effects.includes("owner-clear"), false);
   assert.equal(effects.includes("dom-clear"), false);
-  assert.notEqual(scope.authSession, oldSession);
+  assert.equal(scope.authSession, oldSession);
+  assert.equal(scope.refreshSequence, 2);
   assert.equal(sameWorkspaceConsoleSession(scope.authSession, oldSession), true);
   assert.equal(effects.includes("hydrate"), true);
   assert.equal(scope.activeRefreshCount, 0);
+});
+
+for (const pending of [false, true]) {
+  test(`PRD-147 actual background refresh preserves ${pending ? "pending writes" : "dirty forms"} after reauthentication`, async () => {
+    const { scope, effects, api } = harness();
+    scope.resourcePageShellState = shell();
+    scope.authSession = workspaceConsoleSessionFromShell(scope.resourcePageShellState);
+    const session = scope.authSession;
+    scope.resourcePageLifecycle.enter();
+    const binding = scope.resourcePageLifecycle.bind({ isConnected: true }, ["workspace.console.overview.read"]);
+    const operation = pending ? scope.resourcePageLifecycle.beginMutation(binding) : null;
+    if (!pending) scope.resourcePageLifecycle.markDirty(binding);
+    const oldRead = scope.resourcePageLifecycle.beginRead("overview", ["workspace.console.overview.read"]);
+    let validated = 0;
+    scope.loadConsoleShellState = async () => { validated++; return shell(); };
+    scope.nextRefreshIsBackground = true;
+    await api.refresh();
+    assert.equal(validated, 1);
+    assert.equal(scope.authSession, session);
+    assert.equal(effects.includes("hydrate"), false);
+    assert.equal(oldRead.controller.signal.aborted, true);
+    assert.equal(scope.resourcePageLifecycle.isBindingCurrent(binding), true);
+    if (pending) assert.equal(scope.resourcePageLifecycle.isMutationCurrent(operation), true);
+    assert.equal(scope.activeRefreshCount, 0);
+  });
+}
+
+test("PRD-147 actual background refresh never preserves a dirty form across owner changes", async () => {
+  const { scope, effects, api } = harness();
+  scope.resourcePageShellState = shell();
+  scope.authSession = workspaceConsoleSessionFromShell(scope.resourcePageShellState);
+  scope.resourcePageLifecycle.enter();
+  const binding = scope.resourcePageLifecycle.bind({ isConnected: true }, ["workspace.console.overview.read"]);
+  scope.resourcePageLifecycle.markDirty(binding);
+  const next = shell();
+  next.workspaceIdentity.current_session.session_id = "new_public_session";
+  next.workspaceOwner = workspaceNavigationOwner(next.workspaceIdentity, {
+    context: next.workspaceContext, authorization: next.workspaceAuthorization,
+  });
+  scope.loadConsoleShellState = async () => next;
+  scope.nextRefreshIsBackground = true;
+  await api.refresh();
+  assert.equal(effects.includes("owner-clear"), true);
+  assert.equal(effects.includes("dom-clear"), true);
+  assert.equal(effects.includes("hydrate"), true);
+  assert.equal(scope.resourcePageLifecycle.isBindingCurrent(binding), false);
 });
 
 for (const late of ["success", "error"]) {
@@ -284,17 +340,15 @@ for (const rejected of [false, true]) {
 test("PRD-146 shared cleanup cancels old owners while optionally preserving new navigation", () => {
   for (const preserve of [false, true]) {
     const { scope, effects } = harness();
-    scope.providersLoadController = { abort: () => effects.push("providers-abort") };
     scope.consoleSidebarController = { abort: () => effects.push("sidebar-abort") };
     const clear = runInNewContext(`${section("function clearConsoleSessionState(", "function invitationOwnerInput(")}
       clearConsoleSessionState;`, scope);
     clear({ clearNavigation: !preserve });
     assert.equal(effects.includes("navigation-leave"), !preserve);
-    for (const name of [...cleanupFunctions, ...pageStates, "experience-leave", "providers-abort", "sidebar-abort"]) {
+    for (const name of [...cleanupFunctions, ...pageStates, "experience-leave", "sidebar-abort"]) {
       assert.equal(effects.includes(name), true, name);
     }
     assert.equal(scope.workspaceConsoleExperienceShellState, null);
-    assert.equal(scope.providersLoadController, null);
     assert.equal(scope.consoleSidebarController, null);
   }
 });

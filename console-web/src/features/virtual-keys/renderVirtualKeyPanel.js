@@ -150,7 +150,7 @@ function renderOneTimeSecret(created) {
       </div>
       <code>${escapeHtml(created.plainValue)}</code>
       <div class="virtual-key-actions">
-        <button type="button" data-copy-virtual-key="${escapeAttribute(created.plainValue)}">复制</button>
+        <button type="button" data-copy-virtual-key>复制</button>
         <button type="button" data-dismiss-virtual-key-secret>隐藏</button>
       </div>
     </div>

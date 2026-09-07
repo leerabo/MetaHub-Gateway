@@ -34,7 +34,9 @@ export function hasWorkspaceConsoleSession(session) {
 
 export function sameWorkspaceConsoleSession(left, right) {
   return hasWorkspaceConsoleSession(left) && hasWorkspaceConsoleSession(right)
-    && OWNER_FIELDS.every((field) => left.owner[field] === right.owner[field]);
+    && OWNER_FIELDS.every((field) => left.owner[field] === right.owner[field])
+    && JSON.stringify([...left.context.permission_codes].sort())
+      === JSON.stringify([...right.context.permission_codes].sort());
 }
 
 // A refresh may start without authentication; only a validated shell can establish it.

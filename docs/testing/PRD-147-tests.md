@@ -275,3 +275,74 @@ JUnit、严格 UTF-8、高置信凭据模式及受保护公共基线摘要；模
 不提交测试数据库、`.tmp`、`.artifacts`、用户 PRD-101..105 文档或 outputs。Excel 仅按表格
 技能只读核对，没有修改完成状态；前端 Cookie/owner 消费端、PostgreSQL 并发撤权锁定和批次
 完整 QA 仍未完成，G6/G7/G8 不变，PRD-148 未开始，也未重新等待 72 小时。
+
+## 2026-09-08 基础资源页面 Workspace owner 接线
+
+接续同一批次，设计和两轮自审见 PRD-147「基础资源页面消费端补充自审」。本增量覆盖
+Project/Application、Environment、Provider/Key（含 Catalog）、Model、Virtual Key、File 的
+现有主页面入口。五组普通列表共用 read lane，File 保留私有 cursor/list/upload ticket；
+17 个表单/按钮 handler 的 18 个请求分支显式使用 Workspace Cookie。File 上传另有双层
+ticket，Catalog 四项客户端复用已有认证传输并保留幂等键。没有修改服务端认证守卫或授权默认值。
+
+页面 owner 使用实际 public session 构造器和后端导航投影，不填充 Legacy tenant/user/session。
+同一完整身份和权限集合的刷新复用 session/page 引用；读取代次仍前进。后台先复核授权，
+同 owner 有草稿/未决写入时不替换 DOM。hash、侧栏导航、pagehide、换空间和撤权均清理；
+新导航裁剪后先清旧资源 DOM，再读新页面。旧节点在 FormData/File 读取前拒绝，迟到成功、
+401/403、复制回调、刷新和 finally 不得更新新 owner。一次性 Key 不再写入按钮 dataset，
+隐藏操作立即清可见明文，不等待可能因未决操作而延后的刷新。
+
+正式证据仍在 `.artifacts/g6-security-20260907/`，以下各轮独立保留：
+
+| 报告 | 结果 | 说明 |
+| --- | --- | --- |
+| `prd147-resource-pages-r1-junit.xml` | 324 项，316 通过、8 失败 | 1 项真实缺陷：同 owner enter 替换 page 引用导致在途 Key 结果丢失；7 项旧夹具/请求头断言未适配 |
+| `prd147-resource-pages-r2-junit.xml` | 324/324 | 保留同 owner page 引用，更新实际依赖夹具及大小写不敏感的 Header 断言 |
+| `prd147-resource-pages-r3-junit.xml` | 340 项，143 通过、197 失败 | 扩展到完整 dispatcher 时，测试提取器把多行参数的 `})` 当作函数结尾，VM 语法错误；不是 197 项产品缺陷 |
+| `prd147-resource-pages-r4-junit.xml` | 340/340 | 提取完整生产函数后，六页分发、复制回调、文件旧 DOM 与实际后台刷新通过 |
+| `prd147-resource-pages-final-r1-junit.xml` | 359/359，无错误或跳过 | 增补即时隐藏、目录请求标识生成异常收口、旧筛选/tab 和新导航读前清屏；包含相邻迁移与 Virtual Key 单测 |
+| `prd147-resource-pages-manifest-r1-junit.xml` | 1/1，无错误或跳过 | Python 后端 manifest 与前端发布 manifest 的 canonical 内容、摘要一致 |
+| `prd147-resource-pages-navigation-r1-junit.xml` | 55/55，无错误或跳过 | 相邻 main refresh ownership、PRD-145 Console experience 和 PRD-146 Workspace navigation 单测 |
+
+最终 Node 报告 SHA-256：`699084ab5e4cd2ad89c871e51c25183611cd652b6ebd39afdcd36896f98cf1b0`。
+manifest 单测报告 SHA-256：`5826d2971a9633451c3914fb3bf88b80c7d12f8cccf3d2aeca90a8d82b54733e`。
+
+测试执行生产 main 函数、完整 dispatcher、真实绑定 handler 和 File DOM binder。网络、DOM
+及 public shell 输入为受控单元夹具；这些证据验证前端调用/回调边界，不能冒充浏览器或真实
+后端鉴权结果。传输测试实际执行七组客户端，检查 Cookie/CSRF、Legacy omit、混合凭据拒绝、
+重定向/no-store、幂等键和正文读取取消。未再次运行已完成的长耗时 Legacy API 整组回归。
+
+```powershell
+$node = 'C:\Users\OseasyVM\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+$tests = @(
+  'console-web/tests/unit/prd147ResourcePages.test.mjs'
+  'console-web/tests/unit/prd147ResourceAuthentication.test.mjs'
+  'console-web/tests/unit/files.test.mjs'
+  'console-web/tests/unit/prd119ProviderCatalog.test.mjs'
+  'console-web/tests/unit/prd146ConsoleEntry.test.mjs'
+  'console-web/tests/unit/prd147ConsoleMigration.test.mjs'
+  'console-web/tests/unit/virtualKeys.test.mjs'
+)
+& $node --test --test-reporter=dot --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=.artifacts/g6-security-20260907/prd147-resource-pages-final-r1-junit.xml @tests
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/unit/test_prd147_scheduler_registry.py -q --tb=short --show-capture=no -k frontend_release_digest --junitxml=.artifacts/g6-security-20260907/prd147-resource-pages-manifest-r1-junit.xml
+```
+
+静态检查：`console-web/scripts/lint.mjs` 最终通过（773 文件），production surface verifier 通过
+（261 模块、275 发布源码），`git diff --check` 通过。首次 production build 明确拒绝旧摘要；
+按实际发布字节把前后端 manifest 同步至
+`59e37659083c632b5590cce7fd86c40598ec001d927346a39c4bf3edb45f509f`，随后 build 通过
+（275 assets）。没有降低 verifier、略过摘要检查或修改历史迁移行。现有 5173 开发服务返回
+新 owner 模块 HTTP 200；这不是浏览器流程或视觉验收。
+
+追加导航回归命令沿用上述 Node reporter 参数，目标为
+`mainRefreshOwnership.test.mjs`、`prd146WorkspaceNavigation.test.mjs` 和
+`prd145ConsoleExperience.test.mjs`，输出独立 navigation-r1 报告，不与 359 项轮次拼接。
+
+最终独立审计报告为 `prd-147-resource-page-owners-sensitive-audit-r2.json`，检查本次 15 项精确暂存
+源码/测试/manifest/文档、上述 7 份原始报告、严格 UTF-8、凭据模式和共享基线摘要。首版审计
+仍保留，r2 增补导航回归及更新后的测试记录。审计不
+替代独立安全会签。保留用户 PRD-101..105 文档和 outputs，不提交数据库、dist 或临时制品。
+
+下一步仍是同批次未闭环项目：Catalog 后端 owner fallback/事务权限复核、其余业务域页面的
+真实 Workspace 消费端、PostgreSQL 并发撤权及统一批次 QA。六组基础页面的单元接线完成
+不等于全域 SaaS 迁移完成；G6/G7/G8 尚未证明通过，Excel 未改状态，PRD-148 未开始，未重启
+72 小时等待。

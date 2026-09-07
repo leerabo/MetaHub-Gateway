@@ -40,6 +40,7 @@ function bindUpload(handlers) {
   if (!form || !input || !submit) return;
 
   const updateSelection = () => {
+    if (handlers.isCurrent && !handlers.isCurrent(form)) return;
     const file = input.files?.[0] ?? null;
     const validation = validateSelection(file);
     // 文件名是必要交互字段，但必须只通过 textContent 放入当前 owner DOM。
@@ -50,6 +51,7 @@ function bindUpload(handlers) {
   input.addEventListener("change", updateSelection);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (handlers.isCurrent && !handlers.isCurrent(form)) return;
     const file = input.files?.[0] ?? null;
     const validation = validateSelection(file);
     if (!validation.valid) {
@@ -61,7 +63,7 @@ function bindUpload(handlers) {
       await handlers.onUpload?.(file);
     } finally {
       // 全页 refresh 通常会替换 form；只有旧节点仍连接时才恢复，避免 finally 解锁新 owner DOM。
-      if (form.isConnected) {
+      if (form.isConnected && (!handlers.isCurrent || handlers.isCurrent(form))) {
         form.removeAttribute("aria-busy");
         input.disabled = false;
         updateSelection();
@@ -75,21 +77,25 @@ function bindStatusFilter(handlers) {
   const form = document.querySelector("#file-status-filter-form");
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (handlers.isCurrent && !handlers.isCurrent(form)) return;
     const data = new FormData(form);
     const status = typeof data.get("status") === "string" ? data.get("status") : "";
     await handlers.onFilter?.(status);
   });
-  document.querySelector("#file-status-filter-reset")?.addEventListener("click", async () => {
+  document.querySelector("#file-status-filter-reset")?.addEventListener("click", async (event) => {
+    if (handlers.isCurrent && !handlers.isCurrent(event.currentTarget)) return;
     await handlers.onResetFilter?.();
   });
 }
 
 /** 绑定前后翻页命令；按钮不携带 opaque cursor。 */
 function bindPaging(handlers) {
-  document.querySelector("#file-page-prev")?.addEventListener("click", async () => {
+  document.querySelector("#file-page-prev")?.addEventListener("click", async (event) => {
+    if (handlers.isCurrent && !handlers.isCurrent(event.currentTarget)) return;
     await handlers.onPreviousPage?.();
   });
-  document.querySelector("#file-page-next")?.addEventListener("click", async () => {
+  document.querySelector("#file-page-next")?.addEventListener("click", async (event) => {
+    if (handlers.isCurrent && !handlers.isCurrent(event.currentTarget)) return;
     await handlers.onNextPage?.();
   });
 }

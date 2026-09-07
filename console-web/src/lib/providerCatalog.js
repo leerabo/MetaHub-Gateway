@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 const ENTRY_CODE = /^[a-z][a-z0-9_]{1,63}$/u;
 const VERSION = /^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,3}$/u;
@@ -11,6 +12,7 @@ const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{2,159}$/u;
 export async function listProviderCatalog({
   controlApiUrl,
   token,
+  authentication,
   filters = {},
   signal,
 } = {}) {
@@ -25,7 +27,7 @@ export async function listProviderCatalog({
     if (value) url.searchParams.set(key, value);
   }
   return catalogRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${requiredToken(token)}` },
+    authentication, token,
     signal,
   });
 }
@@ -33,18 +35,20 @@ export async function listProviderCatalog({
 export async function getProviderCatalogCompatibility({
   controlApiUrl,
   token,
+  authentication,
   entryCode,
   signal,
 } = {}) {
   return catalogRequest(
     `${controlApiUrl}/provider-catalog/${encodeURIComponent(code(entryCode, ENTRY_CODE))}/compatibility`,
-    { headers: { Authorization: `Bearer ${requiredToken(token)}` }, signal },
+    { authentication, token, signal },
   );
 }
 
 export async function createProviderFromCatalog({
   controlApiUrl,
   token,
+  authentication,
   entryCode,
   version,
   regionCode,
@@ -59,9 +63,9 @@ export async function createProviderFromCatalog({
   const displayName = String(name ?? "").trim();
   if (displayName.length < 2 || displayName.length > 120 || confirmed !== true) invalidRequest();
   return catalogRequest(`${controlApiUrl}/providers/from-catalog`, {
+    authentication, token,
     method: "POST",
     headers: {
-      Authorization: `Bearer ${requiredToken(token)}`,
       "Content-Type": "application/json",
       "Idempotency-Key": idempotencyKeyValue(idempotencyKey),
     },
@@ -81,6 +85,7 @@ export async function createProviderFromCatalog({
 export async function preflightCatalogProvider({
   controlApiUrl,
   token,
+  authentication,
   providerId,
   timeoutSeconds = 5,
   idempotencyKey = createProviderCatalogIdempotencyKey("preflight"),
@@ -91,9 +96,9 @@ export async function preflightCatalogProvider({
   return catalogRequest(
     `${controlApiUrl}/providers/${encodeURIComponent(code(providerId, PROVIDER_ID))}/preflight`,
     {
+      authentication, token,
       method: "POST",
       headers: {
-        Authorization: `Bearer ${requiredToken(token)}`,
         "Content-Type": "application/json",
         "Idempotency-Key": idempotencyKeyValue(idempotencyKey),
       },
@@ -118,9 +123,10 @@ export function createProviderCatalogIdempotencyKey(kind = "request") {
   return `console:provider-catalog:${safeKind}:${random}`;
 }
 
-async function catalogRequest(url, options = {}) {
+async function catalogRequest(url, { authentication, token, ...options } = {}) {
   const requestId = `console_provider_catalog_${Date.now()}`;
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
+    authentication, token,
     ...options,
     headers: { "X-Request-ID": requestId, ...(options.headers ?? {}) },
   });
@@ -161,12 +167,6 @@ function code(value, pattern) {
   return normalized;
 }
 
-function requiredToken(value) {
-  const token = String(value ?? "");
-  if (!token) invalidRequest();
-  return token;
-}
-
 function idempotencyKeyValue(value) {
   const normalized = String(value ?? "");
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u.test(normalized)) invalidRequest();
@@ -186,7 +186,8 @@ function invalidRequest() {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

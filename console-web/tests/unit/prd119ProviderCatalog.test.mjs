@@ -79,9 +79,14 @@ test("enterprise catalog client sends only signed coordinates and bounded filter
     capability_codes: ["chat"], provider_code: "deepseek_catalog",
     name: "DeepSeek catalog", confirmed: true,
   });
-  assert.equal(calls[2].options.headers["Idempotency-Key"], "console:prd119:create:0001");
+  assert.equal(new Headers(calls[2].options.headers).get("Idempotency-Key"), "console:prd119:create:0001");
   assert.deepEqual(JSON.parse(calls[3].options.body), { timeout_seconds: 5 });
-  const serialized = JSON.stringify(calls);
+  for (const call of calls) {
+    assert.equal(call.options.credentials, "omit");
+    assert.equal(call.options.cache, "no-store");
+    assert.equal(call.options.redirect, "error");
+  }
+  const serialized = JSON.stringify(calls.map((call) => ({ url: call.url, body: call.options.body })));
   assert.doesNotMatch(serialized, /tenant_id|workspace_id|base_url|plain_value|credential|secret/iu);
 });
 

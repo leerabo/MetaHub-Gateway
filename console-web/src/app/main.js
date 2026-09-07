@@ -278,6 +278,7 @@ import {
   sameWorkspaceConsoleSession,
   workspaceConsoleSessionFromShell,
 } from "../lib/workspaceConsoleSession.js";
+import { createWorkspaceResourcePage } from "../lib/workspaceResourcePage.js";
 import {
   downloadDeveloperSdk,
   getDeveloperContractWorkspace,
@@ -751,6 +752,12 @@ const publicInvitationRoute = globalThis.window
   ? captureInvitationRoute(globalThis.window)
   : null;
 let authSession = { context: null, owner: null };
+let resourcePageShellState = null;
+const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files"]);
+const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
+  session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
+  refreshGeneration: refreshSequence,
+}) });
 let consoleLogoutPending = false;
 let consoleShellActionError = null;
 let publicBrandingPreview = null;
@@ -801,7 +808,6 @@ let providerCatalogLastCreated = null;
 let providerCatalogLastPreflight = null;
 let providerCatalogCreateIntent = null;
 let providerCatalogPreflightIntent = null;
-let providerCatalogIdentity = "";
 // PAGE-088 筛选只驻留当前页面内存；tenant_id、窗口和 Endpoint 永不进入浏览器筛选状态。
 let providerStatusFilters = { limit: 50, offset: 0 };
 let providerHealthActionError = null;
@@ -809,7 +815,6 @@ let providerHealthProbingProviderId = null;
 let providerHealthRequestGeneration = 0;
 let providerHealthController = null;
 // Provider 列表及其 Key 读取绑定当前刷新；导航或注销时必须先取消，避免失效 Token 继续请求。
-let providersLoadController = null;
 let workspaceProviderEngineeringProviders = [];
 const WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS = new Set(["providers", "error-maps"]);
 const workspaceProviderEngineeringController = createWorkspaceProviderEngineeringController({
@@ -1145,6 +1150,7 @@ if (app && globalThis.window) {
     // 公开页不绑定控制台 hash、认证或遥测；离页只需销毁尚未消费的一次性凭据。
     window.addEventListener("pagehide", () => publicInvitationRoute.clear());
     window.addEventListener("hashchange", () => {
+      clearBasicResourceSessionState({ clearDom: true });
       if (window.location.hash === "#accept-invitation") return;
       // 公开页离开无凭据哨兵时立即销毁 Token；重载后再由普通认证/导航 bootstrap 接管。
       publicInvitationRoute.leave();
@@ -1239,6 +1245,7 @@ if (app && globalThis.window) {
     bindNavigationHashRefresh(window, refresh);
     // 浏览器关闭、刷新或离开页面时同步 abort 活动流并销毁全部一次性凭据。
     window.addEventListener("pagehide", () => {
+      clearBasicResourceSessionState({ clearDom: true });
       refreshSequence += 1;
       authSession = { context: null, owner: null };
       closeConsoleWorkspaceContextInvalidation();
@@ -1461,9 +1468,9 @@ function broadcastConsoleWorkspaceContextInvalidation() {
 async function performRefresh(options = {}) {
   if (consoleLogoutPending) return;
   const refreshId = ++refreshSequence;
+  resourcePageLifecycle.cancelReads();
+  filePageState.cancelList();
   clearDeveloperContractSecurityLoad();
-  providersLoadController?.abort();
-  providersLoadController = null;
   const isBackgroundRefresh = nextRefreshIsBackground;
   nextRefreshIsBackground = false;
   let refreshSession = authSession;
@@ -1477,18 +1484,26 @@ async function performRefresh(options = {}) {
     return;
   }
   if (!consoleShellState) return;
-  const session = workspaceConsoleSessionFromShell(consoleShellState);
-  if (!session) {
+  const nextSession = workspaceConsoleSessionFromShell(consoleShellState);
+  if (!nextSession) {
     renderLogin(consoleShellState.error ? authErrorMessage(consoleShellState.error) : undefined,
       consoleShellState.error?.requestId);
     return;
   }
-  if (!sameWorkspaceConsoleSession(authSession, session)) {
+  const session = sameWorkspaceConsoleSession(authSession, nextSession) ? authSession : nextSession;
+  if (authSession !== session) {
     clearConsoleSessionState({ clearNavigation: false });
     app?.replaceChildren();
   }
   authSession = session;
   refreshSession = session;
+  const previousResourceNavigation = resourcePageLifecycle.navigation();
+  resourcePageShellState = consoleShellState;
+  if (resourcePageLifecycle.enter().changed) {
+    clearBasicResourceFeedback();
+    if (RESOURCE_NAVIGATION_IDS.has(previousResourceNavigation)) app?.replaceChildren();
+  }
+  if (resourcePageLifecycle.blocksReplacement(isBackgroundRefresh)) return;
   currentI18n = createI18n(consoleShellState.locale);
   const providerEngineeringSnapshot = workspaceProviderEngineeringController.snapshot();
   if (!WORKSPACE_PROVIDER_ENGINEERING_NAVIGATION_IDS.has(
@@ -1724,6 +1739,13 @@ async function loadAndRenderActiveNavigation({
   refreshOwnerCurrent,
   preserveConsoleSidebar = false,
 }) {
+  if (!refreshOwnerCurrent() || refreshId !== refreshSequence) return;
+  const previousResourceNavigation = resourcePageLifecycle.navigation();
+  resourcePageShellState = consoleShellState;
+  if (resourcePageLifecycle.enter().changed) {
+    clearBasicResourceFeedback();
+    if (RESOURCE_NAVIGATION_IDS.has(previousResourceNavigation)) app?.replaceChildren();
+  }
   const activeNavigationId = consoleShellState.activeNavigationItemId;
   const consoleExperienceView = workspaceConsoleExperienceView(activeNavigationId);
   if (!consoleExperienceView) {
@@ -2050,6 +2072,8 @@ async function loadAndRenderActiveNavigation({
     ]))
     : new Map();
 
+  if (resourcePageLifecycle.blocksReplacement(false)) return;
+  resourcePageLifecycle.render();
   renderDeveloperStart(app, {
     gatewayUrl,
     controlApiUrl,
@@ -2099,9 +2123,93 @@ function renderLogin(error, requestId) {
   void loadPublicBrandingPreview(publicBrandingGeneration, true);
 }
 
+function clearBasicResourceFeedback() {
+  environmentActionError = projectActionError = providerActionError = modelActionError = virtualKeyActionError = null;
+  environmentFeedback = projectFeedback = providerFeedback = modelFeedback = virtualKeyFeedback = "";
+  providerLastTestResult = virtualKeyCreatedSecret = null;
+  providerCatalogActiveTab = "catalog";
+  providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
+  providerCatalogCompatibilityByEntryCode = {};
+  providerCatalogLastCreated = providerCatalogLastPreflight = null;
+  providerCatalogCreateIntent = providerCatalogPreflightIntent = null;
+  providerCatalogActionError = null;
+  providerCatalogFeedback = "";
+  filePageState.clear();
+}
+
+function clearBasicResourceSessionState({ clearDom = false } = {}) {
+  if (clearDom && RESOURCE_NAVIGATION_IDS.has(resourcePageLifecycle.navigation())) app?.replaceChildren();
+  resourcePageLifecycle.clear();
+  resourcePageShellState = null;
+  clearBasicResourceFeedback();
+}
+
+function bindResourceElement(element, permissions, navigationId) {
+  const binding = resourcePageLifecycle.bind(element, permissions, navigationId);
+  if (binding) {
+    element.addEventListener("input", () => resourcePageLifecycle.markDirty(binding));
+    element.addEventListener("change", () => resourcePageLifecycle.markDirty(binding));
+  }
+  return binding;
+}
+
+function handleResourceAuthorizationError(error) {
+  if (!(error instanceof AuthApiError)) return false;
+  if (error.status === 401) {
+    renderLogin(authErrorMessage(error), error.requestId);
+    return true;
+  }
+  if (error.status !== 403 || error.code !== "auth.permission_denied") return false;
+  const session = authSession;
+  const generation = refreshSequence;
+  const hash = readActiveNavigationHash();
+  clearBasicResourceSessionState({ clearDom: true });
+  globalThis.queueMicrotask(() => {
+    if (session === authSession && generation === refreshSequence && hash === readActiveNavigationHash()) {
+      void refresh();
+    }
+  });
+  return true;
+}
+
+function handleResourceMutationError(operation, error) {
+  if (!resourcePageLifecycle.isMutationCurrent(operation) || isAbortError(error)) {
+    resourcePageLifecycle.finishMutation(operation);
+    return true;
+  }
+  return handleResourceAuthorizationError(error);
+}
+
+async function resourceMutationRequest(operation, request, input) {
+  if (!resourcePageLifecycle.isMutationCurrent(operation)) throw new DOMException("Cancelled", "AbortError");
+  const result = await request({ ...input, authentication: "workspace", signal: operation.controller.signal });
+  if (!resourcePageLifecycle.isMutationCurrent(operation)) throw new DOMException("Cancelled", "AbortError");
+  return result;
+}
+
+async function refreshResourceMutation(operation) {
+  const current = resourcePageLifecycle.isMutationCurrent(operation);
+  resourcePageLifecycle.finishMutation(operation);
+  if (current) await refresh();
+}
+
+async function loadResourceState(lane, permissions, request, project) {
+  const operation = resourcePageLifecycle.beginRead(lane, permissions);
+  if (!operation) return null;
+  const current = () => resourcePageLifecycle.isReadCurrent(operation);
+  try {
+    const result = await request({ controlApiUrl, authentication: "workspace", signal: operation.controller.signal }, current);
+    return current() ? project(result) : null;
+  } catch (error) {
+    if (!current() || isAbortError(error) || handleResourceAuthorizationError(error)) return null;
+    return { state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
+  } finally {
+    resourcePageLifecycle.finishRead(operation);
+  }
+}
+
 function clearConsoleSessionState({ clearNavigation = true } = {}) {
-  providersLoadController?.abort();
-  providersLoadController = null;
+  clearBasicResourceSessionState();
   consoleSidebarController?.abort();
   consoleSidebarController = null;
   cancelPendingConsoleNavigationSideEffects();
@@ -2608,52 +2716,39 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const createEnvironmentForm = document.querySelector("#create-environment-form");
+  const environmentCreateBinding = bindResourceElement(createEnvironmentForm, [PERMISSIONS.ENVIRONMENT_READ, PERMISSIONS.ENVIRONMENT_WRITE], "environments");
   createEnvironmentForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 环境创建必须依赖当前认证会话，令牌缺失时不得继续提交配置。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(environmentCreateBinding);
+    if (!operation) return;
     const data = new FormData(createEnvironmentForm);
     const button = createEnvironmentForm.querySelector("button[type='submit']");
     button.disabled = true;
     environmentActionError = null;
     environmentFeedback = "环境创建中";
     try {
-      await createEnvironment({
+      await resourceMutationRequest(operation, createEnvironment, {
         controlApiUrl,
-        token,
         code: String(data.get("code") ?? ""),
         name: String(data.get("name") ?? ""),
         description: String(data.get("description") ?? ""),
       });
       environmentFeedback = "环境已创建";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 会话过期必须清理本地令牌；其他业务错误保留 request_id 回到环境面板展示。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       environmentActionError = error;
       environmentFeedback = "环境创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const form of document.querySelectorAll("[data-environment-status-form]")) {
+    const environmentStatusBinding = bindResourceElement(form, [PERMISSIONS.ENVIRONMENT_READ, PERMISSIONS.ENVIRONMENT_WRITE], "environments");
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 环境启停会改变数据面访问边界，令牌缺失时必须立即回到登录页。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(environmentStatusBinding);
+      if (!operation) return;
       const data = new FormData(form);
       const nextStatus = String(data.get("status") ?? "");
       const button = form.querySelector("button[type='submit']");
@@ -2661,19 +2756,19 @@ function bindAuthenticatedEvents(consoleShellState) {
       environmentActionError = null;
       environmentFeedback = nextStatus === "disabled" ? "环境禁用中" : "环境启用中";
       try {
-        await updateEnvironment({
+        await resourceMutationRequest(operation, updateEnvironment, {
           controlApiUrl,
-          token,
           environmentId: form.dataset.environmentId,
           status: nextStatus,
         });
         environmentFeedback = nextStatus === "disabled" ? "环境已禁用" : "环境已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
+        if (handleResourceMutationError(operation, error)) return;
         // Environment 写权限由后端 admin 依赖裁决，前端仅展示返回的统一错误。
         environmentActionError = error;
         environmentFeedback = "环境状态更新失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
@@ -2720,100 +2815,76 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const createProjectForm = document.querySelector("#create-project-form");
+  const projectCreateBinding = bindResourceElement(createProjectForm, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE], "projects");
   createProjectForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 项目写入会影响所有后续归因，前端只提交表单，admin 权限必须由后端重复校验。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(projectCreateBinding);
+    if (!operation) return;
     const button = createProjectForm.querySelector("button[type='submit']");
     const data = new FormData(createProjectForm);
     button.disabled = true;
     projectActionError = null;
     projectFeedback = "项目创建中";
     try {
-      await createProject({
+      await resourceMutationRequest(operation, createProject, {
         controlApiUrl,
-        token,
         projectCode: String(data.get("projectCode") ?? ""),
         name: String(data.get("name") ?? ""),
         description: String(data.get("description") ?? ""),
       });
       projectFeedback = "项目已创建";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 项目创建时会话过期必须清理本地态，避免后续 Key 绑定使用失效权限。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       projectActionError = error;
       projectFeedback = "项目创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   const createApplicationForm = document.querySelector("#create-application-form");
+  const applicationCreateBinding = bindResourceElement(createApplicationForm, [PERMISSIONS.PROJECT_READ, PERMISSIONS.PROJECT_WRITE], "projects");
   createApplicationForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 应用必须挂到当前租户项目下，真实 project_id 归属由后端校验。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(applicationCreateBinding);
+    if (!operation) return;
     const button = createApplicationForm.querySelector("button[type='submit']");
     const data = new FormData(createApplicationForm);
     button.disabled = true;
     projectActionError = null;
     projectFeedback = "应用创建中";
     try {
-      await createApplication({
+      await resourceMutationRequest(operation, createApplication, {
         controlApiUrl,
-        token,
         projectId: String(data.get("projectId") ?? ""),
         applicationCode: String(data.get("applicationCode") ?? ""),
         name: String(data.get("name") ?? ""),
         description: String(data.get("description") ?? ""),
       });
       projectFeedback = "应用已创建";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 应用创建时会话过期必须立即回到登录页，防止项目归属状态继续被旧令牌使用。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       projectActionError = error;
       projectFeedback = "应用创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   const createVirtualKeyForm = document.querySelector("#create-virtual-key-form");
+  const virtualKeyCreateBinding = bindResourceElement(createVirtualKeyForm, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
   createVirtualKeyForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(virtualKeyCreateBinding);
+    if (!operation) return;
     const button = createVirtualKeyForm.querySelector("button[type='submit']");
     const data = new FormData(createVirtualKeyForm);
     button.disabled = true;
     virtualKeyActionError = null;
     virtualKeyFeedback = "创建中";
     try {
-      const result = await createVirtualKey({
+      const result = await resourceMutationRequest(operation, createVirtualKey, {
         controlApiUrl,
-        token,
         name: String(data.get("name") ?? ""),
         environmentId: String(data.get("environmentId") ?? ""),
         environment: undefined,
@@ -2826,30 +2897,21 @@ function bindAuthenticatedEvents(consoleShellState) {
         keyPrefix: result.virtual_key?.key_prefix,
       };
       virtualKeyFeedback = "创建完成";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       virtualKeyActionError = error;
       virtualKeyFeedback = "创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const virtualKeyForm of document.querySelectorAll("[data-virtual-key-form]")) {
+    const virtualKeyStatusBinding = bindResourceElement(virtualKeyForm, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
     virtualKeyForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(virtualKeyStatusBinding);
+      if (!operation) return;
       const button = virtualKeyForm.querySelector("button[type='submit']");
       const data = new FormData(virtualKeyForm);
       const nextStatus = String(data.get("status") ?? "");
@@ -2858,54 +2920,42 @@ function bindAuthenticatedEvents(consoleShellState) {
       virtualKeyFeedback = nextStatus === "disabled" ? "禁用中" : "启用中";
       try {
         if (nextStatus === "disabled") {
-          await disableVirtualKey({
+          await resourceMutationRequest(operation, disableVirtualKey, {
             controlApiUrl,
-            token,
             virtualKeyId: virtualKeyForm.dataset.virtualKeyId,
           });
         } else {
-          await updateVirtualKey({
+          await resourceMutationRequest(operation, updateVirtualKey, {
             controlApiUrl,
-            token,
             virtualKeyId: virtualKeyForm.dataset.virtualKeyId,
             status: nextStatus,
           });
         }
         virtualKeyFeedback = nextStatus === "disabled" ? "已禁用" : "已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         virtualKeyActionError = error;
         virtualKeyFeedback = "操作失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const limitForm of document.querySelectorAll("[data-virtual-key-limits-form]")) {
+    const virtualKeyLimitsBinding = bindResourceElement(limitForm, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
     limitForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(virtualKeyLimitsBinding);
+      if (!operation) return;
       const button = limitForm.querySelector("button[type='submit']");
       const data = new FormData(limitForm);
       button.disabled = true;
       virtualKeyActionError = null;
       virtualKeyFeedback = "保存限制中";
       try {
-        await updateVirtualKeyLimits({
+        await resourceMutationRequest(operation, updateVirtualKeyLimits, {
           controlApiUrl,
-          token,
           virtualKeyId: limitForm.dataset.virtualKeyId,
           rpmLimit: String(data.get("rpmLimit") ?? ""),
           tpmLimit: String(data.get("tpmLimit") ?? ""),
@@ -2913,24 +2963,20 @@ function bindAuthenticatedEvents(consoleShellState) {
           status: "active",
         });
         virtualKeyFeedback = "限制已保存";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         virtualKeyActionError = error;
         virtualKeyFeedback = "限制保存失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const tab of document.querySelectorAll("[data-provider-tab]")) {
+    const providerTabBinding = bindResourceElement(tab, [], "providers");
     tab.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(providerTabBinding)) return;
       const nextTab = tab.dataset.providerTab;
       if (!new Set(["catalog", "providers"]).has(nextTab)) return;
       providerCatalogActiveTab = nextTab;
@@ -2940,8 +2986,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const providerCatalogFilterForm = document.querySelector("[data-provider-catalog-filter-form]");
+  const providerCatalogFilterBinding = bindResourceElement(providerCatalogFilterForm, [PERMISSIONS.PROVIDER_CATALOG_READ], "providers");
   providerCatalogFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(providerCatalogFilterBinding)) return;
     const data = new FormData(providerCatalogFilterForm);
     providerCatalogFilters = {
       status: String(data.get("status") ?? ""),
@@ -2955,19 +3003,16 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   for (const button of document.querySelectorAll("[data-provider-catalog-compatibility]")) {
+    const providerCompatibilityBinding = bindResourceElement(button, [PERMISSIONS.PROVIDER_CATALOG_READ], "providers");
     button.addEventListener("click", async () => {
-      const token = authSession.token;
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(providerCompatibilityBinding);
+      if (!operation) return;
       button.disabled = true;
       providerCatalogActionError = null;
       providerCatalogFeedback = "正在读取兼容说明";
       try {
-        const result = await getProviderCatalogCompatibility({
+        const result = await resourceMutationRequest(operation, getProviderCatalogCompatibility, {
           controlApiUrl,
-          token,
           entryCode: button.dataset.entryCode,
         });
         providerCatalogCompatibilityByEntryCode = {
@@ -2975,133 +3020,109 @@ function bindAuthenticatedEvents(consoleShellState) {
           [result.entry_code]: result,
         };
         providerCatalogFeedback = "兼容说明已更新";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         providerCatalogActionError = error;
         providerCatalogFeedback = "兼容说明读取失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const form of document.querySelectorAll("[data-provider-catalog-create-form]")) {
+    const providerCatalogCreateBinding = bindResourceElement(form, [PERMISSIONS.PROVIDER_CATALOG_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      if (!token) {
-        renderLogin();
-        return;
-      }
-      const data = new FormData(form);
-      const input = {
-        entryCode: String(data.get("entryCode") ?? ""),
-        version: String(data.get("version") ?? ""),
-        regionCode: String(data.get("regionCode") ?? ""),
-        capabilityCodes: data.getAll("capabilityCodes").map(String).sort(),
-        providerCode: String(data.get("providerCode") ?? "").trim(),
-        name: String(data.get("name") ?? "").trim(),
-        confirmed: data.get("confirmed") === "on",
-      };
-      const fingerprint = JSON.stringify(input);
-      const idempotencyKey = providerCatalogCreateIntent?.fingerprint === fingerprint
-        ? providerCatalogCreateIntent.idempotencyKey
-        : createProviderCatalogIdempotencyKey("instantiate");
-      providerCatalogCreateIntent = { fingerprint, idempotencyKey };
-      form.querySelector("button[type='submit']").disabled = true;
-      providerCatalogActionError = null;
-      providerCatalogFeedback = "正在创建目录实例";
-      providerCatalogLastPreflight = null;
+      const operation = resourcePageLifecycle.beginMutation(providerCatalogCreateBinding);
+      if (!operation) return;
       try {
-        const result = await createProviderFromCatalog({
+        const data = new FormData(form);
+        const input = {
+          entryCode: String(data.get("entryCode") ?? ""),
+          version: String(data.get("version") ?? ""),
+          regionCode: String(data.get("regionCode") ?? ""),
+          capabilityCodes: data.getAll("capabilityCodes").map(String).sort(),
+          providerCode: String(data.get("providerCode") ?? "").trim(),
+          name: String(data.get("name") ?? "").trim(),
+          confirmed: data.get("confirmed") === "on",
+        };
+        const fingerprint = JSON.stringify(input);
+        const idempotencyKey = providerCatalogCreateIntent?.fingerprint === fingerprint
+          ? providerCatalogCreateIntent.idempotencyKey
+          : createProviderCatalogIdempotencyKey("instantiate");
+        providerCatalogCreateIntent = { fingerprint, idempotencyKey };
+        form.querySelector("button[type='submit']").disabled = true;
+        providerCatalogActionError = null;
+        providerCatalogFeedback = "正在创建目录实例";
+        providerCatalogLastPreflight = null;
+        const result = await resourceMutationRequest(operation, createProviderFromCatalog, {
           controlApiUrl,
-          token,
           ...input,
           idempotencyKey,
         });
         providerCatalogCreateIntent = null;
         providerCatalogLastCreated = result;
         providerCatalogFeedback = result.idempotent_replay ? "已恢复同一创建结果" : "Provider 已从目录创建";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         if (!(error instanceof AuthApiError) || ![0, 503].includes(error.status)) {
           providerCatalogCreateIntent = null;
         }
         providerCatalogActionError = error;
         providerCatalogFeedback = "目录实例创建失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   const providerCatalogPreflightForm = document.querySelector("[data-provider-catalog-preflight-form]");
+  const providerCatalogPreflightBinding = bindResourceElement(providerCatalogPreflightForm, [PERMISSIONS.PROVIDER_CATALOG_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
   providerCatalogPreflightForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    if (!token) {
-      renderLogin();
-      return;
-    }
-    const data = new FormData(providerCatalogPreflightForm);
-    const input = {
-      providerId: String(data.get("providerId") ?? ""),
-      timeoutSeconds: Number(data.get("timeoutSeconds")),
-    };
-    const fingerprint = JSON.stringify(input);
-    const idempotencyKey = providerCatalogPreflightIntent?.fingerprint === fingerprint
-      ? providerCatalogPreflightIntent.idempotencyKey
-      : createProviderCatalogIdempotencyKey("preflight");
-    providerCatalogPreflightIntent = { fingerprint, idempotencyKey };
-    providerCatalogPreflightForm.querySelector("button[type='submit']").disabled = true;
-    providerCatalogActionError = null;
-    providerCatalogFeedback = "正在运行受限预检";
+    const operation = resourcePageLifecycle.beginMutation(providerCatalogPreflightBinding);
+    if (!operation) return;
     try {
-      const result = await preflightCatalogProvider({
+      const data = new FormData(providerCatalogPreflightForm);
+      const input = {
+        providerId: String(data.get("providerId") ?? ""),
+        timeoutSeconds: Number(data.get("timeoutSeconds")),
+      };
+      const fingerprint = JSON.stringify(input);
+      const idempotencyKey = providerCatalogPreflightIntent?.fingerprint === fingerprint
+        ? providerCatalogPreflightIntent.idempotencyKey
+        : createProviderCatalogIdempotencyKey("preflight");
+      providerCatalogPreflightIntent = { fingerprint, idempotencyKey };
+      providerCatalogPreflightForm.querySelector("button[type='submit']").disabled = true;
+      providerCatalogActionError = null;
+      providerCatalogFeedback = "正在运行受限预检";
+      const result = await resourceMutationRequest(operation, preflightCatalogProvider, {
         controlApiUrl,
-        token,
         ...input,
         idempotencyKey,
       });
       providerCatalogPreflightIntent = null;
       providerCatalogLastPreflight = result;
       providerCatalogFeedback = result.idempotent_replay ? "已恢复同一预检结果" : "预检已完成";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       if (!(error instanceof AuthApiError) || ![0, 503].includes(error.status)) {
         providerCatalogPreflightIntent = null;
       }
       providerCatalogActionError = error;
       providerCatalogFeedback = "预检失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   const createProviderForm = document.querySelector("#create-provider-form");
+  const providerCreateBinding = bindResourceElement(createProviderForm, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
   createProviderForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(providerCreateBinding);
+    if (!operation) return;
     const button = createProviderForm.querySelector("button[type='submit']");
     const data = new FormData(createProviderForm);
     button.disabled = true;
@@ -3109,9 +3130,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     providerFeedback = "创建中";
     providerLastTestResult = null;
     try {
-      await createProvider({
+      await resourceMutationRequest(operation, createProvider, {
         controlApiUrl,
-        token,
         providerCode: String(data.get("providerCode") ?? ""),
         name: String(data.get("name") ?? ""),
         providerType: String(data.get("providerType") ?? "openai_compatible"),
@@ -3120,30 +3140,21 @@ function bindAuthenticatedEvents(consoleShellState) {
         description: String(data.get("description") ?? ""),
       });
       providerFeedback = "创建完成";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       providerActionError = error;
       providerFeedback = "创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const providerForm of document.querySelectorAll("[data-provider-status-form]")) {
+    const providerStatusBinding = bindResourceElement(providerForm, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
     providerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(providerStatusBinding);
+      if (!operation) return;
       const button = providerForm.querySelector("button[type='submit']");
       const data = new FormData(providerForm);
       const nextStatus = String(data.get("status") ?? "");
@@ -3151,46 +3162,35 @@ function bindAuthenticatedEvents(consoleShellState) {
       providerActionError = null;
       providerFeedback = nextStatus === "disabled" ? "禁用中" : "启用中";
       try {
-        await updateProvider({
+        await resourceMutationRequest(operation, updateProvider, {
           controlApiUrl,
-          token,
           providerId: providerForm.dataset.providerId,
           status: nextStatus,
         });
         providerFeedback = nextStatus === "disabled" ? "已禁用" : "已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         providerActionError = error;
         providerFeedback = "操作失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const providerForm of document.querySelectorAll("[data-provider-test-form]")) {
+    const providerTestBinding = bindResourceElement(providerForm, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
     providerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(providerTestBinding);
+      if (!operation) return;
       const button = providerForm.querySelector("button[type='submit']");
       button.disabled = true;
       providerActionError = null;
       providerFeedback = "测试中";
       try {
-        const result = await testProviderConnection({
+        const result = await resourceMutationRequest(operation, testProviderConnection, {
           controlApiUrl,
-          token,
           providerId: providerForm.dataset.providerId,
           timeoutSeconds: 5,
         });
@@ -3202,71 +3202,52 @@ function bindAuthenticatedEvents(consoleShellState) {
           httpStatus: result.test_result?.http_status,
           latencyMs: result.test_result?.latency_ms,
         };
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         providerActionError = error;
         providerFeedback = "测试失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const providerKeyForm of document.querySelectorAll("[data-provider-key-create-form]")) {
+    const providerKeyCreateBinding = bindResourceElement(providerKeyForm, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
     providerKeyForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(providerKeyCreateBinding);
+      if (!operation) return;
       const button = providerKeyForm.querySelector("button[type='submit']");
       const data = new FormData(providerKeyForm);
       button.disabled = true;
       providerActionError = null;
       providerFeedback = "Key 创建中";
       try {
-        await createProviderKey({
+        await resourceMutationRequest(operation, createProviderKey, {
           controlApiUrl,
-          token,
           providerId: providerKeyForm.dataset.providerId,
           name: String(data.get("name") ?? ""),
           plainValue: String(data.get("plainValue") ?? ""),
           weight: optionalNumber(data.get("weight"), 100),
         });
         providerFeedback = "Key 创建完成";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         providerActionError = error;
         providerFeedback = "Key 创建失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   for (const providerKeyForm of document.querySelectorAll("[data-provider-key-status-form]")) {
+    const providerKeyStatusBinding = bindResourceElement(providerKeyForm, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE], "providers");
     providerKeyForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(providerKeyStatusBinding);
+      if (!operation) return;
       const button = providerKeyForm.querySelector("button[type='submit']");
       const data = new FormData(providerKeyForm);
       const nextStatus = String(data.get("status") ?? "");
@@ -3274,47 +3255,36 @@ function bindAuthenticatedEvents(consoleShellState) {
       providerActionError = null;
       providerFeedback = nextStatus === "disabled" ? "Key 禁用中" : "Key 启用中";
       try {
-        await updateProviderKey({
+        await resourceMutationRequest(operation, updateProviderKey, {
           controlApiUrl,
-          token,
           providerKeyId: providerKeyForm.dataset.providerKeyId,
           status: nextStatus,
         });
         providerFeedback = nextStatus === "disabled" ? "Key 已禁用" : "Key 已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         providerActionError = error;
         providerFeedback = "Key 操作失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
 
   const createModelForm = document.querySelector("#create-model-form");
+  const modelCreateBinding = bindResourceElement(createModelForm, [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE], "models");
   createModelForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(modelCreateBinding);
+    if (!operation) return;
     const button = createModelForm.querySelector("button[type='submit']");
     const data = new FormData(createModelForm);
     button.disabled = true;
     modelActionError = null;
     modelFeedback = "创建中";
     try {
-      await createModel({
+      await resourceMutationRequest(operation, createModel, {
         controlApiUrl,
-        token,
         internalModelId: String(data.get("internalModelId") ?? ""),
         providerId: String(data.get("providerId") ?? ""),
         providerModelId: String(data.get("providerModelId") ?? ""),
@@ -3328,30 +3298,21 @@ function bindAuthenticatedEvents(consoleShellState) {
         description: optionalText(data.get("description")),
       });
       modelFeedback = "创建完成";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       modelActionError = error;
       modelFeedback = "创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const modelForm of document.querySelectorAll("[data-model-status-form]")) {
+    const modelStatusBinding = bindResourceElement(modelForm, [PERMISSIONS.MODEL_READ, PERMISSIONS.MODEL_WRITE], "models");
     modelForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(modelStatusBinding);
+      if (!operation) return;
       const button = modelForm.querySelector("button[type='submit']");
       const data = new FormData(modelForm);
       const nextStatus = String(data.get("status") ?? "");
@@ -3359,25 +3320,18 @@ function bindAuthenticatedEvents(consoleShellState) {
       modelActionError = null;
       modelFeedback = nextStatus === "disabled" ? "禁用中" : "启用中";
       try {
-        await updateModel({
+        await resourceMutationRequest(operation, updateModel, {
           controlApiUrl,
-          token,
           modelId: modelForm.dataset.modelId,
           status: nextStatus,
         });
         modelFeedback = nextStatus === "disabled" ? "已禁用" : "已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         modelActionError = error;
         modelFeedback = "操作失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
@@ -3465,18 +3419,33 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const dismissSecretButton = document.querySelector("[data-dismiss-virtual-key-secret]");
+  const dismissSecretBinding = bindResourceElement(dismissSecretButton,
+    [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
   dismissSecretButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(dismissSecretBinding)) return;
     virtualKeyCreatedSecret = null;
+    dismissSecretButton.closest(".one-time-secret")?.replaceChildren();
     await refresh();
   });
 
   const copySecretButton = document.querySelector("[data-copy-virtual-key]");
+  const copySecretBinding = bindResourceElement(copySecretButton,
+    [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
   copySecretButton?.addEventListener("click", async () => {
-    const value = copySecretButton.dataset.copyVirtualKey;
+    if (!resourcePageLifecycle.isBindingCurrent(copySecretBinding)) return;
+    const value = virtualKeyCreatedSecret?.plainValue;
     if (!value || !navigator.clipboard?.writeText) {
       return;
     }
-    await navigator.clipboard.writeText(value);
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      if (!resourcePageLifecycle.isBindingCurrent(copySecretBinding)) return;
+      virtualKeyFeedback = "复制失败";
+      await refresh();
+      return;
+    }
+    if (!resourcePageLifecycle.isBindingCurrent(copySecretBinding)) return;
     virtualKeyFeedback = "已复制";
     await refresh();
   });
@@ -5309,7 +5278,7 @@ function renderSessionRiskActionErrorDom(error) {
 
 /** 构造当前文件 read owner，并绑定浏览器 hash，避免旧 DOM 在离页后发起 GET。 */
 function currentFileReadOwner(consoleShellState) {
-  const owner = filePageOwner(authSession.context, consoleShellState);
+  const owner = filePageOwner(authSession.context, consoleShellState, { session: authSession });
   const hashNavigation = readActiveNavigationHash();
   if (!owner || (hashNavigation && hashNavigation !== "files")) return null;
   return owner;
@@ -5317,7 +5286,7 @@ function currentFileReadOwner(consoleShellState) {
 
 /** 构造当前文件 read+write owner；只读身份或后端导航漂移固定返回 null。 */
 function currentFileWriteOwner(consoleShellState) {
-  const owner = filePageOwner(authSession.context, consoleShellState, { requireWrite: true });
+  const owner = filePageOwner(authSession.context, consoleShellState, { requireWrite: true, session: authSession });
   const hashNavigation = readActiveNavigationHash();
   if (!owner || (hashNavigation && hashNavigation !== "files")) return null;
   return owner;
@@ -5327,7 +5296,13 @@ function currentFileWriteOwner(consoleShellState) {
 function bindFilesPageInteractions(consoleShellState) {
   const readOwner = currentFileReadOwner(consoleShellState);
   if (!readOwner || !filePageState.enter(readOwner)) return;
+  const binding = bindResourceElement(document.querySelector("#file-status-filter-form"), [PERMISSIONS.FILE_READ], "files");
+  const uploadBinding = bindResourceElement(document.querySelector("#file-upload-form"),
+    [PERMISSIONS.FILE_READ, PERMISSIONS.FILE_WRITE], "files");
   bindFileInteractions({
+    isCurrent(element) {
+      return element?.isConnected && resourcePageLifecycle.isBindingCurrent(binding);
+    },
     /** 状态筛选变化会销毁旧 cursor 和在途 GET，再读取 tenant-qualified 首屏。 */
     async onFilter(status) {
       filePageState.setStatus(status);
@@ -5348,7 +5323,7 @@ function bindFilesPageInteractions(consoleShellState) {
     },
     /** 原生 File 仅在该调用栈内传给上传客户端，不写入状态机或日志。 */
     async onUpload(file) {
-      await submitFileUpload(file, consoleShellState);
+      await submitFileUpload(file, consoleShellState, uploadBinding);
     },
   });
 }
@@ -5357,32 +5332,35 @@ function bindFilesPageInteractions(consoleShellState) {
  * 提交一次文件上传并同步等待解析终态。
  * POST ticket 同时绑定 tenant、用户、Session、权限 revision/fingerprint 和后端 files 导航。
  */
-async function submitFileUpload(file, consoleShellState) {
-  const token = authSession.token;
+async function submitFileUpload(file, consoleShellState, binding) {
+  const resourceOperation = resourcePageLifecycle.beginMutation(binding);
+  if (!resourceOperation) return;
   const owner = currentFileWriteOwner(consoleShellState);
-  // Token 或实时写 owner 任一缺失都必须先销毁旧文件名和 cursor，不能仅依赖上传按钮隐藏。
-  if (!token || !owner) {
-    filePageState.clear();
-    // Token 缺失属于登录边界；仅撤权时保留 Session 并由后续导航刷新收口。
-    if (!token) renderLogin();
+  if (!owner) {
+    resourcePageLifecycle.finishMutation(resourceOperation);
     return;
   }
   const operation = filePageState.beginUploadOperation(owner);
-  if (!operation) return;
+  if (!operation) {
+    resourcePageLifecycle.finishMutation(resourceOperation);
+    return;
+  }
   let operationFinished = false;
   // 单一收口函数防止成功、异常和 finally 三条路径重复结束后来上传 ticket。
   const finishOperation = () => {
     if (operationFinished) return;
     operationFinished = true;
     filePageState.finishUploadOperation(operation);
+    resourcePageLifecycle.finishMutation(resourceOperation);
   };
   try {
     const result = await uploadFile({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       file,
       signal: operation.controller.signal,
     });
+    if (!resourcePageLifecycle.isMutationCurrent(resourceOperation)) return;
     const currentOwner = currentFileWriteOwner(consoleShellState);
     if (!filePageState.acceptUpload(operation, result, currentOwner)) return;
     // 显式结束 POST 后再刷新列表，避免上传 busy 门禁把本轮结果误当成仍未决。
@@ -5391,7 +5369,8 @@ async function submitFileUpload(file, consoleShellState) {
   } catch (error) {
     const currentOwner = currentFileWriteOwner(consoleShellState);
     // owner 漂移或主动 Abort 的迟到错误必须静默丢弃，不能影响新租户页面。
-    if (!filePageState.isUploadOperationCurrent(operation, currentOwner) || isFileAbortError(error)) {
+    if (!resourcePageLifecycle.isMutationCurrent(resourceOperation)
+      || !filePageState.isUploadOperationCurrent(operation, currentOwner) || isFileAbortError(error)) {
       return;
     }
     // 401 是强认证边界，先清文件 DTO 与 Token，再渲染统一登录页。
@@ -10604,6 +10583,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (!itemId || !routeCode || WORKSPACE_ROUTE_REGISTRY[routeCode]?.sourceId !== itemId) {
     return;
   }
+  clearBasicResourceSessionState({ clearDom: true });
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
   workspaceNavigationController.changeRoute();
@@ -11657,136 +11637,46 @@ function takeWorkspaceProviderStepUp(form, data) {
  */
 async function loadProvidersState({ includeCatalog = false } = {}) {
   const canReadProviders = hasPermission(authSession.context, PERMISSIONS.PROVIDER_READ);
-  const canReadCatalog = includeCatalog
-    && hasPermission(authSession.context, PERMISSIONS.PROVIDER_CATALOG_READ);
-  if (!canReadProviders && !canReadCatalog) {
-    if (includeCatalog) {
-      workspaceProviderEngineeringProviders = [];
-      workspaceProviderEngineeringController.close();
-    }
-    return null;
-  }
-  const identity = JSON.stringify([
-    authSession.context?.user?.tenant_id ?? authSession.context?.tenant?.tenant_id ?? "",
-    authSession.context?.user?.user_id ?? authSession.context?.user?.email ?? "",
-    authSession.context?.session?.session_id ?? "",
-  ]);
-  if (providerCatalogIdentity && providerCatalogIdentity !== identity) {
-    workspaceProviderEngineeringProviders = [];
-    workspaceProviderEngineeringController.close();
-    providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
-    providerCatalogCompatibilityByEntryCode = {};
-    providerCatalogLastCreated = null;
-    providerCatalogLastPreflight = null;
-    providerCatalogCreateIntent = null;
-    providerCatalogPreflightIntent = null;
-    providerCatalogActionError = null;
-    providerCatalogFeedback = "";
-  }
-  providerCatalogIdentity = identity;
-  providersLoadController?.abort();
-  const controller = new AbortController();
-  providersLoadController = controller;
-  try {
+  const canReadCatalog = includeCatalog && hasPermission(authSession.context, PERMISSIONS.PROVIDER_CATALOG_READ);
+  if (!canReadProviders && !canReadCatalog) return null;
+  const permissions = [
+    ...(canReadProviders ? [PERMISSIONS.PROVIDER_READ] : []),
+    ...(canReadCatalog ? [PERMISSIONS.PROVIDER_CATALOG_READ] : []),
+  ];
+  return loadResourceState("providers", permissions, async (options, current) => {
     const [state, catalog] = await Promise.all([
-      canReadProviders
-        ? listProviders({ controlApiUrl, token: authSession.token, signal: controller.signal })
-        : Promise.resolve({ state: "ok", providers: [] }),
-      canReadCatalog
-        ? listProviderCatalog({
-            controlApiUrl,
-            token: authSession.token,
-            filters: providerCatalogFilters,
-            signal: controller.signal,
-          }).catch((error) => {
-            if (isAbortError(error) || (error instanceof AuthApiError && error.status === 401)) {
-              throw error;
-            }
-            return {
-              state: "error",
-              message: authErrorMessage(error),
-              requestId: error?.requestId ?? "-",
-            };
-          })
-        : Promise.resolve(null),
+      canReadProviders ? listProviders(options) : Promise.resolve({ state: "ok", providers: [] }),
+      canReadCatalog ? listProviderCatalog({ ...options, filters: providerCatalogFilters }).catch((error) => {
+        if (isAbortError(error) || (error instanceof AuthApiError && [401, 403].includes(error.status))) throw error;
+        return { state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
+      }) : Promise.resolve(null),
     ]);
-    const providerKeyEntries = await Promise.all(
-      (canReadProviders ? state.providers ?? [] : []).map(async (provider) => {
-        try {
-          return [
-            provider.provider_id,
-            await listProviderKeys({
-              controlApiUrl,
-              token: authSession.token,
-              providerId: provider.provider_id,
-              signal: controller.signal,
-            }),
-          ];
-        } catch (error) {
-          if (isAbortError(error)) {
-            return null;
-          }
-          return [
-            provider.provider_id,
-            {
-              state: "error",
-              message: authErrorMessage(error),
-              requestId: error?.requestId ?? "-",
-            },
-          ];
-        }
-      }),
-    );
+    if (!current()) throw new DOMException("Cancelled", "AbortError");
+    const entries = await Promise.all((state.providers ?? []).map(async (provider) => {
+      try {
+        return [provider.provider_id, await listProviderKeys({ ...options, providerId: provider.provider_id })];
+      } catch (error) {
+        if (isAbortError(error) || (error instanceof AuthApiError && [401, 403].includes(error.status))) throw error;
+        return [provider.provider_id, { state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" }];
+      }
+    }));
+    return { state, catalog, entries };
+  }, ({ state, catalog, entries }) => {
     if (includeCatalog) {
       workspaceProviderEngineeringProviders = [...(state.providers ?? [])];
-      const selectedProviderId = workspaceProviderEngineeringController.snapshot().providerId;
-      if (selectedProviderId && !workspaceProviderEngineeringProviders.some(
-        (provider) => provider.provider_id === selectedProviderId,
-      )) {
+      const selected = workspaceProviderEngineeringController.snapshot().providerId;
+      if (selected && !workspaceProviderEngineeringProviders.some((provider) => provider.provider_id === selected)) {
         workspaceProviderEngineeringController.close();
       }
     }
-    return {
-      ...state,
-      providerKeysByProviderId: Object.fromEntries(providerKeyEntries.filter(Boolean)),
-      actionError: providerActionError,
-      feedback: providerFeedback,
-      lastTestResult: providerLastTestResult,
-      providerEngineering: includeCatalog
-        ? workspaceProviderEngineeringController.snapshot()
-        : null,
-      providerCatalog: catalog ? {
-        ...catalog,
-        activeTab: providerCatalogActiveTab,
-        filters: providerCatalogFilters,
-        actionError: providerCatalogActionError,
-        feedback: providerCatalogFeedback,
+    return { ...state, providerKeysByProviderId: Object.fromEntries(entries),
+      actionError: providerActionError, feedback: providerFeedback, lastTestResult: providerLastTestResult,
+      providerEngineering: includeCatalog ? workspaceProviderEngineeringController.snapshot() : null,
+      providerCatalog: catalog ? { ...catalog, activeTab: providerCatalogActiveTab, filters: providerCatalogFilters,
+        actionError: providerCatalogActionError, feedback: providerCatalogFeedback,
         compatibilityByEntryCode: providerCatalogCompatibilityByEntryCode,
-        lastCreated: providerCatalogLastCreated,
-        lastPreflight: providerCatalogLastPreflight,
-      } : null,
-    };
-  } catch (error) {
-    if (isAbortError(error)) {
-      return null;
-    }
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  } finally {
-    if (providersLoadController === controller) {
-      providersLoadController = null;
-    }
-  }
+        lastCreated: providerCatalogLastCreated, lastPreflight: providerCatalogLastPreflight } : null };
+  });
 }
 
 /**
@@ -11794,31 +11684,9 @@ async function loadProvidersState({ includeCatalog = false } = {}) {
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 async function loadModelsState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.MODEL_READ)) {
-    return null;
-  }
-  try {
-    const state = await listModels({ controlApiUrl, token: authSession.token });
-    return {
-      ...state,
-      actionError: modelActionError,
-      feedback: modelFeedback,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
-
+  return loadResourceState("models", [PERMISSIONS.MODEL_READ],
+    (options) => listModels(options),
+    (state) => ({ ...state, actionError: modelActionError, feedback: modelFeedback }));
 }
 
 /**
@@ -14784,38 +14652,9 @@ async function runProviderProbe(providerId) {
  * 读取当前租户模型价格时间线，并保留筛选、反馈和统一错误状态。
  */
 async function loadEnvironmentState() {
-  /** 读取当前租户全部 Environment，禁用项仍需展示在历史配置和设置页。 */
-  // 缺少 Environment 读权限时不在每轮刷新制造可避免的 403；后端守卫仍是最终边界。
-  if (!hasPermission(authSession.context, PERMISSIONS.ENVIRONMENT_READ)) {
-    return null;
-  }
-  try {
-    const result = await listEnvironments({
-      controlApiUrl,
-      token: authSession.token,
-      status: "all",
-    });
-    return {
-      ...result,
-      actionError: environmentActionError,
-      feedback: environmentFeedback,
-    };
-  } catch (error) {
-    // 401 改变认证边界，必须回到登录页；403/业务错误保留为面板错误态。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return { state: "error", message: error.message, requestId: error.requestId };
-    }
-    return {
-      state: "error",
-      message: error?.message ?? "环境列表读取失败",
-      requestId: error?.requestId,
-      actionError: environmentActionError,
-      feedback: environmentFeedback,
-    };
-  }
+  return loadResourceState("environments", [PERMISSIONS.ENVIRONMENT_READ],
+    (options) => listEnvironments({ ...options, status: "all" }),
+    (state) => ({ ...state, actionError: environmentActionError, feedback: environmentFeedback }));
 }
 
 
@@ -14856,36 +14695,12 @@ async function loadModelAliasesState() {
  * 管理员/开发者才会调用控制面 API；viewer 返回 null 只是界面优化，真实权限仍由后端项目接口校验。
  */
 async function loadProjectState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.PROJECT_READ)) {
-    return null;
-  }
-  try {
-    const [projects, applications] = await Promise.all([
-      listProjects({ controlApiUrl, token: authSession.token, status: "all" }),
-      listApplications({ controlApiUrl, token: authSession.token, status: "all" }),
-    ]);
-    return {
-      state: "ok",
-      projects: projects.projects ?? [],
-      applications: applications.applications ?? [],
-      actionError: projectActionError,
-      feedback: projectFeedback,
-    };
-  } catch (error) {
-    // 认证失败必须立即清理登录态，避免项目归属页继续驱动后续 Key 绑定请求。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      actionError: projectActionError,
-    };
-  }
+  return loadResourceState("projects", [PERMISSIONS.PROJECT_READ],
+    (options) => Promise.all([
+      listProjects({ ...options, status: "all" }), listApplications({ ...options, status: "all" }),
+    ]),
+    ([projects, applications]) => ({ state: "ok", projects: projects.projects ?? [],
+      applications: applications.applications ?? [], actionError: projectActionError, feedback: projectFeedback }));
 }
 
 /**
@@ -15141,20 +14956,24 @@ async function loadFilesState(consoleShellState, refreshId) {
   if (!owner || refreshId !== refreshSequence || !filePageState.enter(owner)) return null;
   const operation = filePageState.beginListOperation(owner, refreshId);
   if (!operation) return null;
+  const session = authSession;
+  const current = () => session === authSession && refreshId === refreshSequence
+    && filePageState.isListOperationCurrent(operation, currentFileReadOwner(consoleShellState), refreshSequence);
   try {
     const result = await listFiles({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       ...filePageState.query(),
       signal: operation.controller.signal,
     });
+    if (!current()) return null;
     const currentOwner = currentFileReadOwner(consoleShellState);
     if (!filePageState.acceptPage(operation, result, currentOwner, refreshId)) return null;
     return filePageState.snapshot();
   } catch (error) {
     const currentOwner = currentFileReadOwner(consoleShellState);
     if (
-      !filePageState.isListOperationCurrent(operation, currentOwner, refreshId)
+      !current()
       || isFileAbortError(error)
     ) return null;
     // 列表 401 与上传一致地销毁文件名、cursor 和认证状态，避免下一登录复用旧事实。
@@ -15172,7 +14991,7 @@ async function loadFilesState(consoleShellState, refreshId) {
     ) {
       // GET 撤权先销毁文件名与 cursor，再异步重读 /auth/me 和后端导航，避免递归刷新当前调用栈。
       filePageState.clear();
-      globalThis.window?.setTimeout?.(() => void refresh(), 0);
+      handleResourceAuthorizationError(error);
       return null;
     }
     filePageState.rejectPage(operation, error, currentOwner, refreshId);
@@ -17899,29 +17718,8 @@ async function loadAuditLogsState(consoleShellState, refreshId) {
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 async function loadVirtualKeysState() {
-  if (!hasPermission(authSession.context, PERMISSIONS.VIRTUAL_KEY_READ)) {
-    return null;
-  }
-  try {
-    const state = await listVirtualKeys({ controlApiUrl, token: authSession.token });
-    return {
-      ...state,
-      created: virtualKeyCreatedSecret,
-      actionError: virtualKeyActionError,
-      feedback: virtualKeyFeedback,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+  return loadResourceState("virtual-keys", [PERMISSIONS.VIRTUAL_KEY_READ],
+    (options) => listVirtualKeys(options),
+    (state) => ({ ...state, created: virtualKeyCreatedSecret,
+      actionError: virtualKeyActionError, feedback: virtualKeyFeedback }));
 }

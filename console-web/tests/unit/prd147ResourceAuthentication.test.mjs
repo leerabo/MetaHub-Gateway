@@ -8,6 +8,7 @@ import * as providers from "../../src/lib/providers.js";
 import * as models from "../../src/lib/models.js";
 import * as keys from "../../src/lib/virtualKeys.js";
 import * as files from "../../src/lib/files.js";
+import * as catalog from "../../src/lib/providerCatalog.js";
 
 const BASE = "https://control.example.test";
 const CSRF = "w".repeat(43);
@@ -48,6 +49,13 @@ const operations = [
   [files.listFiles, {}, "GET", "/files"],
   [files.getFile, { fileId: FILE_ID }, "GET", `/files/${FILE_ID}`],
   [files.uploadFile, { file: new File(["test"], "sample.txt", { type: "text/plain" }) }, "POST", "/files"],
+  [catalog.listProviderCatalog, {}, "GET", "/provider-catalog"],
+  [catalog.getProviderCatalogCompatibility, { entryCode: "sample" }, "GET", "/provider-catalog/sample/compatibility"],
+  [catalog.createProviderFromCatalog, { entryCode: "sample", version: "2026.09.08.1", regionCode: "cn-east",
+    capabilityCodes: ["chat"], providerCode: "sample", name: "Sample", confirmed: true,
+    idempotencyKey: "console:catalog:instantiate:test" }, "POST", "/providers/from-catalog"],
+  [catalog.preflightCatalogProvider, { providerId: "provider_sample", timeoutSeconds: 5,
+    idempotencyKey: "console:catalog:preflight:test" }, "POST", "/providers/provider_sample/preflight"],
 ];
 
 for (const [operation, input, method, path] of operations) {
