@@ -9,6 +9,8 @@ import * as models from "../../src/lib/models.js";
 import * as keys from "../../src/lib/virtualKeys.js";
 import * as files from "../../src/lib/files.js";
 import * as catalog from "../../src/lib/providerCatalog.js";
+import * as health from "../../src/lib/providerHealth.js";
+import * as status from "../../src/lib/providerStatus.js";
 
 const BASE = "https://control.example.test";
 const CSRF = "w".repeat(43);
@@ -22,6 +24,9 @@ test.afterEach(() => {
 });
 
 const operations = [
+  [health.listProviderHealth, {}, "GET", "/provider-health"],
+  [health.probeProvider, { providerId: "provider_sample" }, "POST", "/providers/provider_sample/probe"],
+  [status.listProviderStatuses, {}, "GET", "/status/providers"],
   [projects.listProjects, {}, "GET", "/projects"],
   [projects.createProject, { projectCode: "sample", name: "Sample" }, "POST", "/projects"],
   [projects.updateProject, { projectId: "prj_sample", name: "Renamed" }, "PATCH", "/projects/prj_sample"],
@@ -57,6 +62,20 @@ const operations = [
   [catalog.preflightCatalogProvider, { providerId: "provider_sample", timeoutSeconds: 5,
     idempotencyKey: "console:catalog:preflight:test" }, "POST", "/providers/provider_sample/preflight"],
 ];
+
+test("PRD-147 observation filters cannot transmit owner selectors or endpoint fields", async () => {
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(new URL(url));
+    return { ok: true, headers: new Headers(), json: async () => ({ state: "error" }) };
+  };
+  for (const operation of [health.listProviderHealth, status.listProviderStatuses]) {
+    const result = await operation({ controlApiUrl: BASE, authentication: "workspace",
+      filters: { tenant_id: "foreign", endpoint: "https://foreign.test", provider_id: "owned", limit: 20 } });
+    assert.equal(result.state, "ok");
+  }
+  for (const url of urls) assert.deepEqual([...url.searchParams.keys()].sort(), ["limit", "provider_id"]);
+});
 
 for (const [operation, input, method, path] of operations) {
   for (const authentication of ["workspace", "legacy"]) {

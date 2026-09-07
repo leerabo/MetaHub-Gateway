@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * PRD-061 Provider 状态只读客户端。
@@ -16,7 +17,7 @@ const FILTER_KEYS = Object.freeze([
 ]);
 
 /** 查询当前认证租户的 Provider 状态快照。 */
-export async function listProviderStatuses({ controlApiUrl, token, filters = {}, signal }) {
+export async function listProviderStatuses({ controlApiUrl, authentication, token, filters = {}, signal }) {
   const url = new URL(`${controlApiUrl}/status/providers`);
   for (const key of FILTER_KEYS) {
     const value = filters[key];
@@ -24,17 +25,17 @@ export async function listProviderStatuses({ controlApiUrl, token, filters = {},
       url.searchParams.set(key, String(value));
     }
   }
-  const response = await fetch(url.toString(), {
-    signal,
+  const response = await authenticatedResourceFetch(url.toString(), {
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": `console_provider_status_${Date.now()}`,
     },
   });
   let payload = {};
   try {
     payload = await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     // 非 JSON 代理错误不能把 HTML/正文带入 DOM，统一降级为空 envelope。
     payload = {};
   }

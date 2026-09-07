@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
-
-from metahub_control.auth import AuthContext, require_provider_status_reader
 from metahub_shared.runtime.errors import ApiError
+
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import ProviderStatusListResponse
 from .service import list_provider_statuses
@@ -25,7 +25,12 @@ PAGINATION_FIELDS = frozenset({"limit", "offset"})
 async def get_provider_statuses(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_provider_status_reader)],
+    context: Annotated[
+        AuthContext,
+        Depends(require_workspace_or_legacy_permissions(
+            "provider.health.read", "request_log.read",
+        )),
+    ],
 ) -> ProviderStatusListResponse:
     """返回当前租户 Provider 状态。
 

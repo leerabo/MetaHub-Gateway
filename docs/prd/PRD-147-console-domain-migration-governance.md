@@ -833,3 +833,31 @@ Legacy 角色矩阵夹具复核：直接降低唯一 Owner 会正确触发 Membe
 最后 Owner 保护，不能删除 trigger 或伪造转移记录来适配测试。保留原 Owner，通过真实旧用户
 创建接口建立独立 Developer/Viewer，再用其实际密码登录验证权限；同时核对两类成员投影与
 原 Owner 未变。真实 Workspace 动态降权仍由既有 HTTP Membership 场景独立验证。
+
+### Provider 状态、健康与手工探测消费端连续批次
+
+范围为导航中仍属 Workspace 主入口的 `workspace.gateway.provider-health`，其状态聚合、
+健康列表与手工探测三个 API，以及筛选、分页、探测按钮和页面访问事件。状态页仍需同时具备
+provider.health.read 与 request_log.read；不迁回已退休的平台工程入口，也不把周期任务当成
+用户 Session 执行。Catalog 完成后复用其已经支持调用方事务的健康 claim/complete 能力。
+
+第一轮自审（凭据与事务）：状态路由显式复用 Workspace/Legacy 双域守卫，保留双权限和固定
+查询白名单。两个读取服务在同一业务快照内重新恢复真实会话，并在结束快照前复核所需权限；
+GET 不写业务事实。手工探测在鉴权短事务内领取租约，关闭连接后才做网络 I/O，再用第二笔
+重新鉴权的事务提交健康日志、Key 状态与 Provider 聚合。失败只释放本 token/generation，
+最终提交时还需检查原租约期限。路由走线程池，网络期间 logout/降权能执行；不改机器任务
+身份模型，不接收请求提供的 endpoint、Key 或 tenant。共享健康 helper 用中性名字供两个
+入口复用，不能让通用探测伪装为 Catalog 命令，也不能绕过 Local Endpoint 专用 API。
+
+第二轮自审（页面与验证）：复用基础资源公共 Session/导航 owner、read lane 和 DOM binding，
+状态读与手工写使用显式 Workspace Cookie 和既有 CSRF 传输。筛选、分页和旧按钮在读取 DOM
+数据之前检查 owner；换空间、离页、撤权、迟到成功/401/403/finally 均不得污染新页面。状态
+双读权限不能被探测权限代替。保留合法 Legacy 客户端显式入口与受控测试，不制造假的
+tenant/session。
+先跑真实 Cookie 反例，再成组编码，受影响单元/API 冒烟合并执行；完整浏览器、PostgreSQL
+并发撤权和整个 KeyPool/DNS 时限仍属于批次 QA，未证明前不改 Excel 或 G6/G7/G8 状态。
+
+实施前接口复核：PRD-146 当前只提供导航、偏好、任务首页及高级工具访问事件，尚无状态页
+`status.viewed` 的 Workspace 写入口，不能凭名称假定已存在。Workspace 页面停止调用旧
+`/console/events`，Legacy tracker 合同仍保留；对应低风险页面访问事实的迁移另记未完成，
+不能以状态读取/探测已接通代替该合同。此缺口仍须在批次交付前补齐并验证唯一访问语义。

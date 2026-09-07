@@ -395,3 +395,69 @@ UTF-8、高置信凭据模式及公共基线 SHA-256。该扫描不是独立安�
 不提交 `.tmp`、`.artifacts`、用户 PRD-101..105 文档或 outputs。Excel 按表格技能只读核对，
 不改完成状态；PostgreSQL 并发撤权、其余业务页消费端、全 KeyPool/DNS 时限与批次完整 QA
 仍待完成。G6/G7/G8 尚未证明通过，PRD-148 未开始，没有重启 72 小时等待。
+
+## 2026-09-08 Provider 观测页面与手工健康事务
+
+继续基础资源迁移批次，设计与两轮自审见 PRD-147「Provider 状态、健康与手工探测消费端
+连续批次」。实际反例证明 `/status/providers` 不接受真实 Workspace Cookie，且用户登出后
+旧 AuthContext 仍可手工探测并提交。修复状态路由为显式 Workspace/Legacy 双域守卫，保留
+provider.health.read/request_log.read 双权限、固定筛选与分页白名单。健康与状态读取在同一
+快照内重验会话，返回前再次复核；状态服务两次均检查第二项调用日志权限，GET 不提交业务写入。
+
+手工 `/providers/{id}/probe` 复用 ResourceWriteTransaction，两笔短事务之间不留实际数据库
+连接。第一笔领取租约，第二笔重新鉴权后共同提交健康日志、Key 状态和 Provider 聚合，最终
+commit 前复核原租约期限。失败只清自己的 token/generation，不覆盖竞争租约。Catalog 与该
+入口共用 perform/complete/commit/release 健康函数；周期任务继续使用可信 tenant 的内部入口，
+不继承浏览器 Session。补齐内部任务读取结果后的连接关闭，Local Endpoint 仍走专用 API。
+
+前端两个观测客户端、三个操作复用显式认证传输；Workspace 不发 Bearer，Legacy 显式 omit
+Cookie，写入只读专用 CSRF Cookie。状态页加入公共资源 owner/read lane/DOM binding：双读
+权限、筛选、分页、probe、旧 DOM、换空间、迟到成功/401/403/503 与 finally 统一淘汰；当前
+503 保留筛选和分页。敏感 query 字段被固定白名单过滤，响应体读取取消原样向上传递。
+
+正式证据位于 `.artifacts/g6-security-20260907/`，各轮独立保留，不合成同轮结果：
+
+| 报告 | 结果 | 证明范围 |
+| --- | --- | --- |
+| `prd147-observation-red-r1-junit.xml` | 2 项产品反例失败，21.355 秒 | 真实 Cookie 状态 401；登出后旧上下文探测未被拒绝 |
+| `prd147-observation-r1-junit.xml` | 27/27，193.425 秒，无错误/跳过 | 16 项新观测用例、4 项相邻 Catalog 健康共同提交用例、7 项共享事务生命周期单测 |
+| `prd147-observation-ui-r1-junit.xml` | 334/334，无失败/错误/跳过 | 实际主页面函数、事件绑定、共享 owner/传输与原有健康/状态渲染及验收脚本单测 |
+| `prd147-observation-ui-r2-junit.xml` | 336/336，无失败/错误/跳过 | 增加当前 503 筛选保留、观测 query 白名单及成功 state 不被响应正文覆盖 |
+| `prd147-observation-legacy-r1-junit.xml` | 2/2，262.907 秒，无失败/错误/跳过 | 原有真实 Legacy 登录的状态指标/探测分组/维护备注及 HTTP 失败恢复主流程；耗时包括两个空库迁移 |
+| `prd147-observation-machine-r1-junit.xml` | 1/1，14.224 秒，无失败/错误/跳过 | 实际用户登出后可信 scheduled 入口仍可领取/提交；未到期拒绝重复网络，三阶段连接关闭 |
+| `prd147-observation-manifest-r1-junit.xml` | 1/1，无失败/错误/跳过 | 前后端发布 manifest canonical 内容与摘要一致 |
+
+API 专项报告 SHA-256：`eab8073db5d9964355633a8828f6d73b49b7d2921c6417f4035e40b86fbee9c6`。
+前端 r2 报告 SHA-256：`d5911c62398b10e32ab00ccc321dd3feb7a74cde6ff4d4552eb8513fdd12c1cb`。
+Legacy 报告 SHA-256：`60219441a104970f185cae7f13641e0220c155a139f0c6057670047d2e08cfc5`。
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+$env:METAHUB_TEST_MIGRATED_BASELINE = 'C:\MetaHub\.tmp\pytest-g6-security-sqlite-r2\prd134-api-base0\base.sqlite3'
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_prd147_provider_observation.py control-plane-api/tests/integration/test_prd147_catalog_transactions.py::test_catalog_real_cookie_scope_and_preflight_replay control-plane-api/tests/integration/test_prd147_catalog_transactions.py::test_catalog_keypool_and_health_facts_commit_together control-plane-api/tests/unit/test_prd147_resource_transaction_lifecycle.py -q --tb=short --show-capture=no --basetemp=.tmp/pytest-prd147-observation-r1 --junitxml=.artifacts/g6-security-20260907/prd147-observation-r1-junit.xml
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_provider_status.py::test_provider_status_metrics_probe_grouping_and_maintenance_note control-plane-api/tests/integration/test_provider_health.py::test_provider_probe_failure_recovery_and_logs -q --tb=short --show-capture=no --basetemp=.tmp/pytest-prd147-observation-legacy-r1 --junitxml=.artifacts/g6-security-20260907/prd147-observation-legacy-r1-junit.xml
+$node = 'C:\Users\OseasyVM\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+& $node --test --test-reporter=dot --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=.artifacts/g6-security-20260907/prd147-observation-ui-r2-junit.xml console-web/tests/unit/prd147ResourcePages.test.mjs console-web/tests/unit/prd147ResourceAuthentication.test.mjs console-web/tests/unit/providerHealth.test.mjs console-web/tests/unit/providerStatus.test.mjs console-web/tests/unit/prd061BrowserAcceptance.test.mjs
+```
+
+machine-r1 是补充后的单用例运行，目标为新模块内
+`test_scheduled_probe_keeps_machine_authority_and_closes_connections`，独立 basetemp/report；因此
+现在重跑整个新模块会多出这一项，不能把原 r1 的 27 项改写为 28 项。manifest 命令仍为
+`test_prd147_scheduler_registry.py -k frontend_release_digest`，独立报告。
+
+新测试及六份相关 Python 文件完整 Ruff 检查通过。健康/状态服务分别保留原有 29/7 项 E501，
+没有新增告警，状态服务原有 I001 已随 import 修改修正；忽略 E501 后通过。compileall、
+console lint（773 文件）、production surface（261 模块、275 发布源码）和 diff-check 通过。
+构建先正确拒绝旧源码摘要；同步两端 manifest 至
+`e25b33cf35063779ee7551f55fe31077031bbe8b88934958889ba3db9a81ce70` 后 build 通过（275 assets）。
+现有 5173 开发服务返回新客户端 HTTP 200；这不是浏览器流程或视觉验收。
+
+独立敏感审计 `prd-147-provider-observation-sensitive-audit.json` 核对本次 17 项精确暂存文件、
+七份原始报告、UTF-8、凭据模式与共享基线摘要。模式扫描不等于安全会签。真实 Workspace
+认证没有替换；网络/时钟/故障注入仅证明事务边界。Legacy HTTP 主流程使用其既有受控本地
+URL 替换，不是 SSRF 验收；前端 VM、DOM 与验收脚本测试也不是实际浏览器证据。
+
+Workspace 页不再尝试旧 `/console/events`，但新域 `status.viewed` 唯一访问事实入口尚未实现，
+已在设计中明确登记，不能以功能接线代替这项完成证据。其余业务消费端、PostgreSQL 并发
+撤权、全 KeyPool/DNS 时间上限和统一批次 QA 仍待完成。Excel、用户 PRD-101..105 与 outputs
+未改；不提交临时数据库、正式运行制品或 dist。G6/G7/G8 尚未证明通过，PRD-148 未开始。

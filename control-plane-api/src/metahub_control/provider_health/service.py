@@ -38,6 +38,7 @@ from metahub_shared.runtime.provider_adapter_spec import (
 from metahub_shared.runtime.webhooks import build_webhook_event
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.providers.service import _validate_provider_auth_combination
 from metahub_control.webhooks.service import dispatch_webhook_event
 
@@ -116,7 +117,7 @@ class LocalProviderCatalogProbe:
 
 
 @dataclass(frozen=True)
-class CatalogProbeResult:
+class ProviderProbeResult:
     """Transient transport results; no persistence or lease ownership changes."""
 
     result_status: str
@@ -278,6 +279,9 @@ def list_provider_health(
             params.append(value)
     connection = _connect(config)
     try:
+        connection.execute("BEGIN")
+        transaction = ResourceWriteTransaction(connection, config, context, "provider.health.read")
+        transaction.begin()
         rows = connection.execute(
             f"""
             SELECT provider_id, tenant_id, provider_code, name, provider_type, base_url,
@@ -307,7 +311,7 @@ def list_provider_health(
         )
         summary = _summary(items)
         total = len(items)
-        return ProviderHealthListResponse(
+        result = ProviderHealthListResponse(
             provider_health=items[offset : offset + limit],
             summary=summary,
             total=total,
@@ -316,8 +320,14 @@ def list_provider_health(
             request_id=request_id,
             trace_id=trace_id,
         )
+        transaction.commit(lambda connection: connection.rollback())
+        return result
     finally:
-        connection.close()
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        finally:
+            connection.close()
 
 
 def probe_provider(
@@ -331,15 +341,45 @@ def probe_provider(
 ) -> ProviderProbeResponse:
     """领取并探测当前租户 Provider，返回不含任何凭据标识的安全结果。"""
 
-    # tenant_id 只取认证上下文，客户端提交的任何同名字段都不会进入服务层。
-    return probe_provider_for_tenant(
-        config,
-        context.user.tenant_id,
-        provider_id,
-        trigger_type=trigger_type,
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    claim_config = config.model_copy(update={
+        "provider_health_lease_seconds": max(config.provider_health_lease_seconds, 30),
+    })
+    with ResourceWriteTransaction(
+        _connect(config), config, context, "provider.health.probe",
+    ) as transaction:
+        context = transaction.context
+        row = transaction.connection.execute(
+            "SELECT provider_type FROM providers WHERE tenant_id=? AND provider_id=?",
+            (context.user.tenant_id, provider_id),
+        ).fetchone()
+        if row is not None and row["provider_type"] == "local_endpoint":
+            raise ApiError("provider.local_endpoint_requires_local_api")
+        claim, credentials = _claim_provider(
+            claim_config, context.user.tenant_id, provider_id, trigger_type,
+            connection=transaction.connection,
+        )
+        transaction.commit()
+
+    try:
+        probe = perform_provider_probe(config, claim, credentials)
+        with ResourceWriteTransaction(
+            _connect(config), config, context, "provider.health.probe",
+        ) as transaction:
+            result, transitioned = complete_provider_probe_in_transaction(
+                config, transaction.connection, claim, probe,
+                request_id=request_id, trace_id=trace_id, trigger_type=trigger_type,
+            )
+            transaction.commit(lambda connection: commit_provider_probe(connection, claim))
+    except BaseException:
+        release_provider_probe(config, claim)
+        raise
+    finally:
+        credentials.clear()
+    if transitioned:
+        _dispatch_unhealthy_event(
+            config, claim, result.provider_health, list(probe.attempts), request_id, trace_id,
+        )
+    return result
 
 
 def probe_provider_for_tenant(
@@ -351,7 +391,7 @@ def probe_provider_for_tenant(
     request_id: str,
     trace_id: str,
 ) -> ProviderProbeResponse:
-    """供手工入口和周期调度共用的租户级探测函数。"""
+    """供可信租户任务使用；HTTP 手工入口另行复核实际 Session。"""
 
     if trigger_type == "manual":
         connection = _connect(config)
@@ -378,8 +418,11 @@ def probe_provider_for_tenant(
         trace_id=trace_id,
     )
     connection = _connect(config)
-    row = _load_health_row(connection, tenant_id, provider_id)
-    item = _health_item(row, config)
+    try:
+        row = _load_health_row(connection, tenant_id, provider_id)
+        item = _health_item(row, config)
+    finally:
+        connection.close()
     if transitioned:
         _dispatch_unhealthy_event(config, claim, item, attempts, request_id, trace_id)
     return ProviderProbeResponse(
@@ -407,28 +450,29 @@ def claim_catalog_provider_in_transaction(
     )
 
 
-def perform_catalog_provider_probe(
+def perform_provider_probe(
     config: AppConfig, claim: _Claim, credentials: list[_Credential]
-) -> CatalogProbeResult:
+) -> ProviderProbeResult:
     """Perform only bounded transport; the caller owns claim and completion."""
 
     attempts = _perform_probe(config, claim, credentials)
-    return CatalogProbeResult(_aggregate_result(attempts), tuple(attempts))
+    return ProviderProbeResult(_aggregate_result(attempts), tuple(attempts))
 
 
-def complete_catalog_provider_in_transaction(
+def complete_provider_probe_in_transaction(
     config: AppConfig,
     connection: sqlite3.Connection,
     claim: _Claim,
-    probe: CatalogProbeResult,
+    probe: ProviderProbeResult,
     *,
     request_id: str,
     trace_id: str,
+    trigger_type: str = "manual",
 ) -> tuple[ProviderProbeResponse, bool]:
-    """Stage health facts in the same transaction as the Catalog run and outbox."""
+    """Stage health facts inside the caller's freshly authenticated transaction."""
 
     if not connection.in_transaction:
-        raise ApiError("provider_catalog.unavailable")
+        raise ApiError("infra.service_unavailable")
     lease = connection.execute(
         """
         SELECT probe_lease_until FROM providers
@@ -444,7 +488,7 @@ def complete_catalog_provider_in_transaction(
         claim,
         list(probe.attempts),
         result_status=probe.result_status,
-        trigger_type="manual",
+        trigger_type=trigger_type,
         request_id=request_id,
         trace_id=trace_id,
         connection=connection,
@@ -459,7 +503,15 @@ def complete_catalog_provider_in_transaction(
     ), transitioned
 
 
-def release_catalog_provider_probe(config: AppConfig, claim: _Claim) -> None:
+def commit_provider_probe(connection: sqlite3.Connection, claim: _Claim) -> None:
+    """Check the original deadline after final authentication and before committing."""
+
+    if claim.lease_until is None or claim.lease_until <= _utcnow():
+        raise ApiError("provider_health.probe_superseded")
+    connection.commit()
+
+
+def release_provider_probe(config: AppConfig, claim: _Claim) -> None:
     """Release only this operation's lease, even after its user has been revoked."""
 
     connection = None
@@ -592,7 +644,7 @@ def _claim_provider(
         if owns_connection:
             connection.execute("BEGIN IMMEDIATE")
         elif not connection.in_transaction:
-            raise ApiError("provider_catalog.unavailable")
+            raise ApiError("infra.service_unavailable")
         row = connection.execute(
             "SELECT * FROM providers WHERE tenant_id=? AND provider_id=?",
             (tenant_id, provider_id),
@@ -980,7 +1032,7 @@ def _complete_probe(
         if owns_connection:
             connection.execute("BEGIN IMMEDIATE")
         elif not connection.in_transaction:
-            raise ApiError("provider_catalog.unavailable")
+            raise ApiError("infra.service_unavailable")
         current = connection.execute(
             """
             SELECT health_status, consecutive_probe_failures FROM providers

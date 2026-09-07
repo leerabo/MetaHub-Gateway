@@ -13,12 +13,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
-from metahub_control.auth import AuthContext
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ERROR_SPECS, ApiError
 from metahub_shared.runtime.provider_adapter_spec import provider_types
+
+from metahub_control.auth import AuthContext, require_permission
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     ProviderFailureItem,
@@ -186,6 +188,9 @@ def list_provider_statuses(
         connection = _connect(config)
         # 显式事务确保 Provider、调用和探测均来自同一 SQLite 快照；GET 不提交任何业务写入。
         connection.execute("BEGIN")
+        transaction = ResourceWriteTransaction(connection, config, context, "provider.health.read")
+        transaction.begin()
+        context = require_permission(transaction.context, "request_log.read")
         provider_rows = _load_provider_rows(
             connection,
             context.user.tenant_id,
@@ -231,7 +236,11 @@ def list_provider_statuses(
             )
             for provider in page
         ]
-        connection.rollback()
+        def finish_read(connection):
+            require_permission(transaction.context, "request_log.read")
+            connection.rollback()
+
+        transaction.commit(finish_read)
     # 已归一化的领域错误保持原码；回滚只结束可能已经打开的只读快照。
     except ApiError:
         if connection is not None:

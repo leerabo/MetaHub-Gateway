@@ -48,7 +48,8 @@ class Element {
     this.isConnected = true;
     this.listeners = new Map();
     this.dataset = { environmentId: "env_sample", providerId: "provider_sample", providerKeyId: "pkey_sample",
-      virtualKeyId: "vkey_sample", modelId: "model_sample", entryCode: "sample", providerTab: "providers" };
+      virtualKeyId: "vkey_sample", modelId: "model_sample", entryCode: "sample", providerTab: "providers",
+      providerProbe: "provider_sample", providerStatusOffset: "50" };
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
       regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5" };
     this.button = { disabled: false };
@@ -65,7 +66,8 @@ const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState",
   "handleResourceAuthorizationError", "handleResourceMutationError", "resourceMutationRequest", "refreshResourceMutation",
   "loadResourceState", "loadModelsState", "loadEnvironmentState", "loadProjectState", "loadVirtualKeysState", "loadProvidersState",
   "currentFileReadOwner", "currentFileWriteOwner", "bindFilesPageInteractions", "submitFileUpload", "loadFilesState",
-  "loadAndRenderActiveNavigation"];
+  "loadAndRenderActiveNavigation", "loadProviderHealthState", "loadProviderStatusState", "runProviderProbe",
+  "ownProviderStatusVisitAfterRender"];
 const payload = { state: "ok", providers: [{ provider_id: "provider_sample" }], projects: [], applications: [], models: [],
   virtual_keys: [], files: [], next_cursor: null, file: { file_id: "file_sample" }, plain_value: "synthetic-one-time-value",
   virtual_key: { key_prefix: "synthetic" }, entry_code: "sample" };
@@ -73,7 +75,7 @@ const clients = ["createEnvironment", "updateEnvironment", "createProject", "cre
   "disableVirtualKey", "updateVirtualKey", "updateVirtualKeyLimits", "getProviderCatalogCompatibility", "createProviderFromCatalog",
   "preflightCatalogProvider", "createProvider", "updateProvider", "testProviderConnection", "createProviderKey", "updateProviderKey",
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
-  "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile"];
+  "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider"];
 
 function harness(navigation, selector) {
   const element = new Element();
@@ -89,7 +91,9 @@ function harness(navigation, selector) {
     bindOutputSafetyDetailInteractions() {}, bindAuthenticatedEvents() {},
     navigator: { clipboard: { writeText: (value) => { effects.push("clipboard"); scope.copied = value; return pending.promise; } } },
     filePageState: createFilePageState(), controlApiUrl: "https://control.example.test", refreshSequence: 1, hash: navigation,
-    RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files"]),
+    providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
+    providerHealthRequestGeneration: 0, providerHealthController: null,
+    RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]),
     resourcePageShellState: shell(navigation), authErrorMessage: () => "Fixed error", isAbortError: isFileAbortError,
     createProviderCatalogIdempotencyKey: () => "console:catalog:synthetic:0001",
     optionalNumber: (value, fallback) => value ? Number(value) : fallback,
@@ -136,6 +140,7 @@ function harness(navigation, selector) {
 }
 
 const forms = [
+  ["provider-health", "[data-provider-probe]", "probeProvider", "click"],
   ["environments", "#create-environment-form", "createEnvironment"],
   ["environments", "[data-environment-status-form]", "updateEnvironment"],
   ["projects", "#create-project-form", "createProject"],
@@ -211,7 +216,8 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
 }
 
 const loaders = [["environments", "loadEnvironmentState"], ["projects", "loadProjectState"],
-  ["providers", "loadProvidersState"], ["models", "loadModelsState"], ["virtual-keys", "loadVirtualKeysState"], ["files", "loadFilesState"]];
+  ["providers", "loadProvidersState"], ["models", "loadModelsState"], ["virtual-keys", "loadVirtualKeysState"], ["files", "loadFilesState"],
+  ["provider-health", "loadProviderHealthState"]];
 for (const [navigation, loader] of loaders) {
   test(`PRD-147 actual ${navigation} dispatcher supplies Workspace reads and renders the accepted state`, async () => {
     const h = harness(navigation);
@@ -233,7 +239,7 @@ for (const [navigation, loader] of loaders) {
   for (const outcome of ["success", "401"]) {
     test(`PRD-147 production ${loader} discards late ${outcome} and cannot sign out a new owner`, async () => {
       const h = harness(navigation);
-      const operation = loader === "loadFilesState"
+      const operation = ["loadFilesState", "loadProviderHealthState"].includes(loader)
         ? h.functions[loader](h.scope.resourcePageShellState, 1) : h.functions[loader]({ includeCatalog: true });
       assert.ok(h.calls.length > 0);
       for (const call of h.calls) {
@@ -253,12 +259,73 @@ for (const [navigation, loader] of loaders) {
   }
   test(`PRD-147 production ${loader} accepts the current owner response`, async () => {
     const h = harness(navigation);
-    const operation = loader === "loadFilesState"
+    const operation = ["loadFilesState", "loadProviderHealthState"].includes(loader)
       ? h.functions[loader](h.scope.resourcePageShellState, 1) : h.functions[loader]({ includeCatalog: true });
     h.pending.resolve(payload);
     assert.equal((await operation).state, "ok");
   });
 }
+
+for (const [selector, event] of [
+  ["#provider-health-filters", "submit"],
+  ["[data-provider-health-reset]", "click"],
+  ["[data-provider-status-offset]", "click"],
+]) {
+  for (const stale of ["workspace", "hash", "dom"]) {
+    test(`PRD-147 status ${selector} rejects stale ${stale} before reading filters`, async () => {
+      const h = harness("provider-health", selector);
+      h.functions.bindActualResourceHandlers();
+      if (stale === "workspace") h.switchOwner();
+      if (stale === "hash") h.scope.hash = "projects";
+      if (stale === "dom") h.element.isConnected = false;
+      const before = JSON.stringify(h.scope.providerStatusFilters);
+      await h.element.fire(event);
+      assert.equal(JSON.stringify(h.scope.providerStatusFilters), before);
+      assert.deepEqual(h.effects, []);
+      assert.equal(h.calls.length, 0);
+    });
+  }
+  test(`PRD-147 current status ${selector} cancels old reads before refreshing`, async () => {
+    const h = harness("provider-health", selector);
+    h.functions.bindActualResourceHandlers();
+    const reading = h.functions.loadProviderHealthState(h.scope.resourcePageShellState);
+    await h.element.fire(event);
+    assert.equal(h.calls[0].input.signal.aborted, true);
+    assert.equal(h.effects.includes("refresh"), true);
+    h.pending.resolve(payload);
+    assert.equal(await reading, null);
+  });
+}
+
+test("PRD-147 status page requires both health and request-log permissions", async () => {
+  for (const missing of [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ]) {
+    const h = harness("provider-health");
+    h.scope.resourcePageShellState = shell("provider-health", "1", allPermissions.filter((value) => value !== missing));
+    h.scope.authSession = workspaceConsoleSessionFromShell(h.scope.resourcePageShellState);
+    h.scope.resourcePageLifecycle.enter();
+    assert.equal(await h.functions.loadProviderHealthState(h.scope.resourcePageShellState), null);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test("PRD-147 Workspace status does not write an unmigrated Legacy page event", async () => {
+  const h = harness("provider-health");
+  h.scope.providerStatusIdentitySnapshot = () => { throw new Error("Legacy identity was read"); };
+  await h.functions.ownProviderStatusVisitAfterRender(h.scope.resourcePageShellState);
+  assert.equal(h.calls.length, 0);
+});
+
+test("PRD-147 current status errors preserve filters without recreating a Legacy owner", async () => {
+  const h = harness("provider-health");
+  h.scope.providerStatusFilters = { health_status: "unhealthy", limit: 50, offset: 50 };
+  const loading = h.functions.loadProviderHealthState(h.scope.resourcePageShellState);
+  h.pending.reject(new AuthApiError({ status: 503, code: "provider_status.query_unavailable" }));
+  const result = await loading;
+  assert.equal(result.state, "error");
+  assert.equal(result.filters.health_status, "unhealthy");
+  assert.equal(result.filters.offset, 50);
+  assert.equal(h.effects.includes("login"), false);
+});
 
 for (const failed of [false, true]) {
   test(`PRD-147 actual copy handler drops late clipboard ${failed ? "failure" : "success"}`, async () => {

@@ -348,7 +348,7 @@ def preflight_catalog_provider(
         connection.close()
 
     try:
-        probe = provider_health.perform_catalog_provider_probe(
+        probe = provider_health.perform_provider_probe(
             config.model_copy(
                 update={"provider_health_timeout_seconds": payload.timeout_seconds}
             ),
@@ -363,7 +363,7 @@ def preflight_catalog_provider(
             trace_id=trace_id,
         )
     except BaseException:
-        provider_health.release_catalog_provider_probe(config, health_claim)
+        provider_health.release_provider_probe(config, health_claim)
         raise
     finally:
         credentials.clear()
@@ -376,7 +376,7 @@ def _complete_catalog_preflight(
     provider_id: str,
     claim,
     health_claim,
-    probe: provider_health.CatalogProbeResult,
+    probe: provider_health.ProviderProbeResult,
     *,
     idempotency_sha256: str,
     request_sha256: str,
@@ -429,7 +429,7 @@ def _complete_catalog_preflight(
             )
             transaction.commit()
             return result
-        health_response, transitioned = provider_health.complete_catalog_provider_in_transaction(
+        health_response, transitioned = provider_health.complete_provider_probe_in_transaction(
             config, connection, health_claim, probe, request_id=request_id, trace_id=trace_id,
         )
         run_id = _id("pfr_")
@@ -505,15 +505,9 @@ def _complete_catalog_preflight(
             request_id=_identifier(request_id),
             trace_id=_identifier(trace_id),
         )
-        def commit_result(connection):
-            if (
-                health_claim.lease_until is None
-                or health_claim.lease_until <= provider_health._utcnow()
-            ):
-                raise ApiError("provider_health.probe_superseded")
-            connection.commit()
-
-        transaction.commit(commit_result)
+        transaction.commit(
+            lambda connection: provider_health.commit_provider_probe(connection, health_claim)
+        )
     except ApiError:
         _rollback(connection)
         raise

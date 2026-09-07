@@ -464,7 +464,7 @@ async def test_catalog_live_probe_lease_rejects_before_transport(catalog_subject
         _call(catalog_subjects)
     assert rejected.value.code == "provider_health.probe_in_progress"
     assert _facts(database) == before
-    health.release_catalog_provider_probe(app.state.config, claim)
+    health.release_provider_probe(app.state.config, claim)
 
 
 @pytest.mark.anyio

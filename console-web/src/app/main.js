@@ -753,7 +753,7 @@ const publicInvitationRoute = globalThis.window
   : null;
 let authSession = { context: null, owner: null };
 let resourcePageShellState = null;
-const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files"]);
+const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
@@ -2124,6 +2124,10 @@ function renderLogin(error, requestId) {
 }
 
 function clearBasicResourceFeedback() {
+  providerHealthActionError = providerHealthProbingProviderId = providerStatusEventWarning = null;
+  providerStatusFilters = { limit: 50, offset: 0 };
+  providerStatusPageState.clear();
+  providerStatusVisitTracker.leave();
   environmentActionError = projectActionError = providerActionError = modelActionError = virtualKeyActionError = null;
   environmentFeedback = projectFeedback = providerFeedback = modelFeedback = virtualKeyFeedback = "";
   providerLastTestResult = virtualKeyCreatedSecret = null;
@@ -2193,7 +2197,7 @@ async function refreshResourceMutation(operation) {
   if (current) await refresh();
 }
 
-async function loadResourceState(lane, permissions, request, project) {
+async function loadResourceState(lane, permissions, request, project, errorFields = {}) {
   const operation = resourcePageLifecycle.beginRead(lane, permissions);
   if (!operation) return null;
   const current = () => resourcePageLifecycle.isReadCurrent(operation);
@@ -2202,7 +2206,7 @@ async function loadResourceState(lane, permissions, request, project) {
     return current() ? project(result) : null;
   } catch (error) {
     if (!current() || isAbortError(error) || handleResourceAuthorizationError(error)) return null;
-    return { state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
+    return { ...errorFields, state: "error", message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
   } finally {
     resourcePageLifecycle.finishRead(operation);
   }
@@ -2774,8 +2778,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const providerHealthForm = document.querySelector("#provider-health-filters");
+  const providerHealthFilterBinding = bindResourceElement(providerHealthForm, [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ], "provider-health");
   providerHealthForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(providerHealthFilterBinding)) return;
     const data = new FormData(providerHealthForm);
     providerStatusFilters = {
       health_status: String(data.get("health_status") ?? ""),
@@ -2786,16 +2792,23 @@ function bindAuthenticatedEvents(consoleShellState) {
     };
     // 筛选提交即刻取消旧筛选请求，不能等待下一轮 /auth/me 和导航读取后才淘汰迟到响应。
     providerStatusPageState.clear();
+    resourcePageLifecycle.cancelReads();
     await refresh();
   });
-  document.querySelector("[data-provider-health-reset]")?.addEventListener("click", async (event) => {
+  const providerHealthReset = document.querySelector("[data-provider-health-reset]");
+  const providerHealthResetBinding = bindResourceElement(providerHealthReset, [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ], "provider-health");
+  providerHealthReset?.addEventListener("click", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(providerHealthResetBinding)) return;
     providerStatusFilters = { limit: 50, offset: 0 };
     providerStatusPageState.clear();
+    resourcePageLifecycle.cancelReads();
     await refresh();
   });
   for (const button of document.querySelectorAll("[data-provider-status-offset]")) {
+    const providerStatusOffsetBinding = bindResourceElement(button, [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ], "provider-health");
     button.addEventListener("click", async () => {
+      if (!resourcePageLifecycle.isBindingCurrent(providerStatusOffsetBinding)) return;
       const nextOffset = Number(button.dataset.providerStatusOffset);
       // offset 只能来自渲染器生成的非负安全整数；异常 DOM 值不触发网络。
       if (!Number.isSafeInteger(nextOffset) || nextOffset < 0) return;
@@ -2805,12 +2818,16 @@ function bindAuthenticatedEvents(consoleShellState) {
         offset: nextOffset,
       };
       providerStatusPageState.clear();
+      resourcePageLifecycle.cancelReads();
       await refresh();
     });
   }
   for (const button of document.querySelectorAll("[data-provider-probe]")) {
+    const providerProbeBinding = bindResourceElement(button, [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ, PERMISSIONS.PROVIDER_HEALTH_PROBE], "provider-health");
     button.addEventListener("click", async () => {
-      await runProviderProbe(String(button.dataset.providerProbe ?? ""));
+      const operation = resourcePageLifecycle.beginMutation(providerProbeBinding);
+      if (!operation) return;
+      await runProviderProbe(String(button.dataset.providerProbe ?? ""), operation);
     });
   }
 
@@ -14273,6 +14290,10 @@ async function recordMigrationGuideVisit({ source }) {
  * 只有双权限身份与后端 provider-health 导航同时成立才允许发送；状态 GET 成功与否不参与访问语义。
  */
 async function ownProviderStatusVisitAfterRender(consoleShellState) {
+  if (hasWorkspaceConsoleSession(authSession)) {
+    providerStatusVisitTracker.leave();
+    return;
+  }
   const identity = providerStatusIdentitySnapshot(authSession.context);
   const token = authSession.token;
   const navigationOwned = providerStatusNavigationOwned(consoleShellState);
@@ -14507,64 +14528,19 @@ async function loadProviderHealthState(consoleShellState) {
 
 /**
  * 读取 PAGE-088 状态快照。
- * ticket 冻结完整授权身份、后端导航、规范筛选、Token、generation 与 AbortController；所有结果共用同一接纳门禁。
+ * 共用 Workspace owner、刷新代次和取消门禁；筛选快照在成功与错误状态中保持一致。
  */
 async function loadProviderStatusState(consoleShellState) {
-  const owner = currentProviderStatusOwner(consoleShellState);
-  if (!owner) {
-    providerStatusPageState.clear();
-    return null;
-  }
-  const ticket = providerStatusPageState.begin(owner);
-  if (!ticket) return null;
-  try {
-    const state = await listProviderStatuses({
-      controlApiUrl,
-      token: ticket.token,
-      filters: ticket.filters,
-      signal: ticket.controller.signal,
-    });
-    // 状态响应必须仍属于相同身份、导航、筛选和 Token；任何漂移都完整丢弃。
-    if (!providerStatusPageState.owns(ticket, currentProviderStatusOwner(consoleShellState))) {
-      return null;
-    }
-    return {
-      ...state,
-      filters: ticket.filters,
-      actionError: providerHealthActionError,
-      probingProviderId: providerHealthProbingProviderId,
-      eventWarning: providerStatusEventWarning,
-    };
-  } catch (error) {
-    // 成功、401/403 与普通错误都必须先验证相同 owner；旧 Session 的迟到错误没有任何全局副作用。
-    if (!providerStatusPageState.owns(ticket, currentProviderStatusOwner(consoleShellState))) {
-      return null;
-    }
-    // Abort 只表示 owner 已被主动淘汰，不能进入页面错误态。
-    if (error?.name === "AbortError") return null;
-    // 仅当前 owner 的 401 可以销毁 Session，旧 ticket 的认证错误已在统一门禁前返回。
-    if (error instanceof AuthApiError && error.status === 401) {
-      providerStatusPageState.clear();
-      providerStatusVisitTracker.leave();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    // 403 代表实时授权已收窄，先销毁读取 owner；页面只保留统一错误，下一轮导航重校验会裁掉入口。
-    if (error instanceof AuthApiError && error.status === 403) {
-      providerStatusPageState.clear();
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      filters: ticket.filters,
-      eventWarning: providerStatusEventWarning,
-    };
-  } finally {
-    providerStatusPageState.finish(ticket);
-  }
+  if (consoleShellState?.activeNavigationItemId !== "provider-health") return null;
+  const filters = Object.freeze({ ...providerStatusFilters, limit: providerStatusFilters.limit ?? 50,
+    offset: providerStatusFilters.offset ?? 0 });
+  const feedback = { filters, actionError: providerHealthActionError,
+    probingProviderId: providerHealthProbingProviderId, eventWarning: providerStatusEventWarning };
+  return loadResourceState(
+    "provider-status", [PERMISSIONS.PROVIDER_HEALTH_READ, PERMISSIONS.REQUEST_LOG_READ],
+    (options) => listProviderStatuses({ ...options, filters }),
+    (state) => ({ ...state, ...feedback }), feedback,
+  );
 }
 
 /**
@@ -14612,39 +14588,25 @@ function currentTenantId() {
 }
 
 /** 触发单行手工探测；POST 开始前作废在途 GET，完成后统一刷新最新快照。 */
-async function runProviderProbe(providerId) {
-  const token = authSession.token;
-  if (
-    !providerId
-    || !token
-    || !hasPermission(authSession.context, PERMISSIONS.PROVIDER_HEALTH_PROBE)
-  ) {
+async function runProviderProbe(providerId, operation) {
+  if (!providerId || !resourcePageLifecycle.isMutationCurrent(operation)) {
+    resourcePageLifecycle.finishMutation(operation);
     return;
   }
   providerHealthProbingProviderId = providerId;
   providerHealthActionError = null;
   // 探测写开始前先淘汰状态 GET，旧指标不能在 POST 之后覆盖新探测结果。
   providerStatusPageState.clear();
-  providerHealthRequestGeneration += 1;
-  providerHealthController?.abort();
-  const controller = new AbortController();
-  providerHealthController = controller;
+  resourcePageLifecycle.cancelReads();
   try {
-    await probeProvider({ controlApiUrl, token, providerId, signal: controller.signal });
+    await resourceMutationRequest(operation, probeProvider, { controlApiUrl, providerId });
+    providerHealthProbingProviderId = null;
+    await refreshResourceMutation(operation);
   } catch (error) {
-    // 只有真实 API 失败才进入行级错误反馈，主动取消不污染运维判断。
-    if (error?.name !== "AbortError") {
-      providerHealthActionError = {
-        message: authErrorMessage(error),
-        requestId: error?.requestId ?? "-",
-      };
-    }
-  } finally {
-    // POST 完成后仅在同一登录态刷新，避免旧账号请求覆盖新账号页面。
-    if (token === authSession.token) {
-      providerHealthProbingProviderId = null;
-      await refresh();
-    }
+    if (handleResourceMutationError(operation, error)) return;
+    providerHealthActionError = { message: authErrorMessage(error), requestId: error?.requestId ?? "-" };
+    providerHealthProbingProviderId = null;
+    await refreshResourceMutation(operation);
   }
 }
 

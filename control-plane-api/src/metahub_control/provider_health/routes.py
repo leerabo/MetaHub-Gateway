@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 
 from metahub_control.auth import (
     AuthContext,
@@ -20,6 +21,7 @@ router = APIRouter(tags=["provider-health"])
 @router.get("/provider-health", response_model=ProviderHealthListResponse)
 async def get_provider_health(
     request: Request,
+    response: Response,
     context: Annotated[
         AuthContext,
         Depends(require_workspace_or_legacy_permissions("provider.health.read")),
@@ -33,6 +35,7 @@ async def get_provider_health(
 ) -> ProviderHealthListResponse:
     """列出当前租户 Provider 健康状态，筛选条件不能改变 tenant_id 边界。"""
 
+    response.headers["Cache-Control"] = "no-store"
     return list_provider_health(
         request.app.state.config,
         context,
@@ -60,7 +63,8 @@ async def post_provider_probe(
     """立即探测一个当前租户 Provider；空 body 与 `{}` 等价，额外字段会被拒绝。"""
 
     del payload
-    return probe_provider(
+    return await run_in_threadpool(
+        probe_provider,
         request.app.state.config,
         context,
         provider_id,
