@@ -298,3 +298,32 @@ isolation_attested、cleanup_attested、full_owner_coverage 继续为 false。�
 
 本条独立敏感审计 `prd-137-resource-probes-sensitive-audit.json` 核验精确暂存字节、UTF-8、凭据
 模式及上述成功/失败原始证据。未重复整批浏览器、性能或全数据库验收；这些仍在批次完成后统一执行。
+
+## 真实遥测增量 (2026-09-07)
+
+延续第 15 节资源批量设计和两轮复核。观察器使用固定只读查询和实际后台 flush 水位，不直接
+enqueue 或调用持久化替代真实 HTTP。已认证 source 的伪造 target/operation/region 标签不能
+改变归属，匿名 Header 不建立 owner；两个窗口分别精确核对 6 和 3 个真实请求的持久计数，
+并验证 owner 伪名、闭集维度、source hash、good/total 及 buffer accepted/persisted/drop。
+真实会话轮换后，旧 Cookie 为 401/none，而当前双租户会话仍各自成功计数。
+
+该探针发现的中间件 owner 漏接线归属 PRD-109，独立设计、测试记录和提交，不在 runner 中伪造
+遥测事件修饰结果。Guest 额外独立随机生成平台会话域密钥用于实际伪名化，不继承开发配置。
+
+- `metrics-http-r1-junit.xml`：真实注册/鉴权/资源集成 1/1，79.58 秒，新增指标与已有七场景通过。
+- `metrics-unit-r1-junit.xml`：58 项中 57 通过、1 失败；旧断言仍要求 metrics_labels 未实现。
+  将其纳入“缺少实际观察器必须 error”组后，r2 为 59/59，2.90 秒；含 8 项 PRD-109 绑定合同。
+- `metrics-resource-r1-junit.xml`：22/22，实际缓存/密文观察回归与指标窗口故障测试。指标覆盖
+  错 owner/退回 none/错计数/未知维度/错 good_count/错 source hash；大部分故障重算 source hash，
+  确保并非仅靠 hash 不匹配发现问题。这些受控表故障不冒充部署攻击证明。
+- `metrics-process-r1-junit.xml`：完整 app、真实 TLS、本地子进程正常模式 1/1，79.03 秒，其他
+  4 个既有模式本轮未选。十个场景中 8 个 passed、272 检查点；queue_owner/late_response 仍 error。
+  包含 13 条初始化和 12 条资源观察，新增 2 个 metric_bucket 观察；实际私有目录为空、基线不变。
+
+遥测等待仍逐次核对短许可，等待期间撤权的边界测试验证永久 fencing 且不产生资源观察。
+没有把缺少 runtime、掉数、后端错误、错 owner 或未知标签记成 passed，也未修改旧失败证据。
+报告仍为 v2，isolation/cleanup/full_owner 均 false；与正式签名 fixture receipt 不直接互换。
+queue、真实浏览器 late-response、Gateway/外部遥测后端及全 owner、实际镜像、远程认证、清理与
+完整签名归档仍待开发和实测。Ruff/diff 通过；JUnit property 警告保留，不宣称 XSD/全域性能验收。
+独立敏感审计 `prd-137-telemetry-probes-sensitive-audit.json` 核对本次精确暂存字节及上述原始
+证据，不覆盖此前资源增量的独立审计，也不把两次不同范围的通过结果拼成全产品门禁通过。

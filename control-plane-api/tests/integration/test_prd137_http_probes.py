@@ -39,6 +39,7 @@ from metahub_control.workspace_access.routes import router as access_router
 from metahub_control.workspace_navigation.routes import router as navigation_router
 from metahub_control.workspaces.routes import router as workspaces_router
 from metahub_shared.db import apply_migrations, apply_seed_data
+from metahub_shared.observability import install_telemetry_runtime
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 ORIGIN = "https://assurance.test"
@@ -120,6 +121,7 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
         "IDENTITY_PII_ENCRYPTION",
         "WORKSPACE_SESSION",
         "FILE_ENCRYPTION",
+        "PLATFORM_SESSION",
     ):
         settings[f"METAHUB_{key}_SECRET"] = secrets.token_urlsafe(48)
     for key, value in settings.items():
@@ -140,6 +142,7 @@ def runtime(migrated_baseline, tmp_path, monkeypatch):
     ):
         app.include_router(router)
     assert not app.dependency_overrides
+    install_telemetry_runtime(app, service_code="control")
     return app
 
 
@@ -171,6 +174,7 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
             )
 
     async with AsyncExitStack() as stack:
+        await stack.enter_async_context(runtime.router.lifespan_context(runtime))
         clients = [
             await stack.enter_async_context(
                 AsyncClient(
@@ -204,6 +208,8 @@ async def test_fixed_probes_with_registered_accounts_and_real_authorization(
             Path(runtime.state.config.file_storage_root).parent / "probe.sqlite3",
             Path(runtime.state.config.file_storage_root),
             runtime.state.config.file_encryption_secret,
+            runtime.state.telemetry_runtime,
+            runtime.state.config.platform_session_secret,
         )
         runner = FixedProbeRunner(fixtures, lease.guard, deadline, resources=resources)
         results = [await runner.run(code) for code in (*RESOURCE_SCENARIOS, *IMPLEMENTED_SCENARIOS)]

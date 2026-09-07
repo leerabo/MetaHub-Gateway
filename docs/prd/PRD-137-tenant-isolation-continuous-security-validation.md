@@ -304,3 +304,20 @@ browser、实际镜像、远程认证、度量、签名及归档验收仍是同�
 实际文件上传暴露旧 Bearer 路由与旧 Session 写事务的迁移缺口，按 PRD-147 单独修复和审计，
 不在探针内签发 Legacy Token 或直调 create_file 代替 HTTP。正常 Guest 当前包含七场景/247
 检查点及 10 条资源观察；上传原文不输出，磁盘篡改只能产生 failed，资源创建后撤权禁止回传报告。
+
+### 遥测实施前两轮复核
+
+2026-09-07 延续上述资源批次。真实 HTTP 遥测必须经过已安装的中间件、有界队列和 lifespan
+后台工作器，探针不得直接 enqueue 合成 fact 或代替生产持久化。只读观察器先等待实际 accepted/
+persisted 收敛，再冻结 ingest watermark；执行已知数量的 source/target/匿名请求，等待同一
+工作器收敛并读取增量 bucket，逐行核对闭集标签、HMAC 租户伪名、good/total 与 source hash。
+
+第一轮复核：合法 source 携带 target 标签仍计入 source；匿名伪造标签只计入 none；不同数量
+的双租户请求必须精确对账，不能只要求存在两个 hash。未知路径和标签字符串不得成为维度。
+观察器只返回布尔检查和摘要，持有的进程内 runtime/secret 不接受 HTTP 配置且不进入 repr。
+
+第二轮复核：用真实空间切换轮换 source 会话后，在新的观测窗口重放旧 Cookie，必须 HTTP 401
+且不归入 source/target；当前 source 与 target 继续成功并各自计数。这样不提前消耗成员降权场景。
+窗口开始/结束、等待 flush 与每个请求均持续检查短许可，超时/掉数/后端故障不判通过。
+两窗口共用现有资源观察报告，不升级 isolation/cleanup/full-owner attestations；queue 和真实
+浏览器 late-response 仍按第 15 节继续开发，不能通过修改场景清单把它们移出总目标。

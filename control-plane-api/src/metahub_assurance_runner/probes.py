@@ -51,7 +51,7 @@ IMPLEMENTED_SCENARIOS = (
     "replay_fencing",
     "input_fuzz",
 )
-RESOURCE_SCENARIOS = ("cache_owner", "object_prefix")
+RESOURCE_SCENARIOS = ("cache_owner", "object_prefix", "metrics_labels")
 LeaseGuard = Callable[[], Awaitable[bool]]
 
 
@@ -209,6 +209,7 @@ class FixedProbeRunner:
                     "input_fuzz": self._input_fuzz,
                     "cache_owner": self._cache_owner,
                     "object_prefix": self._object_prefix,
+                    "metrics_labels": self._metrics_labels,
                 }[scenario_code]
                 remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
                 async with asyncio.timeout(max(0, remaining)):
@@ -325,6 +326,67 @@ class FixedProbeRunner:
             **self._headers(client, global_session=global_session),
             "Cookie": client.build_request("GET", "/").headers["cookie"],
         }
+
+    async def _telemetry_checkpoint(self):
+        if self.resources is None:
+            raise ResourceUnavailable
+        async with asyncio.timeout(5):
+            while True:
+                await self._check_lease()
+                checkpoint = self.resources.telemetry_checkpoint()
+                await self._check_lease()
+                if checkpoint is not None:
+                    return checkpoint
+                await asyncio.sleep(0.05)
+
+    async def _metrics_labels(self):
+        if self.resources is None:
+            raise ResourceUnavailable
+        f = self.fixtures
+        await self._owner(f.source, f.source_workspace_id, "metrics.source")
+        await self._owner(f.target, f.target_workspace_id, "metrics.target")
+        before = await self._telemetry_checkpoint()
+        for label, client, repetitions in (("source", f.source, 2), ("target", f.target, 1)):
+            for index in range(repetitions):
+                response = await self._request(client, "GET", "/projects")
+                self._check(f"metrics.{label}.read_{index}", response.status_code == 200, response)
+        forged = {
+            "X-Tenant-ID": f.target_tenant_id,
+            "X-Workspace-ID": f.target_workspace_id,
+            "X-Telemetry-Operation": "assurance-private-label-canary",
+            "X-Telemetry-Region": "assurance-private-label-canary",
+        }
+        response = await self._request(f.source, "GET", "/projects", headers=forged)
+        self._check("metrics.forged_labels_authenticated", response.status_code == 200, response)
+        response = await self._request(f.anonymous, "GET", "/projects", headers=forged)
+        self._check("metrics.forged_owner_unauthenticated", response.status_code == 401, response)
+        response = await self._request(
+            f.anonymous, "GET", "/assurance-private-label-canary", headers=forged
+        )
+        self._check("metrics.unknown_path", response.status_code == 404, response)
+        after = await self._telemetry_checkpoint()
+        await self._observe(
+            self.resources.telemetry_window, "metrics.labels", before, after,
+            ((f.source_tenant_id, "2xx", 3), (f.target_tenant_id, "2xx", 1), (None, "4xx", 2)),
+        )
+
+        old_cookie = self._session_cookie(f.source)
+        await self._switch(f.source, f.source_workspace_id)
+        self._check("metrics.session_rotated", self._session_cookie(f.source) != old_cookie)
+        before = await self._telemetry_checkpoint()
+        replay = await self._request(
+            f.anonymous, "GET", "/projects",
+            headers={**forged, "Cookie": f"{WORKSPACE_SESSION}={old_cookie}"},
+        )
+        self._check("metrics.revoked_session_denied", replay.status_code == 401, replay)
+        for label, client in (("source", f.source), ("target", f.target)):
+            response = await self._request(client, "GET", "/projects")
+            self._check(f"metrics.{label}.current_read", response.status_code == 200, response)
+        after = await self._telemetry_checkpoint()
+        await self._observe(
+            self.resources.telemetry_window, "metrics.revoked", before, after,
+            ((f.source_tenant_id, "2xx", 1), (f.target_tenant_id, "2xx", 1), (None, "4xx", 1)),
+        )
 
     async def _cache_owner(self):
         if self.resources is None:

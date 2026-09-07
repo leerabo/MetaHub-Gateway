@@ -191,11 +191,11 @@ async def test_fixed_guest_real_process_https_and_report(
         assert not report["full_owner_coverage"]
         assert [run["scenario_code"] for run in report["runs"]] == list(SCENARIOS)
         assert len(report["creations"]) == 13
-        assert len(report["resources"]) == (6 if mode == "tampered_object" else 10)
+        assert len(report["resources"]) == (8 if mode == "tampered_object" else 12)
         assert {item["resource_code"] for item in report["resources"]} == (
-            {"cached_projection"}
+            {"cached_projection", "metric_bucket"}
             if mode == "tampered_object"
-            else {"cached_projection", "object_artifact"}
+            else {"cached_projection", "object_artifact", "metric_bucket"}
         )
         assert all(passed for item in report["resources"] for _, passed in item["checks"])
         for run in report["runs"]:

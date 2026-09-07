@@ -66,6 +66,7 @@ def _configure(database: Path, origin: str) -> None:
         "IDENTITY_PII_ENCRYPTION",
         "WORKSPACE_SESSION",
         "FILE_ENCRYPTION",
+        "PLATFORM_SESSION",
     ):
         os.environ[f"METAHUB_{name}_SECRET"] = secrets.token_urlsafe(48)
     logging.disable(logging.CRITICAL)
@@ -229,6 +230,8 @@ async def execute_workload(
                     directory / "control.sqlite3",
                     directory / "file-storage",
                     app.state.config.file_encryption_secret,
+                    app.state.telemetry_runtime,
+                    app.state.config.platform_session_secret,
                 )
                 runner = FixedProbeRunner(
                     fixtures,

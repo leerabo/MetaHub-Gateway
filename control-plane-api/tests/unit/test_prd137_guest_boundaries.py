@@ -33,7 +33,7 @@ def test_guest_does_not_inherit_configuration_credentials_or_proxy(monkeypatch, 
     assert os.environ["METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED"] == "false"
     assert os.environ["METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE"] == "test_capture"
     generated = [value for key, value in os.environ.items() if key.endswith("_SECRET")]
-    assert len(generated) == len(set(generated)) == 6
+    assert len(generated) == len(set(generated)) == 7
     assert os.environ["METAHUB_FILE_STORAGE_ROOT"] == str(tmp_path / "file-storage")
     assert all(len(value) >= 48 for value in generated)
 

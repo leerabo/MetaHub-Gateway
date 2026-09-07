@@ -123,8 +123,11 @@ guest 清除继承配置，在空的私有工作目录装配应用。stdout 只�
 文件密钥每次独立随机生成，`file-storage` 与本次私有数据库位于同一专有目录。观察器仅只读打开
 这份 SQLite，使用固定有界查询；实际上传、偏好更新和权限检查仍经真实 HTTPS 业务接口。
 缓存验证覆盖持久导航投影的复合 owner、版本、实际内容及暖读；文件验证覆盖真实上传、磁盘
-原文/抽取密文、合法解密、owner/字段交换、路径及覆盖拒绝。已实现的七类代表场景不表示全部
-响应缓存、队列、外部对象存储或 owner registry 验收；queue_owner/metrics_labels/late_response
-仍返回 error。resources 只包含检查码/布尔/时间/标识与状态摘要，不含真实 ID、对象键或正文，
+原文/抽取密文、合法解密、owner/字段交换、路径及覆盖拒绝。遥测经真实中间件/后台工作器落盘，
+两个有界水位窗口逐项核对双租户伪名、计数、闭集标签、匿名输入和旧会话撤销。Guest 独立生成
+用于伪名化的平台会话域密钥，观察器只读实际 bucket，报告增加两个 metric_bucket 摘要。
+已实现的八类代表场景不表示全部响应缓存、队列、外部对象存储、Gateway 遥测或 owner registry
+验收；queue_owner/late_response 仍返回 error。resources 只包含检查码/布尔/时间/标识与状态摘要，
+不含真实 ID、对象键或正文，
 也不是 fixture 删除证明。v2 原文依然不能直接作为正式签名回执，isolation/cleanup/full_owner
 标记继续为 false，须由后续独立 supervisor 度量、完整执行与清理证据完成签名组装。

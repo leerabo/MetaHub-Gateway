@@ -250,7 +250,6 @@ async def test_unimplemented_scenarios_remain_errors():
         runner = _runner(fixtures)
         for code in (
             "queue_owner",
-            "metrics_labels",
             "late_response",
         ):
             result = await runner.run(code)
@@ -263,13 +262,39 @@ async def test_resource_scenarios_require_actual_local_observer():
     requests = []
     async with _fixtures(lambda request: requests.append(request)) as fixtures:
         runner = _runner(fixtures)
-        for code in ("cache_owner", "object_prefix"):
+        for code in ("cache_owner", "object_prefix", "metrics_labels"):
             result = await runner.run(code)
             assert (result.outcome, result.reason_code) == (
                 "error",
                 "resource_observation_unavailable",
             )
         assert not requests
+
+
+@pytest.mark.anyio
+async def test_telemetry_wait_checks_lease_and_permanently_fences():
+    calls = 0
+    allowed = True
+
+    async def guard():
+        return allowed
+
+    class PendingTelemetry:
+        def telemetry_checkpoint(self):
+            nonlocal calls, allowed
+            calls += 1
+            allowed = False
+            return None
+
+    async with _fixtures(_session) as fixtures:
+        runner = _runner(fixtures, guard)
+        runner.resources = PendingTelemetry()
+        result = await runner.run("metrics_labels")
+        assert result.reason_code == "lease_revoked"
+        assert calls == 1 and not runner.resource_observations
+        allowed = True
+        assert (await runner.run("metrics_labels")).reason_code == "lease_revoked"
+        assert calls == 1
 
 
 @pytest.mark.anyio

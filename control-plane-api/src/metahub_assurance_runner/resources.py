@@ -7,8 +7,10 @@ leave this module. These observations are not cleanup or execution attestations.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import sqlite3
+from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -22,6 +24,7 @@ from metahub_shared.files.crypto import (
     decrypt_file_blob,
 )
 from metahub_shared.files.storage import EncryptedLocalBlobStore, file_object_key
+from metahub_shared.observability import TelemetryBuffer, TelemetrySnapshot
 
 
 class ResourceUnavailable(ValueError):
@@ -39,6 +42,12 @@ class ResourceObservation:
     state_sha256: str
     observed_at: datetime
     checks: tuple[tuple[str, bool], ...]
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TelemetryCheckpoint:
+    watermark: int
+    snapshot: TelemetrySnapshot
 
 
 def _digest(value) -> str:
@@ -63,6 +72,8 @@ class LocalResourceInspector:
     database: Path
     storage_root: Path
     file_secret: str
+    telemetry_runtime: TelemetryBuffer | None = None
+    telemetry_secret: str | None = None
 
     def __post_init__(self):
         for path in (self.database, self.storage_root):
@@ -78,6 +89,11 @@ class LocalResourceInspector:
             or len(self.file_secret) < 48
         ):
             raise ResourceUnavailable("resource.profile_invalid")
+        if (self.telemetry_runtime is None) != (self.telemetry_secret is None) or (
+            self.telemetry_secret is not None
+            and (not isinstance(self.telemetry_secret, str) or len(self.telemetry_secret) < 48)
+        ):
+            raise ResourceUnavailable("resource.telemetry_profile_invalid")
 
     def _read(self):
         connection = sqlite3.connect(self.database.as_uri() + "?mode=ro", uri=True, timeout=0.1)
@@ -89,6 +105,104 @@ class LocalResourceInspector:
             connection.close()
             raise
         return connection
+
+    def telemetry_checkpoint(self) -> TelemetryCheckpoint | None:
+        if self.telemetry_runtime is None:
+            raise ResourceUnavailable("resource.telemetry_missing")
+        before = self.telemetry_runtime.snapshot()
+        if before.dropped or before.backend_failures:
+            raise ResourceUnavailable("resource.telemetry_degraded")
+        if before.queued or before.accepted != before.persisted:
+            return None
+        try:
+            with closing(self._read()) as connection:
+                heads = connection.execute(
+                    "SELECT source_watermark,dropped_fact_count FROM telemetry_ingest_head LIMIT 2"
+                ).fetchall()
+            if len(heads) != 1 or heads[0]["dropped_fact_count"]:
+                raise ResourceUnavailable("resource.telemetry_head_invalid")
+            if self.telemetry_runtime.snapshot() != before:
+                return None
+            return TelemetryCheckpoint(int(heads[0]["source_watermark"]), before)
+        except (sqlite3.Error, OSError):
+            raise ResourceUnavailable("resource.telemetry_unavailable") from None
+
+    def telemetry_window(
+        self,
+        start: TelemetryCheckpoint,
+        end: TelemetryCheckpoint,
+        expected: tuple[tuple[str | None, str, int], ...],
+    ) -> ResourceObservation:
+        if self.telemetry_runtime is None or self.telemetry_secret is None:
+            raise ResourceUnavailable("resource.telemetry_missing")
+        counts = Counter()
+        for tenant_id, status_class, count in expected:
+            if tenant_id is not None:
+                _identity(tenant_id, "ten")
+            if status_class not in ("2xx", "4xx") or type(count) is not int or not 1 <= count <= 16:
+                raise ResourceContractViolation("resource.telemetry_expectation_invalid")
+            owner = "none" if tenant_id is None else hmac.new(
+                self.telemetry_secret.encode(),
+                f"prd109/telemetry-tenant/v1\0{tenant_id}".encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            counts[(owner, status_class)] += count
+        total = sum(counts.values())
+        if not 1 <= total <= 32 or not 0 <= start.watermark < end.watermark:
+            raise ResourceContractViolation("resource.telemetry_window_invalid")
+        try:
+            with closing(self._read()) as connection:
+                rows = [dict(row) for row in connection.execute(
+                    """SELECT source_watermark,bucket_started_at,service_code,operation_code,
+                              region_code,status_class,duration_bucket,tenant_pseudonym,
+                              good_count,total_count,source_sha256
+                       FROM sli_time_buckets WHERE source_watermark>? AND source_watermark<=?
+                       ORDER BY source_watermark,sli_time_bucket_id LIMIT 257""",
+                    (start.watermark, end.watermark),
+                )]
+            actual = Counter()
+            for row in rows:
+                actual[(row["tenant_pseudonym"], row["status_class"])] += row["total_count"]
+            checks = (
+                ("telemetry.nonempty_bounded", 0 < len(rows) <= 256),
+                ("telemetry.exact_owner_counts", actual == counts),
+                ("telemetry.buffer_accounted", (
+                    end.snapshot.accepted - start.snapshot.accepted == total
+                    and end.snapshot.persisted - start.snapshot.persisted == total
+                    and end.snapshot.accepted == end.snapshot.persisted
+                    and start.snapshot.accepted == start.snapshot.persisted
+                    and not end.snapshot.queued and not start.snapshot.queued
+                    and not end.snapshot.dropped and not end.snapshot.backend_failures
+                )),
+                ("telemetry.fixed_dimensions", all(
+                    row["service_code"] == "control" and row["operation_code"] == "other"
+                    and row["region_code"] == "global" and row["status_class"] in ("2xx", "4xx")
+                    and row["duration_bucket"] in (
+                        "le_10ms", "le_50ms", "le_100ms", "le_250ms", "le_500ms",
+                        "le_1000ms", "le_2500ms", "le_5000ms", "gt_5000ms",
+                    )
+                    and (row["tenant_pseudonym"] == "none" or re.fullmatch(
+                        r"[0-9a-f]{64}", row["tenant_pseudonym"]
+                    ) is not None)
+                    for row in rows
+                )),
+                ("telemetry.persisted_integrity", all(
+                    type(row["total_count"]) is int and 0 < row["total_count"] <= total
+                    and row["good_count"] == (
+                        row["total_count"] if row["status_class"] == "2xx" else 0
+                    )
+                    and row["source_sha256"] == _digest({
+                        key: value for key, value in row.items() if key != "source_sha256"
+                    })
+                    for row in rows
+                )),
+            )
+            return ResourceObservation(
+                "metric_bucket", _digest([start.watermark, end.watermark]), _digest(rows),
+                datetime.now(UTC), checks,
+            )
+        except (sqlite3.Error, OSError):
+            raise ResourceUnavailable("resource.telemetry_unavailable") from None
 
     def projection(self, workspace_id: str, tenant_id: str, public: dict) -> ResourceObservation:
         _identity(workspace_id, "wsp")
