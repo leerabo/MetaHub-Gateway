@@ -794,3 +794,42 @@ FormData 或 File 前拒绝。提交只发一次，不因取消或网络结果�
 文件筛选、分页和延迟撤权刷新也必须校验旧 binding/session。测试执行生产主页面函数和绑定
 handler，覆盖六组请求、换 owner、断开 DOM、迟到成功/错误、同 owner 后台刷新及一次性结果。
 本组完成后再汇总整批 QA，不修改 Excel 完成状态，不提前开始 PRD-148。
+
+### 2026-09-08 Catalog 服务端事务与归属补充自审
+
+本项继续基础资源迁移批次，覆盖目录读取、兼容投影、实例化和预检四个 Workspace API。
+当前 preflight 内部调用还会领取 Provider 健康租约、复制密文 Key、提交健康日志及凭据状态，
+并非纯网络函数；只修 Catalog 最后一次权限检查无法阻止健康事实在撤权后先行提交。
+
+第一轮自审（真实凭据与共同提交）：四个入口在业务查询之前复用 ResourceWriteTransaction
+恢复实际 Workspace/Legacy Session，提交前再检查具体权限。目录 read 是扩展权限，Legacy
+必须在事务内重验其签名权限目录，不能复制旧 extension_permission_codes。Workspace owner
+必须来自精确 session/membership/user/tenant 关联，wss_ 失效不得回退 Legacy；只有真实旧
+Session 可使用唯一活跃 Workspace 映射。保留现有签名、固定 endpoint、幂等作用域和 DTO。
+健康 claim/complete 增加调用方事务模式，网络函数仍复用既有 KeyPool、固定结果与 DNS/SSRF
+传输；第二笔事务将健康日志、Key 状态、Provider 聚合、Catalog run/event/outbox 一起提交。
+
+第二轮自审（网络、竞争与资源回收）：第一笔短事务完成租约领取后关闭实际连接，再等待网络；
+路由使用线程池，不能阻塞同进程 logout。第二笔事务重新恢复真实权限、比较 Workspace owner、
+实例 ID/revision/endpoint/capability/version/region，并复核健康 generation、租约 token 和期限。
+撤权、变更、异常或提交失败时，用本次精确 token/generation 回收租约，不推进健康/排期或业务
+记录；若数据库本身不可用，租约仍有期限，不覆盖原拒绝错误。幂等重放不再泄漏连接或重复出网。
+共享健康函数保留原有普通/周期/Local 调用合同；改动必须跑相邻健康单元/API 冒烟。
+
+验证以真实注册、双 Workspace、Cookie/CSRF、logout/成员降权、在途 Key/endpoint/实例变更、
+幂等重放、租约竞争/期限及提交失败为核心，核对拒绝后健康和 Catalog 全部事实不变。旧合成
+Workspace 夹具不能充当授权证据，需要替换为真实会话或明确仅用于非鉴权合同测试。本项不
+代表 PostgreSQL 并发撤权、完整业务页浏览器、G6/G7/G8 或 Excel 全目标已完成。
+
+实施复核：`database_request_scope(reuse_connections=False)` 仍把连接绑定到整个请求，并不让
+close 提前释放。预检必须完全脱离请求级 scope；无外部 I/O 的目录 read/create/compatibility
+保留既有暖连接池，在 HTTP 收尾释放请求句柄，避免每次重新解析大 schema。两类操作均保留
+事务内全量鉴权，不缓存权限或使用固定角色默认值。目录查询的 300ms 原有断言不放宽。
+健康默认 20 秒租约短于预检允许的单次 25 秒超时；Catalog claim 至少领取 30 秒租约，并在
+最终认证之后、实际 commit 之前复核原租约期限。KeyPool 多次尝试的总体时间上限和真实 DNS/
+上游超时仍应在批次网络/SLO 验收核对，单个受控 Attempt 不能证明这些事实。
+
+Legacy 角色矩阵夹具复核：直接降低唯一 Owner 会正确触发 Membership 的 owner-transfer 与
+最后 Owner 保护，不能删除 trigger 或伪造转移记录来适配测试。保留原 Owner，通过真实旧用户
+创建接口建立独立 Developer/Viewer，再用其实际密码登录验证权限；同时核对两类成员投影与
+原 Owner 未变。真实 Workspace 动态降权仍由既有 HTTP Membership 场景独立验证。

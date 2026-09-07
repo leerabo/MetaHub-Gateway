@@ -2,19 +2,26 @@
 
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from types import TracebackType
 from typing import Self
 
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
-from .service import AuthContext, require_permission, require_transaction_permission
+from .service import (
+    AuthContext,
+    refresh_transaction_authentication,
+    require_permission,
+    require_transaction_permission,
+)
 
 RESOURCE_PERMISSIONS = frozenset(
     {
         "project.write",
         "environment.write",
         "provider.write",
+        "provider_catalog.read",
         "model.write",
         "virtual_key.write",
     }
@@ -75,6 +82,22 @@ class ResourceWriteTransaction:
         if not isinstance(context, AuthContext):
             raise ApiError("auth.permission_denied")
         if not context.session.session_id.startswith("wss_"):
+            if self.permission == "provider_catalog.read":
+                from metahub_control.workspace_access.provider_catalog_permissions import (
+                    load_verified_provider_catalog_permissions,
+                )
+
+                current = refresh_transaction_authentication(
+                    self.connection, context, unavailable_error_code="infra.service_unavailable"
+                )
+                permissions = load_verified_provider_catalog_permissions(
+                    self.connection,
+                    role_code=current.user.role,
+                    unavailable_error_code="infra.service_unavailable",
+                )
+                return require_permission(
+                    replace(current, extension_permission_codes=permissions), self.permission
+                )
             return require_transaction_permission(
                 self.connection,
                 context,

@@ -79,6 +79,7 @@ class _Claim:
     health_generation: int
     consecutive_failures: int
     lease_token: str
+    lease_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,14 @@ class LocalProviderCatalogProbe:
     response: ProviderProbeResponse
     model_ids: tuple[str, ...] = field(repr=False)
     catalog_truncated: bool
+
+
+@dataclass(frozen=True)
+class CatalogProbeResult:
+    """Transient transport results; no persistence or lease ownership changes."""
+
+    result_status: str
+    attempts: tuple[_Attempt, ...] = field(repr=False)
 
 
 class _ValidatedProbeUrl(str):
@@ -382,54 +391,104 @@ def probe_provider_for_tenant(
     )
 
 
-def probe_catalog_provider_for_tenant(
+def claim_catalog_provider_in_transaction(
     config: AppConfig,
+    connection: sqlite3.Connection,
     tenant_id: str,
     provider_id: str,
     *,
     expected_base_url: str,
+) -> tuple[_Claim, list[_Credential]]:
+    """Claim the signed endpoint inside the caller's authenticated transaction."""
+
+    return _claim_provider(
+        config, tenant_id, provider_id, "manual",
+        connection=connection, expected_base_url=expected_base_url,
+    )
+
+
+def perform_catalog_provider_probe(
+    config: AppConfig, claim: _Claim, credentials: list[_Credential]
+) -> CatalogProbeResult:
+    """Perform only bounded transport; the caller owns claim and completion."""
+
+    attempts = _perform_probe(config, claim, credentials)
+    return CatalogProbeResult(_aggregate_result(attempts), tuple(attempts))
+
+
+def complete_catalog_provider_in_transaction(
+    config: AppConfig,
+    connection: sqlite3.Connection,
+    claim: _Claim,
+    probe: CatalogProbeResult,
+    *,
     request_id: str,
     trace_id: str,
-) -> ProviderProbeResponse:
-    """Probe only when the leased Provider snapshot matches the signed catalog URL."""
+) -> tuple[ProviderProbeResponse, bool]:
+    """Stage health facts in the same transaction as the Catalog run and outbox."""
 
-    claim, credentials = _claim_provider(config, tenant_id, provider_id, "manual")
-    if not hmac.compare_digest(claim.base_url, expected_base_url):
-        attempts = [
-            _fixed_attempt(
-                "failed",
-                "unverified",
-                "endpoint_blocked",
-                "Provider endpoint does not match its signed catalog instance.",
-                _utcnow(),
-            )
-        ]
-    else:
-        attempts = _perform_probe(config, claim, credentials)
-    result_status = _aggregate_result(attempts)
+    if not connection.in_transaction:
+        raise ApiError("provider_catalog.unavailable")
+    lease = connection.execute(
+        """
+        SELECT probe_lease_until FROM providers
+        WHERE tenant_id=? AND provider_id=? AND health_generation=? AND probe_lease_token=?
+        """,
+        (claim.tenant_id, claim.provider_id, claim.health_generation, claim.lease_token),
+    ).fetchone()
+    lease_until = _parse_time(lease[0]) if lease is not None else None
+    if lease_until is None or lease_until <= _utcnow():
+        raise ApiError("provider_health.probe_superseded")
     transitioned = _complete_probe(
         config,
         claim,
-        attempts,
-        result_status=result_status,
+        list(probe.attempts),
+        result_status=probe.result_status,
         trigger_type="manual",
         request_id=request_id,
         trace_id=trace_id,
+        connection=connection,
     )
-    connection = _connect(config)
-    try:
-        item = _health_item(_load_health_row(connection, tenant_id, provider_id), config)
-    finally:
-        connection.close()
-    if transitioned:
-        _dispatch_unhealthy_event(config, claim, item, attempts, request_id, trace_id)
+    item = _health_item(_load_health_row(connection, claim.tenant_id, claim.provider_id), config)
     return ProviderProbeResponse(
         provider_health=item,
-        result_status=result_status,
-        attempts=[_attempt_info(index, attempt) for index, attempt in enumerate(attempts, 1)],
+        result_status=probe.result_status,
+        attempts=[_attempt_info(index, attempt) for index, attempt in enumerate(probe.attempts, 1)],
         request_id=request_id,
         trace_id=trace_id,
-    )
+    ), transitioned
+
+
+def release_catalog_provider_probe(config: AppConfig, claim: _Claim) -> None:
+    """Release only this operation's lease, even after its user has been revoked."""
+
+    connection = None
+    try:
+        connection = _connect(config)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            UPDATE providers SET probe_lease_token=NULL,probe_lease_until=NULL
+            WHERE tenant_id=? AND provider_id=? AND health_generation=? AND probe_lease_token=?
+            """,
+            (claim.tenant_id, claim.provider_id, claim.health_generation, claim.lease_token),
+        )
+        connection.commit()
+    except (sqlite3.Error, DbError, ApiError):
+        # Database outages leave an expiring lease, never replace the original rejection.
+        pass
+    finally:
+        if connection is not None:
+            try:
+                if connection.in_transaction:
+                    connection.rollback()
+            except (sqlite3.Error, DbError):
+                pass
+            finally:
+                try:
+                    connection.close()
+                except (sqlite3.Error, DbError):
+                    pass
 
 
 def probe_local_provider_catalog(
@@ -516,16 +575,24 @@ def claim_next_scheduled(config: AppConfig) -> tuple[str, str] | None:
 
 
 def _claim_provider(
-    config: AppConfig, tenant_id: str, provider_id: str, trigger_type: str
+    config: AppConfig, tenant_id: str, provider_id: str, trigger_type: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+    expected_base_url: str | None = None,
 ) -> tuple[_Claim, list[_Credential]]:
     """短事务领取 Provider，并复制网络阶段所需的配置与密文。"""
 
-    connection = _connect(config)
+    owns_connection = connection is None
+    if connection is None:
+        connection = _connect(config)
     now = _utcnow()
     lease_until = now + timedelta(seconds=config.provider_health_lease_seconds)
     token = uuid4().hex
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        if owns_connection:
+            connection.execute("BEGIN IMMEDIATE")
+        elif not connection.in_transaction:
+            raise ApiError("provider_catalog.unavailable")
         row = connection.execute(
             "SELECT * FROM providers WHERE tenant_id=? AND provider_id=?",
             (tenant_id, provider_id),
@@ -533,6 +600,11 @@ def _claim_provider(
         # 不存在和跨租户 Provider 统一返回 404，不能暴露其他租户资源是否存在。
         if row is None:
             raise ApiError("provider.not_found")
+        if expected_base_url is not None and (
+            row["status"] != "active"
+            or not hmac.compare_digest(str(row["base_url"]), expected_base_url)
+        ):
+            raise ApiError("provider_catalog.instance_changed")
         # 在写入 lease、读取 KeyPool 或执行 DNS/HTTP 前验证完整组合；失败事务会回滚，
         # 不会留下阻塞后续修复操作的探测租约。
         adapter_spec = _validate_provider_auth_combination(
@@ -577,10 +649,15 @@ def _claim_provider(
             """,
             (tenant_id, provider_id, _db_time(now)),
         ).fetchall()
-        connection.commit()
+        if owns_connection:
+            connection.commit()
     except Exception:
-        connection.rollback()
+        if owns_connection:
+            connection.rollback()
         raise
+    finally:
+        if owns_connection:
+            connection.close()
     claim = _Claim(
         provider_id=row["provider_id"],
         tenant_id=row["tenant_id"],
@@ -594,6 +671,7 @@ def _claim_provider(
         health_generation=row["health_generation"],
         consecutive_failures=row["consecutive_probe_failures"],
         lease_token=token,
+        lease_until=lease_until,
     )
     credentials = [_Credential(row["provider_credential_id"], row["encrypted_key"]) for row in key_rows]
     return claim, credentials
@@ -889,14 +967,20 @@ def _complete_probe(
     trigger_type: str,
     request_id: str,
     trace_id: str,
+    connection: sqlite3.Connection | None = None,
 ) -> bool:
     """用 lease token + generation 原子提交日志、Key 状态和 Provider 聚合。"""
 
-    connection = _connect(config)
+    owns_connection = connection is None
+    if connection is None:
+        connection = _connect(config)
     now = _utcnow()
     next_probe = None if claim.provider_status == "disabled" else now + timedelta(seconds=config.provider_health_interval_seconds)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        if owns_connection:
+            connection.execute("BEGIN IMMEDIATE")
+        elif not connection.in_transaction:
+            raise ApiError("provider_catalog.unavailable")
         current = connection.execute(
             """
             SELECT health_status, consecutive_probe_failures FROM providers
@@ -939,7 +1023,8 @@ def _complete_probe(
             # inconclusive 也必须通过 CAS 释放租约，迟到结果不能推进新配置的排期。
             if updated.rowcount != 1:
                 raise ApiError("provider_health.probe_superseded")
-            connection.commit()
+            if owns_connection:
+                connection.commit()
             return False
 
         representative = next((item for item in attempts if item.result_status == result_status), attempts[0])
@@ -978,11 +1063,16 @@ def _complete_probe(
         # 聚合状态提交必须再次检查 token+generation，确保日志与状态属于同一配置代际。
         if updated.rowcount != 1:
             raise ApiError("provider_health.probe_superseded")
-        connection.commit()
+        if owns_connection:
+            connection.commit()
         return previous_status != "unhealthy" and health_status == "unhealthy"
     except Exception:
-        connection.rollback()
+        if owns_connection:
+            connection.rollback()
         raise
+    finally:
+        if owns_connection:
+            connection.close()
 
 
 def _update_credential_probe(

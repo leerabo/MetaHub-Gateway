@@ -11,7 +11,6 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -25,10 +24,11 @@ from metahub_control.platform_access.constants import (
 )
 from metahub_control.platform_access.service import PlatformContext
 from metahub_control.provider_catalog import routes as catalog_routes
-from metahub_control.provider_catalog import service as catalog_service
 from metahub_control.provider_catalog.models import ProviderCatalogManifest
 from metahub_control.provider_catalog.routes import router
 from metahub_control.provider_catalog.seed import SEED_MANIFEST
+from metahub_control.provider_health import service as health_service
+from metahub_control.users.routes import router as users_router
 from metahub_control.workspace_access import service as workspace_service
 from metahub_control.workspace_access.constants import (
     WORKSPACE_CSRF_COOKIE,
@@ -43,6 +43,10 @@ from metahub_shared.db import apply_migrations, apply_seed_data, connect_databas
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
+from test_prd147_workspace_files import (  # noqa: F401
+    _headers as _actual_workspace_headers,
+)
+from test_prd147_workspace_files import file_subjects, migrated_baseline  # noqa: F401
 
 ORIGIN = "http://localhost:5173"
 WORKSPACE_TOKEN = "w" * 43
@@ -99,6 +103,10 @@ def runtime(
     shutil.copy2(base_database, database)
     config = _config(_url(database))
     actor = _owner_actor(config)
+    return config, actor, _platform_actor(config, actor)
+
+
+def _platform_actor(config: AppConfig, actor: WorkspaceSessionContext) -> PlatformContext:
     operator_id = "pto_" + "9" * 32
     with connect_database(config.database_url) as connection:
         connection.execute(
@@ -138,7 +146,20 @@ def runtime(
         ),
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    return config, actor, platform
+    return platform
+
+
+@pytest.fixture
+async def workspace_runtime(file_subjects):  # noqa: F811
+    app, _database, fixtures = file_subjects
+    config = app.state.config.model_copy(update={
+        "allowed_origins": [ORIGIN, str(fixtures.source.base_url).rstrip("/")],
+        "platform_session_secret": secrets.token_urlsafe(32),
+    })
+    actor = workspace_service.authenticate_workspace_session_context(
+        config, fixtures.source.cookies.get(WORKSPACE_SESSION_COOKIE),
+    )
+    return config, actor, _platform_actor(config, actor)
 
 
 def _owner_actor(config: AppConfig) -> WorkspaceSessionContext:
@@ -194,14 +215,9 @@ def _owner_actor(config: AppConfig) -> WorkspaceSessionContext:
 def _app(
     monkeypatch: pytest.MonkeyPatch,
     config: AppConfig,
-    actor: WorkspaceSessionContext,
+    _actor: WorkspaceSessionContext,
     platform_holder: dict[str, PlatformContext],
 ):
-    monkeypatch.setattr(
-        workspace_service,
-        "authenticate_workspace_session_as_auth_context",
-        lambda *_args, **_kwargs: actor.as_auth_context(),
-    )
     monkeypatch.setattr(
         catalog_routes,
         "authenticate_platform_session_context",
@@ -228,14 +244,15 @@ def _legacy_app(config: AppConfig):
     app.state.config = config
     app.include_router(auth_router)
     app.include_router(console_router)
+    app.include_router(users_router)
     app.include_router(router)
     return app
 
 
-def _workspace_headers(*, key: str | None = None) -> dict[str, str]:
+def _workspace_headers(actor=None, *, key: str | None = None) -> dict[str, str]:
     headers = {
         "Cookie": (
-            f"{WORKSPACE_SESSION_COOKIE}={WORKSPACE_TOKEN}; "
+            f"{WORKSPACE_SESSION_COOKIE}={actor.token if actor else WORKSPACE_TOKEN}; "
             f"{WORKSPACE_CSRF_COOKIE}={WORKSPACE_CSRF}"
         ),
         "Origin": ORIGIN,
@@ -264,17 +281,36 @@ def _platform_headers(*, key: str | None = None, revision: int | None = None):
     return headers
 
 
-async def _legacy_login(client: AsyncClient) -> dict:
+async def _legacy_login(
+    client: AsyncClient, *, email: str = "admin@metahub.local"
+) -> dict:
     response = await client.post(
         "/auth/login",
         json={
             "tenant_slug": "default",
-            "email": "admin@metahub.local",
+            "email": email,
             "password": _LEGACY_TEST_PASSWORD,
         },
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def _legacy_member_login(client: AsyncClient, *, role: str) -> dict:
+    owner = await _legacy_login(client)
+    email = f"catalog-{role}@example.test"
+    created = await client.post(
+        "/users",
+        json={
+            "email": email,
+            "display_name": "Catalog test member",
+            "password": _LEGACY_TEST_PASSWORD,
+            "role": role,
+        },
+        headers={"Authorization": f"Bearer {owner['access_token']}"},
+    )
+    assert created.status_code == 201, created.json().get("code")
+    return await _legacy_login(client, email=email)
 
 
 @pytest.mark.anyio
@@ -315,12 +351,7 @@ async def test_legacy_bearer_owner_and_developer_allow_viewer_denies(
         )
         assert owner_catalog.status_code == 200, owner_catalog.text
 
-        with connect_database(config.database_url) as connection:
-            connection.execute(
-                "UPDATE users SET role='developer' WHERE email='admin@metahub.local'"
-            )
-            connection.commit()
-        developer_login = await _legacy_login(client)
+        developer_login = await _legacy_member_login(client, role="developer")
         assert "provider_catalog.read" in developer_login["permission_codes"]
         developer_catalog = await client.get(
             "/provider-catalog",
@@ -328,12 +359,7 @@ async def test_legacy_bearer_owner_and_developer_allow_viewer_denies(
         )
         assert developer_catalog.status_code == 200, developer_catalog.text
 
-        with connect_database(config.database_url) as connection:
-            connection.execute(
-                "UPDATE users SET role='viewer' WHERE email='admin@metahub.local'"
-            )
-            connection.commit()
-        viewer_login = await _legacy_login(client)
+        viewer_login = await _legacy_member_login(client, role="viewer")
         assert "provider_catalog.read" not in viewer_login["permission_codes"]
         viewer_catalog = await client.get(
             "/provider-catalog",
@@ -341,6 +367,19 @@ async def test_legacy_bearer_owner_and_developer_allow_viewer_denies(
         )
         assert viewer_catalog.status_code == 403
         assert viewer_catalog.json()["code"] == "auth.permission_denied"
+    with connect_database(config.database_url) as connection:
+        roles = connection.execute(
+            "SELECT user.email,user.role,membership.role_code "
+            "FROM users user JOIN workspace_memberships membership "
+            "ON membership.tenant_id=user.tenant_id "
+            "AND membership.legacy_user_id=user.user_id "
+            "WHERE membership.status='active' ORDER BY user.email"
+        ).fetchall()
+        assert [tuple(row) for row in roles] == [
+            ("admin@metahub.local", "admin", "owner"),
+            ("catalog-developer@example.test", "developer", "developer"),
+            ("catalog-viewer@example.test", "viewer", "viewer"),
+        ]
 
 
 @pytest.mark.anyio
@@ -350,12 +389,9 @@ async def test_legacy_bearer_provider_catalog_extension_tamper_fails_closed(
     tamper: str,
 ) -> None:
     config, _actor, _platform = runtime
-    with connect_database(config.database_url) as connection:
-        connection.execute("UPDATE users SET role='developer' WHERE email='admin@metahub.local'")
-        connection.commit()
     transport = ASGITransport(app=_legacy_app(config))
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await _legacy_login(client)
+        login = await _legacy_member_login(client, role="developer")
         token = login["access_token"]
         with connect_database(config.database_url) as connection:
             if tamper == "missing_table":
@@ -410,16 +446,27 @@ def test_delegated_machine_authority_revalidates_provider_catalog_matrix(
 
 @pytest.mark.anyio
 async def test_enterprise_catalog_create_compatibility_and_preflight(
-    runtime: tuple[AppConfig, WorkspaceSessionContext, PlatformContext],
+    file_subjects,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config, actor, platform = runtime
-    holder = {"actor": platform}
-    transport = ASGITransport(app=_app(monkeypatch, config, actor, holder))
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    app, _database, fixtures = file_subjects
+    config = app.state.config
+    app.include_router(router)
+    transport = ASGITransport(app=app)
+
+    def workspace_headers(*, key=None):
+        headers = _actual_workspace_headers(fixtures.source)
+        if key is not None:
+            headers["Idempotency-Key"] = key
+        return headers
+
+    async with AsyncClient(
+        transport=transport, base_url=str(fixtures.source.base_url),
+        cookies=fixtures.source.cookies,
+    ) as client:
         listed = await client.get(
             "/provider-catalog?capability_code=chat",
-            headers=_workspace_headers(),
+            headers=workspace_headers(),
         )
         assert listed.status_code == 200, listed.text
         assert "no-store" in listed.headers["cache-control"]
@@ -435,7 +482,7 @@ async def test_enterprise_catalog_create_compatibility_and_preflight(
 
         compatibility = await client.get(
             "/provider-catalog/deepseek/compatibility",
-            headers=_workspace_headers(),
+            headers=workspace_headers(),
         )
         assert compatibility.status_code == 200, compatibility.text
         assert compatibility.json()["compatibility"]["level"] == "native"
@@ -451,14 +498,14 @@ async def test_enterprise_catalog_create_compatibility_and_preflight(
         }
         created = await client.post(
             "/providers/from-catalog",
-            headers=_workspace_headers(key="prd119-create-provider-0001"),
+            headers=workspace_headers(key="prd119-create-provider-0001"),
             json=create_body,
         )
         assert created.status_code == 201, created.text
         instance = created.json()["instance"]
         replay = await client.post(
             "/providers/from-catalog",
-            headers=_workspace_headers(key="prd119-create-provider-0001"),
+            headers=workspace_headers(key="prd119-create-provider-0001"),
             json=create_body,
         )
         assert replay.status_code == 201
@@ -476,24 +523,16 @@ async def test_enterprise_catalog_create_compatibility_and_preflight(
 
         checked_at = datetime.now(UTC)
         monkeypatch.setattr(
-            catalog_service,
-            "probe_catalog_provider_for_tenant",
-            lambda *_args, **_kwargs: SimpleNamespace(
-                result_status="success",
-                attempts=[
-                    SimpleNamespace(
-                        latency_ms=9,
-                        http_status=200,
-                        error_code=None,
-                        checked_at=checked_at,
-                    )
-                ],
-            ),
+            health_service,
+            "_perform_probe",
+            lambda *_args, **_kwargs: [health_service._fixed_attempt(
+                "success", "unverified", None, "Provider probe succeeded.", checked_at,
+            )],
         )
         preflight_started = time.perf_counter()
         preflight = await client.post(
             f"/providers/{instance['provider_id']}/preflight",
-            headers=_workspace_headers(key="prd119-preflight-0001"),
+            headers=workspace_headers(key="prd119-preflight-0001"),
             json={"timeout_seconds": 2.0},
         )
         preflight_elapsed = time.perf_counter() - preflight_started
@@ -503,7 +542,7 @@ async def test_enterprise_catalog_create_compatibility_and_preflight(
         assert preflight_elapsed < 30.0
         second = await client.post(
             f"/providers/{instance['provider_id']}/preflight",
-            headers=_workspace_headers(key="prd119-preflight-0001"),
+            headers=workspace_headers(key="prd119-preflight-0001"),
             json={"timeout_seconds": 2.0},
         )
         assert second.json()["idempotent_replay"] is True
@@ -515,10 +554,10 @@ async def test_enterprise_catalog_create_compatibility_and_preflight(
 
 @pytest.mark.anyio
 async def test_platform_signed_publication_is_isolated_and_idempotent(
-    runtime: tuple[AppConfig, WorkspaceSessionContext, PlatformContext],
+    workspace_runtime: tuple[AppConfig, WorkspaceSessionContext, PlatformContext],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config, actor, platform = runtime
+    config, actor, platform = workspace_runtime
     holder = {"actor": platform}
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(
@@ -555,7 +594,7 @@ async def test_platform_signed_publication_is_isolated_and_idempotent(
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         warm_catalog = await client.get(
             "/provider-catalog?status=active&capability_code=chat",
-            headers=_workspace_headers(),
+            headers=_workspace_headers(actor),
         )
         assert warm_catalog.status_code == 200, warm_catalog.text
         catalog_samples: list[float] = []
@@ -563,7 +602,7 @@ async def test_platform_signed_publication_is_isolated_and_idempotent(
             started = time.perf_counter()
             catalog = await client.get(
                 "/provider-catalog?status=active&capability_code=chat",
-                headers=_workspace_headers(),
+                headers=_workspace_headers(actor),
             )
             catalog_samples.append(time.perf_counter() - started)
             assert catalog.status_code == 200, catalog.text
@@ -587,7 +626,7 @@ async def test_platform_signed_publication_is_isolated_and_idempotent(
         assert "signature" not in published.json()["catalog"]
         propagated_catalog = await client.get(
             "/provider-catalog",
-            headers=_workspace_headers(),
+            headers=_workspace_headers(actor),
         )
         propagation_elapsed = time.perf_counter() - propagation_started
         assert propagated_catalog.status_code == 200, propagated_catalog.text

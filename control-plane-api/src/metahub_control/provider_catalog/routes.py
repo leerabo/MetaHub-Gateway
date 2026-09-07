@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
 
@@ -55,20 +56,20 @@ from .service import (
 
 
 async def provider_catalog_database_scope() -> AsyncIterator[None]:
-    """Keep one verified database handle for the complete catalog request."""
+    """Reuse connections only for operations without an upstream network phase."""
 
     with database_request_scope(reuse_connections=True):
         yield
 
 
-router = APIRouter(
-    tags=["provider-catalog"],
-    dependencies=[Depends(provider_catalog_database_scope)],
-)
+router = APIRouter(tags=["provider-catalog"])
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 
 
-@router.get("/provider-catalog", response_model=ProviderCatalogResponse)
+@router.get(
+    "/provider-catalog", response_model=ProviderCatalogResponse,
+    dependencies=[Depends(provider_catalog_database_scope)],
+)
 async def get_provider_catalog(
     request: Request,
     response: Response,
@@ -99,6 +100,7 @@ async def get_provider_catalog(
     "/providers/from-catalog",
     response_model=CatalogProviderCreateResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(provider_catalog_database_scope)],
 )
 async def post_provider_from_catalog(
     payload: Annotated[CatalogProviderCreateRequest, Body()],
@@ -136,7 +138,8 @@ async def post_provider_preflight(
         Depends(require_workspace_or_legacy_permissions("provider.write")),
     ],
 ) -> ProviderPreflightResponse:
-    result = preflight_catalog_provider(
+    result = await run_in_threadpool(
+        preflight_catalog_provider,
         request.app.state.config,
         context,
         provider_id,
@@ -152,6 +155,7 @@ async def post_provider_preflight(
 @router.get(
     "/provider-catalog/{entry_code}/compatibility",
     response_model=CompatibilityResponse,
+    dependencies=[Depends(provider_catalog_database_scope)],
 )
 async def get_provider_compatibility(
     entry_code: str,
@@ -205,7 +209,10 @@ def require_platform_provider_catalog(request: Request) -> PlatformContext:
     return context
 
 
-@router.get("/platform/provider-catalog", response_model=PlatformCatalogResponse)
+@router.get(
+    "/platform/provider-catalog", response_model=PlatformCatalogResponse,
+    dependencies=[Depends(provider_catalog_database_scope)],
+)
 async def get_platform_provider_catalog(
     request: Request,
     response: Response,
@@ -227,6 +234,7 @@ async def get_platform_provider_catalog(
     "/platform/provider-catalog/versions",
     response_model=PlatformCatalogPublishResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(provider_catalog_database_scope)],
 )
 async def post_platform_provider_catalog_version(
     request: Request,

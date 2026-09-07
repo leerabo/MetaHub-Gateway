@@ -25,8 +25,9 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.provider_adapter_spec import provider_adapter_spec
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.platform_access.service import PlatformContext
-from metahub_control.provider_health.service import probe_catalog_provider_for_tenant
+from metahub_control.provider_health import service as provider_health
 
 from .models import (
     CatalogInstanceSummary,
@@ -93,9 +94,10 @@ def list_provider_catalog(
     checked_capability = _optional_code(capability_code)
     checked_region = _optional_region(region_code)
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "provider_catalog.read")
     try:
-        connection.execute("BEGIN")
-        _workspace_owner(connection, context)
+        transaction.begin()
+        _workspace_owner(connection, transaction.context)
         head = _head(connection)
         manifest, version = _verified_manifest(connection, str(head["version"]))
         entries = tuple(
@@ -122,7 +124,7 @@ def list_provider_catalog(
             request_id=_identifier(request_id),
             trace_id=_identifier(trace_id),
         )
-        connection.commit()
+        transaction.commit()
         return result
     except ApiError:
         _rollback(connection)
@@ -149,8 +151,10 @@ def create_catalog_provider(
     _valid_idempotency(idempotency_key)
     request_sha256 = _digest(payload.model_dump(mode="json"))
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "provider.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         owner = _workspace_owner(connection, context)
         manifest, _version = _verified_manifest(connection, payload.version)
         entry = _entry(manifest, payload.entry_code)
@@ -183,7 +187,7 @@ def create_catalog_provider(
                 request_id=_identifier(request_id),
                 trace_id=_identifier(trace_id),
             )
-            connection.commit()
+            transaction.commit()
             return result
 
         now = _db_time(_utcnow())
@@ -260,7 +264,7 @@ def create_catalog_provider(
             request_id=_identifier(request_id),
             trace_id=_identifier(trace_id),
         )
-        connection.commit()
+        transaction.commit()
         return result
     except sqlite3.IntegrityError as exc:
         _rollback(connection)
@@ -297,8 +301,10 @@ def preflight_catalog_provider(
         {"provider_id": provider_id, "timeout_seconds": payload.timeout_seconds}
     )
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "provider.write")
     try:
-        connection.execute("BEGIN")
+        transaction.begin()
+        context = transaction.context
         owner = _workspace_owner(connection, context)
         claim = _preflight_claim(connection, owner, provider_id)
         idempotency_sha256 = _workspace_idempotency(
@@ -322,45 +328,75 @@ def preflight_catalog_provider(
                 request_id=_identifier(request_id),
                 trace_id=_identifier(trace_id),
             )
-            connection.commit()
+            transaction.commit()
             return result
-        connection.commit()
+        health_claim, credentials = provider_health.claim_catalog_provider_in_transaction(
+            config.model_copy(update={
+                "provider_health_lease_seconds": max(config.provider_health_lease_seconds, 30),
+            }),
+            connection, owner.tenant_id, provider_id,
+            expected_base_url=str(claim["base_url"]),
+        )
+        transaction.commit()
     except ApiError:
         _rollback(connection)
-        connection.close()
         raise
     except (sqlite3.Error, DbError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         _rollback(connection)
-        connection.close()
         raise ApiError("provider_catalog.unavailable") from None
-    connection.close()
+    finally:
+        connection.close()
 
-    probe = None
     try:
-        probe = probe_catalog_provider_for_tenant(
+        probe = provider_health.perform_catalog_provider_probe(
             config.model_copy(
                 update={"provider_health_timeout_seconds": payload.timeout_seconds}
             ),
-            owner.tenant_id,
-            provider_id,
-            expected_base_url=str(claim["base_url"]),
+            health_claim,
+            credentials,
+        )
+        return _complete_catalog_preflight(
+            config, context, owner, provider_id, claim, health_claim, probe,
+            idempotency_sha256=idempotency_sha256,
+            request_sha256=request_sha256,
             request_id=request_id,
             trace_id=trace_id,
         )
-    except ApiError:
-        probe = None
+    except BaseException:
+        provider_health.release_catalog_provider_probe(config, health_claim)
+        raise
+    finally:
+        credentials.clear()
+
+
+def _complete_catalog_preflight(
+    config: AppConfig,
+    context: AuthContext,
+    owner: _WorkspaceOwner,
+    provider_id: str,
+    claim,
+    health_claim,
+    probe: provider_health.CatalogProbeResult,
+    *,
+    idempotency_sha256: str,
+    request_sha256: str,
+    request_id: str,
+    trace_id: str,
+) -> ProviderPreflightResponse:
     status, outcome, latency, http_status, checked_at = _preflight_outcome(probe)
 
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "provider.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        current_owner = _workspace_owner(connection, context)
+        transaction.begin()
+        current_owner = _workspace_owner(connection, transaction.context)
         current_claim = _preflight_claim(connection, current_owner, provider_id)
-        if (
-            current_claim["provider_catalog_instance_id"]
-            != claim["provider_catalog_instance_id"]
-            or int(current_claim["revision"]) != int(claim["revision"])
-            or current_claim["endpoint_sha256"] != claim["endpoint_sha256"]
+        if current_owner != owner or any(
+            current_claim[field] != claim[field]
+            for field in (
+                "provider_catalog_instance_id", "revision", "endpoint_sha256",
+                "capability_sha256", "catalog_version", "region_code", "entry_code",
+            )
         ):
             raise ApiError("provider_catalog.instance_changed")
         replay = _workspace_command(
@@ -381,8 +417,21 @@ def preflight_catalog_provider(
                 request_id=_identifier(request_id),
                 trace_id=_identifier(trace_id),
             )
-            connection.commit()
+            connection.execute(
+                """
+                UPDATE providers SET probe_lease_token=NULL,probe_lease_until=NULL
+                WHERE tenant_id=? AND provider_id=? AND health_generation=? AND probe_lease_token=?
+                """,
+                (
+                    owner.tenant_id, provider_id,
+                    health_claim.health_generation, health_claim.lease_token,
+                ),
+            )
+            transaction.commit()
             return result
+        health_response, transitioned = provider_health.complete_catalog_provider_in_transaction(
+            config, connection, health_claim, probe, request_id=request_id, trace_id=trace_id,
+        )
         run_id = _id("pfr_")
         now = _db_time(_utcnow())
         connection.execute(
@@ -456,8 +505,15 @@ def preflight_catalog_provider(
             request_id=_identifier(request_id),
             trace_id=_identifier(trace_id),
         )
-        connection.commit()
-        return result
+        def commit_result(connection):
+            if (
+                health_claim.lease_until is None
+                or health_claim.lease_until <= provider_health._utcnow()
+            ):
+                raise ApiError("provider_health.probe_superseded")
+            connection.commit()
+
+        transaction.commit(commit_result)
     except ApiError:
         _rollback(connection)
         raise
@@ -466,6 +522,12 @@ def preflight_catalog_provider(
         raise ApiError("provider_catalog.unavailable") from None
     finally:
         connection.close()
+    if transitioned:
+        provider_health._dispatch_unhealthy_event(
+            config, health_claim, health_response.provider_health,
+            list(probe.attempts), request_id, trace_id,
+        )
+    return result
 
 
 def get_catalog_compatibility(
@@ -482,9 +544,10 @@ def get_catalog_compatibility(
     if _CODE_RE.fullmatch(entry_code) is None:
         raise ApiError("provider_catalog.request_invalid")
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "provider_catalog.read")
     try:
-        connection.execute("BEGIN")
-        owner = _workspace_owner(connection, context)
+        transaction.begin()
+        owner = _workspace_owner(connection, transaction.context)
         head = _head(connection)
         manifest, _version = _verified_manifest(connection, str(head["version"]))
         entry = _entry(manifest, entry_code)
@@ -506,7 +569,7 @@ def get_catalog_compatibility(
             request_id=_identifier(request_id),
             trace_id=_identifier(trace_id),
         )
-        connection.commit()
+        transaction.commit()
         return result
     except ApiError:
         _rollback(connection)
@@ -1125,24 +1188,31 @@ def _workspace_owner(
         SELECT session.workspace_id,session.tenant_id,session.account_id
         FROM workspace_sessions session
         JOIN workspace_memberships member
-          ON member.workspace_id=session.workspace_id AND member.tenant_id=session.tenant_id
+          ON member.workspace_membership_id=session.membership_id
+         AND member.workspace_id=session.workspace_id AND member.tenant_id=session.tenant_id
          AND member.account_id=session.account_id
         JOIN workspace_tenant_bindings binding
           ON binding.workspace_id=session.workspace_id AND binding.tenant_id=session.tenant_id
         WHERE session.workspace_session_id=? AND session.tenant_id=?
+          AND member.legacy_user_id=?
           AND session.status='active' AND member.status='active' AND binding.status='active'
         """,
-        (context.session.session_id, context.user.tenant_id),
+        (context.session.session_id, context.user.tenant_id, context.user.user_id),
     ).fetchone()
     if row is None:
+        if context.session.session_id.startswith("wss_"):
+            raise ApiError("provider_catalog.workspace_required")
         rows = connection.execute(
             """
             SELECT member.workspace_id,member.tenant_id,member.account_id
             FROM workspace_memberships member
+            JOIN workspaces workspace ON workspace.workspace_id=member.workspace_id
+            JOIN global_accounts account ON account.account_id=member.account_id
             JOIN workspace_tenant_bindings binding
               ON binding.workspace_id=member.workspace_id AND binding.tenant_id=member.tenant_id
             WHERE member.legacy_user_id=? AND member.tenant_id=?
               AND member.status='active' AND binding.status='active'
+              AND workspace.status='active' AND account.status='active' AND account.login_enabled=1
             ORDER BY member.workspace_id
             """,
             (context.user.user_id, context.user.tenant_id),

@@ -346,3 +346,52 @@ $tests = @(
 真实 Workspace 消费端、PostgreSQL 并发撤权及统一批次 QA。六组基础页面的单元接线完成
 不等于全域 SaaS 迁移完成；G6/G7/G8 尚未证明通过，Excel 未改状态，PRD-148 未开始，未重启
 72 小时等待。
+
+## 2026-09-08 Catalog Workspace 事务与健康共同提交
+
+本项接续基础资源迁移批次，设计和两轮自审见 PRD-147 对应补充。四个 Workspace Catalog
+API 在查询之前和提交之前恢复真实会话；Legacy read 重新校验 Catalog 扩展权限目录。
+Workspace owner 精确绑定 session/membership/user/tenant，失效 wss_ 不再回退旧成员映射。
+预检将租约领取与网络阶段分开，健康日志、Key 状态、Provider 聚合、Catalog run/event/outbox
+在第二笔授权事务中共同提交；失败仅清本次 token/generation 的租约，不推进排期或写业务结果。
+
+已执行的历史轮次位于 `.artifacts/g6-security-20260907/`，不覆盖失败原件：
+
+| 报告 | 结果 | 原因与处置 |
+| --- | --- | --- |
+| `prd147-catalog-r1-junit.xml` | 2 条记录，1 失败、1 teardown 错误，13.422 秒 | 关闭复用开关仍未释放请求级连接；真实关闭断言失败，测试 runner 收尾随后失败。预检改为不使用请求级 scope |
+| `prd147-catalog-r2-junit.xml` | 30 项，25 通过、5 失败，222.417 秒 | 4 个撤销注入未填 revoked_at/reason；1 个实例篡改被不可变 trigger 提前拒绝。改用生产撤销函数；损坏实例测试明确先移除该测试库的 trigger |
+| `prd147-catalog-r3-junit.xml` | 46 项，42 通过、4 失败，481.500 秒 | 3 项旧角色夹具只改 users 未同步 Membership，登录已失败；1 项实际目录 p95 为 840.316ms。修正测试角色关系，无网络接口恢复暖连接池，不削弱权限或放宽 300ms 断言 |
+| `prd147-catalog-r4-junit.xml` | 50 项，47 通过、3 失败，478.935 秒；无错误/跳过 | Workspace 事务、网络竞争、真实 Key 加解密、共同提交及 300ms 目录查询断言通过。三个 Legacy 夹具试图直接降低唯一 Owner，被 Membership 的转移保护正确拒绝 |
+| `prd147-catalog-legacy-r5-junit.xml` | 定向 3/3，153.192 秒；无失败/错误/跳过 | 保留原 Owner，经真实 `/users` 创建 Developer/Viewer 并真实密码登录，验证目录读权限与两种扩展目录损坏拒绝；核对实际 Membership/Legacy 角色映射。时间含空库迁移，不是 API 耗时 |
+
+r5 只改旧测试夹具和记录，不再重复执行 r4 已通过的 47 项，也不把两轮拼接成同轮 50/50。
+r4 SHA-256：`e9db8b984c0bb46665d5df96fec9831e92a861f234e38abea8b32362ad1ec86d`。
+r5 SHA-256：`6761f7b3d4a00edaea101bd17f1b797e6159dd856be3b3e3f6d501c9c8e37da6`。
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+$env:METAHUB_TEST_MIGRATED_BASELINE = 'C:\MetaHub\.tmp\pytest-g6-security-sqlite-r2\prd134-api-base0\base.sqlite3'
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_prd147_catalog_transactions.py control-plane-api/tests/integration/test_prd119_provider_catalog.py control-plane-api/tests/unit/test_prd147_resource_transaction_lifecycle.py control-plane-api/tests/integration/test_prd147_provider_probe_transactions.py::test_probe_respects_health_worker_lease_and_watermark control-plane-api/tests/integration/test_provider_health.py::test_provider_probe_ssrf_policy_blocks_local_and_accepts_public_dns control-plane-api/tests/integration/test_provider_health.py::test_provider_health_pins_validated_dns_address -q --tb=short --show-capture=no --basetemp=.tmp/pytest-prd147-catalog-r4 --junitxml=.artifacts/g6-security-20260907/prd147-catalog-r4-junit.xml
+.venv\Scripts\python.exe -m pytest control-plane-api/tests/integration/test_prd119_provider_catalog.py -q --tb=short --show-capture=no -k legacy_bearer --basetemp=.tmp/pytest-prd147-catalog-legacy-r5 --junitxml=.artifacts/g6-security-20260907/prd147-catalog-legacy-r5-junit.xml
+```
+
+验证覆盖真实 Workspace 注册/验证/登录/空间创建 Cookie，匿名、CSRF、Origin、混合凭据、
+跨空间、Viewer、logout/降权、提交前撤销；实例/Endpoint ABA/Key/generation/lease/期限变化；
+幂等重放与同键异体冲突；健康、outbox、commit、提交鉴权、网络异常和最终过期的原子回滚。
+网络前实际连接关闭，失败只清本操作租约。随机内存 Key 通过真实加解密，受控 HTTP 返回分别
+验证成功、认证拒绝与限流的健康/凭据状态、Catalog run/event/outbox 同时提交。
+
+所有 Workspace 授权场景不替换认证 dependency。Platform 发布测试仅在原签名发布合同范围
+保留合成 PlatformContext，不能作为平台真实认证证据。网络暂停、时钟和故障注入仅证明明确
+边界；SSRF/DNS 相邻两项验证策略和地址固定，不证明真实 DNS 延迟、整个 KeyPool 或上游 SLO。
+
+本次五份 Python 源码/测试完整 Ruff 检查通过；健康服务相对 HEAD 仍是原有 29 项 E501，无新增，
+忽略 E501 后其余规则通过。compileall 与 `git diff --check` 通过。独立敏感审计报告
+`prd-147-catalog-transactions-sensitive-audit.json` 检查八项精确暂存文件、五份原始报告、严格
+UTF-8、高置信凭据模式及公共基线 SHA-256。该扫描不是独立安全会签。
+
+旧 r1/r2/r3 临时 SQLite 已按用户清理请求移入回收站，所有正式报告和 r4 失败现场保留。
+不提交 `.tmp`、`.artifacts`、用户 PRD-101..105 文档或 outputs。Excel 按表格技能只读核对，
+不改完成状态；PostgreSQL 并发撤权、其余业务页消费端、全 KeyPool/DNS 时限与批次完整 QA
+仍待完成。G6/G7/G8 尚未证明通过，PRD-148 未开始，没有重启 72 小时等待。
