@@ -46,7 +46,8 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent, build_webhook_event
 from pydantic import ValidationError
 
-from metahub_control.auth import AuthContext, require_transaction_permission
+from metahub_control.auth import AuthContext, require_permission, require_transaction_permission
+from metahub_control.workspace_access.service import authenticate_workspace_session_in_transaction
 
 from .models import FileExtractInfo, FileInfo, FileListResponse, FileResponse
 from .multipart import ParsedFilePart
@@ -450,12 +451,7 @@ def _create_processing_file(
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        live_context = require_transaction_permission(
-            connection,
-            context,
-            "file.write",
-            unavailable_error_code="file.storage_unavailable",
-        )
+        live_context = _require_file_write(config, connection, context)
         connection.execute(
             """
             INSERT INTO uploaded_files(
@@ -938,12 +934,7 @@ def _commit_terminal(
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        live_context = require_transaction_permission(
-            connection,
-            context,
-            "file.write",
-            unavailable_error_code="file.storage_unavailable",
-        )
+        live_context = _require_file_write(config, connection, context)
         # tenant/file/status 三重 CAS 防止迟到解析覆盖已经形成的 blocked/failed/ready 终态。
         cursor = connection.execute(
             """
@@ -1410,6 +1401,33 @@ def _b64url_decode(value: str) -> bytes:
         # 重编码不一致代表 padding 或别名形式，不能接受为同一个签名输入。
         raise ValueError
     return decoded
+
+
+def _require_file_write(
+    config: AppConfig, connection: sqlite3.Connection, context: AuthContext,
+) -> AuthContext:
+    """Recheck the actual session domain under each file write transaction."""
+    if not connection.in_transaction:
+        raise ApiError("file.storage_unavailable")
+    if not context.session.session_id.startswith("wss_"):
+        return require_transaction_permission(
+            connection,
+            context,
+            "file.write",
+            unavailable_error_code="file.storage_unavailable",
+        )
+    current = authenticate_workspace_session_in_transaction(
+        connection, config, session_token=context.token,
+    ).as_auth_context()
+    if (
+        current.user.tenant_id != context.user.tenant_id
+        or current.tenant.tenant_id != context.tenant.tenant_id
+        or current.user.user_id != context.user.user_id
+        or current.session.session_id != context.session.session_id
+        or current.token_jti != context.token_jti
+    ):
+        raise ApiError("auth.permission_denied")
+    return require_permission(current, "file.write")
 
 
 def _file_secret(config: AppConfig) -> str:

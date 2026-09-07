@@ -94,3 +94,27 @@ N/N-1 route deny、late commit、production source graph、asset set、移动端
 - `.tmp` 只保存可删除、可重建的本地数据库与 pytest 目录；正式机器证据只放 `.artifacts`，两者都不提交。
 - PRD-101..105 未跟踪文档、`outputs/`、本地凭据、SQLite、截图、trace 和 `.artifacts` 不进入 PRD-147 提交。
 - G7 在 PRD-147 独立提交后另建批次报告和机器证据；缺失、跳过或失败项不能记为通过，也不能开始 PRD-148。
+
+## 2026-09-07 文件域 Workspace 接线回归
+
+本轮仅修复 file.read/file.write 从 Workspace Cookie 进入实际文件服务，以及两笔写事务内的真实
+Workspace 会话重验。设计与两轮自审见本条文件域补充节；不修改全局认证 helper、迁移、默认权限、
+前端或文件存储格式。缺口由 PRD-137 真实注册后的文件上传返回 401 复现，不使用旧 Token 绕过。
+
+原始证据位于 `.artifacts/g6-security-20260907/`：
+
+- `resource-process-r1-junit.xml` 首次混合运行共 5 项，4 通过、1 失败。本条两项中上传中真实降权
+  通过，入口用例错误地把混合凭据预期设为 401；既有合同实际为 400，修正测试而非放宽产品。
+  同文件另有 PRD-137 的 3 项真实 Guest 进程通过，不计入本条独立通过数。
+- `prd147-workspace-files-r2-junit.xml`：本条 2/2，26.09 秒。缺失凭据、错误 CSRF/Origin 和混合
+  凭据均在 multipart 读取前拒绝；同租户上传/读取正常，另一租户文件 ID 返回统一 404。
+  另一用例在真实文件解析线程屏障期间经成员 HTTP 接口降权，终态提交拒绝、已发布密文删除，保留
+  processing 失败现场且无 extract；同一旧 AuthContext 不能创建第二条 owner。
+- 同用例重新真实切换后，Viewer 按既有 file.write 矩阵可上传，未按角色名称额外禁用能力。
+- `prd147-file-legacy-r1-junit.xml`：旧 Bearer 主流程/双租户加密存储与事务撤权定向 2/2，
+  135.50 秒，另 11 项未选。旧事务复核函数保留，不将本次定向扩张为文件模块全部回归。
+
+独立提交只含 auth/dependencies、files/service、本条新集成测试及本条设计/测试记录。敏感审计
+`prd-147-workspace-files-sensitive-audit.json` 核验上述精确暂存字节、UTF-8、凭据模式和受保护基线。
+未提交测试数据库、正文、Cookie、报告或用户既有未跟踪文档。文件安全扫描及其他旧入口仍需所属
+范围继续迁移验证，本轮不重新宣称 G7 全部通过，也不解除 G6/G8。

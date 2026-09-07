@@ -679,3 +679,19 @@ PRD-148。每条前序 PRD 仍保留独立 migration、测试记录、敏感审�
    证据；97 条只作必要回归。
 
 第二轮修正后无未关闭 P0/P1，设计可在 G6 通过后进入连续编码。
+
+## 2026-09-07 文件域 Workspace 接线补充
+
+PRD-137 真实注册上传复现：导航已登记 workspace.applications.files，但文件 read/write 依赖
+只接受旧 Bearer，Workspace Cookie 上传返回 401；文件两笔写事务只查旧 sessions 表。此为实际
+迁移接线缺口，不能为探针签发旧 Token 或改用内部 create_file 绕过 HTTP 鉴权。
+
+第一轮自审：仅把 file.read/file.write 入口接到现有 Workspace/Legacy 分域守卫，保持显式单凭据、
+Origin/CSRF、权限先于 multipart 读取、旧 Bearer 兼容及混合凭据拒绝。文件名与正文仍走现有加密、
+tenant 查询和解析流程，不新增数据库迁移、权限默认授予或测试专用后门。
+
+第二轮自审：不能只改路由。文件 processing 与 terminal 两笔写事务都复用真实 Workspace 事务
+鉴权，并核对 tenant/user/session 与路由恢复的上下文一致，再检查 file.write；撤权后不得使用
+旧 AuthContext 提交。Legacy 保持原事务复核，不修改全局 auth helper 的其他业务行为。单独验证
+双租户上传/读取、CSRF、混合凭据、Viewer、路由后撤权及 Legacy 相邻回归。此修复不代表文件安全
+扫描等其他旧入口已全部迁移，也不把专项测试扩张为 G7 完整复验。

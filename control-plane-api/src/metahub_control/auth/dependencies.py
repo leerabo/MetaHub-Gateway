@@ -1813,12 +1813,12 @@ def require_file_reader(
 ) -> AuthContext:
     """要求当前登录 Session 具有 tenant 文件安全投影读取权限。
 
-    参数：Control 请求和 Bearer Session。返回：实时数据库矩阵复核后的 AuthContext。
+    参数：Control 请求与 Workspace Cookie 或 Legacy Bearer。返回实时复核后的 AuthContext。
     关键约束：file.write 不隐含 read，自定义 write-only 角色不能借详情/列表枚举文件名。
     """
 
     # 文件名虽以密文落库，但授权 API 会短暂解密展示，因此必须在 path/query 解析前逐请求校验。
-    return _require_request_permissions(request, authorization, ("file.read",))
+    return require_workspace_or_legacy_permissions("file.read")(request, authorization)
 
 
 def require_file_writer(
@@ -1827,12 +1827,12 @@ def require_file_writer(
 ) -> AuthContext:
     """要求当前登录 Session 具有文件上传、解析和 DLP 预扫权限。
 
-    参数：Control 请求和 Bearer Session。返回：实时数据库矩阵复核后的 AuthContext。
+    参数：Control 请求与 Workspace Cookie 或 Legacy Bearer。返回实时复核后的 AuthContext。
     关键约束：依赖必须先于 multipart 正文读取；服务事务还会二次复核，关闭撤权竞态。
     """
 
     # 上传会接触企业正文并产生持久对象，前端按钮、角色名或 chat.use 都不能替代独立权限。
-    return _require_request_permissions(request, authorization, ("file.write",))
+    return require_workspace_or_legacy_permissions("file.write")(request, authorization)
 
 
 def require_file_security_scanner(
