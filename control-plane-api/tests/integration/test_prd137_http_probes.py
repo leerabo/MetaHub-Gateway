@@ -38,7 +38,10 @@ def migrated_baseline(tmp_path_factory):
     if supplied:
         baseline = Path(supplied).resolve(strict=True)
         assert baseline.is_file()
-        return baseline
+        current = tmp_path_factory.mktemp("prd137-current-probe-base") / "baseline.sqlite3"
+        shutil.copy2(baseline, current)
+        apply_migrations(f"sqlite:///{current.as_posix()}")
+        return current
     baseline = tmp_path_factory.mktemp("prd137-probe-base") / "baseline.sqlite3"
     url = f"sqlite:///{baseline.as_posix()}"
     apply_migrations(url)

@@ -1,6 +1,6 @@
 # Security Assurance 执行回执
 
-当前状态：回执验证与失败关闭已实现，真实隔离 worker 尚未交付。设置公钥路径不会自动部署或启动
+当前状态：回执验证、失败关闭与数据库原文归档已实现，真实隔离 worker 尚未交付。设置公钥路径不会自动部署或启动
 worker，也不能把编排测试的签名样本用于真实安全门禁。
 
 ## 部署信任
@@ -47,8 +47,24 @@ canonical JSON，签名为 64 字节 Ed25519 的无 padding canonical base64url�
 error/P0，environment receipt 为 NULL，且不创建虚假 cleanup journal。为兼容旧必填 DTO/数据库列，
 未知镜像/subject/seed/cleanup 摘要暂以 64 个 `0` 表示“未取得”，绝不表示实际测量或有效回执。
 
+## 原文归档
+
+部署前应用 SQLite/PostgreSQL 各自的 `0142_assurance_receipt_archive` 增量。验签后的原始 UTF-8
+envelope、规范化请求 JSON、所选部署公钥快照、各自 SHA256、验签时间和 fencing generation
+保存到 `assurance_receipt_archives`，与 run/finding/assessment 终态同一事务提交。原文上限
+256 KiB；UTF-16/UTF-32、重复键、未知字段、无效签名和绑定不匹配均拒绝。
+
+每个 assessment 仅一份归档，幂等重放读取原结果。验签有效但清理失败的回执仍归档，评估不得 passed。
+已验签后、提交前才撤权的原文保留，但结果为 error 且不采信其清理事实；旧 generation 则全部拒绝。
+任何归档或结果写入失败都会回滚本次事务，不能留下半份归档或 passed，运行任务由现有租约恢复收尾。
+
+原文及公钥快照不进入公共 DTO、Console 或应用日志。公钥快照仅记录当时信任，不授权未来提交；
+未来回执仍重新读取部署信任。历史未保存的 envelope 不回填。UPDATE/DELETE 被数据库触发器拒绝，
+PostgreSQL 另以语句级触发器拒绝 TRUNCATE；非空归档拒绝 down 迁移。归档数据纳入 `archive_then_delete`
+清单，但本增量不等于全库租户删除原生兼容性验收，也不等于独立 WORM 或能抵抗数据库管理员修改。
+
 ## 未完成项
 
 真实 worker 的无生产权限隔离部署、镜像/代码/迁移/合同度量、全部固定攻击场景、远程短租约传输、
-真实 fixture 创建与 exact cleanup、原始签名 envelope 的不可变归档仍待实现和实测。
+真实 fixture 创建与 exact cleanup 仍待实现和实测。数据库原文归档须随实际 runner 一并做部署验证。
 只有这些证据齐全后，才可把签名结果用于真实安全验收；目前不能解除 G6/G8。

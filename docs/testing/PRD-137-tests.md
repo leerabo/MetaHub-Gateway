@@ -124,3 +124,39 @@ Membership admin 降为 viewer、旧 WorkspaceSession 重放及严格输入拒�
 租约和撤权测试使用受控平台认证及合成签名，属于持久化协调合同；同次 HTTP 探针仍使用真实注册和
 会话认证，但为进程内 ASGI。上述结果不证明隔离 worker、完整 owner 矩阵、真实外部网络或实际清理。
 远程许可传输、剩余五种场景、真实制品/环境度量、fixture 创建/清理与原始签名不可变归档仍未完成。
+
+## 2026-09-07 原始签名回执归档
+
+设计与两轮自审见本条 PRD 第 11 节。新增 0142 双数据库增量，原文、公钥验证上下文、请求摘要和
+fencing generation 与最终结果原子提交；无效签名不归档，有效失败回执保留。已验签后撤权时不接受
+成功或清理声明，接管后的旧 generation 不落库。公共 DTO 不暴露原文和公钥快照。
+
+- `archive-smoke-r1-junit.xml`：5 通过、1 失败、54 未选。失败为公钥 DTO 时间规范化 Z 与输入
+  +00:00 的断言差异；改为与校验后的 TrustKey DTO 比较，不重写 envelope。
+- `archive-focused-r1-junit.xml`：66 通过、1 失败。接管测试未递增 updated_at，被既有租约触发器
+  拒绝；修正测试，使接管事务有效后再验证旧 generation 无法归档，未放宽产品约束。
+- `archive-final-r1-junit.xml`：测试路径拼写错误，0 项执行，不计通过。
+- `archive-final-r2-junit.xml`：SQLite/签名/服务/API/短租约/探针定向 120/120，215.65 秒。
+  其中归档 7 项、签名 47 项、服务 13 项、持久化租约 9 项、capability 11 项、边界 32 项和
+  真实认证 ASGI 探针 1 项。归档覆盖精确字节、重放、不可变、非空 down 拒绝、空表往返、登记摘要、
+  异 owner/损坏摘要/旧 generation 拒绝、归档与后续结果写入失败原子回滚及提交时撤权。
+- `archive-guards-r1-junit.xml`：增强真实列摘要检查后 SQLite 归档 7/7，36.22 秒。
+- `g6-archive-4516d8c7f8d945ffa767985452f09773`：原生首轮基础设施中断，只有部分进度字符，
+  没有完整 JUnit，不能认证整次测试数量或通过。运行栈停在下一临时数据库的 psycopg.connect；
+  专用服务仍有进程但 pg_isready 无响应，正常/立即停止都失败。按已核对 PID 和数据目录终止测试
+  进程及专用实例、启动器，exec 已退出。事实记录为 `archive-native-interruption.json`。
+  未以观测超时自行重启，也未修改产品鉴权；后续本地测试设置 PGCONNECT_TIMEOUT=10、autovacuum=off。
+- `g6-archive-guards-9bf165cea0824cd3b807bb94b7f9b283-junit.xml`：原生归档专项 7/7，另 21 项
+  未选，174.20 秒。真实迁移/seed/克隆数据库上验证原文、重放、UPDATE/DELETE/TRUNCATE 拒绝、
+  归档失败和后续写入失败回滚、撤权保留与 generation 接管拒绝、表/列/触发器函数体摘要和 down/up。
+  新实例正常停止，postmaster.pid 已移除，不将专项结果扩张成首次原生整次通过。
+
+原中断实例 PID 3416/14856 经 taskkill 报告无运行实例，但 CIM/TCP 表仍显示旧记录及 9442 端口；
+未认证其 OS 资源已完全清理，因此保留旧数据目录、不复用该端口。该残留不作为仍在运行的测试通过
+证据，也不将本次新实例正常退出扩张为旧实例已完整清理。
+相关 Python Ruff 和 diff 检查通过。本条独立范围的敏感扫描记录为
+`prd-137-archive-sensitive-audit.json`，原文与公钥快照未进入公共 DTO 或应用日志。
+
+基线只在模块副本上应用增量；原始 `prd134-api-base0/base.sqlite3` 的 SHA256 仍为
+`572173fbf10027815ea1e1ecbdd201d3b7084f6335a86e436a762a68945f3db6`。
+归档测试使用受控认证和合成签名，不作为真实隔离或清理证据；G6/G8 未解除。

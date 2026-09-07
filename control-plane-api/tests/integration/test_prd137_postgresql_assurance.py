@@ -6,6 +6,7 @@ import g6_postgresql_support as native_support
 import pytest
 import test_postgresql_native_migrations as native_migrations
 import test_prd137_persistent_leases as persistent_leases
+import test_prd137_receipt_archives as archives
 import test_prd137_security_assurance as assurance
 
 pytestmark = native_migrations.pytestmark
@@ -84,3 +85,40 @@ async def test_postgresql_competing_schedulers(native_business_database, monkeyp
         assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
     )
     await persistent_leases.test_queued_recovery_competing_schedulers(runtime, monkeypatch)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scenario", [
+    archives.test_archive_exact_bytes_replay_and_immutable,
+    archives.test_archive_insert_rejects_foreign_and_corrupt_binding,
+], ids=lambda scenario: scenario.__name__.removeprefix("test_"))
+async def test_postgresql_archives(native_business_database, monkeypatch, tmp_path, scenario):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await scenario(runtime, monkeypatch)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["archive_insert", "after_archive"])
+async def test_postgresql_archive_rollback(native_business_database, monkeypatch, tmp_path, mode):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await archives.test_archive_and_result_rollback_together(runtime, monkeypatch, mode)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["revoked", "generation"])
+async def test_postgresql_archive_fencing(native_business_database, monkeypatch, tmp_path, mode):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    await archives.test_final_fencing_controls_archive_retention(runtime, monkeypatch, mode)
+
+
+def test_postgresql_archive_migration(native_business_database, tmp_path):
+    runtime = assurance._runtime(
+        assurance._config(native_business_database), tmp_path / "receipt-public-trust.json",
+    )
+    archives.test_archive_empty_migration_roundtrip_and_manifest(runtime)

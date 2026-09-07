@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -13,12 +14,14 @@ from metahub_control.security_assurance.receipts import (
     MAX_RECEIPT_BYTES,
     MAX_TRUST_BYTES,
     FileAssuranceReceiptVerifier,
+    TrustKey,
     execution_request_payload,
 )
 from metahub_control.security_assurance.service import (
     AssessmentExecutionRequest,
     RegisteredScenario,
 )
+from metahub_shared.config_distribution import canonical_json_bytes
 from metahub_shared.runtime.config import load_app_config
 from prd137_receipt_support import (
     TEST_KEY,
@@ -70,6 +73,32 @@ def test_verified_signature_preserves_exact_receipts(signed):
     assert request.tenant_id not in json.dumps(payload)
     assert len({run.seed_digest() for run in receipt.runs}) == 10
     assert all(run.seed_digest() != run.cleanup_digest() for run in receipt.runs)
+
+
+def test_verified_archive_preserves_wire_and_public_trust(signed):
+    request, receipt, path, bundle = signed
+    content = (" \n" + json.dumps(json.loads(sign_receipt(receipt)), indent=2) + "\n").encode()
+    verified = FileAssuranceReceiptVerifier(path).verify(request, content)
+    assert verified.receipt == receipt
+    assert verified.envelope_json.encode("utf-8") == content
+    assert verified.request_json.encode() == canonical_json_bytes(
+        execution_request_payload(request),
+    )
+    assert hashlib.sha256(verified.request_json.encode()).hexdigest() == receipt.request_sha256
+    assert json.loads(verified.trust_key_json) == TrustKey.model_validate_json(
+        json.dumps(bundle["keys"][0]),
+    ).model_dump(mode="json")
+    assert verified.verified_at >= receipt.finished_at
+    assert verified.envelope_json not in repr(verified)
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-32"])
+def test_receipt_transport_requires_utf8(signed, encoding):
+    request, receipt, path, _ = signed
+    with pytest.raises(ValueError):
+        FileAssuranceReceiptVerifier(path).verify(
+            request, sign_receipt(receipt).decode().encode(encoding),
+        )
 
 
 @pytest.mark.parametrize("field,value", [

@@ -182,8 +182,17 @@ def _unique_object(pairs):
 def _strict_json(model, content: bytes, limit: int):
     if not isinstance(content, bytes) or len(content) > limit:
         raise ValueError("invalid receipt size or transport")
-    parsed = json.loads(content, object_pairs_hook=_unique_object)
+    parsed = json.loads(content.decode("utf-8"), object_pairs_hook=_unique_object)
     return model.model_validate_json(json.dumps(parsed))
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class VerifiedExecutionReceipt:
+    receipt: ExecutionReceipt
+    envelope_json: str
+    request_json: str
+    trust_key_json: str
+    verified_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +202,11 @@ class FileAssuranceReceiptVerifier:
     def __call__(
         self, request: AssessmentExecutionRequest, content: bytes,
     ) -> ExecutionReceipt:
+        return self.verify(request, content).receipt
+
+    def verify(
+        self, request: AssessmentExecutionRequest, content: bytes,
+    ) -> VerifiedExecutionReceipt:
         signed = _strict_json(SignedExecutionReceipt, content, MAX_RECEIPT_BYTES)
         with self.trust_path.open("rb") as stream:
             trust = _strict_json(TrustBundle, stream.read(MAX_TRUST_BYTES + 1), MAX_TRUST_BYTES)
@@ -217,7 +231,12 @@ class FileAssuranceReceiptVerifier:
             raise ValueError("runner receipt binding or time mismatch")
         for scenario, run in zip(request.scenarios, receipt.runs, strict=True):
             _validate_run(receipt, run, scenario.target_kind)
-        return receipt
+        return VerifiedExecutionReceipt(
+            receipt=receipt, envelope_json=content.decode("utf-8"),
+            request_json=canonical_json_bytes(execution_request_payload(request)).decode("utf-8"),
+            trust_key_json=canonical_json_bytes(key.model_dump(mode="json")).decode("utf-8"),
+            verified_at=now,
+        )
 
 
 def _validate_run(receipt: ExecutionReceipt, run: ScenarioReceipt, target_kind: str) -> None:

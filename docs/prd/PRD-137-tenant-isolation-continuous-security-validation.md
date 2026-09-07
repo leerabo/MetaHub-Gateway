@@ -154,3 +154,30 @@ runner 合同，需与本批接口一起更新。磁盘耗尽的原生测试未�
 一个认领成功。认领后进程再次退出则由 running 短租约回收，恢复不依赖原请求或原账号继续有效。
 验证覆盖撤权发生在入队后、排队超时、迟到启动、重复调度、原 token 不变但 fencing generation
 已变化、Workspace/tenant 停用和禁用后恢复仍不能复活旧 capability。
+
+## 11. 原始回执归档设计与两轮自审
+
+执行链后续批次保持真实隔离 worker、精确 fixture 生命周期、远程许可和原始回执同一目标。
+当前先完成被服务丢弃的验签原文归档：新增 0142 双数据库增量，不修改 0129 或 0139 已发布校验和。
+归档表以 assessment 为唯一键，带复合 owner、原始 UTF-8 envelope 及其 SHA256、规范请求 JSON 与
+摘要、所选部署公钥快照与摘要、验签时间和最终 fencing generation。只收已验证的闭集 DTO；不存
+凭据、攻击正文或原始 API 响应，不把 archive 原文加入公共 API、Console 或日志。
+
+第一轮自审：归档与 run/finding/assessment 终态同事务，归档失败不能产生 passed。插入必须绑定
+running assessment 和当前 lease generation；UPDATE/DELETE 被数据库约束拒绝。相同请求重放
+读取原事实而不追加新归档；旧 worker 或异 owner 无法注入原文。无效签名不归档，清理失败但验签
+有效的原文保留，防止失败证据消失。历史已丢弃的原文不能从摘要恢复，因此不伪造历史回填。
+第二轮自审：保留收到的原始字节而非重新序列化 envelope；JSON 明确为 UTF-8，拒绝重复键与未知
+字段。公钥快照只证明当时部署信任，不能替代未来提交时的当前信任检查。回滚在归档非空时拒绝，
+并保留 tenant 删除清单的 archive_then_delete 分类。SQLite/原生 PostgreSQL 均验证迁移重放、空表
+往返、跨 owner/篡改/更新删除拒绝与事务回滚。数据库追加保护不声称抵抗 DBA 或替代外部 WORM。
+
+实施复核：原生 PostgreSQL 的 TRUNCATE 不经过行级 DELETE，因此需增加语句级拒绝触发器。
+公钥快照保存经校验 DTO 的规范 JSON，时间可规范为 Z；只有 envelope 要求保留收到的逐字节原文。
+最终提交时才发生撤权的，保留先前已验签原文，但结果一律 error，且不再采信其 cleanup；若 generation
+已被接管，则原文和结果都拒绝写入。归档或后续结果写入失败均回滚整个事务，保留 running 事实供恢复。
+
+清单登记修正为实际 source_table/tenant_key_column/source_prd/created_at 四列，并恢复全部不可变
+保护。SQLite 使用 sqlite_schema/pragma_table_info；原生 PostgreSQL 使用 pg_attribute、约束 DDL、
+触发器 DDL 及函数体计算本表摘要，不复制冻结 SQLite 哈希。本增量不宣称已改造 PRD-089 的全库原生
+删除验证器；全库历史清单迁移和实际租户删除仍须由所属业务范围独立验证。

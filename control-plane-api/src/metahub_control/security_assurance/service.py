@@ -45,8 +45,8 @@ from .models import (
 )
 from .receipts import (
     UNKNOWN_SHA256,
-    ExecutionReceipt,
     FileAssuranceReceiptVerifier,
+    VerifiedExecutionReceipt,
 )
 from .receipts import (
     digest as receipt_digest,
@@ -380,7 +380,7 @@ def execute_security_assessment(
         content = runner(execution_request, lease)
         if not lease.check():
             raise ValueError("execution lease revoked")
-        receipt = FileAssuranceReceiptVerifier(Path(trust_path))(
+        receipt = FileAssuranceReceiptVerifier(Path(trust_path)).verify(
             execution_request, content,
         )
         results = tuple(
@@ -389,7 +389,7 @@ def execute_security_assessment(
                 scenario_code=run.result.scenario_code, outcome="error", severity="p0",
                 duration_ms=run.result.duration_ms, evidence_sha256=run.cleanup_digest(),
             )
-            for run in receipt.runs
+            for run in receipt.receipt.runs
         )
     except Exception:
         receipt = None
@@ -1080,7 +1080,7 @@ def _persist_execution(
     request: AssessmentExecutionRequest,
     results: tuple[ScenarioExecution, ...],
     *,
-    receipt: ExecutionReceipt | None,
+    receipt: VerifiedExecutionReceipt | None,
     lease_sha: str,
     expected_fencing_generation: int,
     request_id: str,
@@ -1100,6 +1100,25 @@ def _persist_execution(
             or int(lease["fencing_generation"]) != expected_fencing_generation
         ):
             raise ApiError("security_assurance.runner_fenced")
+        if receipt is not None:
+            connection.execute(
+                """INSERT INTO assurance_receipt_archives(
+                     security_assessment_id,workspace_id,tenant_id,fencing_generation,
+                     envelope_json,envelope_sha256,request_json,request_sha256,
+                     trust_key_json,trust_key_sha256,verifier_version,verified_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,1,?)""",
+                (
+                    request.security_assessment_id, request.workspace_id, request.tenant_id,
+                    expected_fencing_generation, receipt.envelope_json,
+                    hashlib.sha256(receipt.envelope_json.encode("utf-8")).hexdigest(),
+                    receipt.request_json,
+                    hashlib.sha256(receipt.request_json.encode("utf-8")).hexdigest(),
+                    receipt.trust_key_json,
+                    hashlib.sha256(receipt.trust_key_json.encode("utf-8")).hexdigest(),
+                    _db_time(receipt.verified_at),
+                ),
+            )
+        execution_receipt = receipt.receipt if receipt else None
         if (
             _parse_time(lease["lease_expires_at"]) <= _utcnow()
             or request.deadline_at <= _utcnow()
@@ -1108,12 +1127,15 @@ def _persist_execution(
             )
         ):
             results = _execution_errors(request, "lease_expired_or_revoked")
-            receipt = None
+            execution_receipt = None
         scenario_by_code = {item.scenario_code: item for item in request.scenarios}
         now = _utcnow()
         stamp = _db_time(now)
-        environment_receipt = receipt.environment_digest() if receipt else None
-        receipt_runs = {run.result.scenario_code: run for run in receipt.runs} if receipt else {}
+        environment_receipt = execution_receipt.environment_digest() if execution_receipt else None
+        receipt_runs = (
+            {run.result.scenario_code: run for run in execution_receipt.runs}
+            if execution_receipt else {}
+        )
         failed = False
         summary_items: list[dict[str, object]] = []
         for result in results:
@@ -1142,7 +1164,7 @@ def _persist_execution(
                     result.scenario_code,
                     source_sha,
                     target_sha,
-                    receipt.runner_image_sha256 if receipt else UNKNOWN_SHA256,
+                    execution_receipt.runner_image_sha256 if execution_receipt else UNKNOWN_SHA256,
                     run_receipt.seed_digest() if run_receipt else UNKNOWN_SHA256,
                     cleanup_receipt,
                     result.outcome,

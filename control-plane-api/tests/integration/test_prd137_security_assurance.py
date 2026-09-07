@@ -96,7 +96,10 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if supplied:
         baseline = Path(supplied).resolve(strict=True)
         assert baseline.is_file()
-        return baseline
+        database = tmp_path_factory.mktemp("prd137-current-base") / "base.sqlite3"
+        shutil.copy2(baseline, database)
+        apply_migrations(_url(database))
+        return database
     database = tmp_path_factory.mktemp("prd137-api-base") / "base.sqlite3"
     database_url = _url(database)
     assert "0129" in apply_migrations(database_url).applied
@@ -495,6 +498,9 @@ async def test_missing_runner_fails_closed(
         assert connection.execute(
             "SELECT COUNT(*) FROM assurance_cleanup_journal"
         ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM assurance_receipt_archives",
+        ).fetchone()[0] == 0
 
 
 @pytest.mark.anyio
@@ -531,6 +537,9 @@ async def test_untrusted_runner_cannot_pass_or_claim_cleanup(runtime, monkeypatc
         assert connection.execute(
             "SELECT COUNT(*) FROM assurance_cleanup_journal"
         ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM assurance_receipt_archives",
+        ).fetchone()[0] == 0
 
 
 @pytest.mark.anyio
@@ -558,6 +567,11 @@ async def test_signed_cleanup_failure_prevents_assessment_pass(runtime, monkeypa
         assert dict(connection.execute(
             "SELECT status,COUNT(*) FROM assurance_cleanup_journal GROUP BY status"
         ).fetchall()) == {"failed": 1, "deleted": 23}
+        archive = connection.execute(
+            "SELECT envelope_json FROM assurance_receipt_archives",
+        ).fetchone()
+        fixture = json.loads(archive[0])["receipt"]["runs"][0]["fixtures"][0]
+        assert fixture["cleanup_status"] == "failed"
 
 
 @pytest.mark.anyio
