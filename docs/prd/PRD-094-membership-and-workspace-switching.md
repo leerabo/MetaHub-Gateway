@@ -158,3 +158,18 @@ pristine down仅允许无 WorkspaceSession、无新邀请消费、无成员role/
   Membership 与导航；授权漂移和 BroadcastChannel 失效仍执行完整服务端复核。
 - 开发启动器固定进入关闭 raw access log 的安全入口；邀请接受 canary 日志只保留参数化路径，原始邀请
   token 不进入请求日志。完整脱敏验收记录见 `docs/testing/PRD-094-tests.md`，下一权威项为 PRD-095。
+
+## 17. 跨页 GlobalSession 退出竞态修复
+
+2026-09-07 的 PRD-137 真实 HTTPS/Chromium 验证在桌面和移动视口同时发现：退出 API 已返回
+200，另一账号页仍保留受保护 shell。原通知先于退出事务发出，接收方仅重读 Workspace，可能
+先取得仍有效的 Global/Workspace 摘要，再因后续 401 停留在空间错误态，而未清除账号页面。
+
+第一轮自审：保留现有仅 type/generation 的无身份通知合同，不添加账号、Cookie 或权限内容。
+收到通知必须立即清空全部受保护状态并中止旧请求，然后从 `/identity/me` 开始重验 GlobalSession，
+再走既有空间列表/WorkspaceSession/成员/导航链。通知本身不能授予权限，服务端仍是唯一依据。
+
+第二轮自审：退出和撤销当前设备先广播以立即清除跨页旧数据；异步写入结束的 finally 再广播，
+使提交前返回的合法旧摘要同样失效。失败也需触发权威重读，不能将通知等同于服务端撤销已成功。
+新的验证仍受 generation/AbortController 约束；重放或迟到的 `/identity/me` 不能复活已清状态。
+不修改后台鉴权、Cookie、DTO、迁移或主控制台消息 schema；产品修复与 PRD-137 探针独立提交。

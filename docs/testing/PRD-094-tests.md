@@ -1,7 +1,7 @@
 # PRD-094 测试记录
 
-状态：已完成。PRD-094 的实现、迁移、自动化、真实浏览器、性能和敏感审计均已通过；权威下一项为
-`PRD-095 - SaaS平台运营角色与受控支持访问`。`saas_incremental_roadmap_complete=false`，
+状态：原批次已完成，以下保留当时验收记录；2026-09-07 的跨页退出补充修复见文末。
+原批次下一项为 `PRD-095 - SaaS平台运营角色与受控支持访问`。`saas_incremental_roadmap_complete=false`，
 `all_108_prds_complete=false`。
 
 ## 已执行门禁
@@ -67,4 +67,36 @@
 CSRF 和邀请 token 不写入验收文档或 git。浏览器证据目录只允许安全截图、结构化时延、视口和 hash，不保存
 浏览器 profile、SQLite、WAL/SHM、网络原始正文或 Storage dump。
 
-本记录关闭 PRD-094；下一权威需求为 `PRD-095 - SaaS平台运营角色与受控支持访问`。
+以上为原批次 PRD-094 关闭记录，不代表后续 G6/G8 或全部 SaaS 目标已完成。
+
+## 跨页退出补充修复 (2026-09-07)
+
+PRD-137 的真实 HTTPS/Chromium 竞态测试发现退出事务完成后，另一账号页仍保留受保护 shell。
+原因是退出通知只在提交前发出，接收页只复核 Workspace；提交前的有效摘要与随后 401 可能让
+页面停留在空间错误态。产品修复归属 PRD-094，第 17 节已先记录设计与两轮自审。
+
+退出和撤销当前设备保留立即清空/广播，并在异步写入 finally 再广播。接收页先清全部受保护状态、
+中止旧请求，再从 `/identity/me` 复核 GlobalSession。消息仍只含 type/generation，不传账号或
+凭据；写失败也仅触发权威重读，不将消息等同于服务端撤销成功。后台鉴权、迁移、DTO 均不变。
+
+原始证据独立保存在 `.artifacts/g6-security-20260907/`：
+
+- `prd094-cross-tab-red-r1-junit.xml`：旧实现运行新增回归，12 项中 7 通过、5 失败，确认测试
+  能检出缺少提交后通知及缺少 GlobalSession 重验的问题。
+- `prd094-cross-tab-unit-r1-junit.xml`：最终产品修复的 Identity/PRD-094/PRD-146 导航定向
+  47/47。覆盖 logout/revoke-current 成功与失败的前后通知、立即清空、旧 me 中止和迟到结果不复活。
+- `browser-r4-junit.xml`：修复前桌面、移动两项均失败，JUnit 用时 215.537 秒。两视口实际切换、
+  旧成员响应隔离均已通过，退出 API 200 后主页面未进入登录态。原件不覆盖、不改记为通过。
+- `browser-r5-junit.xml`：修复后两项均通过，JUnit 用时 155.275 秒（pytest 终端 155.35 秒）。
+  1440x900、390x844 各有 22 个通过检查点，实际旧响应交付后不恢复旧 DOM，并各观测到 2 次
+  浏览器原生中止；旧 Workspace 和退出前 Cookie 重放均被服务端拒绝。
+
+已查看两视口退出截图，输入框均遮罩，没有成员或空间受保护界面残留，无横向溢出。
+浏览器私有运行目录已移除，克隆基线不变，原始复用基线 SHA-256 仍为
+`572173fbf10027815ea1e1ecbdd201d3b7084f6335a86e436a762a68945f3db6`。
+截图位于 `.tmp/pytest-prd137-browser-r5/test_real_identity_pages_fence0/logged-out.png`
+和同级 `test_real_identity_pages_fence1/logged-out.png`，属于 PRD-137 真实账号页证据。
+
+本次独立审计 `prd-094-cross-tab-logout-sensitive-audit.json` 核对产品状态机、定向测试、设计和
+本记录共 4 个精确暂存文件及上述 4 份原始证据。审计模式扫描不等于外部安全会签。
+未重复整套数据库/性能/全域浏览器验收；主控制台、评估短许可、固定 Guest 及完整 G6 继续未完成。

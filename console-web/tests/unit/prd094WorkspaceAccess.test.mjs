@@ -285,6 +285,70 @@ test("PRD-094 BroadcastChannel invalidation aborts and fences a late switch", as
   controller.destroy();
 });
 
+for (const operation of ["logout", "revoke-current"]) {
+  for (const failed of [false, true]) {
+    test(`PRD-094 ${operation} invalidates peers before and after the write (${failed})`, async () => {
+      const channel = fakeChannel();
+      const pending = deferred();
+      const root = createRoot();
+      const write = async () => {
+        await pending.promise;
+        if (failed) throw workspaceError(503, "identity.unavailable");
+        return { logged_out: true, revoked: true };
+      };
+      const controller = createIdentityPageController({
+        root, channelFactory: () => channel,
+        api: workingApi({ logout: write, revoke: write }),
+      });
+      await controller.mount();
+      const result = operation === "logout" ? controller.logout() : controller.revokeSession(0);
+      assert.match(root.innerHTML, /data-identity-login-form/u);
+      assert.equal(channel.messages.length, 1);
+      pending.resolve();
+      await result;
+      assert.equal(channel.messages.length, 2);
+      assert.deepEqual(channel.messages, [
+        { type: "context-invalidated", generation: 1 },
+        { type: "context-invalidated", generation: 2 },
+      ]);
+      controller.destroy();
+    });
+  }
+}
+
+test("PRD-094 peer invalidation clears all protected state before rechecking GlobalSession", async () => {
+  const channel = fakeChannel();
+  const pending = deferred();
+  const root = createRoot();
+  let calls = 0;
+  let obsoleteSignal;
+  const controller = createIdentityPageController({
+    root, channelFactory: () => channel,
+    api: workingApi({ me: async ({ signal }) => {
+      calls += 1;
+      if (calls === 1) return accountPayload();
+      if (calls === 2) {
+        obsoleteSignal = signal;
+        return pending.promise;
+      }
+      throw workspaceError(401, "identity.session_invalid");
+    } }),
+  });
+  await controller.mount();
+  channel.onmessage({ data: { type: "context-invalidated", generation: 1 } });
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /Acme AI|Owner|identity-membership-list/u);
+  await waitFor(() => calls === 2);
+  channel.onmessage({ data: { type: "context-invalidated", generation: 2 } });
+  await waitFor(() => calls === 3);
+  assert.equal(obsoleteSignal.aborted, true);
+  pending.resolve(accountPayload());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+  assert.doesNotMatch(root.innerHTML, /Acme AI|Owner|identity-membership-list/u);
+  controller.destroy();
+});
+
 test("PRD-094 context lifecycle never uses localStorage or sessionStorage", async () => {
   const descriptors = new Map(
     ["localStorage", "sessionStorage"].map((name) => [

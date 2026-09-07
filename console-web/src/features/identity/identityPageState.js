@@ -408,6 +408,8 @@ export function createIdentityPageController({
         await queueWrite(() => api.logout({}));
       } catch (error) {
         if (isAbort(error)) return false;
+      } finally {
+        broadcastContextInvalidation();
       }
       return true;
     },
@@ -424,6 +426,8 @@ export function createIdentityPageController({
           await queueWrite(() => api.revoke({ sessionId: session.session_id }));
         } catch (error) {
           if (isAbort(error)) return false;
+        } finally {
+          broadcastContextInvalidation();
         }
         return true;
       }
@@ -4005,7 +4009,9 @@ export function createIdentityPageController({
       ) {
         return;
       }
-      void invalidateWorkspaceContext({ broadcast: false });
+      // The shared Cookie may have lost its GlobalSession, not just its Workspace.
+      // Clear first; every later response must belong to this fresh validation.
+      void loadProtectedState("", clearToLogin());
     };
   }
 
