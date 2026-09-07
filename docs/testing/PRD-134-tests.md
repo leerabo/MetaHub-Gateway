@@ -41,8 +41,8 @@ Legal Hold/retention 决定、Identity 隐私中心与 Platform 最小队列已�
 
 ## 敏感审计与临时证据
 
-- 正式结论只保存在本文和 Git；pytest basetemp、SQLite 副本、缓存与过程输出均为可重现临时证据，`.tmp`
-  可整体删除，不作为正式交付事实。
+- 正式结论保存在本文和 Git，原始测试结果按运行独立保留。`.tmp` 还包含冻结源码、基础设施和持久
+  VM 磁盘，不能整体删除；只可单独核验已停止、无依赖的可重建测试目录后处理。
 - 审计只输出规则命中计数，不输出密码、Token、Cookie、TOTP、step-up grant、receipt、私钥、Provider Key、
   Prompt/Response、客户正文、对象 URL 或本地管理员凭据；本地测试凭据只在进程内使用，不打印或持久化。
 - receipt 只从请求头进入下载边界，浏览器不写 URL/DOM/Storage；数据库保存域分离 HMAC，导出密文使用
@@ -57,3 +57,20 @@ Legal Hold/retention 决定、Identity 隐私中心与 Platform 最小队列已�
 全数据库矩阵、集成、FLOW、真实三浏览器/三缩放、性能、安全、代理/断网、Windows/Linux、
 SQLite/PostgreSQL、N/N-1、四波试点、灾备/支付/Edge 演练和 72 小时长稳统一留到 PRD-138 独立提交后执行。
 G6 只能形成 `release_candidate`，不能公开 GA；本条专项结果不替代这些批次证据。
+
+## 2026-09-07 原生修复复验
+
+同 PRD-135..137 合批，复用数据库迁移基线；本条独立修复毫秒精度的单调时间比较，保持身份验证、
+收集、导出/删除和严格数据库状态约束。fixture 不再固定旧迁移 head，外键检查后端感知。
+
+- PostgreSQL：`g6-security-c693a109613341cbb02892f3d7ae60da-junit.xml` 中本条 3/3 通过。
+  首轮 `g6-security-09c8ecef524c4521b168228d57388585-junit.xml` 的两项隐私转换失败原样保留，
+  全轮是 9 通过、6 失败，不能表述为整轮通过。
+- SQLite：修复后 `sqlite-r2-junit.xml` 中本条 3/3 通过，整次 61/61，458.998 秒。
+- 时间边界：`timestamp-watermark-r1-junit.xml` 中本条 6/6；最终 `receipt-config-unit-r2-junit.xml`
+  再覆盖同样 6 项。Console `console-unit-junit.xml` 中本条 7/7。
+
+以上证据位于 `.artifacts/g6-security-20260907/`，本条敏感审计记录为
+`prd-134-sensitive-audit.json`，范围包括独立暂存文件、源文件摘要和高置信度凭据规则。
+两轮复核记录见本条 PRD 第 8 节。受控会话只验证业务合同，不是实际登录或法定授权证据；
+原生场景通过不等于 G6 全部真实流程、浏览器、性能或长稳已完成。

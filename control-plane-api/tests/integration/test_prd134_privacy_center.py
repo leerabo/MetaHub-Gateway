@@ -19,6 +19,7 @@ from metahub_control.privacy_center.routes import router
 from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
 from metahub_control.workspace_access.service import WorkspaceSessionContext
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.schema import foreign_key_violation_count
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.fastapi_app import create_service_app
 
@@ -63,7 +64,8 @@ def _config(database_url: str) -> AppConfig:
 def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database = tmp_path_factory.mktemp("prd134-api-base") / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0126"
+    assert "0126" in apply_migrations(database_url).applied
+    assert not apply_migrations(database_url).applied
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         apply_seed_data(database_url)
@@ -76,7 +78,10 @@ def runtime(
 ) -> tuple[AppConfig, WorkspaceSessionContext, PlatformContext]:
     database = tmp_path / "prd134.sqlite3"
     shutil.copy2(base_database, database)
-    config = _config(_url(database))
+    return _runtime(_config(_url(database)), monkeypatch)
+
+
+def _runtime(config: AppConfig, monkeypatch: pytest.MonkeyPatch):
     with closing(connect_database(config.database_url)) as connection:
         owner = connection.execute(
             """SELECT member.workspace_membership_id,member.workspace_id,member.tenant_id,
@@ -354,8 +359,9 @@ async def test_erasure_decisions_retention_exceptions_and_idempotency(
         }
         assert request["retention_exceptions"]
         with closing(connect_database(config.database_url)) as connection:
-            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert foreign_key_violation_count(connection) == 0
+            if getattr(connection, "backend", "sqlite") == "sqlite":
+                assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_scheduler_lease_fences_concurrent_scans(

@@ -2078,7 +2078,9 @@ def _database_now(connection) -> datetime:
 
 def _changed_time(now: datetime, previous: object) -> datetime:
     prior = _time(previous)
-    return now if now > prior else prior + timedelta(milliseconds=1)
+    # Compare the same millisecond precision that is persisted by _db_time.
+    candidate = _time(_db_time(now))
+    return candidate if candidate > prior else prior + timedelta(milliseconds=1)
 
 
 def _db_time(value: datetime) -> str:
