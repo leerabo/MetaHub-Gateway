@@ -1,8 +1,8 @@
 # PRD-137 租户隔离持续验证与安全攻防
 
-状态：已完成。依赖 PRD-090..136；范围以 Excel PRD-137 为准。0129、固定隔离 runner、
-finding/remediation/risk acceptance 闭环、Platform Console 与专项验证均已交付；完整 G6 留到
-PRD-138 独立提交后统一执行。
+状态：补充修复中。依赖 PRD-090..136；范围以 Excel PRD-137 为准。0129、
+finding/remediation/risk acceptance 编排与 Platform Console 已实现，但 2026-09-07 源码复核确认
+正式 app 未接入真实隔离 runner，创建/清理回执也未来自实际执行，不能视为完整安全验证已交付。
 
 ## Excel 权威合同
 
@@ -72,3 +72,33 @@ Platform Console 展示 profile、owner coverage、run、finding、SLA、remedia
 0128/0129 往返/down guard；scenario 签名、任意输入/生产 selector 拒绝；全 owner registry IDOR/写越权/缓存/队列/
 对象/指标/动态撤权/重放/迟到响应；runner 故障/接管/fencing；finding/remediation/复验/双批接受；exact cleanup 和
 静止终态；30 分钟增量门禁与 P0 SLA；Platform/Workspace 三浏览器三缩放；敏感证据审计。完整 G6 留到 PRD-138 后。
+
+## 7. 2026-09-07 合批修复设计与未完成项
+
+与 PRD-134..136 合批修复 schema 查询和 CAS，保留所有 lease、generation、当前权限及双人审批
+判断。现有业务测试在原生数据库运行时仍使用受控 runner，验证的是编排行为，不是攻击执行。
+第一轮自审：真实执行器必须使用固定场景和隔离主体，绑定待测 artifact/code/migration/contract，
+不能接收请求提供的 URL、SQL、命令或生产客户 selector。缺失、失败或不可信结果仍失败关闭。
+第二轮自审：当前 `_persist_execution` 自行生成 environment/seed/cleanup 摘要并写 deleted，不能
+证明创建或清理确实发生。必须补齐来自受信执行器的实际回执和验证，不能仅让十个 outcome 恒真，
+也不能把自动生成的 SHA256 当作签名、环境隔离或清理证明。
+该缺口与原生数据库兼容均属于本批必须完成的工作。兼容测试通过后仍不得把本条标记全部完成，
+更不得用它解除 G6/G8。历史受控合同测试保留，但原文“固定隔离 runner 已交付”结论已撤回。
+
+## 8. 受信执行回执修复
+
+服务只接受 `metahub.assurance-execution.v1` 签名 envelope。部署配置
+`METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH` 提供公钥、有效期、runner 镜像和隔离策略摘要，
+每次结果提交重新读取；请求不能自带公钥。签名用途独立，绑定 assessment/owner 摘要、profile、
+code/migration/contract/artifact、generation、随机租约 challenge、执行期限和完整场景 registry。
+传给执行器的 payload 不包含生产 Workspace/tenant 标识，不允许以报告 owner 选择客户目标。
+
+第一轮复核：裸 outcome、签名篡改、不同制品/owner/租约重放、已撤销公钥、未知字段、重复 JSON、
+超大内容、场景乱序/缺项均拒绝。镜像与隔离策略必须同时命中部署信任，不接受响应自授信任。
+第二轮复核：时间区间和 duration 一致；source/target 不同，fixture manifest 与场景资源类别逐项
+一致，创建不晚于执行、清理不早于执行结束。清理失败生成 error/P0；未验签的结果不写 cleanup
+journal，environment receipt 为 NULL，旧 DTO 必填摘要使用全零表示“未取得”，绝不代表实际回执。
+
+仍未完成：真正的固定场景隔离 worker、制品与运行环境的实际度量、完整原始签名回执持久化、每阶段
+短租约/撤权检查、真实 fixture 创建与 exact cleanup。当前测试里的签名和 fixture 是明确标注的
+编排测试数据，不构成实际安全通过或独立审批。因此本条仍为补充修复中，G6/G8 未解除。

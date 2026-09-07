@@ -136,6 +136,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_SUPPORT_SESSION_SECRET": DEFAULT_SUPPORT_SESSION_SECRET,
     "METAHUB_SUPPORT_SESSION_TTL_SECONDS": "900",
     "METAHUB_LAUNCH_EVIDENCE_TRUST_BUNDLE_PATH": "",
+    "METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH": "",
     "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET,
     "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "false",
     "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET,
@@ -567,6 +568,7 @@ class AppConfig(BaseModel):
     features: dict[str, bool] = Field(default_factory=dict)
     config_items: list[ConfigItemSummary] = Field(default_factory=list)
     launch_evidence_trust_bundle_path: str | None = Field(default=None, exclude=True, repr=False)
+    assurance_receipt_trust_bundle_path: str | None = Field(default=None, exclude=True, repr=False)
     warnings: list[str] = Field(default_factory=list)
     sensitive_keys_masked: bool = True
     database_url: str | None = Field(default=None, exclude=True, repr=False)
@@ -2510,6 +2512,9 @@ def load_app_config(service_name: str) -> AppConfig:
         provider_base_urls=provider_base_urls,
         launch_evidence_trust_bundle_path=_optional_value(
             values, "METAHUB_LAUNCH_EVIDENCE_TRUST_BUNDLE_PATH"
+        ),
+        assurance_receipt_trust_bundle_path=_optional_value(
+            values, "METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH"
         ),
         features={
             "business_api_enabled": False,

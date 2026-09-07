@@ -1,8 +1,8 @@
 # PRD-137 测试记录
 
-状态：已完成。0129、固定场景隔离 runner、assessment/finding/remediation/risk acceptance 闭环和 Platform
-Security Assurance Console 已交付；本条保留独立设计、聚焦测试、敏感审计和提交。下一权威项为
-`PRD-138 - SaaS发布候选、核心迁移波次与全产品门禁`。
+状态：补充修复中。0129、assessment/finding/remediation/risk acceptance 编排和 Platform Console
+已有实现。2026-09-07 复核撤回“固定场景隔离 runner 已交付”的旧结论；历史受控 runner 测试只证明
+编排合同，未证明真实隔离、攻击执行或 exact cleanup。下面历史结果不覆盖本次发现的产品缺口。
 
 ## 专项范围
 
@@ -36,8 +36,8 @@ Security Assurance Console 已交付；本条保留独立设计、聚焦测试�
 
 ## 敏感审计与临时证据
 
-- 正式结论只保存在本文和 Git；pytest basetemp、SQLite 副本、缓存与过程输出均为可重现临时证据，`.tmp`
-  可整体删除，不作为正式交付事实。
+- 正式结论保存在本文和 Git，原始测试结果按运行独立保留。`.tmp` 还包含冻结源码、基础设施和持久
+  VM 磁盘，不能整体删除；只可单独核验已停止、无依赖的可重建测试目录后处理。
 - 审计不得输出密码、Token、Cookie、client secret、TOTP、step-up grant、签名值、私钥、Provider Key、
   exploit 正文、客户正文、对象 URL 或本地管理员凭据；本地测试凭据只在进程内使用，不打印或持久化。
 - Console DTO/DOM/Storage 只保留固定 code、digest、裁剪摘要和计数，不投影 runner subject、原始请求/响应、
@@ -50,3 +50,25 @@ Security Assurance Console 已交付；本条保留独立设计、聚焦测试�
 真实三浏览器三缩放、性能、安全、代理/断网、Windows/Linux、SQLite/PostgreSQL、N/N-1、四波试点、灾备、
 支付/Edge 演练与 72 小时长稳统一留到 PRD-138 独立提交后执行。G6 通过也只能形成
 `release_candidate`，不能公开 GA。
+
+## 2026-09-07 受信回执修复复验
+
+schema/CAS 后端兼容已修复，风险动作测试按同一对象的 result_revision 排序，不依赖 rowid。
+服务新增部署公钥信任与 Ed25519 执行 envelope；全部构建摘要、owner、profile、registry、generation
+和随机 lease challenge 都进入签名绑定。缺失/无效回执不再编造 environment/seed/cleanup 或 deleted
+journal；全零必填摘要只表示未知。已验签但清理失败也只能生成 error/P0。
+
+- PostgreSQL：`g6-security-998994776de84a6d8b67961bdb3638ea-junit.xml` 12/12 通过，另有 8 项
+  未选。包括签名编排、缺失执行器、裸结果/篡改/异制品/撤销信任拒绝、清理失败、整改、双批和 fencing。
+- SQLite：`sqlite-r2-junit.xml` 中本条服务/API 13/13、当时加密合同 42/42；整次 61/61。
+- 最终单元：`receipt-config-unit-r2-junit.xml` 86/86，其中签名合同增加用途隔离负例后为 43 项，
+  另有 PRD-134/135 时间/水位 13 项与共享账号/Workspace 配置回归 30 项。
+- Console：`console-unit-junit.xml` 中本条 5/5。改动 Python 的 Ruff 和 `git diff --check` 通过。
+
+证据位于 `.artifacts/g6-security-20260907/`，独立敏感审计为 `prd-137-sensitive-audit.json`。
+首轮原生 9 通过/6 失败和定向修复后 7 通过/8 未选分别保留；不合并成虚构的一次完整通过。
+测试用公钥和签名来自 `prd137_receipt_support.py`，明确是合成编排数据，不能作为实际安全证据。
+
+两轮设计与复核见本条 PRD 第 8 节，部署合同见 `docs/deployment/security-assurance-receipts.md`。
+真实固定场景 worker、运行环境/制品度量、原始签名回执归档、逐阶段短租约与撤权、真实创建和 exact
+cleanup 仍未交付。本次只关闭“无可信回执也可声称通过和已清理”的路径，不标记 PRD-137 或 G6/G8 完成。

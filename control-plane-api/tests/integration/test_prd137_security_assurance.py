@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
 import shutil
 from contextlib import closing
@@ -33,6 +34,7 @@ from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
+from prd137_receipt_support import sign_receipt, synthetic_receipt, write_test_trust
 
 ORIGIN = "http://localhost:5173"
 PLATFORM_CSRF = "c" * 43
@@ -102,16 +104,22 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def runtime(base_database: Path, tmp_path: Path) -> Runtime:
     database = tmp_path / "prd137.sqlite3"
     shutil.copy2(base_database, database)
-    config = _config(_url(database))
+    return _runtime(_config(_url(database)), tmp_path / "receipt-public-trust.json")
+
+
+def _runtime(config: AppConfig, trust_path: Path) -> Runtime:
+    write_test_trust(trust_path)
+    config = config.model_copy(update={"assurance_receipt_trust_bundle_path": str(trust_path)})
     stamp = "2026-08-31T00:00:00.000Z"
     with closing(connect_database(config.database_url)) as connection:
         owner = connection.execute(
-            """SELECT membership.*,account.email_normalized,user.email,user.display_name,
+            """SELECT membership.*,account.email_normalized,
+                      legacy_user.email,legacy_user.display_name,
                       tenant.slug tenant_slug,tenant.name tenant_name
                  FROM workspace_memberships membership
                  JOIN global_accounts account ON account.account_id=membership.account_id
-                 JOIN users user ON user.user_id=membership.legacy_user_id
-                    AND user.tenant_id=membership.tenant_id
+                 JOIN users legacy_user ON legacy_user.user_id=membership.legacy_user_id
+                    AND legacy_user.tenant_id=membership.tenant_id
                  JOIN tenants tenant ON tenant.tenant_id=membership.tenant_id
                 WHERE membership.role_code='owner' AND membership.status='active'"""
         ).fetchone()
@@ -200,12 +208,13 @@ def runtime(base_database: Path, tmp_path: Path) -> Runtime:
             connection, OPERATOR_C_ID
         )
         security = connection.execute(
-            """SELECT membership.*,account.email_normalized,user.email,user.display_name,
+            """SELECT membership.*,account.email_normalized,
+                      legacy_user.email,legacy_user.display_name,
                       tenant.slug tenant_slug,tenant.name tenant_name
                  FROM workspace_memberships membership
                  JOIN global_accounts account ON account.account_id=membership.account_id
-                 JOIN users user ON user.user_id=membership.legacy_user_id
-                    AND user.tenant_id=membership.tenant_id
+                 JOIN users legacy_user ON legacy_user.user_id=membership.legacy_user_id
+                    AND legacy_user.tenant_id=membership.tenant_id
                  JOIN tenants tenant ON tenant.tenant_id=membership.tenant_id
                 WHERE membership.workspace_membership_id=?""",
             (security_membership_id,),
@@ -378,7 +387,7 @@ def _assessment_body(workspace_id: str, *, extra: dict[str, object] | None = Non
     return body
 
 
-def _passed_runner(request) -> tuple[ScenarioExecution, ...]:
+def _passed_results(request) -> tuple[ScenarioExecution, ...]:
     return tuple(
         ScenarioExecution(
             scenario_code=scenario.scenario_code,
@@ -392,8 +401,12 @@ def _passed_runner(request) -> tuple[ScenarioExecution, ...]:
     )
 
 
-def _failed_runner(request) -> tuple[ScenarioExecution, ...]:
-    results = list(_passed_runner(request))
+def _passed_runner(request) -> bytes:
+    return sign_receipt(synthetic_receipt(request, _passed_results(request)))
+
+
+def _failed_runner(request) -> bytes:
+    results = list(_passed_results(request))
     first = request.scenarios[0]
     results[0] = ScenarioExecution(
         scenario_code=first.scenario_code,
@@ -404,7 +417,7 @@ def _failed_runner(request) -> tuple[ScenarioExecution, ...]:
             f"{request.security_assessment_id}:{first.scenario_code}:failed".encode()
         ).hexdigest(),
     )
-    return tuple(results)
+    return sign_receipt(synthetic_receipt(request, results))
 
 
 async def _create(
@@ -466,6 +479,73 @@ async def test_missing_runner_fails_closed(
     assert len(assessment["runs"]) == 10
     assert len(assessment["findings"]) == 10
     assert {run["outcome"] for run in assessment["runs"]} == {"error"}
+    assert assessment["environment_receipt_sha256"] is None
+    assert {run["runner_image_sha256"] for run in assessment["runs"]} == {"0" * 64}
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM assurance_cleanup_journal"
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["bare_results", "tampered", "wrong_binding", "trust_removed"])
+async def test_untrusted_runner_cannot_pass_or_claim_cleanup(runtime, monkeypatch, mode):
+    def untrusted_runner(request):
+        if mode == "bare_results":
+            return _passed_results(request)
+        if mode == "wrong_binding":
+            return _passed_runner(replace(request, artifact_sha256="f" * 64))
+        content = _passed_runner(request)
+        if mode == "tampered":
+            value = json.loads(content)
+            value["receipt"]["runs"][0]["result"]["evidence_sha256"] = "f" * 64
+            return json.dumps(value).encode()
+        Path(runtime.config.assurance_receipt_trust_bundle_path).write_text(
+            '{"schema_version":"metahub.assurance-trust.v1","keys":[]}', encoding="utf-8",
+        )
+        return content
+
+    app = _app(monkeypatch, runtime, untrusted_runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await _create(
+            client, runtime, token=PLATFORM_A_TOKEN, key="prd137-untrusted-receipt-0001",
+        )
+    assert response.status_code == 201, response.text
+    assessment = response.json()["assessment"]
+    assert assessment["status"] == "failed"
+    assert assessment["environment_receipt_sha256"] is None
+    assert len(assessment["findings"]) == 10
+    assert {run["outcome"] for run in assessment["runs"]} == {"error"}
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM assurance_cleanup_journal"
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.anyio
+async def test_signed_cleanup_failure_prevents_assessment_pass(runtime, monkeypatch):
+    def cleanup_failed_runner(request):
+        receipt = synthetic_receipt(request, _passed_results(request))
+        run = receipt.runs[0]
+        failed = run.fixtures[0].model_copy(update={"cleanup_status": "failed"})
+        run = run.model_copy(update={"fixtures": (failed, *run.fixtures[1:])})
+        return sign_receipt(receipt.model_copy(update={"runs": (run, *receipt.runs[1:])}))
+
+    app = _app(monkeypatch, runtime, cleanup_failed_runner)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await _create(
+            client, runtime, token=PLATFORM_A_TOKEN, key="prd137-cleanup-failed-0001",
+        )
+    assert response.status_code == 201, response.text
+    assessment = response.json()["assessment"]
+    assert assessment["status"] == "failed"
+    assert assessment["environment_receipt_sha256"] is not None
+    assert assessment["runs"][0]["outcome"] == "error"
+    assert len(assessment["findings"]) == 1
+    with closing(connect_database(runtime.config.database_url)) as connection:
+        assert dict(connection.execute(
+            "SELECT status,COUNT(*) FROM assurance_cleanup_journal GROUP BY status"
+        ).fetchall()) == {"failed": 1, "deleted": 23}
 
 
 @pytest.mark.anyio
@@ -555,7 +635,7 @@ async def test_fixed_runner_response_idempotency_and_arbitrary_input_rejection(
         assert connection.execute("SELECT COUNT(*) FROM isolation_test_runs").fetchone()[0] == 10
         assert (
             connection.execute("SELECT COUNT(*) FROM assurance_cleanup_journal").fetchone()[0]
-            == 20
+            == 24
         )
 
 
@@ -799,7 +879,9 @@ async def test_workspace_dual_approval_platform_review_and_expiry(
             row[0]
             for row in connection.execute(
                 "SELECT action_code FROM security_assurance_action_commands "
-                "WHERE action_code LIKE 'risk.%' ORDER BY created_at,rowid"
+                "WHERE result_object_id=? AND action_code LIKE 'risk.%' "
+                "ORDER BY result_revision",
+                (requested.risk_acceptance_id,),
             ).fetchall()
         ] == [
             "risk.request",

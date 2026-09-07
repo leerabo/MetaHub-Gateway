@@ -7,12 +7,14 @@ import json
 import re
 import secrets
 import sqlite3
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -40,11 +42,17 @@ from .models import (
     ScenarioExecution,
     SecurityAssessmentSummary,
 )
+from .receipts import (
+    UNKNOWN_SHA256,
+    ExecutionReceipt,
+    FileAssuranceReceiptVerifier,
+)
+from .receipts import (
+    digest as receipt_digest,
+)
 
 _ASSESSMENT_ID = re.compile(r"^sas_[0-9a-f]{32}$")
 _FINDING_ID = re.compile(r"^ptf_[0-9a-f]{32}$")
-_RUNNER_IMAGE_SHA256 = hashlib.sha256(b"metahub/security-assurance-runner/v1").hexdigest()
-_FIXTURES = ("source_subject", "target_subject")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,14 +71,21 @@ class AssessmentExecutionRequest:
     workspace_id: str
     tenant_id: str
     profile_code: str
+    profile_version: int
+    profile_sha256: str
+    profile_signature_sha256: str
     generation: int
     artifact_sha256: str
+    code_tree_sha256: str
+    migration_set_sha256: str
+    contract_set_sha256: str
+    lease_challenge_sha256: str
+    started_at: datetime
+    deadline_at: datetime
     scenarios: tuple[RegisteredScenario, ...]
 
 
-AssuranceRunner = Callable[
-    [AssessmentExecutionRequest], Iterable[ScenarioExecution | Mapping[str, object]]
-]
+AssuranceRunner = Callable[[AssessmentExecutionRequest], bytes]
 
 
 def create_security_assessment(
@@ -292,13 +307,13 @@ def execute_security_assessment(
             raise ApiError("security_assurance.registry_invalid")
         now = _utcnow()
         stamp = _db_time(now)
-        connection.execute(
+        updated = connection.execute(
             """UPDATE security_assessments
                   SET status='running',started_at=?,revision=revision+1,updated_at=?
                 WHERE security_assessment_id=? AND status='queued' AND revision=1""",
             (stamp, stamp, assessment_id),
         )
-        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        if updated.rowcount != 1:
             raise ApiError("security_assurance.assessment_conflict")
         connection.execute(
             """INSERT INTO assurance_runner_leases(
@@ -324,8 +339,17 @@ def execute_security_assessment(
             workspace_id=str(assessment["workspace_id"]),
             tenant_id=str(assessment["tenant_id"]),
             profile_code=str(assessment["profile_code"]),
+            profile_version=int(assessment["profile_version"]),
+            profile_sha256=str(assessment["profile_sha256"]),
+            profile_signature_sha256=str(assessment["profile_signature_sha256"]),
             generation=int(assessment["generation"]),
             artifact_sha256=str(assessment["artifact_sha256"]),
+            code_tree_sha256=str(assessment["code_tree_sha256"]),
+            migration_set_sha256=str(assessment["migration_set_sha256"]),
+            contract_set_sha256=str(assessment["contract_set_sha256"]),
+            lease_challenge_sha256=lease_sha,
+            started_at=now,
+            deadline_at=now + timedelta(seconds=maximum_duration_seconds),
             scenarios=scenarios,
         )
         connection.commit()
@@ -338,9 +362,21 @@ def execute_security_assessment(
     finally:
         connection.close()
 
+    receipt = None
     try:
-        results = _normalize_results(
-            (runner or _default_runner)(execution_request), execution_request.scenarios
+        trust_path = config.assurance_receipt_trust_bundle_path
+        if runner is None or not trust_path:
+            raise ValueError("runner or receipt trust unavailable")
+        receipt = FileAssuranceReceiptVerifier(Path(trust_path))(
+            execution_request, runner(execution_request),
+        )
+        results = tuple(
+            run.result if all(item.cleanup_status == "deleted" for item in run.fixtures)
+            else ScenarioExecution(
+                scenario_code=run.result.scenario_code, outcome="error", severity="p0",
+                duration_ms=run.result.duration_ms, evidence_sha256=run.cleanup_digest(),
+            )
+            for run in receipt.runs
         )
     except Exception:
         results = tuple(
@@ -359,6 +395,7 @@ def execute_security_assessment(
         config,
         execution_request,
         results,
+        receipt=receipt,
         lease_sha=lease_sha,
         request_id=request_id,
         trace_id=trace_id,
@@ -428,13 +465,13 @@ def apply_remediation(
         if command.operation == "propose":
             if finding["status"] not in {"open", "risk_accepted"}:
                 raise ApiError("security_assurance.finding_conflict")
-            connection.execute(
+            updated = connection.execute(
                 """UPDATE pen_test_findings
                       SET status='remediation_pending',revision=revision+1,last_seen_at=?
                     WHERE pen_test_finding_id=? AND revision=?""",
                 (stamp, finding_id, command.expected_revision),
             )
-            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            if updated.rowcount != 1:
                 raise ApiError("security_assurance.revision_conflict")
             connection.execute(
                 """INSERT INTO security_remediations(
@@ -501,14 +538,14 @@ def apply_remediation(
                 ),
             )
             if passed:
-                connection.execute(
+                updated = connection.execute(
                     """UPDATE pen_test_findings
                           SET status='closed',closed_at=?,last_seen_at=?,revision=revision+1
                         WHERE pen_test_finding_id=? AND status='remediation_pending'
                           AND revision=?""",
                     (stamp, stamp, finding_id, command.expected_revision),
                 )
-                if connection.execute("SELECT changes()").fetchone()[0] != 1:
+                if updated.rowcount != 1:
                     raise ApiError("security_assurance.revision_conflict")
                 _event(
                     connection,
@@ -692,7 +729,7 @@ def apply_risk_acceptance(
                 raise ApiError("security_assurance.risk_conflict")
             stamp = _db_time(now)
             if risk["status"] == "pending_owner" and workspace_actor.membership_role == "owner":
-                connection.execute(
+                updated = connection.execute(
                     """UPDATE security_risk_acceptances
                           SET status='pending_security',owner_membership_id=?,owner_account_id=?,
                               revision=revision+1,updated_at=?
@@ -710,7 +747,7 @@ def apply_risk_acceptance(
                 and workspace_actor.membership_role == "security_admin"
                 and risk["owner_account_id"] != workspace_actor.account_id
             ):
-                connection.execute(
+                updated = connection.execute(
                     """UPDATE security_risk_acceptances
                           SET status='pending_platform',security_membership_id=?,
                               security_account_id=?,revision=revision+1,updated_at=?
@@ -725,7 +762,7 @@ def apply_risk_acceptance(
                 )
             else:
                 raise ApiError("security_assurance.risk_conflict")
-            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            if updated.rowcount != 1:
                 raise ApiError("security_assurance.revision_conflict")
             risk_id = str(risk["risk_acceptance_id"])
             result_revision = command.expected_revision + 1
@@ -751,7 +788,7 @@ def apply_risk_acceptance(
                 raise ApiError("security_assurance.risk_conflict")
             status = "active" if command.approved else "revoked"
             stamp = _db_time(now)
-            connection.execute(
+            updated = connection.execute(
                 """UPDATE security_risk_acceptances
                       SET status=?,platform_reviewer_operator_id=?,approved_at=?,
                           revision=revision+1,updated_at=?
@@ -765,7 +802,7 @@ def apply_risk_acceptance(
                     command.expected_revision,
                 ),
             )
-            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            if updated.rowcount != 1:
                 raise ApiError("security_assurance.revision_conflict")
             if command.approved and finding["status"] in {"open", "remediation_pending"}:
                 connection.execute(
@@ -871,6 +908,7 @@ def _persist_execution(
     request: AssessmentExecutionRequest,
     results: tuple[ScenarioExecution, ...],
     *,
+    receipt: ExecutionReceipt | None,
     lease_sha: str,
     request_id: str,
     trace_id: str,
@@ -914,37 +952,20 @@ def _persist_execution(
         scenario_by_code = {item.scenario_code: item for item in request.scenarios}
         now = _utcnow()
         stamp = _db_time(now)
-        environment_receipt = _digest(
-            {
-                "environment": "isolated-assurance-v1",
-                "owner": [request.workspace_id, request.tenant_id],
-                "assessment": request.security_assessment_id,
-            }
-        )
+        environment_receipt = receipt.environment_digest() if receipt else None
+        receipt_runs = {run.result.scenario_code: run for run in receipt.runs} if receipt else {}
         failed = False
         summary_items: list[dict[str, object]] = []
         for result in results:
             scenario = scenario_by_code[result.scenario_code]
             failed = failed or result.outcome != "passed"
             run_id = _id("itr_")
-            source_sha = _digest(
-                {
-                    "assessment": request.security_assessment_id,
-                    "scenario": result.scenario_code,
-                    "subject": "source",
-                }
-            )
-            target_sha = _digest(
-                {
-                    "assessment": request.security_assessment_id,
-                    "scenario": result.scenario_code,
-                    "subject": "target",
-                }
-            )
-            cleanup_receipt = _digest(
-                {"run": run_id, "fixtures": _FIXTURES, "outcome": "deleted"}
-            )
-            started = now - timedelta(milliseconds=result.duration_ms)
+            run_receipt = receipt_runs.get(result.scenario_code)
+            source_sha = run_receipt.source_subject_sha256 if run_receipt else UNKNOWN_SHA256
+            target_sha = run_receipt.target_subject_sha256 if run_receipt else UNKNOWN_SHA256
+            cleanup_receipt = run_receipt.cleanup_digest() if run_receipt else UNKNOWN_SHA256
+            started = run_receipt.started_at if run_receipt else now
+            finished = run_receipt.finished_at if run_receipt else now
             connection.execute(
                 """INSERT INTO isolation_test_runs(
                      isolation_test_run_id,security_assessment_id,workspace_id,tenant_id,
@@ -961,34 +982,35 @@ def _persist_execution(
                     result.scenario_code,
                     source_sha,
                     target_sha,
-                    _RUNNER_IMAGE_SHA256,
-                    _digest({"run": run_id, "fixtures": _FIXTURES, "outcome": "seeded"}),
+                    receipt.runner_image_sha256 if receipt else UNKNOWN_SHA256,
+                    run_receipt.seed_digest() if run_receipt else UNKNOWN_SHA256,
                     cleanup_receipt,
                     result.outcome,
                     result.duration_ms,
                     result.evidence_sha256,
                     _db_time(started),
-                    stamp,
+                    _db_time(finished),
                 ),
             )
-            for fixture in _FIXTURES:
+            for fixture in run_receipt.fixtures if run_receipt else ():
                 connection.execute(
                     """INSERT INTO assurance_cleanup_journal(
                          cleanup_journal_id,isolation_test_run_id,workspace_id,tenant_id,
                          fixture_code,fixture_id_sha256,environment_receipt_sha256,status,
                          cleanup_receipt_sha256,created_at,updated_at)
-                       VALUES(?,?,?,?,?,?,?,'deleted',?,?,?)""",
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         _id("acj_"),
                         run_id,
                         request.workspace_id,
                         request.tenant_id,
-                        fixture,
-                        _digest({"run": run_id, "fixture": fixture}),
+                        fixture.fixture_code,
+                        fixture.fixture_id_sha256,
                         environment_receipt,
-                        _digest({"run": run_id, "fixture": fixture, "status": "deleted"}),
-                        stamp,
-                        stamp,
+                        fixture.cleanup_status,
+                        receipt_digest(fixture.model_dump(mode="json")),
+                        _db_time(fixture.created_at),
+                        _db_time(fixture.cleanup_attempted_at),
                     ),
                 )
             if result.outcome != "passed":
@@ -1044,7 +1066,7 @@ def _persist_execution(
             )
         status = "failed" if failed else "passed"
         summary_sha = _digest(summary_items)
-        connection.execute(
+        updated = connection.execute(
             """UPDATE security_assessments
                   SET status=?,environment_receipt_sha256=?,summary_sha256=?,
                       finished_at=?,revision=revision+1,updated_at=?
@@ -1058,7 +1080,7 @@ def _persist_execution(
                 request.security_assessment_id,
             ),
         )
-        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        if updated.rowcount != 1:
             raise ApiError("security_assurance.runner_fenced")
         if failed:
             _event(
@@ -1083,40 +1105,6 @@ def _persist_execution(
         raise ApiError("security_assurance.unavailable") from None
     finally:
         connection.close()
-
-
-def _default_runner(request: AssessmentExecutionRequest) -> tuple[ScenarioExecution, ...]:
-    return tuple(
-        ScenarioExecution(
-            scenario_code=scenario.scenario_code,
-            outcome="error",
-            severity="p0",
-            duration_ms=0,
-            evidence_sha256=_digest(
-                {
-                    "assessment": request.security_assessment_id,
-                    "runner_available": False,
-                    "scenario_code": scenario.scenario_code,
-                }
-            ),
-        )
-        for scenario in request.scenarios
-    )
-
-
-def _normalize_results(
-    values: Iterable[ScenarioExecution | Mapping[str, object]],
-    scenarios: tuple[RegisteredScenario, ...],
-) -> tuple[ScenarioExecution, ...]:
-    results = tuple(
-        value if isinstance(value, ScenarioExecution) else ScenarioExecution.model_validate(value)
-        for value in values
-    )
-    expected = [item.scenario_code for item in scenarios]
-    actual = [item.scenario_code for item in results]
-    if actual != expected or len(set(actual)) != len(actual):
-        raise ValueError("runner result does not match signed registry")
-    return results
 
 
 def _assessment_response(
@@ -1490,9 +1478,7 @@ def _require_schema(connection) -> None:
 
 
 def _table_exists(connection, name):
-    return connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)
-    ).fetchone() is not None
+    return table_exists(connection, name)
 
 
 def _assessment_id(value: str) -> None:
