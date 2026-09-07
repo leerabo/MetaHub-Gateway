@@ -95,3 +95,21 @@ support/tenant 不能进入平台聚合。移动端使用稳定摘要行；图�
   隐式平台 API。`OnCallRoute` 只保存固定目的地引用摘要，不保存邮件、电话、Webhook 地址或供应商凭据。
 - PRD-109 写入 `rollout_health_summaries` 时复用 PRD-107 已冻结的 canonical body 与 HMAC domain，消费者合同和失败关闭语义
   不变；只有已验证的聚合预算成为规范生产来源。
+
+## 10. G6 真实 HTTP 租户归属补充设计
+
+2026-09-07 复核发现 `TelemetryBuffer` 接受 tenant_owner，但安装到 HTTP 的中间件没有传入它，
+因而已有合成 fact 测试不能证明真实双租户指标隔离。本次把 Control 资源鉴权成功取得的 tenant_id
+绑定到 request-local state，由既有遥测中间件生成 HMAC 伪名后入队，继续使用实际后台 flush 和
+不可变 `sli_time_buckets`。不新增迁移、用户标签参数或遥测查询入口，不改变权限矩阵。
+
+第一轮自审：owner 只取自成功验证的服务端 AuthContext，不解析 Header、Cookie 内容、URL、
+请求 JSON 或 trace 作为 owner；冲突、撤销和未认证请求不得借客户端声称的 tenant_id 归属。
+绑定发生在权限检查成功之后；合法主体访问外租户资源被拒绝时仍只归属于该已认证主体。
+原始 tenant_id 不进入持久化 bucket、日志、事件或报告，平台/匿名流量保持 `none`。
+
+第二轮自审：每个请求进入中间件时清除归属，避免 request-local 数据复用；冲突绑定清除归属且
+不能影响业务授权。缓冲区或存储异常仍遵循既有 fail-open。Control 共用资源守卫、Legacy 与
+Machine 成功分支一致接线；其他独立领域/Gateway 鉴权入口仍须逐域核验，不能宣称全 owner 覆盖。
+回归既有未知维度拒绝、队列满、后端故障，以及真实 Workspace 请求、标签注入、会话轮换和撤销。
+两个业务 PRD 共用迁移基线及现有鉴权测试夹具，独立记录与提交；批次末统一受影响回归。

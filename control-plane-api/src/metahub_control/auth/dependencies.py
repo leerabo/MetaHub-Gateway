@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Header, Request
 from metahub_shared.feedback import FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
+from metahub_shared.observability import bind_authenticated_telemetry_tenant
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
 
@@ -53,6 +54,7 @@ def _require_request_permissions(
     for permission_code in permission_codes:
         # 复合旧守卫采用全部命中语义，避免读写尚未拆路由时把已撤销的写权限重新放大。
         require_permission(context, permission_code)
+    bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
     return context
 
 
@@ -67,7 +69,9 @@ def require_current_user(
 
     # 认证请求是访问控制边界，调用方必须透传统一错误和 request_id。
     _reject_mixed_workspace_credential(request, authorization)
-    return authenticate_bearer(request.app.state.config, authorization)
+    context = authenticate_bearer(request.app.state.config, authorization)
+    bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
+    return context
 
 
 def require_console_user(
@@ -96,8 +100,11 @@ def require_console_user(
             workspace_token,
         )
         request.state.workspace_session_authenticated = True
+        bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
         return context
-    return authenticate_bearer(request.app.state.config, authorization)
+    context = authenticate_bearer(request.app.state.config, authorization)
+    bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
+    return context
 
 
 def require_workspace_or_legacy_permissions(
@@ -142,6 +149,7 @@ def require_workspace_or_legacy_permissions(
             request.state.credential_domain = "legacy"
         for permission_code in permission_codes:
             require_permission(context, permission_code)
+        bind_authenticated_telemetry_tenant(request, context.user.tenant_id)
         return context
 
     return dependency
@@ -205,6 +213,7 @@ def _require_human_or_machine(
     if permission_code not in context.permission_codes:
         raise ApiError("machine_auth.invalid")
     request.state.credential_domain = "machine"
+    bind_authenticated_telemetry_tenant(request, context.tenant_id)
     return context
 
 

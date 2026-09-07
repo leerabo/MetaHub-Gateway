@@ -31,6 +31,7 @@ logger = logging.getLogger("metahub.observability.runtime")
 _CODE = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,63}$")
 _REGION = re.compile(r"^[a-z0-9][a-z0-9.-]{1,39}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
+_OWNER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _STATUS_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx", "other"})
 _REGIONS = frozenset(
     {
@@ -348,6 +349,21 @@ class TelemetryBuffer:
         ).hexdigest()
 
 
+def bind_authenticated_telemetry_tenant(request: Request, tenant_id: str) -> None:
+    """Bind only a server-authenticated owner; never call with request input."""
+    previous = getattr(request.state, "_telemetry_tenant_owner", None)
+    if previous is False:
+        return
+    if (
+        not isinstance(tenant_id, str)
+        or _OWNER.fullmatch(tenant_id) is None
+        or previous not in (None, tenant_id)
+    ):
+        request.state._telemetry_tenant_owner = False
+        return
+    request.state._telemetry_tenant_owner = tenant_id
+
+
 def install_telemetry_runtime(app: FastAPI, *, service_code: str) -> None:
     """Install one non-blocking middleware and one bounded lifespan worker."""
 
@@ -360,6 +376,7 @@ def install_telemetry_runtime(app: FastAPI, *, service_code: str) -> None:
 
     @app.middleware("http")
     async def telemetry_middleware(request: Request, call_next):  # type: ignore[type-arg]
+        request.state._telemetry_tenant_owner = None
         started = time.perf_counter()
         response = await call_next(request)
         try:
@@ -368,12 +385,14 @@ def install_telemetry_runtime(app: FastAPI, *, service_code: str) -> None:
             operation = _OPERATIONS.get(service_code, {}).get(
                 (request.method.upper(), route_path), "other"
             )
+            owner = getattr(request.state, "_telemetry_tenant_owner", None)
             runtime.enqueue_http(
                 operation_code=operation,
                 status_code=int(response.status_code),
                 duration_ms=max(0, int((time.perf_counter() - started) * 1000)),
                 request_id=str(getattr(request.state, "request_id", "missing")),
                 trace_id=str(getattr(request.state, "trace_id", "missing")),
+                tenant_owner=owner if isinstance(owner, str) else None,
             )
         except Exception:
             runtime._record_drop(1)
@@ -458,5 +477,6 @@ __all__ = [
     "TelemetryBuffer",
     "TelemetryFact",
     "TelemetrySnapshot",
+    "bind_authenticated_telemetry_tenant",
     "install_telemetry_runtime",
 ]
