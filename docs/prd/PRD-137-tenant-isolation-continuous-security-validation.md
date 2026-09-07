@@ -347,3 +347,28 @@ fragment 与 owner-bound 加密制品，解密内容与实际注册账号/空间
 每项验证完成后重放与迟到失败无副作用。独立验证 fragment/receipt/manifest/密文及实际下载
 的摘要一致性，不仅检查非空。单独进程的三分钟测试预算已不足以覆盖新增真实队列工作，
 测试总预算改为五分钟；产品两分钟 job lease、逐步许可和永久 fencing 不变。
+
+### 浏览器实施前两轮复核
+
+继续第 15 节完整 late_response 目标。先使用仓库现有 Playwright/Chromium 与完整 Control app，
+只克隆已迁移基线，在私有实例中真实注册账号。浏览器通过实际 identity.html 登录、创建第二个
+企业空间、切换空间与退出登录。拦截器先取得后端实际已授权的非空成员列表响应，再延迟向页面交付；
+不得构造响应体、伪造账号/权限或关闭应用的 AbortController。静态文件和 API 均限私有 loopback。
+
+第一轮复核：确认被延迟响应为 HTTP 200、no-store 且属于切换前租户，再通过实际页面动作切换到
+另一个空间；只有新空间的实际 session/成员列表返回后才释放旧字节。通过第二个真实标签页的正常
+BroadcastChannel 失效链完成切换，记录中止或迟到交付的实际结果，复查 DOM、后续 session owner、
+localStorage/sessionStorage、CacheStorage 和 IndexedDB。所有检查
+必须在真实浏览器中完成，不能从源代码字符串或 Python mock 推断通过。
+
+第二轮复核：以相同方式保留退出前的实际响应，页面退出后释放，确认登录页未被旧状态复活，并
+使用退出前实际 Cookie 验证服务端拒绝重放。凭据只经私有子进程 stdin 传递，不放命令行、日志、
+报告、浏览器持久化 profile 或截图；异常只输出固定阶段码与代码位置。桌面和移动视口独立运行，
+退出后等待浏览器/服务进程结束，再清理精确私有目录。该轮是账号页真实竞态证据，主控制台导航、
+跨页失效、评估短许可与固定 Guest 集成仍须继续，不能提前把整个 late_response 标为 passed。
+
+实施复核：本地浏览器必须使用真实 HTTPS。Chromium 精确 pin 本次生成证书的公钥，Node 使用
+额外测试 CA，不关闭产品 HTTPS 校验。旧 Cookie 重放在独立 request context 中执行，避免
+错误响应清 Cookie 影响合法对照。r4 在两视口发现的 GlobalSession 退出竞态单独归属 PRD-094，
+提交 `7548e46` 后 r5 桌面/移动各 22 个检查点通过；五次原始运行和失败原因分别记录，不覆盖。
+账号页结果不设置 Guest 的 late_response passed，后续继续真实主控制台与评估许可集成。

@@ -380,3 +380,40 @@ error，isolation_attested、cleanup_attested、full_owner_coverage 均 false。
 125 通过、1 失败继续保留，不将多次定向通过拼成一次全绿批次。当前不宣称真实浏览器
 late_response、全部 owner、Docker/Linux、远程 Control 认证、镜像度量、完整清理签名或
 正式归档端到端完成。G6/G8 保持未通过，不启动 PRD-148，不重启 72 小时等待。
+
+## 真实账号页浏览器竞态 (2026-09-07)
+
+延续第 15 节浏览器设计和两轮复核，使用完整 Control app、真实 TLS 与现有 Chromium，私有
+实例只克隆迁移基线。账号经真实注册/密码登录，第二空间由实际 identity.html 创建。两个同源
+标签页通过真实 BroadcastChannel 切换和退出；拦截器从服务端取得实际非空 `/memberships`
+字节后延迟交付，不伪造 API 正文，不关闭产品 AbortController，不替换鉴权。
+
+源空间有真实邀请成员，目标空间没有该成员。确认新空间实际 session 和成员列表后释放旧响应，
+验证旧 DOM 不复活、后续请求仍归新 owner、旧 Cookie 被服务端拒绝；退出后重复迟到交付与
+Cookie 重放检查。敏感值仅经私有 stdin 传入，不进入命令行；重放使用独立 request context，
+避免服务端清 Cookie 副作用污染合法浏览器。浏览器数据库/CacheStorage/Storage 不留私有状态。
+
+原始 JUnit 在 `.artifacts/g6-security-20260907/`，各次运行分别保留：
+
+- `browser-r1-junit.xml`：桌面 1 失败，18.385 秒。夹具使用 HTTP 被既有 HTTPS 初始化边界拒绝。
+  后续改为真实 TLS、精确证书 SPKI 与额外测试 CA，不放宽产品边界。
+- `browser-r2-junit.xml`：桌面 1 失败，101.588 秒。空间切换阶段超时，现有诊断不足以确认
+  具体原因，不追认其通过或将它归为已证明的退出竞态。
+- `browser-r3-junit.xml`：桌面 1/1，85.970 秒、22 个检查点、2 次原生中止；移动未选。
+- `browser-r4-junit.xml`：桌面、移动均失败，215.537 秒。两者切换和旧成员隔离成功，退出
+  API 200 后主标签仍保留受保护 shell。该产品缺陷由 PRD-094 独立设计、回归、审计和提交
+  `7548e46` 修复：立即清空并重验 GlobalSession，退出写入结束后再次广播。
+- `browser-r5-junit.xml`：桌面、移动 2/2，155.275 秒。1440x900 和 390x844 各 22 个检查点，
+  每个视口在切换和退出时分别完成旧字节交付，且各观测到 2 次浏览器原生中止。页面不恢复旧
+  成员或空间，实际旧会话重放拒绝；私有目录移除、进程正常退出、stderr 为空及基线不变均通过。
+
+已查看两张遮罩后的退出截图，没有受保护 shell 残留，中文可读且无横向溢出。截图保存在
+`.tmp/pytest-prd137-browser-r5/test_real_identity_pages_fence0/logged-out.png`（桌面）和同级
+`test_real_identity_pages_fence1/logged-out.png`（移动）。SHA-256 分别为
+`5730278996ca07c8148e408854fbce3e1875c71ab39e6d7791f3d98c33d0926a`、
+`c4cdf4014e45978319d6a296abac8c02c6243858aa385d5d908d0931ea23ffd9`。
+
+独立审计 `prd-137-identity-browser-sensitive-audit.json` 核对 6 个源码/文档文件及上述 5 份
+原始证据，产品修复不混入本条提交。测试只证明账号页实际竞态；主 Console/navigation、评估
+短许可及固定 Guest 尚未集成，Guest 的 late_response 仍 error，不能将局部结果扩张为全部
+owner 或隔离部署通过。完整批次回归及 G6/G8 保持未完成，不启动 PRD-148，也不重启长稳等待。
