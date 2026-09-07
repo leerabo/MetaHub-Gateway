@@ -145,3 +145,43 @@ lint 为 766 files，production surface 为 259 modules / 273 shipped sources。
 独立审计 `prd-145-cookie-owner-sensitive-audit.json` 检查 9 个精确暂存源码/测试/文档、三份
 报告的 UTF-8、凭据模式、SHA-256 和受保护基线。只暂存本条文件，不混入 PRD-137 测试夹具、
 用户未跟踪文档、outputs 或机器证据。
+
+## 2026-09-07 读取审计 WAL 冲突修复
+
+真实 Cookie 浏览器 r7 的桌面 overview 为 503，移动端通过；该事实不足以独立确定数据库原因。
+本次对八个生产 service 入口建立确定性双连接交错，未修复版八项全部失败，其异常上下文均为
+`SQLITE_BUSY_SNAPSHOT`。因此确认这组读后写审计事务存在真实缺陷，不把它当成偶发夹具超时。
+设计及两轮编码前自审见本条 domain 设计的“Console 读取与审计事务补充设计”。
+
+Platform/Workspace overview、assistant、approvals、Identity preferences 和 Workspace deployment
+summary 均改为读取授权之前 `BEGIN IMMEDIATE`。不拆分审计事务、不吞错误、不自动重试命令。
+PostgreSQL adapter 已将该命令翻译为 BEGIN；本增量未运行 PostgreSQL 集成或性能门禁，不据此
+声称跨数据库并发或 SLO 已验证。既有 preference PATCH、DTO、权限与 Cookie 合同不变。
+
+原始报告均独立保留在 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 结果 | 实际覆盖 |
+| --- | --- | --- |
+| `prd145-read-audit-red-r1-junit.xml` | 8/8 失败 | 八个入口均确定性复现 SQLITE_BUSY_SNAPSHOT |
+| `prd145-read-audit-green-r1-junit.xml` | 14/14 通过 | 八个并发回归及本模块六项现有 API/投影测试 |
+| `prd145-read-audit-atomic-r1-junit.xml` | 2/2 通过 | Platform/Workspace 助手审计失败一起回滚，恢复后查询和审计各一条 |
+
+运行使用独立 `--basetemp`，只从受保护原基线复制，迁移复制库至当前 0142，未写原库。
+红版选取 `-k reads_serialize`，绿色执行本模块，新增原子性测试选取 `-k audit_failure`。
+报告使用 `--tb=short`；绿色和原子性运行指定 `-o junit_family=xunit1`，避免原红版 xunit2
+property 兼容警告。数据库错误仅记录固定类别，不输出 SQL 参数、密码、Cookie 或查询正文。
+
+双连接测试使用真实 WAL、实际生产 service 函数、独立 scheduler-state 写事务及真实审计表。
+第一连接取读快照后第二连接尝试提交；修复后第二连接被 writer 预留阻止，请求提交后可以继续，
+请求审计恰好一条。身份对象沿用本模块替身以隔离事务行为，不作为真实认证/撤权的证明。
+PRD-137 的真实注册、登录、生产 scheduler、Console DOM 与退出验证保留独立记录和提交。
+
+实施自审一：确认八个入口都存在持久写入，修改覆盖同类事务，未扩大到无关服务；审计失败仍
+映射既有 unavailable 并回滚，助手查询投影不会残留。实施自审二：独立连接真实冲突由红版
+反证、绿版证明解除，竞争 writer 可恢复；原始失败报告没有覆盖，API fixture 0142 漂移已更正。
+
+Ruff 与 `git diff --check` 通过。独立敏感审计
+`prd-145-read-audit-transactions-sensitive-audit.json` 校验四个精确暂存源码/测试/文档、三份原始
+报告的严格 UTF-8、高置信凭据模式、SHA-256、暂存字节和原基线哈希。模式扫描不等于独立安全
+会签。该提交不含 PRD-146 主入口、PRD-137 夹具、用户未跟踪 PRD-101..105 或 outputs。
+Excel 保持只读，G6/G7/G8 未通过，PRD-148 不启动。

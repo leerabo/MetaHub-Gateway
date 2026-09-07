@@ -487,3 +487,34 @@ PRD-146 的导航 epoch 是不同合同，不能强行相等；前者保持单�
 过期 owner 不再允许请求或接受响应。fetch 和 JSON 读取阶段保留取消，拒绝自动重定向。
 跨页失效通知同步销毁本条 controller，不依赖旧 Token guard。定向覆盖五视图、公开 owner
 各维度漂移、首响应错授权、撤权/冲突清理、取消和接线，批次完整浏览器/API门禁仍另行复验。
+
+## 2026-09-07 Console 读取与审计事务补充设计
+
+真实 Cookie 入口 r7 的 Workspace 会话和导航通过，桌面 overview 仍为 503，移动端通过。
+此前缺少投影的夹具问题已通过生产 scheduler lifespan 与真实 overview 就绪请求修正。
+当前待验证假设是 SQLite WAL 快照升级写事务冲突，不能仅凭 503 推断原因。
+
+本组检查 Platform/Workspace overview、assistant、approvals、Identity preferences 和 Workspace
+deployment-summary 共八个入口。它们均在同一事务读取授权/投影后写安全审计，assistant 还写
+查询投影，preferences 可能创建本人偏好。计划在首次读之前取得写事务，与已有 preference
+PATCH 和 scheduler 使用相同 BEGIN IMMEDIATE 合同；不把审计拆到另一事务，不重试助手命令，
+不修改 DTO、权限、Cookie、迁移、投影刷新或未知错误的失败关闭行为。
+
+### 第一轮自审：事务、授权与一致性
+
+- 读取结果与其审计必须一起提交。吞掉审计错误或单独补写会产生无审计成功，不能用于修复。
+- WAL reader 在其他连接提交后不能升级为 writer，busy_timeout 不能使旧快照重新有效。
+  在读取授权之前预留 writer 可避免此类升级，等待后再读取当前权限和投影。
+- 八个入口使用相同读后写模式，不能只修首页而留下助手、审批和偏好同类缺陷。
+- 事务仍只进行本地授权、索引查询和有界审计，不新增网络等待；PostgreSQL 继续由现有 DB
+  adapter 翻译事务命令，不新增锁协议。批次性能验证仍需评估 SQLite writer 排队代价。
+
+### 第二轮自审：反证与测试真实性
+
+- 先在真实 SQLite WAL 上以两个独立连接建立确定性交错，保留未修复版失败报告，再修改
+  实现。记录 sqlite_errorname，不记录 SQL 参数、Session 或问题正文。
+- 回归逐一执行八个生产 service 函数。既有 API fixture 的身份替身只用于隔离事务问题，
+  不能作为真实鉴权证据；真实身份、生产 scheduler、页面刷新和退出另由 PRD-137 浏览器验证。
+- 竞争写入必须在读请求提交后能够继续，且请求审计恰好一条。无投影和审计失败仍应失败关闭。
+- 旧 fixture 固定末次迁移 0139 已过时；允许从受保护基线复制到独立临时库后运行当前迁移，
+  原基线不得修改。已有报告、失败截图和最新私有诊断不覆盖、不删除。

@@ -1,4 +1,4 @@
-"""Database-authoritative console projections for PRD-145."""
+"""Database-authoritative console projections with atomic read audits for PRD-145."""
 
 from __future__ import annotations
 
@@ -129,7 +129,8 @@ def get_platform_overview(
 ) -> OverviewResponse:
     connection = _connect(config, "platform.unavailable")
     try:
-        connection.execute("BEGIN")
+        # Audited reads are writers; reserve before taking a snapshot that may go stale.
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_platform_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -215,7 +216,7 @@ def get_workspace_overview(
 ) -> OverviewResponse:
     connection = _connect(config, "workspace_session.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_workspace_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -313,7 +314,7 @@ def query_platform_assistant(
     started_ns = time.perf_counter_ns()
     connection = _connect(config, "platform.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_platform_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -417,7 +418,7 @@ def query_workspace_assistant(
     started_ns = time.perf_counter_ns()
     connection = _connect(config, "workspace_session.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_workspace_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -544,7 +545,7 @@ def list_platform_approvals(
     )
     connection = _connect(config, "platform.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_platform_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -654,7 +655,7 @@ def list_workspace_approvals(
     )
     connection = _connect(config, "workspace_session.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_workspace_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -751,7 +752,7 @@ def get_account_preferences(
 ) -> AccountPreferenceResponse:
     connection = _connect(config, "identity.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         identity, _ = authenticate_global_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )
@@ -959,7 +960,7 @@ def get_workspace_deployment_summary(
 ) -> DeploymentSummaryResponse:
     connection = _connect(config, "workspace_session.unavailable")
     try:
-        connection.execute("BEGIN")
+        connection.execute("BEGIN IMMEDIATE")
         actor = authenticate_workspace_session_in_transaction(
             connection, config, session_token=session_token, touch=False
         )

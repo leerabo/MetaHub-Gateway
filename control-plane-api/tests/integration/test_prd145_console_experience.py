@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
+import shutil
+import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -104,12 +107,18 @@ def _insert_platform_owner(connection) -> tuple[str, str]:
 def runtime(tmp_path_factory: pytest.TempPathFactory):
     database = tmp_path_factory.mktemp("prd145-api") / "prd145.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    supplied = os.environ.get("METAHUB_TEST_MIGRATED_BASELINE")
+    if supplied:
+        shutil.copyfile(Path(supplied).resolve(strict=True), database)
+    apply_migrations(database_url)
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         seed = apply_seed_data(database_url)
     config = _config(database_url)
     with closing(connect_database(database_url)) as connection:
+        assert connection.execute(
+            "SELECT max(version) FROM schema_migrations WHERE status='applied'"
+        ).fetchone()[0] == "0142"
         platform_account_id, operator_id = _insert_platform_owner(connection)
         owner = connection.execute(
             """SELECT membership.*,tenant.slug,tenant.name,user.email,user.display_name
@@ -822,6 +831,139 @@ def test_workspace_approval_projection_rejects_revision_regression(runtime) -> N
         assert projected_revision == 2
         assert tuple(rejection) == ("source_revision_regressed", 1)
         assert cursor_revision >= 2
+
+
+@pytest.mark.parametrize(
+    ("function_name", "domain", "action"),
+    [
+        ("get_platform_overview", "platform", "platform.overview.read"),
+        ("get_workspace_overview", "workspace", "workspace.overview.read"),
+        ("query_platform_assistant", "platform", "platform.assistant.query"),
+        ("query_workspace_assistant", "workspace", "workspace.assistant.query"),
+        ("list_platform_approvals", "platform", "platform.approvals.read"),
+        ("list_workspace_approvals", "workspace", "workspace.approvals.read"),
+        ("get_account_preferences", "identity", "identity.preferences.read"),
+        (
+            "get_workspace_deployment_summary",
+            "workspace",
+            "workspace.deployment_summary.read",
+        ),
+    ],
+)
+def test_console_reads_serialize_audit_with_competing_writer(
+    monkeypatch, runtime, record_property, function_name, domain, action
+) -> None:
+    config = runtime["config"]
+    with closing(connect_database(config.database_url)) as connection:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+
+    writer_outcomes = []
+
+    def competing_write():
+        with closing(connect_database(config.database_url)) as writer:
+            writer.execute("PRAGMA busy_timeout=0")
+            try:
+                writer.execute("BEGIN IMMEDIATE")
+                assert writer.execute(
+                    "UPDATE console_experience_scheduler_state "
+                    "SET attempt_count=attempt_count+1 WHERE worker_kind='reconciliation'"
+                ).rowcount == 1
+                writer.commit()
+                return "committed"
+            except sqlite3.OperationalError as error:
+                assert error.sqlite_errorname == "SQLITE_BUSY"
+                writer.rollback()
+                return "blocked"
+
+    def authenticate(connection, _config, **_kwargs):
+        # Establish a real read snapshot before the independent writer attempts its commit.
+        assert connection.execute("SELECT count(*) FROM schema_migrations").fetchone()[0]
+        writer_outcomes.append(competing_write())
+        if domain == "identity":
+            return runtime["identity"], NOW
+        return runtime[domain]
+
+    auth_name = (
+        "authenticate_global_session_in_transaction" if domain == "identity"
+        else f"authenticate_{domain}_session_in_transaction"
+    )
+    monkeypatch.setattr(service, auth_name, authenticate)
+    request_id = "req_prd145_serial_" + function_name
+    arguments = {
+        "session_token": runtime[f"{domain}_token"],
+        "request_id": request_id,
+        "trace_id": "trace_prd145_serial",
+    }
+    if function_name.startswith("query_"):
+        arguments["question"] = "status"
+    if function_name.startswith("list_"):
+        arguments.update(
+            status_filter=None, risk_filter=None, source_domain=None, cursor=None, limit=10
+        )
+    try:
+        result = getattr(service, function_name)(config, **arguments)
+    except ApiError as error:
+        record_property("database_failure", getattr(error.__context__, "sqlite_errorname", "none"))
+        raise
+    assert result.request_id == request_id
+    assert writer_outcomes == ["blocked"]
+    assert competing_write() == "committed"
+    with closing(connect_database(config.database_url)) as connection:
+        rows = connection.execute(
+            "SELECT action_code FROM console_experience_read_audits WHERE request_id=?",
+            (request_id,),
+        ).fetchall()
+        assert [row[0] for row in rows] == [action]
+    record_property("writer_resumed_after_request_commit", True)
+
+
+@pytest.mark.parametrize("domain", ["platform", "workspace"])
+def test_assistant_audit_failure_rolls_back_query_and_allows_recovery(
+    monkeypatch, runtime, domain
+) -> None:
+    config = runtime["config"]
+    monkeypatch.setattr(
+        service,
+        f"authenticate_{domain}_session_in_transaction",
+        lambda _connection, _config, **_kwargs: runtime[domain],
+    )
+    request_id = "req_prd145_atomic_" + domain
+    function = getattr(service, f"query_{domain}_assistant")
+    arguments = {
+        "session_token": runtime[f"{domain}_token"],
+        "question": "status",
+        "request_id": request_id,
+        "trace_id": "trace_prd145_atomic",
+    }
+
+    def failed_audit(*_args, **_kwargs):
+        raise sqlite3.OperationalError("test_audit_write_failure")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(service, "_write_read_audit", failed_audit)
+        with pytest.raises(ApiError) as failure:
+            function(config, **arguments)
+        expected = (
+            "platform.unavailable" if domain == "platform" else "workspace_session.unavailable"
+        )
+        assert failure.value.code == expected
+    with closing(connect_database(config.database_url)) as connection:
+        for table in (
+            f"{domain}_assistant_query_projections",
+            "console_experience_read_audits",
+        ):
+            assert connection.execute(
+                f"SELECT count(*) FROM {table} WHERE request_id=?", (request_id,)
+            ).fetchone()[0] == 0
+    assert function(config, **arguments).request_id == request_id
+    with closing(connect_database(config.database_url)) as connection:
+        for table in (
+            f"{domain}_assistant_query_projections",
+            "console_experience_read_audits",
+        ):
+            assert connection.execute(
+                f"SELECT count(*) FROM {table} WHERE request_id=?", (request_id,)
+            ).fetchone()[0] == 1
 
 
 def test_poison_outbox_persists_failed_attempt(runtime) -> None:
