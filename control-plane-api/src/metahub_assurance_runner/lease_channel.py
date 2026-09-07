@@ -7,6 +7,7 @@ supervisor's verified exact-container attachment, never a guest-chosen address.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import secrets
@@ -22,6 +23,8 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 MAX_FRAME_BYTES = 4096
 IO_TIMEOUT_SECONDS = 10
 GRANT_MILLISECONDS = 1000
+MAX_REPORT_BYTES = 262_144
+REPORT_CHUNK_BYTES = 1024
 
 
 def _nonzero(value):
@@ -69,6 +72,19 @@ class Finish(Check):
     report_sha256: Digest
 
 
+class ReportChunk(Check):
+    kind: Literal["lease.report_chunk"] = "lease.report_chunk"
+    report_sha256: Digest
+    total_bytes: int = Field(ge=1, le=MAX_REPORT_BYTES)
+    chunk_index: int = Field(ge=0, lt=MAX_REPORT_BYTES // REPORT_CHUNK_BYTES)
+    content_base64: str = Field(
+        min_length=4,
+        max_length=1368,
+        pattern=r"^[A-Za-z0-9+/]+={0,2}$",
+        repr=False,
+    )
+
+
 class Decision(FrameModel):
     kind: Literal["lease.decision"] = "lease.decision"
     binding_sha256: Digest
@@ -79,7 +95,7 @@ class Decision(FrameModel):
     expires_at: AwareDatetime
 
 
-Frame = Annotated[Hello | Check | Finish | Decision, Field(discriminator="kind")]
+Frame = Annotated[Hello | Check | Finish | ReportChunk | Decision, Field(discriminator="kind")]
 _FRAME_ADAPTER = TypeAdapter(Frame)
 
 
@@ -185,7 +201,26 @@ class GuestLease:
         self.close()
         return result
 
-    async def _exchange(self, report_sha256):
+    async def publish(self, content: bytes) -> bool:
+        if type(content) is not bytes or not 0 < len(content) <= MAX_REPORT_BYTES:
+            self.close()
+            return False
+        digest = hashlib.sha256(content).hexdigest()
+        for offset in range(0, len(content), REPORT_CHUNK_BYTES):
+            if not await self._exchange(
+                digest,
+                chunk={
+                    "total_bytes": len(content),
+                    "chunk_index": offset // REPORT_CHUNK_BYTES,
+                    "content_base64": base64.b64encode(
+                        content[offset : offset + REPORT_CHUNK_BYTES]
+                    ).decode("ascii"),
+                },
+            ):
+                return False
+        return await self.finish(digest)
+
+    async def _exchange(self, report_sha256, *, chunk=None):
         if self._fenced or self._busy:
             self.close()
             return False
@@ -201,14 +236,12 @@ class GuestLease:
                 sequence=self._sequence,
                 challenge=secrets.token_hex(32),
             )
-            message = (
-                Check(**request)
-                if report_sha256 is None
-                else Finish(
-                    **request,
-                    report_sha256=report_sha256,
-                )
-            )
+            if chunk is not None:
+                message = ReportChunk(**request, report_sha256=report_sha256, **chunk)
+            elif report_sha256 is None:
+                message = Check(**request)
+            else:
+                message = Finish(**request, report_sha256=report_sha256)
             started = datetime.now(UTC)
             async with asyncio.timeout(min(IO_TIMEOUT_SECONDS, remaining)):
                 await self.transport.send(encode_frame(message))
@@ -243,7 +276,10 @@ class GuestLease:
 class LeaseSessionResult:
     checks_permitted: int
     report_sha256: str | None
-    reason_code: Literal["report_announced", "lease_revoked", "channel_unavailable"]
+    reason_code: Literal[
+        "report_announced", "report_received", "lease_revoked", "channel_unavailable"
+    ]
+    report_bytes: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(slots=True, repr=False)
@@ -270,6 +306,10 @@ class SupervisorLeaseSession:
         self._attempted = True
         permitted = 0
         sequence = 0
+        report = bytearray()
+        report_digest = None
+        report_size = None
+        chunk_index = 0
         try:
             remaining = (self.binding.deadline_at - datetime.now(UTC)).total_seconds()
             if not 0 < remaining <= 14_400:
@@ -283,12 +323,39 @@ class SupervisorLeaseSession:
                     async with asyncio.timeout(IO_TIMEOUT_SECONDS):
                         request = decode_frame(await self.transport.receive())
                         if (
-                            not isinstance(request, (Check, Finish))
+                            not isinstance(request, (Check, Finish, ReportChunk))
                             or request.binding_sha256 != self.binding.digest()
                             or request.sequence != sequence + 1
                         ):
                             raise LeaseChannelError("lease_channel.request_mismatch")
                         sequence = request.sequence
+                        if isinstance(request, ReportChunk):
+                            if report_digest is None:
+                                report_digest, report_size = (
+                                    request.report_sha256,
+                                    request.total_bytes,
+                                )
+                            decoded = base64.b64decode(request.content_base64, validate=True)
+                            if (
+                                request.report_sha256 != report_digest
+                                or request.total_bytes != report_size
+                                or request.chunk_index != chunk_index
+                                or base64.b64encode(decoded).decode("ascii")
+                                != request.content_base64
+                                or len(decoded)
+                                != min(REPORT_CHUNK_BYTES, report_size - len(report))
+                                or not decoded
+                            ):
+                                raise LeaseChannelError("lease_channel.report_mismatch")
+                            report.extend(decoded)
+                            chunk_index += 1
+                        elif isinstance(request, Finish) and report_digest is not None:
+                            if (
+                                len(report) != report_size
+                                or request.report_sha256 != report_digest
+                                or hashlib.sha256(report).hexdigest() != report_digest
+                            ):
+                                raise LeaseChannelError("lease_channel.report_mismatch")
                         allowed = await self.check_lease() is True
                         now = datetime.now(UTC)
                         allowed = allowed and not self._fenced and now < self.binding.deadline_at
@@ -310,7 +377,10 @@ class SupervisorLeaseSession:
                         return LeaseSessionResult(permitted, None, "lease_revoked")
                     if isinstance(request, Finish):
                         return LeaseSessionResult(
-                            permitted, request.report_sha256, "report_announced"
+                            permitted,
+                            request.report_sha256,
+                            "report_received" if report_digest is not None else "report_announced",
+                            bytes(report) if report_digest is not None else None,
                         )
                     permitted += 1
         except asyncio.CancelledError:

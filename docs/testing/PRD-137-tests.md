@@ -223,3 +223,39 @@ fencing 和独占 Docker attach。SDK 解复用限制底层单次读取并丢弃
 `prd-137-lease-channel-sensitive-audit.json`，只覆盖本条精确暂存文件与上述六份原始测试证据。
 共享 SQLite 基线未变。当前完整 guest 模块/镜像、真实构建度量、Control 与独立 supervisor 的认证
 通道、剩余五场景、全 owner registry 及真实签名回执仍待接齐，不能将本轮管道合同用于 G6/G8 放行。
+
+## 2026-09-07 固定 Guest、HTTPS 与报告原文
+
+第 14 节设计与两轮自审先于编码。本轮新增 Linux 固定入口、完整 Control app 的私有 SQLite/HTTPS
+执行配置、非生产验证码交付、基线副本、临时证书和镜像构建配方。请求不能指定 URL、命令或数据库。
+实际镜像尚未构建，Docker/Podman 命令仍不存在，不能把配方或 Windows 子进程记作容器部署成功。
+
+报告最多 256 KiB，分为最多 256 块，每块 1 KiB 原文；每块与最终确认均复查许可，验证序号、块序号、
+总长度、规范 Base64 和 SHA256。原文只在完整且最终许可通过时返回，repr 不含块正文或报告原文。
+`report_received` 仅说明已收到对端字节，不证明内容真实、执行通过、清理或签名。旧 digest-only 的
+`report_announced` 继续明确不含原文。
+
+- `guest-report-r1-junit.xml`：JUnit 记录 63 tests、2 errors、0 failures；超长测试参数被 pytest
+  用作名称，触发 Windows 的 32767 字符环境变量限制，含 setup/teardown 错误。改用固定短 ID。
+- `guest-runtime-r2-junit.xml`：64 通过、1 失败，51.721 秒。真实进程执行结束后，SQLite idle pool
+  持有文件，私有目录删除失败；runner 因此没有回传报告，未忽略清理错误。
+- `guest-runtime-r3-junit.xml`：关闭该 guest 内的空闲 SQLite/数据库池后，7 个边界与 2 个真实进程
+  用例通过，共 9/9，50.613 秒。基线只读哈希和私有目录为空均验证。
+- `guest-final-r4-junit.xml`：175/175、0 跳过，78.559 秒。包含 18 报告协议、7 guest 边界、45
+  许可协议、9 Docker 流、88 容器生命周期、5 本地管道及 3 真实 guest 进程用例。pytest 对现有
+  xunit2 配置下的 record_property 给出兼容性警告，原始属性仍保留；不宣称外部 JUnit XSD 验证。
+
+真实 guest 用例通过独立 Windows 子进程调用相同 run_guest/execute_workload，不替换应用鉴权、
+业务路由或 HTTP 传输。应用是完整 metahub_control.app，客户端验证本次临时证书并访问真实 loopback
+TLS socket。成功运行含 10 个有序结果：已实现 5 场景 passed、59 检查点；其余 5 场景 error，另有
+13 条创建观察。完整脱敏报告保存在本次 JUnit property，隔离/清理证明和全 owner 覆盖均为 false。
+
+另外两用例覆盖启动前撤权，以及只读观察到本次 registration_intents 实际新增后撤权；均无报告，
+基线未变且私有目录清空。后一用例不替换产品数据访问，仅以本测试副本中的创建事实决定撤权时机。
+启动阻塞工作取消时先等待该线程结束再清理其目录，硬进程期限仍由 supervisor 持有，不能假设取消
+asyncio.to_thread 会终止底层线程。Linux stdio 入口、实际 Docker 镜像构建和资源隔离仍需原生验证。
+
+本轮静态检查与独立敏感审计为 `prd-137-guest-runtime-sensitive-audit.json`，仅覆盖本条暂存文件和
+上述四份成功/失败证据。未修改数据库迁移、生产认证、公共 DTO 或前端，因此没有重复批次全量回归。
+真实构建度量、远程 Control 认证、剩余场景及全 owner、fixture 与容器清理回执、签名和正式归档端到端
+仍待接齐，G6/G8 未通过。本轮临时目录删除只证明这些本地测试目录消失，不是正式租户数据清理验收。

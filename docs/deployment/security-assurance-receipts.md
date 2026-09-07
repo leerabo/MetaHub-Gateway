@@ -98,7 +98,23 @@ cleanup 返回结构化观察，不是签名回执，也不是全部业务 fixtu
 的受认证远程许可通道尚未接入；测试中本地进程间调用的 AssuranceLease 不能作为该网络部署的替代。
 `report_announced` 仅说明对端发来报告摘要，不说明已读到报告、执行通过、签名有效或清理完成。
 
+固定入口现已实现于 `metahub_assurance_runner.guest`，构建配方为
+`infra/docker/assurance-guest.Dockerfile`。它在镜像构建时生成独立合成基线，不复制工作站数据库；
+运行时只在私有 tmpfs 副本上应用增量。完整 Control app 仅监听 guest 内 loopback 的 HTTPS，使用
+本次临时证书和真实验证/登录；客户端必须验证该证书，禁止代理继承。此配置明确为 SQLite，验证码
+使用非生产 test_capture，不能声称 PostgreSQL、SMTP、外部存储或全 owner 已验收。
+
+guest 清除继承配置，在空的私有工作目录装配应用。stdout 只保留协议；阻塞启动期间仍复查许可，
+取消线程任务不能当成底层线程退出。正常停止 API 后关闭本 guest 的空闲数据库池，再清理私有目录；
+失败时不回传报告。supervisor 在所有失败路径仍须执行自己的 exact-ID 容器清理，不能信任 guest
+自身的目录删除等同于宿主资源已释放。
+
+`GuestLease.publish` 在退出前分块传回报告，避免依赖容器停止后仍存在的 tmpfs。报告上限 256 KiB，
+每块最多 1 KiB 原文，仍使用 4 KiB 长度帧；每块和最终确认均复查许可。supervisor 检查连续块序号、
+总长度、规范编码及最终 SHA256 后返回 `report_received` 与隐藏于 repr 的 report_bytes。
+这只提供报告传输完整性，不等于内容验证、攻击执行、签名或清理证明，不可直接交给现有正式验签入口。
+
 真实 worker 的无生产权限隔离部署、镜像/代码/迁移/合同度量、全部固定攻击场景、远程短租约传输、
-全 owner fixture 创建与 exact cleanup 仍待完整接线和实测。固定 guest 入口的实际模块与镜像尚未
-交付，当前不能独立运行完整 worker。数据库原文归档须随实际 runner 一并做部署验证。
+全 owner fixture 创建与 exact cleanup 仍待完整接线和实测。当前仅已验证本地进程和真实 TLS 执行，
+尚未构建或启动上述镜像，也未验证 Linux stdio 入口。数据库原文归档须随实际 runner 一并做部署验证。
 只有这些证据齐全后，才可把签名结果用于真实安全验收；目前不能解除 G6/G8。
