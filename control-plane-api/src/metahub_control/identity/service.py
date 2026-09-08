@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_columns, table_exists
 from metahub_shared.db.security import hash_password, hash_password_argon2id, verify_password
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
@@ -246,11 +247,8 @@ def project_platform_access(config: AppConfig, *, session_token: str) -> bool:
     try:
         now = _utcnow()
         identity = _authenticate(connection, config, session_token, now, touch=True)
-        capability = connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='platform_operators'"
-        ).fetchone()
         available = False
-        if capability is not None:
+        if table_exists(connection, "platform_operators"):
             available = (
                 connection.execute(
                     """
@@ -621,13 +619,7 @@ def _account_by_id(connection: sqlite3.Connection, account_id: str) -> sqlite3.R
 def _recovery_target(
     connection: sqlite3.Connection, *, account_id: str, workspace_id: str
 ) -> sqlite3.Row | None:
-    if (
-        connection.execute(
-            """SELECT 1 FROM sqlite_schema
-                 WHERE type='table' AND name='enterprise_identity_session_grants'"""
-        ).fetchone()
-        is None
-    ):
+    if not table_exists(connection, "enterprise_identity_session_grants"):
         return None
     return connection.execute(
         """SELECT policy.workspace_id,policy.tenant_id
@@ -1050,10 +1042,7 @@ def _account_summary(connection: sqlite3.Connection, row: sqlite3.Row) -> Global
 def _mfa_configured(
     connection: sqlite3.Connection, account_id: str, legacy_state: str
 ) -> bool:
-    capability = connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='account_mfa_factors'"
-    ).fetchone()
-    if capability is None:
+    if not table_exists(connection, "account_mfa_factors"):
         return legacy_state != "not_enrolled"
     return connection.execute(
         "SELECT 1 FROM account_mfa_factors WHERE account_id=? AND status='active'",
@@ -1062,15 +1051,11 @@ def _mfa_configured(
 
 
 def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (table,)
-    ).fetchone() is not None
+    return table_exists(connection, table)
 
 
 def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM pragma_table_info(?) WHERE name=?", (table, column)
-    ).fetchone() is not None
+    return column in table_columns(connection, table)
 
 
 def _session_summary(row: sqlite3.Row, *, current_session_id: str) -> GlobalSessionSummary:

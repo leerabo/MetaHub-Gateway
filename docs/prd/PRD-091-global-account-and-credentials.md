@@ -290,3 +290,19 @@ localStorage/sessionStorage 不得出现 Token 或 tenant 上下文。
   独占一个 handle，归还前强制 rollback 并恢复 query-only、read-uncommitted、FK 和 busy-timeout，
   并发溢出直接创建独立连接而不阻塞事件循环。真实 loopback HTTP 实测 warm 登录 p95
   279.684 ms、Session 校验 p95 21.898 ms。
+
+## 2026-09-08 Identity/Workspace 原生能力发现批次
+
+原生注册已通过限流阶段，验证创建真实 GlobalSession 时在 _mfa_configured 查询
+sqlite_schema 失败（SQLSTATE 42P01）。同组复核发现平台入口投影、SSO recovery 能力、
+Session 撤销列探测与 Workspace 初始化也使用 SQLite-only 元数据查询。
+
+第一轮自审：共享 metahub_shared.db.schema.table_exists/table_columns，在当前连接和
+schema 中检查真实表/列，不创建 sqlite_schema 兼容视图、不伪造能力存在、不硬编码角色授权。
+历史 schema 缺失能力时保留原合同，元数据查询故障仍失败关闭；MFA 启用状态继续读取当前
+account_mfa_factors 的 active 行，不能用旧 mfa_state 覆盖已存在的新事实表。
+
+第二轮自审：元数据检查不提交、不回滚、不切换连接；平台 operator、恢复目标及 Session
+撤销操作仍运行原验证与业务 SQL。先成组修复本服务及 Workspace 创建的查询，再运行受影响
+单元、真实 PostgreSQL 注册/验证/建空间冒烟；分别保留 PRD-091/093/147 的记录和提交。
+不以此宣称 MFA/SSO 完整原生流程或 PostgreSQL 并发撤权已通过。

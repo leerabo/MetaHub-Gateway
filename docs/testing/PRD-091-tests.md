@@ -52,3 +52,25 @@
   完整IP/UA、tenant、role和permission未进入禁止载体。
 - 真实浏览器DOM未出现tenant/workspace/issuer/token/account_id/session_id/role/permission，390和
   1280视口无越界，浏览器Console warning/error为0。
+
+## 2026-09-08 原生 schema 能力发现修复
+
+与 Workspace 初始化同批完成两轮自审与编码，本 PRD 独立交付。MFA 当前事实表、平台
+operator、恢复目标和 Session 撤销列的能力探测统一复用 backend-aware schema helper；仍在
+原事务、当前 schema 内查询，不引入兼容视图、缓存授权或改变能力缺失时的历史合同。
+
+独立原始报告位于 `.artifacts/g6-security-20260907/`：
+
+- `prd091-schema-capabilities-r1-junit.xml`：3/3，1.148 秒。
+- `prd091-schema-capabilities-r2-junit.xml`：3/3，1.761 秒；覆盖旧 MFA 投影 fallback、新表
+  active/撤销/其他账号隔离、view 拒绝、列存在性、非法标识符和调用方事务保留。
+- `prd091-schema-capabilities-api-r3-junit.xml`：1/1；实际登录、本人读取、列会话、密码轮换、
+  旧 Session 撤销、登出和旧认证兼容冒烟。沿用原测试真实 KDF，没有替换生产认证。
+- 原生 `g6-page-visits-r4-a81dee8b361a4c2da1549c3de6851bd3-junit.xml` 保留验证阶段
+  sqlite_schema / 42P01 的反例；r5 已推进到 Workspace SQL，r7 的实际注册、验证、登录和
+  空间切换均成功，但在 Project 聚合 SQL / 42803 失败，不能记作整轮原生通过。
+
+受影响 Python 源与单元 Ruff 通过。独立敏感审计由 `091-schema-capabilities` profile 核对
+四个精确暂存文件、原报告、UTF-8、凭据模式和共享基线摘要；审计输出为
+`prd-091-schema-capabilities-sensitive-audit.json`。模式扫描不是独立安全会签。
+未重跑完整 MFA/SSO、浏览器、并发撤权或整批 QA；G6/G7/G8 和全路线图仍未证明完成。
