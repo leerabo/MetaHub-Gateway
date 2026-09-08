@@ -681,3 +681,30 @@ queue-api-r1 因旧 fixture 重复执行全量迁移并已出现两个 setup err
 首个真实新实例已取得 63 个队列，启动期累计 5 次 drop、3 次 backend failure，随后观测未增长；
 不能记成零失败启动。管理助手 outbox 暖句柄临时表冲突已独立归属 PRD-077 修复。
 本轮是发布修复增量，不认定完整可用发布、G6/G8 或长稳完成。
+
+## 2026-09-08 有界批量续租
+
+`211a5bb` 暖容量和 `f7e7486` outbox 临时表修复后，完整实例仍增长到 148 次 drop、
+21 次 backend failure；此前零错误短观察不能覆盖后续失败。采样和私有争用实验支持减少
+逐队列写锁申请，本次在最早 proof 到半程时一次事务续租全部活跃组，每组独立 savepoint。
+公共多队列 helper 共用 CAS，保持组内原子性；数据库故障回滚整批，不发布未提交 proof。
+
+原始报告均在 `.artifacts/g6-security-20260907/`：
+
+- `prd147-batch-red-r1.xml`：9 failed / 1 passed，包含新接口缺失、旧串行续租及改接点的测试失败。
+- `prd147-batch-r2.xml`：错误测试路径，零执行，不计通过。
+- `prd147-batch-r3.xml`：43/43；`r4`：62/62；`r5`：63/63，增加整批数据库异常回滚。
+- `g6-batch-renewal-1e8e03dfd1ff431ab46537acb6322b0b-junit.xml`：2 passed / 1 failed，
+  失败是夹具直接停用受保护 registry 被完整性约束拒绝，未绕过该保护。
+- `g6-batch-renewal-r2-248c5bb1b39245deb550bcbaf1d92052-junit.xml`：原生三项通过。
+- `g6-batch-clock-red-a6026127dcff47cebf3d4772482a49d3-junit.xml`：1 failed，真实持锁超过
+  三秒后，事务开始时间使过期 proof 仍续租成功。改为先取得行锁，再读取数据库墙钟。
+- `g6-batch-final-679d691b95154b779a93cca3a99210b7-junit.xml`：原生四项全部通过，
+  包含失效组隔离、savepoint 原子性、有效组 fence 和锁等待期间过期拒绝。原生实例正常停止。
+- `prd147-batch-runtime-short-r1.json`：36 样本、108 HTTP 检查全部通过，63 队列，
+  drop/backend failure/shutdown timeout 均为零，观测持续刷新。版本是 `889900c` 加批量续租，
+  在最后 PostgreSQL 墙钟增量之前；不是最终版本全业务或 72 小时证据。
+
+真实浏览器：重启后 Cookie 会话恢复，概览和 Provider 状态读取成功；继续点击成员管理则
+触发旧 `/users` Bearer 请求并退出控制台。该业务入口缺口继续修复，不能据短健康检查宣称
+完整可用发布。唯一配置的本地模型端点仍不可用，未关闭 loopback/SSRF 保护或伪造探测成功。

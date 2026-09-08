@@ -9,6 +9,7 @@ import re
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,9 +89,10 @@ def test_coordinator_database_lane_survives_saturated_default_executor(tmp_path)
     asyncio.run(scenario())
 
 
-def _database(tmp_path, scheduler_code: str = "status-publication"):
+def _database(tmp_path, scheduler_code: str | None = "status-publication"):
     database = tmp_path / "scheduler.sqlite3"
-    definition = next(item for item in SCHEDULER_MANIFEST if item.code == scheduler_code)
+    definitions = tuple(item for item in SCHEDULER_MANIFEST
+                        if scheduler_code is None or item.code == scheduler_code)
     connection = sqlite3.connect(database)
     try:
         connection.executescript(
@@ -142,9 +144,9 @@ def _database(tmp_path, scheduler_code: str = "status-publication"):
                  probe_id TEXT PRIMARY KEY
                );"""
         )
-        connection.execute(
+        connection.executemany(
             "INSERT INTO scheduler_registry_entries VALUES(?,1,?)",
-            (definition.code, definition.manifest_digest),
+            [(definition.code, definition.manifest_digest) for definition in definitions],
         )
         connection.executemany(
             "INSERT INTO scheduler_queue_contracts VALUES(?,?,?,?,?,1)",
@@ -156,6 +158,7 @@ def _database(tmp_path, scheduler_code: str = "status-publication"):
                     queue.partition_policy_code,
                     queue.manifest_digest,
                 )
+                for definition in definitions
                 for queue in SCHEDULER_QUEUES_BY_SCHEDULER[definition.code]
             ],
         )
@@ -723,16 +726,150 @@ async def test_expired_context_cleanup_does_not_delay_other_lease_renewals(monke
             partition_code=queue.partition_code, deadline=deadline)
         active[(code, queue.code)] = SimpleNamespace(leases=(lease,))
 
-    def renew(_config, leases, **_kwargs):
-        code = leases[0].scheduler_code
-        events.append(f"renew:{code}")
-        return None if code == "status-publication" else leases
+    def renew(_config, groups, **_kwargs):
+        events.extend(f"renew:{leases[0].scheduler_code}" for leases in groups)
+        return tuple(None if leases[0].scheduler_code == "status-publication" else leases
+                     for leases in groups)
 
     async def stop(_app, _replica, _active, key, _stats):
         events.append(f"stop:{key[0]}")
 
-    monkeypatch.setattr(scheduler_module, "renew_scheduler_leases", renew)
+    monkeypatch.setattr(scheduler_module, "_renew_scheduler_lease_batch", renew, raising=False)
     monkeypatch.setattr(scheduler_module, "_stop_active", stop)
     await scheduler_module._renew_active(app, "test-replica", active,
         scheduler_module._CoordinatorStats(), 15)
     assert events == ["renew:status-publication", "renew:admin-assistant", "stop:status-publication"]
+
+
+@pytest.mark.anyio
+async def test_full_coordinator_renewal_uses_one_write_transaction(tmp_path, monkeypatch):
+    config = _config(_database(tmp_path, None))
+    config.control_background_schedulers_enabled = True
+    config.gateway_placement_enabled = True
+    app = FastAPI()
+    app.state.config = config
+    active = {}
+    for definition in SCHEDULER_MANIFEST:
+        leases = claim_scheduler_leases(config, scheduler_code=definition.code,
+            replica_code="batch-owner", lease_seconds=120)
+        assert leases is not None
+        for lease in leases:
+            active[(lease.scheduler_code, lease.queue_code)] = SimpleNamespace(leases=(lease,))
+    # One due proof triggers a single coalesced round, including later deadlines.
+    first = next(iter(active.values()))
+    first.leases = (replace(first.leases[0], deadline=datetime.now(UTC)),)
+    statements = []
+    original_connect = scheduler_module._connect
+
+    def traced_connect(current_config):
+        connection = original_connect(current_config)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(scheduler_module, "_connect", traced_connect)
+    stats = scheduler_module._CoordinatorStats()
+    await scheduler_module._renew_active(app, "batch-owner", active, stats, 120)
+    assert len(active) == len(SCHEDULER_QUEUE_MANIFEST)
+    assert stats.persisted_count == len(active)
+    assert stats.dropped_count == stats.backend_failure_count == 0
+    assert statements.count("BEGIN IMMEDIATE") == 1
+    assert statements.count("COMMIT") == 1
+    deadlines = [child.leases[0].deadline for child in active.values()]
+    assert (max(deadlines) - min(deadlines)).total_seconds() <= 1
+    await scheduler_module._renew_active(app, "batch-owner", active, stats, 120)
+    assert statements.count("BEGIN IMMEDIATE") == 1
+
+
+@pytest.mark.parametrize("invalid", ["owner", "token", "generation", "expired", "registry", "contract"])
+def test_batch_renewal_isolates_invalid_groups_and_preserves_atomicity(tmp_path, invalid):
+    config = _config(_database(tmp_path, None))
+    config.control_background_schedulers_enabled = True
+    good = claim_scheduler_leases(config, scheduler_code="status-publication",
+        replica_code="batch-owner", lease_seconds=120)
+    bad = claim_scheduler_leases(config, scheduler_code="platform-customer-success",
+        replica_code="batch-owner", lease_seconds=120)
+    assert good and bad and len(bad) == 4
+    connection = sqlite3.connect(config.database_url.removeprefix("sqlite:///"))
+    try:
+        last = bad[-1]
+        if invalid == "registry":
+            bad = tuple(replace(lease, registry_generation=0) for lease in bad)
+        elif invalid == "contract":
+            connection.execute("UPDATE scheduler_registry_entries SET enabled=0 WHERE scheduler_code=?",
+                (last.scheduler_code,))
+        else:
+            assignments = {"owner": "lease_owner_pseudonym='revoked'",
+                "token": "lease_token_hmac='revoked'", "generation": "fencing_generation=99",
+                "expired": "lease_deadline_at='2000-01-01T00:00:00Z'"}
+            connection.execute("UPDATE scheduler_leases SET " + assignments[invalid]
+                + " WHERE scheduler_code=? AND partition_code=?", (last.scheduler_code, last.partition_code))
+        connection.commit()
+        results = scheduler_module._renew_scheduler_lease_batch(config, (bad, good),
+            replica_code="batch-owner", lease_seconds=120)
+        assert results[0] is None or isinstance(results[0], ApiError)
+        assert results[1] is not None and not isinstance(results[1], ApiError)
+        assert connection.execute("SELECT sum(revision) FROM scheduler_leases WHERE scheduler_code=?",
+            (bad[0].scheduler_code,)).fetchone()[0] == len(bad)
+        assert connection.execute("SELECT revision FROM scheduler_leases WHERE scheduler_code=?",
+            (good[0].scheduler_code,)).fetchone()[0] == 2
+    finally:
+        connection.close()
+    if invalid in {"token", "generation", "expired", "registry"}:
+        guarded = connect_database(config.database_url)
+        try:
+            with pytest.raises(ApiError):
+                scheduler_module.require_scheduler_fences(guarded, config, bad)
+        finally:
+            guarded.close()
+
+
+def test_batch_renewal_rejects_duplicate_and_unbounded_proofs(tmp_path):
+    config = _config(_database(tmp_path))
+    leases = claim_scheduler_leases(config, scheduler_code="status-publication",
+        replica_code="batch-owner", lease_seconds=120)
+    for groups in ((leases, leases), ((),), (leases,) * (len(SCHEDULER_QUEUE_MANIFEST) + 1)):
+        with pytest.raises(ApiError) as captured:
+            scheduler_module._renew_scheduler_lease_batch(config, groups, replica_code="batch-owner")
+        assert captured.value.code == "console_migration.contract_not_ready"
+
+
+def test_public_multi_queue_renewal_rolls_back_partial_success(tmp_path):
+    config = _config(_database(tmp_path, "platform-customer-success"))
+    config.control_background_schedulers_enabled = True
+    leases = claim_scheduler_leases(config, scheduler_code="platform-customer-success",
+        replica_code="batch-owner", lease_seconds=120)
+    invalid = leases[:-1] + (replace(leases[-1], token="invalid"),)
+    assert renew_scheduler_leases(config, invalid, replica_code="batch-owner") is None
+    connection = sqlite3.connect(config.database_url.removeprefix("sqlite:///"))
+    try:
+        assert connection.execute("SELECT sum(revision) FROM scheduler_leases").fetchone()[0] == len(leases)
+    finally:
+        connection.close()
+
+
+def test_batch_database_failure_rolls_back_all_renewals(tmp_path, monkeypatch):
+    config = _config(_database(tmp_path, "platform-customer-success"))
+    config.control_background_schedulers_enabled = True
+    leases = claim_scheduler_leases(config, scheduler_code="platform-customer-success",
+        replica_code="batch-owner", lease_seconds=120)
+    original = scheduler_module._renew_leases_in_transaction
+    calls = []
+
+    def fail_second(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("controlled database failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler_module, "_renew_leases_in_transaction", fail_second)
+    with pytest.raises(ApiError) as captured:
+        scheduler_module._renew_scheduler_lease_batch(config, tuple((lease,) for lease in leases),
+            replica_code="batch-owner")
+    assert captured.value.code == "console_migration.dependency_unavailable"
+    connection = sqlite3.connect(config.database_url.removeprefix("sqlite:///"))
+    try:
+        assert connection.execute("SELECT sum(revision) FROM scheduler_leases").fetchone()[0] == len(leases)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.rollback()
+    finally:
+        connection.close()

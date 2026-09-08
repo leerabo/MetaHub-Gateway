@@ -224,29 +224,33 @@ async def _renew_active(
     stats: _CoordinatorStats,
     lease_seconds: float,
 ) -> None:
-    expired = []
-    for key, child in sorted(
+    children = sorted(
         tuple(active.items()),
         key=lambda item: min(lease.deadline for lease in item[1].leases),
-    ):
-        scheduler_code, _queue_code = key
-        remaining = min(
-            (lease.deadline - datetime.now(UTC)).total_seconds() for lease in child.leases
+    )
+    if not children or min(
+        (lease.deadline - datetime.now(UTC)).total_seconds()
+        for lease in children[0][1].leases
+    ) > lease_seconds / 2:
+        return
+    # Align active deadlines in one writer admission, including not-yet-due queues.
+    try:
+        results = await _coordinator_database_call(
+            app,
+            _renew_scheduler_lease_batch,
+            app.state.config,
+            tuple(child.leases for _key, child in children),
+            replica_code=replica_code,
+            lease_seconds=lease_seconds,
         )
-        if remaining > lease_seconds / 2:
-            continue
-        try:
-            renewed = await _coordinator_database_call(
-                app,
-                renew_scheduler_leases,
-                app.state.config,
-                child.leases,
-                replica_code=replica_code,
-                lease_seconds=lease_seconds,
-            )
-        except ApiError as exc:
+    except ApiError as exc:
+        results = (exc,) * len(children)
+    expired = []
+    for (key, child), renewed in zip(children, results, strict=True):
+        scheduler_code, _queue_code = key
+        if isinstance(renewed, ApiError):
             stats.backend_failure_count += 1
-            _warning(scheduler_code, exc.code)
+            _warning(scheduler_code, renewed.code)
             renewed = None
         if renewed is None:
             stats.dropped_count += 1
@@ -511,47 +515,15 @@ def renew_scheduler_leases(
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        registry_generation = _validate_registry(connection, definition)
-        _validate_queue_contracts(connection, scheduler_code)
-        if any(registry_generation != lease.registry_generation for lease in leases):
+        renewed = _renew_leases_in_transaction(
+            connection, config, leases, replica_code=replica_code,
+            lease_seconds=lease_seconds,
+        )
+        if renewed is None:
             connection.rollback()
             return None
-        now = _database_now(connection)
-        deadline = now + timedelta(seconds=max(3.0, lease_seconds))
-        for lease in leases:
-            updated = connection.execute(
-                """UPDATE scheduler_leases SET lease_deadline_at=?,revision=revision+1,
-                     updated_at=?
-                   WHERE scheduler_code=? AND partition_code=?
-                     AND lease_owner_pseudonym=? AND fencing_generation=?
-                     AND lease_token_hmac=? AND lease_deadline_at>?""",
-                (
-                    _db_time(deadline),
-                    _db_time(now),
-                    lease.scheduler_code,
-                    lease.partition_code,
-                    _secret_hmac(config, "replica", replica_code),
-                    lease.generation,
-                    _secret_hmac(config, "lease", lease.token),
-                    _db_time(now),
-                ),
-            ).rowcount
-            if updated != 1:
-                connection.rollback()
-                return None
         connection.commit()
-        return tuple(
-            SchedulerLeaseProof(
-                scheduler_code=lease.scheduler_code,
-                queue_code=lease.queue_code,
-                partition_code=lease.partition_code,
-                token=lease.token,
-                generation=lease.generation,
-                registry_generation=lease.registry_generation,
-                deadline=deadline,
-            )
-            for lease in leases
-        )
+        return renewed
     except ApiError:
         _rollback(connection)
         raise
@@ -560,6 +532,114 @@ def renew_scheduler_leases(
         raise ApiError("console_migration.dependency_unavailable") from None
     finally:
         connection.close()
+
+
+def _renew_scheduler_lease_batch(
+    config: AppConfig,
+    groups: tuple[tuple[SchedulerLeaseProof, ...], ...],
+    *,
+    replica_code: str,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+) -> tuple[tuple[SchedulerLeaseProof, ...] | ApiError | None, ...]:
+    if not groups:
+        return ()
+    count = sum(len(leases) for leases in groups)
+    partitions = {(lease.scheduler_code, lease.partition_code)
+                  for leases in groups for lease in leases}
+    if (len(groups) > len(SCHEDULER_QUEUES_BY_CODE)
+        or any(not leases for leases in groups)
+        or count > len(SCHEDULER_QUEUES_BY_CODE) or len(partitions) != count):
+        raise ApiError("console_migration.contract_not_ready")
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        results = []
+        for leases in groups:
+            connection.execute("SAVEPOINT scheduler_renew_group")
+            try:
+                renewed = _renew_leases_in_transaction(
+                    connection, config, leases, replica_code=replica_code,
+                    lease_seconds=lease_seconds,
+                )
+            except ApiError as exc:
+                renewed = exc
+            if renewed is None or isinstance(renewed, ApiError):
+                connection.execute("ROLLBACK TO SAVEPOINT scheduler_renew_group")
+            connection.execute("RELEASE SAVEPOINT scheduler_renew_group")
+            results.append(renewed)
+        connection.commit()
+        return tuple(results)
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
+        _rollback(connection)
+        raise ApiError("console_migration.dependency_unavailable") from None
+    finally:
+        connection.close()
+
+
+def _renew_leases_in_transaction(
+    connection,
+    config: AppConfig,
+    leases: tuple[SchedulerLeaseProof, ...],
+    *,
+    replica_code: str,
+    lease_seconds: float,
+) -> tuple[SchedulerLeaseProof, ...] | None:
+    scheduler_code = _lease_scheduler_code(leases)
+    definition = _definition(scheduler_code)
+    if not _condition_enabled(config, definition.config_condition):
+        return None
+    registry_generation = _validate_registry(connection, definition)
+    _validate_queue_contracts(connection, scheduler_code)
+    if any(registry_generation != lease.registry_generation for lease in leases):
+        return None
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        # Evaluate expiry only after row-lock waits, not against transaction start.
+        for lease in sorted(leases, key=lambda item: item.partition_code):
+            connection.execute(
+                """SELECT 1 FROM scheduler_leases
+                   WHERE scheduler_code=? AND partition_code=? FOR UPDATE""",
+                (lease.scheduler_code, lease.partition_code),
+            ).fetchone()
+    now = _database_now(connection)
+    deadline = now + timedelta(seconds=max(3.0, lease_seconds))
+    for lease in leases:
+        queue = _queue_definition(scheduler_code, lease.queue_code)
+        if queue.partition_code != lease.partition_code:
+            raise ApiError("console_migration.contract_not_ready")
+        updated = connection.execute(
+            """UPDATE scheduler_leases SET lease_deadline_at=?,revision=revision+1,
+                 updated_at=?
+               WHERE scheduler_code=? AND partition_code=?
+                 AND lease_owner_pseudonym=? AND fencing_generation=?
+                 AND lease_token_hmac=? AND lease_deadline_at>?""",
+            (
+                _db_time(deadline),
+                _db_time(now),
+                lease.scheduler_code,
+                lease.partition_code,
+                _secret_hmac(config, "replica", replica_code),
+                lease.generation,
+                _secret_hmac(config, "lease", lease.token),
+                _db_time(now),
+            ),
+        ).rowcount
+        if updated != 1:
+            return None
+    return tuple(
+        SchedulerLeaseProof(
+            scheduler_code=lease.scheduler_code,
+            queue_code=lease.queue_code,
+            partition_code=lease.partition_code,
+            token=lease.token,
+            generation=lease.generation,
+            registry_generation=lease.registry_generation,
+            deadline=deadline,
+        )
+        for lease in leases
+    )
 
 
 def release_scheduler_lease(
@@ -868,7 +948,12 @@ def _db_time(value: datetime) -> str:
 
 
 def _database_now(connection) -> datetime:
-    return _parse_time(connection.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+    statement = (
+        "SELECT clock_timestamp()"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else "SELECT CURRENT_TIMESTAMP"
+    )
+    return _parse_time(connection.execute(statement).fetchone()[0])
 
 
 def _parse_time(value: object) -> datetime:

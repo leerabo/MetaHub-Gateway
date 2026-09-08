@@ -1061,3 +1061,19 @@ Console、商业计费、客户成功、供应商工程、渠道、品牌、增�
 并验证超过上限的归还物理关闭、数据库 LRU 淘汰、活动 owner 不被淘汰及退出关闭全部空闲句柄。
 旧 owner wrapper 保持不可用，guard 仍逐提交读取当前上下文。诊断只支持容量调整，不能代替
 实际完整配置的业务验证或 72 小时稳定性证据。
+
+批量续租复核一：十六句柄与 outbox 临时表修复后，完整实例仍出现租约丢失。采样确认协调线程
+在逐队列 BEGIN IMMEDIATE 等待；私有公平写入实验也失败，因此不加入未经证明的全局写入队列。
+当最早租约进入半程时，在同一有界事务内续租当前全部 context，使期限对齐并只申请一次写锁。
+总 proof 数不超过现有队列 manifest，重复分区拒绝；不延长 15 秒 TTL，不改变业务 fence。
+
+批量续租复核二：每组保留独立 savepoint；同 scheduler 多分区 helper 仍全部成功或全部回滚。
+逐组验证配置、registry generation、队列合同，UPDATE 仍验证 owner、token HMAC、fencing
+generation 和数据库真实到期时间。失效或合同漂移组回滚后继续其他组；数据库故障回滚整批，
+提交前不得发布新 proof。原公开 helper 与批处理共用 CAS 实现。测试覆盖一次写锁、失效隔离、
+组内原子性、撤权及过期提交拒绝，并补原生 PostgreSQL 和完整配置短验证。
+
+原生时间复核：真实 PostgreSQL 持有 lease 行锁超过三秒，原事务使用固定 CURRENT_TIMESTAMP
+在释放锁后仍成功续租已过期 proof。续租组先按分区顺序取得原生行锁，再读取 clock_timestamp；
+SQLite 仍在 BEGIN IMMEDIATE 后读取数据库当前时间。共享 fence 时钟也采用原生墙钟，避免
+长事务把旧时间当作提交许可；不改变 TTL，不用应用进程时钟替代数据库权威时间。

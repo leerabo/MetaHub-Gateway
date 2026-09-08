@@ -6,14 +6,20 @@ import inspect
 import os
 import secrets
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
 import test_postgresql_native_migrations as native_migrations
 import test_prd147_console_migration as contracts
+from metahub_control.console_migration import scheduler as scheduler_module
 from metahub_control.console_migration.scheduler import (
+    _renew_scheduler_lease_batch,
     claim_scheduler_lease,
+    claim_scheduler_leases,
     release_scheduler_lease,
     renew_scheduler_lease,
     require_scheduler_fences,
@@ -24,8 +30,8 @@ from metahub_shared.db import (
     close_database_pools,
     connect_database,
 )
-from metahub_shared.db.schema import foreign_key_violation_count, table_columns, table_exists
 from metahub_shared.db.connection import database_commit_guard
+from metahub_shared.db.schema import foreign_key_violation_count, table_columns, table_exists
 from metahub_shared.runtime.errors import ApiError
 from test_prd147_console_migration import _config
 
@@ -152,6 +158,80 @@ def test_postgresql_seed_and_scheduler_fencing(postgresql_database, monkeypatch)
     assert replacement.generation > renewed.generation
     assert not release_scheduler_lease(config, renewed, replica_code="native-a")
     assert release_scheduler_lease(config, replacement, replica_code="native-b")
+
+
+@pytest.mark.parametrize("invalid", ["token", "expired", "contract"])
+def test_postgresql_batch_renewal_isolates_failure(native_runtime, invalid):
+    config = native_runtime["config"].model_copy(
+        update={"control_background_schedulers_enabled": True})
+    good = claim_scheduler_leases(config, scheduler_code="status-publication",
+        replica_code="batch-owner", lease_seconds=120)
+    bad = claim_scheduler_leases(config, scheduler_code="platform-customer-success",
+        replica_code="batch-owner", lease_seconds=120)
+    assert good and bad and len(bad) == 4
+    with closing(connect_database(config.database_url)) as connection:
+        before = connection.execute("SELECT sum(revision) FROM scheduler_leases WHERE scheduler_code=?",
+            (bad[0].scheduler_code,)).fetchone()[0]
+        if invalid == "token":
+            bad = bad[:-1] + (replace(bad[-1], token="invalid"),)
+        elif invalid == "expired":
+            connection.execute("UPDATE scheduler_leases SET lease_deadline_at='2000-01-01T00:00:00Z' "
+                "WHERE scheduler_code=? AND partition_code=?", (bad[-1].scheduler_code, bad[-1].partition_code))
+        else:
+            bad = bad[:-1] + (replace(bad[-1], queue_code=good[0].queue_code),)
+        connection.commit()
+    result = _renew_scheduler_lease_batch(config, (bad, good),
+        replica_code="batch-owner", lease_seconds=120)
+    assert result[0] is None or isinstance(result[0], ApiError)
+    assert result[1] is not None and not isinstance(result[1], ApiError)
+    with closing(connect_database(config.database_url)) as connection:
+        assert connection.execute("SELECT sum(revision) FROM scheduler_leases WHERE scheduler_code=?",
+            (bad[0].scheduler_code,)).fetchone()[0] == before
+        require_scheduler_fences(connection, config, result[1])
+        if invalid != "contract":
+            with pytest.raises(ApiError):
+                require_scheduler_fences(connection, config, bad)
+
+
+def test_postgresql_batch_renewal_rejects_expiry_while_waiting_for_row_lock(native_runtime, monkeypatch):
+    config = native_runtime["config"].model_copy(
+        update={"control_background_schedulers_enabled": True})
+    leases = claim_scheduler_leases(config, scheduler_code="status-publication",
+        replica_code="batch-owner", lease_seconds=3)
+    assert leases is not None
+    waiting = threading.Event()
+    original_connect = scheduler_module._connect
+
+    class TracedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def execute(self, sql, *args):
+            if "scheduler_leases" in sql:
+                waiting.set()
+            return self.connection.execute(sql, *args)
+
+    with closing(connect_database(config.database_url)) as blocker:
+        blocker.execute("BEGIN")
+        blocker.execute("SELECT 1 FROM scheduler_leases WHERE scheduler_code=? FOR UPDATE",
+            (leases[0].scheduler_code,))
+        monkeypatch.setattr(scheduler_module, "_connect",
+            lambda current: TracedConnection(original_connect(current)))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_renew_scheduler_lease_batch, config, (leases,),
+                replica_code="batch-owner", lease_seconds=3)
+            try:
+                assert waiting.wait(5)
+                blocker.execute("SELECT pg_sleep(3.2)")
+            finally:
+                blocker.rollback()
+            assert future.result(timeout=10) == (None,)
+    with closing(connect_database(config.database_url)) as connection:
+        assert connection.execute("SELECT revision FROM scheduler_leases WHERE scheduler_code=?",
+            (leases[0].scheduler_code,)).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("method", ["commit", "sql", "context"])
