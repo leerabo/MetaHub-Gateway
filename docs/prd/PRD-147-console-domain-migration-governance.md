@@ -1091,3 +1091,12 @@ CSRF、If-Match revision、后端 can_manage 和 owner/service_account 保护，
 成员交互补充：未改变角色/状态时不发 PATCH，保存按钮默认禁用，改动后启用，恢复原值后禁用；
 提交处理器再次拒绝无变化请求。分页期间总数减少导致当前页为空时显示 0-0，并保留上一页恢复，
 不显示倒置范围。原邀请 dialog 的注释保留在对应实现前，不把它套用于 Membership 列表。
+
+Provider 凭据配置复核一：真实试用发现 `.env` 已有加密主密钥，但 Provider 写入、探测和 Gateway
+解密只查询进程环境，导致保存失败。AppConfig 应显式携带已解析的 Provider 加密主密钥，字段
+禁止 repr/model_dump；全部 Provider 密文读写调用传递同一配置，不把用户 Key 写入 `.env`。
+
+Provider 凭据配置复核二：保持 AES-GCM 格式和旧环境变量兼容；不轮换现有主密钥，不降级明文，
+不跳过 KeyPool、租户、健康、亲和恢复或事务权限。测试覆盖仅文件配置、环境优先、脱敏、错误
+主密钥拒绝，以及真实 Workspace 创建到 Gateway 选择。健康探测与初始化向导也必须使用同一
+配置；验证只用合成凭据，真实 Kimi 凭据仅经本地管理 API 加密入库。

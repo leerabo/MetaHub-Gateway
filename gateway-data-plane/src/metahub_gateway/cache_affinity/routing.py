@@ -471,7 +471,9 @@ def _binding_target_is_selectable(
     try:
         # 亲和升格发生在 Decision 提交前，必须证明旧 Key 真能解密；只看密文前缀会让损坏
         # Credential 把本可成功的其他 endpoint 降格。明文只在当前栈短暂存在且绝不记录。
-        plain_value = decrypt_provider_key(str(credential["encrypted_key"]))
+        plain_value = decrypt_provider_key(
+            str(credential["encrypted_key"]), encryption_secret=config.provider_key_encryption_secret,
+        )
     except ValueError:
         return False
     selectable = bool(plain_value)

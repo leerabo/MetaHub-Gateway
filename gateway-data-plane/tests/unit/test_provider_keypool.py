@@ -385,7 +385,7 @@ def test_provider_key_decrypt_failure_log_omits_credential_id_and_short_prefix(
     insert_provider_key(database_url, route, credential_id, short_secret)
     config = load_app_config("gateway-data-plane")
 
-    def reject_decrypt(_ciphertext: str) -> str:
+    def reject_decrypt(_ciphertext: str, *, encryption_secret: str | None = None) -> str:
         """模拟不可解密托管 Key，异常正文不得进入应用日志。"""
 
         # 测试异常正文刻意含敏感哨兵，用于证明日志不会序列化底层异常。
@@ -425,7 +425,7 @@ def test_affinity_key_decrypt_failure_log_uses_real_request_without_credential(
     config = load_app_config("gateway-data-plane")
     connection = connect_database(database_url)
 
-    def reject_decrypt(_ciphertext: str) -> str:
+    def reject_decrypt(_ciphertext: str, *, encryption_secret: str | None = None) -> str:
         """模拟亲和事务内解密失败，验证日志只消费显式安全上下文。"""
 
         # 亲和事务只允许记录真实链路字段，底层解密异常正文必须留在内存中。
@@ -564,7 +564,7 @@ def test_keypool_snapshot_is_read_only_and_respects_managed_key_boundary(
     config = load_app_config("gateway-data-plane")
     connection = connect_database(database_url)
 
-    def reject_decrypt(_ciphertext: str) -> str:
+    def reject_decrypt(_ciphertext: str, *, encryption_secret: str | None = None) -> str:
         """快照若意外解密立即失败，防止路由资格阶段接触 Provider Key 明文。"""
 
         # 快照合同明确禁止解密，触发此函数即代表敏感信息边界发生回归。

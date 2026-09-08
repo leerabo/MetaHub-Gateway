@@ -546,7 +546,9 @@ def _select_key_in_transaction(
         )
         for row in candidates:
             try:
-                plain_value = decrypt_provider_key(str(row["encrypted_key"]))
+                plain_value = decrypt_provider_key(
+                    str(row["encrypted_key"]), encryption_secret=config.provider_key_encryption_secret,
+                )
             # 单把损坏密文只使该候选失格；日志使用真实 request/trace 但禁止 Credential 标识。
             # 继续尝试同租户同 Provider 的下一把托管 Key，不能回退全局环境 Key。
             except ValueError:
@@ -798,7 +800,9 @@ def _restore_existing_selection(
             # 删除或失格的 Credential 使用同一亲和错误，禁止回退环境变量或另一把 Key。
             raise ApiError("gateway.cache_affinity_unavailable")
         try:
-            plain_value = decrypt_provider_key(str(row["encrypted_key"]))
+            plain_value = decrypt_provider_key(
+                str(row["encrypted_key"]), encryption_secret=config.provider_key_encryption_secret,
+            )
         # 合法格式但认证标签损坏也已在共享解密边界归一为 ValueError；这里只映射固定错误。
         except ValueError:
             # 外层先回滚读取事务，再用独立短事务持久化安全异常；不能在持写锁时另开连接。

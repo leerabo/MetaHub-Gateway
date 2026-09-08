@@ -81,7 +81,7 @@ def _prepare(
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_ALLOWED_PORTS", str(port))
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_PRIVATE_CIDRS", "10.0.0.0/8")
     monkeypatch.setenv("METAHUB_LOCAL_ENDPOINT_ALLOW_LOOPBACK", "true")
-    assert apply_migrations(database_url).applied[-1] == "0089"
+    assert "0089" in apply_migrations(database_url).applied
     seed = apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -486,7 +486,7 @@ async def test_idempotent_replay_precedes_new_token_validation_and_encryption(
         )
         assert created.status_code == 201, created.text
 
-        def encryption_failure(_value: str) -> str:
+        def encryption_failure(_value: str, *, encryption_secret: str | None = None) -> str:
             raise ValueError("test-only encryption failure")
 
         monkeypatch.setattr(local_endpoint_service, "encrypt_provider_key", encryption_failure)

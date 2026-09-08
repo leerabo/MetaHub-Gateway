@@ -137,7 +137,10 @@ def get_workspace_onboarding(
         )
         _require_schema(connection)
         progress = _progress_row(connection, context.workspace_id)
-        evaluation = _evaluate(connection, context.workspace_id, context.tenant_id)
+        evaluation = _evaluate(
+            connection, context.workspace_id, context.tenant_id,
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         connection.commit()
         return _response(evaluation, progress, request_id=request_id, trace_id=trace_id)
     except ApiError:
@@ -184,6 +187,7 @@ def get_legacy_workspace_onboarding(
             connection,
             binding["workspace_id"],
             context.user.tenant_id,
+            encryption_secret=config.provider_key_encryption_secret,
         )
         connection.commit()
         return _response(evaluation, progress, request_id=request_id, trace_id=trace_id)
@@ -240,7 +244,10 @@ def mutate_workspace_onboarding_step(
             request_sha256=request_sha256,
         )
         if replay is not None:
-            evaluation = _evaluate(connection, context.workspace_id, context.tenant_id)
+            evaluation = _evaluate(
+                connection, context.workspace_id, context.tenant_id,
+                encryption_secret=config.provider_key_encryption_secret,
+            )
             progress = _progress_row(connection, context.workspace_id)
             connection.commit()
             return _response(evaluation, progress, request_id=request_id, trace_id=trace_id)
@@ -248,7 +255,10 @@ def mutate_workspace_onboarding_step(
         progress = _progress_row(connection, context.workspace_id)
         if int(progress["revision"]) != expected_revision:
             raise ApiError("onboarding.revision_conflict")
-        current = _evaluate(connection, context.workspace_id, context.tenant_id)
+        current = _evaluate(
+            connection, context.workspace_id, context.tenant_id,
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         _authorize_step_action(context, current, normalized_step, action)
         if action == "confirm" and not _confirmation_candidate_ready(
             connection,
@@ -283,7 +293,10 @@ def mutate_workspace_onboarding_step(
                 _db_time(now),
             ),
         )
-        evaluation = _evaluate(connection, context.workspace_id, context.tenant_id, now=now)
+        evaluation = _evaluate(
+            connection, context.workspace_id, context.tenant_id, now=now,
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         updated = _persist_evaluation(
             connection,
             config,
@@ -348,14 +361,20 @@ def recheck_workspace_onboarding(
             request_sha256=request_sha256,
         )
         if replay is not None:
-            evaluation = _evaluate(connection, context.workspace_id, context.tenant_id)
+            evaluation = _evaluate(
+                connection, context.workspace_id, context.tenant_id,
+                encryption_secret=config.provider_key_encryption_secret,
+            )
             progress = _progress_row(connection, context.workspace_id)
             connection.commit()
             return _response(evaluation, progress, request_id=request_id, trace_id=trace_id)
         progress = _progress_row(connection, context.workspace_id)
         if int(progress["revision"]) != expected_revision:
             raise ApiError("onboarding.revision_conflict")
-        evaluation = _evaluate(connection, context.workspace_id, context.tenant_id)
+        evaluation = _evaluate(
+            connection, context.workspace_id, context.tenant_id,
+            encryption_secret=config.provider_key_encryption_secret,
+        )
         updated = _persist_evaluation(
             connection,
             config,
@@ -393,6 +412,7 @@ def _evaluate(
     tenant_id: str,
     *,
     now: datetime | None = None,
+    encryption_secret: str | None = None,
 ) -> _Evaluation:
     checked_at = now or _utcnow()
     workspace = connection.execute(
@@ -413,7 +433,9 @@ def _evaluate(
 
     profile = _profile_fact(connection, workspace_id, tenant_id, str(workspace["kind"]))
     environment = _environment_fact(connection, workspace_id, tenant_id)
-    provider = _provider_fact(connection, workspace_id, tenant_id)
+    provider = _provider_fact(
+        connection, workspace_id, tenant_id, encryption_secret=encryption_secret,
+    )
     model = _model_fact(connection, workspace_id, tenant_id, provider)
     alias = _alias_fact(connection, workspace_id, tenant_id, environment, model)
     project_application = _project_application_fact(connection, workspace_id, tenant_id)
@@ -572,6 +594,8 @@ def _provider_fact(
     connection: sqlite3.Connection,
     workspace_id: str,
     tenant_id: str,
+    *,
+    encryption_secret: str | None = None,
 ) -> _ResourceFact:
     rows = connection.execute(
         """
@@ -631,7 +655,9 @@ def _provider_fact(
             ):
                 continue
             try:
-                plaintext = decrypt_provider_key(str(credential["encrypted_key"]))
+                plaintext = decrypt_provider_key(
+                    str(credential["encrypted_key"]), encryption_secret=encryption_secret,
+                )
             except ValueError:
                 continue
             if plaintext:

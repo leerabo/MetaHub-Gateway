@@ -381,7 +381,9 @@ def create_provider_key(
         provider_key_id = str(uuid4())
         now = _to_db_time(_utcnow())
         try:
-            encrypted_key = encrypt_provider_key(plain_value)
+            encrypted_key = encrypt_provider_key(
+                plain_value, encryption_secret=config.provider_key_encryption_secret,
+            )
         # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
         except ValueError as exc:
             # 令牌和密钥只允许哈希、指纹或密文参与判断，失败时不能暴露明文或有效性细节。

@@ -747,3 +747,43 @@ failure 与 shutdown timeout 均为零。首个样本仍在启动收敛阶段，
 均为 63；整份严格判定仍为 failed，未重写或以筛掉首个样本的方式冒充完整运行通过。
 最终重启后的真实浏览器再次恢复原 Cookie 会话和成员列表。独立敏感审计覆盖精确暂存内容、
 上述成功及失败原件与受保护基线，不构成完整 G6/G8 或正式 GA 放行。
+
+## 2026-09-08 Kimi 测试服务接入与凭据配置修复
+
+用户提供一次性测试凭据后，官方 `https://api.moonshot.cn/v1` 模型列表与 `kimi-k2.6`
+生成均成功。本地真实 Cookie 管理流程已创建 `kimi_test` Provider、`kimi-test` 模型和开发
+环境的 `kimi-test-chat` 别名，没有修改原有本地模型或创建新的 Virtual Key。
+
+真实保存首次遇到 `provider_key.encryption_failed`：`.env` 被 AppConfig 解析，但 Provider
+加解密仅查进程环境。新增禁止 repr/序列化的配置字段，显式传递到 Provider 创建、本地模型
+凭据、健康探测、普通 KeyPool、亲和选择/恢复/资格，以及初始化向导。保留 AES-GCM 格式与
+既有环境变量兼容，不轮换主密钥，不写明文，不禁用权限、健康或网络安全规则。
+
+- `kimi-key-config-red-r1.xml`：两项预期失败，缺少 Provider 加密配置字段。
+- `kimi-key-config-r2.xml`：3 passed，Control/Gateway 文件配置、环境优先和配置脱敏；真实
+  Workspace 创建后 Gateway 使用配置主密钥解密，错误主密钥拒绝，响应与日志不回显合成秘密。
+- `kimi-key-config-r3.xml`：最终 3 passed，补充真实密文的亲和 Key 选择与 warm 资格校验；
+  复用受保护基线的私有副本，原始基线摘要不变。
+- `kimi-key-regression-r1.xml`：3 passed / 2 failed，普通/亲和解密失败与
+  亲和恢复边界通过；两个 Local Endpoint 测试停于旧 fixture 的最新迁移固定为 0089 断言。
+  改为检查必需迁移 0089 已包含，不退回旧 schema，不省略后续迁移。
+- `kimi-local-endpoint-r2.xml`：补跑 2 passed，真实 Local Endpoint 创建、权限、通用入口
+  绕过拒绝与创建重放在密钥校验/加密之前返回均通过。原失败报告未改写。
+- `kimi-onboarding-r1.xml`：1 passed / 1 deselected，真实初始化链激活及证据丢失重新阻断。
+- `kimi-gateway-compatibility-r1.json`：仅模型列表成功，当时探针偏好的旧模型均不存在，未调用生成。
+- `kimi-gateway-compatibility-r2.json`：官方生成 200，11 输入 / 5 输出 / 16 tokens。
+- `kimi-metahub-call-r1.json`：本地真实 Gateway、既有开发 Virtual Key、别名与托管 KeyPool
+  路径生成 200，11 输入 / 5 输出 / 16 tokens；Provider healthy，真实请求与用量持久化成功。
+- `kimi-metahub-stream-r1.json`：同一路径 SSE 200，结束标记与非空内容已验证，11 输入 /
+  4 输出 / 15 tokens。真实生成合计 47 tokens，不自动重复消费测试额度。
+
+两服务已重启加载修复，旧日志保留在 `.logs/archive-kimi-key-config-20260908-r1/`。真实
+测试凭据仅通过本地 Provider 管理 API 加密入库；没有写入源码、`.env`、探针或报告。模型
+本地价格标记 `test-unpriced-20260908`，未配置真实价目，界面零价不代表上游免费或正式账单。
+前端本轮没有代码变更；目录/别名页曾出现刷新错误，重新加载后可完成配置，这一间歇问题
+仍需单独定位。此次是可用 AI 调用交付，不代表完整目标、全部页面、GA 或 72 小时已完成。
+
+最终受影响用例共 9 个独立场景通过（不重复累计 r2/r3 的相同用例）。新测试和向导文件完整
+Ruff 通过；历史文件保留原有 E501 行宽问题，其余规则通过，修改文件 compileall 与 diff
+检查通过。源码与暂存字节、严格 UTF-8、凭据模式和受保护基线由独立审计脚本核验；另对
+本轮日志、探针和证据执行真实 Key/主密钥精确字节扫描，报告只保存结果，不保存秘密。

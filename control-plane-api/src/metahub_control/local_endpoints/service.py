@@ -116,7 +116,9 @@ def create_local_endpoint(
             token = _normalize_token(token)
             try:
                 encrypted = (
-                    encrypt_provider_key(token),
+                    encrypt_provider_key(
+                        token, encryption_secret=config.provider_key_encryption_secret,
+                    ),
                     secret_fingerprint(token),
                     secret_prefix(token),
                 )

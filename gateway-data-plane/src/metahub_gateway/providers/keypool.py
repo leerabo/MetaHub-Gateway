@@ -345,7 +345,9 @@ def select_provider_key(
             if not encrypted_key.startswith("aesgcm-v1:"):
                 continue
             try:
-                plain_value = decrypt_provider_key(encrypted_key)
+                plain_value = decrypt_provider_key(
+                    encrypted_key, encryption_secret=config.provider_key_encryption_secret,
+                )
             except ValueError:
                 decrypt_failure_count += 1
                 # 日志只保留 Provider/模型和可信链路；Credential 标识、前缀、密文及异常均不写入。

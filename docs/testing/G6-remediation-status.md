@@ -190,3 +190,10 @@ official clients`。未修改 Codex 配置、未向 MetaHub 保存不可用 Key�
 最终本地三服务已重启，18 样本 / 54 HTTP 全部成功，drop/backend failure/shutdown timeout
 均零。首样本为启动中的 62 队列，其余 17 样本为 63；短观察报告严格保留 failed，不抹掉
 启动收敛记录。重启后的真实成员页面已恢复，但模型调用、移动验收和全目标仍未标为完成。
+
+2026-09-08 Kimi 接入补充：用户新提供测试 Key 后，官方推理已验证，且本地 MetaHub 已完成
+非流式与 SSE 两条真实 Gateway 调用。开发别名 `kimi-test-chat` 指向 `kimi-k2.6`，Key 仅在
+现有本地 KeyPool 加密保存。修复了 `.env` 主密钥未传入 Provider 加解密的配置断点，健康
+探测恢复 healthy；三次生成共 47 tokens。由此关闭“没有可用真实 AI 上游”的缺口，不再
+尝试 Codex 专用客户端限制。当前测试模型未定价，不能用本地零成本推断上游账单。页面
+间歇刷新错误、旧 Bearer 业务页迁移、完整交付与移动验收仍需继续，72 小时仍在可用交付后。

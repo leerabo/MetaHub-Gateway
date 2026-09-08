@@ -681,6 +681,7 @@ class AppConfig(BaseModel):
     file_security_max_image_pixels: int = 12_000_000
     file_security_max_total_pixels: int = 50_000_000
     auth_token_secret: str = Field(exclude=True, repr=False)
+    provider_key_encryption_secret: str | None = Field(default=None, exclude=True, repr=False)
     identity_session_secret: str = Field(
         default=DEFAULT_IDENTITY_SESSION_SECRET,
         exclude=True,
@@ -2683,6 +2684,9 @@ def load_app_config(service_name: str) -> AppConfig:
         file_security_max_total_pixels=file_security_max_total_pixels,
         auth_token_secret=auth_token_secret,
         identity_session_secret=identity_session_secret,
+        provider_key_encryption_secret=_raw_optional_value(
+            values, "METAHUB_PROVIDER_KEY_ENCRYPTION_SECRET"
+        ),
         identity_challenge_secret=identity_challenge_secret,
         enterprise_sso_hmac_secret=enterprise_sso_hmac_secret,
         enterprise_sso_encryption_secret=enterprise_sso_encryption_secret,

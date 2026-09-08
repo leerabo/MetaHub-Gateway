@@ -787,7 +787,9 @@ def _perform_probe(
     attempts: list[_Attempt] = []
     for credential in credentials:
         try:
-            plain_key = decrypt_provider_key(credential.encrypted_key)
+            plain_key = decrypt_provider_key(
+                credential.encrypted_key, encryption_secret=config.provider_key_encryption_secret,
+            )
         # 单把密文无法解密只标记该凭据不可用，继续尝试其余 Key。
         except ValueError:
             attempts.append(
