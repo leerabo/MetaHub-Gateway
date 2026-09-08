@@ -8629,6 +8629,33 @@ h3 {
   border-top: 0;
 }
 
+.workspace-members-grid .users-row {
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 0.75fr) 76px;
+}
+
+.workspace-members-grid .user-identity strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.workspace-members-pagination {
+  margin-top: 16px;
+}
+
+@media (max-width: 700px) {
+  .workspace-members-grid .users-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .workspace-members-grid .users-head {
+    display: none;
+  }
+
+  .workspace-members-grid .user-identity {
+    grid-column: 1 / -1;
+  }
+}
+
 .users-head {
   min-height: 42px;
   color: var(--muted);

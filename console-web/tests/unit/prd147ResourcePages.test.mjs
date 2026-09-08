@@ -49,9 +49,10 @@ class Element {
     this.listeners = new Map();
     this.dataset = { environmentId: "env_sample", providerId: "provider_sample", providerKeyId: "pkey_sample",
       virtualKeyId: "vkey_sample", modelId: "model_sample", entryCode: "sample", providerTab: "providers",
-      providerProbe: "provider_sample", providerStatusOffset: "50", modelAliasId: "alias_sample", routingPolicyVersion: "1" };
+      providerProbe: "provider_sample", providerStatusOffset: "50", modelAliasId: "alias_sample", routingPolicyVersion: "1",
+      membershipId: `wmb_${"1".repeat(32)}`, membershipRevision: "4", membershipRole: "admin", membershipStatus: "active" };
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
-      regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5" };
+      regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5", role: "auditor" };
     this.button = { disabled: false };
   }
   addEventListener(event, handler) {
@@ -68,6 +69,7 @@ const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState",
   "currentFileReadOwner", "currentFileWriteOwner", "bindFilesPageInteractions", "submitFileUpload", "loadFilesState",
   "loadAndRenderActiveNavigation", "loadProviderHealthState", "loadProviderStatusState", "runProviderProbe",
   "loadModelAliasesState",
+  "bindWorkspaceMemberInteractions", "loadUsersState",
   "ownProviderStatusVisitAfterRender"];
 const payload = { state: "ok", providers: [{ provider_id: "provider_sample" }], projects: [], applications: [], models: [],
   virtual_keys: [], files: [], next_cursor: null, file: { file_id: "file_sample" }, plain_value: "synthetic-one-time-value",
@@ -77,7 +79,8 @@ const clients = ["createEnvironment", "updateEnvironment", "createProject", "cre
   "preflightCatalogProvider", "createProvider", "updateProvider", "testProviderConnection", "createProviderKey", "updateProviderKey",
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
   "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider",
-  "createModelAlias", "updateModelAlias", "updateFallbackPolicy", "listModelAliases"];
+  "createModelAlias", "updateModelAlias", "updateFallbackPolicy", "listModelAliases",
+  "listWorkspaceMembers", "updateWorkspaceMember"];
 
 function harness(navigation, selector) {
   const element = new Element();
@@ -97,7 +100,8 @@ function harness(navigation, selector) {
     clearRoutingPolicySessionState() {}, clearModelQualityScoreSessionState() {}, experimentPageState: { clear() {} },
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
-    RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),
+    RESOURCE_NAVIGATION_IDS: new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),
+    broadcastConsoleWorkspaceContextInvalidation: () => effects.push("broadcast"),
     resourcePageShellState: shell(navigation), authErrorMessage: () => "Fixed error", isAbortError: isFileAbortError,
     createProviderCatalogIdempotencyKey: () => "console:catalog:synthetic:0001",
     optionalNumber: (value, fallback) => value ? Number(value) : fallback,
@@ -129,7 +133,7 @@ function harness(navigation, selector) {
   const secretStart = source.indexOf('  const dismissSecretButton = document.querySelector(');
   const secretEnd = source.indexOf('  const budgetScopeChainKey = document.querySelector(', secretStart);
   const functions = runInNewContext(`${helpers.map(production).join("\n")}
-    function bindActualResourceHandlers() { ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} }
+    function bindActualResourceHandlers() { bindWorkspaceMemberInteractions(); ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} }
     function bindActualSecretHandlers() { ${source.slice(secretStart, secretEnd)} }
     ({ ${helpers.join(",")}, bindActualResourceHandlers, bindActualSecretHandlers });`, scope);
   Object.assign(scope, functions);
@@ -145,7 +149,25 @@ function harness(navigation, selector) {
   return { scope, functions, element, calls, effects, scheduled, pending, switchOwner };
 }
 
+test("PRD-147 membership save requires an actual change and clears when reverted", async () => {
+  const h = harness("users", "[data-workspace-member-form]");
+  h.functions.bindWorkspaceMemberInteractions();
+  h.element.values = { role: "admin", status: "active" };
+  await h.element.fire("change");
+  assert.equal(h.element.button.disabled, true);
+  await h.element.fire("submit");
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  h.element.values.role = "auditor";
+  await h.element.fire("change");
+  assert.equal(h.element.button.disabled, false);
+  h.element.values.role = "admin";
+  await h.element.fire("change");
+  assert.equal(h.element.button.disabled, true);
+});
+
 const forms = [
+  ["users", "[data-workspace-member-form]", "updateWorkspaceMember"],
   ["model-aliases", "#create-model-alias-form", "createModelAlias"],
   ["model-aliases", "[data-model-alias-status-form]", "updateModelAlias"],
   ["model-aliases", "[data-fallback-policy-form]", "updateFallbackPolicy"],

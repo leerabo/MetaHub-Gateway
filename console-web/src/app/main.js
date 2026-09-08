@@ -601,7 +601,7 @@ import {
   publishPolicySnapshot,
   rollbackPolicySnapshot,
 } from "../lib/policySnapshots.js";
-import { createUser, listUsers, updateUserRole } from "../lib/users.js";
+import { createUser, listWorkspaceMembers, updateUserRole, updateWorkspaceMember } from "../lib/users.js";
 import {
   acceptInvitation,
   captureInvitationRoute,
@@ -764,13 +764,16 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
     else if ([403, 409, 412].includes(error?.status)) void refresh();
   },
 });
-const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
+const RESOURCE_NAVIGATION_IDS = new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
   "model-aliases", "routing-policies", "model-quality-scores", "experiments"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
 }) });
 let consoleLogoutPending = false;
+let workspaceMembersOffset = 0;
+let workspaceMembersFeedback = "";
+let workspaceMembersActionError = null;
 let consoleShellActionError = null;
 let publicBrandingPreview = null;
 let publicBrandingGeneration = 0;
@@ -2144,6 +2147,9 @@ function renderLogin(error, requestId) {
 }
 
 function clearBasicResourceFeedback() {
+  workspaceMembersOffset = 0;
+  workspaceMembersFeedback = "";
+  workspaceMembersActionError = null;
   modelAliasActionError = null;
   modelAliasFeedback = "";
   clearRoutingPolicySessionState();
@@ -2447,6 +2453,7 @@ async function copyInvitationSecret(
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 function bindAuthenticatedEvents(consoleShellState) {
+  bindWorkspaceMemberInteractions();
   bindDeveloperContractDownloads(consoleShellState);
   // PAGE-093 使用独立事件绑定；DOM 不存在或后端导航未授权时该函数立即失败关闭且不发请求。
   bindEnterpriseChatInteractions(consoleShellState);
@@ -11346,31 +11353,67 @@ async function loadTenantOnboardingState() {
  * 执行 控制台主应用 的 `loadUsersState` 辅助逻辑，保持页面状态和后端响应口径一致。
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
+function bindWorkspaceMemberInteractions() {
+  for (const button of document.querySelectorAll("[data-workspace-members-offset], [data-workspace-members-refresh]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.USER_MANAGE], "users");
+    button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      const offset = button.dataset.workspaceMembersOffset;
+      if (offset !== undefined) {
+        const value = Number(offset);
+        if (!Number.isSafeInteger(value) || value < 0) return;
+        workspaceMembersOffset = value;
+      }
+      resourcePageLifecycle.cancelReads();
+      void refresh();
+    });
+  }
+  for (const form of document.querySelectorAll("[data-workspace-member-form]")) {
+    const binding = bindResourceElement(form, [PERMISSIONS.USER_MANAGE], "users");
+    form.addEventListener("change", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
+      const data = new FormData(form);
+      form.querySelector("button[type='submit']").disabled =
+        (data.get("role") === form.dataset.membershipRole && data.get("status") === form.dataset.membershipStatus)
+        || resourcePageLifecycle.blocksReplacement(false);
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
+      const data = new FormData(form);
+      form.querySelector("button[type='submit']").disabled = true;
+      if (data.get("role") === form.dataset.membershipRole && data.get("status") === form.dataset.membershipStatus) {
+        resourcePageLifecycle.finishMutation(operation);
+        return;
+      }
+      workspaceMembersActionError = null;
+      workspaceMembersFeedback = "";
+      try {
+        await resourceMutationRequest(operation, updateWorkspaceMember, {
+          controlApiUrl, membershipId: form.dataset.membershipId,
+          revision: Number(form.dataset.membershipRevision),
+          role: String(data.get("role") ?? ""), status: String(data.get("status") ?? ""),
+        });
+        broadcastConsoleWorkspaceContextInvalidation();
+        workspaceMembersFeedback = "成员已更新";
+        await refreshResourceMutation(operation);
+      } catch (error) {
+        if (handleResourceMutationError(operation, error)) return;
+        workspaceMembersActionError = error;
+        await refreshResourceMutation(operation);
+      }
+    });
+  }
+}
+
 async function loadUsersState(consoleShellState) {
-  // 用户邮箱属于租户 PII，只在后端已确认 PAGE-086 为当前导航时读取，定时刷新不得跨页面预取。
-  if (
-    consoleShellState?.activeNavigationItemId !== "users"
-    || !hasPermission(authSession.context, PERMISSIONS.USER_MANAGE)
-  ) {
-    return null;
-  }
-  try {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    return await listUsers({ controlApiUrl, token: authSession.token });
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+  if (consoleShellState?.activeNavigationItemId !== "users") return null;
+  return loadResourceState("users", [PERMISSIONS.USER_MANAGE],
+    (input) => listWorkspaceMembers({ ...input, offset: workspaceMembersOffset, limit: 20 }),
+    (result) => ({ ...result, kind: "workspace", state: "ok", role: authSession.owner?.role,
+      feedback: workspaceMembersFeedback, actionError: workspaceMembersActionError }),
+    { kind: "workspace" });
 }
 
 function renderCurrentWorkspaceCommercialAccounting(

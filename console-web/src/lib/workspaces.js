@@ -70,8 +70,17 @@ export async function getCurrentWorkspaceSession({ controlApiUrl, signal } = {})
   });
 }
 
-export async function listWorkspaceMemberships({ controlApiUrl, signal } = {}) {
-  return workspaceAccessRequest(controlApiUrl, "/memberships", {
+export async function listWorkspaceMemberships({ controlApiUrl, signal, offset, limit } = {}) {
+  const query = new URLSearchParams();
+  if (offset !== undefined) {
+    if (!Number.isSafeInteger(offset) || offset < 0) invalidClient("offset");
+    query.set("offset", String(offset));
+  }
+  if (limit !== undefined) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) invalidClient("limit");
+    query.set("limit", String(limit));
+  }
+  return workspaceAccessRequest(controlApiUrl, `/memberships${query.size ? `?${query}` : ""}`, {
     responseType: "membershipList",
     signal,
   });

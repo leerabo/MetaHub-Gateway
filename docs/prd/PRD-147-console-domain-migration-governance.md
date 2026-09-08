@@ -1077,3 +1077,17 @@ generation 和数据库真实到期时间。失效或合同漂移组回滚后继
 在释放锁后仍成功续租已过期 proof。续租组先按分区顺序取得原生行锁，再读取 clock_timestamp；
 SQLite 仍在 BEGIN IMMEDIATE 后读取数据库当前时间。共享 fence 时钟也采用原生墙钟，避免
 长事务把旧时间当作提交许可；不改变 TTL，不用应用进程时钟替代数据库权威时间。
+
+成员入口复核一：真实当前 Cookie 会话点击 users 导航仍调用旧 Bearer `/users`，导致错误登出。
+该路由应展示既有 `/memberships` DTO，不把 Workspace 认证接到旧本地账号创建/改角色语义。
+复用 workspaceResourcePage 的 owner、请求代次、离页取消和写入绑定；Membership PATCH 保留
+CSRF、If-Match revision、后端 can_manage 和 owner/service_account 保护，不新增后台 API。
+
+成员入口复核二：列表保留真实 limit/offset/total 分页；角色和启停写入从当前呈现的 membership
+及 revision 创建请求。旧响应、旧 DOM 和旧授权不得回填；权限冲突重新校验。邀请和所有权转移
+链接到已存在的账号页成员流程，不复用含 tenant_id/email 的旧邀请 DTO，不在 Console 伪造密码
+创建用户。保留 legacy users helper 的既有合同，但 Workspace 页面不调用它。
+
+成员交互补充：未改变角色/状态时不发 PATCH，保存按钮默认禁用，改动后启用，恢复原值后禁用；
+提交处理器再次拒绝无变化请求。分页期间总数减少导致当前页为空时显示 0-0，并保留上一页恢复，
+不显示倒置范围。原邀请 dialog 的注释保留在对应实现前，不把它套用于 Membership 列表。

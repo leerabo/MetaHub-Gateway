@@ -708,3 +708,42 @@ queue-api-r1 因旧 fixture 重复执行全量迁移并已出现两个 setup err
 真实浏览器：重启后 Cookie 会话恢复，概览和 Provider 状态读取成功；继续点击成员管理则
 触发旧 `/users` Bearer 请求并退出控制台。该业务入口缺口继续修复，不能据短健康检查宣称
 完整可用发布。唯一配置的本地模型端点仍不可用，未关闭 loopback/SSRF 保护或伪造探测成功。
+
+## 2026-09-08 Workspace 成员入口交付增量
+
+主 Console 成员列表改用既有 Membership Cookie API，保留分页、后端 can_manage、CSRF 和
+If-Match revision。列表和更新进入已有 owner/代次/取消生命周期；旧 DOM、旧响应、跨空间
+迟到结果、重复提交和无变化提交均不能产生有效写入。邀请与所有权管理复用账号页流程。
+
+原始报告位于 `.artifacts/g6-security-20260907/`，各轮范围分开记录：
+
+| 报告 | 结果 | 范围 |
+| --- | --- | --- |
+| `prd147-members-red-r1.xml`、`prd147-members-r2.xml` | 测试语法失败 | 新测试的正则结束括号未转义，不是产品红测 |
+| `prd147-members-r3.xml` | 292 passed | 成员迁移及相关客户端、生命周期合同 |
+| `prd147-members-frontend-r4.xml` | 1830 passed | 无变化按钮增量前的完整前端 |
+| `prd147-members-r5.xml` | passed | 无变化提交及主入口生命周期定向复验 |
+| `prd147-members-frontend-final-r6.xml` | 无完整产物，不计通过 | 无界并发运行有子进程停在启动阶段；中止后用有限并发重跑 |
+| `prd147-members-frontend-final-r7.xml` | 1831 passed | 四并发、每文件 60 秒上界的完整前端；最后空分页增量之前 |
+| `prd147-members-final-r8.xml` | 299 passed | 最终成员、资源页面、legacy users 和 Workspace Access 定向回归，含空分页恢复 |
+| `prd147-members-api-r1.xml` | 3 passed / 7 deselected | 隔离真实 Membership API，角色授权、变更失效及 Cookie/Origin/CSRF |
+| `prd147-batch-members-final-r6.xml` | 63 passed | 调度、事务、最终 PostgreSQL 墙钟代码和此前摘要合同 |
+| `prd147-members-manifest-r8.xml` | 2 passed / 22 deselected | 最终两端前端摘要合同 |
+
+最终生产构建 276 assets、生产表面 262 modules / 276 sources、Console lint 779 files 通过。
+两端最终摘要为 `82d2feca2907d00a3ab6b99e6053a9fa6480378b7e965e94d348b6ec6edae165`。
+源码更新后旧摘要导致的构建拒绝保留为正常漂移门禁，不删除校验。
+
+真实桌面浏览器已验证 Cookie 恢复、两名现有成员显示、默认保存禁用、改字段启用及恢复原值
+再次禁用；没有提交现有成员权限变更。邀请链接实际进入账号页，原成员、邀请及所有权流程可见。
+桌面截图已检查。移动 viewport API 两次设置后实际 DOM 仍为 1265px，不能记作 390px 通过；
+临时标签已关闭、视口覆盖已重置。真实移动验收与完整业务验收仍待完成，不以单元测试冒充。
+
+最终三服务已重启，原日志保存在 `.logs/archive-members-release-20260908-r1/`；短运行结果
+单独记录，不替代完整业务或 72 小时长稳。用户要求的先交付后长稳顺序保持不变。
+
+`prd147-members-runtime-short-r2.json` 的 18 样本 / 54 次 HTTP 全部返回 200，drop、backend
+failure 与 shutdown timeout 均为零。首个样本仍在启动收敛阶段，为 62 队列，随后 17 样本
+均为 63；整份严格判定仍为 failed，未重写或以筛掉首个样本的方式冒充完整运行通过。
+最终重启后的真实浏览器再次恢复原 Cookie 会话和成员列表。独立敏感审计覆盖精确暂存内容、
+上述成功及失败原件与受保护基线，不构成完整 G6/G8 或正式 GA 放行。

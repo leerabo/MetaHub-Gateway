@@ -1,4 +1,24 @@
 import { AuthApiError } from "./auth.js";
+import { IdentityApiError } from "./identity.js";
+import { listWorkspaceMemberships, updateWorkspaceMembership } from "./workspaces.js";
+
+export function listWorkspaceMembers(input) {
+  return workspaceMembersRequest(listWorkspaceMemberships, input);
+}
+
+export function updateWorkspaceMember(input) {
+  return workspaceMembersRequest(updateWorkspaceMembership, input);
+}
+
+async function workspaceMembersRequest(request, input) {
+  try {
+    return await request(input);
+  } catch (error) {
+    if (!(error instanceof IdentityApiError)) throw error;
+    throw new AuthApiError({ status: error.status, code: error.code, message: error.message,
+      requestId: error.requestId, traceId: error.traceId });
+  }
+}
 
 /**
  * 查询当前租户用户列表。
