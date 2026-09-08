@@ -128,3 +128,17 @@ pristine down 仅允许所有 intent/challenge/consent/binding/event 表为空�
 - P1：迟到响应可能在用户离开后重填密码/验证码视图。修正为 AbortController generation、DOM 清理和 Storage 零写入门禁。
 
 两轮修正已写回本设计，编码不得弱化这些边界。
+
+## 2026-09-08 原生数据库注册限流补充自审
+
+PRD-147 的真实 PostgreSQL Cookie 冒烟在注册前置阶段返回 identity.unavailable。安全诊断
+定位为 _consume_rate_limits 的过期清理 DELETE 使用 SQLite rowid，原生库报 SQLSTATE 42703。
+
+第一轮自审（同一事实与可移植性）：只把过期批量删除的外层/子查询键改为既有
+identity_abuse_bucket_id 主键，不改 schema、不映射 PostgreSQL ctid、不创建平行计数器。
+过期谓词、每笔最多 50 条清理及四个 scope 的原子 upsert/RETURNING 保持不变。
+
+第二轮自审（拒绝与回滚）：清理与限流累计仍共享 BEGIN/COMMIT；INSERT 故障须回滚已清理
+记录，超限仍先提交持久封禁再返回 429。用无 rowid 表执行生产 helper，验证三类操作的
+50 条边界、未过期记录保留、计数累计、限流持久化和写失败回滚，再通过真实 PostgreSQL
+注册/验证/建空间链路检验，不用固定或伪造 Session 替代认证。该修复独立记录和提交。

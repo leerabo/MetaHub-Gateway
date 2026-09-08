@@ -1061,8 +1061,9 @@ def _consume_rate_limits(
         expires_at = window_end + _RATE_RETENTION
         connection.execute(
             """
-            DELETE FROM identity_abuse_buckets WHERE rowid IN(
-              SELECT rowid FROM identity_abuse_buckets WHERE expires_at<=? LIMIT 50)
+            DELETE FROM identity_abuse_buckets WHERE identity_abuse_bucket_id IN(
+              SELECT identity_abuse_bucket_id FROM identity_abuse_buckets
+              WHERE expires_at<=? LIMIT 50)
             """,
             (_db_time(now),),
         )

@@ -61,3 +61,30 @@
   正式 GlobalAccount 按 PRD-091 保存已验证邮箱，RegistrationIntent 仍只有认证密文。
 - 真实终态为 GlobalAccount `2`、legacy User `1`，证明注册没有创建 tenant authority；Challenge 状态为
   `(1,superseded),(2,consumed)`，Event 为两次 dispatched 与一次 registered，payload 字段白名单通过。
+
+## 2026-09-08 原生注册限流修复
+
+PostgreSQL 实际 HTTP 注册在持久限流清理处报 SQLSTATE 42703（UndefinedColumn），根因是
+identity_abuse_buckets 查询依赖 SQLite rowid。两处键引用改为既有 identity_abuse_bucket_id，
+不改过期窗口、每笔 50 条清理上限、四维计数、持久封禁和事务边界。
+
+独立证据均位于 .artifacts/g6-security-20260907：
+
+- prd092-abuse-primary-key-red-r1-junit.xml：5 fixture errors；默认 Windows pytest 临时
+  目录权限拒绝，未执行产品断言。随后改用工作区内独立 basetemp，没有改 ACL。
+- prd092-abuse-primary-key-red-r2-junit.xml：4 failed / 1 passed，2.17s。无 rowid 表上
+  注册、验证、重置清理及累计均复现 identity.unavailable；这是查询 helper 反例，不是模拟认证。
+- prd092-abuse-primary-key-r3-junit.xml：5/5，2.02s。三种操作各保留未过期行并分两次清理
+  51 条过期行，四维计数持续累计；INSERT 故障实际进入写语句后回滚删除；第六次超限仍提交
+  attempt_count=6 与 blocked_until，再返回 identity.rate_limited。
+- prd092-abuse-primary-key-api-r4-junit.xml：1/1，59.34s。既有 API 测试验证五次接纳、
+  第六次 429 且 KDF 只调用五次。此测试刻意替换 KDF 计数，不作为真实密码认证证据。
+- g6-page-visits-r3-bfb6cf1a6cae426b834463458115d780-junit.xml：原生库修复前注册 503，
+  安全诊断只含 SQLSTATE 与代码位置，1 error / 2 deselected / 71.06s。
+- g6-page-visits-r4-a81dee8b361a4c2da1549c3de6851bd3-junit.xml：修复后实际注册已进入验证
+  阶段；三项 fixture 在 /identity/verifications 另一处 SQLite-only schema 查询失败，
+  SQLSTATE 42P01，3 errors / 111.35s。因此本记录不声称整条原生身份/Workspace 链路通过。
+
+Ruff 与 diff 检查通过。该限流修复独立于 PRD-147 页面事件提交；原生 Session/MFA 能力发现、
+Workspace 创建和后续页面事件仍由各自批次继续处理。敏感审计核对本次四项源文件、上述六份
+原始报告及保护基线；模式扫描不等于独立安全会签，不修改全产品门禁或 Excel 完成状态。
