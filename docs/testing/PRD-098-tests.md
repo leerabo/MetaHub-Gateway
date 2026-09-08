@@ -60,3 +60,25 @@ SQLite/WAL/SHM、浏览器 profile、截图、Cookie、TOTP 或原始网络正�
 测试凭据只用于本地受控输入，未进入回复、日志、截图、文档或正式证据。
 
 本记录关闭 PRD-098；下一权威需求为 `PRD-099 - 平台计量归集与账单摘要`。
+
+## 2026-09-09 表结构检查修复
+
+以下为本次增量结果，前文为历史记录，不代表当前全目标或原生订阅验收完成。
+证据目录：`.artifacts/g6-security-20260907/`。
+
+- `prd098-schema-units-r1.xml`：11 passed。七表逐项缺失、调用者事务保持、rollback 后重新检查、
+  view/temp 替代拒绝、连接故障拒绝和单条 SQL。
+- `prd147-feedback-native-prd099-projection-r1-d624e232680c4f5b9eb91282950f4ac8.xml`：6 errors，
+  全部在套餐创建前置流程报 `saas_catalog.unavailable`。原生日志定位为 SQLite 专用 catalog 查询。
+- `prd147-feedback-native-prd098-099-schema-r2-8b656eee2a3743c5b0dbe5668d2e1836.xml`：4 passed，
+  其中 PRD-098 两项验证全部必需表的真实 schema 边界、套餐发布与公开 DTO；另两项属于 PRD-099。
+  该轮 229.791 秒，隔离 PostgreSQL 已停止，未修改受保护基线。
+- 套餐发布测试使用受控 PlatformContext，不等于真实平台登录或完整订阅验收。原生
+  `subscription_order_records` 未实现 SQLite 隐含 rowid 的排序语义，该缺口尚未关闭。
+- 本批不修改价格或运行库套餐，不创建历史权益，不新增付费模型调用。
+
+`prd098-099-batch-r1.xml`：19 passed，365.039 秒，包含本条 11 项 schema 测试、套餐订阅完整
+SQLite 流程，以及 PRD-099 关账/调整流程和六项故障回归。定向 Ruff、compileall、diff check 通过。
+本地 Control API 已使用修复代码重启，8001 PID=2172；Gateway=7924、Console=10008 未重启，
+三个服务 readiness 均 200。本轮无新迁移；运行库依然没有套餐或订阅，不宣称商业链路已闭环。
+独立敏感审计：`prd-098-native-schema-sensitive-audit-r1.json`、`prd098-schema-key-audit-r1.json`。

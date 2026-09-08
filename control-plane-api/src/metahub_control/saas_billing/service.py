@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -1306,17 +1307,12 @@ def _require_platform_permission(actor: PlatformContext, permission: str) -> Non
 
 
 def _require_schema(connection: sqlite3.Connection) -> None:
-    count = int(
-        connection.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN(
-              'saas_plan_catalogs','saas_plan_versions','workspace_subscriptions',
-              'subscription_trials','subscription_order_records','entitlement_snapshots',
-              'saas_subscription_events')
-            """
-        ).fetchone()[0]
+    required = (
+        "saas_plan_catalogs", "saas_plan_versions", "workspace_subscriptions",
+        "subscription_trials", "subscription_order_records", "entitlement_snapshots",
+        "saas_subscription_events",
     )
-    if count != 7:
+    if not tables_exist(connection, required):
         raise ApiError("saas_catalog.unavailable")
 
 
