@@ -185,3 +185,29 @@ Ruff 与 `git diff --check` 通过。独立敏感审计
 报告的严格 UTF-8、高置信凭据模式、SHA-256、暂存字节和原基线哈希。模式扫描不等于独立安全
 会签。该提交不含 PRD-146 主入口、PRD-137 夹具、用户未跟踪 PRD-101..105 或 outputs。
 Excel 保持只读，G6/G7/G8 未通过，PRD-148 不启动。
+
+## 2026-09-08 发布文案与维护节奏
+
+十八类平台/Workspace 指标补齐实际含义的中文标签、记录状态和修订号，未知机器码使用
+受控兜底。空间成员、探测、用量均保持真实记录数，不变成任务完成数、健康率或费用。
+完整 reconciliation 检查保留，成功后 next_attempt_at 为五分钟；业务工作仍为一至两秒，
+失败重试、CAS、租约期限与提交 guard 不变。
+
+`.artifacts/g6-security-20260907/` 中 labels-red-r1 两项失败；labels-r2 9/9，cadence-r2
+38/38（其中四项维护/业务节奏及完整检查，34 项调度回归），console-regression-r3 全前端
+1815/1815。报告完整文件名分别为 `prd145-labels-red-r1.xml`、`prd145-labels-r2.xml`、
+`prd145-cadence-r2.xml`、`prd145-console-regression-r3.xml`。
+cadence-red-r1 为一失败三通过，原始失败展开了隔离测试随机 lease token，原件保留但不列入
+可发布无明文证据；后续断言只展开布尔结果。该临时 token 不能用于本地业务库或外部服务。
+
+Console lint 778 files、surface 262 modules / 276 sources、build 276 assets 通过。
+两端发布摘要 `9dc5f75d3611ab71241d7cac98802f9b754f1a53d9dcf19e08146e2bb30512d6`。
+构建首轮按预期拒绝旧摘要，更新实际构建字节摘要后通过，没有跳过发布校验。
+真实本地管理员 Cookie 页面已查看桌面与 390x844 移动概览，成员 2、部署 6 和空记录标签
+显示正确，无文案重叠，移动 drawer 默认关闭；临时 viewport 已 reset。该手工检查没有生成
+独立浏览器 JUnit，不冒充完整浏览器业务验收。入口为 `index.html#workspace.home.overview`，
+错误 hash 的既有回退提示在正常 reload 后清除。
+
+实际完整后台仍有租约抖动，正在独立核对连接池的冷 schema 重解析；不能把本项绿色测试
+当作整版可用发布。用户最新指示优先于上述旧门禁顺序：先交付后做 72 小时长稳，长稳未开始。
+独立审计入口 `prd-145-release-overview-sensitive-audit.json`，不含用户未跟踪文档或 outputs。

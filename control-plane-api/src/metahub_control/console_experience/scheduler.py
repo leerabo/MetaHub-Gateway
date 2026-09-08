@@ -28,6 +28,7 @@ from metahub_control.workspace_navigation.scheduler import (
 logger = logging.getLogger("metahub.control.console_experience.scheduler")
 WORKER_ID = f"console-experience-{uuid4().hex}"
 POLL_SECONDS = 2.0
+RECONCILIATION_INTERVAL_SECONDS = 300
 LEASE_SECONDS = 30
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
 _WORKER_KINDS = (
@@ -255,6 +256,11 @@ def _release(config: AppConfig, lease: _SchedulerLease, *, worked: bool) -> None
         connection.execute("BEGIN IMMEDIATE")
         now = _now()
         stamp = _db_time(now)
+        delay = (
+            RECONCILIATION_INTERVAL_SECONDS
+            if lease.worker_kind == "reconciliation"
+            else 1 if worked else 2
+        )
         updated = connection.execute(
             """UPDATE console_experience_scheduler_state
                SET cursor_value=?,lease_owner_id=NULL,lease_token_hmac=NULL,
@@ -263,7 +269,7 @@ def _release(config: AppConfig, lease: _SchedulerLease, *, worked: bool) -> None
                  AND lease_token_hmac=? AND lease_expires_at>?""",
             (
                 f"worked:{stamp}" if worked else f"idle:{stamp}",
-                _db_time(now + timedelta(seconds=1 if worked else 2)),
+                _db_time(now + timedelta(seconds=delay)),
                 stamp,
                 lease.worker_kind,
                 lease.generation,

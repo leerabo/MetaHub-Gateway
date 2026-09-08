@@ -13,6 +13,46 @@ const LABELS = Object.freeze({
   "provider-health": "Provider 健康",
   security: "安全",
   status: "状态",
+  observability: "可观测性",
+  jobs: "平台任务",
+  capacity: "服务容量",
+  channel: "渠道结算",
+  customer_success: "客户成功",
+  growth: "增长分析",
+  branding: "品牌管理",
+  provider_engineering: "供应商工程",
+  commercial_accounting: "商业账务",
+  role_tasks: "空间成员",
+  gateway_health: "Gateway 部署",
+  provider_health: "Provider 探测",
+  usage_cost: "用量统计",
+  notifications: "通知",
+  deployment: "部署",
+  "status.records": "状态组件数",
+  "observability.records": "服务目标数",
+  "jobs.records": "平台任务数",
+  "capacity.records": "容量服务记录数",
+  "channel.records": "渠道结算单数",
+  "customer_success.records": "客户账号记录数",
+  "growth.records": "增长漏斗快照数",
+  "branding.records": "品牌数",
+  "provider_engineering.records": "适配器发布数",
+  "commercial_accounting.records": "平台发票数",
+  "role_tasks.records": "空间成员记录数",
+  "gateway_health.records": "Gateway 部署数",
+  "provider_health.records": "探测记录数",
+  "governance.records": "DLP 规则数",
+  "approvals.records": "审批事项数",
+  "usage_cost.records": "用量记录数",
+  "notifications.records": "通知数",
+  "deployment.records": "部署记录数",
+  "assistant.answer.unsupported": "暂不支持此类查询",
+  "assistant.answer.ready": "查询结果",
+  "assistant.answer.partial": "部分查询结果",
+  ready: "已有记录",
+  empty: "暂无记录",
+  unavailable: "来源不可用",
+  unknown: "待确认",
 });
 
 export function renderConsoleExperience(state, { domain, view } = {}) {
@@ -75,7 +115,7 @@ function renderOverview(state, domainLabel) {
     <section class="console-experience-section" data-freshness="${escapeAttribute(section.freshness)}">
       <div class="console-experience-section-heading">
         <div><p>${escapeHtml(label(section.source_code))}</p><h2>${freshnessLabel(section.freshness)}</h2></div>
-        <span>Revision ${Number(section.source_revision)}</span>
+        <span>修订 ${Number(section.source_revision)}</span>
       </div>
       <div class="console-experience-metrics">
         ${section.metrics.map((metric) => `
@@ -230,7 +270,7 @@ function stateBlock(status, error) {
 }
 function options(items, selected) { return items.map(([value, text]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${text}</option>`).join(""); }
 function empty(text) { return `<p class="console-experience-empty">${escapeHtml(text)}</p>`; }
-function label(value) { const text = String(value ?? ""); return LABELS[text] ?? text.split(/[._-]/u).filter(Boolean).map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" "); }
+function label(value) { const text = String(value ?? ""); return Object.hasOwn(LABELS, text) ? LABELS[text] : "未识别事项"; }
 function freshnessLabel(value) { return ({ fresh: "数据已更新", stale: "最近快照", unavailable: "来源不可用" })[value] ?? "状态待确认"; }
 function overviewStatus(value) { return ({ ready: "已就绪", partial: "部分可用", stale: "最近快照" })[value] ?? "状态待确认"; }
 function queryTypeLabel(value) { return ({ operations_summary: "运营摘要", security_summary: "安全摘要", billing_summary: "账务摘要", provider_summary: "Provider 摘要", unknown: "未识别问题" })[value] ?? "查询结果"; }
