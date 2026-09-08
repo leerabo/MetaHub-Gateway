@@ -25,6 +25,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import build_webhook_event
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .filters import AuditFilters, audit_where_clause, normalize_audit_filters
 from .models import AuditExportResult
@@ -108,7 +109,9 @@ def export_audit_logs(
     connection = _connect(config)
     audit_record: AuditRecord | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "audit.export")
+        transaction.begin()
+        context = transaction.context
         existing = _load_existing(
             connection,
             context.user.tenant_id,
@@ -125,7 +128,7 @@ def export_audit_logs(
                 request_id=request_id,
                 trace_id=trace_id,
             )
-            connection.commit()
+            transaction.commit()
             return result
 
         _verify_sequence_integrity(connection, context.user.tenant_id)
@@ -219,7 +222,7 @@ def export_audit_logs(
         if audit_record is None:
             # 该动作必须至少包含 completed/hash 等变化；None 表示内部摘要合同被错误修改。
             raise ApiError("audit_export.unavailable")
-        connection.commit()
+        transaction.commit()
         result = AuditExportResult(
             audit_export_id=audit_export_id,
             file_name=file_name,

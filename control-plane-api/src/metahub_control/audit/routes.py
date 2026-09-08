@@ -10,7 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
-from metahub_control.auth import AuthContext, require_audit_exporter, require_audit_log_reader
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .export_scheduler import wake_audit_export_scheduler
 from .export_service import export_audit_logs
@@ -18,6 +18,8 @@ from .models import AuditLogListResponse
 from .service import build_audit_request_meta, list_audit_logs
 
 router = APIRouter(prefix="/audit-logs", tags=["audit-logs"])
+require_audit_log_reader = require_workspace_or_legacy_permissions("audit.read")
+require_audit_exporter = require_workspace_or_legacy_permissions("audit.export", csrf_required=True)
 
 # 导出只接受列表已有的七个精确筛选；tenant、分页、列选择和文件路径都不能由客户端指定。
 AUDIT_EXPORT_QUERY_FIELDS = frozenset(

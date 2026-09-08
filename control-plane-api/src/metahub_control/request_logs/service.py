@@ -13,6 +13,7 @@ from typing import Any
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_exists
 from metahub_shared.feedback import (
     FeedbackRecord,
     evaluate_feedback_eligibility,
@@ -23,6 +24,7 @@ from metahub_shared.runtime.error_diagnosis import ErrorDiagnosisInfo, diagnose_
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.response_cache.models import ResponseCacheRequestLogInfo
 
 from .models import (
@@ -238,7 +240,11 @@ def get_request_log_detail(
     connection = _connect(config)
     try:
         # 锚点、反馈、路由、预算、DLP、Usage 与流终态必须来自同一读快照。
-        connection.execute("BEGIN")
+        authentication = ResourceWriteTransaction(
+            connection, config, context, "request_log.read", read_only=True,
+        )
+        authentication.begin()
+        context = authentication.context
         detail = load_request_log_detail_from_connection(
             connection,
             context.user.tenant_id,
@@ -246,6 +252,10 @@ def get_request_log_detail(
             include_feedback=True,
         )
         connection.rollback()
+        authentication.begin()
+        connection.rollback()
+    except sqlite3.Error as exc:
+        raise ApiError("request_log.query_unavailable") from exc
     finally:
         # 404、SQLite/Pydantic 异常和成功返回都必须释放文件句柄与快照。
         connection.close()
@@ -402,9 +412,7 @@ def _load_response_cache_projection(
     """从 tenant-qualified request fact/hit 构造 7.5 exact 白名单，历史请求返回 null。"""
 
     # 少数旧单元测试使用迁移前的最小手工 schema；没有 0069 表时等价于历史不适用请求。
-    if connection.execute(
-        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='response_cache_request_facts'"
-    ).fetchone() is None:
+    if not table_exists(connection, "response_cache_request_facts"):
         return None
     row = connection.execute(
         """

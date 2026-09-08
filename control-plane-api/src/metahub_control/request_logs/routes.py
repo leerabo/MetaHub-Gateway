@@ -14,8 +14,8 @@ from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import (
     AuthContext,
-    require_request_log_reader,
     require_request_log_reader_or_machine,
+    require_workspace_or_legacy_permissions,
 )
 from metahub_control.machine_identity.service import MachineAuthContext
 
@@ -35,6 +35,7 @@ from .saved_filters import (
 from .service import get_request_log_detail
 
 router = APIRouter(prefix="/request-logs", tags=["request-logs"])
+require_request_log_reader = require_workspace_or_legacy_permissions("request_log.read")
 
 # SavedFilter 只包含名称、白名单筛选与排序，8 KiB 足以覆盖合法合同并限制解析资源。
 MAX_SAVED_FILTER_BODY_BYTES = 8 * 1024
@@ -183,8 +184,9 @@ def _private_no_store(response: Response) -> None:
         if item.strip()
     ]
     # Vary 必须显式包含认证维度，防止代理把一个用户的筛选响应复用给另一身份。
-    if not any(item.lower() == "authorization" for item in existing):
-        existing.append("Authorization")
+    for name in ("Authorization", "Cookie"):
+        if not any(item.lower() == name.lower() for item in existing):
+            existing.append(name)
     response.headers["Vary"] = ", ".join(existing)
 
 

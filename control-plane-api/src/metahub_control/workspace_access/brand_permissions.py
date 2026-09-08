@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.errors import ApiError
 
 WORKSPACE_BRAND_ROLE_PERMISSIONS = {
@@ -87,13 +88,7 @@ def _migration_applied(connection: sqlite3.Connection, version: str) -> bool:
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
-            (name,),
-        ).fetchone()
-        is not None
-    )
+    return table_exists(connection, name)
 
 
 __all__ = (

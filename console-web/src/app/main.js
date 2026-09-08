@@ -510,6 +510,7 @@ import {
   testLocalProviderConnection,
 } from "../lib/localSecretManagement.js";
 import {
+  IdentityApiError,
   beginIdentityWebAuthnStepUp,
   createIdentityStepUpGrant,
   getIdentityMe,
@@ -765,7 +766,8 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
   },
 });
 const RESOURCE_NAVIGATION_IDS = new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
-  "model-aliases", "routing-policies", "model-quality-scores", "experiments"]);
+  "model-aliases", "routing-policies", "model-quality-scores", "experiments",
+  "request-logs", "output-safety", "audit-logs"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
@@ -2147,6 +2149,9 @@ function renderLogin(error, requestId) {
 }
 
 function clearBasicResourceFeedback() {
+  clearRequestLogSessionState();
+  clearAuditExportSessionState();
+  auditLogFilters = { limit: 20, offset: 0 };
   workspaceMembersOffset = 0;
   workspaceMembersFeedback = "";
   workspaceMembersActionError = null;
@@ -4025,10 +4030,15 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
 
+  const requestLogBinding = bindResourceElement(
+    document.querySelector(".request-logs-panel, .output-safety-panel"),
+    [PERMISSIONS.REQUEST_LOG_READ], consoleShellState?.activeNavigationItemId,
+  );
+  const requestLogEventCurrent = () => resourcePageLifecycle.isBindingCurrent(requestLogBinding);
   const requestLogFilterForm = document.querySelector("#request-log-filter-form");
   requestLogFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     // FormData 只读取 PAGE-080 白名单；时间统一转 UTC，Decimal 保持字符串精度。
     configureCurrentRequestLogState(requestLogFiltersFromForm(new FormData(requestLogFilterForm)), null);
     await refresh();
@@ -4036,7 +4046,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const requestLogFilterReset = document.querySelector("#request-log-filter-reset");
   requestLogFilterReset?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     configureCurrentRequestLogState({ limit: 20, offset: 0 }, null);
     await refresh();
   });
@@ -4044,7 +4054,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   const outputSafetyFilterForm = document.querySelector("#output-safety-filter-form");
   outputSafetyFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     // terminalStage 由 PAGE-099 固定，表单或旧内存都不能把安全事件查询降级成普通全量日志。
     configureCurrentRequestLogState(
       outputSafetyFiltersFromForm(new FormData(outputSafetyFilterForm)),
@@ -4054,13 +4064,14 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   document.querySelector("#output-safety-filter-reset")?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     configureCurrentRequestLogState({ terminalStage: "output_safety", limit: 20, offset: 0 }, null);
     await refresh();
   });
 
   const savedFilterSelect = document.querySelector("#request-log-saved-filter-select");
   savedFilterSelect?.addEventListener("change", () => {
+    if (!requestLogEventCurrent()) return;
     const savedFilter = currentSavedRequestLogFilter(savedFilterSelect.value);
     // 下拉只选择待操作对象；查询必须由“应用”按钮显式触发，避免键盘浏览选项时意外发送敏感查询。
     const nameInput = document.querySelector("#request-log-saved-filter-name");
@@ -4076,7 +4087,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   document.querySelector("#request-log-saved-filter-apply")?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const savedFilter = currentSavedRequestLogFilter(savedFilterSelect?.value);
     if (!savedFilter) return;
     // 应用后恢复表单展示，但 GET 只发送 ID，让后端按当前 tenant + owner 加载权威筛选和排序。
@@ -4085,23 +4096,23 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   document.querySelector("#request-log-saved-filter-create")?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const name = optionalText(document.querySelector("#request-log-saved-filter-name")?.value);
     const currentFilters = currentRequestLogFiltersFromForm();
     if (!currentFilters) return;
     await mutateCurrentSavedRequestLogFilter((signal) => createSavedRequestLogFilter({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       name,
       filters: currentFilters,
       sortBy: currentFilters.sortBy,
       sortDirection: currentFilters.sortDirection,
       signal,
-    }), { activeNavigationItemId: consoleShellState?.activeNavigationItemId });
+    }), { activeNavigationItemId: consoleShellState?.activeNavigationItemId, binding: requestLogBinding });
   });
 
   document.querySelector("#request-log-saved-filter-update")?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const savedFilter = currentSavedRequestLogFilter(savedFilterSelect?.value);
     if (!savedFilter) return;
     const name = optionalText(document.querySelector("#request-log-saved-filter-name")?.value);
@@ -4109,7 +4120,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     if (!currentFilters) return;
     await mutateCurrentSavedRequestLogFilter((signal) => updateSavedRequestLogFilter({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       savedFilterId: savedFilter.saved_filter_id,
       version: savedFilter.version,
       name,
@@ -4117,30 +4128,31 @@ function bindAuthenticatedEvents(consoleShellState) {
       sortBy: currentFilters.sortBy,
       sortDirection: currentFilters.sortDirection,
       signal,
-    }), { activeNavigationItemId: consoleShellState?.activeNavigationItemId });
+    }), { activeNavigationItemId: consoleShellState?.activeNavigationItemId, binding: requestLogBinding });
   });
 
   document.querySelector("#request-log-saved-filter-delete")?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const savedFilter = currentSavedRequestLogFilter(savedFilterSelect?.value);
     if (!savedFilter) return;
     const confirmed = globalThis.window?.confirm?.(`删除保存筛选“${savedFilter.name}”？`) === true;
     if (!confirmed) return;
     await mutateCurrentSavedRequestLogFilter((signal) => deleteSavedRequestLogFilter({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       savedFilterId: savedFilter.saved_filter_id,
       version: savedFilter.version,
       signal,
     }), {
       clearSelection: true,
       activeNavigationItemId: consoleShellState?.activeNavigationItemId,
+      binding: requestLogBinding,
     });
   });
 
   const requestLogPrev = document.querySelector("#request-log-prev");
   requestLogPrev?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const currentFilters = requestLogPageMemory.query().filters;
     const nextFilters = {
       ...currentFilters,
@@ -4152,7 +4164,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const requestLogNext = document.querySelector("#request-log-next");
   requestLogNext?.addEventListener("click", async () => {
-    if (!requestLogInteractionAllowed(consoleShellState)) return;
+    if (!requestLogEventCurrent()) return;
     const currentFilters = requestLogPageMemory.query().filters;
     const nextFilters = {
       ...currentFilters,
@@ -4165,7 +4177,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   if (consoleShellState?.activeNavigationItemId !== "output-safety") {
     for (const button of document.querySelectorAll("[data-request-log-detail]")) {
       button.addEventListener("click", async () => {
-        if (!requestLogInteractionAllowed(consoleShellState)) return;
+        if (!button.isConnected || !requestLogEventCurrent()) return;
         configureCurrentRequestLogState(
           requestLogPageMemory.query().filters,
           button.dataset.requestLogDetail,
@@ -4176,7 +4188,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
     const requestLogDetailRefresh = document.querySelector("[data-request-log-detail-refresh]");
     requestLogDetailRefresh?.addEventListener("click", async () => {
-      if (!requestLogInteractionAllowed(consoleShellState)) return;
+      if (!requestLogEventCurrent()) return;
       const requestId = String(requestLogDetailRefresh.dataset.requestLogDetailRefresh ?? "").trim();
       const selectedRequestId = requestLogPageMemory.query().selectedRequestId;
       if (!requestId || requestId !== selectedRequestId) {
@@ -4191,7 +4203,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   for (const button of document.querySelectorAll("[data-request-log-explain]")) {
     button.addEventListener("click", async () => {
-      if (!requestLogInteractionAllowed(consoleShellState)) {
+      if (!button.isConnected || !requestLogEventCurrent()) {
         requestExplanationHandoff.clear();
         return;
       }
@@ -4213,9 +4225,12 @@ function bindAuthenticatedEvents(consoleShellState) {
     });
   }
 
+  const auditLogBinding = bindResourceElement(document.querySelector(".audit-logs-panel"),
+    [PERMISSIONS.AUDIT_READ], "audit-logs");
   const auditLogFilterForm = document.querySelector("#audit-log-filter-form");
   auditLogFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(auditLogBinding)) return;
     // 筛选变化会改变导出快照，必须先 abort 旧操作并清除上一筛选的 hash/行数反馈。
     clearAuditExportSessionState();
     const submitButton = auditLogFilterForm.querySelector("button[type='submit']");
@@ -4240,6 +4255,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const auditLogFilterReset = document.querySelector("#audit-log-filter-reset");
   auditLogFilterReset?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(auditLogBinding)) return;
     auditLogFilterReset.disabled = true;
     clearAuditExportSessionState();
     // 重置必须清除全部筛选并回到第一页，不能保留旧时间范围或旧 offset。
@@ -4249,6 +4265,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const auditLogPrev = document.querySelector("#audit-log-prev");
   auditLogPrev?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(auditLogBinding)) return;
     auditLogPrev.disabled = true;
     auditLogFilters = {
       ...auditLogFilters,
@@ -4259,6 +4276,7 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   const auditLogNext = document.querySelector("#audit-log-next");
   auditLogNext?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(auditLogBinding)) return;
     auditLogNext.disabled = true;
     auditLogFilters = {
       ...auditLogFilters,
@@ -4268,26 +4286,17 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const auditLogExportButton = document.querySelector("#audit-log-export-csv");
+  const auditExportBinding = bindResourceElement(auditLogExportButton,
+    [PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_EXPORT], "audit-logs");
   auditLogExportButton?.addEventListener("click", async () => {
-    const token = authSession.token;
-    // DOM 门禁只改善体验；真实 audit.export 权限与 tenant_id 仍由后端从 Session 校验。
-    if (
-      !token
-      || !hasPermission(authSession.context, PERMISSIONS.AUDIT_EXPORT)
-      || consoleShellState?.activeNavigationItemId !== "audit-logs"
-      || currentRenderedNavigation() !== "audit-logs"
-    ) {
-      // 缺少令牌时主动回到登录页，避免失效 DOM 入口仍表现为可导出；有令牌但角色或导航不符则静默拒绝。
-      if (!token) {
-        renderLogin();
-      }
-      return;
-    }
+    const mutation = resourcePageLifecycle.beginMutation(auditExportBinding);
+    if (!mutation) return;
     const operation = auditExportLifecycle.begin({
-      identity: auditExportIdentitySnapshot(authSession.context),
+      identity: currentEvaluationPageIdentity("audit-logs", PERMISSIONS.AUDIT_EXPORT),
       navigation: currentRenderedNavigation(),
     });
     if (!operation) {
+      resourcePageLifecycle.finishMutation(mutation);
       // 活动 owner 或不完整身份均失败关闭，重复点击不得产生第二份不可变 AuditExport。
       return;
     }
@@ -4298,7 +4307,7 @@ function bindAuthenticatedEvents(consoleShellState) {
     try {
       const result = await exportAuditLogs({
         controlApiUrl,
-        token,
+        authentication: "workspace",
         actorUserId: auditLogFilters.actorUserId,
         action: auditLogFilters.action,
         objectType: auditLogFilters.objectType,
@@ -4310,11 +4319,11 @@ function bindAuthenticatedEvents(consoleShellState) {
         signal: operation.signal,
       });
       // 离页、换身份或后续 generation 接管后，旧 Blob 必须被丢弃且不能创建 object URL。
-      if (!ownsAuditExportOperation(operation)) {
+      if (!resourcePageLifecycle.isMutationCurrent(mutation) || !ownsAuditExportOperation(operation)) {
         return;
       }
       triggerAuditCsvDownload(result);
-      if (!ownsAuditExportOperation(operation)) {
+      if (!resourcePageLifecycle.isMutationCurrent(mutation) || !ownsAuditExportOperation(operation)) {
         return;
       }
       setAuditExportState({
@@ -4327,17 +4336,11 @@ function bindAuthenticatedEvents(consoleShellState) {
       refreshAfterSuccess = true;
     } catch (error) {
       // Abort 和迟到异常属于预期生命周期，不能覆盖下一身份或下一导航的反馈。
-      if (isAbortError(error) || !ownsAuditExportOperation(operation)) {
+      if (isAbortError(error) || !resourcePageLifecycle.isMutationCurrent(mutation)
+        || !ownsAuditExportOperation(operation)) {
         return;
       }
-      // 当前 owner 的 401 证明会话边界已失效，必须销毁审计反馈与令牌，避免旧租户状态被下一次登录复用。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuditExportSessionState();
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceAuthorizationError(error)) return;
       setAuditExportState({
         status: "error",
         code: safeAuditExportErrorCode(error),
@@ -4346,7 +4349,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     } finally {
       // 只有本 operation 可以释放自己的 owner；clear() 或新边界已经接管时 finish 不产生副作用。
       auditExportLifecycle.finish(operation);
-      syncAuditExportDomState();
+      resourcePageLifecycle.finishMutation(mutation);
+      if (resourcePageLifecycle.isBindingCurrent(auditExportBinding)) syncAuditExportDomState();
     }
     if (refreshAfterSuccess) {
       // 成功下载后只执行既有列表刷新，让新 audit.exported 行可见；不会再次调用导出接口。
@@ -9145,6 +9149,15 @@ async function openRequestLogFromDebug(requestId) {
  * 该函数只展示后端统一错误中的安全字段，不能输出登录密码、Token 原文或浏览器异常堆栈。
  */
 function authErrorMessage(error) {
+  if (error instanceof IdentityApiError) {
+    if (error.status === 401 && error.code.startsWith("workspace_session.")) {
+      return "Workspace 会话不可用，请在账号页重新选择空间。";
+    }
+    if (error.status === 401 && error.code.startsWith("identity.session_")) {
+      return "登录状态已失效，请重新登录。";
+    }
+    return error.message;
+  }
   if (error instanceof AuthApiError) {
     // 密钥和令牌处理只能使用哈希或密文，任何路径都不得记录明文。
     return error.code === "auth.token_expired" || error.code === "auth.session_revoked"
@@ -16514,7 +16527,7 @@ function syncAuditExportDomState() {
 /** 当前 operation 必须仍匹配完整身份、实际导航、独立 generation 与未取消 signal。 */
 function ownsAuditExportOperation(operation) {
   return auditExportLifecycle.isCurrent(operation, {
-    identity: auditExportIdentitySnapshot(authSession.context),
+    identity: currentEvaluationPageIdentity("audit-logs", PERMISSIONS.AUDIT_EXPORT),
     navigation: currentRenderedNavigation(),
   });
 }
@@ -17278,8 +17291,9 @@ function bindOutputSafetyDetailInteractions(consoleShellState) {
 function bindOutputSafetyDetailButton(button, consoleShellState, panel) {
   if (!button || button.dataset.outputSafetyDetailActionBound === "true") return;
   button.dataset.outputSafetyDetailActionBound = "true";
+  const binding = bindResourceElement(button, [PERMISSIONS.REQUEST_LOG_READ], "output-safety");
   button.addEventListener("click", async () => {
-    if (!button.isConnected || !panel.contains(button) || !requestLogInteractionAllowed(consoleShellState)) return;
+    if (!resourcePageLifecycle.isBindingCurrent(binding) || !panel.contains(button)) return;
     const requestId = String(
       button.dataset.requestLogDetail ?? button.dataset.requestLogDetailRefresh ?? "",
     ).trim();
@@ -17303,11 +17317,11 @@ function bindOutputSafetyDetailButton(button, consoleShellState, panel) {
       await refreshOutputSafetyDetail(consoleShellState);
     } finally {
       // 局部渲染不会替换列表按钮；仍连接当前面板时恢复可操作状态。
-      if (button.isConnected && panel.contains(button)) {
+      if (resourcePageLifecycle.isBindingCurrent(binding) && panel.contains(button)) {
         button.disabled = false;
         button.removeAttribute("aria-busy");
       }
-      detailPane?.removeAttribute("aria-busy");
+      if (resourcePageLifecycle.isBindingCurrent(binding)) detailPane?.removeAttribute("aria-busy");
     }
   });
 }
@@ -17331,7 +17345,7 @@ async function refreshOutputSafetyDetail(consoleShellState) {
     const state = await loadRequestLogsState(consoleShellState, refreshId);
     if (
       refreshId !== refreshSequence
-      || !authSession.token
+      || !requestLogInteractionAllowed(consoleShellState)
       || currentRenderedNavigation() !== "output-safety"
     ) {
       return;
@@ -17374,9 +17388,8 @@ async function refreshOutputSafetyDetail(consoleShellState) {
  */
 function requestLogInteractionAllowed(consoleShellState) {
   return Boolean(
-    authSession.token
-    && REQUEST_LOG_NAVIGATION_IDS.has(consoleShellState?.activeNavigationItemId)
-    && requestLogIdentitySnapshot(authSession.context),
+    REQUEST_LOG_NAVIGATION_IDS.has(consoleShellState?.activeNavigationItemId)
+    && currentEvaluationPageIdentity(consoleShellState.activeNavigationItemId, PERMISSIONS.REQUEST_LOG_READ),
   );
 }
 
@@ -17394,18 +17407,24 @@ function currentSavedRequestLogFilter(savedFilterId) {
  */
 async function mutateCurrentSavedRequestLogFilter(
   operation,
-  { clearSelection = false, activeNavigationItemId = "" } = {},
+  { clearSelection = false, activeNavigationItemId = "", binding } = {},
 ) {
   // 事件处理器之外再做一次导航与身份核验，手工触发的旧 DOM 回调不能复活已离开的 owner。
   if (!requestLogInteractionAllowed({ activeNavigationItemId })) return;
+  const mutation = resourcePageLifecycle.beginMutation(binding);
+  if (!mutation) return;
   const owner = currentRequestLogOwner();
   const ticket = requestLogPageMemory.beginSavedFilterMutation(owner);
   // 不完整身份或已失效 Session 不得发出 SavedFilter 请求，DOM 可见性不能替代该内存门禁。
-  if (!ticket || !authSession.token) return;
+  if (!ticket) {
+    resourcePageLifecycle.finishMutation(mutation);
+    return;
+  }
   try {
     await operation(ticket.signal);
     const currentOwner = currentRequestLogOwner();
-    if (!requestLogPageMemory.isCurrentSavedFilterMutation(ticket, currentOwner)) return;
+    if (!resourcePageLifecycle.isMutationCurrent(mutation)
+      || !requestLogPageMemory.isCurrentSavedFilterMutation(ticket, currentOwner)) return;
     requestLogPageMemory.finishSavedFilterMutation(ticket, currentOwner);
     if (clearSelection) {
       configureCurrentRequestLogState({
@@ -17414,26 +17433,24 @@ async function mutateCurrentSavedRequestLogFilter(
         offset: 0,
       }, null);
     }
+    resourcePageLifecycle.finishMutation(mutation);
     await refresh();
   } catch (error) {
     const currentOwner = currentRequestLogOwner();
     // 主动取消和 owner 迁移都静默丢弃，禁止旧用户错误覆盖新身份页面。
-    if (isAbortError(error) || !requestLogPageMemory.isCurrentSavedFilterMutation(ticket, currentOwner)) return;
-    // 只有仍属于当前 owner 的 401 才能结束会话，迟到 401 已被上一分支拒绝。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRequestLogSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
+    if (isAbortError(error) || !resourcePageLifecycle.isMutationCurrent(mutation)
+      || !requestLogPageMemory.isCurrentSavedFilterMutation(ticket, currentOwner)) return;
+    if (handleResourceAuthorizationError(error)) return;
     requestLogPageMemory.acceptSavedFilterMutationError(
       ticket,
       safeRequestLogClientError(error, "保存筛选操作失败"),
       currentOwner,
     );
     requestLogPageMemory.finishSavedFilterMutation(ticket, currentOwner);
+    resourcePageLifecycle.finishMutation(mutation);
     await refresh();
+  } finally {
+    resourcePageLifecycle.finishMutation(mutation);
   }
 }
 
@@ -17442,12 +17459,11 @@ function currentRequestLogOwner(
   refreshId = refreshSequence,
   requestedNavigation = currentRenderedNavigation(),
 ) {
-  const identity = requestLogIdentitySnapshot(authSession.context);
-  const tenantId = String(
-    authSession.context?.user?.tenant_id
-      ?? authSession.context?.tenant?.tenant_id
-      ?? "",
-  ).trim();
+  const workspaceOwner = workspaceResourcePageOwner(authSession, resourcePageShellState, {
+    navigationId: requestedNavigation, permissions: [PERMISSIONS.REQUEST_LOG_READ], hash: readActiveNavigationHash(),
+  });
+  const identity = workspaceOwner?.key ?? "";
+  const tenantId = "";
   const current = refreshId === refreshSequence;
   const navigation = REQUEST_LOG_NAVIGATION_IDS.has(requestedNavigation)
     ? requestedNavigation
@@ -17455,6 +17471,7 @@ function currentRequestLogOwner(
   return {
     identity,
     tenantId,
+    workspaceOwner,
     navigation: current && identity ? navigation : "",
     refreshId,
     currentRefreshId: refreshSequence,
@@ -17475,6 +17492,7 @@ function configureCurrentRequestLogState(
     requestFeedbackMutationMemory.leave();
   }
   return requestLogPageMemory.configure({
+    workspaceOwner: owner.workspaceOwner,
     identity: owner.identity,
     tenantId: owner.tenantId,
     navigation: owner.navigation,
@@ -17522,7 +17540,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
     || !REQUEST_LOG_NAVIGATION_IDS.has(activeNavigation)
     || refreshId !== refreshSequence
     || !owner.identity
-    || !owner.tenantId
+    || !owner.workspaceOwner
   ) {
     return null;
   }
@@ -17533,6 +17551,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
   ) {
     // 首次进入或从普通日志切换时冻结安全阶段；旧 SavedFilter 和手写 hash 均不能移除该条件。
     requestLogPageMemory.configure({
+      workspaceOwner: owner.workspaceOwner,
       identity: owner.identity,
       tenantId: owner.tenantId,
       navigation: owner.navigation,
@@ -17550,12 +17569,11 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
   if (!ticket) {
     return null;
   }
-  const token = authSession.token;
   try {
     // 两个 GET 共用同一 list ticket；任一迟到响应都必须通过完整身份和 refresh 代次。
     const savedFiltersPromise = listSavedRequestLogFilters({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       signal: ticket.signal,
     }).then(
       (value) => ({ value }),
@@ -17563,7 +17581,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
     );
     const state = await listRequestLogs({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       advancedFilters: ticket.filters,
       savedFilterId: ticket.filters.selectedSavedFilterId,
       sortBy: ticket.filters.sortBy,
@@ -17609,7 +17627,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
     try {
       const detail = await getRequestLog({
         controlApiUrl,
-        token,
+        authentication: "workspace",
         requestId: detailTicket.requestId,
         signal: detailTicket.signal,
       });
@@ -17643,14 +17661,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
       ) {
         return null;
       }
-      // 详情返回 401 表示认证边界已经失效，必须清除令牌及全部租户内 RequestLog 状态后再回登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearRequestLogSessionState();
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return null;
-      }
+      if (handleResourceAuthorizationError(error)) return null;
       requestLogPageMemory.acceptDetailError(
         detailTicket,
         safeRequestLogClientError(error, "调用日志详情读取失败", detailTicket.requestId),
@@ -17664,14 +17675,7 @@ async function loadRequestLogsState(consoleShellState, refreshId) {
     if (isAbortError(error) || !requestLogPageMemory.isCurrentList(ticket, currentOwner)) {
       return null;
     }
-    // 列表返回 401 与详情一致地销毁认证和页面 owner，避免旧租户内存被下一次登录复用。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRequestLogSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
+    if (handleResourceAuthorizationError(error)) return null;
     requestLogPageMemory.acceptListError(
       ticket,
       safeRequestLogClientError(error, "调用日志读取失败", ticket.filters.requestId || "-"),
@@ -17697,43 +17701,18 @@ async function loadAuditLogsState(consoleShellState, refreshId) {
   ) {
     return null;
   }
-  try {
-    const state = await listAuditLogs({
-      controlApiUrl,
-      token: authSession.token,
-      actorUserId: auditLogFilters.actorUserId,
-      action: auditLogFilters.action,
-      objectType: auditLogFilters.objectType,
-      objectId: auditLogFilters.objectId,
-      requestId: auditLogFilters.requestId,
-      createdFrom: auditLogFilters.createdFrom,
-      createdTo: auditLogFilters.createdTo,
-      limit: auditLogFilters.limit ?? 20,
-      offset: auditLogFilters.offset ?? 0,
-    });
-    return {
-      ...state,
-      filters: auditLogFilters,
-      exportState: { ...auditExportState },
-    };
-  } catch (error) {
-    // 401 改变认证边界，必须清除本地会话；其他错误在审计页面原位展示 code/request_id。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuditExportSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      code: error?.code ?? "audit_log.query_failed",
-      requestId: error?.requestId ?? "-",
-      filters: auditLogFilters,
-      exportState: { ...auditExportState },
-    };
-  }
+  const filters = { ...auditLogFilters };
+  return loadResourceState("audit-logs", [PERMISSIONS.AUDIT_READ],
+    (options) => listAuditLogs({ ...options, ...filters }),
+    (state) => {
+      const rows = state?.audit_logs;
+      if (!Array.isArray(rows) || rows.some((row) => !row?.tenant_id)
+        || new Set(rows.map((row) => row.tenant_id)).size > 1) {
+        throw new AuthApiError({ status: 502, code: "audit_log.response_invalid",
+          message: "审计日志响应不完整", requestId: state?.request_id ?? "-" });
+      }
+      return { ...state, filters, exportState: { ...auditExportState } };
+    }, { filters, exportState: { ...auditExportState } });
 }
 
 /**

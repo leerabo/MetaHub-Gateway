@@ -35,6 +35,9 @@ RESOURCE_PERMISSIONS = frozenset(
         "model_quality.write",
         "experiment.read",
         "experiment.write",
+        "request_log.read",
+        "audit.read",
+        "audit.export",
     }
 )
 

@@ -1100,3 +1100,45 @@ Provider 凭据配置复核二：保持 AES-GCM 格式和旧环境变量兼容�
 不跳过 KeyPool、租户、健康、亲和恢复或事务权限。测试覆盖仅文件配置、环境优先、脱敏、错误
 主密钥拒绝，以及真实 Workspace 创建到 Gateway 选择。健康探测与初始化向导也必须使用同一
 配置；验证只用合成凭据，真实 Kimi 凭据仅经本地管理 API 加密入库。
+
+## 2026-09-08 调用日志与审计批次设计
+
+范围为调用列表/详情、个人 SavedFilter、审计列表和同步 CSV 导出。保持现有 DTO、分页、
+筛选、幂等请求键、Webhook 与产品事件。Workspace 使用真实 Cookie，Legacy 显式 Bearer；
+Machine 仍仅允许调用列表，不获得个人筛选、详情或审计权限。
+
+第一轮自审（身份与历史）：QueryEvent 的旧 actor_session_id 不得填入影子 Session。
+增量迁移将旧列改为可空，并加入 workspace_session_id 外键，严格要求二者恰有一个，
+WorkspaceSession、Membership、Account、legacy user 与 tenant binding 的复合 owner 一致。
+SQLite 重建只在一个迁移事务内进行，逐列及 rowid 保留历史，恢复原触发器、索引和隐私清单；
+PostgreSQL 使用独立原生增量。不编辑 0139 基线，不重新派发历史事件。出现新域事实时 down
+必须拒绝，不能删除它们。查询仍先读取快照，再在短写事务内认证并记录审计，失败不返回列表。
+
+第二轮自审（撤权与浏览器）：读取进入事务后鉴权，在最终返回前结束旧快照并再次验证当前
+权限；写入、幂等重放、no-op 和提交均使用同一事务内复核。审计 GET export 实际创建事实，
+因此 Workspace 必须校验 Origin/CSRF，不能按普通 GET 放过。前端复用显式认证传输和当前
+Workspace owner、导航代次、DOM 归属及取消机制；旧响应不得触发下载或改写新空间状态。
+仅跑本批受影响单元/API，批次完成后统一数据库、流程、浏览器和安全复验；不消耗 Kimi 额度。
+
+原生兼容复核一：日志检索与缓存详情存在 SQLite 专有 rowid、索引提示和 schema 目录读取；
+PostgreSQL 按业务 request_id 检索，表存在性使用既有 table_exists，SavedFilter 的可空参数
+显式 CAST AS TEXT，事务认证的保留字别名改为 actor。数据库异常只收敛到既有固定错误码。
+
+原生兼容复核二：QueryEvent、SavedFilter 和 AuditExportEvent 触发器不能把 PostgreSQL 每次
+更新都会变化的 ctid 当业务身份；保留所有业务不可变字段与状态转换检查。审计导出到自身
+AuditLog 的外键保持可延迟检查，文件名后缀使用 right。up/down 均校验现存结构和隐私 manifest，
+既有 Workspace 查询事实阻止 down；原生往返检查覆盖触发器、函数、索引和约束，不改历史基线。
+
+刷新语义复核一：SavedFilter mutation 的页面 owner 与请求代次应分离，同一公开会话和授权
+下的后台 refresh 不得丢掉正在提交的写入结果；真正换空间、换授权、离页和旧 DOM 仍拒绝。
+审计导出另持有独立 operation，并受当前页面 mutation 绑定保护；迟到 Blob 不下载，重复点击
+不创建第二份导出，不把有副作用的 GET 当作可自动重试的普通读取。
+
+刷新语义复核二：日志 memory 接纳真实 Workspace owner，不构造 tenant_id；列表与详情的
+事实 tenant 一致且不得漂移。增加真实客户端和 memory 组合测试，不仅替换客户端测 handler。
+浏览器遇到 IdentityApiError 的 Workspace 会话缺失时展示重新选择空间的固定提示，真正的
+账号会话失效提示重新登录；未知网络异常仍不展示堆栈或原始错误内容，不绕过会话有效期。
+
+本地发布演练使用 SQLite backup API，迁移前备份与私有演练副本分开保存；quick_check、外键
+以及 11 张历史表逐行/rowid 摘要一致后才对本地运行库升级到 0144。升级不重复执行，不把本地
+备份、测试凭据、下载 CSV 或原始运行日志提交到 Git。完整可用发布与 72 小时证明仍独立验收。

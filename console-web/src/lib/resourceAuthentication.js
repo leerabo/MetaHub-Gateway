@@ -13,6 +13,7 @@ export function authenticatedResourceFetch(url, {
   authentication,
   token,
   method = "GET",
+  csrfRequired = false,
   headers: inputHeaders,
   ...options
 } = {}) {
@@ -26,7 +27,7 @@ export function authenticatedResourceFetch(url, {
   const workspace = authentication === "workspace";
   if (workspace) {
     if (token !== undefined && token !== null) invalidCredentials("workspace_session.credential_conflict");
-    if (WRITES.has(verb)) {
+    if (WRITES.has(verb) || csrfRequired) {
       try { headers.set("X-CSRF-Token", readWorkspaceCsrfCookie()); }
       catch { invalidCredentials("workspace_session.csrf_invalid", 403); }
     }

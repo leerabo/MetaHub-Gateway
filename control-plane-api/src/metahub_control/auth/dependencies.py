@@ -109,6 +109,7 @@ def require_console_user(
 
 def require_workspace_or_legacy_permissions(
     *permission_codes: str,
+    csrf_required: bool = False,
 ) -> Callable[..., AuthContext]:
     """Build an explicit resource-route guard for one Workspace or Legacy credential."""
 
@@ -130,7 +131,7 @@ def require_workspace_or_legacy_permissions(
                 raise ApiError("workspace_session.credential_conflict")
             clear_workspace_cookies_on_error(request)
             csrf_token = None
-            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            if csrf_required or request.method not in {"GET", "HEAD", "OPTIONS"}:
                 _require_workspace_origin(request)
                 csrf_token = _workspace_csrf(request)
             from metahub_control.workspace_access.service import (

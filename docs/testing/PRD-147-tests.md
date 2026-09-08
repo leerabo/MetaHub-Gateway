@@ -787,3 +787,70 @@ failure 与 shutdown timeout 均为零。首个样本仍在启动收敛阶段，
 Ruff 通过；历史文件保留原有 E501 行宽问题，其余规则通过，修改文件 compileall 与 diff
 检查通过。源码与暂存字节、严格 UTF-8、凭据模式和受保护基线由独立审计脚本核验；另对
 本轮日志、探针和证据执行真实 Key/主密钥精确字节扫描，报告只保存结果，不保存秘密。
+
+## 2026-09-08 Workspace 调用日志、保存筛选与审计导出
+
+本批使用真实 Workspace Cookie 和显式 Legacy Bearer，QueryEvent 保存所属认证域的真实
+Session 外键。个人 SavedFilter、审计读取、带 Origin/CSRF 的 CSV GET、幂等重放及最终提交
+均重新鉴权。SQLite 0144 与原生 PostgreSQL 0146 是独立增量迁移，不改历史基线。
+
+证据位于 `.artifacts/g6-security-20260907/`，原失败报告保留，不覆盖或累计重复执行：
+
+| 报告 | 结果 | 实际覆盖 |
+| --- | --- | --- |
+| `prd147-logs-r6.xml` | 6 passed | SQLite 真实双域 API、筛选 CRUD、查询详情、CSV/CSRF 重放、两个真实 outbox、跨 owner、9 类终态过期拒绝、往返保真和结构漂移拒绝 |
+| `prd147-logs-native-r5.xml` | 6 passed | 同六场景在真实 PostgreSQL 执行，含原生触发器、约束、隐私 manifest 保真 |
+| `prd147-logs-unit-r2.xml` | 56 passed | 本批相关 Python 单元；显式私有 basetemp |
+| `prd147-log-pages-r3.xml` | 431 passed | 日志及相关资源页生命周期、客户端合同和 owner 竞态 |
+| `prd147-log-pages-refresh-red.xml` | failed | 保存筛选 mutation 被同 owner 的后台授权刷新错误淘汰的原始反例 |
+| `prd147-log-browser-red-r1.xml` | 1 failed / 11 passed | Workspace 会话缺失被错误映射为连接失败；真实客户端与 memory 组合用例通过，不能据此排除真实浏览器间歇传输失败 |
+| `prd147-log-browser-r2.xml` | 12 passed | 认证提示修复后的定向复验 |
+| `prd147-logs-frontend-final-r4.xml` | 1844 passed | 最终全部前端单元，四并发、每文件 60 秒上界；临时诊断代码已删除 |
+| `prd147-logs-manifest-r4.xml` | 2 passed / 22 deselected | 最终前后端生产摘要合同 |
+
+最初 Python 单元运行因系统 Temp 权限失败；使用 `.tmp/pytest-prd147-logs-unit-r2` 后通过。
+资源页回归最初的 272 个 VM harness 错误是新增清理依赖未接入夹具，补齐后 431 项通过。
+早期 SQLite/原生迁移和数据库兼容失败的 r1..r5、native-diag 与 PostgreSQL 日志均继续保留。
+最终 lint 780 files、生产表面 262 modules / 276 sources、构建 276 assets 通过；最终两端
+资产摘要为 `d7a9a49ab79e9f1638afe95bf1f74e7f5e7b2ef90a1c9bde93757df8c52040b2`。
+
+本地升级报告 `prd147-logs-local-upgrade.json`：先 SQLite backup API 备份到
+`.data/backups/log-release-20260908-r1/before.sqlite3`，私有副本演练成功后升级
+`.data/metahub-dev-prd117.sqlite3` 至 0144。quick_check、外键及 11 张历史表内容/rowid 摘要
+均不变。原生隔离测试实例已正常停止，升级未重复 apply，备份不提交。
+
+真实浏览器恢复既有账号 Cookie，账号页重新建立 Workspace 会话，无需输入新密码或调整
+权限。调用列表显示已有 Kimi JSON/SSE 两条真实请求，详情分别保留 16/15 tokens 和冻结
+路由、价格、风险事实；不发送新的 Provider 请求。创建个人筛选 `PRD147 local log acceptance`
+返回 201，刷新后仍可选择并按服务器 SavedFilter ID 应用。该测试筛选暂保留。
+
+真实审计 CSV 导出返回 200，生成新 `audit.exported` 事实；浏览器 download 事件等待超时，
+随后独立检查 `C:/Users/OseasyVM/Downloads/metahub-audit-20260908-0f2ab861.csv` 已落盘，
+2038 bytes、2 行，SHA-256 与页面一致：
+`16a32f76ddff2c2e13ab6574f619bcf322a3666e16d776a9141048ef59a4e1ef`。
+此检查证明下载完成，不把自动化事件超时认定为产品导出失败。CSV 包含本地审计数据，不提交。
+
+视口测量曾确认 1280x900 以及 390x844；移动审计页 scrollWidth=390、可见按钮没有横向越界，
+截图 `prd147-audit-mobile-r1.png` 已检查。内嵌浏览器桌面截图受宿主裁剪，fullPage 拼接出现
+重复区域，因此不将该拼接图作为桌面无重叠证明。全部页面/全部移动流程仍不能据此认定通过。
+
+未解决项：真实浏览器在日志列表或 SavedFilter 并行刷新时两次出现 TypeError，响应未被
+浏览器接纳，即使对应服务日志存在 200；重载恢复后查询和筛选应用成功，尚未证明根因已修复。
+临时诊断仅包含异常类型及源码位置，最终已删除，没有记录原始异常正文或凭据。
+后台仍出现 platform_metering.reconciliation_required，旧运行还有 lease_lost；不能宣称
+全部后台健康。原日志分别保留在 `.logs/archive-log-release-20260908-r1/` 和
+`.logs/archive-log-browser-20260908-r2/`。反馈、请求解释等相邻旧入口及完整 PRD-148/G6/G8
+仍未完成；此批不代表全目标、GA 或 72 小时已通过，先交付后长稳的用户顺序保持不变。
+
+最终重启前的七份日志/PID 文件另存于 `.logs/archive-log-final-20260908-r3/`，不覆盖前两次
+归档。重新核验本项目监听进程后，`prd147-logs-runtime-short-r1.json` 在 11:16:27 至
+11:17:17 UTC 完成六个样本：18 次 HTTP 均为 200，每个样本均为 63 队列，drop、backend
+failure、shutdown timeout 为零，协调器观测时间保持新鲜，严格判定 passed。这是约 50 秒
+的有限观测，不替代后台业务逐项验收、性能结论或 72 小时长稳。最后重启后真实浏览器重新
+加载审计页，原 Cookie 会话恢复并显示三条审计事实，没有再次导出或调用付费模型。
+
+四份新增迁移仅按仓库规则规范为 LF，真实迁移加载器复核 0144 规范摘要仍与已应用数据库
+一致，没有重复迁移或改变 SQL 内容。最终独立脚本报告为
+`prd147-logs-runtime-sensitive-r2.json` 与 `prd-147-workspace-logs-sensitive-audit.json`：
+分别核验真实测试 Key/主密钥精确字节，以及本批 30 个暂存文件的路径/字节、严格 UTF-8、
+高置信凭据模式、成功与失败证据及受保护基线。扫描结果无命中，不等于完整安全验收。

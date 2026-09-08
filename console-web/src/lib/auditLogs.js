@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 审计导出响应必须同时满足服务端冻结合同；任一头异常都按不可用失败关闭，不能保存代理错误页。
 const AUDIT_EXPORT_ID_PATTERN = /^aex_[0-9a-f]{32}$/;
@@ -12,12 +13,14 @@ const MAX_AUDIT_EXPORT_BYTES = 16 * 1024 * 1024;
 /**
  * 查询当前认证管理员可见的管理操作审计日志。
  *
- * 安全边界：客户端不接受也不发送 tenant_id，租户范围只能由后端根据 Bearer Token
+ * 安全边界：客户端不接受也不发送 tenant_id，租户范围只能由后端根据已选择的认证域
  * 恢复；空筛选不会进入查询字符串，避免空值与后端精确匹配语义发生歧义。
  */
 export async function listAuditLogs({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   actorUserId,
   action,
   objectType,
@@ -42,7 +45,7 @@ export async function listAuditLogs({
   url.searchParams.set("offset", String(offset));
 
   return auditLogsRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication, signal,
   });
 }
 
@@ -55,6 +58,7 @@ export async function listAuditLogs({
 export async function exportAuditLogs({
   controlApiUrl,
   token,
+  authentication,
   actorUserId,
   action,
   objectType,
@@ -80,11 +84,11 @@ export async function exportAuditLogs({
     "audit_export.unavailable",
     "审计导出 operation request_id 无效",
   );
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedResourceFetch(url.toString(), {
+    token, authentication, csrfRequired: true,
     signal,
     headers: {
       Accept: "text/csv",
-      Authorization: `Bearer ${token}`,
       // operation request_id 是 tenant+admin 范围的幂等键；筛选 request_id 仅位于 query，二者不得混用。
       "X-Request-ID": safeOperationRequestId,
     },
@@ -182,7 +186,7 @@ function setOptionalParam(url, name, value) {
  * Token 或任意原始正文拼进页面反馈。
  */
 async function auditLogsRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_audit_logs_${Date.now()}`,

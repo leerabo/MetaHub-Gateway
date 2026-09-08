@@ -14,9 +14,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from metahub_control.auth import AuthContext
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+
+from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import SavedFilterInfo, SavedFilterListResponse, SavedFilterResponse
 from .query import (
@@ -46,6 +48,11 @@ def list_saved_filters(
 
     connection = _connect(config)
     try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "request_log.read", read_only=True,
+        )
+        transaction.begin()
+        context = transaction.context
         rows = connection.execute(
             """
             SELECT saved_filter_id, name, filter_json, sort_by, sort_direction,
@@ -57,11 +64,15 @@ def list_saved_filters(
             """,
             (context.user.tenant_id, context.user.user_id),
         ).fetchall()
-        return SavedFilterListResponse(
+        result = SavedFilterListResponse(
             saved_filters=[_saved_filter_info(row) for row in rows],
             request_id=request_id,
             trace_id=trace_id,
         )
+        connection.rollback()
+        transaction.begin()
+        connection.rollback()
+        return result
     # 持久记录损坏已经转换成稳定业务错误，继续原样抛出才能保留统一错误码。
     except ApiError:
         raise
@@ -92,7 +103,9 @@ def create_saved_filter(
     now = _db_time(datetime.now(UTC))
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
+        transaction.begin()
+        context = transaction.context
         count = connection.execute(
             """
             SELECT COUNT(*) AS count FROM saved_filters
@@ -129,7 +142,7 @@ def create_saved_filter(
             ),
         )
         row = _load_active(connection, context, saved_filter_id)
-        connection.commit()
+        transaction.commit()
     # 业务校验失败也必须回滚已获取的写锁，避免连接关闭前留下不完整事务状态。
     except ApiError:
         _rollback(connection)
@@ -170,7 +183,9 @@ def update_saved_filter(
     version = _version(data["version"])
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
+        transaction.begin()
+        context = transaction.context
         current = _load_active(connection, context, identifier, required=False)
         if current is None:
             # 不存在、已删除及越过 owner 边界统一返回同形错误，阻断横向记录枚举。
@@ -228,7 +243,7 @@ def update_saved_filter(
             # 条件更新未命中说明版本或状态在事务边界内变化，绝不能伪造成功响应。
             raise ApiError("saved_filter.version_conflict")
         row = _load_active(connection, context, identifier)
-        connection.commit()
+        transaction.commit()
     # 领域错误需回滚当前写事务并保留原错误码，方便前端区分冲突与输入错误。
     except ApiError:
         _rollback(connection)
@@ -262,7 +277,9 @@ def delete_saved_filter(
     expected = _query_version(version)
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
+        transaction.begin()
+        context = transaction.context
         current = _load_active(connection, context, identifier, required=False)
         if current is None:
             # 删除也采用同形不存在响应，不能暴露跨租户、其他 owner 或历史删除状态。
@@ -292,7 +309,7 @@ def delete_saved_filter(
         if changed.rowcount != 1:
             # 状态或版本并发变化时条件更新不会命中，此时必须报告冲突而不是成功。
             raise ApiError("saved_filter.version_conflict")
-        connection.commit()
+        transaction.commit()
     # 删除流程中的领域错误同样要释放写事务，同时保留稳定错误码和同形边界。
     except ApiError:
         _rollback(connection)
@@ -425,7 +442,7 @@ def _name_exists(
         """
         SELECT 1 FROM saved_filters
         WHERE tenant_id=? AND owner_user_id=? AND name_normalized=? AND status='active'
-          AND (? IS NULL OR saved_filter_id!=?)
+          AND (CAST(? AS TEXT) IS NULL OR saved_filter_id!=?)
         LIMIT 1
         """,
         (

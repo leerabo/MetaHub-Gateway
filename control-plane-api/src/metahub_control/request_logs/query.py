@@ -25,6 +25,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import RequestLogListResponse
 from .service import _connect, _request_log_info
@@ -174,6 +175,11 @@ def list_request_logs_advanced(
     started = perf_counter()
     connection = _connect(config)
     try:
+        authentication = ResourceWriteTransaction(
+            connection, config, context, "request_log.read", read_only=True,
+        )
+        authentication.begin()
+        context = authentication.context
         query = _parse_query(connection, context, query_items, allow_saved_filters=True)
         rows, total = _read_page(connection, context.user.tenant_id, query)
         connection.rollback()
@@ -211,6 +217,7 @@ def list_request_logs_advanced(
             connection,
             context,
             query,
+            config=config,
             total=total,
             returned_count=len(page_rows),
             has_more=has_more,
@@ -293,19 +300,22 @@ def _read_page(
         legacy_model=query.legacy_model,
     )
     order_sql = _build_order(query.sort_by, query.sort_direction)
-    index_hint = _matched_index_hint(query.filters, query.sort_by)
-    connection.execute("BEGIN")
+    native = getattr(connection, "backend", "sqlite") == "postgresql"
+    row_key = "request_id" if native else "rowid"
+    index_hint = "" if native else _matched_index_hint(query.filters, query.sort_by)
+    if not connection.in_transaction:
+        connection.execute("BEGIN")
     rows = connection.execute(
         f"""
         WITH matched AS MATERIALIZED (
-          SELECT rl.rowid AS matched_rowid, COUNT(*) OVER() AS _matched_total
+          SELECT rl.{row_key} AS matched_rowid, COUNT(*) OVER() AS _matched_total
           FROM request_logs rl {index_hint}
           {_OUTPUT_SAFETY_JOIN}
           {where_sql}
           {order_sql}
           LIMIT ? OFFSET ?
         )
-        {_PAGE_SELECT_SQL}
+        {_PAGE_SELECT_SQL.format(row_key=row_key)}
         {order_sql}
         """,
         [*parameters, query.limit + 1, query.offset],
@@ -680,6 +690,7 @@ def _write_query_event(
     context: AuthContext,
     query: AdvancedQuery,
     *,
+    config: AppConfig,
     total: int,
     returned_count: int,
     has_more: bool,
@@ -700,7 +711,10 @@ def _write_query_event(
         separators=(",", ":"),
     )
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(connection, config, context, "request_log.read")
+        transaction.begin()
+        context = transaction.context
+        workspace = context.session.session_id.startswith("wss_")
         connection.execute(
             """
             INSERT INTO request_log_query_events(
@@ -709,17 +723,17 @@ def _write_query_event(
               sort_by, sort_direction, query_limit, query_offset, matched_count,
               returned_count, has_more, query_duration_ms, operation_request_id,
               operation_trace_id, event_dispatch_status, event_dispatch_attempts,
-              event_next_attempt_at, executed_at, created_at, updated_at
+              event_next_attempt_at, executed_at, created_at, updated_at, workspace_session_id
             )
             VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                   'pending', 0, ?, ?, ?, ?)
+                   'pending', 0, ?, ?, ?, ?, ?)
             """,
             (
                 query_event_id,
                 event_id,
                 context.user.tenant_id,
                 context.user.user_id,
-                context.session.session_id,
+                None if workspace else context.session.session_id,
                 query.fingerprint,
                 filter_keys,
                 query.saved_filter_id,
@@ -737,10 +751,14 @@ def _write_query_event(
                 timestamp,
                 timestamp,
                 timestamp,
+                context.session.session_id if workspace else None,
             ),
         )
-        connection.commit()
+        transaction.commit()
         return query_event_id
+    except ApiError:
+        _rollback(connection)
+        raise
     # 审计事实写入失败时回滚整个短事务，列表结果不得在无追踪状态下返回。
     except sqlite3.Error as exc:
         _rollback(connection)
@@ -987,6 +1005,6 @@ SELECT
   matched._matched_total AS _matched_total,
 {_SELECT_COLUMNS}
 FROM matched
-JOIN request_logs rl ON rl.rowid=matched.matched_rowid
+JOIN request_logs rl ON rl.{{row_key}}=matched.matched_rowid
 {_SELECT_JOINS}
 """

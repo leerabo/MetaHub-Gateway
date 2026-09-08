@@ -7,6 +7,7 @@ import {
   PERMISSIONS,
 } from "../../lib/permissions.js";
 import { normalizeResponseCacheRequestLogInfo } from "../../lib/responseCache.js";
+import { hasWorkspaceConsoleSession } from "../../lib/workspaceConsoleSession.js";
 
 // PAGE-082 只把后端稳定公开标识写入一次性 handoff 属性，非法 ID/目录版本降级为纯文本。
 const TENANT_ERROR_MAP_REFERENCE_PATTERN = /^pem_[0-9a-f]{32}$/;
@@ -111,6 +112,8 @@ export function requestLogIdentitySnapshot(authContext) {
 export function createRequestLogPageMemory() {
   let activeIdentity = "";
   let activeTenantId = "";
+  let activeWorkspaceOwner = null;
+  let factTenantId = "";
   let activeNavigation = "";
   let generation = 0;
   let listController = null;
@@ -165,17 +168,25 @@ export function createRequestLogPageMemory() {
     if (resetOwner) {
       activeIdentity = "";
       activeTenantId = "";
+      activeWorkspaceOwner = null;
+      factTenantId = "";
       activeNavigation = "";
     }
   }
 
   /** 进入完整 owner；身份、租户或导航变化必须先销毁上一 owner 的全部内存。 */
-  function enter({ identity, tenantId, navigation }) {
+  function enter({ identity, tenantId, navigation, workspaceOwner = null }) {
     const nextIdentity = requestLogText(identity);
     const nextTenantId = requestLogText(tenantId).trim();
     const nextNavigation = requestLogText(navigation);
     // 不完整身份或非活动导航必须按离页处理，禁止空 owner 继承上一租户的列表和详情。
-    if (!nextIdentity || !nextTenantId || !REQUEST_LOG_NAVIGATIONS.has(nextNavigation)) {
+    const workspace = workspaceOwner
+      && hasWorkspaceConsoleSession(workspaceOwner.session)
+      && hasPermission(workspaceOwner.session.context, PERMISSIONS.REQUEST_LOG_READ)
+      && workspaceOwner.navigation === nextNavigation && workspaceOwner.key === nextIdentity
+      && workspaceOwner.key === JSON.stringify([workspaceOwner.session.owner, nextNavigation, workspaceOwner.route]);
+    if (!nextIdentity || (!workspace && !nextTenantId) || (workspaceOwner && !workspace)
+      || !REQUEST_LOG_NAVIGATIONS.has(nextNavigation)) {
       invalidate({ resetOwner: true });
       return false;
     }
@@ -183,11 +194,13 @@ export function createRequestLogPageMemory() {
       nextIdentity !== activeIdentity
       || nextTenantId !== activeTenantId
       || nextNavigation !== activeNavigation
+      || workspaceOwner?.session !== activeWorkspaceOwner?.session
     ) {
       invalidate({ resetOwner: true });
       activeIdentity = nextIdentity;
       activeTenantId = nextTenantId;
       activeNavigation = nextNavigation;
+      activeWorkspaceOwner = workspaceOwner;
     }
     return true;
   }
@@ -203,8 +216,11 @@ export function createRequestLogPageMemory() {
       && ticket.identity === requestLogText(owner.identity)
       && ticket.tenantId === requestLogText(owner.tenantId).trim()
       && ticket.navigation === requestLogText(owner.navigation)
-      && ticket.refreshId === owner.refreshId
-      && ticket.refreshId === owner.currentRefreshId,
+      && ((activeWorkspaceOwner && ticket.kind === "saved-filter-mutation")
+        || (ticket.refreshId === owner.refreshId && ticket.refreshId === owner.currentRefreshId))
+      && (!activeWorkspaceOwner || (hasWorkspaceConsoleSession(activeWorkspaceOwner.session)
+        && owner.workspaceOwner?.session === activeWorkspaceOwner.session
+        && owner.workspaceOwner?.key === activeWorkspaceOwner.key)),
     );
   }
 
@@ -239,8 +255,8 @@ export function createRequestLogPageMemory() {
 
   return {
     /** 配置筛选或详情选择；交互变化立即取消旧请求并清除旧列表/详情/反馈。 */
-    configure({ identity, tenantId, navigation, nextFilters, nextSelectedRequestId = null }) {
-      if (!enter({ identity, tenantId, navigation })) {
+    configure({ identity, tenantId, navigation, workspaceOwner, nextFilters, nextSelectedRequestId = null }) {
+      if (!enter({ identity, tenantId, navigation, workspaceOwner })) {
         return false;
       }
       abortRequests();
@@ -256,8 +272,8 @@ export function createRequestLogPageMemory() {
     },
 
     /** 开始当前页列表读取，并把本轮筛选和详情选择冻结进不可变 ticket。 */
-    beginList({ identity, tenantId, navigation, refreshId }) {
-      if (!enter({ identity, tenantId, navigation })) {
+    beginList({ identity, tenantId, navigation, workspaceOwner, refreshId }) {
+      if (!enter({ identity, tenantId, navigation, workspaceOwner })) {
         return null;
       }
       abortRequests();
@@ -287,9 +303,15 @@ export function createRequestLogPageMemory() {
 
     /** 只接纳全部行都属于 ticket 租户的列表，后端异常串租户响应不能进入页面内存。 */
     acceptList(ticket, payload, owner) {
-      if (!isCurrentList(ticket, owner) || !listPayloadMatchesTenant(payload, ticket.tenantId)) {
+      if (!isCurrentList(ticket, owner)) return false;
+      const tenant = activeWorkspaceOwner
+        ? factTenantId || requestLogText(payload?.request_logs?.[0]?.tenant_id).trim()
+        : ticket.tenantId;
+      if (!listPayloadMatchesTenant(payload, tenant)
+        || (payload.request_logs.length > 0 && !tenant)) {
         return false;
       }
+      if (activeWorkspaceOwner && tenant) factTenantId = tenant;
       listPayload = { ...payload, state: "ok" };
       listError = null;
       // controller 保留到 owner 销毁；完成后的 Abort 是幂等操作，可确保离页时所有旧身份句柄统一失效。
@@ -398,9 +420,14 @@ export function createRequestLogPageMemory() {
 
     /** 详情必须同时匹配 tenant_id 与 request_id；同名 request_id 不能跨租户复用旧响应。 */
     acceptDetail(ticket, payload, owner) {
-      if (!isCurrentDetail(ticket, owner) || !detailPayloadMatchesOwner(payload, ticket)) {
+      if (!isCurrentDetail(ticket, owner)) return false;
+      const tenant = activeWorkspaceOwner
+        ? factTenantId || requestLogText(payload?.request_log?.log?.tenant_id).trim()
+        : ticket.tenantId;
+      if (!tenant || !detailPayloadMatchesOwner(payload, { ...ticket, tenantId: tenant })) {
         return false;
       }
+      if (activeWorkspaceOwner) factTenantId = tenant;
       detail = payload;
       detailError = null;
       actionError = null;

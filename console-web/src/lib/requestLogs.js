@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 import { normalizeResponseCacheRequestLogInfo } from "./responseCache.js";
 
 /**
@@ -8,6 +9,7 @@ import { normalizeResponseCacheRequestLogInfo } from "./responseCache.js";
 export async function listRequestLogs({
   controlApiUrl,
   token,
+  authentication,
   advancedFilters,
   savedFilterId,
   sortBy = "created_at",
@@ -57,7 +59,7 @@ export async function listRequestLogs({
   }
   // 该分支影响安全或治理链路，需要用中文说明处理边界。
   return requestLogsRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication,
     signal,
   });
 }
@@ -66,40 +68,42 @@ export async function listRequestLogs({
  * 列出当前登录用户自己的保存筛选。
  * owner 和 tenant 均由后端 Session 决定，客户端不发送可伪造的归属字段。
  */
-export async function listSavedRequestLogFilters({ controlApiUrl, token, signal }) {
+export async function listSavedRequestLogFilters({ controlApiUrl, token, authentication, signal }) {
   return requestLogsRequest(`${controlApiUrl}/request-logs/saved-filters`, {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication,
     signal,
   });
 }
 
 /** 创建当前用户的保存筛选；分页位置永不进入持久化对象。 */
-export async function createSavedRequestLogFilter({ controlApiUrl, token, name, filters, sortBy, sortDirection, signal }) {
+export async function createSavedRequestLogFilter({ controlApiUrl, token, authentication, name, filters, sortBy, sortDirection, signal }) {
   return requestLogsRequest(`${controlApiUrl}/request-logs/saved-filters`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    token, authentication,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(savedFilterBody({ name, filters, sortBy, sortDirection })),
     signal,
   });
 }
 
 /** 使用乐观版本更新当前用户自己的保存筛选，防止多标签页静默覆盖。 */
-export async function updateSavedRequestLogFilter({ controlApiUrl, token, savedFilterId, version, name, filters, sortBy, sortDirection, signal }) {
+export async function updateSavedRequestLogFilter({ controlApiUrl, token, authentication, savedFilterId, version, name, filters, sortBy, sortDirection, signal }) {
   return requestLogsRequest(`${controlApiUrl}/request-logs/saved-filters/${encodeURIComponent(savedFilterId)}`, {
     method: "PATCH",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    token, authentication,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ version, ...savedFilterBody({ name, filters, sortBy, sortDirection }) }),
     signal,
   });
 }
 
 /** 软删除当前用户自己的保存筛选；version 作为并发保护，不允许无条件删除。 */
-export async function deleteSavedRequestLogFilter({ controlApiUrl, token, savedFilterId, version, signal }) {
+export async function deleteSavedRequestLogFilter({ controlApiUrl, token, authentication, savedFilterId, version, signal }) {
   const url = new URL(`${controlApiUrl}/request-logs/saved-filters/${encodeURIComponent(savedFilterId)}`);
   url.searchParams.set("version", String(version));
   return requestLogsRequest(url.toString(), {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication,
     signal,
     allowEmpty: true,
   });
@@ -157,9 +161,9 @@ function savedFilterBody({ name, filters, sortBy, sortDirection }) {
  * 查询单条调用日志详情。
  * request_id 来自服务端日志列表或用户输入，encodeURIComponent 防止路径注入。
  */
-export async function getRequestLog({ controlApiUrl, token, requestId, signal }) {
+export async function getRequestLog({ controlApiUrl, token, authentication, requestId, signal }) {
   const payload = await requestLogsRequest(`${controlApiUrl}/request-logs/${encodeURIComponent(requestId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication,
     signal,
   });
   const tenantId = String(payload?.request_log?.log?.tenant_id ?? "");
@@ -211,7 +215,7 @@ function setOptionalParam(url, name, value) {
  * 这里不读取或输出任何敏感头，只保留 request_id/trace_id 便于排障。
  */
 async function requestLogsRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_request_logs_${Date.now()}`,

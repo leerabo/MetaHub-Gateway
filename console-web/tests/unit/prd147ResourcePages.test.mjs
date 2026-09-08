@@ -98,6 +98,7 @@ function harness(navigation, selector) {
     filePageState: createFilePageState(), controlApiUrl: "https://control.example.test", refreshSequence: 1, hash: navigation,
     providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
     clearRoutingPolicySessionState() {}, clearModelQualityScoreSessionState() {}, experimentPageState: { clear() {} },
+    clearRequestLogSessionState() {}, clearAuditExportSessionState() {}, auditLogFilters: {},
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
     RESOURCE_NAVIGATION_IDS: new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),

@@ -541,8 +541,10 @@ test("main binds export only to an explicit authorized click and clears every ow
   const clickEnd = source.indexOf('for (const copyButton of document.querySelectorAll("[data-copy-audit-id]"))', clickStart);
   assert.ok(clickStart >= 0 && clickEnd > clickStart);
   const clickHandler = source.slice(clickStart, clickEnd);
-  assert.match(clickHandler, /!hasPermission\(authSession\.context, PERMISSIONS\.AUDIT_EXPORT\)/);
-  assert.match(clickHandler, /activeNavigationItemId !== "audit-logs"/);
+  assert.match(source, /bindResourceElement\(auditLogExportButton,\s*\[PERMISSIONS\.AUDIT_READ, PERMISSIONS\.AUDIT_EXPORT\], "audit-logs"\)/);
+  assert.match(clickHandler, /resourcePageLifecycle\.beginMutation\(auditExportBinding\)/);
+  assert.match(clickHandler, /resourcePageLifecycle\.isMutationCurrent\(mutation\)/);
+  assert.match(clickHandler, /authentication: "workspace"/);
   assert.match(clickHandler, /createAuditExportRequestId\(\)/);
   assert.match(clickHandler, /exportAuditLogs\(\{/);
   assert.match(clickHandler, /triggerAuditCsvDownload\(result\)/);

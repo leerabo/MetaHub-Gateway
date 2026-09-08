@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_exists
 from metahub_shared.db.security import hash_token, verify_password
 from metahub_shared.rbac import (
     ADMIN_ROLE,
@@ -804,15 +805,15 @@ def refresh_transaction_authentication(
     now = _to_db_time(_utcnow())
     owner = connection.execute(
         """
-        SELECT user.role
+        SELECT actor.role
         FROM sessions session
-        JOIN users user
-          ON user.tenant_id=session.tenant_id AND user.user_id=session.user_id
+        JOIN users actor
+          ON actor.tenant_id=session.tenant_id AND actor.user_id=session.user_id
         JOIN tenants tenant ON tenant.tenant_id=session.tenant_id
         WHERE session.tenant_id=? AND session.user_id=? AND session.session_id=?
           AND session.token_jti=? AND session.token_hash=?
           AND session.status='active' AND julianday(session.expires_at)>julianday(?)
-          AND user.status='active' AND tenant.status='active'
+          AND actor.status='active' AND tenant.status='active'
         """,
         (
             tenant_id,
@@ -1042,12 +1043,7 @@ def _load_permission_snapshot(
             "rbac_permission_templates",
             "rbac_role_permission_templates",
         }
-        placeholders = ",".join("?" for _ in required_tables)
-        table_rows = connection.execute(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-            tuple(sorted(required_tables)),
-        ).fetchall()
-        if {row["name"] for row in table_rows} != required_tables:
+        if not all(table_exists(connection, table) for table in sorted(required_tables)):
             # 缺表属于权限目录不完整，不能被解释成旧版本并回退硬编码角色集合。
             raise ApiError("rbac.matrix_integrity_failed")
 

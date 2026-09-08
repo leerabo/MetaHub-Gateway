@@ -24,6 +24,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.policy_dsl import ALLOWED_VARIABLES
 from metahub_shared.runtime.webhooks import build_webhook_event
 
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.auth.service import AuthContext
 
 from .filters import audit_where_clause, normalize_audit_filters
@@ -1080,6 +1081,8 @@ def list_audit_logs(
     normalized_offset = _normalize_offset(offset)
     connection = _connect(config)
     try:
+        transaction = ResourceWriteTransaction(connection, config, context, "audit.read", read_only=True)
+        transaction.begin()
         total_row = connection.execute(
             f"SELECT COUNT(*) AS total FROM audit_logs WHERE {where_sql}", params
         ).fetchone()
@@ -1100,6 +1103,9 @@ def list_audit_logs(
             request_id=request_id,
             trace_id=trace_id,
         )
+        connection.rollback()
+        transaction.begin()
+        connection.rollback()
     # 查询异常只暴露统一错误码，不向控制台泄露 SQL 或底层表结构。
     except sqlite3.Error as exc:
         raise ApiError("audit_log.query_unavailable") from exc
