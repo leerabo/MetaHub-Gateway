@@ -116,3 +116,44 @@
 PRD-049 的设计、自审、实现、租户隔离、后端权限、统一错误/request_id、不可变反馈与统计、0038/0039 迁移、专项/全量、真实三服务、Webhook、Browser、视觉复核、隐私和静止终态全部通过，可以标记完成。
 
 按 Excel `01_PRD总表` 重新识别出的下一条未完成项是 `PRD-050 - Prompt Cache 感知粘性路由`（M1-企业POC / P1）。总体 108 条 PRD 目标仍在进行中，不因 PRD-049 完成而宣称全部完成。
+
+## 11. 2026-09-08 完整调度配置下的汇总隔离修复
+
+本次结论独立于上述历史基线。默认线程池被后台工作占满时，空 Summary 也消耗完
+250ms；改为按 PRD-075 既有模式使用进程内专用单线程，并逐调用 copy_context。
+每 app 有界槽位、截止时间、shield、真正退出后归还槽位与末端授权均保留。
+两轮编码前自审见本条设计第 18 节。
+
+证据均位于 `.artifacts/g6-security-20260907/`：
+
+- `prd049-summary-isolation-red-r1.xml`：1 failed / 1 passed。默认池饱和时空 Summary
+  超时，独立上下文对照通过，证明无关后台工作可以提前耗尽汇总预算。
+- `prd049-summary-isolation-green-r1.xml`：6 passed，覆盖饱和、上下文、取消、执行器
+  拒绝、原有串行门禁和超时后槽位恢复。
+- `prd049-summary-isolation-units-r2.xml`：35 passed，包含新增真实数据库提交 guard
+  拒绝且不落库，以及受影响的连接生命周期回归。
+- `prd049-summary-isolation-batch-r1.xml`：9 passed / 11 deselected，216.50 秒，含
+  Workspace 创建/幂等/跨 owner/summary、末端新快照撤权和 HTTP timeout 后连接保留。
+- `prd147-feedback-native-summary-isolation-r1-b7e9166878594baa8f93c29d4f5ddc18.xml`：
+  PostgreSQL 对应 3 项通过，164.351 秒；隔离实例已停止，无 postmaster.pid。
+- 生产模块和新增测试 Ruff 全规则、`git diff --check` 通过。
+
+已部署至本地 Control API，Gateway 与 Console 未重启。发布前 PID 8864 的最近记录为
+63 accepted / 0 dropped / 0 backend failure；仅是该进程观察，不覆盖更早失败进程。
+发布后 `prd049-summary-isolation-runtime-r1.json` 6 个样本、18 次健康检查通过，
+63 queues / 0 drop / 0 backend / 0 shutdown timeout，只代表短窗口。
+
+`prd049-summary-isolation-live-r1.json` 和 r2 两轮各 8 次原有反馈幂等回放：16/16 返回
+200 且 fact digest 未变，日志/筛选 32/32 返回 200。Summary 每轮 7/8 成功，总计
+14/16 成功、2 次 503，组合验收仍为 failed；不能用第二轮覆盖第一轮，也不能宣称
+250ms SLA 已通过。成功响应约 156-234ms，HTTP 客户端时间不等于纯查询耗时。
+
+浏览器初次进入仍 unavailable，点击“刷新”后恢复为 1 feedback / 平均 5/5 / 采纳率
+100% / Kimi K2.6 Test；当前桌面截图非空、主表单和统计无重叠，未重跑三浏览器或
+全部响应式布局。`prd049-summary-isolation-facts-r1.json` 仍为 2 request / 3 explanation /
+1 feedback / 1 event，quick_check=ok、FK 违规 0。没有新增付费模型调用。
+
+独立敏感审计为 `prd-049-summary-isolation-sensitive-audit-r1.json`，精确凭据检查为
+`prd049-summary-isolation-key-audit-r1.json`。保存原有失败、用户文档及受保护 baseline。
+剩余间歇 Summary 超时、历史队列故障、计量 owner 错误、完整目标和 G6/G7/72 小时
+仍未通过；线程池隔离的局部正确性不等于这些目标完成。

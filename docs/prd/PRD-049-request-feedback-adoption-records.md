@@ -677,3 +677,21 @@ Runtime `status=passed`：Session 与 Virtual Key 两条主流程形成 2 条 Fe
 停止服务后日志审计得到 909 行结构化 JSON、809 行 access、8 行生命周期和 26 行受控 4xx warning；5xx、ERROR、未知异常和敏感命中均为 0。最终数据库 `wal_checkpoint(TRUNCATE)=(0,0,0)`，39 条迁移、最高 0039、六个 trigger、`integrity_check=ok`、FK 违规 0；保留两轮 Runtime 的 4 条 Feedback、4 条 Event、Aggregate count 合计 4 和 4 条 delivery，临时用户/Session 为 0，WAL/SHM 与三个服务端口监听均为 0。最终数据库 SHA-256 为 `80578e85c35b8548aaca2d4103ec0d416d5ef6f022566ccb31b85e621ab28d9f`。完整命令、作废批次、hash、日志和截图证据见 [PRD-049 测试记录](../testing/PRD-049-tests.md)。
 
 PRD-049 的设计、实现、租户隔离、后端权限、统一错误码/request_id、不可变反馈闭环、迁移、专项/全量、真实运行、Browser、隐私和静止终态全部通过，可以标记完成。按 Excel `01_PRD总表` 重新识别出的下一条未完成项是 `PRD-050 - Prompt Cache 感知粘性路由`（M1-企业POC / P1）；总体 108 条 PRD 目标仍在进行中。
+
+## 18. 2026-09-08 多后台队列下的汇总执行隔离
+
+完整本地运行配置中，反馈回放/日志读取成功，但 Summary 6/8 次 unavailable。运行时
+通过 asyncio.to_thread 使用默认线程池，与 63 个后台队列竞争；现有 PRD-075 实验统计
+已用专用单线程规避同类排队。新增确定性饱和反证后，复用此模式为 Summary 提供惰性
+专用进程内单线程；原有每 app Semaphore、250ms 绝对 deadline、数据库 progress handler、
+独立 worker 连接和末端重新授权不变。此设计只证明可避免无关线程池排队，不预先认定
+它是本地所有超时的原因。
+
+第一轮自审：run_in_executor 必须显式 copy_context，不能丢失请求上下文、数据库 scope
+和提交 guard；每次提交独立复制，不从前一工作项恢复租户/权限。执行器不存储凭据。
+在取得有界槽位后才提交；运行中的 worker 仍 shield，超时/取消后真正退出才归还槽位。
+
+第二轮自审：专用池按现有实验统计模式进程级惰性创建线程，不增加后台工作者数量或
+放宽数据库/Summary deadline。测试覆盖默认池完全占满时空操作成功、上下文隔离、
+超时与外部取消保留槽位、恢复以及提交失败仍归还槽位。实测服务仍失败就保留失败，
+不得用独立测试或重启后零计数替代本地整体验收，更不替代 G6/G7 和 72 小时。

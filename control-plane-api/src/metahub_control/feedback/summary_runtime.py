@@ -12,6 +12,8 @@ import asyncio
 import math
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import TypeVar
 
 from fastapi import FastAPI
@@ -20,6 +22,11 @@ from metahub_shared.runtime.errors import ApiError
 # SQLite 是当前控制面的单文件共享资源；单并发可防止多条 JSON 聚合互相放大尾延迟。
 FEEDBACK_SUMMARY_MAX_CONCURRENCY = 1
 _APP_STATE_ATTRIBUTE = "feedback_summary_runtime"
+# Match experiment statistics: background schedulers must not consume the query budget.
+_SUMMARY_EXECUTOR = ThreadPoolExecutor(
+    max_workers=FEEDBACK_SUMMARY_MAX_CONCURRENCY,
+    thread_name_prefix="metahub-feedback-summary",
+)
 
 _ResultT = TypeVar("_ResultT")
 
@@ -65,7 +72,7 @@ class FeedbackSummaryRuntime:
         deadline = self._normalize_deadline(monotonic_deadline)
         acquired = False
         release_on_worker_completion = False
-        worker: asyncio.Task[_ResultT] | None = None
+        worker: asyncio.Future[_ResultT] | None = None
         try:
             try:
                 # wait_for 的时间也从 endpoint 绝对截止点扣除，排队不能刷新预算。
@@ -79,11 +86,13 @@ class FeedbackSummaryRuntime:
                 # 只公开稳定错误码，不能暴露当前活跃租户、队列长度或线程状态。
                 raise ApiError("feedback.unavailable") from exc
 
-            # to_thread 只在取得唯一槽位后创建，避免超时 waiter 堆积默认线程池任务。
-            worker = asyncio.create_task(
-                asyncio.to_thread(operation, deadline),
-                name="control-feedback-summary",
-            )
+            # Copy each request's context, including its database ownership and guards.
+            try:
+                worker = asyncio.get_running_loop().run_in_executor(
+                    _SUMMARY_EXECUTOR, copy_context().run, operation, deadline,
+                )
+            except RuntimeError:
+                raise ApiError("feedback.unavailable") from None
             try:
                 result = await asyncio.wait_for(
                     asyncio.shield(worker),
@@ -108,7 +117,7 @@ class FeedbackSummaryRuntime:
                 and not worker.done()
                 and not release_on_worker_completion
             ):
-                # 此分支覆盖 to_thread 已排队、但 wait_for 尚未来得及接管的极窄竞态窗口。
+                # 此分支覆盖 worker 已排队、但 wait_for 尚未来得及接管的极窄竞态窗口。
                 worker.add_done_callback(self._release_after_worker)
                 release_on_worker_completion = True
             raise
@@ -123,7 +132,7 @@ class FeedbackSummaryRuntime:
             if acquired and not release_on_worker_completion:
                 self._slots.release()
 
-    def _release_after_worker(self, worker: asyncio.Task[object]) -> None:
+    def _release_after_worker(self, worker: asyncio.Future[object]) -> None:
         """消费脱离请求生命周期的 worker 结果，并在真实退出后归还并发槽位。"""
 
         try:
