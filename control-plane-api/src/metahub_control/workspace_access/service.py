@@ -773,6 +773,8 @@ def authenticate_workspace_session_context(
             return context
     except ApiError as exc:
         _finish_workspace_error(connection, exc)
+        if monotonic_deadline is not None and exc.code == "workspace_session.unavailable":
+            raise ApiError(deadline_error_code) from exc
         raise
     except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
         if connection.in_transaction:
@@ -2126,11 +2128,17 @@ def _authenticate_workspace(
     )
     if stale:
         if not read_only:
-            _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")
+            _revoke_workspace_session(
+                connection, row["workspace_session_id"], now, "authority_changed"
+            )
         raise ApiError("workspace_session.revoked")
     try:
         snapshot = _permission_snapshot(connection, row)
-    except ApiError:
+    except ApiError as exc:
+        # A failed permission read proves no authority change. Fail this request
+        # without permanently revoking a valid session or clearing its cookies.
+        if exc.code == "workspace_session.unavailable":
+            raise
         if not read_only:
             _revoke_workspace_session(
                 connection, row["workspace_session_id"], now, "permission_changed"

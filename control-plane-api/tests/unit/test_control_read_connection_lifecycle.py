@@ -28,6 +28,7 @@ class _QueryFailure(RuntimeError):
 class _FailingConnection:
     def __init__(self) -> None:
         self.closed = False
+        self.in_transaction = False
 
     def execute(self, *_args, **_kwargs):
         raise _QueryFailure("query failed")
@@ -128,15 +129,14 @@ def test_control_read_connection_closes_when_query_fails(monkeypatch, service, c
     assert connection.closed is True
 
 
-def test_local_launcher_disables_optional_schedulers_without_changing_production_default():
+def test_local_launcher_preserves_complete_scheduler_profile():
     launcher = (
         __import__("pathlib").Path(__file__).parents[3]
         / "scripts"
         / "dev"
         / "start-control-api.ps1"
     ).read_text(encoding="utf-8")
-    assert "if (-not $env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED)" in launcher
-    assert '$env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED = "false"' in launcher
+    assert "METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED" not in launcher
 
     from metahub_shared.runtime.config import DEFAULT_CONFIG
 

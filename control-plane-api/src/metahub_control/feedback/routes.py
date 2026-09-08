@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
+from metahub_shared.db.connection import database_request_scope, release_idle_request_connections
 from metahub_shared.feedback import (
     FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS,
     MAX_FEEDBACK_BODY_BYTES,
@@ -122,19 +123,25 @@ async def get_feedback_summary(
         """在线程内完成 tenant-scoped SQLite 查询和 DTO 映射，并沿用 endpoint deadline。"""
 
         # DTO 构造和 tenant scope 均由 service 完成，路由不得从 query 补入租户或 actor。
-        return summarize_session_feedback(
-            request.app.state.config,
-            context,
-            model_id=query.model_id,
-            from_time=query.from_time,
-            to_time=query.to_time,
-            limit=query.limit,
-            offset=query.offset,
-            request_id=_request_id(request),
-            trace_id=_trace_id(request),
-            monotonic_deadline=worker_deadline,
-        )
+        # HTTP timeout can precede worker exit. Only the worker may return its
+        # connection to the pool; never inherit the request's shorter lifetime.
+        with database_request_scope(reuse_connections=True):
+            return summarize_session_feedback(
+                request.app.state.config,
+                context,
+                model_id=query.model_id,
+                from_time=query.from_time,
+                to_time=query.to_time,
+                limit=query.limit,
+                offset=query.offset,
+                request_id=_request_id(request),
+                trace_id=_trace_id(request),
+                monotonic_deadline=worker_deadline,
+            )
 
+    # Authentication has committed; make its warm handle available without
+    # coupling the independently owned worker to the HTTP request's teardown.
+    release_idle_request_connections()
     result = await get_feedback_summary_runtime(request.app).run(
         build_summary,
         monotonic_deadline=monotonic_deadline,

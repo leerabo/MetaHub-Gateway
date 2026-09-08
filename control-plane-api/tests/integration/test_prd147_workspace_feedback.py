@@ -1,5 +1,7 @@
 """Workspace feedback authorization at HTTP, transaction and replay boundaries."""
 
+import asyncio
+import sqlite3
 import threading
 import time
 from contextlib import closing
@@ -13,6 +15,7 @@ from metahub_control.feedback import service as feedback_service
 from metahub_control.models import routes as model_routes
 from metahub_control.providers import routes as provider_routes
 from metahub_control.workspace_access import service as workspace_access
+from metahub_shared.db import connection as database_connections
 from metahub_shared.db.connection import connect_database, database_request_scope
 from metahub_shared.feedback import normalize_feedback_payload, storage
 from metahub_shared.runtime.errors import ApiError
@@ -277,3 +280,131 @@ async def test_feedback_write_does_not_block_event_loop(feedback_subjects, monke
     )
     assert response.status_code == 201, response.json().get("code")
     assert len(worker_threads) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure_stage", (1, 2, 3))
+async def test_feedback_permission_read_failure_preserves_session(
+    feedback_subjects, monkeypatch, failure_stage,
+):
+    app, _database, fixtures, _ids = feedback_subjects
+    config = app.state.config
+    token = fixtures.source.cookies.get(WORKSPACE_SESSION)
+    context = workspace_access.authenticate_workspace_session_as_auth_context(config, token)
+    before = _facts(config)
+    original = workspace_access._workspace_extension_permissions
+    attempts = 0
+
+    def fail_database_read(connection, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts != failure_stage:
+            return original(connection, **kwargs)
+        if config.database_url.startswith("postgres"):
+            # Native driver error goes through the real catalog error mapping.
+            driver = database_connections._PostgresConnection
+            execute = driver.execute
+
+            def fail_statement(current, sql, parameters=None):
+                if current is connection or getattr(connection, "_connection", None) is current:
+                    return execute(current, "SELECT 1 / 0")
+                return execute(current, sql, parameters)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(driver, "execute", fail_statement)
+                return original(connection, **kwargs)
+        # A real SQLite VM interruption, not a substituted authentication decision.
+        connection.set_progress_handler(lambda: 1, 1)
+        try:
+            return original(connection, **kwargs)
+        finally:
+            connection.set_progress_handler(None, 0)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(workspace_access, "_workspace_extension_permissions", fail_database_read)
+        response = await fixtures.source.get("/feedback/summary")
+    assert attempts == failure_stage
+    assert response.status_code == 503, response.json().get("code")
+    assert response.json()["code"] == "feedback.unavailable"
+    assert not response.headers.get_list("set-cookie")
+    assert fixtures.source.cookies.get(WORKSPACE_SESSION) == token
+    assert _facts(config) == before
+    with closing(connect_database(config.database_url)) as connection:
+        state = connection.execute(
+            "SELECT status,revoked_reason FROM workspace_sessions WHERE workspace_session_id=?",
+            (context.session.session_id,),
+        ).fetchone()
+    assert tuple(state) == ("active", None)
+    assert workspace_access.authenticate_workspace_session_as_auth_context(config, token)
+    response = await fixtures.source.get("/feedback/summary")
+    assert response.status_code == 200, response.json().get("code")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("code", ("auth.permission_denied", "rbac.matrix_integrity_failed"))
+async def test_feedback_verified_permission_failure_still_revokes(
+    feedback_subjects, monkeypatch, code,
+):
+    app, _database, fixtures, ids = feedback_subjects
+    config = app.state.config
+    context = workspace_access.authenticate_workspace_session_as_auth_context(
+        config, fixtures.source.cookies.get(WORKSPACE_SESSION),
+    )
+    before = _facts(config)
+
+    def reject_snapshot(*_args, **_kwargs):
+        raise ApiError(code)
+
+    monkeypatch.setattr(workspace_access, "_permission_snapshot", reject_snapshot)
+    response = await fixtures.source.post(
+        "/feedback", headers=_headers(fixtures.source), json=_payload(ids[0]),
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "workspace_session.revoked"
+    assert fixtures.source.cookies.get(WORKSPACE_SESSION) is None
+    assert _facts(config) == before
+    with closing(connect_database(config.database_url)) as connection:
+        state = connection.execute(
+            "SELECT status,revoked_reason FROM workspace_sessions WHERE workspace_session_id=?",
+            (context.session.session_id,),
+        ).fetchone()
+    assert tuple(state) == ("revoked", "permission_changed")
+
+
+@pytest.mark.anyio
+async def test_feedback_timed_out_worker_retains_connection(feedback_subjects, monkeypatch):
+    app, _database, fixtures, _ids = feedback_subjects
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    outcomes = []
+
+    def slow_summary(config, *_args, **_kwargs):
+        connection = connect_database(config.database_url)
+        try:
+            connection.execute("SELECT 1").fetchone()
+            started.set()
+            if not release.wait(3):
+                outcomes.append("worker_not_released")
+            else:
+                try:
+                    connection.execute("SELECT 1").fetchone()
+                    outcomes.append("connection_retained")
+                except (sqlite3.Error, RuntimeError):
+                    outcomes.append("connection_released_early")
+        finally:
+            connection.close()
+            finished.set()
+        raise ApiError("feedback.unavailable")
+
+    monkeypatch.setattr(feedback_routes, "summarize_session_feedback", slow_summary)
+    try:
+        response = await fixtures.source.get("/feedback/summary")
+        assert started.is_set()
+        assert response.status_code == 503
+        assert response.json()["code"] == "feedback.unavailable"
+        assert not finished.is_set()
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 3)
+    assert outcomes == ["connection_retained"]

@@ -42,6 +42,26 @@ def table_columns(connection, table: str) -> tuple[str, ...]:
     return tuple(str(row["name"]) for row in rows)
 
 
+def tables_exist(connection, tables) -> bool:
+    """Check one required table set in the caller's snapshot without N round trips."""
+    names = tuple(sorted({_table_name(table) for table in tables}))
+    if not names:
+        return True
+    placeholders = ",".join("?" for _ in names)
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        query = (
+            "SELECT count(*) FROM pg_catalog.pg_class "
+            "WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p') "
+            f"AND relname IN ({placeholders})"
+        )
+    else:
+        query = (
+            "SELECT count(*) FROM main.sqlite_schema "
+            f"WHERE type='table' AND name IN ({placeholders})"
+        )
+    return connection.execute(query, names).fetchone()[0] == len(names)
+
+
 def foreign_key_violation_count(connection) -> int:
     if getattr(connection, "backend", "sqlite") != "postgresql":
         return len(connection.execute("PRAGMA foreign_key_check").fetchall())

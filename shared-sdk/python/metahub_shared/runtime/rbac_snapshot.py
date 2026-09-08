@@ -13,7 +13,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-from metahub_shared.db.schema import table_exists
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.rbac import (
     ADMIN_ROLE,
     CATALOG_REVISION,
@@ -116,7 +116,7 @@ def _load_permission_snapshot(
         "rbac_permission_templates",
         "rbac_role_permission_templates",
     }
-    if not all(table_exists(connection, table) for table in sorted(required_tables)):
+    if not tables_exist(connection, required_tables):
         # 权限目录、租户投影或矩阵哈希不一致时关闭访问，禁止沿用漂移授权。
         raise ApiError("rbac.matrix_integrity_failed")
 

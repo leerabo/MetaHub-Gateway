@@ -565,6 +565,20 @@ def database_request_scope(*, reuse_connections: bool = False) -> Iterator[None]
         scope.close()
 
 
+def release_idle_request_connections() -> None:
+    """End an idle request stage before starting an independently owned worker.
+
+    Prior idle facades become invalid. Active transactions remain request-owned;
+    this is not a commit, rollback, or transfer of uncommitted business work.
+    """
+    scope = _DATABASE_REQUEST_SCOPE.get()
+    if scope is not None:
+        for key, connection in tuple(scope.connections.items()):
+            if not connection.in_transaction:
+                del scope.connections[key]
+                connection._release()
+
+
 def _metahub_sha256(value: str | bytes | None) -> str | None:
     """为迁移守卫计算稳定 SHA-256；SQLite 非文本/BLOB 类型必须失败关闭。"""
 

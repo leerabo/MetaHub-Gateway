@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import ExitStack
+from contextvars import Context
 
 import anyio
 import pytest
@@ -13,6 +14,7 @@ from metahub_shared.db.connection import (
     connect_database,
     database_commit_guard,
     database_request_scope,
+    release_idle_request_connections,
 )
 
 
@@ -177,6 +179,54 @@ def test_absolute_sqlite_url_uses_the_requested_filesystem_path(tmp_path):
         connection.close()
 
     assert database.is_file()
+
+
+def test_idle_stage_release_reuses_handle_with_independent_lifetime(tmp_path):
+    url = f"sqlite:///{tmp_path / 'stage-lifetime.db'}"
+    worker_context = Context()
+    worker_scope = ExitStack()
+    try:
+        try:
+            with database_request_scope(reuse_connections=True):
+                authentication = connect_database(url)
+                authentication.execute("CREATE TABLE probe(value TEXT)")
+                authentication.commit()
+                physical = authentication._connection
+                release_idle_request_connections()
+                release_idle_request_connections()
+                with pytest.raises(sqlite3.ProgrammingError):
+                    authentication.execute("SELECT 1")
+                worker_context.run(
+                    worker_scope.enter_context, database_request_scope(reuse_connections=True),
+                )
+                worker = worker_context.run(connect_database, url)
+                assert worker._connection is physical
+            assert worker.execute("SELECT 1").fetchone()[0] == 1
+        finally:
+            worker_context.run(worker_scope.close)
+        with pytest.raises(sqlite3.ProgrammingError):
+            worker.execute("SELECT 1")
+    finally:
+        _close_idle_database_connections()
+
+
+def test_idle_stage_release_leaves_active_transaction_untouched(tmp_path):
+    url = f"sqlite:///{tmp_path / 'stage-active.db'}"
+    release_idle_request_connections()
+    try:
+        with database_request_scope(reuse_connections=True):
+            connection = connect_database(url)
+            connection.execute("CREATE TABLE probe(value TEXT)")
+            connection.commit()
+            connection.execute("INSERT INTO probe VALUES ('uncommitted')")
+            release_idle_request_connections()
+            assert connect_database(url) is connection
+            assert connection.in_transaction
+            assert connection.execute("SELECT COUNT(*) FROM probe").fetchone()[0] == 1
+        with database_request_scope(reuse_connections=True):
+            assert connect_database(url).execute("SELECT COUNT(*) FROM probe").fetchone()[0] == 0
+    finally:
+        _close_idle_database_connections()
 
 
 @pytest.mark.parametrize("owner", ["request", "worker"])

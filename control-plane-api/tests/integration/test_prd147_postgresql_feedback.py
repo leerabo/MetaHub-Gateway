@@ -10,6 +10,7 @@ import pytest
 import test_postgresql_native_migrations as native_migrations
 import test_prd147_workspace_feedback as contracts
 from metahub_shared.db.connection import connect_database, database_operation_deadline
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.runtime.errors import ApiError
 from test_prd147_workspace_files import workspace_http_subjects
 
@@ -44,6 +45,15 @@ test_feedback_summary_checks_new_snapshot_revocation = (
 test_feedback_write_does_not_block_event_loop = (
     contracts.test_feedback_write_does_not_block_event_loop
 )
+test_feedback_permission_read_failure_preserves_session = (
+    contracts.test_feedback_permission_read_failure_preserves_session
+)
+test_feedback_verified_permission_failure_still_revokes = (
+    contracts.test_feedback_verified_permission_failure_still_revokes
+)
+test_feedback_timed_out_worker_retains_connection = (
+    contracts.test_feedback_timed_out_worker_retains_connection
+)
 
 
 @pytest.mark.anyio
@@ -66,6 +76,24 @@ async def test_postgresql_workspace_authentication_lock_budget(feedback_subjects
         app.state.config,
         f.source.cookies.get(contracts.WORKSPACE_SESSION),
     )
+
+
+def test_postgresql_required_table_set_stays_in_current_schema(native_business_database):
+    with closing(connect_database(native_business_database)) as connection:
+        connection.execute("CREATE TABLE schema_probe_a(id integer)")
+        connection.execute("CREATE TABLE schema_probe_b(id integer)")
+        connection.commit()
+        connection.execute("CREATE VIEW schema_probe_view AS SELECT 1 AS id")
+        connection.execute("CREATE TEMP TABLE schema_probe_temp(id integer)")
+        assert tables_exist(connection, ("schema_probe_a", "schema_probe_b", "schema_probe_a"))
+        assert connection.in_transaction
+        assert not tables_exist(connection, ("schema_probe_a", "schema_probe_view"))
+        assert not tables_exist(connection, ("schema_probe_temp",))
+        assert not tables_exist(connection, ("Schema_probe_a",))
+        connection.execute("DROP TABLE schema_probe_b")
+        assert not tables_exist(connection, ("schema_probe_a", "schema_probe_b"))
+        connection.rollback()
+        assert tables_exist(connection, ("schema_probe_a", "schema_probe_b"))
 
 
 def test_postgresql_deadline_restores_settings_and_cancels_statement(native_business_database):

@@ -939,3 +939,86 @@ quick_check 正常、外键违规为零。解释桌面/移动截图已检查，�
 `prd147-feedback-explanation-key-audit-r2.json`，覆盖最终暂存字节、成功/失败证据、诊断
 辅助脚本、日志及真实测试 Key/主密钥的精确字节，受保护基线保持原摘要。扫描不是完整安全
 签署；本批提交不把真实写锁争用、日志间歇失败、PRD-148 或整体目标标记完成。
+
+## 2026-09-08 反馈超时与会话生命周期修复
+
+正式 profile 重放已存在的 operation，不调用 Provider、不新建反馈样本。r1 辅助脚本将
+workspace_id 误当 tenant_id，在 Workspace 选择前退出，业务事实未变化；r2 改用真实绑定表，
+七次反馈重放成功，但 Summary 最后一次返回 workspace_session.revoked 并清除 Cookie，
+下一步辅助脚本因缺失 Cookie 停止。只读数据库确认该测试 Session 被写为 permission_changed。
+
+根因一：_permission_snapshot 的任意 ApiError 都被解释为权限变化，原生 SQL 中断也会导致
+401 和永久撤销。现在依赖不可用只拒绝本次请求并回滚；真实权限拒绝、矩阵破坏、版本或指纹
+变化仍保持撤销。Summary 的认证和事务回调把读取故障映射为 feedback.unavailable。
+
+根因二：HTTP deadline 可先于 shield worker 退出，原请求 scope 会提前回收仍被 worker 使用的
+连接。现在鉴权完成后只归还空闲句柄，worker 独立借用同一有界池并负责最终归还，活动事务
+不被提交、回滚或转交。250ms 预算、并发槽及终态新快照复核均保留。
+
+### 定向验证与失败保留
+
+报告位于 `.artifacts/g6-security-20260907/`，轮次不合并冒充一次验收：
+
+| 报告 | 结果 | 说明 |
+| --- | --- | --- |
+| `prd147-permission-read-red-r1.xml` | 3 failed | 首次认证、读取事务、终态复核均以真实 SQLite VM 中断复现错误 401 |
+| `prd147-summary-worker-red-r1.xml` | 1 failed | 真实 HTTP 超时后 worker 连接已被提前关闭 |
+| `prd147-permission-worker-green-r1.xml` | 6 passed / 5 failed | 独立 worker 重复解析冷 schema 导致原预算失败，未放宽预算 |
+| `prd147-db-stage-r1.xml` | 12 passed / 1 failed | 新测试错误地跨序退出同一 ContextVar 栈，污染后续用例；改为独立 Context |
+| `prd147-db-stage-r2.xml` | 13 passed | 空闲阶段归还、旧 facade 失效、worker 独立生命周期、活动事务保留及原池上限 |
+| `prd147-permission-worker-green-r2.xml` | 11 passed | SQLite 反馈完整定向集，包括原生中断后的同 Cookie 恢复、真实撤权与超时 worker |
+| `prd147-permission-worker-units-r1.xml` | 64 passed / 3 failed | 旧连接替身缺少 in_transaction；旧启动断言仍要求关闭后台任务 |
+| `prd147-permission-worker-units-r2.xml` | 67 passed | 修正测试合同后，DB 生命周期/预算、共享反馈、控制面清理和事务授权均通过 |
+| `prd147-feedback-native-permission-worker-r1-9d31cfd7c121437b8c441b3c5052aa95.xml` | 11 passed / 2 failed | 独立 worker 初版的原生汇总预算失败 |
+| `prd147-feedback-native-permission-worker-r2-4bec45dd47314e7ea46b0b171c56be3a.xml` | 12 passed / 1 failed | 新生命周期及故障恢复通过，首条真实汇总仍为 503；不标记原生整轮通过 |
+
+### 本地发布事实
+
+只重启控制服务，仍使用正式 `start-control-api.ps1`；前端 dist 和 Gateway 未重启，没有数据库
+迁移或恢复旧会话。新日志为 `.logs/control-feedback-reliability-r1.*.log`，原日志未覆盖。
+真实浏览器重启期间出现连接失败，服务就绪后重新验证恢复原 Session 和两条 Kimi 日志。
+Summary 首次 503 后保持登录，手动刷新恢复 1 条样本、5/5、100% 采纳；截图
+`prd147-feedback-reliability-recovered-r1.png` 已检查，不以重试成功隐去首次失败。
+
+`prd147-normal-feedback-replay-r3.json` 记录八次正式服务幂等重放全部 200；两条请求、三条解释、
+一条反馈、一个反馈事件以及反馈/事件/聚合摘要前后一致。八次 Summary 为 2 次 200、6 次
+503，因此组合报告仍为 failed；没有再次出现 401，测试 Session 保持 active。
+本轮不证明首次反馈写锁竞争、日志 TypeError 或全部后台业务已解决，也不代表 PRD-148、
+G6/G8、全业务域、GA 或 72 小时已完成。先交付再长稳的顺序保持不变。
+
+### 预算诊断与查询合并
+
+`prd147-feedback-native-http-profile-r1-3d4f2402c9af4f15897fbf0024e6cfcb.xml` 仅为诊断：
+首样本在真实 250ms 时限返回 503，鉴权 125ms、首个权限快照 78ms、汇总已执行 125ms。
+后两个样本存在超时线程的交错回调，不作为逐请求精确归因；诊断测试本身通过不代表 API 通过。
+确认多次权限复核反复执行相同的五表存在性检查后，合并为同一事务中的单查询，不缓存权限。
+
+`prd147-permission-worker-units-r3.xml` 为 74 passed / 2 failed：最初基于无参 pragma_table_list
+的批量检查错误地包含 sqlite_schema，且 SQLite trace 会额外记录内部 PRAGMA。改为显式
+main.sqlite_schema 的真实 table 集合后，`prd147-permission-worker-units-r4.xml` 为 76 passed，
+覆盖单次查询、大小写、View/TEMP/附加 schema、虚拟/影子表、事务内 DDL 与非法名称。
+两轮原件保留，缺表和权限矩阵破坏仍拒绝访问。
+
+`prd147-feedback-reliability-runtime-r1.json` 在补丁首轮发布后完成六样本/18 HTTP，63 队列、
+drop/backend failure/shutdown timeout 均为零；仍不是后台所有业务成功或 72 小时证明。
+
+最终查询合并版的 `prd147-permission-worker-final-r3.xml` 为 5 passed / 6 deselected；
+`prd147-feedback-native-permission-worker-r3-80e57e973133402d8bf8aef96804e8ee.xml` 为 6 passed，
+覆盖原生此前失败的创建/幂等/跨域与汇总流程、三阶段数据库故障后 Cookie 恢复、超时 worker
+以及 current_schema 真实表/视图/临时表/DDL 合同。该轮是定向重验，不把前两轮失败改写。
+
+共享 RBAC 查询优化在控制服务和 Gateway 通过正式启动脚本一起加载；新日志分别为
+`.logs/control-feedback-reliability-r2.*.log`、`.logs/gateway-feedback-reliability-r2.*.log`。
+前端 dist 未修改，未新增模型调用或恢复已撤销的历史会话。
+
+`prd147-normal-feedback-replay-r4.json` 在最终双服务版本下八次重放均 200，同一反馈身份和
+反馈/事件/聚合摘要不变；Summary 为 7 次 200、1 次 503，组合报告保留 failed，没有 401。
+浏览器最终重载和随后刷新汇总仍连续 503，返回日志也出现旧的读取失败，分别保留
+`prd147-feedback-reliability-final-failed-r1.png` 与
+`prd147-feedback-reliability-final-logs-failed-r1.png`。HTTP 重放成功不代表浏览器问题已解决。
+
+`prd147-feedback-reliability-facts-final-r2.json` 确认两条请求、三条解释、一条反馈/事件，
+quick_check 正常、外键违规为零。`prd147-feedback-reliability-runtime-r2.json` 六样本/18 HTTP
+均 200，但协调器为 accepted=126、dropped=63、backend_failure=17、queued=63，因此严格
+判定 failed。旧进程观测也存在非零累计值；没有清零、删历史或为得到零计数再次重启。
+协调器失败归因、原始首次反馈写锁与浏览器间歇故障继续作为未完成项，而非本批修复成果。

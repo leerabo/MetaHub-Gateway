@@ -161,9 +161,14 @@ def summarize_session_feedback(
 
 def _feedback_authorizer(config: AppConfig, context: AuthContext):
     def authorize(connection, read_only):
-        ResourceWriteTransaction(
-            connection, config, context, "feedback.use", read_only=read_only,
-        ).verify()
+        try:
+            ResourceWriteTransaction(
+                connection, config, context, "feedback.use", read_only=read_only,
+            ).verify()
+        except ApiError as exc:
+            if exc.code == "workspace_session.unavailable":
+                raise ApiError("feedback.unavailable") from exc
+            raise
     return authorize
 
 
