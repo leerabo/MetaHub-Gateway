@@ -92,6 +92,7 @@ function harness(navigation, selector) {
     navigator: { clipboard: { writeText: (value) => { effects.push("clipboard"); scope.copied = value; return pending.promise; } } },
     filePageState: createFilePageState(), controlApiUrl: "https://control.example.test", refreshSequence: 1, hash: navigation,
     providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
+    workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
     RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]),
     resourcePageShellState: shell(navigation), authErrorMessage: () => "Fixed error", isAbortError: isFileAbortError,

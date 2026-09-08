@@ -861,3 +861,64 @@ tenant/session。
 `status.viewed` 的 Workspace 写入口，不能凭名称假定已存在。Workspace 页面停止调用旧
 `/console/events`，Legacy tracker 合同仍保留；对应低风险页面访问事实的迁移另记未完成，
 不能以状态读取/探测已接通代替该合同。此缺口仍须在批次交付前补齐并验证唯一访问语义。
+
+### 2026-09-08 Workspace 页面访问事实连续批次
+
+范围为当前导航中的 primary/detail/task_home/developer_center 页面访问，统一处理普通页面、
+首页、Provider 状态和迁移指南；已退休 competitor 与平台入口不恢复，advanced open 和角色
+任务完成继续使用各自既有事实。新增 POST /workspace/navigation/page-views，复用导航域严格
+Cookie/Origin/CSRF、DTO、投影与事务认证；客户端不得自报 event_type、tenant、user、path
+或任意 payload。请求只含实际会话的不可逆 page_visit_session_ref、导航快照、权限指纹、导航 epoch、
+route_code、固定 source/viewport_class，所有归属字段仅作预期值比对，不作为授权来源。
+
+第一轮自审（历史、身份与数据边界）：console_page_events.user_id 可关联 Membership 已有的
+真实 legacy_user_id，但其 session_id 外键只接受 Legacy Session。采用增量 0143 添加可空
+workspace_session_id 与 visit_request_sha256；Workspace 行的旧 session_id 必须为空，禁止
+制造 Session 镜像。数据库 guard 验证真实 Session/Membership/User/Workspace 的同属关系。
+旧十二列、rowid、索引及历史 payload 原样保留；幂等 event_id 由实际 Session 和请求键的 HMAC
+派生，原表保存唯一事实，不另建页面事件表/outbox。同步更新隐私删除 schema/trigger manifest。
+SQLite/PostgreSQL 均提供前向与拒绝丢失新事实的回滚迁移，不修改历史迁移。
+
+第二轮自审（撤权、迟到与证据）：进入事务和提交前均恢复真实 Workspace 会话，再检查当前
+导航投影、具体页面权限、快照/epoch/权限指纹/会话预期值。重放也先鉴权，同键异体冲突；
+source/viewport 只接受枚举，path/hash/event_type 由冻结导航目录生成。页面渲染后按完整 owner
+与进入代次只发一次，换空间/离页取消，迟到成功/401/403/finally 不影响新 owner；失败不自动
+重试，也不阻断业务读取。旧 Legacy tracker 保留但不得接收 Workspace 会话。测试覆盖历史
+保真、真实双 Workspace 与撤权、越权/混合凭据、严格正文、幂等及提交回滚，再接客户端生产
+handler 与状态机测试。完整浏览器、并发 PostgreSQL 和 G6/G7/G8 仍由批次 QA 证明；本项不
+修改 Excel 完成标记、不提前进入 PRD-148，也不重新启动 72 小时等待。
+
+接口实施复核：现有 Workspace public context 不含 workspace_session_id。导航响应增加
+page_visit_session_ref，以既有 HMAC helper 绑定实际 WorkspaceSession，事件请求只回传该摘要。
+摘要仅为预期归属值，不能替代 Cookie/CSRF；切换后摘要不符即拒绝，数据库仍存真实 Session FK。
+
+### PostgreSQL 触发器别名转换补充两轮自审
+
+原生页面访问 r8 在 membership-invitations 的 Legacy 邀请写入处被
+invitation_owner_mismatch 拒绝。已对照 0051 权威 SQL、0139 原生函数和生成器确认：别名
+user 转 user_row 的全字符串正则同时篡改了权限 user.manage 与事件 user.invited。
+相同转换还处理 freeze/grant；必须成组保护 SQL 字符串与引号标识符，不能加假权限来放行。
+
+第一轮：使用既有 PostgreSQL parser 的词法 token，仅改已识别表别名声明和未引用的限定
+标识符；SQL 文字值、转义单引号、JSON 与中文内容不进入别名替换。原聚合/JSON/运算符转换
+保留，不修改已交付的 0139 历史迁移。生成器单元加载定义而不执行其顶层生成命令。
+
+第二轮：生成器修复不能代替已安装原生函数的前向迁移。后续修复必须逐一核对受影响邀请、
+审计与产品事件函数及隐私 schema/trigger manifest，保留原守卫和事实，不重算历史事件。
+回滚及页面访问迁移顺序须共同验证；原生邀请、真实成员注册/接受、越权拒绝与历史保真未
+通过前，仍不能提交页面访问为已验收，或把 G6/G7/G8 标记通过。
+
+实施前复核：原生 0143 单独修复解析确认的七个触发器函数，PostgreSQL 页面访问增量顺延至
+0144，SQLite 页面访问保持 0143。迁移先锁定四张事实表及两张隐私清单，核对 live trigger、
+清单集合和精确函数正文摘要，再保留函数定义属性仅替换两种文字值，复核修复后正文摘要并
+更新七项 trigger 与四项表集合摘要。不得把漂移或禁用的 trigger 刷新为合法清单。
+回滚先拒绝已存在的邀请、邀请事件及关联审计/产品事件，再精确还原七个旧函数；历史事实
+不更新、不删除。测试覆盖原生正常邀请及跨 Workspace 拒绝、空库往返、函数/清单漂移与
+有事实时回滚的原子拒绝。该修复仅改变 PostgreSQL 已证实错误，不重生成历史基线。
+
+r9 实施反例：0139 中四张表的隐私清单仍是 SQLite 源格式，不能假定迁移前已是原生 SQL。
+补充设计只接纳逐项摘要匹配不可变基线的旧清单，或与已验证 live 定义完全相同的原生清单；
+同时严格核对这些表的全量触发器名称、表、事件类型、函数名称/正文、启用状态及零附加条件。
+修复后将四张表的所有对应 trigger 清单统一为原生定义，不只改七个函数的清单，避免混合格式。
+回滚恢复旧函数并保留与旧函数一致的原生清单，不再退回 SQLite SQL；原始清单仍可从不可变
+基线追溯。事实行及表结构摘要不改变；此处不声明全产品隐私删除原生适配已完成。

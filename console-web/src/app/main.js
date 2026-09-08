@@ -526,10 +526,12 @@ import {
   getWorkspaceNavigation,
   openWorkspaceAdvancedTool,
   projectWorkspaceNavigationForConsole,
+  recordWorkspacePageVisit,
   resolveWorkspaceNavigationRoute,
   updateWorkspaceNavigationPreference,
 } from "../lib/workspaceNavigation.js";
 import { createWorkspaceNavigationController } from "../features/workspace-navigation/workspaceNavigationController.js";
+import { createWorkspacePageVisitTracker } from "../lib/workspacePageVisitTracker.js";
 import {
   renderWorkspaceAdvancedTools,
 } from "../features/workspace-navigation/renderWorkspaceNavigation.js";
@@ -753,6 +755,19 @@ const publicInvitationRoute = globalThis.window
   : null;
 let authSession = { context: null, owner: null };
 let resourcePageShellState = null;
+let workspacePageVisitShellState = null;
+let workspacePageVisitSource = "direct_hash";
+const workspacePageVisitTracker = createWorkspacePageVisitTracker({
+  current: () => ({ session: authSession, shell: workspacePageVisitShellState,
+    hash: readActiveNavigationHash(),
+    renderedNavigation: document.querySelector(".console-shell")?.dataset.activeNavigation }),
+  recordVisit: (options) => recordWorkspacePageVisit({ controlApiUrl: workspaceControlApiUrl, ...options }),
+  createIdempotencyKey: createWorkspaceNavigationIdempotencyKey,
+  onError: (error) => {
+    if (error?.status === 401) renderLogin(authErrorMessage(error), error.requestId);
+    else if ([403, 409, 412].includes(error?.status)) void refresh();
+  },
+});
 const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
@@ -1161,6 +1176,9 @@ if (app && globalThis.window) {
     bindConsoleWorkspaceContextInvalidation();
     window.addEventListener("hashchange", () => {
       workspaceConsoleExperienceShellState = null;
+      workspacePageVisitTracker.leave();
+      workspacePageVisitShellState = null;
+      workspacePageVisitSource = "direct_hash";
       workspaceConsoleExperienceController.leave();
       // PAGE-088 额外监听同一 hash 边界，同步淘汰旧状态回调；通用监听仍负责重读后端导航。
       providerStatusPageState.clear();
@@ -2142,6 +2160,8 @@ function clearBasicResourceFeedback() {
 }
 
 function clearBasicResourceSessionState({ clearDom = false } = {}) {
+  workspacePageVisitTracker.leave();
+  workspacePageVisitShellState = null;
   if (clearDom && RESOURCE_NAVIGATION_IDS.has(resourcePageLifecycle.navigation())) app?.replaceChildren();
   resourcePageLifecycle.clear();
   resourcePageShellState = null;
@@ -2590,6 +2610,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   // 页面完成首屏渲染并绑定交互后再启动唯一访问 owner；失败只更新局部告警，不阻断指南阅读。
   void ownMigrationGuideVisitAfterRender(consoleShellState);
   void ownProviderStatusVisitAfterRender(consoleShellState);
+  void ownWorkspacePageVisitAfterRender(consoleShellState);
 
   const tenantForm = document.querySelector("#tenant-form");
   tenantForm?.addEventListener("submit", async (event) => {
@@ -10601,6 +10622,7 @@ async function switchConsoleNavigation(button, consoleShellState) {
     return;
   }
   clearBasicResourceSessionState({ clearDom: true });
+  workspacePageVisitSource = "sidebar";
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
   workspaceNavigationController.changeRoute();
@@ -14239,7 +14261,17 @@ function activateMigrationLanguage(language, tabs) {
 /**
  * 首屏渲染后的单一 owner 根据后端 active item 推进 visit 状态机，并处理 401 与非阻断遥测失败。
  */
+function ownWorkspacePageVisitAfterRender(consoleShellState) {
+  workspacePageVisitShellState = consoleShellState;
+  return workspacePageVisitTracker.afterRender({ source: workspacePageVisitSource,
+    viewportClass: globalThis.window?.innerWidth < 720 ? "mobile" : "desktop" });
+}
+
 async function ownMigrationGuideVisitAfterRender(consoleShellState) {
+  if (hasWorkspaceConsoleSession(authSession)) {
+    migrationGuideVisitTracker.leave();
+    return;
+  }
   try {
     await migrationGuideVisitTracker.afterRender({
       activeItemId: consoleShellState?.activeNavigationItemId,

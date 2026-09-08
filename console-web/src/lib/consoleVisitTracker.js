@@ -19,7 +19,7 @@ export function createUniquePageVisitTracker({ targetItemId, recordVisit }) {
     /**
      * 在页面渲染完成后观察后端确认的 active item；只有从其他页面进入目标页才创建新访问。
      */
-    afterRender({ activeItemId, sessionKey: nextSessionKey, source }) {
+    afterRender({ activeItemId, sessionKey: nextSessionKey, source, visitContext }) {
       // Session 变化会使旧代次立即失效；同一 hash 在新认证上下文中应重新记录一次。
       if (nextSessionKey !== sessionKey) {
         generation += 1;
@@ -52,7 +52,11 @@ export function createUniquePageVisitTracker({ targetItemId, recordVisit }) {
       }
       attempted = true;
       const visitGeneration = generation;
-      const request = Promise.resolve().then(() => recordVisit({ source, generation: visitGeneration }));
+      const request = Promise.resolve().then(() => {
+        if (generation !== visitGeneration) return { state: "inactive", generation: visitGeneration };
+        return recordVisit({ source, generation: visitGeneration,
+          ...(visitContext === undefined ? {} : { visitContext }) });
+      });
       inFlight = request.finally(() => {
         // 旧代次请求结束时不能清理新访问的进行中标记，否则会重新打开并发重复上报窗口。
         if (generation === visitGeneration) {

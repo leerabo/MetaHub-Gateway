@@ -20,6 +20,25 @@ class NavigationItem(StrictModel):
     order: int = Field(ge=0, le=1000)
 
 
+class WorkspacePageVisitRequest(StrictModel):
+    page_visit_session_ref: str = Field(pattern=r"^[0-9a-f]{64}$")
+    contract_snapshot_id: str = Field(pattern=r"^ncs_[0-9a-f]{32}$")
+    permission_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    navigation_epoch: int = Field(ge=1)
+    route_code: str = Field(min_length=3, max_length=120)
+    source: Literal["sidebar", "direct_hash"]
+    viewport_class: Literal["mobile", "desktop"]
+
+
+class WorkspacePageVisitResponse(StrictModel):
+    accepted: Literal[True] = True
+    event_id: str = Field(pattern=r"^cpe_[0-9a-f]{64}$")
+    idempotent_replay: bool
+    permission_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_id: str
+    trace_id: str
+
+
 class NavigationGroup(StrictModel):
     group_code: str = Field(min_length=2, max_length=60)
     label_key: str = Field(min_length=3, max_length=120)
@@ -36,6 +55,7 @@ class NavigationPreferenceProjection(StrictModel):
 
 class WorkspaceNavigationResponse(StrictModel):
     owner_ref: str = Field(min_length=64, max_length=64)
+    page_visit_session_ref: str = Field(pattern=r"^[0-9a-f]{64}$")
     account_locale: Literal["zh-CN", "en-US"]
     contract_snapshot_id: str = Field(min_length=36, max_length=36)
     contract_version: Literal["workspace-navigation-v1"]

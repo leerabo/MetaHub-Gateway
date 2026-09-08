@@ -813,6 +813,7 @@ function navigationPayload() {
     contract_generation: 4,
     contract_snapshot_id: SNAPSHOT,
     contract_version: "workspace-navigation-v1",
+    page_visit_session_ref: "b".repeat(64),
     detail_route_codes: [
       "workspace.deployment.branding",
       "workspace.gateway.routing-policies",

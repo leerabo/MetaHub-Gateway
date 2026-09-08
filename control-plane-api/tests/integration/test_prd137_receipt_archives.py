@@ -20,7 +20,12 @@ from metahub_control.security_assurance.receipts import (
     utc_text,
 )
 from metahub_shared.config_distribution import canonical_json_bytes
-from metahub_shared.db import apply_migrations, connect_database, rollback_last_migration
+from metahub_shared.db import (
+    apply_migrations,
+    connect_database,
+    database_backend,
+    rollback_last_migration,
+)
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.schema import table_exists
 
@@ -41,6 +46,14 @@ async def _create(runtime, monkeypatch, runner, key="prd137-archive-contract-000
 def _rows(runtime):
     with closing(connect_database(runtime.config.database_url)) as connection:
         return connection.execute("SELECT * FROM assurance_receipt_archives").fetchall()
+
+
+def _rollback_after_archive(database_url):
+    versions = ["0143", "0144"] if database_backend(database_url) == "postgresql" else ["0143"]
+    for version in reversed(versions):
+        result = rollback_last_migration(database_url, expected_version=version)
+        assert result.rolled_back == version
+    return versions
 
 
 @pytest.mark.anyio
@@ -90,10 +103,11 @@ async def test_archive_exact_bytes_replay_and_immutable(runtime, monkeypatch):
             with pytest.raises(sqlite3.Error):
                 connection.execute(statement)
             connection.rollback()
+    later_versions = _rollback_after_archive(runtime.config.database_url)
     with pytest.raises(DbError):
         rollback_last_migration(runtime.config.database_url, expected_version="0142")
     assert [dict(item) for item in _rows(runtime)] == [dict(row)]
-    assert not apply_migrations(runtime.config.database_url).applied
+    assert apply_migrations(runtime.config.database_url).applied == later_versions
 
 
 @pytest.mark.anyio
@@ -279,6 +293,7 @@ def test_archive_empty_migration_roundtrip_and_manifest(runtime):
             ]
         assert _sha(table_sql) == manifest["table_sql_sha256"]
         assert _sha(column_text) == manifest["column_signature_sha256"]
+    later_versions = _rollback_after_archive(url)
     rollback_last_migration(url, expected_version="0142")
     with closing(connect_database(url)) as connection:
         assert not table_exists(connection, "assurance_receipt_archives")
@@ -287,5 +302,5 @@ def test_archive_empty_migration_roundtrip_and_manifest(runtime):
             assert connection.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE source_table='assurance_receipt_archives'",
             ).fetchone()[0] == 0
-    assert apply_migrations(url).applied == ["0142"]
+    assert apply_migrations(url).applied == ["0142", *later_versions]
     assert not apply_migrations(url).applied

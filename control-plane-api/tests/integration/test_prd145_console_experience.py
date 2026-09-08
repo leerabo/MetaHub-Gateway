@@ -118,7 +118,7 @@ def runtime(tmp_path_factory: pytest.TempPathFactory):
     with closing(connect_database(database_url)) as connection:
         assert connection.execute(
             "SELECT max(version) FROM schema_migrations WHERE status='applied'"
-        ).fetchone()[0] == "0142"
+        ).fetchone()[0] == "0143"
         platform_account_id, operator_id = _insert_platform_owner(connection)
         owner = connection.execute(
             """SELECT membership.*,tenant.slug,tenant.name,user.email,user.display_name

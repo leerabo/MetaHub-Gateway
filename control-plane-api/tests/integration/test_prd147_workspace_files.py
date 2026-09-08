@@ -5,7 +5,7 @@ import secrets
 import shutil
 import sqlite3
 import threading
-from contextlib import AsyncExitStack, closing
+from contextlib import AsyncExitStack, aclosing, closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -43,9 +43,17 @@ def _headers(client, *, global_session=False, attack=False):
 async def file_subjects(migrated_baseline, tmp_path, monkeypatch):  # noqa: F811
     database = tmp_path / "files.sqlite3"
     shutil.copyfile(migrated_baseline, database)
+    async with aclosing(workspace_http_subjects(
+        f"sqlite:///{database.as_posix()}", tmp_path, monkeypatch,
+    )) as subjects:
+        async for app, fixtures in subjects:
+            yield app, database, fixtures
+
+
+async def workspace_http_subjects(database_url, tmp_path, monkeypatch):
     settings = {
         "METAHUB_ENV": "test",
-        "METAHUB_DATABASE_URL": f"sqlite:///{database.as_posix()}",
+        "METAHUB_DATABASE_URL": database_url,
         "METAHUB_ALLOWED_ORIGINS": ORIGIN,
         "METAHUB_IDENTITY_CHALLENGE_DELIVERY_MODE": "test_capture",
         "METAHUB_WORKSPACE_ALLOWED_REGIONS": "cn-north-1",
@@ -101,7 +109,7 @@ async def file_subjects(migrated_baseline, tmp_path, monkeypatch):  # noqa: F811
             lease_guard=allowed,
             deadline_at=datetime.now(UTC) + timedelta(minutes=3),
         ).run()
-        yield app, database, fixtures
+        yield app, fixtures
 
 
 @pytest.mark.anyio

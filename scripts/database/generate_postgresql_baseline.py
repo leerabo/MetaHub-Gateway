@@ -16,7 +16,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPOSITORY_ROOT / "infra" / "migrations"
 DEFAULT_OUTPUT = MIGRATIONS_DIR / "postgresql" / "0139_postgresql_baseline.sql"
 BASELINE_VERSION = "0139"
-GENERATOR_REVISION = 4
+GENERATOR_REVISION = 5
 CANONICAL_SEED_DATETIME = "2026-09-01 00:00:00"
 CANONICAL_SEED_TIMESTAMP = "2026-09-01T00:00:00Z"
 CANONICAL_SEED_TIMESTAMP_MILLIS = "2026-09-01T00:00:00.000Z"
@@ -624,22 +624,32 @@ def conditional_ignore_or_abort(body: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+def rename_reserved_trigger_aliases(sql: str) -> str:
+    from pglast import scan
+
+    tables = {"user": "users", "freeze": "session_risk_freezes", "grant": "access_token_grants"}
+    tokens = scan(sql)
+    words = [sql[token.start:token.end + 1].lower() for token in tokens]
+    replacements = []
+    for index, word in enumerate(words):
+        if word not in tables:
+            continue
+        table_index = index - (2 if index and words[index - 1] == "as" else 1)
+        declaration = (
+            table_index >= 1
+            and words[table_index] == tables[word]
+            and words[table_index - 1] in {"from", "join"}
+        )
+        reference = index + 1 < len(words) and words[index + 1] == "."
+        if declaration or reference:
+            replacements.append((tokens[index].start, tokens[index].end + 1, word + "_row"))
+    for start, end, replacement in reversed(replacements):
+        sql = sql[:start] + replacement + sql[end:]
+    return sql
+
+
 def postgres_trigger_fragment(sql: str) -> str:
-    result = strip_sql_comments(sql)
-    result = re.sub(r"(?i)\b(FROM|JOIN)\s+users\s+user\b", r"\1 users user_row", result)
-    result = re.sub(r"(?i)\buser\.", "user_row.", result)
-    result = re.sub(
-        r"(?i)\b(FROM|JOIN)\s+session_risk_freezes\s+freeze\b",
-        r"\1 session_risk_freezes freeze_row",
-        result,
-    )
-    result = re.sub(r"(?i)\bfreeze\.", "freeze_row.", result)
-    result = re.sub(
-        r"(?i)\b(FROM|JOIN)\s+access_token_grants\s+grant\b",
-        r"\1 access_token_grants grant_row",
-        result,
-    )
-    result = re.sub(r"(?i)\bgrant\.", "grant_row.", result)
+    result = rename_reserved_trigger_aliases(strip_sql_comments(sql))
     result = re.sub(
         r"(?i)\blength\s*\(\s*CAST\s*\((.*?)\s+AS\s+BLOB\s*\)\s*\)",
         r"octet_length(convert_to(\1,'UTF8'))",

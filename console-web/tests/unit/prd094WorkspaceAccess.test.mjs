@@ -639,6 +639,7 @@ function navigationPayload() {
     contract_generation: 1,
     contract_snapshot_id: `ncs_${"1".repeat(32)}`,
     contract_version: "workspace-navigation-v1",
+    page_visit_session_ref: "b".repeat(64),
     detail_route_codes: [],
     developer_route_codes: [],
     groups: [

@@ -182,6 +182,30 @@ export function createWorkspaceNavigationIdempotencyKey(namespace = "navigation"
   return namespace + ":" + Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+export function recordWorkspacePageVisit({ controlApiUrl, visit, idempotencyKey, signal } = {}) {
+  exact(visit, ["page_visit_session_ref", "contract_snapshot_id", "permission_fingerprint",
+    "navigation_epoch", "route_code", "source", "viewport_class"]);
+  if (!HEX_64.test(visit.page_visit_session_ref) || !HEX_64.test(visit.permission_fingerprint)
+    || !SNAPSHOT_ID.test(visit.contract_snapshot_id)
+    || !Number.isSafeInteger(visit.navigation_epoch) || visit.navigation_epoch < 1
+    || !["primary", "detail", "task_home", "developer_center"].includes(WORKSPACE_ROUTE_REGISTRY[visit.route_code]?.placement)
+    || !["sidebar", "direct_hash"].includes(visit.source)
+    || !["mobile", "desktop"].includes(visit.viewport_class)
+    || !IDEMPOTENCY_KEY.test(String(idempotencyKey))) invalidRequest();
+  return request(controlApiUrl, "/workspace/navigation/page-views", {
+    method: "POST", body: visit, signal,
+    headers: { "Idempotency-Key": idempotencyKey, "X-CSRF-Token": readExactCookie(WORKSPACE_CSRF_COOKIE) },
+    normalize(value) {
+      exact(value, ["accepted", "event_id", "idempotent_replay", "permission_fingerprint", "request_id", "trace_id"]);
+      if (value.accepted !== true || typeof value.idempotent_replay !== "boolean"
+        || !/^cpe_[0-9a-f]{64}$/u.test(value.event_id)
+        || value.permission_fingerprint !== visit.permission_fingerprint) invalidResponse();
+      return deepFreeze({ ...value, request_id: chain(value.request_id), trace_id: chain(value.trace_id) });
+    },
+    etag: (value) => [value.event_id],
+  });
+}
+
 export function normalizeWorkspaceNavigation(value) {
   exact(value, [
     "account_action_codes", "account_locale", "advanced_tools_available", "contract_generation",
@@ -189,7 +213,7 @@ export function normalizeWorkspaceNavigation(value) {
     "developer_route_codes", "groups", "item_set_digest", "membership_revision",
     "navigation_epoch", "observed_at", "owner_ref", "permission_fingerprint",
     "permission_revision", "preference", "projection_generation", "projection_status",
-    "request_id", "trace_id",
+    "request_id", "trace_id", "page_visit_session_ref",
   ]);
   if (value.contract_version !== "workspace-navigation-v1"
     || typeof value.advanced_tools_available !== "boolean") invalidResponse();
@@ -199,6 +223,7 @@ export function normalizeWorkspaceNavigation(value) {
   return deepFreeze({
     ...authorizationEnvelope(value),
     owner_ref: digest(value.owner_ref),
+    page_visit_session_ref: digest(value.page_visit_session_ref),
     observed_at: timestamp(value.observed_at),
     contract_version: value.contract_version,
     projection_generation: positive(value.projection_generation),
@@ -728,7 +753,8 @@ async function json(response) {
   try {
     const value = await response.json();
     return plain(value) ? value : {};
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

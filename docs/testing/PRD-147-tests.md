@@ -461,3 +461,127 @@ Workspace 页不再尝试旧 `/console/events`，但新域 `status.viewed` 唯�
 已在设计中明确登记，不能以功能接线代替这项完成证据。其余业务消费端、PostgreSQL 并发
 撤权、全 KeyPool/DNS 时间上限和统一批次 QA 仍待完成。Excel、用户 PRD-101..105 与 outputs
 未改；不提交临时数据库、正式运行制品或 dist。G6/G7/G8 尚未证明通过，PRD-148 未开始。
+
+## 2026-09-08 Workspace 页面访问事件实施记录（未提交、未完成验收）
+
+本轮按 PRD-147 设计补充章节完成两轮自审后，增加统一页面访问 DTO/API、真实会话摘要、
+原 console_page_events 的可空会话外键及请求摘要，以及 SQLite/PostgreSQL 0143 前向/回滚
+迁移。普通页面、首页、Provider 状态和迁移指南共用前端访问生命周期；Workspace 不调用
+退休的 /console/events。旧十二列、rowid 和 payload 不重写；新事件使用现有真实成员对应
+的 User 与 WorkspaceSession，不制造 Legacy Session 或第二张事件事实表。
+
+### 独立测试轮次
+
+- prd147-page-visits-r1-junit.xml：1 passed / 1 failed，30.88s；测试把缺 Origin 的匿名
+  POST 预期为 401，既有导航边界实际首先返回 403。原报告保留。
+- prd147-page-visits-r2-junit.xml：4 passed / 1 failed，69.91s；严格 DTO 错误的现有
+  workspace_session.request_invalid 为 422，测试原先预期 400。原报告保留。
+- prd147-page-visits-r3-junit.xml：4 passed / 1 failed，71.05s；既有
+  identity.revision_conflict 为 412，测试原先预期 409。原报告保留。
+- prd147-page-visits-contract-r4-junit.xml：上述严格传输/归属/退休路由单项通过，20.15s。
+- prd147-page-visits-final-r5-junit.xml：9 passed / 2 failed，128.04s。七项本组测试
+  覆盖原表唯一事实、同键异体、严格传输与跨空间、换 Session 后重放、提交前拒绝回滚、真实
+  成员降权、真实会话最终过期、历史行/rowid 保真及数据库 owner/不可变 guard；另有 File
+  真实 Cookie 冒烟和 PRD-145 投影用例通过。两项 PRD-137 归档回滚相邻测试失败，发现新的
+  0143 down SQL 缺少 expected-version 执行器要求的固定 PRAGMA 前后缀。
+- 已补齐 0143 down 的受信事务格式，保留 expected_version 和新事实阻止回滚的断言。
+  此修正尚未复验，不能把 r5 描述为全部通过。
+- prd147-page-visits-ui-r1/r2/r3-junit.xml：三份独立前端命令均退出 0。最后一轮包含本组、
+  PRD-094/146 导航、PRD-147 资源页，以及 Provider 状态/迁移指南/旧竞品页面的受影响单元。
+  新测试覆盖真实 public owner 形状、生产渲染入口、不同页面唯一访问、微任务前离页取消、
+  迟到 401/403/409/412/503 隔离、同 owner 不重试、重新进入和 Cookie/CSRF 正文 abort。
+  这是单元/VM 证据，不是真实浏览器验收。
+- Console lint 通过（776 files），生产引用面检查通过（262 modules / 276 shipped sources）。
+  build 实际计算到新摘要 253f283d00c44354bbecf0975db6995ed70f5c285bf01f01a5b586e2bb2a1203，
+  随后已同步两个 manifest；同步后的完整 build 与 manifest 测试尚未重跑。
+- 受影响 Workspace navigation 和测试源 Ruff 检查通过；后续仅修正 SQL 前后缀、同步 manifest。
+
+### PostgreSQL 未完成项
+
+隔离实例 r1（281626fe2bc548bfbf2003434672f643）完成原生迁移和 seed 后，三项测试均在实际
+HTTP fixture bootstrap 失败，3 errors / 106.90s，尚未执行页面事件断言。r2
+（934fb705892a4b648a5f6494dc2af7d9）只诊断第一项，1 error / 2 deselected / 68.67s，已定位
+POST /identity/registrations 返回 503 identity.unavailable。尚未定位其数据库或业务根因，
+不得用合成 Session 绕过。两个测试命令均已返回 exit 1，实例脚本已执行其 finally；没有把
+仍在运行的测试误作终止或因观察超时重启测试。
+
+原报告位于 .artifacts/g6-security-20260907，前缀为 g6-page-visits-r1/r2，失败报告没有覆盖。
+新增 native fixture 复用实际注册/建空间的 workspace_http_subjects，仅输出接口、状态及固定
+错误码；尚无 PostgreSQL 页面事件、回滚或并发撤权通过证据。
+
+### 继续顺序与边界
+
+本轮后段 exec_command 新命令无法返回结果，PowerShell（含不加载 profile）和 cmd 读取均
+未返回；只取消了这些无输出的只读调用，未重启测试。替代 node_repl 启动也报 kernel assets
+路径不存在。下一轮先恢复可执行的只读检查，再定位上述 PostgreSQL 注册 503；复验 0143
+受信回滚、原生页面事件与相邻归档保护，完成 build/manifest 检查、敏感审计和独立提交。
+
+上述源文件仍未提交，敏感审计尚未执行；不要把准备好的代码或通过的局部测试作为整批 QA。
+工作簿本轮只读，G6/G7/G8 与 PRD-148 仍未证明完成；不新增 72 小时等待。后续继续其他
+Legacy-only 消费端、完整业务页浏览器、PostgreSQL 并发撤权、KeyPool/DNS 总体时限及批次 QA。
+
+## 2026-09-08 页面访问与原生邀请补充复验
+
+本节补充前节的后续结果，不覆盖历史失败记录。共享 SQLite 迁移基线摘要未变；Excel 本次只读，
+没有把局部测试通过写成 G6/G7/G8 完成，也没有新开 72 小时等待。
+
+| 独立报告 | 结果 | 范围 |
+| --- | --- | --- |
+| `prd147-page-visits-rollback-r6-junit.xml` | 3 passed，47.095s | 原先两项归档失败及页面访问迁移保真复验通过 |
+| `prd147-page-visits-logical-r7-junit.xml` | 7 passed，168.311s | 页面访问真实 Cookie、唯一事实、权限与事务、历史行保真 |
+| `prd147-page-visits-manifest-r1-junit.xml` | 1 passed，2.885s | 前后端发布清单一致 |
+| `prd147-page-visits-ui-r3-junit.xml` | 324 passed，无失败/错误/跳过 | 受影响客户端与生产 handler 单元，仍非浏览器证据 |
+| `prd147-alias-unit-r3-junit.xml` | 8 passed，0.254s | 词法别名改名保留权限、事件、JSON、引号与中文文字值 |
+| `prd147-page-visits-archive-r8-junit.xml` | 2 passed，22.207s | 归档回滚夹具适配 backend 独立编号后的 SQLite 冒烟 |
+
+上述通过报告均无跳过。最新 production build 再次通过（276 assets），两端发布摘要仍为
+`253f283d00c44354bbecf0975db6995ed70f5c285bf01f01a5b586e2bb2a1203`。
+前节所述“回滚修正未复验”和“同步清单后 build 未重跑”已由这些后续结果补齐。
+
+原生 HTTP bootstrap 先后查明的身份 schema 能力、Workspace 运营状态初始化和 Project 聚合
+兼容性分别由 PRD-091/093/029 的独立设计、测试、审计及提交交付，本节不混记为页面访问实现。
+三个提交 `07cea41`、`6809c76`、`cda51cf` 的各四项已提交源码字节再次与各自审计摘要比对通过。
+
+原生 r8 已走通身份、空间、Project/Application，邀请写入因权限字符串被别名替换而拒绝。
+修复生成器后，新增 PostgreSQL 0143 前向/回滚修复；页面访问原生迁移顺延 0144，SQLite 保持
+0143。不可变 0139 未重生成。七个函数修复共 13 处文字值；四张表的 32 项 trigger 清单先校验
+不可变基线或一致原生定义，再转换为原生格式。业务事实行不更新。
+
+- r9 `f6cb19e74ee5435ea03a4f6406c8e918`：1 error，54.73s。预检拒绝旧 SQLite 格式清单，
+  据此补齐精确旧清单摘要与完整原生触发器结构的验证；没有取消 drift guard。
+- r10 `717a3d7534d444479117a198fe993b38`：9 passed / 1 failed，271.73s。空库修复往返及
+  八项 up/down 函数、禁用 trigger、trigger 清单与表集合清单漂移原子拒绝通过。真实 HTTP
+  注册、登录、邀请、受邀成员注册和接受已完成；随后测试错误地要求旧 invitation_events 非空。
+  实际 Workspace 流程写 membership 事件并保留 Legacy invitations 关联，不写旧邀请事件表。
+  断言改为确认真实 invitations 事实存在，不添加模拟事件。此轮尚未证明页面事件请求通过。
+
+补充源代码复核覆盖函数所属 schema、PL/pgSQL、trigger 返回类型及执行配置。旧清单匹配不能
+放过相同正文但不同 search_path、strict、leakproof、volatility 或 parallel 设置的函数；新增
+function_settings 的 up/down 反例。回滚保留与还原函数一致的原生清单，事实和表结构不变。
+
+### 本组定向验证完成记录
+
+- r11 `2d14b99b06fd4411aff604ccf6531f5f`：13 passed / 1 failed，JUnit 314.423s。
+  修复往返、十项漂移反例、真实 Cookie 页面事件唯一事实/幂等和严格传输/归属通过；真实邀请
+  事实存在时 0143 回滚原子拒绝通过。最后一项已触发正确 owner guard，但测试仍匹配 SQLite
+  错误文本，原生适配器按既有合同返回固定脱敏文本，故该断言失败，原报告保留。
+- r12 `af9caf91d46444a6801f9dc4fc86aeb6`：1 passed / 13 deselected，JUnit 79.643s。
+  只复验上述受影响的原生历史/回滚用例。保留生产错误脱敏，测试只采集白名单固定错误码和
+  SQLSTATE；依次精确核对新事实阻止回滚、跨空间 owner 拒绝、不可变拒绝均为 23514。
+  原有逻辑行历史、幂等和外键检查继续执行。不能把 r11/r12 拼成同轮全绿报告。
+- `prd147-page-visits-sqlite-r9-junit.xml`：1 passed，22.195s。同一保真用例改为捕获
+  IntegrityError 后的 SQLite 定向复验，无失败/错误/跳过，仍验证 SQLite 具体 guard 文本。
+- `g6-page-visits-archive-r1-5b553bbec0364f33804c93716fb2d171-junit.xml`：1 passed /
+  27 deselected，JUnit 73.050s。原生归档空库往返与隐私清单验证通过，回滚精确执行 0144、
+  0143、0142，再重放同一版本序列；没有通过错误版本拒绝冒充归档保护。
+
+受影响 Python 源码、共享夹具与新测试 Ruff 通过，git diff-check 通过。原生 0139 与 HEAD
+逐字节一致，SHA-256 为 `11892ef4760a18c9adacb7745e8e01b173e651adf076fb44e18054b7cb934fe0`。
+所有本组 PostgreSQL 命令均已返回且隔离实例完成停止。Console 开发服务已恢复，identity.html
+返回 HTTP 200；未启动普通开发后端，不能据此宣称可登录或完成浏览器业务流程。
+
+本组独立敏感审计入口为 `prd-147-workspace-page-visits-sensitive-audit.json`，覆盖 28 项
+精确暂存源码、16 份独立原始报告、严格 UTF-8、凭据模式与共享测试基线摘要。模式扫描不是
+安全会签；本组原生认证证据来自真实 API 经 ASGITransport 调用，不是浏览器/套接字证据。
+页面访问的局部实现与上述定向验证已完成，其他消费端、完整业务浏览器、原生并发撤权、
+KeyPool/DNS 总体时限和统一批次 QA 仍继续推进。G6/G7/G8 与 Excel 总目标未标记完成。

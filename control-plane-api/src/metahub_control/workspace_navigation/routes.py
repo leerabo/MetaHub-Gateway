@@ -49,6 +49,8 @@ from .models import (
     NavigationPreferencePatch,
     NavigationPreferenceResponse,
     WorkspaceNavigationResponse,
+    WorkspacePageVisitRequest,
+    WorkspacePageVisitResponse,
 )
 from .permissions import WORKSPACE_NAVIGATION_PERMISSIONS
 from .service import (
@@ -57,6 +59,7 @@ from .service import (
     get_workspace_getting_started,
     get_workspace_navigation,
     open_workspace_advanced_tool,
+    record_workspace_page_visit,
 )
 
 router = APIRouter(tags=["workspace-navigation"])
@@ -274,12 +277,34 @@ async def open_workspace_advanced_tool_route(
     return result
 
 
+@router.post("/workspace/navigation/page-views", response_model=WorkspacePageVisitResponse)
+async def workspace_page_visit_route(
+    request: Request,
+    response: Response,
+    _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_navigation)],
+) -> WorkspacePageVisitResponse:
+    _reject_query(request, "workspace_session.request_invalid")
+    payload = await _model(request, WorkspacePageVisitRequest, "workspace_session.request_invalid")
+    result = record_workspace_page_visit(
+        request.app.state.config,
+        session_token=_workspace_token(request),
+        payload=payload,
+        idempotency_key=_idempotency_key(request, "workspace_session.request_invalid"),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    _private(response, payload.permission_fingerprint)
+    response.headers["ETag"] = f'"{result.event_id}"'
+    return result
+
+
 def _workspace_permission(request: Request) -> str:
     key = (request.method, request.url.path)
     permissions = {
         ("GET", "/workspace/navigation"): "workspace.navigation.read",
         ("GET", "/workspace/getting-started"): "workspace.task_home.read",
         ("GET", "/workspace/advanced-tools"): "workspace.advanced_tool.read",
+        ("POST", "/workspace/navigation/page-views"): "workspace.navigation.read",
     }
     permission = permissions.get(key)
     if permission is not None:

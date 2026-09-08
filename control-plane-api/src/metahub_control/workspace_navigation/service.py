@@ -43,6 +43,8 @@ from .models import (
     NavigationPreferenceResponse,
     RoleTask,
     WorkspaceNavigationResponse,
+    WorkspacePageVisitRequest,
+    WorkspacePageVisitResponse,
 )
 
 _CONTRACT_VERSION = "workspace-navigation-v1"
@@ -109,6 +111,9 @@ def get_workspace_navigation(
             _allowed(tool.permissions, actor.permission_codes) for tool in ADVANCED_TOOL_SPECS
         )
         result = WorkspaceNavigationResponse(
+            page_visit_session_ref=_pseudonym(
+                config, "page-visit-session", actor.workspace_session_id,
+            ),
             owner_ref=_owner_ref(config, actor.workspace_id, actor.tenant_id),
             account_locale=_account_locale(connection, actor.account_id),
             contract_snapshot_id=str(contract["navigation_contract_snapshot_id"]),
@@ -658,6 +663,99 @@ def open_workspace_advanced_tool(
         raise ApiError("workspace_session.unavailable") from None
     finally:
         connection.close()
+
+
+def record_workspace_page_visit(
+    config: AppConfig,
+    *,
+    session_token: str,
+    payload: WorkspacePageVisitRequest,
+    idempotency_key: str,
+    request_id: str,
+    trace_id: str,
+) -> WorkspacePageVisitResponse:
+    connection = _connect(config, "workspace_session.unavailable")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        actor, spec = _page_visit_authority(connection, config, session_token, payload)
+        event_id = "cpe_" + _idempotency_hmac(
+            config, "page-visit", actor.workspace_session_id, idempotency_key,
+        )
+        request_sha256 = _sha(payload.model_dump(mode="json"))
+        replay = connection.execute(
+            "SELECT visit_request_sha256 FROM console_page_events WHERE event_id=?",
+            (event_id,),
+        ).fetchone()
+        if replay is not None:
+            if not hmac.compare_digest(str(replay["visit_request_sha256"]), request_sha256):
+                raise ApiError("identity.idempotency_conflict")
+        else:
+            event_type = {
+                "overview": "dashboard.viewed",
+                "provider-health": "status.viewed",
+                "migration-guide": "migration.guide_viewed",
+            }.get(spec.source_id, "console.page_viewed")
+            connection.execute(
+                """INSERT INTO console_page_events(
+                  event_id,tenant_id,user_id,session_id,event_type,navigation_item_id,
+                  target_section,path,request_id,trace_id,payload_json,created_at,
+                  workspace_session_id,visit_request_sha256
+                ) VALUES(?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    event_id, actor.tenant_id, actor.legacy_user_id, event_type,
+                    spec.source_id, spec.source_id, f"/#{spec.source_id}", request_id, trace_id,
+                    _json({"hash": f"#{spec.source_id}", "source": payload.source,
+                           "viewport_class": payload.viewport_class}),
+                    _db_time(_now()), actor.workspace_session_id, request_sha256,
+                ),
+            )
+        _page_visit_authority(connection, config, session_token, payload)
+        connection.commit()
+        return WorkspacePageVisitResponse(
+            event_id=event_id, idempotent_replay=replay is not None,
+            permission_fingerprint=actor.authorization_fingerprint,
+            request_id=request_id, trace_id=trace_id,
+        )
+    except ApiError:
+        _rollback(connection)
+        raise
+    except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
+        _rollback(connection)
+        raise ApiError("workspace_session.unavailable") from None
+    finally:
+        connection.close()
+
+
+def _page_visit_authority(
+    connection: sqlite3.Connection,
+    config: AppConfig,
+    session_token: str,
+    payload: WorkspacePageVisitRequest,
+) -> tuple[WorkspaceSessionContext, ContractSpec]:
+    actor = _workspace_actor(connection, config, session_token)
+    _require_workspace(actor, "workspace.navigation.read")
+    session_ref = _pseudonym(config, "page-visit-session", actor.workspace_session_id)
+    if (
+        payload.page_visit_session_ref != session_ref
+        or payload.permission_fingerprint != actor.authorization_fingerprint
+    ):
+        raise ApiError("workspace_session.permission_denied")
+    contract = _ensure_contract(connection, actor.workspace_id, actor.tenant_id)
+    if (
+        payload.contract_snapshot_id != contract["navigation_contract_snapshot_id"]
+        or payload.navigation_epoch != _current_navigation_epoch(connection, actor.membership_id)
+    ):
+        raise ApiError("identity.revision_conflict")
+    visible = _visible_specs(
+        connection, _ensure_projection(connection, contract), actor.permission_codes,
+    )
+    spec = next((item for item in visible if item.route_code == payload.route_code
+                 and item.placement in {
+                     "primary", "detail", "task_home", "developer_center",
+                 }), None)
+    if spec is None:
+        raise ApiError("workspace_session.permission_denied")
+    return actor, spec
 
 
 def _workspace_actor(
