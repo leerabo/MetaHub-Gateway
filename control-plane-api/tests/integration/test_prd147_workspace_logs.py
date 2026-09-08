@@ -51,6 +51,18 @@ def _facts(config):
         }
 
 
+def _rollback_log_identity(config, version):
+    # Descendant migrations also exercise their own lossless down guards.
+    with closing(connect_database(config.database_url)) as connection:
+        descendants = [row[0] for row in connection.execute(
+            "SELECT version FROM schema_migrations WHERE status='applied' AND version>? "
+            "ORDER BY version DESC", (version,),
+        )]
+    for descendant in descendants:
+        rollback_last_migration(config.database_url, expected_version=descendant)
+    return rollback_last_migration(config.database_url, expected_version=version)
+
+
 async def _legacy(app, f):
     app.include_router(legacy_auth_router)
     workspace = workspace_access.authenticate_workspace_session_as_auth_context(
@@ -164,8 +176,8 @@ async def test_log_identity_history_roundtrip_and_explicit_legacy(log_subjects):
     version = "0146" if config.database_url.startswith("postgres") else "0144"
     before = _facts(config)
     assert before["request_log_query_events"][0][4] is not None
-    rollback_last_migration(config.database_url, expected_version=version)
-    assert apply_migrations(config.database_url).applied == [version]
+    _rollback_log_identity(config, version)
+    assert apply_migrations(config.database_url).applied[0] == version
     assert _facts(config) == before
     assert not apply_migrations(config.database_url).applied
     exported = await f.anonymous.get("/audit-logs/export", headers=headers)
@@ -236,7 +248,7 @@ async def test_workspace_query_owner_outbox_and_lossless_rollback_guard(log_subj
     before = _facts(config)
     version = "0146" if config.database_url.startswith("postgres") else "0144"
     with pytest.raises(DbError):
-        rollback_last_migration(config.database_url, expected_version=version)
+        _rollback_log_identity(config, version)
     assert _facts(config) == before
 
 
@@ -358,7 +370,7 @@ async def test_log_migration_rejects_schema_drift_and_preserves_privacy_manifest
             if forward:
                 apply_migrations(config.database_url)
             else:
-                rollback_last_migration(config.database_url, expected_version=version)
+                _rollback_log_identity(config, version)
         assert _facts(config) == before
         with closing(connect_database(config.database_url)) as connection:
             connection.execute(
@@ -368,9 +380,9 @@ async def test_log_migration_rejects_schema_drift_and_preserves_privacy_manifest
                 connection.execute("DROP FUNCTION test_log_drift()")
             connection.commit()
         if forward:
-            assert apply_migrations(config.database_url).applied == [version]
+            assert apply_migrations(config.database_url).applied[0] == version
         else:
-            rollback_last_migration(config.database_url, expected_version=version)
+            _rollback_log_identity(config, version)
     assert _facts(config) == before
     with closing(connect_database(config.database_url)) as connection:
         for table in (

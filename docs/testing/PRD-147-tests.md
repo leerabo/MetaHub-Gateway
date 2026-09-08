@@ -854,3 +854,88 @@ failure、shutdown timeout 为零，协调器观测时间保持新鲜，严格�
 `prd147-logs-runtime-sensitive-r2.json` 与 `prd-147-workspace-logs-sensitive-audit.json`：
 分别核验真实测试 Key/主密钥精确字节，以及本批 30 个暂存文件的路径/字节、严格 UTF-8、
 高置信凭据模式、成功与失败证据及受保护基线。扫描结果无命中，不等于完整安全验收。
+
+## 2026-09-08 请求反馈与解释批次
+
+范围：Workspace/显式 Legacy 反馈写入、250ms 总预算汇总、日志内联请求解释、真实双域
+访问事实及提交时字段权限裁剪。解释不得重复调用 Provider，不得恢复原始正文或密钥。
+工作簿只读核对 `11_现有导航处置!A48:J49`，没有修改工作簿或以本批替代全部导航迁移。
+
+### 定向与回归
+
+所有原始报告均在 `.artifacts/g6-security-20260907/`，不同轮次分开记录：
+
+| 报告 | 结果 | 范围 |
+| --- | --- | --- |
+| `prd147-explanation-r3.xml` | 10 passed | SQLite 双域真实 HTTP、Origin/CSRF、混合凭据、同形跨租户 404、Session 外键/XOR、终态过期和快照后撤权、访问 outbox、迁移往返/漂移拒绝、最后权限快照投影、反馈四场景 |
+| `prd147-feedback-native-explanation-r2-347f8e0adf3641c1aa60498dbf599f6c.xml` | 12 passed | 原生 PostgreSQL 反馈与解释、250ms 汇总 HTTP、锁/statement 预算取消恢复、双域事实和迁移 |
+| `prd147-feedback-native-explanation-final-r3-203c9db712bb4694b58c4ff849e0cc7c.xml` | 18 passed | 原生反馈、解释和既有日志回归，含迁移/down 守卫与预算合同 |
+| `prd147-explanation-log-regression-r1.xml` | 6 passed | SQLite 已交付日志/导出回归；旧迁移测试先逐一执行后继迁移的正式 down，再验证目标迁移，未绕过回滚守卫 |
+| `prd147-explanation-legacy-r1.xml` | 3 passed | Legacy API/RBAC/隐私、微秒源时间保真、缺表/锁/连接释放 |
+| `prd147-feedback-explanation-units-r1.xml` | 110 passed | 共享 DB 预算、反馈、事务生命周期、解释合同与字段裁剪 |
+| `prd147-feedback-explanation-web-full-r2.xml` | 1855 passed | 全部前端单元，包括真实生产 handler、重复点击、旧 DOM、迟到 200/401、同 owner 刷新、清空草稿、Cookie/CSRF 与混合凭据拒绝 |
+| `prd147-feedback-explanation-manifest-r1.xml` | 1 passed / 23 deselected | 前后端发布清单及摘要一致 |
+| `prd147-feedback-regression-r1.xml` | 9 passed / 2 failed | 两处旧测试错误地用 dataclasses.replace 复制 Pydantic 配置，尚未进入业务 |
+| `prd147-feedback-regression-r2.xml` | 2 passed / 4 deselected | 改用 model_copy 后重验上述两个真实并发/副作用场景 |
+| `prd147-feedback-worker-red-r1.xml` | 1 failed / 4 deselected | 真实 HTTP 证明旧反馈写入仍在事件循环线程执行 |
+| `prd147-feedback-worker-r2.xml` | 5 passed | 反馈整体移入既有工作线程模式后，SQLite 双域 API、幂等、撤权、汇总预算及线程合同 |
+| `prd147-feedback-native-worker-r4-c3a9c55f40bf47e3ae18a399ce6ffae7.xml` | 7 passed | 最终工作线程版本的原生 PostgreSQL 反馈回归；隔离实例正常停止 |
+
+原失败证据保留：SQLite 撤权测试最初在仍持有读锁时提交另一连接写入，得到 database locked。
+修正后在读取事务回滚与第二次 begin 之间提交撤权，断言已经结束旧事务，验证实际终态窗口。
+前端旧断言要求独立页面 handoff，已改为内联动作，继续检查 ID 不进入 URL/Storage。
+字段测试曾发现不存在的 webhook.read，改用路由实际已有的 webhook.manage 后通过；未加假权限。
+
+### 发布准备
+
+隔离目录使用正式构建脚本构建 276 个资产；第一次遗漏 partner.html 的失败副本保留，补齐
+清单中的 HTML 后构建通过，没有让失败构建清空当前 dist。前端 lint/生产来源检查通过。
+发布摘要为 `cfcefcae1cb4e249db79d500aa5640661902c7ae9849680d8fbba51b1f5afc34`。
+`prd147-feedback-explanation-local-upgrade-r1.json` 记录 SQLite backup API 备份和 0145
+副本升级演练，15 张业务表历史 rowid 与全部既有列的摘要保持相等，quick_check 与 FK 检查通过。
+
+本批没有新增付费模型调用，沿用之前验证的 Kimi 本地加密配置。PRD-148、G6/G8、完整
+业务域与 72 小时长稳仍不能据此认定完成，用户要求的先交付再长稳顺序不变。
+
+### 本地发布与真实反馈
+
+0145 已对 `.data/metahub-dev-prd117.sqlite3` 实际应用；升级前另存
+`.data/backups/feedback-explanation-release-20260908-r1/before-apply.sqlite3`，15 张历史业务表
+既有列及 rowid 摘要一致。旧 dist 可恢复地保存在 `.tmp/prd147-feedback-explanation-dist-before-r1`。
+Console 已明确以 `METAHUB_CONSOLE_ROOT=C:/MetaHub/console-web/dist` 启动，在线
+`production-assets.json` 与发布摘要一致，不再把源码服务器当作构建发布验证。
+
+真实 Cookie 浏览器首次打开与手动刷新解释，各产生一条独立访问事实，关联真实 Workspace
+Session 并完成事件投递；清空后输入和结果消失。源请求的路由、用量和十阶段决策链可见，
+历史 Provider 响应证据标为未记录，未伪造完整证据。
+
+反馈首次及同操作重试均为 503，移入工作线程后仍出现 503。临时诊断只记录类型、SQLite
+错误码和源码位置，确认 `SQLITE_BUSY` 发生于 `BEGIN IMMEDIATE`，没有半条反馈。隔离副本
+写入成功；`prd147-feedback-lock-probe-r1.json` 的冷/暖连接各四次锁探针全部取得并回滚锁，
+未改业务数据。这些诊断尚不能证明实际锁持有者或根因已消除，未放宽 250ms 写锁预算。
+
+诊断运行的同操作重试返回 201，保存唯一反馈 `rfb_7a9f12463a214025b73d51a95fb705f2`。
+恢复正式 `start-control-api.ps1` 后，真实页面显示已记录反馈 5/5、已采纳；汇总显示一条样本、
+平均 5/5、采纳率 100%，正式服务日志中的 `/feedback/summary` 为 200 / 158ms。
+成功写入发生在诊断运行中，不冒充正常完整 profile 下稳定写入已验证。诊断 launcher 已退出，
+原诊断文件与失败截图保留，没有进入正式启动脚本或受版本控制源码。
+
+桌面 1280x900 汇总与移动 390x844 反馈页已经截图检查；页面没有横向溢出，可见控件没有
+越出视口。截图分别为 `prd147-feedback-summary-desktop-r1.png`、
+`prd147-feedback-mobile-saved-r1.png`，失败原件 `prd147-feedback-mobile-failed-r1.png` 保留。
+返回日志时仍遇到读取失败，重载后恢复；此前间歇 TypeError 未证明修复，不以服务端 200
+替代浏览器成功。后台 `platform_metering.reconciliation_required` 也仍存在。
+
+短观测 r1 六样本/18 HTTP 通过；正常启动后的 r2 首样本仍为 62 队列，之后收敛到 63，
+严格报告保留 failed，未删掉首样本。各轮均不代表完整后台业务或 72 小时稳定性。
+
+正常服务收敛后的 `prd147-feedback-explanation-runtime-short-r3.json` 六样本/18 HTTP 全部
+通过；各样本 63 队列、drop/backend failure/shutdown timeout 均为零，观测持续刷新。
+`prd147-feedback-explanation-facts-r1.json` 与 r2 在解释重开后相隔超过一分钟，均为两条
+Gateway 请求、三条解释事实、一条反馈及一个反馈事件；后台刷新没有增加解释访问次数，
+quick_check 正常、外键违规为零。解释桌面/移动截图已检查，临时 viewport 已调用 reset。
+
+最终扫描使用新报告 `prd-147-feedback-explanation-sensitive-audit-r2.json` 与
+`prd147-feedback-explanation-key-audit-r2.json`，覆盖最终暂存字节、成功/失败证据、诊断
+辅助脚本、日志及真实测试 Key/主密钥的精确字节，受保护基线保持原摘要。扫描不是完整安全
+签署；本批提交不把真实写锁争用、日志间歇失败、PRD-148 或整体目标标记完成。

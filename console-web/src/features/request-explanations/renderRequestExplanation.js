@@ -10,6 +10,7 @@ import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
 const STATE_LABELS = Object.freeze({
   complete: "证据完整",
   partial: "证据部分缺失",
+  restricted: "权限受限",
   pending: "等待异步证据",
   not_recorded: "未记录",
   not_applicable: "未执行",
@@ -334,8 +335,7 @@ export function renderRequestExplanationPanel(state, authContext) {
   return `
     <div class="request-explanation-heading">
       <div>
-        <h2 id="request-explanations-title">请求解释中心</h2>
-        <p>单次请求的鉴权、治理决策、上游调用、用量与投递证据。</p>
+        <h2 id="request-explanations-title">请求解释</h2>
       </div>
       ${renderTopStatus(currentState)}
     </div>

@@ -36,6 +36,8 @@ RESOURCE_PERMISSIONS = frozenset(
         "experiment.read",
         "experiment.write",
         "request_log.read",
+        "feedback.use",
+        "request_explanation.read",
         "audit.read",
         "audit.export",
     }

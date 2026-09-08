@@ -30,7 +30,9 @@ from .contracts import (
 
 # 决策阶段与详情区块使用两套正交状态：业务阶段说明“发生了什么”，证据状态说明
 # “我们能否完整证明”。这样 Provider 失败也可以拥有 complete 证据，而不会被误报为缺失。
-EvidenceState = Literal["complete", "partial", "not_recorded", "not_applicable", "pending"]
+EvidenceState = Literal[
+    "complete", "partial", "not_recorded", "not_applicable", "pending", "restricted"
+]
 DecisionStageStatus = Literal[
     "passed",
     "blocked",
@@ -38,8 +40,9 @@ DecisionStageStatus = Literal[
     "pending",
     "not_evaluated",
     "not_recorded",
+    "restricted",
 ]
-ExplanationStatus = Literal["complete", "partial"]
+ExplanationStatus = Literal["complete", "partial", "restricted"]
 StageName = Literal[
     "authentication",
     "rate_limit",
@@ -137,12 +140,12 @@ class RequestExplanationSummary(BaseModel):
     application_name: StrictStr | None = None
     snapshot_version: StrictInt | None = None
     latency_ms: StrictInt | None = None
-    input_tokens: StrictInt
-    output_tokens: StrictInt
-    total_tokens: StrictInt
+    input_tokens: StrictInt | None
+    output_tokens: StrictInt | None
+    total_tokens: StrictInt | None
     estimated_cost_amount: StrictStr | None = None
-    currency: StrictStr
-    fallback_triggered: StrictBool
+    currency: StrictStr | None
+    fallback_triggered: StrictBool | None
     created_at: datetime
     updated_at: datetime
 
@@ -189,6 +192,12 @@ class RequestExplanation(BaseModel):
         missing = tuple(self.missing_sections)
         truncated = tuple(self.truncated_sections)
         positions = {name: index for index, name in enumerate(SECTION_ORDER)}
+        restricted = {name for name in SECTION_ORDER
+                      if getattr(self, name).evidence_state == "restricted"}
+        if (self.status == "restricted") != bool(restricted):
+            raise ValueError("request_explanation.restricted_status_invalid")
+        if restricted & (set(missing) | set(truncated)):
+            raise ValueError("request_explanation.restricted_metadata_invalid")
         if (
             tuple(sorted(set(missing), key=positions.__getitem__)) != missing
             or tuple(sorted(set(truncated), key=positions.__getitem__)) != truncated
@@ -204,6 +213,8 @@ class RequestExplanation(BaseModel):
             raise ValueError("request_explanation.status_invalid")
         for section_name, allowed_kinds in SECTION_FACT_KINDS.items():
             section = getattr(self, section_name)
+            if section_name in restricted and (section.facts or section.truncated):
+                raise ValueError("request_explanation.restricted_fact_invalid")
             if any(fact.kind not in allowed_kinds for fact in section.facts):
                 # kind 放错区块会误导决策链引用，也可能扩大该区块原本允许的披露范围。
                 raise ValueError("request_explanation.section_fact_invalid")

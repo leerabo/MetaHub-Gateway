@@ -110,6 +110,8 @@ def require_console_user(
 def require_workspace_or_legacy_permissions(
     *permission_codes: str,
     csrf_required: bool = False,
+    monotonic_deadline: float | None = None,
+    deadline_error_code: str = "infra.service_unavailable",
 ) -> Callable[..., AuthContext]:
     """Build an explicit resource-route guard for one Workspace or Legacy credential."""
 
@@ -142,11 +144,16 @@ def require_workspace_or_legacy_permissions(
                 request.app.state.config,
                 workspace_token,
                 csrf_token=csrf_token,
+                monotonic_deadline=monotonic_deadline,
+                deadline_error_code=deadline_error_code,
             )
             request.state.workspace_session_authenticated = True
             request.state.credential_domain = "workspace"
         else:
-            context = authenticate_bearer(request.app.state.config, authorization)
+            context = authenticate_bearer(
+                request.app.state.config, authorization,
+                monotonic_deadline=monotonic_deadline, deadline_error_code=deadline_error_code,
+            )
             request.state.credential_domain = "legacy"
         for permission_code in permission_codes:
             require_permission(context, permission_code)
@@ -854,15 +861,11 @@ def require_feedback_summary_user(
     deadline = started + FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
     # deadline 只驻留当前请求，路由不得重新用当前时刻生成另一份 250ms 预算。
     request.state.feedback_summary_deadline = deadline
-    _reject_mixed_workspace_credential(request, authorization)
-    context = authenticate_bearer(
-        request.app.state.config,
-        authorization,
+    return require_workspace_or_legacy_permissions(
+        "feedback.use",
         monotonic_deadline=deadline,
         deadline_error_code="feedback.unavailable",
-    )
-    # 当前后端 permission 快照是唯一授权依据，禁止按角色名或前端可见性补权。
-    return require_permission(context, "feedback.use")
+    )(request, authorization)
 
 
 def require_usage_exporter(

@@ -497,6 +497,7 @@ function renderActiveContent(activeItemId, options, statuses) {
         options.authContext,
         options.requestFeedbackState,
         options.i18n,
+        options.requestExplanationState,
       );
     case "request-explanations":
       // PAGE-079 只渲染后端单次 GET 返回的严格白名单；权限、租户归属和访问审计均由后端强制执行。
@@ -1082,12 +1083,15 @@ function renderPromptTemplatesContent(options) {
  * 渲染调用日志区域。
  * 前端会按角色隐藏该区域，但后端 /request-logs 仍会做管理员/开发者权限校验。
  */
-function renderRequestLogsSection(requestLogsState, authContext, feedbackState, i18n) {
+function renderRequestLogsSection(requestLogsState, authContext, feedbackState, i18n, explanationState) {
   const html = renderRequestLogPanel(requestLogsState, authContext, feedbackState, i18n);
   return html
     ? `
       <section class="panel request-logs-panel" aria-labelledby="request-logs-title">
         ${html}
+        <div class="request-explanations-panel">
+          ${explanationState?.requestId ? renderRequestExplanationPanel(explanationState, authContext) : ""}
+        </div>
       </section>
     `
     : "";

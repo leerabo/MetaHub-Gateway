@@ -4,6 +4,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /** Feedback Summary 的分页默认值，与后端 `GET /feedback/summary` 合同保持一致。 */
 const DEFAULT_SUMMARY_LIMIT = 20;
@@ -25,6 +26,7 @@ export function createRequestFeedbackRequestId() {
 export async function createRequestFeedback({
   controlApiUrl,
   token,
+  authentication,
   requestId,
   rating,
   accepted,
@@ -34,8 +36,9 @@ export async function createRequestFeedback({
 }) {
   const payload = await requestFeedbackRequest(`${controlApiUrl}/feedback`, {
     method: "POST",
+    authentication,
+    token,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       "X-Request-ID": operationRequestId,
     },
@@ -63,6 +66,7 @@ export async function createRequestFeedback({
 export async function getRequestFeedbackSummary({
   controlApiUrl,
   token,
+  authentication,
   modelId,
   fromTime,
   toTime,
@@ -77,7 +81,8 @@ export async function getRequestFeedbackSummary({
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   const payload = await requestFeedbackRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication,
+    token,
     cache: "no-store",
     signal,
   });
@@ -180,7 +185,7 @@ function setOptionalQuery(url, name, value) {
  * 错误对象只保留 code/message/suggestion/request_id/trace_id，不附带 URL、请求体、Token 或原始响应正文。
  */
 async function requestFeedbackRequest(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await authenticatedResourceFetch(url, options);
   const payload = await readJson(response);
   if (!response.ok) {
     // 统一错误转换必须发生在业务层之前，避免表单直接读取可能包含敏感字段的原始响应。

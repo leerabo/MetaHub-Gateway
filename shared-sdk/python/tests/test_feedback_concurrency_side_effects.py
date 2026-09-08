@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 import sqlite3
 import threading
 from collections.abc import Callable, Sequence
@@ -18,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from metahub_control.auth.service import authenticate_bearer, login_admin
 from metahub_control.feedback import service as control_feedback_service
 from metahub_gateway.auth.virtual_key import GatewayAuthContext
 from metahub_gateway.feedback import service as gateway_feedback_service
@@ -28,6 +31,7 @@ from metahub_shared.feedback import (
     create_request_feedback,
     normalize_feedback_payload,
 )
+from metahub_shared.runtime.config import load_app_config
 from metahub_shared.runtime.errors import ApiError
 
 # 每个场景使用不同源调用，避免一个场景形成的不可变反馈改变另一个场景的裁决结果。
@@ -69,6 +73,18 @@ def _sqlite_url(path: Path) -> str:
     """把 pytest 临时路径转换为项目数据库层支持的 SQLite URL。"""
 
     return f"sqlite:///{path.as_posix()}"
+
+
+def _control_subject(fixture):
+    config = load_app_config("control-plane-api").model_copy(
+        update={"database_url": fixture.database_url}
+    )
+    login = login_admin(
+        config, tenant_slug="default", email="admin@metahub.local",
+        password=os.environ["METAHUB_SEED_ADMIN_PASSWORD"], request_id="feedback-test-login",
+        trace_id="feedback-test-login", user_agent=None, client_host=None,
+    )
+    return config, authenticate_bearer(config, f"Bearer {login.access_token}")
 
 
 def _prepare_database(tmp_path: Path, request_ids: Sequence[str]) -> _FeedbackFixture:
@@ -373,11 +389,9 @@ def test_control_and_gateway_real_concurrency_share_one_source_fact(
 ) -> None:
     """Control Session 与 Gateway Key 同时评价同一源调用时全局只形成一条事实。"""
 
+    monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
     fixture = _prepare_database(tmp_path, [CROSS_ENTRY_REQUEST_ID])
-    config = SimpleNamespace(database_url=fixture.database_url)
-    control_context = SimpleNamespace(
-        user=SimpleNamespace(tenant_id=fixture.tenant_id, user_id=fixture.admin_user_id)
-    )
+    config, control_context = _control_subject(fixture)
     gateway_context = _virtual_key_context(fixture)
     app_state = SimpleNamespace(runtime_event_queue=None)
     # 本测试只裁决双入口数据库竞争；外部投递分别由后续副作用测试使用真实边界验证。
@@ -533,11 +547,9 @@ def test_control_webhook_dispatch_failure_does_not_rollback(
 ) -> None:
     """Control Webhook 提交后异常只告警，不能改写已经提交的成功反馈。"""
 
+    monkeypatch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
     fixture = _prepare_database(tmp_path, [WEBHOOK_FAILURE_REQUEST_ID])
-    config = SimpleNamespace(database_url=fixture.database_url)
-    context = SimpleNamespace(
-        user=SimpleNamespace(tenant_id=fixture.tenant_id, user_id=fixture.admin_user_id)
-    )
+    config, context = _control_subject(fixture)
     # 故障正文模拟外部 Endpoint 细节；服务日志只能保留固定分类，不能传播该文本。
     dispatch = Mock(side_effect=RuntimeError("private-endpoint-token must stay redacted"))
     monkeypatch.setattr(control_feedback_service, "dispatch_webhook_event", dispatch)

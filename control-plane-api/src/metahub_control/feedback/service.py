@@ -23,6 +23,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.webhooks import WebhookEvent
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.webhooks.service import dispatch_webhook_event
 
 from .models import (
@@ -63,6 +64,7 @@ def create_session_feedback(
         operation_request_id=operation_request_id,
         trace_id=trace_id,
         intent=intent,
+        authorize=_feedback_authorizer(config, context),
     )
     _dispatch_feedback_event(
         config,
@@ -114,6 +116,7 @@ def summarize_session_feedback(
         limit=limit,
         offset=offset,
         monotonic_deadline=monotonic_deadline,
+        authorize=_feedback_authorizer(config, context),
     )
     response = FeedbackSummaryResponse(
         scope_type=result.scope_type,
@@ -154,6 +157,14 @@ def summarize_session_feedback(
         # 最多 100 个模型 DTO 的 Python 映射也属于 endpoint 预算，不能只限制 SQL statement。
         raise ApiError("feedback.unavailable")
     return response
+
+
+def _feedback_authorizer(config: AppConfig, context: AuthContext):
+    def authorize(connection, read_only):
+        ResourceWriteTransaction(
+            connection, config, context, "feedback.use", read_only=read_only,
+        ).verify()
+    return authorize
 
 
 def _mutation_response(

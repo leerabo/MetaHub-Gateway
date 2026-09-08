@@ -857,7 +857,7 @@ test("PRD-055 main gates list and mutations with role navigation and owner ticke
   assert.match(source, /listSavedRequestLogFilters\([\s\S]*signal: ticket\.signal/);
   assert.match(source, /beginSavedFilterMutation\(owner\)/);
   assert.match(source, /isCurrentSavedFilterMutation\(ticket, currentOwner\)/);
-  assert.match(source, /const owner = currentRequestLogOwner\(\);[\s\S]*requestExplanationHandoff\.stage\([\s\S]*source: "request_logs"/);
+  assert.match(source, /runRequestExplanationRead\(button\.dataset\.requestLogExplain, "request_logs", binding/);
   assert.match(source, /function requestLogInteractionAllowed[\s\S]*REQUEST_LOG_NAVIGATION_IDS\.has\(consoleShellState\?\.activeNavigationItemId\)[\s\S]*requestLogIdentitySnapshot/);
   assert.match(source, /terminalStage: optionalText\(data\.get\("terminalStage"\)\)/);
   assert.equal((source.match(/currentRequestLogFiltersFromForm\(\)/g) ?? []).length, 3);

@@ -378,7 +378,7 @@ def insert_request_explanation(
     source_request_id: str,
     source_trace_id: str,
     actor_user_id: str,
-    actor_session_id: str,
+    actor_session_id: str | None,
     source_status: str,
     status: str,
     section_status: dict[str, str],
@@ -389,6 +389,7 @@ def insert_request_explanation(
     operation_request_id: str,
     operation_trace_id: str,
     viewed_at: datetime,
+    workspace_session_id: str | None = None,
 ) -> None:
     """在调用方短写事务中插入不可变访问事实和 pending source outbox。
 
@@ -401,7 +402,7 @@ def insert_request_explanation(
         """
         INSERT INTO request_explanations(
           request_explanation_id, event_id, tenant_id,
-          source_request_id, source_trace_id, actor_user_id, actor_session_id,
+          source_request_id, source_trace_id, actor_user_id, actor_session_id, workspace_session_id,
           source_status, status, evidence_version,
           section_status_json, missing_sections_json, truncated_sections_json,
           source_created_at, source_updated_at,
@@ -409,7 +410,7 @@ def insert_request_explanation(
           event_dispatch_status, event_dispatch_attempts, event_next_attempt_at,
           viewed_at, created_at, updated_at
         ) VALUES(
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, 'request_explanation_v1',
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'request_explanation_v1',
           ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?
         )
         """,
@@ -421,6 +422,7 @@ def insert_request_explanation(
             source_trace_id,
             actor_user_id,
             actor_session_id,
+            workspace_session_id,
             source_status,
             status,
             json.dumps(section_status, ensure_ascii=True, separators=(",", ":")),

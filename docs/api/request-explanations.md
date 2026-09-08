@@ -20,7 +20,8 @@
 
 ## 2. 认证、权限与租户隔离
 
-- 认证方式：Authorization: Bearer session_token。
+- 认证方式：显式 Legacy Bearer，或真实 WorkspaceSession Cookie，禁止混用。
+- Workspace GET 会创建访问事实，必须校验允许的 Origin 与 Workspace CSRF。
 - admin、developer 可读取。
 - 匿名请求返回统一 401；viewer 返回统一 403。
 - 后端 RBAC 先于 path 业务校验和 query/body/header 严格校验执行。前端隐藏入口不能
@@ -61,8 +62,17 @@ A-Z a-z 0-9 _ . : -
 - X-Request-ID、X-Trace-ID 若提供，只能各出现一次并使用同一安全字符集；
 - 重复、逗号合并、控制字符、超长或非 ASCII 链路头统一拒绝。
 
-成功为 HTTP 200，并包含 no-store/private、Pragma: no-cache、Vary: Authorization
+成功为 HTTP 200，并包含 no-store/private、Pragma: no-cache、Vary: Authorization, Cookie
 以及统一 X-Request-ID、X-Trace-ID。
+
+PRD-147 字段授权：入口 `request_explanation.read` 不隐含来源领域权限。各区块按既有
+`virtual_key.read`、`request_log.read`、`billing.budget.read`、`dlp.read`、`policy.read`、
+`routing.read`、`provider.read`、`billing.usage.read` + `billing.finops.read`、`webhook.manage`
+求交；摘要和区块内的跨域字段另按环境、项目、模型、Provider 健康、价格、质量与用量权限裁剪。
+字段缺权返回 null，受限区块返回 `evidence_state=restricted`、固定 reason、空 facts；
+相关阶段为 `restricted`，不返回原因详情、时间或引用。受限信息不进入缺失/截断列表。
+整个响应含受限区块时 `status=restricted`，不把权限限制误报为证据完整或缺失。
+授权取访问事实提交前重新鉴权后的权限快照，内部访问记录仍保存原始完整性状态。
 
 响应骨架：
 

@@ -53,13 +53,14 @@ test("renderer exposes only fixed interaction anchors for browser focus and disc
   assert.doesNotMatch(rendererSource, /JSON\.stringify\(.*(?:fact|values|explanation)/);
 });
 
-test("main keeps source request ids out of URL and browser storage during handoff", () => {
-  const handoffStart = mainSource.indexOf("requestExplanationHandoff.stage");
-  const handoffEnd = mainSource.indexOf("switchConsoleNavigation", handoffStart);
+test("main keeps source request ids out of URL and browser storage during inline explain", () => {
+  const handoffStart = mainSource.indexOf("async function runRequestExplanationRead(");
+  const handoffEnd = mainSource.indexOf("\n}", handoffStart);
   assert.ok(handoffStart >= 0 && handoffEnd > handoffStart);
   const handoffBlock = mainSource.slice(handoffStart, handoffEnd + 80);
   assert.doesNotMatch(handoffBlock, /replaceNavigationHash\([^)]*requestId/);
   assert.doesNotMatch(handoffBlock, /localStorage|sessionStorage/);
+  assert.doesNotMatch(handoffBlock, /switchConsoleNavigation|location\./);
 
   const loaderStart = mainSource.indexOf("async function loadRequestExplanationState");
   const loader = mainSource.slice(loaderStart, loaderStart + 5000);

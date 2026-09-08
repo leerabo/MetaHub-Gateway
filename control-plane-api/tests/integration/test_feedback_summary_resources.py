@@ -312,6 +312,7 @@ async def test_summary_endpoint_uses_trusted_tenant_and_one_entry_budget(
         offset: int = 0,
         deadline_seconds: float = 0.250,
         monotonic_deadline: float | None = None,
+        authorize=None,
     ) -> FeedbackSummaryResult:
         """捕获 service 恢复的可信 tenant 和绝对 deadline，并返回安全空报表。"""
 
@@ -319,6 +320,7 @@ async def test_summary_endpoint_uses_trusted_tenant_and_one_entry_budget(
         assert model_id is None
         assert deadline_seconds == 0.250
         assert monotonic_deadline is not None
+        assert callable(authorize)
         captured_tenants.append(tenant_id)
         captured_deadlines.append(monotonic_deadline)
         return _empty_summary(

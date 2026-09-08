@@ -8,13 +8,15 @@ Provider Key 与 Token 不得明文落日志。
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -42,6 +44,47 @@ _DATABASE_COMMIT_GUARD: ContextVar[DatabaseCommitGuard | None] = ContextVar(
     "metahub_database_commit_guard",
     default=None,
 )
+_DATABASE_OPERATION_DEADLINE: ContextVar[float | None] = ContextVar(
+    "metahub_database_operation_deadline", default=None,
+)
+
+
+class _DatabaseOperationDeadline:
+    def __init__(self, deadline: float | None) -> None:
+        self.deadline = deadline
+        self.token = None
+
+    def __enter__(self) -> None:
+        previous = _DATABASE_OPERATION_DEADLINE.get()
+        deadline = self.deadline
+        if deadline is not None:
+            if (
+                isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                or not math.isfinite(deadline)
+            ):
+                raise sqlite3.OperationalError("Database deadline invalid.")
+            deadline = min(previous, deadline) if previous is not None else deadline
+        self.token = _DATABASE_OPERATION_DEADLINE.set(
+            deadline if deadline is not None else previous,
+        )
+
+    def __exit__(self, *_args) -> None:
+        _DATABASE_OPERATION_DEADLINE.reset(self.token)
+
+
+def database_operation_deadline(deadline: float | None) -> _DatabaseOperationDeadline:
+    """Opt in to a shared PostgreSQL budget without mutating frozen driver exceptions."""
+    return _DatabaseOperationDeadline(deadline)
+
+
+def _database_remaining_seconds() -> float | None:
+    deadline = _DATABASE_OPERATION_DEADLINE.get()
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise sqlite3.OperationalError("Database deadline exceeded.")
+    return remaining
 
 
 @contextmanager
@@ -204,11 +247,19 @@ class _PostgresConnection:
         statement = _postgres_sql(sql, translate_placeholders=parameters is not None)
         cursor = None
         try:
-            cursor = self._connection.cursor()
-            if parameters is None:
-                cursor.execute(statement, prepare=False)
-            else:
-                cursor.execute(statement, parameters)
+            budgeted = _DATABASE_OPERATION_DEADLINE.get() is not None and not re.fullmatch(
+                r"\s*(?:BEGIN(?: IMMEDIATE)?|ROLLBACK|SET TRANSACTION READ ONLY)\s*;?\s*",
+                sql, re.I,
+            )
+            # Flush the setting and its statement together, retaining their server order.
+            with self._connection.pipeline() if budgeted else nullcontext():
+                if budgeted:
+                    self._apply_statement_deadline()
+                cursor = self._connection.cursor()
+                if parameters is None:
+                    cursor.execute(statement, prepare=False)
+                else:
+                    cursor.execute(statement, parameters)
         except Exception as exc:
             if cursor is not None:
                 try:
@@ -217,6 +268,20 @@ class _PostgresConnection:
                     pass
             _raise_postgres_error(exc)
         return _PostgresCursor(cursor)
+
+    def _apply_statement_deadline(self) -> None:
+        remaining = _database_remaining_seconds()
+        if remaining is None:
+            return
+        milliseconds = str(max(1, int(remaining * 1000)))
+        # Transaction-local settings disappear on commit/rollback, never leaking
+        # a short request budget into the next pool checkout.
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('statement_timeout', %s, true), "
+                "set_config('lock_timeout', %s, true)",
+                (milliseconds, milliseconds),
+            )
 
     def executescript(self, sql: str) -> None:
         """Run a reviewed bootstrap script containing explicit transaction batches."""
@@ -256,6 +321,7 @@ class _PostgresConnection:
             raise RuntimeError("Cannot operate on a closed database.")
         cursor = None
         try:
+            self._apply_statement_deadline()
             cursor = self._connection.cursor()
             cursor.executemany(_postgres_sql(sql), parameters)
         except Exception as exc:
@@ -270,6 +336,7 @@ class _PostgresConnection:
     def commit(self) -> None:
         _require_commit_authority(self)
         try:
+            self._apply_statement_deadline()
             self._connection.commit()
         except Exception as exc:
             _raise_postgres_error(exc)
@@ -672,12 +739,19 @@ def _connect_postgresql(database_url: str) -> Any:
         ) from None
     try:
         scope = _DATABASE_REQUEST_SCOPE.get()
+
+        def checkout():
+            remaining = _database_remaining_seconds()
+            return _PostgresConnection(
+                pool.getconn(timeout=remaining) if remaining is not None else pool.getconn(), pool,
+            )
+
         if scope is not None:
             return scope.connection(
                 f"postgresql:{pool_key}",
-                lambda: _PostgresConnection(pool.getconn(), pool),
+                checkout,
             )
-        return _PostgresConnection(pool.getconn(), pool)
+        return checkout()
     except PoolTimeout:
         raise DbError(
             "db.pool_exhausted",
@@ -734,7 +808,9 @@ def _raise_postgres_error(error: Exception) -> NoReturn:
     if sqlstate.startswith("23"):
         raise sqlite3.IntegrityError("Database integrity constraint failed.") from None
     if sqlstate.startswith("40") or sqlstate == "55P03":
-        raise sqlite3.OperationalError("Database transaction conflict.") from None
+        conflict = sqlite3.OperationalError("Database transaction conflict.")
+        conflict.sqlstate = sqlstate
+        raise conflict from None
     raise sqlite3.DatabaseError("Database operation failed.") from None
 
 

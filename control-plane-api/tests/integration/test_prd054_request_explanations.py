@@ -530,7 +530,7 @@ async def test_prd054_api_rbac_tenant_shape_audit_and_privacy(
         assert body["request_id"] == response.headers["X-Request-ID"]
         assert response.headers["Cache-Control"] == "no-store, private"
         assert response.headers["Pragma"] == "no-cache"
-        assert response.headers["Vary"] == "Authorization"
+        assert response.headers["Vary"] == "Authorization, Cookie"
         assert [stage["stage"] for stage in explanation["decision_chain"]] == STAGE_ORDER
         assert len(explanation["decision_chain"]) == 10
         assert all(

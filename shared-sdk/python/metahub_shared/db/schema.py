@@ -16,8 +16,9 @@ def table_exists(connection, table: str) -> bool:
     table = _table_name(table)
     if getattr(connection, "backend", "sqlite") == "postgresql":
         row = connection.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema=current_schema() AND table_type='BASE TABLE' AND table_name=?",
+            "SELECT 1 FROM pg_catalog.pg_class "
+            "WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p') "
+            "AND relname=?",
             (table,),
         ).fetchone()
     else:

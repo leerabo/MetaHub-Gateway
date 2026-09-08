@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database
+from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.schema import table_exists
 from metahub_shared.db.security import hash_token, verify_password
@@ -23,7 +23,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.rbac_snapshot import require_actor_runtime_permissions
 
 from metahub_control.auth.models import AuthSession, AuthTenant, AuthUser
-from metahub_control.auth.service import AuthContext
+from metahub_control.auth.service import AuthContext, authentication_database_deadline
 from metahub_control.customer_support.permissions import (
     CUSTOMER_SUPPORT_ROLE_PERMISSIONS,
 )
@@ -728,11 +728,15 @@ def authenticate_workspace_session_as_auth_context(
     session_token: str,
     *,
     csrf_token: str | None = None,
+    monotonic_deadline: float | None = None,
+    deadline_error_code: str = "workspace_session.unavailable",
 ) -> AuthContext:
     return authenticate_workspace_session_context(
         config,
         session_token,
         csrf_token=csrf_token,
+        monotonic_deadline=monotonic_deadline,
+        deadline_error_code=deadline_error_code,
     ).as_auth_context()
 
 
@@ -741,28 +745,42 @@ def authenticate_workspace_session_context(
     session_token: str,
     *,
     csrf_token: str | None = None,
+    monotonic_deadline: float | None = None,
+    deadline_error_code: str = "workspace_session.unavailable",
 ) -> WorkspaceSessionContext:
     """Restore the full Workspace principal with optional CSRF verification."""
 
-    connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        context, _row = _authenticate_workspace(
-            connection,
-            config,
-            session_token=session_token,
-            csrf_token=csrf_token,
-            touch=True,
-        )
-        connection.commit()
-        return context
+        with database_operation_deadline(monotonic_deadline):
+            connection = _connect(config)
+    except (ApiError, sqlite3.Error) as exc:
+        if monotonic_deadline is not None:
+            raise ApiError(deadline_error_code) from exc
+        raise
+    try:
+        with authentication_database_deadline(
+            connection, monotonic_deadline=monotonic_deadline, error_code=deadline_error_code,
+        ):
+            connection.execute("BEGIN IMMEDIATE")
+            context, _row = _authenticate_workspace(
+                connection,
+                config,
+                session_token=session_token,
+                csrf_token=csrf_token,
+                touch=True,
+            )
+            connection.commit()
+            return context
     except ApiError as exc:
         _finish_workspace_error(connection, exc)
         raise
     except (sqlite3.Error, DbError, KeyError, TypeError, ValueError):
         if connection.in_transaction:
             connection.rollback()
-        raise ApiError("workspace_session.unavailable") from None
+        raise ApiError(
+            deadline_error_code
+            if monotonic_deadline is not None else "workspace_session.unavailable"
+        ) from None
     finally:
         connection.close()
 
@@ -2341,8 +2359,9 @@ def _workspace_extension_permissions(
     placeholders = ",".join("?" for _ in table_names)
     try:
         table_catalog = (
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema=current_schema() AND table_name IN "
+            "SELECT relname FROM pg_catalog.pg_class "
+            "WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p') "
+            "AND relname IN "
             if getattr(connection, "backend", "sqlite") == "postgresql"
             else "SELECT name FROM sqlite_schema WHERE type='table' AND name IN "
         )

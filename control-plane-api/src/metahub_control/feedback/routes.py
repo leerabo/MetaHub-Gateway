@@ -20,12 +20,13 @@ from metahub_shared.feedback import (
     resolve_feedback_operation_request_id,
 )
 from metahub_shared.runtime.errors import ApiError
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.auth import (
     AuthContext,
     require_feedback_summary_user,
-    require_feedback_user,
 )
+from metahub_control.auth.dependencies import require_workspace_or_legacy_permissions
 
 from .models import FeedbackMutationResponse, FeedbackSummaryResponse
 from .service import create_session_feedback, summarize_session_feedback
@@ -61,7 +62,9 @@ class _SummaryQuery:
 async def post_feedback(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_feedback_user)],
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("feedback.use"))
+    ],
 ) -> FeedbackMutationResponse:
     """由 admin/developer 对当前租户的一次成功模型调用提交不可变反馈。
 
@@ -79,7 +82,8 @@ async def post_feedback(
         content_type=request.headers.get("content-type"),
         content_length=request.headers.get("content-length"),
     )
-    result = create_session_feedback(
+    result = await run_in_threadpool(
+        create_session_feedback,
         request.app.state.config,
         context,
         operation_request_id=operation_request_id,

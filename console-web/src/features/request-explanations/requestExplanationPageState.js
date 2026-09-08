@@ -112,7 +112,7 @@ export function createRequestExplanationHandoff() {
  * 显式查询或刷新才推进 desiredRevision；15 秒全页刷新仅复用已接纳快照，不重复 GET。
  * AbortController 是资源回收手段，identity/tenant/navigation/generation 才是迟到响应门禁。
  */
-export function createRequestExplanationPageMemory() {
+export function createRequestExplanationPageMemory({ authentication = "legacy" } = {}) {
   let activeIdentity = "";
   let activeTenantId = "";
   let activeNavigation = "";
@@ -164,8 +164,9 @@ export function createRequestExplanationPageMemory() {
     const nextNavigation = text(navigation);
     if (
       !nextIdentity
-      || !nextTenantId
-      || nextNavigation !== REQUEST_EXPLANATION_NAVIGATION
+      || (!nextTenantId && authentication !== "workspace")
+      || !(nextNavigation === REQUEST_EXPLANATION_NAVIGATION
+        || (authentication === "workspace" && nextNavigation === "request-logs"))
     ) {
       invalidate({ resetOwner: true });
       return false;

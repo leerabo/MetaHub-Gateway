@@ -99,6 +99,8 @@ function harness(navigation, selector) {
     providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
     clearRoutingPolicySessionState() {}, clearModelQualityScoreSessionState() {}, experimentPageState: { clear() {} },
     clearRequestLogSessionState() {}, clearAuditExportSessionState() {}, auditLogFilters: {},
+    clearRequestFeedbackSummarySessionState() {},
+    clearRequestExplanationSessionState() {},
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
     RESOURCE_NAVIGATION_IDS: new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),

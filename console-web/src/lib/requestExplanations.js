@@ -3,6 +3,7 @@
  * 维护边界：不提交 tenant、actor、Prompt、Response 或 include_raw；真实 RBAC 与租户隔离由后端执行。
  */
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 读取当前登录用户有权查看的一条请求解释。
@@ -14,6 +15,7 @@ import { AuthApiError } from "./auth.js";
 export async function getRequestExplanation({
   controlApiUrl,
   token,
+  authentication,
   requestId,
   signal,
 }) {
@@ -21,7 +23,9 @@ export async function getRequestExplanation({
   return requestExplanationRequest(
     `${controlApiUrl}/request-explain/${encodeURIComponent(sourceRequestId)}`,
     {
-      headers: { Authorization: `Bearer ${token}` },
+      token,
+      authentication,
+      csrfRequired: true,
       signal,
     },
   );
@@ -34,7 +38,7 @@ export async function getRequestExplanation({
  * suggestion 以及 operation request_id/trace_id，便于在不泄露源请求内容的前提下排障。
  */
 async function requestExplanationRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_request_explanation_${Date.now()}`,

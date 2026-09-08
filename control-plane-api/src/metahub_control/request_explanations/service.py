@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -29,6 +30,7 @@ from .models import (
     RequestExplanationSection,
     RequestExplanationSummary,
 )
+from .projection import project_explanation
 from .repository import (
     ExplanationSnapshot,
     connect_explanation_database,
@@ -76,7 +78,7 @@ def get_request_explanation(
     captured_at = _now(now)
     snapshot = _read_snapshot(
         config,
-        tenant_id=context.user.tenant_id,
+        context,
         source_request_id=source_request_id,
     )
     if snapshot is None:
@@ -94,7 +96,7 @@ def get_request_explanation(
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
         # 持久事实损坏或 owner 图漂移不能被降级成空值，否则页面会把缺证据误当成功。
         raise ApiError("request_explanation.integrity_failed") from exc
-    _persist_access_fact(
+    current_context = _persist_access_fact(
         config,
         context,
         built,
@@ -103,7 +105,9 @@ def get_request_explanation(
         operation_trace_id=trace_id,
     )
     return RequestExplanationResponse(
-        request_explanation=built.explanation,
+        request_explanation=project_explanation(
+            built.explanation, current_context.permission_codes,
+        ),
         request_id=request_id,
         trace_id=trace_id,
     )
@@ -111,8 +115,8 @@ def get_request_explanation(
 
 def _read_snapshot(
     config: AppConfig,
+    context: AuthContext,
     *,
-    tenant_id: str,
     source_request_id: str,
 ) -> ExplanationSnapshot | None:
     """在一条一致性读事务中加载快照，并在所有路径结束事务、关闭连接。"""
@@ -123,15 +127,16 @@ def _read_snapshot(
         # 数据库 URL 与驱动正文属于内部实现，统一折叠为可重试领域错误。
         raise ApiError("request_explanation.unavailable") from exc
     try:
-        connection.execute("BEGIN")
-        snapshot = load_explanation_snapshot(
-            connection,
-            tenant_id=tenant_id,
-            source_request_id=source_request_id,
-        )
-        # 只读事务使用 rollback 结束快照，明确不把任何意外写入提交到控制面。
-        connection.rollback()
-        return snapshot
+        with ResourceWriteTransaction(
+            connection, config, context, "request_explanation.read", read_only=True,
+        ) as transaction:
+            snapshot = load_explanation_snapshot(
+                connection, tenant_id=context.user.tenant_id,
+                source_request_id=source_request_id,
+            )
+            connection.rollback()
+            transaction.begin()
+            return snapshot
     # 读取锁、缺表或数据库损坏统一折叠，SQL 与文件路径不得进入 API 响应。
     except sqlite3.Error as exc:
         _rollback(connection)
@@ -148,49 +153,59 @@ def _persist_access_fact(
     event_id: str,
     operation_request_id: str,
     operation_trace_id: str,
-) -> None:
+) -> AuthContext:
     """把一次成功读取原子保存为不可变访问事实与 pending source outbox。"""
 
-    explanation = built.explanation
     try:
         connection = connect_explanation_database(config)
     # 访问事实连接失败时必须整体失败关闭，禁止先返回敏感解释再漏记审计。
     except Exception as exc:
         raise ApiError("request_explanation.audit_unavailable") from exc
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        insert_request_explanation(
-            connection,
-            request_explanation_id=explanation.request_explanation_id,
-            event_id=event_id,
-            tenant_id=context.user.tenant_id,
-            source_request_id=explanation.source_request_id,
-            source_trace_id=explanation.source_trace_id,
-            actor_user_id=context.user.user_id,
-            actor_session_id=context.session.session_id,
-            source_status=explanation.summary.source_status,
-            status=explanation.status,
-            section_status=built.section_status,
-            missing_sections=list(explanation.missing_sections),
-            truncated_sections=list(explanation.truncated_sections),
-            source_created_at=built.source_created_at_text,
-            source_updated_at=built.source_updated_at_text,
-            operation_request_id=operation_request_id,
-            operation_trace_id=operation_trace_id,
-            viewed_at=explanation.captured_at,
-        )
-        connection.commit()
-    # owner/不可变约束失败表示事实图冲突，应与暂时锁故障使用不同领域错误。
+        with ResourceWriteTransaction(
+            connection, config, context, "request_explanation.read",
+        ) as transaction:
+            _insert_access_fact(
+                connection, context, built, event_id=event_id,
+                operation_request_id=operation_request_id,
+                operation_trace_id=operation_trace_id,
+            )
+            transaction.commit()
+            return transaction.context
     except sqlite3.IntegrityError as exc:
-        _rollback(connection)
-        # owner、固定 JSON 或不可变约束失败表示事实图不一致，不应伪装成暂时锁冲突。
         raise ApiError("request_explanation.integrity_failed") from exc
-    # 短写事务的普通数据库错误按审计不可用返回，原始 SQL 异常不得泄露。
     except sqlite3.Error as exc:
-        _rollback(connection)
         raise ApiError("request_explanation.audit_unavailable") from exc
     finally:
         connection.close()
+
+
+def _insert_access_fact(
+    connection, context, built, *, event_id, operation_request_id, operation_trace_id,
+):
+    explanation = built.explanation
+    workspace = context.session.session_id.startswith("wss_")
+    insert_request_explanation(
+        connection,
+        request_explanation_id=explanation.request_explanation_id,
+        event_id=event_id,
+        tenant_id=context.user.tenant_id,
+        source_request_id=explanation.source_request_id,
+        source_trace_id=explanation.source_trace_id,
+        actor_user_id=context.user.user_id,
+        actor_session_id=None if workspace else context.session.session_id,
+        workspace_session_id=context.session.session_id if workspace else None,
+        source_status=explanation.summary.source_status,
+        status=explanation.status,
+        section_status=built.section_status,
+        missing_sections=list(explanation.missing_sections),
+        truncated_sections=list(explanation.truncated_sections),
+        source_created_at=built.source_created_at_text,
+        source_updated_at=built.source_updated_at_text,
+        operation_request_id=operation_request_id,
+        operation_trace_id=operation_trace_id,
+        viewed_at=explanation.captured_at,
+    )
 
 
 def _build_explanation(

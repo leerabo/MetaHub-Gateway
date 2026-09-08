@@ -248,10 +248,10 @@ test("client encodes path and sends no tenant, raw query, body or content type",
   });
 
   assert.equal(captured.url, "http://control.local/request-explain/req%2Fwith%20space");
-  assert.equal(captured.options.method, undefined);
+  assert.equal(captured.options.method, "GET");
   assert.equal(captured.options.body, undefined);
-  assert.equal(captured.options.headers.Authorization, "Bearer jwt-secret");
-  assert.equal("Content-Type" in captured.options.headers, false);
+  assert.equal(new Headers(captured.options.headers).get("Authorization"), "Bearer jwt-secret");
+  assert.equal(new Headers(captured.options.headers).has("Content-Type"), false);
   assert.doesNotMatch(captured.url, /tenant|include_raw|prompt|response/i);
   assert.equal(result.request_id, "req_prd054_operation");
 });
@@ -401,7 +401,7 @@ test("renderer shows exact safe facts, large integer strings, and no unknown sen
     sectionDisclosure: { authentication: false, provider_response: true },
   };
   const html = renderRequestExplanationPanel(state, authContext());
-  assert.match(html, /请求解释中心/);
+  assert.match(html, /请求解释/);
   assert.match(html, /rxe_0123456789abcdef0123456789abcdef/);
   assert.match(html, /已持久化，待投递/);
   assert.match(html, /账务核心/);
@@ -448,16 +448,16 @@ test("renderer covers partial, error and viewer zero-DOM states", () => {
   ), "");
 });
 
-test("main wires no-prefetch RBAC, cleanup, handoff and generic page-view skip", async () => {
+test("main wires no-prefetch RBAC, cleanup, inline detail and generic page-view skip", async () => {
   const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   assert.match(source, /pagehide[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /function renderLogin[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /logoutButton[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(source, /function clearConsoleSessionState[\s\S]*clearRequestExplanationSessionState\(\)/);
-  assert.match(source, /activeNavigationItemId !== "request-explanations"[\s\S]*clearRequestExplanationSessionState\(\)/);
-  assert.match(source, /hasPermission\(authSession\.context, PERMISSIONS\.REQUEST_EXPLANATION_READ\)[\s\S]*activeNavigationItemId !== "request-explanations"/);
-  assert.match(source, /requestExplanationHandoff\.stage\([\s\S]*switchConsoleNavigation/);
+  assert.match(source, /!\["request-logs", "request-explanations"\]\.includes\(consoleShellState\?\.activeNavigationItemId\)/);
+  assert.match(source, /runRequestExplanationRead\(button\.dataset\.requestLogExplain, "request_logs", binding/);
+  assert.doesNotMatch(source, /requestExplanationHandoff\.stage\(/);
   const sideEffects = source.slice(source.indexOf("function scheduleConsoleNavigationSideEffects("),
     source.indexOf("async function toggleConsoleSidebarGroup("));
   assert.doesNotMatch(sideEffects, /recordConsolePageView/);

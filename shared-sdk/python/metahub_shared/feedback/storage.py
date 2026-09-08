@@ -11,10 +11,12 @@ import json
 import math
 import sqlite3
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database
+from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.errors import ApiError
 
@@ -48,6 +50,7 @@ FEEDBACK_CONCURRENCY_POLL_SECONDS = 0.025
 FEEDBACK_SUMMARY_MAX_DAYS = 366
 FEEDBACK_SUMMARY_MAX_LIMIT = 100
 FEEDBACK_SUMMARY_MAX_OFFSET = 10_000
+FeedbackAuthorization = Callable[[sqlite3.Connection, bool], None]
 
 
 def create_request_feedback(
@@ -58,6 +61,7 @@ def create_request_feedback(
     trace_id: str,
     intent: FeedbackIntent,
     now: datetime | None = None,
+    authorize: FeedbackAuthorization | None = None,
 ) -> FeedbackCreateResult:
     """原子创建反馈、派生聚合和持久事件，或恢复同 actor 的幂等结果。
 
@@ -77,8 +81,14 @@ def create_request_feedback(
     connection_open = True
     try:
         # 反馈不能长时间争用 Gateway 的 RequestLog/Usage 写事务，锁等待固定为 250ms。
-        connection.execute("PRAGMA busy_timeout=250")
+        postgres = getattr(connection, "backend", "sqlite") == "postgresql"
+        if not postgres:
+            connection.execute("PRAGMA busy_timeout=250")
         connection.execute("BEGIN IMMEDIATE")
+        if postgres:
+            connection.execute("SET LOCAL lock_timeout='250ms'")
+        if authorize is not None:
+            authorize(connection, False)
         recovered = _load_by_operation(
             connection,
             actor=actor,
@@ -95,6 +105,8 @@ def create_request_feedback(
             ):
                 # 相同 actor/操作 ID 已绑定另一规范化意图，不能覆盖首次不可变事实。
                 raise ApiError("feedback.request_conflict")
+            if authorize is not None:
+                authorize(connection, False)
             connection.rollback()
             return FeedbackCreateResult(
                 feedback=recovered.feedback,
@@ -215,6 +227,8 @@ def create_request_feedback(
             feedback=result.feedback,
             intent=normalized_intent,
         )
+        if authorize is not None:
+            authorize(connection, False)
         connection.commit()
         return FeedbackCreateResult(
             feedback=result.feedback,
@@ -233,10 +247,16 @@ def create_request_feedback(
             operation_request_id=operation_id,
             intent=normalized_intent,
             cause=exc,
+            authorize=authorize,
         )
     # 已知业务错误保持 404/409/422 语义，但显式事务必须在传播前撤销。
     except ApiError:
         # 领域错误也必须先撤销显式写事务，后续请求不能意外提交中间 Feedback/Aggregate。
+        if authorize is not None and connection.in_transaction:
+            try:
+                authorize(connection, False)
+            finally:
+                connection.rollback()
         connection.rollback()
         raise
     except sqlite3.OperationalError as exc:
@@ -253,6 +273,7 @@ def create_request_feedback(
                 operation_request_id=operation_id,
                 intent=normalized_intent,
                 cause=exc,
+                authorize=authorize,
             )
         # 缺少迁移、I/O 等其他 OperationalError 仍属于暂不可用，不猜测为并发业务冲突。
         raise ApiError("feedback.unavailable") from exc
@@ -326,6 +347,7 @@ def query_feedback_summary(
     offset: int = 0,
     deadline_seconds: float = FEEDBACK_DATABASE_DEADLINE_SECONDS,
     monotonic_deadline: float | None = None,
+    authorize: FeedbackAuthorization | None = None,
 ) -> FeedbackSummaryResult:
     """在一个 query-only SQLite 快照内计算窗口总计、模型页和标签计数。
 
@@ -370,19 +392,36 @@ def query_feedback_summary(
     )
     # 绝对 deadline 已在认证后的 endpoint 消耗完时，禁止打开连接或偷偷刷新查询预算。
     _ensure_summary_deadline(deadline)
+    with database_operation_deadline(deadline):
+        return _query_feedback_summary_snapshot(
+            database_url, normalized_tenant=normalized_tenant, normalized_model=normalized_model,
+            normalized_from=normalized_from, normalized_to=normalized_to,
+            limit=limit, offset=offset, deadline=deadline, authorize=authorize,
+        )
+
+
+def _query_feedback_summary_snapshot(
+    database_url, *, normalized_tenant, normalized_model, normalized_from, normalized_to,
+    limit, offset, deadline, authorize,
+):
     connection = _connect(database_url, error_code="feedback.unavailable")
+    postgres = getattr(connection, "backend", "sqlite") == "postgresql"
     try:
         # 文件连接或线程调度也可能耗时；在安装 SQLite 门限前再次扣减剩余预算。
         _ensure_summary_deadline(deadline)
         remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-        connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
-        # query_only 在 BEGIN 前打开，数据库级阻止报表路径意外写业务事实。
-        connection.execute("PRAGMA query_only=ON")
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() >= deadline else 0,
-            1_000,
-        )
+        if not postgres:
+            connection.execute(f"PRAGMA busy_timeout={remaining_ms}")
+            connection.execute("PRAGMA query_only=ON")
+            connection.set_progress_handler(
+                lambda: 1 if time.monotonic() >= deadline else 0,
+                1_000,
+            )
         connection.execute("BEGIN")
+        if postgres:
+            connection.execute("SET TRANSACTION READ ONLY")
+        if authorize is not None:
+            authorize(connection, True)
         _ensure_summary_deadline(deadline)
         where, params = _summary_scope(
             tenant_id=normalized_tenant,
@@ -439,11 +478,15 @@ def query_feedback_summary(
             [*params, limit, offset],
         ).fetchall()
         _ensure_summary_deadline(deadline)
+        tag_source = (
+            "CROSS JOIN LATERAL jsonb_array_elements_text(feedback.tags_json::jsonb) AS tag(value)"
+            if postgres else "JOIN json_each(feedback.tags_json) AS tag"
+        )
         tag_rows = connection.execute(
             f"""
             SELECT tag.value AS tag, COUNT(*) AS tag_count
             FROM request_feedbacks AS feedback
-            JOIN json_each(feedback.tags_json) AS tag
+            {tag_source}
             {qualified_where}
             GROUP BY tag.value
             """,
@@ -451,6 +494,9 @@ def query_feedback_summary(
         ).fetchall()
         _ensure_summary_deadline(deadline)
         connection.rollback()
+        if postgres:
+            total_row = _postgres_summary_aggregates(total_row)
+            model_rows = [_postgres_summary_aggregates(row) for row in model_rows]
         result = _summary_result(
             total_row=total_row,
             model_rows=model_rows,
@@ -462,6 +508,13 @@ def query_feedback_summary(
         )
         # 任意精度 half-up 与 DTO 前置整理同属报表计算，不能在 SQL 完成后越过 deadline。
         _ensure_summary_deadline(deadline)
+        if authorize is not None:
+            connection.execute("BEGIN")
+            if postgres:
+                connection.execute("SET TRANSACTION READ ONLY")
+            authorize(connection, True)
+            connection.rollback()
+            _ensure_summary_deadline(deadline)
         return result
     # query_invalid 等共享领域错误不得被宽泛数据库异常处理改写成 unavailable。
     except ApiError:
@@ -474,8 +527,19 @@ def query_feedback_summary(
         try:
             connection.rollback()
         finally:
-            connection.set_progress_handler(None, 0)
+            if not postgres:
+                connection.set_progress_handler(None, 0)
             connection.close()
+
+
+def _postgres_summary_aggregates(row):
+    # SUM(bigint) is numeric in PostgreSQL; the shared driver retains exact decimal text.
+    result = dict(row)
+    for name in ("rating_sum", "accepted_count"):
+        value = result[name]
+        if type(value) is str and value.isascii() and value.isdecimal():
+            result[name] = int(value)
+    return result
 
 
 def _load_source_request(
@@ -659,6 +723,7 @@ def _classify_integrity_error(
     operation_request_id: str,
     intent: FeedbackIntent,
     cause: sqlite3.IntegrityError,
+    authorize: FeedbackAuthorization | None = None,
 ) -> FeedbackCreateResult:
     """回滚关闭后用新连接按固定优先级重分类并发唯一冲突。"""
 
@@ -670,6 +735,7 @@ def _classify_integrity_error(
             operation_request_id=operation_request_id,
             intent=intent,
             cause=cause,
+            authorize=authorize,
         )
         if classified is not None:
             return classified
@@ -692,6 +758,7 @@ def _recover_after_write_lock(
     operation_request_id: str,
     intent: FeedbackIntent,
     cause: sqlite3.OperationalError,
+    authorize: FeedbackAuthorization | None = None,
 ) -> FeedbackCreateResult:
     """在首次写锁预算耗尽后，有界等待并读取并发胜者的已提交事实。
 
@@ -706,10 +773,11 @@ def _recover_after_write_lock(
         try:
             # 单次读等待保持很短，使轮询可在 deadline 内重新取得新提交快照；query_only 从
             # SQLite 层阻止恢复代码未来误引入写 SQL，不能成为第二条写竞争路径。
-            connection.execute(
-                f"PRAGMA busy_timeout={int(FEEDBACK_CONCURRENCY_POLL_SECONDS * 1000)}"
-            )
-            connection.execute("PRAGMA query_only=ON")
+            if getattr(connection, "backend", "sqlite") != "postgresql":
+                connection.execute(
+                    f"PRAGMA busy_timeout={int(FEEDBACK_CONCURRENCY_POLL_SECONDS * 1000)}"
+                )
+                connection.execute("PRAGMA query_only=ON")
         # 只读恢复连接无法初始化时没有可信提交事实，必须保持依赖暂不可用语义。
         except sqlite3.Error as exc:
             # 固定错误码阻止 SQLite 正文、数据库路径或 SQL 片段进入 API 响应。
@@ -726,6 +794,7 @@ def _recover_after_write_lock(
                     operation_request_id=operation_request_id,
                     intent=intent,
                     cause=cause,
+                    authorize=authorize,
                 )
                 if classified is not None:
                     return classified
@@ -754,6 +823,53 @@ def _recover_after_write_lock(
 
 
 def _classify_committed_feedback(
+    connection: sqlite3.Connection,
+    *,
+    actor: FeedbackActor,
+    operation_request_id: str,
+    intent: FeedbackIntent,
+    cause: sqlite3.Error,
+    authorize: FeedbackAuthorization | None = None,
+) -> FeedbackCreateResult | None:
+    with _authorized_feedback_read(connection, authorize):
+        return _classify_committed_feedback_snapshot(
+            connection, actor=actor, operation_request_id=operation_request_id,
+            intent=intent, cause=cause,
+        )
+
+
+@contextmanager
+def _authorized_feedback_read(
+    connection: sqlite3.Connection,
+    authorize: FeedbackAuthorization | None,
+) -> Iterator[None]:
+    postgres = getattr(connection, "backend", "sqlite") == "postgresql"
+    if authorize is None and not postgres:
+        yield
+        return
+    connection.execute("BEGIN")
+    try:
+        if postgres:
+            connection.execute("SET TRANSACTION READ ONLY")
+            connection.execute("SET LOCAL lock_timeout='25ms'")
+        if authorize is not None:
+            authorize(connection, True)
+        try:
+            yield
+        finally:
+            # End the data snapshot before checking revocation, including conflict exits.
+            connection.rollback()
+            if authorize is not None:
+                connection.execute("BEGIN")
+                if postgres:
+                    connection.execute("SET TRANSACTION READ ONLY")
+                    connection.execute("SET LOCAL lock_timeout='25ms'")
+                authorize(connection, True)
+    finally:
+        connection.rollback()
+
+
+def _classify_committed_feedback_snapshot(
     connection: sqlite3.Connection,
     *,
     actor: FeedbackActor,
@@ -827,6 +943,8 @@ def _classify_committed_feedback(
 def _is_sqlite_lock_error(error: sqlite3.OperationalError) -> bool:
     """只按 SQLite 原生错误码识别 BUSY/LOCKED，不解析可能含路径或 SQL 的错误正文。"""
 
+    if getattr(error, "sqlstate", None) in {"55P03", "40001", "40P01"}:
+        return True
     error_code = getattr(error, "sqlite_errorcode", None)
     # 原生码缺失时禁止解析异常文本，以免路径、SQL 或本地化消息进入分类与日志分支。
     if type(error_code) is not int:

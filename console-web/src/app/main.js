@@ -767,7 +767,7 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
 });
 const RESOURCE_NAVIGATION_IDS = new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
   "model-aliases", "routing-policies", "model-quality-scores", "experiments",
-  "request-logs", "output-safety", "audit-logs"]);
+  "request-logs", "request-explanations", "output-safety", "audit-logs", "feedback-summary"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
@@ -962,7 +962,7 @@ const requestLogPageMemory = createRequestLogPageMemory();
 // PAGE-080 与 PAGE-099 共用读取链路，但导航 ID 必须进入 owner，防止两页迟到响应互相覆盖。
 const REQUEST_LOG_NAVIGATION_IDS = new Set(["request-logs", "output-safety"]);
 // PAGE-079 使用独立 owner 和单次内存 handoff；源 request_id 永不进入 URL 或浏览器 Storage。
-const requestExplanationPageMemory = createRequestExplanationPageMemory();
+const requestExplanationPageMemory = createRequestExplanationPageMemory({ authentication: "workspace" });
 const requestExplanationHandoff = createRequestExplanationHandoff();
 // PAGE-070 POST 独立于日志 list/detail 刷新；只有详情或身份 owner 改变才会 abort 并清除 dirty 草稿。
 const requestFeedbackMutationMemory = createRequestFeedbackMutationMemory();
@@ -1601,7 +1601,7 @@ async function performRefresh(options = {}) {
     clearRequestLogSessionState();
   }
   // PAGE-079 状态只属于后端确认的解释入口；离页、导航裁剪或降权立即销毁源请求标识与响应。
-  if (consoleShellState?.activeNavigationItemId !== "request-explanations") {
+  if (!["request-logs", "request-explanations"].includes(consoleShellState?.activeNavigationItemId)) {
     clearRequestExplanationSessionState();
   }
   // PAGE-071 只属于后端授权的 active 导航；viewer/hash 回退和离页必须同步停止 GET 并清空上一租户报表。
@@ -1988,6 +1988,7 @@ async function loadAndRenderActiveNavigation({
     case "request-logs":
       await load("requestLogsState", () => loadRequestLogsState(consoleShellState, refreshId));
       state.requestFeedbackState = requestFeedbackMutationMemory.snapshot();
+      state.requestExplanationState = requestExplanationPageMemory.snapshot();
       break;
     case "webhooks":
       await load("webhookState", loadWebhookState);
@@ -1996,7 +1997,7 @@ async function loadAndRenderActiveNavigation({
       await load("webhookDeadLettersState", () => loadWebhookDeadLettersState(consoleShellState, refreshId));
       break;
     case "request-explanations":
-      await load("requestExplanationState", () => loadRequestExplanationState(consoleShellState, refreshId));
+      state.requestExplanationState = requestExplanationPageMemory.snapshot();
       break;
     case "feedback-summary":
       state.requestFeedbackSummaryState = await loadRequestFeedbackSummaryState(consoleShellState, refreshId);
@@ -2150,6 +2151,8 @@ function renderLogin(error, requestId) {
 
 function clearBasicResourceFeedback() {
   clearRequestLogSessionState();
+  clearRequestExplanationSessionState();
+  clearRequestFeedbackSummarySessionState();
   clearAuditExportSessionState();
   auditLogFilters = { limit: 20, offset: 0 };
   workspaceMembersOffset = 0;
@@ -4207,21 +4210,10 @@ function bindAuthenticatedEvents(consoleShellState) {
         requestExplanationHandoff.clear();
         return;
       }
-      const owner = currentRequestLogOwner();
-      // handoff 在导航前绑定完整身份；日志页销毁后目标页只能消费一次，失败时不保留源 ID。
-      const staged = requestExplanationHandoff.stage({
-        identity: owner.identity,
-        tenantId: owner.tenantId,
-        requestId: button.dataset.requestLogExplain,
-        source: "request_logs",
-      });
-      const navigationButton = Array.from(document.querySelectorAll("[data-console-nav]"))
-        .find((candidate) => candidate.dataset.consoleNav === "request-explanations");
-      if (!staged || !navigationButton) {
-        requestExplanationHandoff.clear();
-        return;
-      }
-      await switchConsoleNavigation(navigationButton, consoleShellState);
+      const binding = bindResourceElement(document.querySelector(".request-logs-panel"),
+        [PERMISSIONS.REQUEST_LOG_READ, PERMISSIONS.REQUEST_EXPLANATION_READ], "request-logs");
+      await runRequestExplanationRead(button.dataset.requestLogExplain, "request_logs", binding,
+        consoleShellState);
     });
   }
 
@@ -14011,7 +14003,8 @@ function currentRequestFeedbackOwner() {
   const snapshot = requestFeedbackMutationMemory.snapshot();
   const panelActive = Boolean(document.querySelector(".request-logs-panel .request-feedback-section"));
   return {
-    identity: requestFeedbackIdentitySnapshot(authSession.context),
+    identity: hasPermission(authSession.context, PERMISSIONS.FEEDBACK_USE)
+      ? currentRequestLogOwner().identity : "",
     navigation: panelActive ? "request-logs" : "",
     sourceRequestId: panelActive ? snapshot.sourceRequestId : "",
   };
@@ -14025,7 +14018,7 @@ function bindRequestFeedbackInteractions(consoleShellState) {
   if (
     !hasPermission(authSession.context, PERMISSIONS.FEEDBACK_USE)
     || consoleShellState?.activeNavigationItemId !== "request-logs"
-    || !requestFeedbackIdentitySnapshot(authSession.context)
+    || !currentRequestFeedbackOwner().identity
   ) {
     return;
   }
@@ -14033,23 +14026,28 @@ function bindRequestFeedbackInteractions(consoleShellState) {
   if (!form) {
     return;
   }
+  const binding = bindResourceElement(document.querySelector(".request-logs-panel"),
+    [PERMISSIONS.REQUEST_LOG_READ, PERMISSIONS.FEEDBACK_USE], "request-logs");
+  const allowed = () => form.isConnected && resourcePageLifecycle.isBindingCurrent(binding);
+  if (!allowed()) return;
 
   for (const radio of form.querySelectorAll("input[name='rating']")) {
     radio.addEventListener("change", () => {
-      if (radio.checked && requestFeedbackMutationMemory.selectRating(Number(radio.value))) {
+      if (allowed() && radio.checked && requestFeedbackMutationMemory.selectRating(Number(radio.value))) {
         renderRequestFeedbackPanelFromMemory({ focusSelector: `input[name='rating'][value='${radio.value}']` });
       }
     });
   }
   for (const radio of form.querySelectorAll("input[name='accepted']")) {
     radio.addEventListener("change", () => {
-      if (radio.checked && requestFeedbackMutationMemory.selectAccepted(radio.value === "true")) {
+      if (allowed() && radio.checked && requestFeedbackMutationMemory.selectAccepted(radio.value === "true")) {
         renderRequestFeedbackPanelFromMemory({ focusSelector: `input[name='accepted'][value='${radio.value}']` });
       }
     });
   }
   for (const checkbox of form.querySelectorAll("input[name='tags']")) {
     checkbox.addEventListener("change", () => {
+      if (!allowed()) return;
       if (!requestFeedbackMutationMemory.toggleTag(checkbox.value, checkbox.checked)) {
         // 标签超过五个或与已选标签互斥时恢复当前权威草稿，不能把无效选择留在 DOM 伪装成可提交。
         checkbox.checked = !checkbox.checked;
@@ -14066,25 +14064,20 @@ function bindRequestFeedbackInteractions(consoleShellState) {
     });
   }
   form.querySelector("[data-request-feedback-cancel]")?.addEventListener("click", () => {
-    if (requestFeedbackMutationMemory.cancelDraft()) {
+    if (allowed() && requestFeedbackMutationMemory.cancelDraft()) {
       renderRequestFeedbackPanelFromMemory({ focusSelector: ".request-feedback-live" });
     }
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!form.reportValidity()) {
+    if (!allowed() || !form.reportValidity()) {
       return;
     }
-    const token = authSession.token;
-    // 身份 Token 缺失时必须先销毁草稿和详情 owner，禁止旧 DOM 继续构造 POST。
-    if (!token) {
-      // Token 消失说明 mutation owner 已结束，旧表单不得继续发送源调用 ID 或表单意图。
-      clearRequestLogSessionState();
-      renderLogin();
-      return;
-    }
+    const mutation = resourcePageLifecycle.beginMutation(binding);
+    if (!mutation) return;
     const acquired = requestFeedbackMutationMemory.acquireSubmit(currentRequestFeedbackOwner());
     if (acquired.state !== "ok" || acquired.reused) {
+      resourcePageLifecycle.finishMutation(mutation);
       return;
     }
     const ticket = acquired.ticket;
@@ -14092,7 +14085,7 @@ function bindRequestFeedbackInteractions(consoleShellState) {
     try {
       const result = await createRequestFeedback({
         controlApiUrl,
-        token,
+        authentication: "workspace",
         requestId: ticket.sourceRequestId,
         rating: ticket.rating,
         accepted: ticket.accepted,
@@ -14101,7 +14094,8 @@ function bindRequestFeedbackInteractions(consoleShellState) {
         signal: ticket.signal,
       });
       const owner = currentRequestFeedbackOwner();
-      if (!requestFeedbackMutationMemory.isCurrent(ticket, owner)) {
+      if (!resourcePageLifecycle.isMutationCurrent(mutation)
+        || !requestFeedbackMutationMemory.isCurrent(ticket, owner)) {
         return;
       }
       if (!requestFeedbackMutationMemory.acceptSuccess(ticket, result, owner)) {
@@ -14115,6 +14109,7 @@ function bindRequestFeedbackInteractions(consoleShellState) {
       renderRequestFeedbackPanelFromMemory({ focusSelector: ".request-feedback-live" });
       // 成功事实先进入独立 mutation memory，再刷新日志 has_feedback 与服务端详情；刷新不会回溯取消已接纳 POST。
       if (requestFeedbackMutationMemory.snapshot().authoritativeFeedback) {
+        resourcePageLifecycle.finishMutation(mutation);
         await refresh();
       }
     } catch (error) {
@@ -14123,17 +14118,12 @@ function bindRequestFeedbackInteractions(consoleShellState) {
       }
       const owner = currentRequestFeedbackOwner();
       // 迟到 401/409/5xx 先过完整 owner，避免上一租户错误退出新 Session 或覆盖新详情草稿。
-      if (!requestFeedbackMutationMemory.isCurrent(ticket, owner)) {
+      if (!resourcePageLifecycle.isMutationCurrent(mutation)
+        || !requestFeedbackMutationMemory.isCurrent(ticket, owner)) {
         return;
       }
       // 只有仍属于当前 mutation owner 的 401 才能结束登录态，迟到响应已在上方失败关闭。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearRequestLogSessionState();
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceAuthorizationError(error)) return;
       const safeError = error instanceof AuthApiError
         ? error
         : {
@@ -14143,6 +14133,8 @@ function bindRequestFeedbackInteractions(consoleShellState) {
           };
       requestFeedbackMutationMemory.acceptFailure(ticket, safeError, owner);
       renderRequestFeedbackPanelFromMemory({ focusSelector: ".request-feedback-live" });
+    } finally {
+      resourcePageLifecycle.finishMutation(mutation);
     }
   });
 }
@@ -14154,7 +14146,7 @@ function bindRequestFeedbackInteractions(consoleShellState) {
 function renderRequestFeedbackPanelFromMemory({ focusSelector = null } = {}) {
   const current = document.querySelector(".request-logs-panel .request-feedback-section");
   // DOM 已销毁或角色已收窄时不允许局部重建受限表单，后端权限仍是最终边界。
-  if (!current || !hasPermission(authSession.context, PERMISSIONS.FEEDBACK_USE)) {
+  if (!current || !currentRequestFeedbackOwner().identity) {
     return;
   }
   const html = renderRequestFeedbackSection(
@@ -14184,13 +14176,18 @@ function bindRequestFeedbackSummaryInteractions(consoleShellState) {
   if (
     !hasPermission(authSession.context, PERMISSIONS.FEEDBACK_USE)
     || consoleShellState?.activeNavigationItemId !== "feedback-summary"
-    || !requestFeedbackIdentitySnapshot(authSession.context)
+    || !currentEvaluationPageIdentity("feedback-summary", PERMISSIONS.FEEDBACK_USE)
   ) {
     return;
   }
   const form = document.querySelector("#feedback-summary-filter-form");
+  const binding = bindResourceElement(document.querySelector(".feedback-summary-panel"),
+    [PERMISSIONS.FEEDBACK_USE], "feedback-summary");
+  const allowed = () => resourcePageLifecycle.isBindingCurrent(binding);
+  if (!allowed()) return;
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!allowed() || !form.isConnected) return;
     const data = new FormData(form);
     const fromTime = String(data.get("fromTime") ?? "").trim();
     const toTime = String(data.get("toTime") ?? "").trim();
@@ -14216,15 +14213,18 @@ function bindRequestFeedbackSummaryInteractions(consoleShellState) {
     await refresh();
   });
   document.querySelector("#feedback-summary-refresh")?.addEventListener("click", async () => {
+    if (!allowed()) return;
     requestFeedbackSummaryMemory.invalidate();
     await refresh();
   });
   document.querySelector("#feedback-summary-reset")?.addEventListener("click", async () => {
+    if (!allowed()) return;
     requestFeedbackSummaryFilters = { modelId: "", fromTime: "", toTime: "", limit: 20, offset: 0 };
     requestFeedbackSummaryMemory.invalidate();
     await refresh();
   });
   document.querySelector("#feedback-summary-prev")?.addEventListener("click", async () => {
+    if (!allowed()) return;
     requestFeedbackSummaryFilters = {
       ...requestFeedbackSummaryFilters,
       offset: Math.max(0, requestFeedbackSummaryFilters.offset - requestFeedbackSummaryFilters.limit),
@@ -14233,6 +14233,7 @@ function bindRequestFeedbackSummaryInteractions(consoleShellState) {
     await refresh();
   });
   document.querySelector("#feedback-summary-next")?.addEventListener("click", async () => {
+    if (!allowed()) return;
     requestFeedbackSummaryFilters = {
       ...requestFeedbackSummaryFilters,
       offset: requestFeedbackSummaryFilters.offset + requestFeedbackSummaryFilters.limit,
@@ -16838,7 +16839,7 @@ function requestFeedbackSummaryQuery() {
 function currentRequestFeedbackSummaryOwner(refreshId = refreshSequence) {
   const current = refreshId === refreshSequence;
   return {
-    identity: requestFeedbackIdentitySnapshot(authSession.context),
+    identity: currentEvaluationPageIdentity("feedback-summary", PERMISSIONS.FEEDBACK_USE),
     navigation: current ? "feedback-summary" : "",
     query: requestFeedbackSummaryQuery(),
     refreshId,
@@ -16881,7 +16882,7 @@ async function loadRequestFeedbackSummaryState(consoleShellState, refreshId) {
   try {
     const result = await getRequestFeedbackSummary({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       modelId: requestFeedbackSummaryFilters.modelId,
       fromTime: requestFeedbackSummaryFilters.fromTime,
       toTime: requestFeedbackSummaryFilters.toTime,
@@ -16908,14 +16909,7 @@ async function loadRequestFeedbackSummaryState(consoleShellState, refreshId) {
       return null;
     }
     // 只有当前 Summary owner 的 401 才能结束认证态，迟到 401 已在上方被 generation 门禁丢弃。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRequestFeedbackSummarySessionState();
-      clearRequestLogSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
+    if (handleResourceAuthorizationError(error)) return null;
     const safeError = error instanceof AuthApiError
       ? error
       : {
@@ -16935,15 +16929,21 @@ async function loadRequestFeedbackSummaryState(consoleShellState, refreshId) {
 function bindRequestExplanationInteractions(consoleShellState) {
   if (
     !hasPermission(authSession.context, PERMISSIONS.REQUEST_EXPLANATION_READ)
-    || consoleShellState?.activeNavigationItemId !== "request-explanations"
+    || !["request-logs", "request-explanations"].includes(consoleShellState?.activeNavigationItemId)
   ) {
     return;
   }
 
   const form = document.querySelector("#request-explanation-form");
   const owner = currentRequestExplanationOwner();
+  const panel = document.querySelector(owner.navigation === "request-logs"
+    ? ".request-logs-panel" : ".request-explanations-panel");
+  const binding = bindResourceElement(panel, [PERMISSIONS.REQUEST_EXPLANATION_READ], owner.navigation);
+  const allowed = () => resourcePageLifecycle.isBindingCurrent(binding);
+  if (!allowed()) return;
   const requestIdInput = form?.querySelector("[name='requestId']");
   requestIdInput?.addEventListener("input", () => {
+    if (!allowed() || !requestIdInput.isConnected) return;
     // 草稿只驻留当前 owner 内存；不写 URL/Storage，也不在输入阶段触发 explain GET。
     requestExplanationPageMemory.setDraft({
       identity: owner.identity,
@@ -16961,6 +16961,7 @@ function bindRequestExplanationInteractions(consoleShellState) {
 
   for (const sectionElement of document.querySelectorAll("[data-request-explanation-section]")) {
     sectionElement.addEventListener("toggle", () => {
+      if (!allowed() || !sectionElement.isConnected) return;
       const sectionKey = sectionElement.dataset.requestExplanationSection;
       requestExplanationPageMemory.setSectionDisclosure({
         identity: owner.identity,
@@ -16975,6 +16976,7 @@ function bindRequestExplanationInteractions(consoleShellState) {
   // 焦点恢复只接受 renderer 的固定 data 值；单纯初始 open/toggle 不得覆盖用户实际焦点。
   for (const control of document.querySelectorAll("[data-request-explanation-focus]")) {
     control.addEventListener("focus", () => {
+      if (!allowed() || !control.isConnected) return;
       requestExplanationPageMemory.setFocusTarget({
         identity: owner.identity,
         tenantId: owner.tenantId,
@@ -16988,58 +16990,48 @@ function bindRequestExplanationInteractions(consoleShellState) {
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submitOwner = currentRequestExplanationOwner();
+    if (!allowed() || !form.isConnected) return;
     const data = new FormData(form);
-    requestExplanationPageMemory.select({
-      identity: submitOwner.identity,
-      tenantId: submitOwner.tenantId,
-      navigation: submitOwner.navigation,
-      requestId: String(data.get("requestId") ?? ""),
-      source: "manual",
-    });
-    requestExplanationPageMemory.setFocusTarget({
-      identity: submitOwner.identity,
-      tenantId: submitOwner.tenantId,
-      navigation: submitOwner.navigation,
-      target: "query",
-    });
-    renderCurrentRequestExplanationSnapshot(consoleShellState);
-    await refresh();
+    await runRequestExplanationRead(String(data.get("requestId") ?? ""), "manual", binding,
+      consoleShellState);
   });
 
   const refreshButton = document.querySelector("#request-explanation-refresh");
   refreshButton?.addEventListener("click", async () => {
-    const owner = currentRequestExplanationOwner();
+    if (!allowed() || !refreshButton.isConnected) return;
     const query = requestExplanationPageMemory.query();
-    requestExplanationPageMemory.select({
-      identity: owner.identity,
-      tenantId: owner.tenantId,
-      navigation: owner.navigation,
-      requestId: query.requestId,
-      source: query.source,
-    });
-    requestExplanationPageMemory.setFocusTarget({
-      identity: owner.identity,
-      tenantId: owner.tenantId,
-      navigation: owner.navigation,
-      target: "refresh",
-    });
-    renderCurrentRequestExplanationSnapshot(consoleShellState);
-    await refresh();
+    await runRequestExplanationRead(query.requestId, query.source, binding, consoleShellState);
   });
 
   const clearButton = document.querySelector("#request-explanation-clear");
   clearButton?.addEventListener("click", async () => {
-    const clearOwner = currentRequestExplanationOwner();
-    requestExplanationPageMemory.clearSelection({
-      identity: clearOwner.identity,
-      tenantId: clearOwner.tenantId,
-      navigation: clearOwner.navigation,
-    });
-    requestExplanationHandoff.clear();
-    renderCurrentRequestExplanationSnapshot(consoleShellState);
-    await refresh();
+    if (!allowed() || !clearButton.isConnected) return;
+    const mutation = resourcePageLifecycle.beginMutation(binding);
+    if (!mutation) return;
+    try {
+      requestExplanationPageMemory.clearSelection(currentRequestExplanationOwner());
+      requestExplanationHandoff.clear();
+      renderCurrentRequestExplanationSnapshot(consoleShellState);
+    } finally {
+      resourcePageLifecycle.finishMutation(mutation);
+    }
   });
+}
+
+async function runRequestExplanationRead(requestId, source, binding, consoleShellState) {
+  const mutation = resourcePageLifecycle.beginMutation(binding);
+  if (!mutation) return;
+  try {
+    const owner = currentRequestExplanationOwner();
+    requestExplanationPageMemory.select({ ...owner, requestId, source });
+    renderCurrentRequestExplanationSnapshot(consoleShellState);
+    await loadRequestExplanationState(consoleShellState, refreshSequence, mutation);
+    if (resourcePageLifecycle.isMutationCurrent(mutation)) {
+      renderCurrentRequestExplanationSnapshot(consoleShellState);
+    }
+  } finally {
+    resourcePageLifecycle.finishMutation(mutation);
+  }
 }
 
 /**
@@ -17074,19 +17066,15 @@ function renderCurrentRequestExplanationSnapshot(consoleShellState) {
 
 /** 返回当前 RequestExplanation owner；身份、租户、导航和刷新代次均从实时应用状态读取。 */
 function currentRequestExplanationOwner(refreshId = refreshSequence) {
-  const identity = requestExplanationIdentitySnapshot(authSession.context);
-  const tenantId = String(
-    authSession.context?.user?.tenant_id
-      ?? authSession.context?.tenant?.tenant_id
-      ?? "",
-  ).trim();
-  const current = refreshId === refreshSequence;
+  const navigation = resourcePageShellState?.activeNavigationItemId;
+  const identity = ["request-logs", "request-explanations"].includes(navigation)
+    ? currentEvaluationPageIdentity(navigation, PERMISSIONS.REQUEST_EXPLANATION_READ) : "";
   return {
     identity,
-    tenantId,
-    navigation: current && identity ? "request-explanations" : "",
+    tenantId: "",
+    navigation: identity ? navigation : "",
     refreshId,
-    currentRefreshId: refreshSequence,
+    currentRefreshId: refreshId,
   };
 }
 
@@ -17120,14 +17108,14 @@ function safeRequestExplanationClientError(error, fallbackRequestId = "-") {
  * 只在后端确认的 active PAGE-079 中消费一次 handoff 并读取解释。
  * 成功 GET 已由后端原子创建 request.explanation_viewed，本函数不得再写通用页面访问事件。
  */
-async function loadRequestExplanationState(consoleShellState, refreshId) {
+async function loadRequestExplanationState(consoleShellState, refreshId, mutation) {
   const owner = currentRequestExplanationOwner(refreshId);
   if (
     !hasPermission(authSession.context, PERMISSIONS.REQUEST_EXPLANATION_READ)
-    || consoleShellState?.activeNavigationItemId !== "request-explanations"
+    || !["request-logs", "request-explanations"].includes(consoleShellState?.activeNavigationItemId)
     || refreshId !== refreshSequence
     || !owner.identity
-    || !owner.tenantId
+    || !resourcePageLifecycle.isMutationCurrent(mutation)
   ) {
     return null;
   }
@@ -17156,12 +17144,13 @@ async function loadRequestExplanationState(consoleShellState, refreshId) {
   try {
     const result = await getRequestExplanation({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       requestId: ticket.requestId,
       signal: ticket.signal,
     });
     const currentOwner = currentRequestExplanationOwner(refreshId);
-    if (!requestExplanationPageMemory.isCurrent(ticket, currentOwner)) {
+    if (!resourcePageLifecycle.isMutationCurrent(mutation)
+      || !requestExplanationPageMemory.isCurrent(ticket, currentOwner)) {
       return null;
     }
     if (!requestExplanationPageMemory.acceptSuccess(ticket, result, currentOwner)) {
@@ -17175,18 +17164,12 @@ async function loadRequestExplanationState(consoleShellState, refreshId) {
   } catch (error) {
     const currentOwner = currentRequestExplanationOwner(refreshId);
     // Abort 或 owner 转移属于主动清理，迟到 401/错误不得结束新 Session 或恢复旧租户事实。
-    if (isAbortError(error) || !requestExplanationPageMemory.isCurrent(ticket, currentOwner)) {
+    if (isAbortError(error) || !resourcePageLifecycle.isMutationCurrent(mutation)
+      || !requestExplanationPageMemory.isCurrent(ticket, currentOwner)) {
       return null;
     }
     // 只有当前解释 owner 的 401 才能结束会话；上方门禁已排除迟到的旧身份响应。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearRequestExplanationSessionState();
-      clearRequestLogSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
+    if (handleResourceAuthorizationError(error)) return null;
     requestExplanationPageMemory.acceptFailure(
       ticket,
       safeRequestExplanationClientError(error, ticket.requestId),

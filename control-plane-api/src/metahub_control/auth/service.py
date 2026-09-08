@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database
+from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.errors import DbError
 from metahub_shared.db.schema import table_exists
 from metahub_shared.db.security import hash_token, verify_password
@@ -396,7 +396,13 @@ def authenticate_bearer(
     deadline = _normalize_auth_deadline(monotonic_deadline, deadline_error_code)
     owns_connection = connection is None
     if connection is None:
-        connection = _connect(config)
+        try:
+            with database_operation_deadline(deadline):
+                connection = _connect(config)
+        except (ApiError, sqlite3.Error) as exc:
+            if deadline is not None:
+                raise ApiError(deadline_error_code) from exc
+            raise
     connection_invalid = False
 
     def mark_connection_invalid() -> None:
@@ -463,6 +469,21 @@ def authenticate_bearer(
 
 
 @contextmanager
+def authentication_database_deadline(
+    connection: sqlite3.Connection,
+    *,
+    monotonic_deadline: float | None,
+    error_code: str,
+) -> Iterator[None]:
+    """Apply one endpoint budget to a caller-owned authentication connection."""
+    deadline = _normalize_auth_deadline(monotonic_deadline, error_code)
+    with _authentication_sqlite_deadline(connection, deadline=deadline, error_code=error_code):
+        yield
+        if deadline is not None:
+            _remaining_auth_deadline_ms(deadline, error_code)
+
+
+@contextmanager
 def _authentication_sqlite_deadline(
     connection: sqlite3.Connection,
     *,
@@ -474,6 +495,11 @@ def _authentication_sqlite_deadline(
 
     if deadline is None:
         yield
+        return
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        with database_operation_deadline(deadline):
+            yield
+            _remaining_auth_deadline_ms(deadline, error_code)
         return
     remaining_ms = _remaining_auth_deadline_ms(deadline, error_code)
     previous_timeout_ms: int | None = None
