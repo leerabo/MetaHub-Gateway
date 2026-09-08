@@ -103,3 +103,13 @@ route、owner、control version、collector identity/version、artifact digest�
 改为当前 owner 的 `SUM(revision)`，批准和过期均递增、不可删除约束保持；时间比较统一为入库毫秒精度。
 第一轮复核保持真实 OAuth、动态权限、凭据轮换及 IP/mTLS 约束原样；第二轮验证不同 owner 不改变
 本空间水位，新增/批准/过期逐次失效，使用 WITHOUT ROWID 表检测物理行号依赖不会复发。
+
+## 9. 2026-09-08 调度异常清理
+
+第一轮自审：完整注册调度下的外层 lease fence 可在 _release_lease 的 commit 抛错；原函数
+吞掉异常后跳过 close，SQLite 事务与写锁会残留。独立副本已记录该函数持锁超过 8 秒。将连接
+归还置于 finally，异常时先尽力 rollback，不绕过 fence，也不把释放失败写成释放成功。
+
+第二轮自审：连接创建失败必须仍为 best-effort；rollback 自身失败也不能跳过 close。使用
+真实 SQLite 事务和生产 database_commit_guard 制造提交拒绝，检查句柄关闭、业务行不变与
+第二连接可立即取得写锁；正常 CAS 释放及 owner 不匹配仍按原逻辑运行。独立归属本 PRD。

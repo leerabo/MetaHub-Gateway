@@ -81,3 +81,21 @@ SQLite `rowid` 水位。分别改为 `token_grant` 与 owner 限定的 `SUM(revi
 证据位于 `.artifacts/g6-security-20260907/`，独立敏感审计为 `prd-135-sensitive-audit.json`。
 两轮复核见本条 PRD 第 8 节。机器认证是真实应用 OAuth；合规 evidence 与审批角色仍为测试场景，
 不构成外部合规认证或独立责任人批准。既有 PRD-118 性能残差本轮未复测、不改原阈值。
+
+## 2026-09-08 完整调度下的异常清理
+
+真实完整本地运行暴露 scheduler commit fence 失效后的 SQLite 持锁。独立数据库副本的
+诊断记录将持续事务定位到 _release_lease；原函数异常分支跳过连接关闭。本条增加 finally
+归还句柄及异常 rollback，保持 best-effort 行为，不绕过外层 lease fence。
+
+原始 JUnit 位于 `.artifacts/g6-security-20260907/`：
+
+- `prd135-cleanup-red-r1.xml`：4 项，2 通过、2 失败，复现拒绝提交和 rollback 失败后未关闭。
+- `prd135-cleanup-r2.xml`：11/11，含上述 4 个清理用例与 7 个既有时间/水位回归。
+- `prd135-cleanup-api-r1.xml`：3/3，原有 SQLite 证据、审批、报告与调度业务回归；使用该测试
+  自建完整迁移库，不冒充原生 PostgreSQL、真实浏览器或长期稳定性验收。
+
+清理测试在真实 SQLite 事务中使用生产 commit guard 拒绝提交，检查原事实不变、句柄关闭及
+第二连接即时获得写锁。连接建立失败仍正常返回，rollback 抛错也继续关闭。独立敏感审计
+为 `prd-135-scheduler-cleanup-sensitive-audit.json`，范围仅本条四个暂存文件与上述三份报告。
+后续发现的旧用量导出持锁属于公共提交拒绝边界，由 PRD-147 独立处理，不混入本条完成范围。

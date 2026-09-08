@@ -7,6 +7,7 @@ import hmac
 import json
 import secrets
 import sqlite3
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -1346,6 +1347,7 @@ def _require_lease(
 
 
 def _release_lease(config: AppConfig, worker_id: str, generation: int, token_sha256: str) -> None:
+    connection = None
     try:
         connection = _connect(config)
         connection.execute("BEGIN IMMEDIATE")
@@ -1367,9 +1369,14 @@ def _release_lease(config: AppConfig, worker_id: str, generation: int, token_sha
                 (_db_time(changed), row["revision"]),
             )
         connection.commit()
-        connection.close()
     except Exception:
-        return
+        if connection is not None:
+            with suppress(Exception):
+                _rollback(connection)
+    finally:
+        if connection is not None:
+            with suppress(Exception):
+                connection.close()
 
 
 def _connect(config: AppConfig):
