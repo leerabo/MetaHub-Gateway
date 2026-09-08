@@ -168,3 +168,16 @@ Excel 的 `01_PRD总表` 第 79 行、`03_M2-M3扩展交付` 第 15 行、PAGE-1
 `approval.created`/`approval.timeout` 和 TC-0155/0156 共同确认，PRD-077 完成后的下一条权威未完成项是
 `PRD-078 | M2-企业增强 | P2 | 扩展层 | 移动审批 | 移动端/企微钉钉审批入口`。本次不启动或实现
 PRD-078；`all_108_prds_complete=false`。
+
+## 2026-09-08 共享数据库生命周期修复
+
+PRD-147 租约回收暴露旧 teardown 错误地维护整个共享 WAL 的问题。现在只等待自身在途
+attempt/slot，回滚、重置并独立关闭两条连接，不执行 checkpoint、切换日志模式或删除 sidecar。
+外部 reader/writer 仍可工作，成功关闭后同一 app/loop 可重新初始化；实际 close 失败仍保留
+closing 状态并返回原有固定错误，取消仍等待资源 owner 释放。
+
+`.artifacts/g6-security-20260907/prd077-shared-teardown-red-r1.xml` 的两项真实 WAL 反例均失败；
+`prd077-shared-teardown-r2.xml` 为 5/5，覆盖外部空闲/活动快照、未提交写入回滚、重新初始化、
+取消与关闭失败。旧 checkpoint 故障测试改为证明子系统完全不发全库 checkpoint，并未删除
+实际连接关闭故障测试。静态 E4/E7/E9/F/I 与 diff-check 通过。不是完整业务、原生或长稳复验。
+独立审计为 `prd-077-shared-database-teardown-sensitive-audit.json`；全目标仍继续推进。

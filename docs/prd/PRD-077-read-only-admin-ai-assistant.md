@@ -816,3 +816,15 @@ Browser 必须使用实际 PAGE-107、桌面和移动视口，覆盖 admin 主�
   `d347474897d3c2eeceb2fc4af73b115758a83a94101819c1757ac9b81e2b55c0`。
 - 完整专项、必要回归、静态门禁、中文注释、敏感信息、禁止文件、端口和 owner 进程审计见
   `docs/testing/PRD-077-tests.md`。本条完成不代表总体完成，`all_108_prds_complete=false`。
+
+## 2026-09-08 共享数据库下的调度重启
+
+第一轮自审：PRD-147 现按集群租约回收单个 scheduler，管理助手仅拥有自身两条连接，不拥有
+整个 Control/Gateway 数据库。旧 teardown 的 WAL TRUNCATE 和 journal_mode=DELETE 会与
+其他活跃 reader/writer 冲突，失败后 runtime 留在 closing，后续重新取得租约也无法启动。
+子系统退出只等待自身 attempt/slot、回滚未提交事务、清理 handler 并关闭自己拥有的连接。
+
+第二轮自审：保留取消延迟传播、在途 owner 等待、两条连接独立尽力关闭及任一实际 close
+失败的失败状态。不得删除 WAL/SHM，不执行数据库全局维护，也不宣称数据库已静止；完整
+停服或私有测试数据库收束仍由确实拥有整个实例的外层负责。使用真实 WAL 长读者证明旧
+实现失败，验证外部快照/新写入均不受影响，且同一 app/loop 能重新初始化。

@@ -955,10 +955,10 @@ async def test_teardown_close_failure_attempts_both_connections_and_stays_failed
 
 
 @pytest.mark.anyio
-async def test_teardown_checkpoint_failure_closes_handles_without_false_success(
+async def test_teardown_never_runs_database_wide_checkpoint(
     tmp_path: Path,
 ) -> None:
-    """WAL checkpoint 失败时两条句柄仍尽力关闭，但 runtime 保持失败状态。"""
+    """子系统只关闭自身连接，不执行共享数据库的全局 checkpoint。"""
 
     class FailingCheckpointConnection(sqlite3.Connection):
         """只拒绝 shutdown 的正规 checkpoint，其他 SQLite 操作保持真实。"""
@@ -992,20 +992,18 @@ async def test_teardown_checkpoint_failure_closes_handles_without_false_success(
     runtime.write_connection = write_connection
     assistant_service.release_admin_assistant_request(request)  # type: ignore[arg-type]
 
-    with pytest.raises(ApiError) as raised:
-        await assistant_service.clear_admin_assistant_execution_runtime(
-            app,
-            asyncio.get_running_loop(),
-        )
-    assert raised.value.code == "admin_assistant.audit_unavailable"
-    assert write_connection.checkpoint_attempts == 1
+    await assistant_service.clear_admin_assistant_execution_runtime(
+        app,
+        asyncio.get_running_loop(),
+    )
+    assert write_connection.checkpoint_attempts == 0
     for connection in (read_connection, write_connection):
         with pytest.raises(sqlite3.ProgrammingError):
             connection.execute("SELECT 1")
-    assert runtime.closed is False
+    assert runtime.closed is True
     assert runtime.closing is True
     runtimes = getattr(app.state, assistant_service._EXECUTION_RUNTIMES_STATE)
-    assert runtimes.get(asyncio.get_running_loop()) is runtime
+    assert asyncio.get_running_loop() not in runtimes
 
 
 @pytest.mark.anyio

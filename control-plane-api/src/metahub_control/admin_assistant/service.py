@@ -555,7 +555,7 @@ async def clear_admin_assistant_execution_runtime(
         return
 
     async def close_runtime_connections() -> None:
-        """等待 attempt 与 connection owner 空闲，再 checkpoint 并关闭长期连接。"""
+        """等待自身 attempt 与 connection owner 空闲，再关闭长期连接。"""
 
         await _wait_for_attempt_owners(runtime)
         await runtime.read_slots.acquire()
@@ -568,7 +568,7 @@ async def clear_admin_assistant_execution_runtime(
                     abandon_on_cancel=False,
                     limiter=runtime.dispatcher,
                 )
-                # 只有两条连接、checkpoint 和 journal 切换均成功后，才可发布 closed 状态。
+                # 子系统只证明自身连接已关闭，不改变其他服务仍在使用的数据库日志模式。
                 runtime.read_connection = None
                 runtime.write_connection = None
                 runtime.closed = True
@@ -629,7 +629,7 @@ def _close_runtime_connection_bundle(
     read_connection: sqlite3.Connection | None,
     write_connection: sqlite3.Connection | None,
 ) -> None:
-    """独立尽力关闭两条连接，并在最后 owner 上正规收敛 WAL sidecar。"""
+    """独立尽力关闭自身两条连接，保留共享数据库的 WAL 与其他 owner。"""
 
     connections: list[sqlite3.Connection] = []
     for connection in (read_connection, write_connection):
@@ -653,48 +653,19 @@ def _close_runtime_connection_bundle(
         attempt(lambda connection=connection: connection.set_progress_handler(None, 0))
         try:
             in_transaction = connection.in_transaction
-        # 事务状态读取失败时仍继续清 handler 与 PRAGMA，但整束连接最终不可判成功。
+        # 事务状态读取失败时仍继续清 handler 与连接，但整束连接最终不可判成功。
         except sqlite3.Error as exc:
             in_transaction = False
             first_error = first_error or exc
         if in_transaction:
             attempt(connection.rollback)
-        # read-stage 若在异常清理路径遗留 query_only，也要先尽力恢复再执行 checkpoint。
+        # 清理连接级设置，避免暖连接归还后影响下一个 owner。
         attempt(lambda connection=connection: connection.execute("PRAGMA query_only=OFF"))
 
-    maintenance = write_connection if write_connection is not None else read_connection
     for connection in connections:
-        if connection is not maintenance:
-            attempt(connection.close)
+        attempt(connection.close)
 
-    if maintenance is not None:
-        try:
-            mode_row = maintenance.execute("PRAGMA journal_mode").fetchone()
-            if mode_row is None:
-                # 无法读取 journal 模式就不能声称 WAL sidecar 已正规收束。
-                raise sqlite3.OperationalError("journal mode unavailable")
-            mode = str(mode_row[0]).casefold()
-            if mode == "wal":
-                checkpoint = maintenance.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                if checkpoint is None or len(checkpoint) < 1 or int(checkpoint[0]) != 0:
-                    # checkpoint busy 代表仍有快照或写者，禁止直接删除 sidecar 或伪造静止终态。
-                    raise sqlite3.OperationalError("WAL checkpoint busy")
-                delete_row = maintenance.execute("PRAGMA journal_mode=DELETE").fetchone()
-                if delete_row is None or str(delete_row[0]).casefold() != "delete":
-                    # WAL 未切回 DELETE 时数据库文件仍可能依赖 sidecar，停服验收必须失败。
-                    raise sqlite3.OperationalError("DELETE journal mode unavailable")
-            elif mode not in {"delete", "memory"}:
-                # runtime 正常只会是 WAL；未知文件 journal 模式不能被当作 sidecar 已治理。
-                delete_row = maintenance.execute("PRAGMA journal_mode=DELETE").fetchone()
-                if delete_row is None or str(delete_row[0]).casefold() != "delete":
-                    raise sqlite3.OperationalError("DELETE journal mode unavailable")
-        # journal 收束的任何错误都保留为资源终态失败，同时 finally 仍关闭 maintenance。
-        except sqlite3.Error as exc:
-            first_error = first_error or exc
-        finally:
-            attempt(maintenance.close)
-
-    # 任一连接或 journal 清理失败都不能被其余成功步骤掩盖为完整 shutdown。
+    # 任一自身连接清理失败都不能被其余成功步骤掩盖为完整 shutdown。
     if first_error is not None:
         # 不把 SQLite 路径、锁 owner 或 SQL 详情交给 lifespan/API 错误边界。
         raise ApiError("admin_assistant.audit_unavailable") from None
