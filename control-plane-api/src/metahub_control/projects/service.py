@@ -93,7 +93,7 @@ def list_projects(
             LEFT JOIN applications a ON a.tenant_id=p.tenant_id AND a.project_id=p.project_id
             LEFT JOIN virtual_keys vk ON vk.tenant_id=p.tenant_id AND vk.project_id=p.project_id
             WHERE {' AND '.join(clauses)}
-            GROUP BY p.project_id
+            GROUP BY p.project_id, u.display_name
             ORDER BY p.updated_at DESC, p.project_code ASC
             """,
             params,
@@ -267,7 +267,7 @@ def list_applications(
             LEFT JOIN virtual_keys vk
               ON vk.tenant_id=a.tenant_id AND vk.application_id=a.application_id
             WHERE {' AND '.join(clauses)}
-            GROUP BY a.application_id
+            GROUP BY a.application_id, p.project_code, p.name
             ORDER BY a.updated_at DESC, a.application_code ASC
             """,
             params,
@@ -542,7 +542,7 @@ def _load_project(connection: sqlite3.Connection, tenant_id: str, project_id: st
         LEFT JOIN applications a ON a.tenant_id=p.tenant_id AND a.project_id=p.project_id
         LEFT JOIN virtual_keys vk ON vk.tenant_id=p.tenant_id AND vk.project_id=p.project_id
         WHERE p.tenant_id=? AND p.project_id=?
-        GROUP BY p.project_id
+        GROUP BY p.project_id, u.display_name
         """,
         (tenant_id, project_id),
     ).fetchone()
@@ -565,7 +565,7 @@ def _load_application(connection: sqlite3.Connection, tenant_id: str, applicatio
         JOIN projects p ON p.tenant_id=a.tenant_id AND p.project_id=a.project_id
         LEFT JOIN virtual_keys vk ON vk.tenant_id=a.tenant_id AND vk.application_id=a.application_id
         WHERE a.tenant_id=? AND a.application_id=?
-        GROUP BY a.application_id
+        GROUP BY a.application_id, p.project_code, p.name
         """,
         (tenant_id, application_id),
     ).fetchone()

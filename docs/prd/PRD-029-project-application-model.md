@@ -529,3 +529,18 @@ python scripts\ci\check-comments.py
 - 控制面全量 pytest：通过。
 - 数据面全量 pytest：通过。
 - 中文注释门禁：`comment coverage ok`。
+
+## 2026-09-08 SaaS 原生项目/应用聚合补充自审
+
+PRD-147 真实 Cookie 流程在 POST /projects 的响应读取阶段复现 PostgreSQL 42803：
+GROUP BY 只有 Project 主键，没有关联 User 的 display_name。相同问题存在于列表及
+Application 的列表/详情，后者读取关联 Project 的 code/name。
+
+第一轮：四处 GROUP BY 保留实体主键，显式加入关联表的非聚合展示字段。实体自身字段仍由
+既有主键确定，租户 WHERE/JOIN 和 COUNT(DISTINCT ...) 均保留；不修改数据、DTO、角色或
+历史归属，不用 MIN/MAX 掩盖关联问题，也不降低 PostgreSQL 的 SQL 校验要求。
+
+第二轮：覆盖负责人为空、多个应用与多个 Key JOIN 的去重计数、tenant 过滤和列表/详情一致。
+单元只证明实际 SQL 的汇总语义，原生真实 Cookie 流程证明 PostgreSQL 可执行性；保留 r7
+失败证据，不将已提交但响应失败的 Project 当成失败回滚。新实例重跑，不复用失败业务数据。
+本修复保留 PRD-029 独立测试记录、敏感审计与提交，不并入 Identity 或页面事件交付事实。
