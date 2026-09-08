@@ -30,6 +30,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 from metahub_control.environments.service import resolve_environment_binding
 
 from .models import (
@@ -136,9 +137,11 @@ def list_model_aliases(
         filters.append("a.environment=?")
         params.append(normalized_environment)
     connection = _connect(config)
-    if environment_id:
-        # ID 筛选先在当前租户内解析，避免列表接口泄露其他租户是否存在该 Environment。
-        try:
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.read", read_only=True)
+    try:
+        transaction.begin()
+        context = transaction.context
+        if environment_id:
             binding = resolve_environment_binding(
                 connection,
                 context.user.tenant_id,
@@ -147,13 +150,9 @@ def list_model_aliases(
                 require_active=False,
                 allow_default=False,
             )
-        except BaseException:
-            connection.close()
-            raise
-        filters.append("a.environment_id=?")
-        params.append(binding.environment_id)
-    where_extra = f" AND {' AND '.join(filters)}" if filters else ""
-    try:
+            filters.append("a.environment_id=?")
+            params.append(binding.environment_id)
+        where_extra = f" AND {' AND '.join(filters)}" if filters else ""
         rows = connection.execute(
             f"""
         SELECT
@@ -209,13 +208,15 @@ def list_model_aliases(
             """,
             params,
         ).fetchall()
-        return ModelAliasListResponse(
+        result = ModelAliasListResponse(
             model_aliases=[_model_alias_info(row) for row in rows],
             request_id=request_id,
             trace_id=trace_id,
         )
+        transaction.commit()
+        return result
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
 
 
 def create_model_alias(
@@ -265,9 +266,12 @@ def create_model_alias(
     disabled_by = context.user.user_id if status == "disabled" else None
     audit_record: AuditRecord | None = None
     event: _RoutingPolicyEventRecord | None = None
+    replay_to_dispatch: _RecoveredMutation | None = None
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.write")
     try:
         # 写锁必须覆盖恢复检查、目标复核、Alias/Policy、audit/event 和提交，消除并发覆盖窗口。
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered = _recover_mutation(
             connection,
             context,
@@ -275,8 +279,9 @@ def create_model_alias(
             fingerprint=fingerprint,
         )
         if recovered is not None:
+            transaction.verify()
             connection.rollback()
-            _dispatch_recovered_mutation(config, context, recovered)
+            replay_to_dispatch = recovered
             return ModelAliasResponse(
                 model_alias=recovered.model_alias,
                 request_id=normalized_request_id,
@@ -375,7 +380,7 @@ def create_model_alias(
             previous_mode=None,
             now=now,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 已分类业务错误先回滚，再把审计基础错误折叠为 ModelAlias 稳定领域码。
     except ApiError as exc:
         connection.rollback()
@@ -394,6 +399,10 @@ def create_model_alias(
     except sqlite3.Error as exc:
         connection.rollback()
         raise ApiError("model_alias.routing_policy_update_failed") from exc
+    finally:
+        transaction.__exit__(None, None, None)
+        if replay_to_dispatch is not None:
+            _dispatch_recovered_mutation(config, context, replay_to_dispatch)
 
     # 网络投递只在业务/audit/event 已提交后执行，外部失败绝不能回滚已生效 Alias。
     dispatch_audit_recorded(
@@ -473,8 +482,11 @@ def update_model_alias(
     now = _to_db_time(_utcnow())
     audit_record: AuditRecord | None = None
     event: _RoutingPolicyEventRecord | None = None
+    replay_to_dispatch: _RecoveredMutation | None = None
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered = _recover_mutation(
             connection,
             context,
@@ -482,8 +494,9 @@ def update_model_alias(
             fingerprint=fingerprint,
         )
         if recovered is not None:
+            transaction.verify()
             connection.rollback()
-            _dispatch_recovered_mutation(config, context, recovered)
+            replay_to_dispatch = recovered
             return ModelAliasResponse(
                 model_alias=recovered.model_alias,
                 request_id=normalized_request_id,
@@ -515,6 +528,7 @@ def update_model_alias(
             if getattr(before, field) != value
         }
         if not changed_updates:
+            transaction.verify()
             connection.rollback()
             return ModelAliasResponse(
                 model_alias=before,
@@ -610,9 +624,9 @@ def update_model_alias(
                 previous_mode=before_policy.routing_mode,
                 now=now,
             )
-            commit_audited_transaction(connection)
+            transaction.commit(commit_audited_transaction)
         else:
-            connection.commit()
+            transaction.commit()
     # 所有领域异常先回滚 Alias、FallbackPolicy、audit 和配置事件的同一事务。
     except ApiError as exc:
         connection.rollback()
@@ -631,6 +645,10 @@ def update_model_alias(
     except sqlite3.Error as exc:
         connection.rollback()
         raise ApiError("model_alias.routing_policy_update_failed") from exc
+    finally:
+        transaction.__exit__(None, None, None)
+        if replay_to_dispatch is not None:
+            _dispatch_recovered_mutation(config, context, replay_to_dispatch)
 
     dispatch_audit_recorded(
         config,
@@ -697,8 +715,11 @@ def update_fallback_policy(
     now = _to_db_time(_utcnow())
     audit_record: AuditRecord | None = None
     event: _RoutingPolicyEventRecord | None = None
+    replay_to_dispatch: _RecoveredMutation | None = None
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered = _recover_mutation(
             connection,
             context,
@@ -706,8 +727,9 @@ def update_fallback_policy(
             fingerprint=fingerprint,
         )
         if recovered is not None:
+            transaction.verify()
             connection.rollback()
-            _dispatch_recovered_mutation(config, context, recovered)
+            replay_to_dispatch = recovered
             return FallbackPolicyResponse(
                 model_alias=recovered.model_alias,
                 fallback_policy=_require_fallback_policy(recovered.model_alias),
@@ -800,9 +822,9 @@ def update_fallback_policy(
                 previous_mode=before_routing_policy.routing_mode,
                 now=now,
             )
-            commit_audited_transaction(connection)
+            transaction.commit(commit_audited_transaction)
         else:
-            connection.commit()
+            transaction.commit()
     # 业务校验失败必须完整回滚目标与策略两处写入，再保留原错误码交给统一异常处理器。
     except ApiError as exc:
         connection.rollback()
@@ -815,6 +837,10 @@ def update_fallback_policy(
         connection.rollback()
         # 固定错误码允许客户端提示重试，同时避免泄露底层异常文本。
         raise ApiError("model_alias.routing_policy_update_failed") from exc
+    finally:
+        transaction.__exit__(None, None, None)
+        if replay_to_dispatch is not None:
+            _dispatch_recovered_mutation(config, context, replay_to_dispatch)
 
     dispatch_audit_recorded(
         config,
@@ -897,8 +923,11 @@ def update_routing_mode(
     now = _to_db_time(_utcnow())
     audit_record: AuditRecord | None = None
     event: _RoutingPolicyEventRecord | None = None
+    replay_to_dispatch: _RecoveredMutation | None = None
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered = _recover_mutation(
             connection,
             context,
@@ -906,8 +935,9 @@ def update_routing_mode(
             fingerprint=fingerprint,
         )
         if recovered is not None:
+            transaction.verify()
             connection.rollback()
-            _dispatch_recovered_mutation(config, context, recovered)
+            replay_to_dispatch = recovered
             return RoutingPolicyMutationResponse(
                 routing_policy=_require_routing_policy(recovered.model_alias),
                 changed=True,
@@ -926,6 +956,7 @@ def update_routing_mode(
         )
         mode_changed = before_policy.routing_mode != routing_mode
         if not mode_changed and not config_changed:
+            transaction.verify()
             connection.rollback()
             return RoutingPolicyMutationResponse(
                 routing_policy=before_policy,
@@ -1013,7 +1044,7 @@ def update_routing_mode(
             previous_mode=before_policy.routing_mode,
             now=now,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 领域错误统一回滚模式、版本、审计和事件，避免部分提交后再转换异常。
     except ApiError as exc:
         connection.rollback()
@@ -1025,6 +1056,10 @@ def update_routing_mode(
     except sqlite3.Error as exc:
         connection.rollback()
         raise ApiError("model_alias.routing_policy_update_failed") from exc
+    finally:
+        transaction.__exit__(None, None, None)
+        if replay_to_dispatch is not None:
+            _dispatch_recovered_mutation(config, context, replay_to_dispatch)
 
     dispatch_audit_recorded(
         config,

@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 随机源即使被浏览器扩展或测试桩固定，进程内单调序列仍保证并发管理请求不碰撞。
 let clientRequestSequence = 0;
@@ -9,7 +10,7 @@ let clientRequestSequence = 0;
  * status/environment 只作为过滤条件传给后端；租户边界由登录 Token 决定，前端不会
  * 拼接 tenant_id。
  */
-export async function listModelAliases({ controlApiUrl, token, status, environmentId, environment, signal }) {
+export async function listModelAliases({ controlApiUrl, authentication, token, status, environmentId, environment, signal }) {
   const url = new URL(`${controlApiUrl}/model-aliases`);
   if (status) {
     url.searchParams.set("status", status);
@@ -22,7 +23,7 @@ export async function listModelAliases({ controlApiUrl, token, status, environme
   }
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelAliasesRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token,
     signal,
   });
 }
@@ -35,6 +36,8 @@ export async function listModelAliases({ controlApiUrl, token, status, environme
  */
 export async function createModelAlias({
   controlApiUrl,
+  authentication,
+  signal,
   token,
   alias,
   environmentId,
@@ -46,8 +49,8 @@ export async function createModelAlias({
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelAliasesRequest(`${controlApiUrl}/model-aliases`, {
     method: "POST",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -68,6 +71,8 @@ export async function createModelAlias({
  */
 export async function updateModelAlias({
   controlApiUrl,
+  authentication,
+  signal,
   token,
   modelAliasId,
   alias,
@@ -82,8 +87,8 @@ export async function updateModelAlias({
   // 路由和模型判断决定实际上游调用，必须保持可解释和可追踪。
   return modelAliasesRequest(`${controlApiUrl}/model-aliases/${encodeURIComponent(modelAliasId)}`, {
     method: "PATCH",
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -106,6 +111,8 @@ export async function updateModelAlias({
  */
 export async function updateFallbackPolicy({
   controlApiUrl,
+  authentication,
+  signal,
   token,
   modelAliasId,
   enabled,
@@ -129,8 +136,8 @@ export async function updateFallbackPolicy({
     `${controlApiUrl}/model-aliases/${encodeURIComponent(modelAliasId)}/fallback`,
     {
       method: "PATCH",
+      authentication, token, signal,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -160,6 +167,7 @@ export function createCacheAffinityRequestId() {
  */
 export async function updateCacheAffinity({
   controlApiUrl,
+  authentication,
   token,
   modelAliasId,
   status,
@@ -174,8 +182,8 @@ export async function updateCacheAffinity({
     `${controlApiUrl}/model-aliases/${encodeURIComponent(modelAliasId)}/cache-affinity`,
     {
       method: "PATCH",
+      authentication, token,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -198,6 +206,7 @@ export async function updateCacheAffinity({
  */
 export async function updateRoutingMode({
   controlApiUrl,
+  authentication,
   token,
   modelAliasId,
   routingMode,
@@ -218,8 +227,8 @@ export async function updateRoutingMode({
     `${controlApiUrl}/model-aliases/${encodeURIComponent(modelAliasId)}/routing-mode`,
     {
       method: "PATCH",
+      authentication, token,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -235,7 +244,7 @@ export async function updateRoutingMode({
  * 所有请求都带 X-Request-ID，非 2xx 响应统一转为 AuthApiError，便于页面共用错误态。
  */
 async function modelAliasesRequest(url, options = {}, requestId = createModelAliasRequestId()) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": requestId,
@@ -382,7 +391,8 @@ function safeRoutingPolicyCandidate(candidate) {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

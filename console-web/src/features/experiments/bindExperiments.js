@@ -31,21 +31,27 @@ export function clearExperimentDom(root = globalThis.document) {
 
 /** 绑定筛选、显式刷新、私有 cursor 分页和当前列表内详情选择。 */
 function bindList(workspace, handlers) {
+  const current = () => workspace.isConnected !== false && (handlers.isCurrent?.("read") ?? true);
   workspace.querySelector("[data-experiment-status]")?.addEventListener("change", async (event) => {
+    if (!current()) return;
     const value = String(event.currentTarget?.value ?? "");
     await handlers.onFilter?.(STATUSES.has(value) ? value : "");
   });
   workspace.querySelector("[data-experiment-refresh]")?.addEventListener("click", async () => {
+    if (!current()) return;
     await handlers.onRefresh?.();
   });
   workspace.querySelector("[data-experiment-previous]")?.addEventListener("click", async () => {
+    if (!current()) return;
     await handlers.onPreviousPage?.();
   });
   workspace.querySelector("[data-experiment-next]")?.addEventListener("click", async () => {
+    if (!current()) return;
     await handlers.onNextPage?.();
   });
   for (const button of workspace.querySelectorAll("[data-experiment-select]")) {
     button.addEventListener("click", async () => {
+      if (!current() || button.isConnected === false) return;
       const experimentId = String(button.dataset.experimentSelect ?? "");
       if (EXPERIMENT_ID.test(experimentId)) await handlers.onSelect?.(experimentId);
     });
@@ -58,6 +64,8 @@ function bindCreate(workspace, handlers) {
   const form = dialog?.querySelector("[data-experiment-create-form]");
   const openButton = workspace.querySelector("[data-experiment-create]");
   if (!dialog || !form || !openButton) return;
+  const current = () => workspace.isConnected !== false && form.isConnected !== false
+    && (handlers.isCurrent?.("create") ?? true);
   const closeButtons = dialog.querySelectorAll(
     "[data-experiment-create-close], [data-experiment-create-cancel]",
   );
@@ -68,7 +76,9 @@ function bindCreate(workspace, handlers) {
 
   /** 打开当前 owner 的 Dialog，并从空草稿和空幂等意图开始。 */
   const open = async () => {
+    if (!current()) return;
     if (await handlers.onOpenCreate?.() !== true) return;
+    if (!current()) return;
     opener = openButton;
     pendingFingerprint = "";
     pendingIdempotencyKey = "";
@@ -80,7 +90,9 @@ function bindCreate(workspace, handlers) {
   };
   /** 仅在状态机允许关闭时擦除草稿和幂等键，并把焦点还给 opener。 */
   const close = async () => {
+    if (!current()) return;
     if (await handlers.onCloseCreate?.() !== true) return;
+    if (!current()) return;
     pendingFingerprint = "";
     pendingIdempotencyKey = "";
     form.reset();
@@ -90,9 +102,11 @@ function bindCreate(workspace, handlers) {
   openButton.addEventListener("click", open);
   for (const button of closeButtons) button.addEventListener("click", close);
   retryButton?.addEventListener("click", async () => {
+    if (!current()) return;
     await handlers.onRefresh?.();
   });
   dialog.addEventListener("keydown", async (event) => {
+    if (!current()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       await close();
@@ -100,15 +114,16 @@ function bindCreate(workspace, handlers) {
     }
     if (event.key === "Tab") containFocus(dialog, event);
   });
-  form.elements.project_id?.addEventListener("change", () => syncScopedOptions(form));
-  form.elements.environment_id?.addEventListener("change", () => syncScopedOptions(form));
-  form.elements.feedback_collection_enabled?.addEventListener("change", () => syncFeedback(form));
-  form.elements.name?.addEventListener("input", () => validateName(form));
+  form.elements.project_id?.addEventListener("change", () => { if (current()) syncScopedOptions(form); });
+  form.elements.environment_id?.addEventListener("change", () => { if (current()) syncScopedOptions(form); });
+  form.elements.feedback_collection_enabled?.addEventListener("change", () => { if (current()) syncFeedback(form); });
+  form.elements.name?.addEventListener("input", () => { if (current()) validateName(form); });
   for (const name of ["model_a_id", "model_b_id"]) {
-    form.elements[name]?.addEventListener("change", () => validateDistinctModels(form));
+    form.elements[name]?.addEventListener("change", () => { if (current()) validateDistinctModels(form); });
   }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!current()) return;
     validateName(form);
     validateDistinctModels(form);
     if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
@@ -129,6 +144,7 @@ function bindCreate(workspace, handlers) {
         pendingIdempotencyKey = nextIdempotencyKey;
       }
       const snapshot = await handlers.onCreate?.(request, pendingIdempotencyKey);
+      if (!current()) return;
       if (snapshot?.createState === "success") {
         pendingFingerprint = "";
         pendingIdempotencyKey = "";
@@ -140,9 +156,9 @@ function bindCreate(workspace, handlers) {
         );
       }
     } catch {
-      setLive(form, "实验创建暂不可用");
+      if (current()) setLive(form, "实验创建暂不可用");
     } finally {
-      if (form.isConnected) lockForm(form, false);
+      if (current()) lockForm(form, false);
     }
   });
   syncFeedback(form);

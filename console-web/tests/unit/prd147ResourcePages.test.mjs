@@ -49,7 +49,7 @@ class Element {
     this.listeners = new Map();
     this.dataset = { environmentId: "env_sample", providerId: "provider_sample", providerKeyId: "pkey_sample",
       virtualKeyId: "vkey_sample", modelId: "model_sample", entryCode: "sample", providerTab: "providers",
-      providerProbe: "provider_sample", providerStatusOffset: "50" };
+      providerProbe: "provider_sample", providerStatusOffset: "50", modelAliasId: "alias_sample", routingPolicyVersion: "1" };
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
       regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5" };
     this.button = { disabled: false };
@@ -67,6 +67,7 @@ const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState",
   "loadResourceState", "loadModelsState", "loadEnvironmentState", "loadProjectState", "loadVirtualKeysState", "loadProvidersState",
   "currentFileReadOwner", "currentFileWriteOwner", "bindFilesPageInteractions", "submitFileUpload", "loadFilesState",
   "loadAndRenderActiveNavigation", "loadProviderHealthState", "loadProviderStatusState", "runProviderProbe",
+  "loadModelAliasesState",
   "ownProviderStatusVisitAfterRender"];
 const payload = { state: "ok", providers: [{ provider_id: "provider_sample" }], projects: [], applications: [], models: [],
   virtual_keys: [], files: [], next_cursor: null, file: { file_id: "file_sample" }, plain_value: "synthetic-one-time-value",
@@ -75,7 +76,8 @@ const clients = ["createEnvironment", "updateEnvironment", "createProject", "cre
   "disableVirtualKey", "updateVirtualKey", "updateVirtualKeyLimits", "getProviderCatalogCompatibility", "createProviderFromCatalog",
   "preflightCatalogProvider", "createProvider", "updateProvider", "testProviderConnection", "createProviderKey", "updateProviderKey",
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
-  "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider"];
+  "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider",
+  "createModelAlias", "updateModelAlias", "updateFallbackPolicy", "listModelAliases"];
 
 function harness(navigation, selector) {
   const element = new Element();
@@ -92,9 +94,10 @@ function harness(navigation, selector) {
     navigator: { clipboard: { writeText: (value) => { effects.push("clipboard"); scope.copied = value; return pending.promise; } } },
     filePageState: createFilePageState(), controlApiUrl: "https://control.example.test", refreshSequence: 1, hash: navigation,
     providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
+    clearRoutingPolicySessionState() {}, clearModelQualityScoreSessionState() {}, experimentPageState: { clear() {} },
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
-    RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]),
+    RESOURCE_NAVIGATION_IDS: new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health", "model-aliases"]),
     resourcePageShellState: shell(navigation), authErrorMessage: () => "Fixed error", isAbortError: isFileAbortError,
     createProviderCatalogIdempotencyKey: () => "console:catalog:synthetic:0001",
     optionalNumber: (value, fallback) => value ? Number(value) : fallback,
@@ -120,11 +123,13 @@ function harness(navigation, selector) {
   }) });
   for (const client of clients) scope[client] = async (input) => { calls.push({ client, input }); return pending.promise; };
   const start = source.indexOf('  const createEnvironmentForm = document.querySelector(');
-  const end = source.indexOf('  const createModelAliasForm = document.querySelector(', start);
+  const end = source.indexOf('  const dismissSecretButton = document.querySelector(', start);
+  const fallbackStart = source.indexOf('  for (const fallbackForm of document.querySelectorAll(');
+  const fallbackEnd = source.indexOf('  const usageFilterForm = document.querySelector(', fallbackStart);
   const secretStart = source.indexOf('  const dismissSecretButton = document.querySelector(');
   const secretEnd = source.indexOf('  const budgetScopeChainKey = document.querySelector(', secretStart);
   const functions = runInNewContext(`${helpers.map(production).join("\n")}
-    function bindActualResourceHandlers() { ${source.slice(start, end)} }
+    function bindActualResourceHandlers() { ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} }
     function bindActualSecretHandlers() { ${source.slice(secretStart, secretEnd)} }
     ({ ${helpers.join(",")}, bindActualResourceHandlers, bindActualSecretHandlers });`, scope);
   Object.assign(scope, functions);
@@ -141,6 +146,9 @@ function harness(navigation, selector) {
 }
 
 const forms = [
+  ["model-aliases", "#create-model-alias-form", "createModelAlias"],
+  ["model-aliases", "[data-model-alias-status-form]", "updateModelAlias"],
+  ["model-aliases", "[data-fallback-policy-form]", "updateFallbackPolicy"],
   ["provider-health", "[data-provider-probe]", "probeProvider", "click"],
   ["environments", "#create-environment-form", "createEnvironment"],
   ["environments", "[data-environment-status-form]", "updateEnvironment"],
@@ -218,7 +226,7 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
 
 const loaders = [["environments", "loadEnvironmentState"], ["projects", "loadProjectState"],
   ["providers", "loadProvidersState"], ["models", "loadModelsState"], ["virtual-keys", "loadVirtualKeysState"], ["files", "loadFilesState"],
-  ["provider-health", "loadProviderHealthState"]];
+  ["provider-health", "loadProviderHealthState"], ["model-aliases", "loadModelAliasesState"]];
 for (const [navigation, loader] of loaders) {
   test(`PRD-147 actual ${navigation} dispatcher supplies Workspace reads and renders the accepted state`, async () => {
     const h = harness(navigation);

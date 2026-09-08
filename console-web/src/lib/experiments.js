@@ -6,6 +6,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 实验、资源、链路和时间标识使用与 Control 公共 DTO 一致的白名单，拒绝正文型字段混入。
 const EXPERIMENT_ID = /^exp_[0-9a-f]{32}$/;
@@ -87,6 +88,7 @@ const ERROR_MESSAGES = Object.freeze({
  */
 export async function listExperiments({
   controlApiUrl,
+  authentication,
   token,
   status = "",
   limit = 50,
@@ -101,7 +103,7 @@ export async function listExperiments({
   if (status) query.set("status", status);
   if (cursor !== null) query.set("cursor", requireCursor(cursor));
   const payload = await requestJson(`${controlApiUrl}/experiments?${query}`, {
-    headers: authorizationHeaders(token),
+    authentication, token,
     signal,
   }, 200);
   const normalized = normalizeExperimentListResponse(payload);
@@ -113,11 +115,11 @@ export async function listExperiments({
 }
 
 /** 读取一个实验的不可变配置，并校验 path owner 与响应 ID 完全一致。 */
-export async function getExperiment({ controlApiUrl, token, experimentId, signal }) {
+export async function getExperiment({ controlApiUrl, authentication, token, experimentId, signal }) {
   const id = requireExperimentId(experimentId);
   const payload = await requestJson(
     `${controlApiUrl}/experiments/${encodeURIComponent(id)}`,
-    { headers: authorizationHeaders(token), signal },
+    { authentication, token, signal },
     200,
   );
   const normalized = normalizeExperimentDetailResponse(payload, id);
@@ -129,11 +131,11 @@ export async function getExperiment({ controlApiUrl, token, experimentId, signal
 }
 
 /** 读取后端单 snapshot 生成的 A/B 权威统计，浏览器不拼接 Usage 或 Feedback。 */
-export async function getExperimentResults({ controlApiUrl, token, experimentId, signal }) {
+export async function getExperimentResults({ controlApiUrl, authentication, token, experimentId, signal }) {
   const id = requireExperimentId(experimentId);
   const payload = await requestJson(
     `${controlApiUrl}/experiments/${encodeURIComponent(id)}/results`,
-    { headers: authorizationHeaders(token), signal },
+    { authentication, token, signal },
     200,
   );
   const normalized = normalizeExperimentResultsResponse(payload, id);
@@ -151,6 +153,7 @@ export async function getExperimentResults({ controlApiUrl, token, experimentId,
  */
 export async function createExperiment({
   controlApiUrl,
+  authentication,
   token,
   idempotencyKey,
   request,
@@ -160,8 +163,8 @@ export async function createExperiment({
   const key = requireIdempotencyKey(idempotencyKey);
   const payload = await requestJson(`${controlApiUrl}/experiments`, {
     method: "POST",
+    authentication, token,
     headers: {
-      ...authorizationHeaders(token),
       "Content-Type": "application/json",
       "Idempotency-Key": key,
     },
@@ -494,16 +497,18 @@ function normalizeArmResult(value) {
 async function requestJson(url, init, expectedStatus) {
   let response;
   try {
-    response = await fetch(url, { ...init, cache: "no-store", credentials: "omit" });
+    response = await authenticatedResourceFetch(url, init);
   } catch (error) {
     // Abort 只表示当前 owner 被替换，不能误报为服务失败或写入页面错误状态。
     if (error?.name === "AbortError") throw error;
+    if (error instanceof AuthApiError) throw error;
     throw clientError("experiment.unavailable", 503);
   }
   let payload;
   try {
     payload = await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     // 非 JSON 或空响应不允许把原始 body 当成错误文案透传到页面。
     throw clientError("experiment.response_invalid", response.ok ? 502 : response.status);
   }
@@ -531,16 +536,6 @@ async function requestJson(url, init, expectedStatus) {
     );
   }
   return payload;
-}
-
-/** 构造只含 Bearer 与 JSON Accept 的认证头，空白 Token 在网络前失败。 */
-function authorizationHeaders(token) {
-  // Token 属于 Session 边界，非法值不得进入 Header、错误或日志。
-  if (typeof token !== "string" || !token || /\s/.test(token)) {
-    throw clientError("auth.token_missing", 401);
-  }
-  // 合法 Token 只进入本次 Authorization Header，不会写入状态或缓存键。
-  return { Authorization: `Bearer ${token}`, Accept: "application/json" };
 }
 
 /** 校验公开实验 ID，非法 path 与当前租户不可见对象统一映射为 not_found。 */

@@ -922,3 +922,55 @@ r9 实施反例：0139 中四张表的隐私清单仍是 SQLite 源格式，不�
 修复后将四张表的所有对应 trigger 清单统一为原生定义，不只改七个函数的清单，避免混合格式。
 回滚恢复旧函数并保留与旧函数一致的原生清单，不再退回 SQLite SQL；原始清单仍可从不可变
 基线追溯。事实行及表结构摘要不改变；此处不声明全产品隐私删除原生适配已完成。
+
+### 2026-09-08 模型路由与评估连续批次
+
+同组范围为 ModelAlias、Fallback、RoutingPolicy、CacheAffinity、ModelQualityScore 和
+Experiment 的读写 API、客户端传输和业务页。复用原事实表、严格 DTO、权限目录及页面草稿，
+不增加影子 Session，不把 Workspace ID 填入 tenant 或 Legacy session 字段。
+
+第一轮自审（认证与事务）：路由明确选 Workspace Cookie/Origin/CSRF 或显式 Legacy Bearer，
+混合凭据拒绝且先鉴权后解析正文。ResourceWriteTransaction 仅扩展本组权限、只读 BEGIN、
+显式 verify 和多权限复核；普通写路径仍 BEGIN IMMEDIATE。业务查询前恢复真实会话，提交、
+重放和 no-op 返回前再次复核。实验创建同时要求五项已有权限。保留 CAS 先于 no-op、规范化
+幂等指纹及原子审计/配置事件。CacheAffinity no-op 仍保存 ConfigEvent 并消费请求 ID，人工
+评分 no-op 不写事实。所有出口关闭连接，恢复后的外部投递也在释放连接之后。
+
+第二轮自审（统计与页面）：实验统计保留专用单线程、非阻塞单飞、250ms SQL 与 2s HTTP
+期限，不因新增认证放宽。Legacy 快速权限指纹验证保留，Workspace 使用真实事务认证，快照
+结束再次验证且总时间仍受期限限制。页面复用公共 Workspace session owner、导航和读写代次；
+切换空间、离页、撤权或 DOM 已断开时，旧回调不能修改新页面。路由、评分和实验的独立草稿、
+私有 cursor、同意图未知结果重试与版本冲突处理保留；缺 token 不能隐式回落 Cookie。
+
+先执行真实双 Workspace Cookie 红测，再连续实现后端、传输和页面。开发中只跑受影响单元/API
+冒烟，整组完成后汇总原生数据库、流程、浏览器、性能和安全 QA。失败报告原样保留，不将
+局部绿色结果当作 G6/G7/G8 或 Excel 全目标完成。
+
+### 用户调整的发布顺序
+
+统计期限实施复核一：r6/r7 定位到专用线程冷连接第一次 schema 解析即耗时 281ms 以上。
+仅对 results 采用独立短路由鉴权 scope 并归还现有暖连接池；worker 自建 scope，不跨线程共享
+请求句柄。250ms 在 worker scope 内查询前启动，2s HTTP 与非阻塞单飞不变，不缓存授权结果。
+实施复核二：完整 Workspace 认证拒绝时原有状态写入与 query_only 冲突。新增默认关闭的只读
+认证选项，仅在只读事务里不持久化拒绝状态，仍验证全部 Session/SSO/条件访问/权限并返回
+原拒绝码。原有写认证行为保持；测试需要覆盖真实冷启动首读、超时后 worker 持有资源、连接
+归还重置、只读过期拒绝与无业务变更。
+
+原生统计复核一：只在实验服务内选择 backend，PostgreSQL 使用 REPEATABLE READ READ ONLY
+快照及数据库时钟，不把 PRAGMA/strftime/julianday 送给原生连接，不改共享 SQL 翻译器。
+复核二：原生统计逐语句设置 transaction-local statement_timeout 为同一绝对期限的剩余时间，
+并保持 25ms lock_timeout；所有认证与快照查询共用该期限，提交前再测总时间。异常回滚恢复
+事务级设置，worker scope 退出归还连接；以真实双 Workspace HTTP 复用测试核对写入/重放/
+统计/跨空间拒绝，而不是用内存 SQL 替身认定原生通过。
+
+缓存亲和实施复核一：旧 memory 从 JSON 身份数组首项提取 tenant，而新 Workspace owner 的
+首项是公共会话对象，会把所有合法 Alias 丢弃。beginRefresh 显式接收已验证页面 owner，核对
+其 key/navigation/公共 Session；Legacy 仍按原 tenant 合同校验，Workspace 不伪造 tenant。
+实施复核二：Workspace 数据只在对应读取代次下接纳，列表不得混入多个 tenant，已存在 Alias
+不得更换 tenant；PATCH 继续逐项验证原事实 tenant、Alias、请求键、草稿与 CAS。增加真实
+production handler 的当前成功路径及错 owner/mixed-tenant 反例，不能仅依赖迟到拒绝测试。
+
+2026-09-08 用户明确要求先完成目标开发并发布供其使用，再执行 72 小时长稳。此指示优先于
+Excel 中长稳前置的旧排序：先完成发布前必要的功能、权限、数据与回滚验证并交付可用版本，
+长稳作为发布后的独立任务，不阻塞该交付；尚未执行或尚未通过的长稳不得标成通过。全目标、
+PRD-148 最终记录及未证明的门禁继续保留，不以调整执行顺序冒充验证完成。

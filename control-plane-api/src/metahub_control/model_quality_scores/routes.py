@@ -15,8 +15,7 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_control.audit import build_audit_request_meta
 from metahub_control.auth import (
     AuthContext,
-    require_model_quality_score_reader,
-    require_model_quality_score_writer,
+    require_workspace_or_legacy_permissions,
 )
 
 from .models import ModelQualityScoreListResponse, ModelQualityScoreMutationResponse
@@ -39,7 +38,7 @@ class _DuplicateJsonKey(ValueError):
 async def get_model_quality_scores(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_model_quality_score_reader)],
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions("model_quality.read"))],
 ) -> ModelQualityScoreListResponse:
     """查询当前认证租户的模型质量统计，viewer 由后端依赖拒绝。"""
 
@@ -60,7 +59,7 @@ async def get_model_quality_scores(
 @router.patch("", response_model=ModelQualityScoreMutationResponse)
 async def patch_model_quality_score(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_model_quality_score_writer)],
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions("model_quality.write"))],
 ) -> ModelQualityScoreMutationResponse:
     """认证后读取严格小 JSON，并以独立人工版本 CAS 修改评分。"""
 

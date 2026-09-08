@@ -13,6 +13,8 @@ import {
   permissionRevision,
   PERMISSIONS,
 } from "../../lib/permissions.js";
+import { workspaceResourcePageOwner } from "../../lib/workspaceResourcePage.js";
+import { workspaceConsoleSessionFromShell } from "../../lib/workspaceConsoleSession.js";
 
 // 页面只接受后端冻结的 experiments 导航、实验 ID、资源 ID 和单向状态枚举。
 const NAVIGATION_ID = "experiments";
@@ -66,7 +68,30 @@ export function experimentCreateIdentitySnapshot(authContext) {
  * 把 auth/me 与后端 navigation 的 tenant、权限集合、revision 和 fingerprint 合并为页面 owner。
  * 导航 target 或 required_permissions 任一漂移都返回 null，绝不依赖前端角色名补权。
  */
-export function experimentPageOwner(authContext, consoleShellState, { mode = "read" } = {}) {
+export function experimentPageOwner(authContext, consoleShellState, {
+  mode = "read", session = workspaceConsoleSessionFromShell(consoleShellState),
+} = {}) {
+  if (consoleShellState?.workspaceNavigationContract === true || session?.authentication === "workspace") {
+    const page = workspaceResourcePageOwner(session, consoleShellState, {
+      navigationId: NAVIGATION_ID, permissions: [PERMISSIONS.EXPERIMENT_READ],
+    });
+    if (!page || !["read", "create"].includes(mode)
+      || authContext?.permission_revision !== session.context.permission_revision
+      || authContext?.membership_revision !== session.context.membership_revision
+      || authContext?.permission_fingerprint !== session.context.permission_fingerprint
+      || JSON.stringify(permissionCodesFromAuthContext(authContext))
+        !== JSON.stringify(permissionCodesFromAuthContext(session.context))) return null;
+    const canCreate = hasEveryPermission(session.context, CREATE_PERMISSIONS);
+    if (mode === "create" && !canCreate) return null;
+    return Object.freeze({
+      readIdentity: page.key,
+      createIdentity: canCreate ? JSON.stringify([page.key, CREATE_PERMISSIONS]) : "",
+      workspaceId: session.owner.workspaceId,
+      navigation: NAVIGATION_ID,
+      navigationOwner: page.key,
+      canCreate,
+    });
+  }
   const readIdentity = experimentReadIdentitySnapshot(authContext);
   const createIdentity = experimentCreateIdentitySnapshot(authContext);
   const tenantId = mirroredTenantId(authContext);
@@ -606,11 +631,11 @@ export function createExperimentPageState({ clearDom = () => {} } = {}) {
 /** 把 read/create 身份、tenant 和后端导航快照冻结为仅存内存的 owner key。 */
 function ownerKeyFor(owner) {
   // 缺少任一身份或导航维度时不得沿用已有页面状态。
-  if (!owner?.readIdentity || !owner?.navigationOwner || !owner?.tenantId) return "";
+  if (!owner?.readIdentity || !owner?.navigationOwner || !(owner?.tenantId || owner?.workspaceId)) return "";
   return JSON.stringify([
     owner.readIdentity,
     owner.createIdentity,
-    owner.tenantId,
+    owner.workspaceId ? ["workspace", owner.workspaceId] : ["legacy", owner.tenantId],
     owner.navigationOwner,
   ]);
 }

@@ -37,6 +37,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     ModelQualityScoreInfo,
@@ -94,7 +95,10 @@ def list_model_quality_scores(
 
     normalized_model_id = _normalize_optional_model_id(model_id)
     connection = _connect(config, unavailable_code="model_quality_score.unavailable")
+    transaction = ResourceWriteTransaction(connection, config, context, "model_quality.read", read_only=True)
     try:
+        transaction.begin()
+        context = transaction.context
         # 指定 ID 必须先做 tenant-qualified 存在性检查，使跨租户与真实不存在保持相同 404。
         if normalized_model_id is not None:
             _require_score_row(connection, context.user.tenant_id, normalized_model_id)
@@ -136,7 +140,7 @@ def list_model_quality_scores(
             [*params, limit, offset],
         ).fetchall()
         as_of = _utcnow()
-        return ModelQualityScoreListResponse(
+        result = ModelQualityScoreListResponse(
             model_quality_scores=[_score_info(row) for row in rows],
             total=int(total_row["total"] if total_row else 0),
             limit=limit,
@@ -145,6 +149,8 @@ def list_model_quality_scores(
             request_id=request_id,
             trace_id=trace_id,
         )
+        transaction.commit()
+        return result
     # 领域异常保留既定 404 等公开语义，不能被宽泛转换成依赖不可用错误。
     except ApiError:
         raise
@@ -155,7 +161,7 @@ def list_model_quality_scores(
         # 查询失败只暴露固定领域码，不能把 SQL、数据库路径或底层异常正文回显。
         raise ApiError("model_quality_score.unavailable") from exc
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
 
 
 def update_manual_quality_score(
@@ -177,8 +183,11 @@ def update_manual_quality_score(
     audit_record: AuditRecord | None = None
     event: _FeedbackEventRecord | None = None
     score: ModelQualityScoreInfo | None = None
+    replay_to_dispatch: _RecoveredMutation | None = None
+    transaction = ResourceWriteTransaction(connection, config, context, "model_quality.write")
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered = _recover_mutation(
             connection,
             context,
@@ -186,8 +195,9 @@ def update_manual_quality_score(
             fingerprint=fingerprint,
         )
         if recovered is not None:
+            transaction.verify()
             connection.rollback()
-            _dispatch_recovered_mutation(config, context, recovered)
+            replay_to_dispatch = recovered
             return ModelQualityScoreMutationResponse(
                 model_quality_score=recovered.score,
                 changed=True,
@@ -202,6 +212,7 @@ def update_manual_quality_score(
             raise ApiError("model_quality_score.version_conflict")
         if before.manual_quality_bps == manual_bps:
             # 同值 no-op 必须在版本匹配后返回，不写审计/事件，也不推进人工版本。
+            transaction.verify()
             connection.rollback()
             return ModelQualityScoreMutationResponse(
                 model_quality_score=before,
@@ -258,7 +269,7 @@ def update_manual_quality_score(
             fingerprint=fingerprint,
             created_at=now,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 所有领域错误先回滚；仅审计内部错误需折叠，避免暴露子系统错误码或留下半事务。
     except ApiError as exc:
         connection.rollback()
@@ -275,7 +286,9 @@ def update_manual_quality_score(
         connection.rollback()
         raise ApiError("model_quality_score.update_failed") from exc
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
+        if replay_to_dispatch is not None:
+            _dispatch_recovered_mutation(config, context, replay_to_dispatch)
 
     # 以下外部副作用只能发生在主事务提交后；失败不能撤销已经提交的人工评分。
     if score is None or audit_record is None or event is None:  # pragma: no cover - 事务路径已保证。

@@ -585,3 +585,53 @@ function_settings 的 up/down 反例。回滚保留与还原函数一致的原�
 安全会签；本组原生认证证据来自真实 API 经 ASGITransport 调用，不是浏览器/套接字证据。
 页面访问的局部实现与上述定向验证已完成，其他消费端、完整业务浏览器、原生并发撤权、
 KeyPool/DNS 总体时限和统一批次 QA 仍继续推进。G6/G7/G8 与 Excel 总目标未标记完成。
+
+## 2026-09-08 模型路由与评估批次复验
+
+范围：Alias、Fallback、RoutingPolicy、CacheAffinity、ModelQualityScore、Experiment
+列表/创建/详情/结果。设计与两轮自审见本条设计文档，复用真实 Workspace Cookie/CSRF/Origin
+和显式 Legacy Bearer，不生成影子 Session。写入、幂等重放、no-op 和统计终态均重新鉴权。
+统计保留专用单线程、非阻塞单飞、250ms SQL 预算与 2s 响应边界；认证暖连接经现有池归还，
+工作线程独立取得连接，既不跨线程共享请求句柄，也不缓存授权。只读认证仍执行真实会话、SSO、
+条件访问和权限校验，仅不持久化拒绝状态。PostgreSQL 使用原生只读快照及剩余语句期限。
+
+客户端改用显式认证传输，生产 handler 绑定公共 Workspace 会话、导航、页面代次和 DOM 归属。
+Workspace ID 不充当 tenant ID。CacheAffinity 保留服务端事实 tenant，拒绝混合 tenant 列表、
+已知 Alias 的 tenant 替换及迟到写回，保留 CAS、请求键、草稿和原意图重试。
+
+原始报告均在 `.artifacts/g6-security-20260907/`。以下是独立运行，不拼接成一次整轮通过。
+
+| 报告 | 结果 | 范围 |
+| --- | --- | --- |
+| `prd147-routing-evaluation-r8.xml` | 12 passed | 真实双 Workspace API、读写/重放/无副作用拒绝、统计及连接恢复 |
+| `prd147-routing-evaluation-r9.xml` | 1 passed | 真实统计快照后会话过期，终态返回原始 401，事实不变、query_only 复位 |
+| `prd147-evaluation-legacy-r1.xml` | 1 passed | 真实账号密码经 /auth/login，显式 Bearer 读写/结果/退出；撤销后拒绝，Cookie 不受影响 |
+| `prd147-statistics-regression-r1.xml` | 4 passed | PRD-075 期限、单飞、工作线程和连接故障回归 |
+| `g6-evaluation-r2-ce439146ec1b49278cfbc046ca5cd655-junit.xml` | 2 passed | 原生 PostgreSQL 真实业务与跨空间拒绝、十类终态过期回滚及连接关闭 |
+| `prd147-evaluation-frontend-r5.xml` | 416 passed | 受影响传输、页面状态及 handler 单元 |
+| `prd147-console-regression-r1.xml` | 1791 passed / 13 failed | 全前端 1804 项；新路由评估 handler 的 44 项全通过，整体未通过 |
+| `prd147-head-source-control-r2.xml` | 107 passed / 13 failed | 仅将 main.js 源码读取替换为 HEAD 的对照，复现同样 13 项失败，不是完整 HEAD 回归 |
+| `prd147-evaluation-manifest-r1.xml` | 7 passed | 实为生命周期测试，文件名不代表执行了 manifest 测试 |
+| `prd147-frontend-manifest-r2.xml` | 1 passed | 实际前后端发布清单测试 |
+| `prd147-browser-r1.xml` | 2 passed | 桌面/移动真实注册、登录并进入 Console 概览，无 Legacy token；不是业务页浏览器验收 |
+
+失败追踪：red-r1 为两项预期认证失败；r2 导入错误已修正；r3 九项通过；r4 测试模型
+context window 为零导致两项失败，改用真实模型 API 设置；r5/r6/r7 保留统计 503 及诊断。
+冷 SQLite 首次 schema 解析 281--297ms 超过原预算，以上连接生命周期修复后 r8 通过。
+frontend-r6 的测试错误地读取 listState 而非公开 state，已修正并由全前端运行覆盖。
+原生 evaluation-r1 两项 setup error 来自既有审计水位分配缺陷，独立由 PRD-058 提交
+`076920f` 修复，不归为 PRD-147 的原生审计交付。错误 selector 的零执行报告不计通过。
+
+13 项前端失败分布在审计、成本异常、企业聊天、环境、FinOps、邀请、预算、浏览器验收、
+批处理、Edge installer、请求解释、请求日志和 webhook dead letters；主要为旧 main.js
+生命周期/启动源码断言。保留原始失败，下一批逐项检查生产行为后修复，不删除测试或改写成全绿。
+
+发布表面验证通过：262 modules / 276 shipped sources；生产构建 276 assets，Console lint
+777 files 通过。两端摘要为 `28523b6cfc83e87e929cb0c38b63540933f8b475ee2265694cd59e7cd318a624`。
+Python E4/E7/E9/F/I 检查和 diff-check 通过；完整 Ruff 仍有 E501，未声明全量 lint 通过。
+浏览器截图已查看，仍有 overview/nav 翻译键、中英文混合和移动侧栏空白，未宣称视觉 QA 通过。
+两个私有目录已清理、子进程归零，受保护 SQLite 基线摘要不变；所有原生实例正常停止。
+
+本批独立敏感审计为 `prd-147-routing-evaluation-sensitive-audit.json`，覆盖精确暂存字节、
+原始报告、严格 UTF-8 和高置信凭据模式；不替代独立安全会签。用户明确调整为先交付可用版本、
+后做 72 小时长稳。长稳保持未完成但不前置阻止交付，其他未验证业务与发布状态不冒充已完成。

@@ -774,6 +774,7 @@ def authenticate_workspace_session_in_transaction(
     session_token: str,
     csrf_token: str | None = None,
     touch: bool = False,
+    read_only: bool = False,
 ) -> WorkspaceSessionContext:
     """Authenticate one WorkspaceSession inside a caller-owned transaction."""
 
@@ -782,7 +783,8 @@ def authenticate_workspace_session_in_transaction(
         config,
         session_token=session_token,
         csrf_token=csrf_token,
-        touch=touch,
+        touch=touch and not read_only,
+        read_only=read_only,
     )
     return context
 
@@ -1997,6 +1999,7 @@ def _authenticate_workspace(
     session_token: str,
     csrf_token: str | None,
     touch: bool,
+    read_only: bool = False,
 ) -> tuple[WorkspaceSessionContext, sqlite3.Row]:
     if not connection.in_transaction:
         raise ApiError("workspace_session.unavailable")
@@ -2063,13 +2066,14 @@ def _authenticate_workspace(
         or _parse_time(row["global_expires_at"]) <= now
         or _parse_time(row["global_idle_expires_at"]) <= now
     ):
-        connection.execute(
-            """
-            UPDATE workspace_sessions SET status='expired',updated_at=?
-            WHERE workspace_session_id=?
-            """,
-            (_db_time(now), row["workspace_session_id"]),
-        )
+        if not read_only:
+            connection.execute(
+                """
+                UPDATE workspace_sessions SET status='expired',updated_at=?
+                WHERE workspace_session_id=?
+                """,
+                (_db_time(now), row["workspace_session_id"]),
+            )
         raise ApiError("workspace_session.expired")
     compatible_workspace_roles = _WORKSPACE_ROLES_BY_LEGACY_ROLE.get(
         row["legacy_role"], frozenset()
@@ -2103,21 +2107,24 @@ def _authenticate_workspace(
         or not conditional_access_authorized
     )
     if stale:
-        _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")
+        if not read_only:
+            _revoke_workspace_session(connection, row["workspace_session_id"], now, "authority_changed")
         raise ApiError("workspace_session.revoked")
     try:
         snapshot = _permission_snapshot(connection, row)
     except ApiError:
-        _revoke_workspace_session(
-            connection, row["workspace_session_id"], now, "permission_changed"
-        )
+        if not read_only:
+            _revoke_workspace_session(
+                connection, row["workspace_session_id"], now, "permission_changed"
+            )
         raise ApiError("workspace_session.revoked") from None
     if row["legacy_permission_revision"] != snapshot.permission_revision or not hmac.compare_digest(
         row["matrix_fingerprint"], snapshot.authorization_fingerprint
     ):
-        _revoke_workspace_session(
-            connection, row["workspace_session_id"], now, "permission_changed"
-        )
+        if not read_only:
+            _revoke_workspace_session(
+                connection, row["workspace_session_id"], now, "permission_changed"
+            )
         raise ApiError("workspace_session.revoked")
     if csrf_token is not None:
         if not valid_opaque_value(csrf_token) or not hmac.compare_digest(

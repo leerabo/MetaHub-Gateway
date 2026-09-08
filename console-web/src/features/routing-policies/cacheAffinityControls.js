@@ -4,6 +4,7 @@
  */
 
 import { createCacheAffinityRequestId } from "../../lib/modelAliases.js";
+import { hasWorkspaceConsoleSession } from "../../lib/workspaceConsoleSession.js";
 
 // 配置字段、数值范围和 TTL 预设与 Control API/0040 迁移保持一致，前端校验不能替代后端约束。
 const CACHE_AFFINITY_STATUSES = new Set(["enabled", "disabled"]);
@@ -90,10 +91,13 @@ export function createCacheAffinityPageMemory({ requestIdFactory } = {}) {
 
   return {
     /** 开始一轮复用 ModelAlias 列表的读取，并冻结当前身份 owner。 */
-    beginRefresh({ identity, navigation }) {
+    beginRefresh({ identity, navigation, workspaceOwner = null }) {
       enter(identity, navigation);
       const generation = ++refreshSequence;
-      return Object.freeze({ identity: activeIdentity, navigation: activeNavigation, generation });
+      const workspace = Boolean(workspaceOwner?.key === activeIdentity
+        && workspaceOwner.navigation === activeNavigation
+        && hasWorkspaceConsoleSession(workspaceOwner.session));
+      return Object.freeze({ identity: activeIdentity, navigation: activeNavigation, generation, workspace });
     },
 
     /**
@@ -105,14 +109,18 @@ export function createCacheAffinityPageMemory({ requestIdFactory } = {}) {
         return false;
       }
       const identityTenantId = tenantIdFromIdentity(ticket.identity);
+      const tenantIds = new Set((Array.isArray(aliases) ? aliases : [])
+        .map((alias) => cacheAffinityText(alias?.tenant_id)));
+      if (ticket.workspace && (tenantIds.has("") || tenantIds.size > 1)) return false;
       const seen = new Set();
       for (const alias of Array.isArray(aliases) ? aliases : []) {
         const modelAliasId = cacheAffinityText(alias?.model_alias_id);
         const tenantId = cacheAffinityText(alias?.tenant_id);
         // 缺失租户或与身份不一致的响应不得进入页面状态，即使后端本应已经隔离。
-        if (!modelAliasId || !tenantId || tenantId !== identityTenantId) {
+        if (!modelAliasId || !tenantId || (!ticket.workspace && tenantId !== identityTenantId)) {
           continue;
         }
+        if (rows.has(modelAliasId) && rows.get(modelAliasId).tenantId !== tenantId) continue;
         seen.add(modelAliasId);
         const row = rows.get(modelAliasId);
         if (!row) {
@@ -549,7 +557,7 @@ function isCacheAffinityBaseVersion(value, authority) {
 function tenantIdFromIdentity(identity) {
   try {
     const values = JSON.parse(cacheAffinityText(identity));
-    return Array.isArray(values) ? cacheAffinityText(values[0]) : "";
+    return Array.isArray(values) && typeof values[0] === "string" ? cacheAffinityText(values[0]) : "";
   } catch {
     return "";
   }

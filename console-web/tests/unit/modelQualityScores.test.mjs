@@ -410,7 +410,7 @@ test("main loader gates PAGE-069 prefetch and lifecycle cleanup by permission ac
   assert.match(loader, /!hasPermission\(authSession\.context, PERMISSIONS\.MODEL_QUALITY_READ\)/);
   assert.match(loader, /activeNavigationItemId !== "model-quality-scores"/);
   assert.match(loader, /refreshId !== refreshSequence/);
-  assert.match(loader, /modelQualityScoreIdentitySnapshot/);
+  assert.match(loader, /currentEvaluationPageIdentity/);
   assert.match(loader, /listModelQualityScores/);
   assert.doesNotMatch(loader, /tenantId|tenant_id/);
   assert.match(source, /pagehide[\s\S]*clearModelQualityScoreSessionState\(\)/);

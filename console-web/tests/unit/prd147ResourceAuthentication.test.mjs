@@ -11,6 +11,9 @@ import * as files from "../../src/lib/files.js";
 import * as catalog from "../../src/lib/providerCatalog.js";
 import * as health from "../../src/lib/providerHealth.js";
 import * as status from "../../src/lib/providerStatus.js";
+import * as aliases from "../../src/lib/modelAliases.js";
+import * as scores from "../../src/lib/modelQualityScores.js";
+import * as experiments from "../../src/lib/experiments.js";
 
 const BASE = "https://control.example.test";
 const CSRF = "w".repeat(43);
@@ -24,6 +27,15 @@ test.afterEach(() => {
 });
 
 const operations = [
+  [aliases.listModelAliases, {}, "GET", "/model-aliases"],
+  [aliases.createModelAlias, { alias: "sample", defaultModelId: "model_sample" }, "POST", "/model-aliases"],
+  [aliases.updateModelAlias, { modelAliasId: "alias_sample", status: "disabled", expectedRoutingPolicyVersion: 1 }, "PATCH", "/model-aliases/alias_sample"],
+  [aliases.updateFallbackPolicy, { modelAliasId: "alias_sample", enabled: false, triggerConditions: ["upstream_timeout"], expectedRoutingPolicyVersion: 1 }, "PATCH", "/model-aliases/alias_sample/fallback"],
+  [aliases.updateRoutingMode, { modelAliasId: "alias_sample", routingMode: "fixed", expectedVersion: 1 }, "PATCH", "/model-aliases/alias_sample/routing-mode"],
+  [aliases.updateCacheAffinity, { modelAliasId: "alias_sample", status: "disabled", dataClass: null, minimumPrefixChars: 256, ttlSeconds: 60, expectedVersion: 0 }, "PATCH", "/model-aliases/alias_sample/cache-affinity"],
+  [scores.listModelQualityScores, {}, "GET", "/model-quality-scores"],
+  [scores.updateModelQualityScore, { modelId: "model_sample", manualQualityBps: 8000, expectedFeedbackVersion: 1 }, "PATCH", "/model-quality-scores"],
+  [experiments.listExperiments, {}, "GET", "/experiments"],
   [health.listProviderHealth, {}, "GET", "/provider-health"],
   [health.probeProvider, { providerId: "provider_sample" }, "POST", "/providers/provider_sample/probe"],
   [status.listProviderStatuses, {}, "GET", "/status/providers"],
@@ -224,6 +236,8 @@ test("PRD-147 transport options cannot override credential isolation, caching or
 
 function responseFor(path, method) {
   const envelope = { request_id: "req_resource", trace_id: "trc_resource" };
+  if (path === "/experiments") return Response.json({ experiments: [], next_cursor: null, ...envelope },
+    { headers: { "Cache-Control": "no-store, private" } });
   if (path === "/files" && method === "GET") {
     return Response.json({ files: [], next_cursor: null, ...envelope });
   }

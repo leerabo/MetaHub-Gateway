@@ -278,7 +278,7 @@ import {
   sameWorkspaceConsoleSession,
   workspaceConsoleSessionFromShell,
 } from "../lib/workspaceConsoleSession.js";
-import { createWorkspaceResourcePage } from "../lib/workspaceResourcePage.js";
+import { createWorkspaceResourcePage, workspaceResourcePageOwner } from "../lib/workspaceResourcePage.js";
 import {
   downloadDeveloperSdk,
   getDeveloperContractWorkspace,
@@ -768,7 +768,8 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
     else if ([403, 409, 412].includes(error?.status)) void refresh();
   },
 });
-const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health"]);
+const RESOURCE_NAVIGATION_IDS = new Set(["environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
+  "model-aliases", "routing-policies", "model-quality-scores", "experiments"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
@@ -1821,7 +1822,7 @@ async function loadAndRenderActiveNavigation({
       ]);
       break;
     case "routing-policies": {
-      const identity = routingPolicyIdentitySnapshot(authSession.context);
+      const identity = currentEvaluationPageIdentity("routing-policies", PERMISSIONS.ROUTING_READ);
       const ticket = routingPolicyPageMemory.beginRefresh({
         identity,
         navigation: "routing-policies",
@@ -1829,6 +1830,9 @@ async function loadAndRenderActiveNavigation({
       const cacheTicket = cacheAffinityPageMemory.beginRefresh({
         identity,
         navigation: "routing-policies",
+        workspaceOwner: workspaceResourcePageOwner(authSession, resourcePageShellState, {
+          navigationId: "routing-policies", permissions: [PERMISSIONS.ROUTING_READ], hash: readActiveNavigationHash(),
+        }),
       });
       const aliases = await loadModelAliasesState();
       if (!ticket || !cacheTicket) break;
@@ -2142,6 +2146,11 @@ function renderLogin(error, requestId) {
 }
 
 function clearBasicResourceFeedback() {
+  modelAliasActionError = null;
+  modelAliasFeedback = "";
+  clearRoutingPolicySessionState();
+  clearModelQualityScoreSessionState();
+  experimentPageState.clear();
   providerHealthActionError = providerHealthProbingProviderId = providerStatusEventWarning = null;
   providerStatusFilters = { limit: 50, offset: 0 };
   providerStatusPageState.clear();
@@ -2175,6 +2184,12 @@ function bindResourceElement(element, permissions, navigationId) {
     element.addEventListener("change", () => resourcePageLifecycle.markDirty(binding));
   }
   return binding;
+}
+
+function currentEvaluationPageIdentity(navigationId, permission) {
+  return workspaceResourcePageOwner(authSession, resourcePageShellState, {
+    navigationId, permissions: [permission], hash: readActiveNavigationHash(),
+  })?.key ?? "";
 }
 
 function handleResourceAuthorizationError(error) {
@@ -3375,23 +3390,20 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const createModelAliasForm = document.querySelector("#create-model-alias-form");
+  const createModelAliasBinding = bindResourceElement(createModelAliasForm,
+    [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "model-aliases");
   createModelAliasForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (!token) {
-      renderLogin();
-      return;
-    }
+    const operation = resourcePageLifecycle.beginMutation(createModelAliasBinding);
+    if (!operation) return;
     const button = createModelAliasForm.querySelector("button[type='submit']");
     const data = new FormData(createModelAliasForm);
     button.disabled = true;
     modelAliasActionError = null;
     modelAliasFeedback = "创建中";
     try {
-      await createModelAlias({
+      await resourceMutationRequest(operation, createModelAlias, {
         controlApiUrl,
-        token,
         alias: String(data.get("alias") ?? ""),
         environmentId: String(data.get("environmentId") ?? ""),
         environment: undefined,
@@ -3400,30 +3412,22 @@ function bindAuthenticatedEvents(consoleShellState) {
         description: optionalText(data.get("description")),
       });
       modelAliasFeedback = "创建完成";
-      await refresh();
+      await refreshResourceMutation(operation);
     } catch (error) {
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       modelAliasActionError = error;
       modelAliasFeedback = "创建失败";
-      await refresh();
+      await refreshResourceMutation(operation);
     }
   });
 
   for (const modelAliasForm of document.querySelectorAll("[data-model-alias-status-form]")) {
+    const binding = bindResourceElement(modelAliasForm,
+      [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "model-aliases");
     modelAliasForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
       const button = modelAliasForm.querySelector("button[type='submit']");
       const data = new FormData(modelAliasForm);
       const nextStatus = String(data.get("status") ?? "");
@@ -3431,27 +3435,20 @@ function bindAuthenticatedEvents(consoleShellState) {
       modelAliasActionError = null;
       modelAliasFeedback = nextStatus === "disabled" ? "禁用中" : "启用中";
       try {
-        await updateModelAlias({
+        await resourceMutationRequest(operation, updateModelAlias, {
           controlApiUrl,
-          token,
           modelAliasId: modelAliasForm.dataset.modelAliasId,
           status: nextStatus,
           // Alias 启停会改变初始路由图，必须携带当前 RoutingPolicy version 做锁内 CAS。
           expectedRoutingPolicyVersion: Number(modelAliasForm.dataset.routingPolicyVersion),
         });
         modelAliasFeedback = nextStatus === "disabled" ? "已禁用" : "已启用";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         modelAliasActionError = error;
         modelAliasFeedback = "操作失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
@@ -4364,23 +4361,20 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   for (const fallbackForm of document.querySelectorAll("[data-fallback-policy-form]")) {
+    const binding = bindResourceElement(fallbackForm,
+      [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "model-aliases");
     fallbackForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // Fallback 策略属于租户管理操作；会话失效时立即回登录页，禁止发送无认证 PATCH。
-      if (!token) {
-        renderLogin();
-        return;
-      }
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
       const button = fallbackForm.querySelector("button[type='submit']");
       const data = new FormData(fallbackForm);
       button.disabled = true;
       modelAliasActionError = null;
       modelAliasFeedback = "Fallback 保存中";
       try {
-        await updateFallbackPolicy({
+        await resourceMutationRequest(operation, updateFallbackPolicy, {
           controlApiUrl,
-          token,
           modelAliasId: fallbackForm.dataset.modelAliasId,
           enabled: data.get("enabled") === "on",
           fallbackModelId: optionalText(data.get("fallbackModelId")),
@@ -4390,18 +4384,12 @@ function bindAuthenticatedEvents(consoleShellState) {
           expectedRoutingPolicyVersion: Number(fallbackForm.dataset.routingPolicyVersion),
         });
         modelAliasFeedback = "Fallback 已保存";
-        await refresh();
+        await refreshResourceMutation(operation);
       } catch (error) {
-        // 登录态失效必须先清除 Token；其他策略错误保留 request_id 在当前页面展示。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (handleResourceMutationError(operation, error)) return;
         modelAliasActionError = error;
         modelAliasFeedback = "Fallback 保存失败";
-        await refresh();
+        await refreshResourceMutation(operation);
       }
     });
   }
@@ -8198,7 +8186,8 @@ function isBatchPermissionRevocation(error) {
 
 /** 构造 PAGE-105 实时 owner；权限 fingerprint 仅用于内存比较，绝不进入 DOM。 */
 function currentExperimentOwner(consoleShellState, mode = "read") {
-  const owner = experimentPageOwner(authSession.context, consoleShellState, { mode });
+  if (!currentEvaluationPageIdentity("experiments", PERMISSIONS.EXPERIMENT_READ)) return null;
+  const owner = experimentPageOwner(authSession.context, consoleShellState, { mode, session: authSession });
   const hashNavigation = readActiveNavigationHash();
   if (!owner || (hashNavigation && hashNavigation !== "experiments")) return null;
   return owner;
@@ -8218,7 +8207,11 @@ function shouldLoadExperimentCreateResources(consoleShellState) {
 function bindExperimentsPageInteractions(consoleShellState) {
   const owner = currentExperimentOwner(consoleShellState);
   if (!experimentPageState.enter(owner)) return;
+  const binding = bindResourceElement(document.querySelector("[data-experiments-root]"),
+    [PERMISSIONS.EXPERIMENT_READ], "experiments");
   bindExperimentInteractions({
+    isCurrent: (mode = "read") => resourcePageLifecycle.isBindingCurrent(binding)
+      && Boolean(currentExperimentOwner(consoleShellState, mode)),
     async onFilter(status) {
       if (experimentPageState.setStatus(status)) await refresh();
     },
@@ -8296,13 +8289,9 @@ async function refreshSelectedExperimentPanel(consoleShellState) {
 
 /** 提交不可变实验；UUIDv4 只由绑定闭包传入且不会写入全局页面状态。 */
 async function submitExperiment(request, idempotencyKey, consoleShellState) {
-  const token = authSession.token;
   const owner = currentExperimentOwner(consoleShellState, "create");
   // Token 或 composite owner 缺失时先销毁草稿与幂等状态，绝不尝试 POST。
-  if (!token || !owner) {
-    experimentPageState.clear();
-    // 缺 Token 说明当前 Session 已结束，页面必须立即返回登录态。
-    if (!token) renderLogin();
+  if (!owner) {
     return null;
   }
   const operation = experimentPageState.beginCreate(owner);
@@ -8318,7 +8307,7 @@ async function submitExperiment(request, idempotencyKey, consoleShellState) {
   try {
     const response = await createExperiment({
       controlApiUrl,
-      token,
+      authentication: "workspace",
       idempotencyKey,
       request,
       signal: operation.controller.signal,
@@ -13300,7 +13289,7 @@ function intentSecurityHasSensitiveInput() {
  * developer 不生成表单；即便测试伪造 DOM，本函数也会同时核对角色、后端 active navigation 和完整身份快照。
  */
 function bindRoutingPolicyInteractions(consoleShellState) {
-  const identity = routingPolicyIdentitySnapshot(authSession.context);
+  const identity = currentEvaluationPageIdentity("routing-policies", PERMISSIONS.ROUTING_READ);
   if (
     !hasPermission(authSession.context, PERMISSIONS.ROUTING_WRITE)
     || consoleShellState?.activeNavigationItemId !== "routing-policies"
@@ -13310,10 +13299,12 @@ function bindRoutingPolicyInteractions(consoleShellState) {
   }
 
   for (const form of document.querySelectorAll("[data-routing-policy-form]")) {
+    const binding = bindResourceElement(form,
+      [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "routing-policies");
     const modelAliasId = String(form.dataset.modelAliasId ?? "");
     for (const radio of form.querySelectorAll("input[name='routingMode']")) {
       radio.addEventListener("change", () => {
-        if (!radio.checked) {
+        if (!resourcePageLifecycle.isBindingCurrent(binding) || !radio.checked) {
           return;
         }
         routingPolicyPageMemory.selectMode(modelAliasId, radio.value);
@@ -13324,6 +13315,7 @@ function bindRoutingPolicyInteractions(consoleShellState) {
     // 百分比输入只在内存中转换为整数 bps；input 事件局部更新合计和保存门禁，避免重建 DOM 打断键盘输入。
     for (const input of form.querySelectorAll("[data-routing-quality-config] input")) {
       input.addEventListener("input", () => {
+        if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
         const config = readRoutingQualityCostConfig(form);
         routingPolicyPageMemory.selectQualityCostConfig(modelAliasId, config);
         updateRoutingQualityCostFormState(form, modelAliasId);
@@ -13332,13 +13324,7 @@ function bindRoutingPolicyInteractions(consoleShellState) {
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // 保存必须绑定当前认证 Session；Token 已清理时不能让旧表单继续构造写请求。
-      if (!token) {
-        clearRoutingPolicySessionState();
-        renderLogin();
-        return;
-      }
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       // submit 再读取一次 DOM，确保浏览器尚未触发 change 的最后一个键盘输入也进入 ticket 指纹。
       routingPolicyPageMemory.selectQualityCostConfig(modelAliasId, readRoutingQualityCostConfig(form));
       const acquired = routingPolicyPageMemory.acquireSave({
@@ -13355,7 +13341,7 @@ function bindRoutingPolicyInteractions(consoleShellState) {
       try {
         const result = await updateRoutingMode({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           modelAliasId: ticket.modelAliasId,
           routingMode: ticket.routingMode,
           qualityCostConfig: ticket.qualityCostConfig,
@@ -13390,6 +13376,7 @@ function bindRoutingPolicyInteractions(consoleShellState) {
         if (!routingPolicyPageMemory.isCurrentOperation(ticket, owner)) {
           return;
         }
+        if (handleResourceAuthorizationError(error)) return;
         // 当前 ticket 收到 401 才能清理 Session；迟到 401 已被上面的 owner 门禁丢弃。
         if (error instanceof AuthApiError && error.status === 401) {
           clearRoutingPolicySessionState();
@@ -13417,7 +13404,9 @@ function bindRoutingPolicyInteractions(consoleShellState) {
   }
 
   for (const button of document.querySelectorAll("[data-routing-policy-cancel]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "routing-policies");
     button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const modelAliasId = button.closest("[data-routing-policy-form]")?.dataset.modelAliasId;
       if (modelAliasId && routingPolicyPageMemory.cancel(modelAliasId)) {
         renderRoutingPolicyPanelFromMemory({ focusSelector: ".routing-policy-row-feedback" });
@@ -13426,7 +13415,9 @@ function bindRoutingPolicyInteractions(consoleShellState) {
   }
 
   for (const button of document.querySelectorAll("[data-routing-policy-rebase]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "routing-policies");
     button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const modelAliasId = button.closest("[data-routing-policy-form]")?.dataset.modelAliasId;
       if (modelAliasId && routingPolicyPageMemory.rebase(modelAliasId)) {
         renderRoutingPolicyPanelFromMemory({ focusSelector: ".routing-policy-row-feedback" });
@@ -13449,14 +13440,17 @@ function bindCacheAffinityInteractions(consoleShellState, identity) {
     return;
   }
   for (const form of document.querySelectorAll("[data-cache-affinity-form]")) {
+    const binding = bindResourceElement(form, [PERMISSIONS.ROUTING_READ, PERMISSIONS.ROUTING_WRITE], "routing-policies");
     const modelAliasId = String(form.dataset.modelAliasId ?? "");
     const syncDraft = () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       cacheAffinityPageMemory.selectDraft(modelAliasId, readCacheAffinityDraft(form));
       updateCacheAffinityFormState(form, modelAliasId);
     };
     const dataClassInput = form.elements.cacheAffinityDataClass;
     /** 无参数、无返回值；在 input 阶段统一 DOM 与草稿的 trim 语义，必须早于 submit 原生 pattern 校验。 */
     const syncDataClassDraft = () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const normalizedDataClass = cacheAffinityDataClassValue(dataClassInput?.value);
       // 浏览器在 submit 事件前执行原生 pattern 校验；必须在 input 时同步 DOM，避免内存已 trim 而 DOM 仍被拦截。
       if (dataClassInput && dataClassInput.value !== (normalizedDataClass ?? "")) {
@@ -13472,13 +13466,7 @@ function bindCacheAffinityInteractions(consoleShellState, identity) {
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const token = authSession.token;
-      // Session 已清理时旧表单不得继续构造配置写请求或保留上一租户草稿。
-      if (!token) {
-        clearRoutingPolicySessionState();
-        renderLogin();
-        return;
-      }
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       cacheAffinityPageMemory.selectDraft(modelAliasId, readCacheAffinityDraft(form));
       const acquired = cacheAffinityPageMemory.acquireSave({
         identity,
@@ -13494,7 +13482,7 @@ function bindCacheAffinityInteractions(consoleShellState, identity) {
       try {
         const result = await updateCacheAffinity({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           modelAliasId: ticket.modelAliasId,
           status: ticket.draft.status,
           dataClass: ticket.draft.data_class,
@@ -13531,6 +13519,7 @@ function bindCacheAffinityInteractions(consoleShellState, identity) {
         if (!cacheAffinityPageMemory.isCurrentOperation(ticket, owner)) {
           return;
         }
+        if (handleResourceAuthorizationError(error)) return;
         // 401 表示当前认证边界已经失效，必须先销毁跨租户草稿与请求所有权再回到登录页。
         if (error instanceof AuthApiError && error.status === 401) {
           clearRoutingPolicySessionState();
@@ -13556,11 +13545,13 @@ function bindCacheAffinityInteractions(consoleShellState, identity) {
     });
 
     form.querySelector("[data-cache-affinity-cancel]")?.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       if (cacheAffinityPageMemory.cancel(modelAliasId)) {
         renderRoutingPolicyPanelFromMemory({ focusSelector: ".cache-affinity-feedback" });
       }
     });
     form.querySelector("[data-cache-affinity-rebase]")?.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       if (cacheAffinityPageMemory.rebase(modelAliasId)) {
         renderRoutingPolicyPanelFromMemory({ focusSelector: ".cache-affinity-feedback" });
       }
@@ -13659,7 +13650,7 @@ function formatRoutingBps(value) {
 /** 局部重绘 PAGE-067 并重新绑定行事件；不存在 active panel 时不创建隐藏 DOM。 */
 function renderRoutingPolicyPanelFromMemory({ focusSelector = null } = {}) {
   const panel = document.querySelector(".routing-policies-panel");
-  if (!panel || !hasPermission(authSession.context, PERMISSIONS.ROUTING_READ)) {
+  if (!panel || !currentEvaluationPageIdentity("routing-policies", PERMISSIONS.ROUTING_READ)) {
     return;
   }
   panel.innerHTML = renderRoutingPolicyPanel({
@@ -13675,7 +13666,7 @@ function renderRoutingPolicyPanelFromMemory({ focusSelector = null } = {}) {
 /** 返回当前 PATCH 回调使用的 owner；导航 DOM 消失时用空值使迟到响应失败。 */
 function currentRoutingPolicyOwner() {
   return {
-    identity: routingPolicyIdentitySnapshot(authSession.context),
+    identity: currentEvaluationPageIdentity("routing-policies", PERMISSIONS.ROUTING_READ),
     navigation: document.querySelector(".routing-policies-panel") ? "routing-policies" : "",
   };
 }
@@ -13701,7 +13692,7 @@ function clearRoutingPolicyStateOnIdentityChange(previous, current) {
  * developer 只绑定读取操作；admin 写入仍须同时通过 DOM、后端 active 导航和完整身份快照门禁。
  */
 function bindModelQualityScoreInteractions(consoleShellState) {
-  const identity = modelQualityScoreIdentitySnapshot(authSession.context);
+  const identity = currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ);
   if (
     !hasPermission(authSession.context, PERMISSIONS.MODEL_QUALITY_READ)
     || consoleShellState?.activeNavigationItemId !== "model-quality-scores"
@@ -13711,8 +13702,10 @@ function bindModelQualityScoreInteractions(consoleShellState) {
   }
 
   const filterForm = document.querySelector("#model-quality-filter-form");
+  const filterBinding = bindResourceElement(filterForm, [PERMISSIONS.MODEL_QUALITY_READ], "model-quality-scores");
   filterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(filterBinding)) return;
     modelQualityScoreFilters = {
       ...modelQualityScoreFilters,
       modelId: String(new FormData(filterForm).get("modelId") ?? "").trim(),
@@ -13722,12 +13715,18 @@ function bindModelQualityScoreInteractions(consoleShellState) {
     modelQualityScorePageMemory.invalidate();
     await refresh();
   });
-  document.querySelector("#model-quality-filter-reset")?.addEventListener("click", async () => {
+  const resetButton = document.querySelector("#model-quality-filter-reset");
+  const resetBinding = bindResourceElement(resetButton, [PERMISSIONS.MODEL_QUALITY_READ], "model-quality-scores");
+  resetButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(resetBinding)) return;
     modelQualityScoreFilters = { modelId: "", limit: 100, offset: 0 };
     modelQualityScorePageMemory.invalidate();
     await refresh();
   });
-  document.querySelector("#model-quality-prev")?.addEventListener("click", async () => {
+  const previousButton = document.querySelector("#model-quality-prev");
+  const previousBinding = bindResourceElement(previousButton, [PERMISSIONS.MODEL_QUALITY_READ], "model-quality-scores");
+  previousButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(previousBinding)) return;
     modelQualityScoreFilters = {
       ...modelQualityScoreFilters,
       offset: Math.max(0, modelQualityScoreFilters.offset - modelQualityScoreFilters.limit),
@@ -13735,7 +13734,10 @@ function bindModelQualityScoreInteractions(consoleShellState) {
     modelQualityScorePageMemory.invalidate();
     await refresh();
   });
-  document.querySelector("#model-quality-next")?.addEventListener("click", async () => {
+  const nextButton = document.querySelector("#model-quality-next");
+  const nextBinding = bindResourceElement(nextButton, [PERMISSIONS.MODEL_QUALITY_READ], "model-quality-scores");
+  nextButton?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(nextBinding)) return;
     modelQualityScoreFilters = {
       ...modelQualityScoreFilters,
       offset: modelQualityScoreFilters.offset + modelQualityScoreFilters.limit,
@@ -13749,9 +13751,11 @@ function bindModelQualityScoreInteractions(consoleShellState) {
     return;
   }
   for (const form of document.querySelectorAll("[data-model-quality-form]")) {
+    const binding = bindResourceElement(form, [PERMISSIONS.MODEL_QUALITY_READ, PERMISSIONS.MODEL_QUALITY_WRITE], "model-quality-scores");
     const modelId = String(form.dataset.modelId ?? "");
     const input = form.elements.manualQualityPercent;
     input?.addEventListener("input", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const draft = modelQualityDraftFromElement(input);
       input.setCustomValidity(draft.valid ? "" : "请输入 0 到 100 之间、最多两位小数的评分");
       if (draft.valid) {
@@ -13762,19 +13766,13 @@ function bindModelQualityScoreInteractions(consoleShellState) {
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const draft = modelQualityDraftFromElement(input);
       if (!draft.valid) {
         input?.reportValidity();
         return;
       }
       modelQualityScorePageMemory.selectManualQuality(modelId, draft.value);
-      const token = authSession.token;
-      // Token 缺失表示认证 owner 已消失，旧表单不得继续构造包含人工评分意图的 PATCH。
-      if (!token) {
-        clearModelQualityScoreSessionState();
-        renderLogin();
-        return;
-      }
       const acquired = modelQualityScorePageMemory.acquireSave({
         identity,
         navigation: "model-quality-scores",
@@ -13789,7 +13787,7 @@ function bindModelQualityScoreInteractions(consoleShellState) {
       try {
         const result = await updateModelQualityScore({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           modelId: ticket.modelId,
           manualQualityBps: ticket.manualQualityBps,
           expectedFeedbackVersion: ticket.baseFeedbackVersion,
@@ -13822,6 +13820,7 @@ function bindModelQualityScoreInteractions(consoleShellState) {
         if (!modelQualityScorePageMemory.isCurrentOperation(ticket, owner)) {
           return;
         }
+        if (handleResourceAuthorizationError(error)) return;
         // 当前 ticket 的 401 才能结束会话；上面的 owner 门禁已先排除跨身份迟到响应。
         if (error instanceof AuthApiError && error.status === 401) {
           clearModelQualityScoreSessionState();
@@ -13849,7 +13848,9 @@ function bindModelQualityScoreInteractions(consoleShellState) {
   }
 
   for (const button of document.querySelectorAll("[data-model-quality-clear]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.MODEL_QUALITY_READ, PERMISSIONS.MODEL_QUALITY_WRITE], "model-quality-scores");
     button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const modelId = button.closest("[data-model-quality-form]")?.dataset.modelId;
       if (modelId && modelQualityScorePageMemory.selectManualQuality(modelId, null)) {
         renderModelQualityScorePanelFromMemory();
@@ -13857,7 +13858,9 @@ function bindModelQualityScoreInteractions(consoleShellState) {
     });
   }
   for (const button of document.querySelectorAll("[data-model-quality-cancel]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.MODEL_QUALITY_READ, PERMISSIONS.MODEL_QUALITY_WRITE], "model-quality-scores");
     button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const modelId = button.closest("[data-model-quality-form]")?.dataset.modelId;
       if (modelId && modelQualityScorePageMemory.cancel(modelId)) {
         renderModelQualityScorePanelFromMemory({ focusModelId: modelId });
@@ -13865,7 +13868,9 @@ function bindModelQualityScoreInteractions(consoleShellState) {
     });
   }
   for (const button of document.querySelectorAll("[data-model-quality-rebase]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.MODEL_QUALITY_READ, PERMISSIONS.MODEL_QUALITY_WRITE], "model-quality-scores");
     button.addEventListener("click", () => {
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const modelId = button.closest("[data-model-quality-form]")?.dataset.modelId;
       if (modelId && modelQualityScorePageMemory.rebase(modelId)) {
         renderModelQualityScorePanelFromMemory({ focusModelId: modelId });
@@ -13904,7 +13909,7 @@ function updateModelQualityFormState(form, modelId, inputValid) {
 /** 局部重绘 PAGE-069 并重新绑定事件；保存反馈只把焦点放回对应模型行。 */
 function renderModelQualityScorePanelFromMemory({ focusModelId = null } = {}) {
   const panel = document.querySelector(".model-quality-scores-panel");
-  if (!panel || !hasPermission(authSession.context, PERMISSIONS.MODEL_QUALITY_READ)) {
+  if (!panel || !currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ)) {
     return;
   }
   panel.innerHTML = renderModelQualityScoresPanel(
@@ -13923,7 +13928,7 @@ function renderModelQualityScorePanelFromMemory({ focusModelId = null } = {}) {
 /** 返回 PAGE-069 PATCH 的实时 owner；DOM 已销毁时空导航会使迟到响应失败关闭。 */
 function currentModelQualityScoreOwner() {
   return {
-    identity: modelQualityScoreIdentitySnapshot(authSession.context),
+    identity: currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ),
     navigation: document.querySelector(".model-quality-scores-panel") ? "model-quality-scores" : "",
   };
 }
@@ -14656,31 +14661,8 @@ async function loadEnvironmentState() {
  * 读取当前租户模型别名，并保留环境绑定字段供控制台按环境创建和展示。
  */
 async function loadModelAliasesState() {
-  // 模型别名只对具有 routing.read 的身份开放，其他身份不主动发起读取请求。
-  if (!hasPermission(authSession.context, PERMISSIONS.ROUTING_READ)) {
-    return null;
-  }
-  try {
-    const state = await listModelAliases({ controlApiUrl, token: authSession.token });
-    return {
-      ...state,
-      actionError: modelAliasActionError,
-      feedback: modelAliasFeedback,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+  return loadResourceState("model-aliases", [PERMISSIONS.ROUTING_READ], listModelAliases,
+    (state) => ({ ...state, actionError: modelAliasActionError, feedback: modelAliasFeedback }));
 }
 
 
@@ -15584,7 +15566,7 @@ async function loadExperimentsState(
   try {
     const response = await listExperiments({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       ...experimentPageState.listQuery(),
       limit: 50,
       signal: operation.controller.signal,
@@ -15664,13 +15646,13 @@ async function loadExperimentDetailState(
     const [detail, results] = await Promise.all([
       getExperiment({
         controlApiUrl,
-        token: authSession.token,
+        authentication: "workspace",
         experimentId: detailOperation.experimentId,
         signal: detailOperation.controller.signal,
       }),
       getExperimentResults({
         controlApiUrl,
-        token: authSession.token,
+        authentication: "workspace",
         experimentId: resultsOperation.experimentId,
         signal: resultsOperation.controller.signal,
       }),
@@ -16357,7 +16339,7 @@ async function loadModelQualityScoresState(consoleShellState, refreshId) {
   ) {
     return null;
   }
-  const identity = modelQualityScoreIdentitySnapshot(authSession.context);
+  const identity = currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ);
   if (!identity) {
     return null;
   }
@@ -16374,13 +16356,14 @@ async function loadModelQualityScoresState(consoleShellState, refreshId) {
   try {
     const result = await listModelQualityScores({
       controlApiUrl,
-      token: authSession.token,
+      authentication: "workspace",
       modelId: modelQualityScoreFilters.modelId,
       limit: modelQualityScoreFilters.limit,
       offset: modelQualityScoreFilters.offset,
       signal: ticket.signal,
     });
-    if (refreshId !== refreshSequence || !modelQualityScorePageMemory.isCurrentRefresh(ticket)) {
+    if (refreshId !== refreshSequence || !modelQualityScorePageMemory.isCurrentRefresh(ticket)
+      || identity !== currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ)) {
       return null;
     }
     modelQualityScorePageMemory.acceptRefresh(ticket, result);
@@ -16391,9 +16374,11 @@ async function loadModelQualityScoresState(consoleShellState, refreshId) {
       isAbortError(error)
       || refreshId !== refreshSequence
       || !modelQualityScorePageMemory.isCurrentRefresh(ticket)
+      || identity !== currentEvaluationPageIdentity("model-quality-scores", PERMISSIONS.MODEL_QUALITY_READ)
     ) {
       return null;
     }
+    if (handleResourceAuthorizationError(error)) return null;
     // 只有仍属于当前 GET owner 的 401 才可清理认证态，防止旧租户迟到错误退出新会话。
     // 当前 Summary GET 的 401 才可结束 Session；owner 转移错误已在上方静默丢弃。
     if (error instanceof AuthApiError && error.status === 401) {

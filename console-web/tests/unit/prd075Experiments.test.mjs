@@ -803,7 +803,7 @@ test("create client requires HTTP 201 and sends exact body with one memory-only 
   });
   assert.equal(created.experiment.experiment_id, EXPERIMENT_ID);
   assert.equal(calls[0].options.method, "POST");
-  assert.equal(calls[0].options.headers["Idempotency-Key"], "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(new Headers(calls[0].options.headers).get("Idempotency-Key"), "123e4567-e89b-42d3-a456-426614174000");
   assert.deepEqual(JSON.parse(calls[0].options.body), request);
   assert.equal(JSON.stringify(calls[0]).includes("tenant_id"), false);
 

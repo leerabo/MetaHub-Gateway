@@ -31,6 +31,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import CacheAffinityInfo, CacheAffinityMutationResponse
 
@@ -110,9 +111,6 @@ def update_cache_affinity(
     仍消费 request_id 并写 ConfigEvent，但不升版本、不写 Audit 或配置 Webhook。
     """
 
-    # 路由依赖是首道权限门；服务层复核避免内部调用绕过后端 RBAC。
-    if context.user.role != "admin":
-        raise ApiError("auth.permission_denied")
     desired = _normalize_payload(payload)
     normalized_request_id = _normalize_request_id(request_id)
     fingerprint = _request_fingerprint(model_alias_id, desired)
@@ -125,9 +123,11 @@ def update_cache_affinity(
     response_trace_id = trace_id
     changed_fields: list[str] = []
     alias_name = ""
+    transaction = ResourceWriteTransaction(connection, config, context, "routing.write")
     try:
         # BEGIN IMMEDIATE 让“恢复检查 -> CAS -> 三事实提交”只有一个确定顺序。
-        connection.execute("BEGIN IMMEDIATE")
+        transaction.begin()
+        context = transaction.context
         recovered_mutation = _recover_mutation(
             connection,
             context,
@@ -136,6 +136,7 @@ def update_cache_affinity(
         )
         if recovered_mutation is not None:
             # 这里只读取已提交事实；回滚读事务后再执行幂等的提交后投递。
+            transaction.verify()
             connection.rollback()
             recovered = True
             cache_affinity = recovered_mutation.cache_affinity
@@ -174,7 +175,7 @@ def update_cache_affinity(
                     after=before_snapshot,
                     now=now,
                 )
-                connection.commit()
+                transaction.commit()
             else:
                 if before is None:
                     cache_affinity_id = f"caf_{uuid4().hex}"
@@ -264,7 +265,7 @@ def update_cache_affinity(
                     after=after_snapshot,
                     now=now,
                 )
-                commit_audited_transaction(connection)
+                transaction.commit(commit_audited_transaction)
                 changed = True
     # 领域异常也必须先回滚当前写事务，避免配置、审计与事件出现部分提交。
     except ApiError as exc:
@@ -279,7 +280,7 @@ def update_cache_affinity(
         # SQL、数据库路径和 trigger 文本都可能泄露实现细节，只返回稳定 503。
         raise ApiError("cache_affinity.update_failed") from exc
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
 
     if cache_affinity is None or event is None:
         # 防御性检查阻止未来分支在三事实不完整时返回虚假 200。

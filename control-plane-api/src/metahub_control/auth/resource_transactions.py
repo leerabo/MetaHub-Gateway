@@ -26,6 +26,15 @@ RESOURCE_PERMISSIONS = frozenset(
         "provider_catalog.read",
         "model.write",
         "virtual_key.write",
+        "project.read",
+        "environment.read",
+        "model.read",
+        "routing.read",
+        "routing.write",
+        "model_quality.read",
+        "model_quality.write",
+        "experiment.read",
+        "experiment.write",
     }
 )
 
@@ -39,11 +48,16 @@ class ResourceWriteTransaction:
         config: AppConfig,
         context: AuthContext,
         permission: str,
+        *,
+        additional_permissions: tuple[str, ...] = (),
+        read_only: bool = False,
     ) -> None:
         self.connection = connection
         self.config = config
         self.context = context
         self.permission = permission
+        self.additional_permissions = additional_permissions
+        self.read_only = read_only
 
     def __enter__(self) -> Self:
         try:
@@ -67,18 +81,29 @@ class ResourceWriteTransaction:
 
     def begin(self) -> None:
         if not self.connection.in_transaction:
-            self.connection.execute("BEGIN IMMEDIATE")
+            self.connection.execute("BEGIN" if self.read_only else "BEGIN IMMEDIATE")
+        self.verify()
+
+    def verify(self) -> AuthContext:
+        """Recheck read/replay/no-op exits without committing business facts."""
         self.context = self._authenticate()
+        for permission in self.additional_permissions:
+            require_permission(self.context, permission)
+        return self.context
 
     def commit(self, committer: Callable[[sqlite3.Connection], None] | None = None) -> None:
-        self.context = self._authenticate()
+        self.verify()
         if committer is not None:
             committer(self.connection)
         else:
             self.connection.commit()
 
     def _authenticate(self) -> AuthContext:
-        if not self.connection.in_transaction or self.permission not in RESOURCE_PERMISSIONS:
+        if (
+            not self.connection.in_transaction
+            or self.permission not in RESOURCE_PERMISSIONS
+            or any(code not in RESOURCE_PERMISSIONS for code in self.additional_permissions)
+        ):
             raise ApiError("infra.service_unavailable")
         context = self.context
         if not isinstance(context, AuthContext):
@@ -114,6 +139,7 @@ class ResourceWriteTransaction:
             self.connection,
             self.config,
             session_token=context.token,
+            read_only=self.read_only,
         ).as_auth_context()
         if (
             current.user.tenant_id != context.user.tenant_id

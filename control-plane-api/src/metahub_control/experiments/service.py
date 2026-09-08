@@ -52,8 +52,8 @@ from metahub_control.audit import (
 from metahub_control.auth import (
     AuthContext,
     require_permission,
-    require_transaction_permission,
 )
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     CreateExperimentRequest,
@@ -130,16 +130,13 @@ def create_experiment(
     connection = _connect(config)
     audit_record: AuditRecord | None = None
     response: ExperimentCreateResponse | None = None
+    transaction = ResourceWriteTransaction(
+        connection, config, context, _CREATE_PERMISSIONS[0],
+        additional_permissions=_CREATE_PERMISSIONS[1:],
+    )
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        live = context
-        for permission_code in _CREATE_PERMISSIONS:
-            live = require_transaction_permission(
-                connection,
-                live,
-                permission_code,
-                unavailable_error_code="experiment.unavailable",
-            )
+        transaction.begin()
+        live = transaction.context
         existing = connection.execute(
             """
             SELECT * FROM model_experiments
@@ -160,7 +157,7 @@ def create_experiment(
                 request_id=request_id,
                 trace_id=trace_id,
             )
-            connection.commit()
+            transaction.commit()
             return response
 
         _validate_scope(
@@ -322,7 +319,7 @@ def create_experiment(
             request_id=request_id,
             trace_id=trace_id,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
     except ApiError:
         connection.rollback()
@@ -344,7 +341,7 @@ def create_experiment(
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ApiError("experiment.unavailable") from None
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
     dispatch_audit_recorded(
         config,
         context,
@@ -378,14 +375,10 @@ def list_experiments(
         status=normalized_status,
     )
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "experiment.read", read_only=True)
     try:
-        connection.execute("BEGIN")
-        live = require_transaction_permission(
-            connection,
-            context,
-            "experiment.read",
-            unavailable_error_code="experiment.unavailable",
-        )
+        transaction.begin()
+        live = transaction.context
         clauses = ["tenant_id=?"]
         params: list[object] = [live.user.tenant_id]
         if normalized_status is not None:
@@ -420,7 +413,7 @@ def list_experiments(
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        transaction.commit()
         return result
     # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
     except ApiError:
@@ -432,7 +425,7 @@ def list_experiments(
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ApiError("experiment.unavailable") from None
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
 
 
 def get_experiment(
@@ -446,21 +439,17 @@ def get_experiment(
     """按认证租户读取实验安全投影或权威结果，跨租户对象统一表现为不存在。"""
     normalized_id = _owned_experiment_id(experiment_id)
     connection = _connect(config)
+    transaction = ResourceWriteTransaction(connection, config, context, "experiment.read", read_only=True)
     try:
-        connection.execute("BEGIN")
-        live = require_transaction_permission(
-            connection,
-            context,
-            "experiment.read",
-            unavailable_error_code="experiment.unavailable",
-        )
+        transaction.begin()
+        live = transaction.context
         row = _owned_experiment_row(connection, live.user.tenant_id, normalized_id)
         response = ExperimentDetailResponse(
             experiment=_experiment_info(row),
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        transaction.commit()
         return response
     # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
     except ApiError:
@@ -472,7 +461,7 @@ def get_experiment(
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ApiError("experiment.unavailable") from None
     finally:
-        connection.close()
+        transaction.__exit__(None, None, None)
 
 
 async def get_experiment_results(
@@ -542,14 +531,17 @@ def _get_results_with_query_deadline(
 ) -> ExperimentResultsResponse:
     """worker 获得 CPU 后才启动 250ms SQLite 期限，线程调度由外层 2 秒包络约束。"""
 
-    return _get_results_sync(
-        config,
-        context,
-        experiment_id,
-        request_id,
-        trace_id,
-        time.monotonic() + _STATISTICS_QUERY_DEADLINE_SECONDS,
-    )
+    from metahub_shared.db.connection import database_request_scope
+
+    with database_request_scope(reuse_connections=True):
+        return _get_results_sync(
+            config,
+            context,
+            experiment_id,
+            request_id,
+            trace_id,
+            time.monotonic() + _STATISTICS_QUERY_DEADLINE_SECONDS,
+        )
 
 
 def _get_results_sync(
@@ -567,15 +559,21 @@ def _get_results_sync(
     except ApiError:
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ApiError("experiment.statistics_unavailable") from None
+    postgres = getattr(connection, "backend", "sqlite") == "postgresql"
     try:
-        connection.execute("PRAGMA busy_timeout=25")
-        connection.execute("PRAGMA query_only=ON")
-        connection.set_progress_handler(
-            lambda: 1 if time.monotonic() >= absolute_deadline else 0,
-            250,
-        )
-        connection.execute("BEGIN")
-        live = _require_statistics_permission(connection, context)
+        if postgres:
+            connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            connection.execute("SET LOCAL lock_timeout='25ms'")
+            connection = _StatisticsDeadlineConnection(connection, absolute_deadline)
+        else:
+            connection.execute("PRAGMA busy_timeout=25")
+            connection.execute("PRAGMA query_only=ON")
+            connection.set_progress_handler(
+                lambda: 1 if time.monotonic() >= absolute_deadline else 0,
+                250,
+            )
+            connection.execute("BEGIN")
+        live = _require_statistics_permission(connection, context, config=config)
         row = _owned_experiment_row(connection, live.user.tenant_id, experiment_id)
         database_now = _database_now(connection)
         snapshot = load_statistics_snapshot(
@@ -606,6 +604,7 @@ def _get_results_sync(
             request_id=request_id,
             trace_id=trace_id,
         )
+        _require_statistics_permission(connection, live, config=config)
         if time.monotonic() >= absolute_deadline:
             # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
             raise ApiError("experiment.statistics_unavailable")
@@ -621,16 +620,47 @@ def _get_results_sync(
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ApiError("experiment.statistics_unavailable") from None
     finally:
-        connection.set_progress_handler(None, 0)
-        connection.close()
+        try:
+            if not postgres:
+                connection.set_progress_handler(None, 0)
+        finally:
+            connection.close()
+
+
+class _StatisticsDeadlineConnection:
+    """Give every native query only the remaining shared statistics budget."""
+
+    def __init__(self, connection, deadline: float) -> None:
+        self.connection = connection
+        self.deadline = deadline
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def execute(self, sql, parameters=None):
+        remaining_ms = int((self.deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise ApiError("experiment.statistics_unavailable")
+        self.connection.execute(
+            "SELECT set_config('statement_timeout', ?, true)", (f"{remaining_ms}ms",),
+        ).fetchone()
+        return self.connection.execute(sql, parameters)
 
 
 def _require_statistics_permission(
     connection: sqlite3.Connection,
     context: AuthContext,
+    *,
+    config: AppConfig | None = None,
 ) -> AuthContext:
     """在结果快照事务内快速复核刚由路由完整验证的授权指纹。"""
 
+    if context.session.session_id.startswith("wss_"):
+        if config is None:
+            raise ApiError("experiment.statistics_unavailable")
+        return ResourceWriteTransaction(
+            connection, config, context, "experiment.read", read_only=True,
+        ).verify()
     # 路由依赖已重算完整权限目录；这里仍先验证目标 code 属于可信目录且存在于该快照。
     require_permission(context, "experiment.read")
     if not connection.in_transaction:
@@ -642,8 +672,13 @@ def _require_statistics_permission(
         raise ApiError("auth.permission_denied")
     # 单条 owner 查询同时证明 Session、用户、租户、角色和 experiment.read 关系仍有效；
     # RolePermission 变更触发器会原子推进 revision/matrix hash，随后由指纹比较发现撤权竞态。
+    expires = (
+        "CAST(session.expires_at AS timestamptz)>clock_timestamp()"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else "julianday(session.expires_at)>julianday('now')"
+    )
     row = connection.execute(
-        """
+        f"""
         SELECT user.role,role.permission_revision,role.matrix_sha256
         FROM sessions session
         JOIN users user
@@ -659,7 +694,7 @@ def _require_statistics_permission(
         WHERE session.tenant_id=? AND session.user_id=? AND session.session_id=?
           AND session.token_jti=? AND session.token_hash=?
           AND session.status='active'
-          AND julianday(session.expires_at)>julianday('now')
+          AND {expires}
           AND user.status='active' AND tenant.status='active' AND role.status='active'
         """,
         (
@@ -1049,7 +1084,12 @@ def _secret_bytes(value: object) -> bytes:
 
 def _database_now(connection: sqlite3.Connection) -> datetime:
     """封装实验服务的冻结配置或并发围栏，保持租户归属和幂等语义。"""
-    row = connection.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')").fetchone()
+    statement = (
+        "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else "SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+    )
+    row = connection.execute(statement).fetchone()
     if row is None:
         # 租户归属、幂等指纹或结果状态不一致时关闭请求，并返回统一实验错误。
         raise ValueError

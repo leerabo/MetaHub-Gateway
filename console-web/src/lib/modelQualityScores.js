@@ -4,6 +4,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // request_id 只承担幂等与排障关联；随机段和单调序列都不包含租户、模型或评分业务值。
 let modelQualityRequestSequence = 0;
@@ -14,6 +15,7 @@ let modelQualityRequestSequence = 0;
  */
 export async function listModelQualityScores({
   controlApiUrl,
+  authentication,
   token,
   modelId,
   limit = 100,
@@ -27,7 +29,7 @@ export async function listModelQualityScores({
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   return modelQualityRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token,
     signal,
   });
 }
@@ -46,6 +48,7 @@ export function createModelQualityScoreRequestId() {
  */
 export async function updateModelQualityScore({
   controlApiUrl,
+  authentication,
   token,
   modelId,
   manualQualityBps,
@@ -57,8 +60,8 @@ export async function updateModelQualityScore({
     `${controlApiUrl}/model-quality-scores`,
     {
       method: "PATCH",
+      authentication, token,
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -77,7 +80,7 @@ export async function updateModelQualityScore({
  * 错误对象只附带后端公开的当前 Score 摘要，SQL、响应原文和任意额外字段不会进入页面状态。
  */
 async function modelQualityRequest(url, options = {}, requestId = createModelQualityScoreRequestId()) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": requestId,
@@ -172,7 +175,8 @@ function createRequestNonce() {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

@@ -10,14 +10,15 @@ from collections.abc import Callable, Coroutine
 from typing import Annotated, Any
 from uuid import RFC_4122, UUID
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
 from pydantic import BaseModel, ValidationError
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_current_user, require_permission
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     CreateExperimentRequest,
@@ -80,20 +81,27 @@ router = APIRouter(prefix="/experiments", tags=["experiments"], route_class=Expe
 
 
 def require_experiment_reader(
-    context: Annotated[AuthContext, Depends(require_current_user)],
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions("experiment.read"))],
 ) -> AuthContext:
     """在解析业务正文前执行实验后端权限依赖，并从实时认证上下文取得租户。"""
     # HTTP 输入、权限或请求标识不满足固定契约时拒绝，不回显正文与认证材料。
-    return require_permission(context, "experiment.read")
+    return context
 
 
 def require_experiment_creator(
-    context: Annotated[AuthContext, Depends(require_current_user)],
+    context: Annotated[AuthContext, Depends(require_workspace_or_legacy_permissions(*_CREATE_PERMISSIONS))],
 ) -> AuthContext:
     """在解析业务正文前执行实验后端权限依赖，并从实时认证上下文取得租户。"""
-    for permission_code in _CREATE_PERMISSIONS:
-        require_permission(context, permission_code)
     return context
+
+
+def require_experiment_statistics_reader(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> AuthContext:
+    # Release authentication's parsed connection before the isolated statistics worker.
+    with database_request_scope(reuse_connections=True):
+        return require_workspace_or_legacy_permissions("experiment.read")(request, authorization)
 
 
 @router.post(
@@ -178,7 +186,7 @@ async def get_experiment_results_route(
     request: Request,
     response: Response,
     experiment_id: str,
-    context: Annotated[AuthContext, Depends(require_experiment_reader)],
+    context: Annotated[AuthContext, Depends(require_experiment_statistics_reader)],
 ) -> ExperimentResultsResponse:
     """处理实验 API 命令或查询，统一附带 request_id、trace_id 与禁止缓存响应头。"""
     await _reject_get_body(request)

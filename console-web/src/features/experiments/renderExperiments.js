@@ -35,7 +35,7 @@ export function renderExperiments(state, authContext, consoleShellState) {
       <div class="experiment-toolbar">
         <div>
           <h2 id="experiments-title">模型评测</h2>
-          <span>当前租户: ${escapeHtml(owner.tenantId)}</span>
+          <span>${owner.workspaceId ? "当前空间" : "当前租户"}: ${escapeHtml(owner.workspaceId ?? owner.tenantId)}</span>
         </div>
         <div class="experiment-toolbar-actions">
           <label>
