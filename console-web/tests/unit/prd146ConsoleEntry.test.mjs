@@ -9,6 +9,9 @@ import { isConsoleNavigationOwnerCurrent } from "../../src/features/developer-st
 import { renderWorkspaceSessionPrompt } from "../../src/features/auth/renderLoginPage.js";
 import { renderConsoleShell } from "../../src/features/console-shell/renderConsoleShell.js";
 import { createWorkspaceResourcePage } from "../../src/lib/workspaceResourcePage.js";
+import { createI18n } from "../../src/i18n/messages.js";
+import { WORKSPACE_ROUTE_REGISTRY } from "../../src/lib/workspaceNavigation.js";
+import { workspaceCookieApiOrigin } from "../../src/lib/edgeManagement.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const EXPIRY = "2099-01-01T00:00:00Z";
@@ -137,6 +140,7 @@ function harness() {
   const scope = {
     authSession: { context: null, owner: null }, refreshSequence: 1, consoleLogoutPending: false,
     resourcePageShellState: null, consoleSidebarController: null, nextRefreshIsBackground: false,
+    mobileSidebarCollapsed: true,
     clearBasicResourceFeedback: () => effects.push("resource-feedback-clear"),
     expandedConsoleGroupKey: null, activeRefreshCount: 0,
     hasWorkspaceConsoleSession, sameWorkspaceConsoleSession, workspaceConsoleSessionFromShell,
@@ -341,6 +345,7 @@ test("PRD-146 shared cleanup cancels old owners while optionally preserving new 
   for (const preserve of [false, true]) {
     const { scope, effects } = harness();
     scope.consoleSidebarController = { abort: () => effects.push("sidebar-abort") };
+    scope.mobileSidebarCollapsed = false;
     const clear = runInNewContext(`${section("function clearConsoleSessionState(", "function invitationOwnerInput(")}
       clearConsoleSessionState;`, scope);
     clear({ clearNavigation: !preserve });
@@ -350,8 +355,42 @@ test("PRD-146 shared cleanup cancels old owners while optionally preserving new 
     }
     assert.equal(scope.workspaceConsoleExperienceShellState, null);
     assert.equal(scope.consoleSidebarController, null);
+    assert.equal(scope.mobileSidebarCollapsed, true);
   }
 });
+
+for (const boundary of ["owner-change", "peer-invalidation"]) {
+  test(`PRD-146 ${boundary} executes every shared cleanup before reloading business data`, async () => {
+    const { scope, effects, api } = harness();
+    scope.authSession = workspaceConsoleSessionFromShell(shell());
+    const previous = scope.authSession;
+    scope.clearConsoleSessionState = runInNewContext(
+      `${section("function clearConsoleSessionState(", "function invitationOwnerInput(")}\nclearConsoleSessionState;`, scope,
+    );
+    const next = shell();
+    next.workspaceIdentity.current_session.session_id = "replacement_session";
+    next.workspaceOwner = workspaceNavigationOwner(next.workspaceIdentity, {
+      context: next.workspaceContext, authorization: next.workspaceAuthorization,
+    });
+    const loaded = deferred();
+    scope.loadAndRenderActiveNavigation = async () => {
+      for (const name of [...cleanupFunctions, ...pageStates]) assert.ok(effects.includes(name), name);
+      assert.ok(effects.includes("dom-clear"));
+      assert.notEqual(scope.authSession, previous);
+      loaded.resolve();
+    };
+    scope.loadConsoleShellState = async () => {
+      if (boundary === "peer-invalidation") {
+        for (const name of [...cleanupFunctions, ...pageStates]) assert.ok(effects.includes(name), name);
+        assert.equal(scope.authSession.context, null);
+      }
+      return next;
+    };
+    if (boundary === "owner-change") await api.refresh();
+    else api.handleConsoleWorkspaceContextInvalidation();
+    await loaded.promise;
+  });
+}
 
 test("PRD-146 session prompt is escaped, retryable and never exposes a password form", () => {
   const container = {};
@@ -417,4 +456,84 @@ test("PRD-146 shell menu renders the real Workspace account without Legacy user 
   assert.match(html, /Test workspace/);
   assert.match(html, /id="logout-button"/);
   assert.doesNotMatch(html, /undefined/);
+});
+
+for (const locale of ["zh-CN", "en-US"]) {
+  test(`PRD-146 every registered Workspace route has a ${locale} display label`, () => {
+    const i18n = createI18n(locale);
+    for (const { sourceId } of Object.values(WORKSPACE_ROUTE_REGISTRY)) {
+      const key = `nav.${sourceId}`;
+      const label = i18n.t(key);
+      assert.notEqual(label, key, sourceId);
+      assert.ok(label.length > 0);
+      if (locale === "zh-CN") assert.match(label, /\p{Script=Han}/u, sourceId);
+    }
+    const html = renderConsoleShell({ consoleShellState: shell(), contentHtml: "", i18n });
+    assert.doesNotMatch(html, />nav\.[^<]*</);
+    assert.match(html, locale === "zh-CN" ? /id="console-main-title">概览</ : /id="console-main-title">Overview</);
+    assert.match(html, locale === "zh-CN" ? /title="概览"/ : /title="Overview"/);
+  });
+}
+
+test("PRD-146 compact desktop navigation exposes authorized groups without losing expanded preference", async () => {
+  const css = await readFile(new URL("../../src/styles/main.css", import.meta.url), "utf8");
+  assert.match(css, /\.sidebar-collapsed \.sidebar-group-items\[hidden\]\s*\{\s*display: grid;/);
+  assert.match(css, /\.sidebar-group-items\[hidden\]\s*\{\s*display: none;/);
+  const current = shell();
+  current.preferences = { sidebar_collapsed: true };
+  const html = renderConsoleShell({ consoleShellState: current, contentHtml: "", i18n: createI18n() });
+  assert.match(html, /console-shell sidebar-collapsed/);
+  assert.match(html, /data-console-nav="overview"/);
+  assert.doesNotMatch(html, /data-console-nav="providers"/);
+});
+
+for (const hostname of ["localhost", "127.0.0.1"]) {
+  test(`PRD-146 actual ${hostname} startup shares one Host-only Cookie origin across business and identity`, () => {
+    const location = { hostname };
+    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+      ({ controlApiUrl, workspaceControlApiUrl });`, {
+      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+    });
+    assert.equal(origins.controlApiUrl, `http://${hostname}:8001`);
+    assert.equal(origins.workspaceControlApiUrl, origins.controlApiUrl);
+  });
+}
+
+test("PRD-146 mobile drawer state is independent of desktop density", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { innerWidth: 390 };
+  try {
+    const current = shell();
+    assert.match(renderConsoleShell({ consoleShellState: current, contentHtml: "" }), /console-shell sidebar-collapsed/);
+    for (const collapsed of [false, true]) {
+      current.mobileSidebarCollapsed = collapsed;
+      current.preferences = { preference: { sidebar_collapsed: !collapsed } };
+      const html = renderConsoleShell({ consoleShellState: current, contentHtml: "" });
+      assert.equal(html.includes("console-shell sidebar-collapsed"), collapsed);
+    }
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
+
+test("PRD-146 production mobile toggle survives refresh without persisting desktop preference", async () => {
+  const { scope, api } = harness();
+  scope.authSession = workspaceConsoleSessionFromShell(shell());
+  scope.window = { innerWidth: 390 };
+  scope.workspaceNavigationController.savePreference = () => { throw new Error("unexpected desktop write"); };
+  const element = { dataset: { sidebarCollapsed: "true" } };
+  scope.applyConsoleSidebarCollapsedState = (target, value) => { target.dataset.sidebarCollapsed = String(value); };
+  const current = shell();
+  const toggle = runInNewContext(`${section("async function toggleConsoleSidebar(",
+    "function applyConsoleSidebarCollapsedState(")}\ntoggleConsoleSidebar;`, scope);
+  await toggle({ closest: () => element }, current);
+  assert.equal(element.dataset.sidebarCollapsed, "false");
+  assert.equal(current.mobileSidebarCollapsed, false);
+  scope.loadAndRenderActiveNavigation = async ({ consoleShellState }) => {
+    assert.equal(consoleShellState.mobileSidebarCollapsed, false);
+  };
+  await api.refresh();
+  await toggle({ closest: () => element }, current);
+  assert.equal(element.dataset.sidebarCollapsed, "true");
 });

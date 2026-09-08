@@ -97,7 +97,7 @@ test("PRD-052 main and CSS freeze owner gates and responsive record conversion",
 
   assert.match(mainSource, /loadBudgetState\(virtualKeysState, consoleShellState, refreshId\)/);
   assert.match(mainSource, /isBudgetRefreshOwnerCurrent\(refreshOwner/);
-  assert.match(mainSource, /clearBudgetStateOnIdentityChange\(authSession\.context, context\)/);
+  assert.match(mainSource, /function clearConsoleSessionState\([\s\S]*?clearBudgetSessionState\(\)/);
   assert.match(mainSource, /selectBudgetScopeOption\(/);
   assert.match(css, /@media \(max-width: 1400px\)\s*\{[\s\S]*?\.budget-rule-row\s*\{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css, /\.budget-rule-row:not\(\.budget-rule-head\) > \[data-label\]::before/);

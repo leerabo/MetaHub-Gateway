@@ -83,10 +83,11 @@ test("public invitation fragment is scrubbed synchronously before auth bootstrap
 
   const mainSource = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
   const captureIndex = mainSource.indexOf("captureInvitationRoute(globalThis.window)");
-  const authReadIndex = mainSource.indexOf(": readAuthSession();", captureIndex);
+  const authReadIndex = mainSource.indexOf("let authSession = { context: null, owner: null };", captureIndex);
   const publicBranchIndex = mainSource.indexOf("if (publicInvitationRoute?.isPublicMode())");
   const navigationBindIndex = mainSource.indexOf("bindNavigationHashRefresh(window, refresh)");
   assert.ok(captureIndex > 0 && captureIndex < authReadIndex);
+  assert.doesNotMatch(mainSource, /readAuthSession\(\)/);
   assert.ok(publicBranchIndex > 0 && publicBranchIndex < navigationBindIndex);
 });
 

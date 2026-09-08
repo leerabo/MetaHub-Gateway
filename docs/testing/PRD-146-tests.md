@@ -220,3 +220,41 @@ Identity Cookie logout，并在 HTTP 前后发送无身份内容的跨标签失�
 检查严格 UTF-8、高置信凭据模式、SHA-256、暂存字节和受保护原基线。仅提交六个源码、九个
 测试和两份设计/测试文档，不纳入 PRD-137 夹具与证据记录、PRD-145 服务修复、用户未跟踪文档
 或 outputs。Excel 只读；仍依赖旧 token 的可达业务页及页面翻译键必须继续按域修复。
+
+## 2026-09-08 发布导航与同源 Cookie 收尾
+
+本批对应设计 13.3：补全 Workspace registry 的中英文导航名称，未知文案键不进入标题或
+tooltip；桌面收缩栏可见授权入口，移动端显示展开命令。移动抽屉采用独立会话内状态，默认
+关闭、重绘保持、身份清理重置，不修改桌面的持久密度偏好。
+
+真实 localhost 管理员模型别名请求复现控制面使用 127.0.0.1 丢失 Host-only Cookie，现统一
+控制面 Cookie origin，实际模型别名和模型评分页均能读取数据。无 Cookie 复制、Legacy Token
+注入或鉴权替身。两个 hostname 的真实 main 初始化代码均有定向执行测试。
+
+13 条过时源码断言改为校验现有共享 cleanup 和 Workspace bootstrap；新增会话替换/跨页
+广播实际执行每个清理函数的测试，以及生产移动 toggle、refresh、cleanup 的执行用例。
+未通过源码正则重新引入旧密码表单或逐域重复清理。
+
+本批原始报告目录为 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 结果 |
+| --- | --- |
+| `prd146-release-console-r1.xml` | 1806 项，1 个剩余旧 pagehide 断言失败，随后修正 |
+| `prd146-release-console-r2.xml` | 运行未完成，保留不完整 XML，不计通过；独立 PRD-050 55 项随后通过 |
+| `prd146-release-console-r3.xml` | 1812 项，1 个移动默认关闭断言失败，暴露桌面偏好与移动抽屉混用 |
+| `prd146-release-console-r4.xml` | 1813/1813，0 失败、取消、跳过 |
+| `prd146-release-browser-r1.xml` | 2/2，早期入口/概览/退出；在最终同源及移动修复前，不替代最终结果 |
+| `prd146-release-browser-r2.xml` | 移动 1 项通过；桌面 BootstrapError，0 个业务检查点，私有目录已清理且基线不变 |
+| `prd146-release-browser-r3.xml` | 只重验桌面，1/1；不能与 r2 拼写为一次全绿 |
+| `prd146-release-manifest-r1.xml` | 早期 manifest 专项 1/1；最终 manifest 另经当前 build/verify 校验 |
+
+最终桌面/移动两个独立浏览器运行各验证 15 个入口、刷新、无 Legacy 槽位、无 Bearer、实际
+服务端退出、双标签失效、旧 Cookie 拒绝及水平溢出检查点。两张完整概览截图已查看：导航名称
+与移动展开命令可见；概览指标仍有英文机器码衍生文案，留在 PRD-145 单独修复，不声明全视觉
+验收完成。本机真实移动点击展开及切换模型评分页后仍可操作；业务写流程仍需后续检查。
+
+最终 lint 777 文件、production surface 262 模块/276 来源、生产构建 276 资产通过；两端
+asset-set 摘要为 `673c94f0608719f7dd1ef65572e32fa576fe7da6e9cbd435c41c1976cd82b135`。
+独立敏感审计 `prd-146-release-navigation-sensitive-audit.json` 对精确暂存文件及上述报告验证
+UTF-8、凭据高置信模式、暂存字节与受保护基线。未纳入本地凭据、数据库、用户文档或 outputs。
+全目标及发布仍在推进；72 小时检查按用户要求后置，不在此处等待或虚报通过。

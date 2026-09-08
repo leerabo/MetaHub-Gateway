@@ -43,8 +43,7 @@ export function renderConsoleShell({
     localizeNavigationItem(item, i18n),
   );
   const activeItem = activeNavigationItem(consoleShellState, navigationItems);
-  const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState)
-    || isCompactNavigationViewport();
+  const sidebarCollapsed = sidebarCollapsedFromState(consoleShellState);
   const expandedGroupKey = String(consoleShellState?.sidebarExpandedGroupKey ?? "").trim();
   const sidebarToggleLabel = sidebarCollapsed
     ? t(i18n, "shell.sidebar_expand", "展开导航")
@@ -119,8 +118,12 @@ function brandingText(value, fallback) {
 
 /** 偏好接口返回 preference 包装对象；兼容单测和旧缓存中的扁平形态。 */
 function sidebarCollapsedFromState(consoleShellState) {
-  return consoleShellState?.preferences?.preference?.sidebar_collapsed === true
-    || consoleShellState?.preferences?.sidebar_collapsed === true;
+  if (isCompactNavigationViewport()) {
+    return consoleShellState?.mobileSidebarCollapsed !== false;
+  }
+  const preference = consoleShellState?.preferences?.preference?.sidebar_collapsed
+    ?? consoleShellState?.preferences?.sidebar_collapsed;
+  return preference === true;
 }
 
 function isCompactNavigationViewport() {
@@ -253,7 +256,7 @@ function renderNavigationItem(item, activeId) {
       data-console-description="${escapeAttribute(item.description ?? "")}"
       aria-current="${active ? "page" : "false"}"
       aria-label="${escapeAttribute(label)}"
-      title="${escapeAttribute(item.empty_state_hint ?? item.description ?? "")}"
+      title="${escapeAttribute(item.empty_state_hint || item.description || label)}"
     >
       <span class="sidebar-link-label">${escapeHtml(label)}</span>
       <span class="sidebar-link-short" aria-hidden="true">${escapeHtml(shortNavigationLabel(item))}</span>
@@ -344,7 +347,8 @@ function renderUserMenu(authContext, i18n, navigation, consoleShellState) {
  * 读取 i18n 文案，缺少 i18n 上下文时保留中文 fallback。
  */
 function t(i18n, key, fallback, params = {}) {
-  return i18n?.t?.(key, params, fallback) ?? fallback;
+  const text = i18n?.t?.(key, params, fallback);
+  return text == null || text === key ? fallback : text;
 }
 
 /**

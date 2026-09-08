@@ -374,7 +374,7 @@ test("PRD-053 render and app integration freeze responsive and lifecycle contrac
   assert.equal(mainSource.includes("beginListOperation(owner)"), true);
   assert.equal(mainSource.includes("beginActionOperation(owner)"), true);
   assert.equal(
-    mainSource.includes("clearCostAnomalyStateOnIdentityChange(authSession.context, context)"),
+    /function clearConsoleSessionState\([\s\S]*?costAnomalyPageState\.clear\(\)/.test(mainSource),
     true,
   );
   assert.equal(mainSource.includes("bindCostAnomalyPageInteractions(consoleShellState)"), true);

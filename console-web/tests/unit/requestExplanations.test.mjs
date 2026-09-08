@@ -453,7 +453,7 @@ test("main wires no-prefetch RBAC, cleanup, handoff and generic page-view skip",
   assert.match(source, /pagehide[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /function renderLogin[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /logoutButton[\s\S]*clearRequestExplanationSessionState\(\)/);
-  assert.match(source, /!sameWorkspaceConsoleSession\(authSession, session\)[\s\S]*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
+  assert.match(source, /const session = sameWorkspaceConsoleSession\(authSession, nextSession\) \? authSession : nextSession;\s*if \(authSession !== session\) \{\s*clearConsoleSessionState\(\{ clearNavigation: false \}\)/);
   assert.match(source, /function clearConsoleSessionState[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /activeNavigationItemId !== "request-explanations"[\s\S]*clearRequestExplanationSessionState\(\)/);
   assert.match(source, /hasPermission\(authSession\.context, PERMISSIONS\.REQUEST_EXPLANATION_READ\)[\s\S]*activeNavigationItemId !== "request-explanations"/);

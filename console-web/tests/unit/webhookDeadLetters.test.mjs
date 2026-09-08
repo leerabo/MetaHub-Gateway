@@ -513,7 +513,7 @@ test("PRD-057 app integration freezes zero-prefetch cleanup polling and responsi
   assert.match(mainSource, /loadWebhookDeadLettersState\(consoleShellState, refreshId\)/);
   assert.match(mainSource, /currentWebhookDeadLetterActionOwner[\s\S]*target_section === "webhook-dead-letters"/);
   assert.match(mainSource, /webhookDeadLetterIdentitySnapshot\(authSession\.context\)/);
-  assert.match(mainSource, /clearWebhookDeadLetterStateOnIdentityChange\(authSession\.context, context\)/);
+  assert.match(mainSource, /function clearConsoleSessionState\([\s\S]*?webhookDeadLetterPageState\.clear\(\)/);
   assert.match(mainSource, /window\.addEventListener\("pagehide"[\s\S]*webhookDeadLetterPageState\.clear\(\)/);
   assert.match(mainSource, /itemId !== "webhook-dead-letters"[\s\S]*webhookDeadLetterPageState\.clear\(\)/);
   assert.match(mainSource, /schedulePoll[\s\S]*delayMs: 1500, maxAttempts: 8/);

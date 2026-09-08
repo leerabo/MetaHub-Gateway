@@ -280,7 +280,7 @@ test("PRD-074 main application wires loader, bind, identity cleanup and result h
   assert.match(source, /case "batch-jobs":[\s\S]*state\.batchJobsState = await loadBatchJobsState\(consoleShellState, refreshId/);
   assert.match(source, /state\.batchJobsState = await loadBatchJobsState/);
   assert.match(source, /bindBatchJobsPageInteractions\(consoleShellState\)/);
-  assert.match(source, /clearBatchJobStateOnIdentityChange\(authSession\.context, context\)/);
+  assert.match(source, /function clearConsoleSessionState\([\s\S]*?batchJobPageState\.clear\(\)/);
   assert.match(source, /hydrateBatchResultText\(globalThis\.document/);
   assert.match(source, /if \(consoleShellState\?\.activeNavigationItemId !== "batch-jobs"\)/);
   assert.doesNotMatch(source, /tenant_id[^\n]*listBatchJobs|listBatchJobs[^\n]*tenant_id/);

@@ -150,6 +150,6 @@ test("environment panel is readonly for developer and hidden for viewer", () => 
 test("environment loader does not prefetch without environment read permission", () => {
   assert.match(
     mainSource,
-    /async function loadEnvironmentState\(\)[\s\S]*?!hasPermission\(authSession\.context, PERMISSIONS\.ENVIRONMENT_READ\)[\s\S]*?return null;/,
+    /async function loadEnvironmentState\(\)\s*\{\s*return loadResourceState\("environments", \[PERMISSIONS\.ENVIRONMENT_READ\]/,
   );
 });

@@ -88,7 +88,7 @@ test("main loader requires FinOps read permission, backend navigation, current h
   assert.match(source, /responseHashNavigation && responseHashNavigation !== "finops-ledger"/);
   assert.doesNotMatch(source, /readActiveNavigationHash\(\) !== "finops-ledger"/);
   assert.match(source, /refreshId !== refreshSequence/);
-  assert.match(source, /clearFinOpsStateOnIdentityChange\(authSession\.context, context\)/);
+  assert.match(source, /function clearConsoleSessionState\([\s\S]*?finOpsPageState\.clear\(\)/);
   assert.match(source, /finOpsPageState\.clear\(\)/);
   assert.match(source, /createFinOpsAdjustment\(\{/);
   assert.match(source, /Idempotency|idempotencyKey/);

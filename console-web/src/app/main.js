@@ -739,15 +739,11 @@ import { renderInvitationAcceptancePage } from "../features/invitations/renderIn
 
 // 非浏览器单测只导入生命周期管理器，不启动应用；真实页面仍要求存在 #app 根节点。
 const app = globalThis.document?.querySelector("#app") ?? null;
-// The local Python services bind IPv4 only. On the local console, avoid the
-// Windows IPv6 ::1 fallback delay; keep the hostname fallback for non-local
-// deployments and the established source-level browser contracts.
+// Gateway traffic has no Workspace Cookie; Control must retain the page's host.
 const localLoopback = globalThis.window?.location?.hostname === "localhost";
 const gatewayUrl = localLoopback ? "http://127.0.0.1:8000" : "http://localhost:8000";
-const controlApiUrl = localLoopback ? "http://127.0.0.1:8001" : "http://localhost:8001";
-// Workspace cookies are Host-only; loopback Cookie APIs must use the page host
-// even while legacy Bearer traffic keeps the IPv4-only development origin.
-const workspaceControlApiUrl = workspaceCookieApiOrigin(controlApiUrl);
+const controlApiUrl = workspaceCookieApiOrigin(localLoopback ? "http://127.0.0.1:8001" : "http://localhost:8001");
+const workspaceControlApiUrl = controlApiUrl;
 const consoleUrl = globalThis.window?.location?.origin ?? "";
 // 公开邀请 fragment 必须先于认证 Storage 读取同步截获并清除，避免既有 Session 污染 accept 请求。
 const publicInvitationRoute = globalThis.window
@@ -946,6 +942,7 @@ const workspaceCommercialAccountingController = createWorkspaceCommercialAccount
   },
 });
 let consoleSidebarController = null;
+let mobileSidebarCollapsed = true;
 // 导航偏好和访问事件是低优先级写入；快速切页时只保留最后一页。
 const CONSOLE_NAVIGATION_SIDE_EFFECT_DELAY_MS = 5_000;
 let consoleNavigationSideEffectTimer = null;
@@ -1538,6 +1535,7 @@ async function performRefresh(options = {}) {
     workspaceCommercialAccountingController.close();
   }
   consoleShellState.sidebarExpandedGroupKey = expandedConsoleGroupKey;
+  consoleShellState.mobileSidebarCollapsed = mobileSidebarCollapsed;
   if (!hasWorkspaceConsoleSession(authSession) || !refreshOwnerCurrent()) {
     return;
   }
@@ -2251,6 +2249,7 @@ function clearConsoleSessionState({ clearNavigation = true } = {}) {
   clearBasicResourceSessionState();
   consoleSidebarController?.abort();
   consoleSidebarController = null;
+  mobileSidebarCollapsed = true;
   cancelPendingConsoleNavigationSideEffects();
   workspaceConsoleExperienceShellState = null;
   workspaceConsoleExperienceController.leave();
@@ -11161,6 +11160,8 @@ async function toggleConsoleSidebar(button, consoleShellState) {
   const next = !previous;
   if (Number(globalThis.window?.innerWidth ?? 0) > 0
     && Number(globalThis.window.innerWidth) <= 820) {
+    mobileSidebarCollapsed = next;
+    consoleShellState.mobileSidebarCollapsed = next;
     applyConsoleSidebarCollapsedState(shell, next);
     return;
   }

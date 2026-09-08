@@ -448,12 +448,15 @@ test("Workspace invalidation synchronously fences stale Edge state before reload
   assert.ok(start >= 0 && end > start);
   const handler = source.slice(start, end);
   const generationIndex = handler.indexOf("refreshSequence += 1;");
-  const clearIndex = handler.indexOf("privateGatewayPageState.clear();");
+  const clearIndex = handler.indexOf("clearConsoleSessionState();");
   const refreshIndex = handler.indexOf("void refresh();");
   assert.ok(generationIndex >= 0 && generationIndex < clearIndex && clearIndex < refreshIndex);
+  const cleanupStart = source.indexOf("function clearConsoleSessionState(");
+  const cleanupEnd = source.indexOf("function invitationOwnerInput(", cleanupStart);
+  assert.match(source.slice(cleanupStart, cleanupEnd), /privateGatewayPageState\.clear\(\)/);
   assert.match(source, /channelFactory\("metahub-workspace-context-v1"\)/u);
   assert.match(
     source,
-    /window\.addEventListener\("pagehide", \(\) => \{\s*closeConsoleWorkspaceContextInvalidation\(\);/u,
+    /window\.addEventListener\("pagehide", \(\) => \{\s*clearBasicResourceSessionState\(\{ clearDom: true \}\);\s*refreshSequence \+= 1;\s*authSession = \{ context: null, owner: null \};\s*closeConsoleWorkspaceContextInvalidation\(\);/u,
   );
 });

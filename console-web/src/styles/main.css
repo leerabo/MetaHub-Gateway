@@ -2820,6 +2820,10 @@ h3 {
   gap: 5px;
 }
 
+.sidebar-collapsed .sidebar-group-items[hidden] {
+  display: grid;
+}
+
 .sidebar-collapsed .sidebar-link {
   min-height: 46px;
   padding: 7px 3px;
@@ -11745,13 +11749,27 @@ h3 {
   }
 
   .sidebar-collapsed .sidebar-title {
-    justify-content: flex-end;
+    justify-content: space-between;
     border-bottom: 0;
     padding-bottom: 0;
   }
 
   .sidebar-collapsed .sidebar-group {
     display: none;
+  }
+
+  .sidebar-collapsed .sidebar-title-copy {
+    display: grid;
+  }
+
+  .sidebar-collapsed .sidebar-toggle-text,
+  .sidebar-collapsed .sidebar-advanced-entry strong {
+    display: inline;
+  }
+
+  .sidebar-collapsed .sidebar-toggle {
+    width: auto;
+    padding: 5px 10px;
   }
 
   .sidebar-toggle,
