@@ -761,6 +761,29 @@ def authenticate_workspace_session_context(
         with authentication_database_deadline(
             connection, monotonic_deadline=monotonic_deadline, error_code=deadline_error_code,
         ):
+            connection.execute("BEGIN")
+            try:
+                context, row = _authenticate_workspace(
+                    connection,
+                    config,
+                    session_token=session_token,
+                    csrf_token=csrf_token,
+                    touch=False,
+                    read_only=True,
+                )
+            except ApiError as exc:
+                if exc.code not in {"workspace_session.expired", "workspace_session.revoked"}:
+                    raise
+            else:
+                if _parse_time(row["last_seen_at"]) > _utcnow() - timedelta(seconds=60):
+                    connection.commit()
+                    return context
+        # Never upgrade an old read snapshot or persist its authorization
+        # decision. Recompute the remaining lock wait before writer admission.
+        connection.rollback()
+        with authentication_database_deadline(
+            connection, monotonic_deadline=monotonic_deadline, error_code=deadline_error_code,
+        ):
             connection.execute("BEGIN IMMEDIATE")
             context, _row = _authenticate_workspace(
                 connection,

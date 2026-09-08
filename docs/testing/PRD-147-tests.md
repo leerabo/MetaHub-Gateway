@@ -1022,3 +1022,90 @@ quick_check 正常、外键违规为零。`prd147-feedback-reliability-runtime-r
 均 200，但协调器为 accepted=126、dropped=63、backend_failure=17、queued=63，因此严格
 判定 failed。旧进程观测也存在非零累计值；没有清零、删历史或为得到零计数再次重启。
 协调器失败归因、原始首次反馈写锁与浏览器间歇故障继续作为未完成项，而非本批修复成果。
+
+## 2026-09-08 Workspace 认证写锁准入批次
+
+工作簿路线图只读复核，原表未导出或修改。继续先交付可用补丁，再独立验证长稳；不把
+PRD-148、G0..G8、全域业务或 72 小时验证标记完成。补丁仅调整独立 Workspace 认证入口，
+近期会话只读验证，需要触达或持久化撤销时先结束旧快照，再进入写事务完整重新鉴权。
+同一 deadline、原始权限目录完整性检查、条件访问、Cookie 和调用方事务合同不变。
+
+本批证据位于 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 结果 | 说明 |
+| --- | --- | --- |
+| `prd147-auth-admission-red-r1.xml` | 4 failed | 旧实现争抢独立写锁、没有只读阶段、不能在阶段之间重新验证 |
+| `prd147-auth-admission-green-r1.xml` | 14 passed / 1 failed | SQLite 反馈回归通过；并发撤权夹具使用 DELETE 模式，写方无法在旧读事务期间提交 |
+| `prd147-auth-admission-green-r2.xml` | 3 passed / 1 failed | 仅预热并发连接不能消除 DELETE 模式的读写阻塞，失败保留 |
+| `prd147-auth-admission-green-r3.xml` | 4 passed | 明确以运行库同款 WAL 验证并发提交；近期会话、触达重验、阶段间撤权与旧拒绝不直接持久化均通过 |
+
+原来的反馈认证写锁预算用例增加已到期触达条件，仍验证写锁等待计入 60ms 测试预算并返回
+feedback.unavailable，不再错误要求每次近期只读认证也争抢写锁。第二阶段发生异常时不能
+返回第一阶段的 context。原生 PostgreSQL 定向验收与正式服务验证尚待下节记录。
+
+`prd147-contention-runtime-before-r1.json` 三次采样的九次 HTTP 均为 200，但已有累计
+accepted=126、dropped=63、backend_failure=17，因此报告为 failed；后续只读检查观察到
+189/126/36，旧进程不能当作健康。运行库使用 WAL，meter outbox 一条 failed，具体为
+platform_metering.owner_invalid，另一条 pending；未跳过 checkpoint 或改写账务事实。
+
+直接对比确认 localhost 健康请求约 2.1 秒，而 127.0.0.1 为 15-16ms，说明这部分客户端
+连接回退耗时不能归因于服务端数据库处理。浏览器仍复现汇总 503 和保存筛选加载失败。
+`prd147-auth-admission-facts-before-r1.json` 确认两条请求、三条解释、一条反馈及一个事件，
+quick_check=ok、外键违规为零；本轮未消耗 Kimi 调用额度。
+
+### 原生验证与本地加载结果
+
+`prd147-feedback-native-auth-admission-r1-16fcc42f3ffa43a88334dfa2220c4b5d.xml` 为
+9 passed / 1 failed。三项新快照准入测试、真实权限丢失撤销、首次与终态权限读取故障恢复、
+创建/重放/跨域/汇总流程和原生锁预算通过；读取阶段故障用例 `[2]` 的随后恢复 HTTP 请求
+仍返回 feedback.unavailable。该轮保持失败，不自动重试或增加时限；隔离 PostgreSQL 已停止，
+其 postmaster.pid 已确认不存在。`prd147-auth-admission-units-r1.xml` 为 37 passed，覆盖
+连接生命周期、控制面清理和资源事务生命周期。Ruff 和 git diff --check 通过。
+
+本地 SQLite 补丁通过正式 start-control-api.ps1 加载，控制服务 PID 为 11300，日志为
+`.logs/control-auth-admission-r1.*.log`。Gateway 和前端未重启，也未迁移或修改已有业务数据。
+停止旧进程前的 `prd147-contention-runtime-predeploy-r1.json` 记录累计 252 次接纳、189 次
+丢弃、51 次后台失败，报告为 failed。新进程短时 `prd147-contention-runtime-after-r1.json`
+六次采样/18 HTTP 均成功，63 队列、无新增 drop/backend failure/shutdown timeout；只能证明
+该短窗口，不证明旧故障根因已消失，也不算 72 小时验证。
+
+`prd147-auth-admission-live-replay-r1.json` 八次同一操作键的反馈恢复全部 200，始终是同一
+反馈且事实摘要前后一致。日志与 SavedFilter API 均 200，Summary 则为 1 次 200、7 次 503，
+因此组合报告仍为 failed，没有 401。浏览器汇总继续 503，回到日志后重载可显示两条 Kimi
+请求、保存筛选和已反馈标志，已检查 DOM 与实际截图；不把重载恢复当作传输故障已修复。
+
+`prd147-auth-admission-facts-after-r1.json` 与 before 一样为两条请求、三条解释、一条反馈和
+一个事件，quick_check 正常、无外键违规。权限读取预算、浏览器间歇错误、账务 owner_invalid
+以及协调器旧失败归因仍是未完成项。所有事实保留，未新增收费模型调用。
+
+独立敏感审计入口为 `prd-147-auth-admission-sensitive-audit-r1.json`，核对六项暂存源码/文档、
+本批原始证据的严格 UTF-8、敏感模式和受保护基线；精确 Kimi 凭据/主密钥扫描另记为
+`prd147-auth-admission-key-audit-r1.json`，不把密钥放入源码、测试报告或聊天回复。
+
+### 提交前的第二阶段锁预算修正
+
+代码复核发现两阶段复用一个 SQLite deadline scope 时，busy_timeout 仍是第一阶段开始时
+的剩余值。修正为每阶段分别进入既有 helper，传入同一个绝对 deadline，第二次写锁准入
+按已消耗的时间重新计算；不调整任何产品超时配置。
+
+`prd147-auth-admission-budget-red-r1.xml` 以实际持锁复现，160ms 总测试预算下耗时约
+297ms。`prd147-auth-admission-final-r1.xml` 四项集成通过，单项墙钟测试仍因 250ms 耗时
+超过 210ms 断言而失败，不能宣称端点 SLA 已达标。最终预算传播测试改为同时观察 SQLite
+实际接收的 PRAGMA：600ms 测试预算先消耗 300ms，写锁预算必须比初始值少至少 250ms，
+另保留宽松墙钟上界检查调度迟延。此处验证配置传播，不以测试墙钟容差替代产品 250ms。
+`prd147-auth-admission-budget-final-r2.xml` 一项通过，原失败报告保留。
+
+最终敏感审计另存 `prd-147-auth-admission-sensitive-audit-r2.json`，增加独立锁预算单元测试，
+共七项源码/文档；精确凭据扫描另存 `prd147-auth-admission-key-audit-r2.json`，不覆盖初轮。
+
+最终 `prd147-feedback-native-auth-admission-r2-0310744295e44b05aea4d2976380ce3e.xml`
+四项通过，覆盖两阶段触达、阶段间撤权、旧快照拒绝重判和 PostgreSQL 锁预算；测试库已退出。
+该定向重验不覆盖、更不推翻 r1 的汇总恢复失败。
+
+最终版本经原启动脚本加载至控制服务 PID 10100，日志为 `.logs/control-auth-admission-r2.*.log`。
+`prd147-contention-runtime-predeploy-r2.json` 的健康采样与重启窗口重叠，控制健康请求超时、
+观测过期，保持 failed，不能作为独立部署前健康结论。正式服务
+`prd147-auth-admission-live-replay-r2.json` 八次反馈重放、日志和 SavedFilter 读取均 200，
+反馈摘要及两条请求/三条解释/一条反馈/一个事件保持不变；汇总三次 200、五次 503，组合
+报告仍为 failed，无误撤销、无新增模型调用。最终短时 runtime-after-r2 仅证明所采窗口，
+不作为累计队列故障或 72 小时长稳的完成依据。

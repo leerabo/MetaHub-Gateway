@@ -8,6 +8,7 @@ from pathlib import Path
 import g6_postgresql_support as native_support
 import pytest
 import test_postgresql_native_migrations as native_migrations
+import test_prd147_workspace_auth_admission as admission
 import test_prd147_workspace_feedback as contracts
 from metahub_shared.db.connection import connect_database, database_operation_deadline
 from metahub_shared.db.schema import tables_exist
@@ -53,6 +54,15 @@ test_feedback_verified_permission_failure_still_revokes = (
 )
 test_feedback_timed_out_worker_retains_connection = (
     contracts.test_feedback_timed_out_worker_retains_connection
+)
+test_due_workspace_touch_uses_read_then_fresh_write = (
+    admission.test_due_workspace_touch_uses_read_then_fresh_write
+)
+test_workspace_touch_rechecks_revocation_after_read = (
+    admission.test_workspace_touch_rechecks_revocation_after_read
+)
+test_workspace_read_denial_is_rechecked_before_persisting = (
+    admission.test_workspace_read_denial_is_rechecked_before_persisting
 )
 
 

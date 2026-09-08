@@ -246,6 +246,14 @@ async def test_workspace_feedback_authentication_retains_deadline(feedback_subje
     token = f.source.cookies.get(WORKSPACE_SESSION)
     if config.database_url.startswith("postgres"):
         pytest.skip("SQLite writer contention contract")
+    context = workspace_access.authenticate_workspace_session_context(config, token)
+    with closing(connect_database(config.database_url)) as connection:
+        connection.execute(
+            "UPDATE workspace_sessions SET last_seen_at=? WHERE workspace_session_id=?",
+            (workspace_access._db_time(workspace_access._utcnow() - timedelta(seconds=61)),
+             context.workspace_session_id),
+        )
+        connection.commit()
     with closing(connect_database(config.database_url)) as writer:
         writer.execute("BEGIN IMMEDIATE")
         started = time.monotonic()
