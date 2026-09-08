@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import ExitStack
 
 import anyio
 import pytest
+from metahub_shared.db import connection as database_connections
 from metahub_shared.db.connection import (
     _close_idle_database_connections,
     connect_database,
+    database_commit_guard,
     database_request_scope,
 )
 
@@ -174,3 +177,72 @@ def test_absolute_sqlite_url_uses_the_requested_filesystem_path(tmp_path):
         connection.close()
 
     assert database.is_file()
+
+
+@pytest.mark.parametrize("owner", ["request", "worker"])
+def test_full_profile_burst_reuses_sixteen_exclusively_owned_handles(tmp_path, owner):
+    url = f"sqlite:///{(tmp_path / 'burst.db').as_posix()}"
+    batches = []
+    try:
+        for _ in range(3):
+            with ExitStack() as scopes:
+                if owner == "worker":
+                    scopes.enter_context(database_commit_guard(lambda _: None))
+                handles = []
+                for _ in range(16):
+                    if owner == "request":
+                        scopes.enter_context(database_request_scope(reuse_connections=True))
+                    connection = connect_database(url)
+                    if owner == "worker":
+                        scopes.callback(connection.close)
+                    connection.execute("SELECT 1").fetchone()
+                    handles.append(connection)
+                physical = {handle._connection for handle in handles}
+                assert len(physical) == 16
+                batches.append(physical)
+            for handle in handles:
+                with pytest.raises(sqlite3.ProgrammingError):
+                    handle.execute("SELECT 1")
+        assert batches[0] == batches[1] == batches[2]
+    finally:
+        _close_idle_database_connections()
+
+
+def test_idle_pool_bounds_overflow_and_closes_all_retained_handles(tmp_path):
+    pool = database_connections._IdleConnectionPool()
+    database = str(tmp_path / "bounded.db")
+    capacity = database_connections._MAX_IDLE_CONNECTIONS_PER_DATABASE
+    handles = [pool.acquire(database) for _ in range(capacity + 1)]
+    try:
+        assert len(set(handles)) == capacity + 1
+        for handle in handles:
+            pool.release(database, handle)
+        assert len(pool._connections[database]) == capacity
+        with pytest.raises(sqlite3.ProgrammingError):
+            handles[-1].execute("SELECT 1")
+    finally:
+        pool.close_idle()
+    assert not pool._connections
+    for handle in handles:
+        with pytest.raises(sqlite3.ProgrammingError):
+            handle.execute("SELECT 1")
+
+
+def test_idle_pool_evicts_oldest_database_without_closing_active_owner(tmp_path):
+    pool = database_connections._IdleConnectionPool()
+    first_database = str(tmp_path / "first.db")
+    active = pool.acquire(first_database)
+    idle = pool.acquire(first_database)
+    try:
+        pool.release(first_database, idle)
+        for index in range(database_connections._MAX_IDLE_DATABASES):
+            database = str(tmp_path / f"other-{index}.db")
+            pool.release(database, pool.acquire(database))
+        assert len(pool._connections) == database_connections._MAX_IDLE_DATABASES
+        assert first_database not in pool._connections
+        with pytest.raises(sqlite3.ProgrammingError):
+            idle.execute("SELECT 1")
+        assert active.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        active.close()
+        pool.close_idle()

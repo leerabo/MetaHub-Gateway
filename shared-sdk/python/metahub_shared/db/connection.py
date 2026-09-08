@@ -31,7 +31,9 @@ from .security import password_hash_algorithm
 # when two requests briefly contend for the single SQLite writer.
 SQLITE_BUSY_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MILLISECONDS = SQLITE_BUSY_TIMEOUT_SECONDS * 1000
-_MAX_IDLE_CONNECTIONS_PER_DATABASE = 4
+# Retain a full local scheduler/request burst without reparsing the large schema.
+# This bounds idle handles, not active concurrency; overflow still opens independently.
+_MAX_IDLE_CONNECTIONS_PER_DATABASE = 16
 _MAX_IDLE_DATABASES = 4
 DatabaseBackend = Literal["sqlite", "postgresql"]
 DatabaseCommitGuard = Callable[[Any], None]
