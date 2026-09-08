@@ -49,7 +49,7 @@ def _rows(runtime):
 
 
 def _rollback_after_archive(database_url):
-    versions = ["0143", "0144"] if database_backend(database_url) == "postgresql" else ["0143"]
+    versions = ["0143", "0144", "0145"] if database_backend(database_url) == "postgresql" else ["0143"]
     for version in reversed(versions):
         result = rollback_last_migration(database_url, expected_version=version)
         assert result.rolled_back == version

@@ -664,3 +664,21 @@ PRD-058 已达到可运行、可验收和可复核条件。按 Excel 两张核�
 是 `PRD-059 - 细粒度角色权限矩阵`（`M1-企业POC / P1 / RBAC增强`）。
 
 `all_108_prds_complete=false`。
+
+## 16. 2026-09-08 原生审计水位修复
+
+PRD-147 真实 PostgreSQL Provider 创建触发 audit_log_export_sequence_immutable，确认 0139
+把 SQLite 未分配 rowid=-1 错译为 NEW.ctid IS NOT NULL，且 BIGINT 主键缺少分配机制。
+原 SQLite 交付结论不扩张为原生通过；0139 保持不可变，用 PostgreSQL 0145 增量修复。
+
+第一轮自审：保留原表、五个触发器及历史映射，新增专用 BIGINT 序列，BEFORE INSERT 只允许
+未提供 audit_log_sequence 的新映射，再由触发器分配。显式零、正数、负数与重复 audit ID
+均拒绝，AFTER INSERT 复核正数，原 owner/FK/update/delete 守卫不变。迁移先锁表、验证
+完整 live trigger 和旧/原生清单摘要，拒绝漂移；不通过刷新清单掩盖已有漂移。
+
+第二轮自审：普通 sequence 不能保证提交顺序，较小水位晚提交可能被增量导出跳过。分配前
+领取固定 (58049,1) transaction advisory lock，提交/回滚前持有，且在锁后 nextval，允许
+回滚产生空洞但不允许晚提交水位倒退。序列起点严格超过历史最大值，旧事实与表结构不改。
+回滚仅允许映射表为空，拒绝有事实时退回坏分配机制；序列配置和拥有关系也要验证。
+独立测试覆盖迁移往返、漂移/显式水位/owner 拒绝、正常审计 API、并发提交与回滚水位。
+本修复不代表全产品原生审计导出、隐私删除或正式发布已验收。

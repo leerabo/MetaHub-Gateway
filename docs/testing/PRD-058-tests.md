@@ -222,3 +222,29 @@ PRD-058 已达到可运行、可验收、可复核条件，可以标记完成。
 `02_M0-M1核心开发` 第 60 行重新识别，下一条未完成项是
 `PRD-059 - 细粒度角色权限矩阵`（`M1-企业POC / P1 / 核心层 / RBAC增强`）。
 总体目标继续进行，`all_108_prds_complete=false`。
+
+## 12. 2026-09-08 PostgreSQL 审计水位增量
+
+真实 Workspace Provider 创建在不可变 0139 上失败，原始证据为
+`g6-evaluation-r1-de172fee01f1415cac0f6c7fe62a827f-junit.xml`（2 个夹具错误）。原因是
+SQLite rowid=-1 的未分配语义被错译成 NEW.ctid IS NOT NULL，原生 BIGINT 主键也无分配器。
+该运行不计任何业务通过；0139 未修改，SHA-256 仍为
+`11892ef4760a18c9adacb7745e8e01b173e651adf076fb44e18054b7cb934fe0`。
+
+新增 PostgreSQL 0145 仅修复两个函数并登记五项原生 trigger 清单；旧 owner、FK、不可变
+UPDATE/DELETE 规则不变。专用 sequence 在固定事务 advisory lock 下分配，保持提交水位
+顺序；旧映射不更新。回滚拒绝任何已有映射，迁移拒绝函数、禁用 trigger 或清单漂移。
+
+独立报告均位于 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 结果 | 证明范围 |
+| --- | --- | --- |
+| `g6-audit-sequence-r1-76eaad1e117542348a82be96f15b70a0-junit.xml` | 10 passed，224.27s | 空库往返、映射不可变、显式/跨 owner 拒绝、有事实回滚拒绝、并发等待实际 pg_locks、提交/回滚顺序、六种迁移漂移 |
+| `g6-audit-page-roundtrip-r1-c0ed06dbaa5c4add9d94efb0c8575ffe-junit.xml` | 1 passed，13 deselected，89.45s | 相邻 0143/0144/0145 顺序往返、授权事实与清单保真 |
+| `g6-audit-archive-roundtrip-r1-7adda12f3c904aa399b62b60bbe60aae-junit.xml` | 28 deselected，无执行 | 首次选择器未命中，不计通过 |
+| `g6-audit-archive-roundtrip-r2-859120f73b724989a924b55530bd100b-junit.xml` | 1 passed，27 deselected，68.34s | 0142 归档及三个后续迁移往返、清单验证 |
+
+PRD-147 原生业务复验另记在对应 testing 文档，不与本迁移合同混为完整审计导出验收。
+测试实例均正常停止；只读原基线不变。独立敏感审计为
+`prd-058-native-audit-sequence-sensitive-audit.json`，核对本组七项精确暂存文件和上述报告。
+模式扫描不等于安全会签；未完成全产品原生隐私删除/审计导出或 G6/G8 正式验收。

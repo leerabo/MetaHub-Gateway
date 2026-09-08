@@ -62,6 +62,7 @@ def test_native_authorization_repair_roundtrip_preserves_facts_and_manifests(
 ):
     database = native_business_database
     before = _authorization_state(database)
+    assert rollback_last_migration(database, expected_version="0145").rolled_back == "0145"
     assert rollback_last_migration(database, expected_version="0144").rolled_back == "0144"
     assert rollback_last_migration(database, expected_version="0143").rolled_back == "0143"
     legacy = _authorization_state(database)
@@ -69,7 +70,7 @@ def test_native_authorization_repair_roundtrip_preserves_facts_and_manifests(
         table: before[table] for table in AUTHORIZATION_TABLES
     }
     assert legacy["live_triggers"] != before["live_triggers"]
-    assert apply_migrations(database).applied == ["0143", "0144"]
+    assert apply_migrations(database).applied == ["0143", "0144", "0145"]
     assert _authorization_state(database) == before
     assert apply_migrations(database).applied == []
 
@@ -82,6 +83,7 @@ def test_native_authorization_repair_refuses_drift_atomically(
     native_business_database, direction, drift,
 ):
     database = native_business_database
+    rollback_last_migration(database, expected_version="0145")
     rollback_last_migration(database, expected_version="0144")
     if direction == "up":
         rollback_last_migration(database, expected_version="0143")
@@ -166,11 +168,12 @@ async def test_native_page_visit_cookie_and_unique_facts(native_visit_subjects):
     _app, database, _fixtures = native_visit_subjects
     before = _authorization_state(database)
     assert before["invitations"]
+    rollback_last_migration(database, expected_version="0145")
     rollback_last_migration(database, expected_version="0144")
     with pytest.raises(DbError):
         rollback_last_migration(database, expected_version="0143")
     assert _authorization_state(database) == before
-    assert apply_migrations(database).applied == ["0144"]
+    assert apply_migrations(database).applied == ["0144", "0145"]
     await visits.test_workspace_page_visits_share_original_facts_and_replay(native_visit_subjects)
 
 
