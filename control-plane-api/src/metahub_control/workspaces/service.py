@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -190,17 +191,7 @@ def create_workspace(
             """,
             (_id("wtb"), workspace_id, tenant_id, stamp),
         )
-        if _table_exists(connection, "workspace_operational_states"):
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO workspace_operational_states(
-                  workspace_operational_state_id,workspace_id,tenant_id,status,
-                  revision,risk_revision,source,suspended_reason_code,
-                  suspended_by_operator_id,suspended_at,created_at,updated_at)
-                VALUES(?,?,?,'active',1,1,'workspace_creation',NULL,NULL,NULL,?,?)
-                """,
-                (_id("wos"), workspace_id, tenant_id, stamp, stamp),
-            )
+        _initialize_operational_state(connection, workspace_id, tenant_id, stamp)
         connection.execute(
             """
             INSERT INTO workspace_regions(
@@ -984,14 +975,32 @@ def _is_create_conflict(error: sqlite3.IntegrityError) -> bool:
     )
 
 
-def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",
-            (name,),
-        ).fetchone()
-        is not None
+def _initialize_operational_state(
+    connection: sqlite3.Connection, workspace_id: str, tenant_id: str, stamp: str,
+) -> None:
+    if not _table_exists(connection, "workspace_operational_states"):
+        return
+    connection.execute(
+        """
+        INSERT INTO workspace_operational_states(
+          workspace_operational_state_id,workspace_id,tenant_id,status,
+          revision,risk_revision,source,suspended_reason_code,
+          suspended_by_operator_id,suspended_at,created_at,updated_at)
+        VALUES(?,?,?,'active',1,1,'workspace_creation',NULL,NULL,NULL,?,?)
+        ON CONFLICT(workspace_id) DO NOTHING
+        """,
+        (_id("wos"), workspace_id, tenant_id, stamp, stamp),
     )
+    if connection.execute(
+        "SELECT 1 FROM workspace_operational_states "
+        "WHERE workspace_id=? AND tenant_id=? AND status='active'",
+        (workspace_id, tenant_id),
+    ).fetchone() is None:
+        raise sqlite3.IntegrityError("workspace_operational_state_invalid")
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return table_exists(connection, name)
 
 
 def _connect(config: AppConfig) -> sqlite3.Connection:

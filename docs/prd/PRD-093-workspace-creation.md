@@ -125,3 +125,27 @@ organization slug 使用 ASCII 小写 `a-z0-9-`、3..48、首尾字母数字、�
 - P1：页面若把 Workspace/tenant内部 ID 写Storage再继续旧请求，会造成切换前污染。修正为本条不签发 WorkspaceSession，页面只持内存展示 DTO。
 
 两轮修正已写回本设计，编码不得弱化这些边界。
+
+## 2026-09-08 Workspace 原生能力发现补充自审
+
+与 PRD-091 的 Identity/Workspace 原生能力发现批次连续实施。创建流程通过 _table_exists
+判断是否应写 workspace_operational_states；当前该 helper 只查询 sqlite_schema。
+
+第一轮自审：改为既有 backend-aware table_exists，保留当前 schema、真实表而非 view 的
+约束；不把缺表默认为已初始化，不跳过必要状态事实或原有鉴权、幂等、唯一性保护。
+
+第二轮自审：检查必须使用同一创建事务连接，不能提交半成品 Workspace/Tenant/Owner。
+先用现有 SQLite 能力与事务用例检查兼容，再以实际 PostgreSQL 注册/建空间验证；元数据或
+初始化写失败仍整笔回滚。PRD-093 单独保留记录和提交，本项不扩展为整组原生 QA 已完成。
+
+### 原生初始化 SQL 补充两轮自审
+
+第一轮：真实 PostgreSQL r5 在创建运营状态时报告 SQLSTATE 42601。共享连接只转换参数和
+BEGIN IMMEDIATE，不翻译 INSERT OR IGNORE。沿用 seed 的 ON CONFLICT(workspace_id)
+DO NOTHING，只有同一 Workspace 的触发器先行初始化可以复用；tenant、主键、CHECK、FK
+冲突不得忽略，不修改历史迁移或引入第二套状态事实。
+
+第二轮：复用后必须仍为当前 workspace/tenant 的 active 状态；不能把 suspended、deleted
+或 migration_conflict 改成 active。该检查与初始化共用创建事务，任何异常由原创建流程整体
+回滚。单元覆盖首次写入、重复不改行、错误 owner/状态/唯一键与回滚；实际注册、验证、建
+空间和 WorkspaceSession 冒烟验证完整接线，不能以 SQLite 冒烟替代原生证据。

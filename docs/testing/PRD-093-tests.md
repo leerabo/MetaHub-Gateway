@@ -58,3 +58,26 @@ WorkspaceSession，也不授予平台角色。`saas_incremental_roadmap_complete
   outbox 和幂等记录中均为 0 命中。事件 payload 字段集合严格等于固定白名单。
 - 密码轮换后的旧/新明文均未进入数据库工件；浏览器 Storage 调用为 0，草稿和幂等 key 只存在于
   当前内存生命周期，页面刷新后由安全摘要重新加载。
+
+## 2026-09-08 原生运营状态初始化修复
+
+与 Identity 原生能力探测同批完成两轮自审和编码。创建事务中的表探测复用共享 schema
+helper；运营状态写入改用 ON CONFLICT(workspace_id) DO NOTHING。触发器先行创建的同属
+active 状态保持原行，不重置既有状态；错误 tenant、其他唯一约束、NOT NULL/CHECK/FK 和
+非 active 状态失败关闭，原创建事务负责整体回滚。未修改历史迁移、DTO 或授权角色。
+
+独立原始报告位于 `.artifacts/g6-security-20260907/`：
+
+- `prd093-schema-capabilities-r1-junit.xml`：1/1，1.512 秒，真实表探测及事务保留。
+- `prd093-operational-r2-junit.xml`：8/8，2.695 秒；首次写入、同 owner 重复不改行、回滚、
+  历史缺表、错误 owner/状态、tenant 唯一键、主键及 NOT NULL 拒绝。
+- `prd093-operational-api-r3-junit.xml`：1/1，210.468 秒，含空库迁移；真实注册、验证、
+  organization 创建、幂等重放/异体拒绝、列表/详情、完整 RBAC/Owner/Environment 和零假资源。
+- 原生 r5（e83e553a7f2f4f689f5a9fc19083d415）保留 INSERT OR IGNORE / 42601 反例；
+  r7（91dcfa5a0c6d43bca31b59b0069028c5）实际创建返回 201，随后空间切换返回 200，
+  后续 Project 聚合错误属于独立 PRD-029，未被计为 Workspace/整组原生通过。
+
+受影响源和单元 Ruff 通过；`093-operational-initialization` 独立审计 profile 核对四个精确
+暂存文件、原报告、UTF-8、凭据模式及基线摘要，输出
+`prd-093-operational-initialization-sensitive-audit.json`。不宣称新一轮 100 并发、p95、浏览器
+或完整 PostgreSQL 隔离验收已完成；这些仍归统一批次 QA。模式扫描不是安全会签。
