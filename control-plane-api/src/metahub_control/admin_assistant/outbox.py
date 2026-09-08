@@ -73,8 +73,11 @@ def claim_next_assistant_event(
     try:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
-            "CREATE TEMP TABLE prd077_bad_source_skip(source_rowid INTEGER PRIMARY KEY)"
+            "CREATE TEMP TABLE IF NOT EXISTS prd077_bad_source_skip"
+            "(source_rowid INTEGER PRIMARY KEY)"
         )
+        # A warm handle can outlive this claim; skip state belongs only to this iteration.
+        connection.execute("DELETE FROM temp.prd077_bad_source_skip")
         # 第十次 attempt 若在终态提交前崩溃，租约过期后必须直接失败关闭，不能发生
         # 第十一次网络调用；同事务还会终结该 source 已创建的 original pending intent。
         _finish_one_exhausted_source(connection, timestamp=timestamp)

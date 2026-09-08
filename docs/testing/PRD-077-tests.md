@@ -181,3 +181,11 @@ closing 状态并返回原有固定错误，取消仍等待资源 owner 释放�
 取消与关闭失败。旧 checkpoint 故障测试改为证明子系统完全不发全库 checkpoint，并未删除
 实际连接关闭故障测试。静态 E4/E7/E9/F/I 与 diff-check 通过。不是完整业务、原生或长稳复验。
 独立审计为 `prd-077-shared-database-teardown-sensitive-audit.json`；全目标仍继续推进。
+
+## 2026-09-08 暖连接事件轮询
+
+source 领取改为复用临时 skip 表并每轮清空，避免暖连接第二次运行撞表名或遗留跳过 rowid。
+`prd077-warm-outbox-red-r1.xml` 两项均以真实 SQLite 的 table already exists 失败；
+`prd077-warm-outbox-r2.xml` 为 23/23，含连续三轮真实 claim、遗留 skip 重置、共享 WAL
+回收、连接池生命周期及拒绝提交原子回滚。聚焦 claim 测试使用最小空 source schema，
+不冒充完整 source 投递、迁移约束或外部 webhook 集成。完整本地实例仍将独立重启检查。
