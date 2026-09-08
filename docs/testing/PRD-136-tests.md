@@ -68,3 +68,28 @@ G6 只能形成 `release_candidate`，不能公开 GA；本条专项结果不替
 证据位于 `.artifacts/g6-security-20260907/`，独立敏感审计为 `prd-136-sensitive-audit.json`。
 两轮复核见本条 PRD 第 8 节。数据库事务和状态合同通过，不等于真实漏洞扫描服务、供应链环境、
 独立审批、三浏览器或 G6 总体验收通过。
+
+## 2026-09-08 结构检查单次往返修复
+
+复用 Shared tables_exist，以一条查询在调用方快照内检查全部 11 张表；不缓存结构、
+不改变事务、签名、漏洞、租约或调度间隔。两轮编码前自审见本条设计第 9 节。
+
+- `polling-init-red-r3.xml`：修正 fixture 临时目录和错误码断言后，旧实现结构检查
+  实际 11 条语句，预期 1 条，反证失败；缺表、view/temp、回滚和数据库故障分支通过。
+  r1/r2 的环境及测试断言错误均保留，不算产品缺陷证明。
+- `polling-init-green-r1.xml`：同批 21 passed，其中本条 15 项结构检查通过。
+- `polling-init-batch-r1.xml`：SQLite 同批 34 passed，516.64 秒，其中本条结构检查
+  15 项、签名/扫描/双控例外/patch 与严格读取 2 项通过。
+- `prd147-feedback-native-polling-init-r1-88f9465ce96a41ccbc920fdd1c9eca37.xml`：
+  PostgreSQL 7 passed，304.343 秒，含本条生命周期 2 项、4 种缺失/替代对象拒绝和
+  Shared 当前 schema 合同。隔离实例已停止，postmaster.pid 不存在。
+- 本条所有修改代码/测试 Ruff 全规则通过，`git diff --check` 通过。
+
+已加载到本地 Control API。新进程短时 63 queues / 0 drop / 0 backend failure，18 次
+健康检查成功，仅为短窗口。部署前旧进程 accepted=189 / dropped=126 / backend=22
+已独立保存 `prd147-polling-init-predeploy-r1.json`，不能用新进程计数覆盖。真实 Summary
+仍 6/8 次 503，日志/反馈回放成功且原事实 digest 未变；整体验收仍失败。
+
+证据根目录 `.artifacts/g6-security-20260907/`，独立敏感审计
+`prd-136-polling-init-sensitive-audit-r1.json`。未新增付费模型调用、未删除失败证据或
+受保护 baseline，未声明真实外部 scanner、完整 G6/G7 或 72 小时通过。

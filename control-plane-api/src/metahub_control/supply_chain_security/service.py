@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from metahub_shared.config_distribution import canonical_json_bytes
 from metahub_shared.db.connection import connect_database
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -1231,7 +1232,7 @@ def _require_reader(reader):
 
 
 def _require_schema(connection):
-    if any(not _table_exists(connection, name) for name in _SCHEMA):
+    if not tables_exist(connection, _SCHEMA):
         raise ApiError("supply_chain.unavailable")
 
 
