@@ -79,3 +79,32 @@ PRD-051/079/080 回归。
 - P0：Workspace 与 Platform 共用 Bearer 会允许跨域查询。修正为独立 Cookie/Session 解释边界。
 - P1：CSV 可形成公式注入或长期下载链接。修正为固定列转义和 tenant-bound 短 TTL 令牌。
 - P1：未知价格按 0 结算会漏费。修正为 unavailable/reconciliation_required，禁止静默归零。
+
+## 9. 2026-09-09 计量事实时间与失败原子性补充设计
+
+现场核对：本地试用空间有唯一 Workspace binding，但没有套餐、订阅或权益快照。首条 outbox 已
+`owner_invalid`，后续全局水位停止。这不是允许倒填商业合同、把未知价格计为零或跳过失败记录的依据。
+本批不修改该历史事实，也不新增模型调用；历史计量恢复仍需独立的有依据补偿合同。
+
+同一投影事务修复两项：
+
+- 查询显式将 canonical Usage 的 `created_at` 命名为 `usage_created_at`；周期、历史权益和 Reading
+  `occurred_at` 仅使用该字段。outbox 入队时间和 worker 当前时间不参与历史归属。
+- 完成 outbox claim 后建立局部 savepoint。业务投影 ApiError 先撤销本条新增的 cycle、allocation、
+  reading、adjustment 及 cycle 状态变化，再提交 failed outbox。数据库异常仍回滚整个外层事务。
+  成功路径仍在同一外层事务完成四个 Reading、outbox 和 checkpoint，无新迁移、重试 API 或跳号规则。
+
+第一轮自审（领域与一致性）：时间重名会跨权益边界误归属；已关闭历史周期必须追加 adjustment，
+不能进入入队日的新周期。失败后的部分 Reading 不可删除，故须在首次错误提交前原子撤销。
+保留 claim 尝试次数和错误码，但不得保留失败投影的业务副作用。结论：按上述边界实现。
+
+第二轮自审（恢复与安全）：仅回滚 savepoint 内本条投影，不能撤销既有历史 summary 或其他成功事实；
+savepoint/错误落盘本身失败时交给外层 rollback。断点不前进，后续用量继续 fail closed，不以补造权益
+掩盖缺失订阅。测试复用隔离数据库，不改受保护基线或运行库；报告不含请求正文、Secret 或 Cookie。
+结论：定向红绿测试后统一执行 SQLite、原生 PostgreSQL 与相邻账单流程回归，独立审计和提交。
+
+原生回归发现套餐及计量检查使用 SQLite catalog；二者改用已有 `tables_exist`，保留七表/八表完整性、
+当前 schema 边界和事务归属，不改模型或金额。两轮补充自审确认：不接受 view/temp/其他 schema 替代，
+无权限快照缓存，无新迁移。原生订阅还有未闭环的隐含 rowid 排序，Usage 导出序列表的主键缺少分配器。
+本次原生验收限定 schema 边界及空投影事务；保留失败全流程与待恢复用例，不注入 Usage 或跳过触发器。
+SQLite 六项投影断言已执行，但不等同于原生事务或真实平台登录通过。

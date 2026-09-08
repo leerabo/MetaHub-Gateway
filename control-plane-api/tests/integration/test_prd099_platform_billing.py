@@ -33,8 +33,8 @@ ADMIN_PASSWORD = "LocalAdmin!2026"
 GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 
 
-def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    database_url = f"sqlite:///{(tmp_path / 'platform-billing.sqlite3').as_posix()}"
+def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, database_url: str | None = None):
+    database_url = database_url or f"sqlite:///{(tmp_path / 'platform-billing.sqlite3').as_posix()}"
     settings = {
         "METAHUB_ENV": "test",
         "METAHUB_DATABASE_URL": database_url,

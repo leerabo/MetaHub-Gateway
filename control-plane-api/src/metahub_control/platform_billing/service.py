@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.db.schema import tables_exist
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
@@ -62,7 +63,8 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
         row = connection.execute(
             """
             SELECT sequence.usage_export_sequence,outbox.*,usage.tenant_id,usage.request_id,
-              usage.input_tokens,usage.output_tokens,usage.total_tokens,usage.created_at
+              usage.input_tokens,usage.output_tokens,usage.total_tokens,
+              usage.created_at AS usage_created_at
             FROM usage_export_ledger_sequences sequence
             JOIN usage_ledger usage ON usage.usage_ledger_id=sequence.usage_ledger_id
             LEFT JOIN platform_meter_outbox outbox
@@ -101,9 +103,13 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
         ).rowcount
         if claimed != 1:
             raise ApiError("platform_metering.checkpoint_conflict")
+        # Keep the failed claim, but never commit a partial business projection.
+        connection.execute("SAVEPOINT platform_usage_projection")
         try:
             _project_usage_row(connection, row, sequence=sequence, now=now)
         except ApiError as exc:
+            connection.execute("ROLLBACK TO SAVEPOINT platform_usage_projection")
+            connection.execute("RELEASE SAVEPOINT platform_usage_projection")
             connection.execute(
                 """
                 UPDATE platform_meter_outbox
@@ -115,6 +121,7 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
             )
             connection.commit()
             raise
+        connection.execute("RELEASE SAVEPOINT platform_usage_projection")
         finished = connection.execute(
             """
             UPDATE platform_meter_outbox
@@ -528,7 +535,7 @@ def _project_usage_row(
     if len(owner) != 1:
         raise ApiError("platform_metering.owner_invalid")
     workspace_id = str(owner[0]["workspace_id"])
-    occurred_at = _parse_time(row["created_at"])
+    occurred_at = _parse_time(row["usage_created_at"])
     cycle = _ensure_cycle(
         connection,
         workspace_id=workspace_id,
@@ -1083,13 +1090,7 @@ def _require_schema(connection: sqlite3.Connection) -> None:
         "platform_meter_outbox",
         "platform_meter_checkpoints",
     }
-    found = {
-        str(row[0])
-        for row in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'platform_%'"
-        ).fetchall()
-    }
-    if not required <= found:
+    if not tables_exist(connection, required):
         raise ApiError("platform_billing.unavailable")
 
 

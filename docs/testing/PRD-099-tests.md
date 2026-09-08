@@ -58,3 +58,41 @@
 - 其余 4 个失败已用独立 basetemp 单独复现：旧 quota outbox 投递预期、旧 webhook mock 缺少
   `payload_format`，以及 2 个 Windows spool 重试/目录可见性预期。失败所在模块和测试不在 PRD-099
   候选 diff 中；PRD-099 的 DB/API/Console 专项均通过，未用这些历史失败替代或放宽专项门禁。
+
+## 2026-09-09 事实时间与投影原子性修复
+
+以下为本次增量结果，前文为历史验收，不代表当前商业链路或原生计量已全量通过。
+证据目录：`.artifacts/g6-security-20260907/`。
+
+- `prd099-projection-red-r1.xml`：5 failed / 1 passed，56.975 秒。复现延迟入队错失历史权益、借用
+  入队时权益接受非法时间、失败时保留新 cycle/allocation 和部分迟到 Reading/adjustment。
+- `prd099-projection-green-r1.xml`：6 passed，62.451 秒；原始红测保留。
+- 数据库错误最终用例改为第二条迟到调整后执行真实缺列 SQL，检查外层 rollback、claim 复原、
+  重试成功且恰好八条 Reading/四条 adjustment，冻结 summary 完整不变。
+- `prd147-feedback-native-prd099-projection-r1-d624e232680c4f5b9eb91282950f4ac8.xml`：6 errors，
+  尚未进入计量断言。失败用例源保留于 `.tmp/test_prd099_postgresql_projection_pending.py`，不计为通过。
+- `prd147-feedback-native-prd098-099-schema-r2-8b656eee2a3743c5b0dbe5668d2e1836.xml`：4 passed，
+  PRD-099 仅占两项：八个必需表的缺失/view/temp 边界，以及空 Usage 投影不改 checkpoint。
+  其余两项为 PRD-098。原生完整投影仍未通过，不注入 Usage 或绕过触发器建立假前置条件。
+- 原生前置缺口：订阅订单隐含 rowid；Usage 导出序列表主键无分配器，其 append trigger 又省略该列。
+  需要独立序列/迁移治理，不能以随机 ID、物理地址或跳过检查点替代。
+- `prd099-projection-predeploy-r1.json`：运行库套餐、订阅和权益均为零；outbox 一条 failed、一条
+  pending，checkpoint=0。失败原因 `platform_metering.owner_invalid`。quick_check=ok，FK 违规为零。
+- `prd098-099-predeploy-runtime-r1.json`：上线前已有 accepted=126、dropped=63、backend_failure=63、
+  shutdown_timeout=45，采样 failed；三个 HTTP 均为 200。此证据不因代码发布重启而被清除或改写。
+
+本批不改历史 Usage、失败 outbox、价格或订阅依据；Summary SLA、后台队列稳定性和 72 小时验收仍未完成。
+`prd098-099-batch-r1.xml`：19 passed，365.039 秒，包含相邻套餐流程、完整关账/迟到调整/幂等流程、
+六项投影故障回归和 11 项 schema 测试。定向 Ruff、compileall、diff check 通过。
+
+本地发布：Control API 更新为 PID=2172，Gateway/Console 未重启。
+`prd099-projection-postdeploy-r1.json` 与 predeploy 的 14 组账本计数及 SHA-256 完全一致，
+checkpoint 仍为 0，FK 违规为零，quick_check=ok，三个服务 readiness 均 200。
+`prd098-099-live-feedback-r1.json` 仅该回放报告 passed：8 次同反馈重放、16 次日志/过滤器查询及
+8 次 Summary 全部 200，反馈事实摘要不变。POST 仍有秒级延迟，本记录不认定性能 SLA 通过。
+
+CUA 浏览器首次刷新报 `feedback.unavailable`，request_id=`req_81608988d95348fbb33469de35ade9fc`；
+再次刷新恢复 1 条 Kimi K2.6 Test、5/5、100% 采纳，截图目视非空且可滚动。该次浏览器失败与脚本
+成功分别保留，不能宣称 Summary 间歇故障已修复，也没有重做移动端验收。
+`prd098-099-postdeploy-runtime-r1.json` 只记录新进程短采样；上线前的后台计数失败不因此关闭。
+独立敏感审计：`prd-099-projection-sensitive-audit-r1.json`、`prd099-projection-key-audit-r1.json`。
