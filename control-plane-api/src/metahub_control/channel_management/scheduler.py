@@ -151,14 +151,20 @@ def acquire_channel_lease(config: AppConfig, *, worker_id: str) -> ChannelLease 
         connection.close()
 
 
+_WORKER_QUEUES = {"statements": "statements", "outbox": "main"}
+
+
 def _process_fenced_batch(config: AppConfig, lease: ChannelLease, should_stop) -> bool:
+    from metahub_control.console_migration.execution import selected_scheduler_work
+
+    selected = selected_scheduler_work("channel-attribution", _WORKER_QUEUES)
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
         state = _assert_fence(connection, lease)
         limit = int(state["bounded_batch_size"])
-        closed = _close_due_statements(connection, lease, limit, should_stop)
-        delivered = _deliver_outbox(connection, lease, limit, should_stop)
+        closed = _close_due_statements(connection, lease, limit, should_stop) if "statements" in selected else 0
+        delivered = _deliver_outbox(connection, lease, limit, should_stop) if "outbox" in selected else 0
         now = _utcnow()
         if now >= lease.expires_at:
             raise ApiError("channel.scheduler_fenced")

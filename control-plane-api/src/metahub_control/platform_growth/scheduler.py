@@ -20,6 +20,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.console_migration.execution import selected_scheduler_work
 from metahub_control.product_analytics.outbox import drain_product_event_once
 
 from .outbox import claim_next_event, complete_event, fail_event
@@ -50,6 +51,10 @@ _INTERVAL = {
     "product_event_outbox": 2,
 }
 _ORDER = tuple(_INTERVAL)
+_WORKER_QUEUES = {
+    code: "events" if code in {"growth_event_outbox", "product_event_outbox"} else "main"
+    for code in _ORDER
+}
 
 
 def install_platform_growth_scheduler(app: FastAPI) -> None:
@@ -173,6 +178,9 @@ def _claim_job(
     worker_id: str,
     now: datetime,
 ) -> tuple[str, int, str] | None:
+    selected = selected_scheduler_work("platform-growth", _WORKER_QUEUES)
+    if not selected:
+        return None
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -185,10 +193,10 @@ def _claim_job(
         ) + " END"
         row = connection.execute(
             f"""SELECT * FROM platform_growth_scheduler_state
-                WHERE next_run_at<=? AND(
+                WHERE job_code IN ({','.join('?' for _ in selected)}) AND next_run_at<=? AND(
                   status IN('idle','failed') OR(status='leased' AND lease_expires_at<=?))
                 ORDER BY {order},next_run_at,job_code LIMIT 1""",
-            (stamp, stamp),
+            (*selected, stamp, stamp),
         ).fetchone()
         if row is None:
             connection.commit()

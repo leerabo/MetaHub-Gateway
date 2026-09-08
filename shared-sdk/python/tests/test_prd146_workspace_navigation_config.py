@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from metahub_shared.runtime.config import ConfigError, load_app_config
 
@@ -10,7 +12,10 @@ SETTING = "METAHUB_WORKSPACE_NAVIGATION_SCHEDULER_ENABLED"
 
 def test_workspace_navigation_scheduler_is_disabled_by_default_and_opt_in(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("METAHUB_CONFIG_FILE", raising=False)
     monkeypatch.delenv(SETTING, raising=False)
     disabled = load_app_config("control-plane-api")
     assert disabled.workspace_navigation_scheduler_enabled is False

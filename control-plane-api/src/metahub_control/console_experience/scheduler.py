@@ -19,6 +19,7 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.console_migration.execution import selected_scheduler_work
 from metahub_control.workspace_navigation.scheduler import (
     NavigationLeaseProof,
     run_navigation_queue_once,
@@ -48,6 +49,23 @@ _NAVIGATION_WORKER_KINDS = (
     "workspace_navigation_outbox",
     "navigation_reconciliation",
 )
+_WORKER_QUEUES = {
+    "platform_dashboard_refresh": "platform-dashboard",
+    "workspace_dashboard_refresh": "workspace-dashboard",
+    "platform_approval_projection": "platform-approval",
+    "workspace_approval_projection": "workspace-approval",
+    "workspace_deployment_diagnostic": "deployment-diagnostic",
+    "platform_outbox": "main",
+    "workspace_outbox": "main",
+    "account_preference_outbox": "account-preference",
+    "reconciliation": "main",
+    "cleanup": "main",
+    "workspace_navigation_projection": "workspace-navigation",
+    "role_task_home": "role-task-home",
+    "advanced_tool_entitlement": "advanced-tool",
+    "workspace_navigation_outbox": "navigation-outbox",
+    "navigation_reconciliation": "navigation-reconciliation",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +109,11 @@ async def _loop(config: AppConfig, stop: asyncio.Event) -> None:
 
 
 def run_console_experience_once(config: AppConfig) -> bool:
+    selected = selected_scheduler_work("console-experience", _WORKER_QUEUES)
     with database_request_scope(reuse_connections=True):
         for worker_kind in _WORKER_KINDS:
+            if worker_kind not in selected:
+                continue
             lease = _claim(config, worker_kind)
             if lease is None:
                 continue
@@ -115,7 +136,10 @@ def run_console_experience_once(config: AppConfig) -> bool:
 
 
 def _run_navigation_workers(config: AppConfig) -> bool:
+    selected = selected_scheduler_work("console-experience", _WORKER_QUEUES)
     for queue_code in _NAVIGATION_WORKER_KINDS:
+        if queue_code not in selected:
+            continue
         lease = _claim_navigation(config, queue_code)
         if lease is None:
             continue

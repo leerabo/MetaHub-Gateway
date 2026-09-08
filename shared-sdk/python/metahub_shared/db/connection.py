@@ -14,7 +14,7 @@ import sqlite3
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -56,7 +56,17 @@ def database_commit_guard(guard: DatabaseCommitGuard) -> Iterator[None]:
 def _require_commit_authority(connection: Any) -> None:
     guard = _DATABASE_COMMIT_GUARD.get()
     if guard is not None and connection.in_transaction:
-        guard(connection)
+        try:
+            guard(connection)
+        except BaseException:
+            # Rejected authority must release the transaction even in legacy callers
+            # that only catch database errors. Never retain a denied writer's locks.
+            try:
+                connection.rollback()
+            except BaseException:
+                with suppress(BaseException):
+                    connection.close()
+            raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,6 +446,13 @@ class _RequestConnection:
             self._connection.close()
 
 
+class _GuardedWorkerConnection(_RequestConnection):
+    """An independently owned warm handle, returned immediately on close."""
+
+    def close(self) -> None:
+        self._release()
+
+
 @dataclass
 class _DatabaseRequestScope:
     reuse_connections: bool = False
@@ -549,6 +566,11 @@ def connect_database(
             return scope.connection(
                 f"sqlite:{database}",
                 lambda: _open_sqlite_connection(database, check_same_thread=False),
+            )
+        if _DATABASE_COMMIT_GUARD.get() is not None and database != ":memory:":
+            return _GuardedWorkerConnection(
+                _IDLE_CONNECTION_POOL.acquire(database),
+                lambda connection: _IDLE_CONNECTION_POOL.release(database, connection),
             )
         connection = _open_sqlite_connection(
             database,

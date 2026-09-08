@@ -19,6 +19,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.billing_disputes.scheduler import run_billing_dispute_event_once
+from metahub_control.console_migration.execution import selected_scheduler_work
 from metahub_control.invoice_reconciliation.scheduler import run_invoice_reconciliation_once
 from metahub_control.payment_commerce.scheduler import run_payment_commerce_once
 from metahub_control.plan_billing.scheduler import run_plan_expiry_once, run_quota_event_once
@@ -48,6 +49,18 @@ _WORKER_KINDS = (
     "reference_rate",
     "cleanup",
 )
+_WORKER_QUEUES = {
+    "quota_trial_outbox": "plan",
+    "subscription_trial": "subscription",
+    "meter": "main",
+    "payment_dunning_refund": "payment",
+    "invoice_reconciliation": "invoice",
+    "legacy_dispute": "dispute",
+    "projection": "subscription",
+    "commercial_outbox": "main",
+    "reference_rate": "reconciliation",
+    "cleanup": "main",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +111,7 @@ def run_commercial_accounting_once(config: AppConfig) -> bool:
 
 
 def _run_commercial_accounting_once(config: AppConfig) -> bool:
-    for worker_kind in _WORKER_KINDS:
+    for worker_kind in selected_scheduler_work("commercial-accounting", _WORKER_QUEUES):
         lease = _claim(config, worker_kind)
         if lease is None:
             continue

@@ -17,12 +17,18 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.branding.outbox import drain_branding_event_once
+from metahub_control.console_migration.execution import selected_scheduler_work
 
 from .outbox import drain_brand_event_once
 from .service import _connect, _db_time, scan_brand_asset_once
 
 logger = logging.getLogger("metahub.control.brand_domains.scheduler")
 WORKER_ID = f"brand-domain-{uuid4().hex}"
+_WORKER_QUEUES = {
+    "legacy_outbox": "main",
+    "asset_scan": "verification",
+    "brand_event_outbox": "main",
+}
 
 
 def install_brand_domain_scheduler(app: FastAPI) -> None:
@@ -74,12 +80,15 @@ def _safe_once(config: AppConfig, stop: threading.Event) -> bool:
 
 
 def run_brand_domain_once(config: AppConfig, *, worker_id: str) -> bool:
+    selected = selected_scheduler_work("brand-domain", _WORKER_QUEUES)
     jobs = (
         ("legacy_outbox", lambda: drain_branding_event_once(config, worker_id=worker_id)),
         ("asset_scan", lambda: scan_brand_asset_once(config)),
         ("brand_event_outbox", lambda: drain_brand_event_once(config, worker_id=worker_id)),
     )
     for job_code, operation in jobs:
+        if job_code not in selected:
+            continue
         claim = _claim_job(config, job_code=job_code, worker_id=worker_id)
         if claim is None:
             continue

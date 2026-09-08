@@ -19,6 +19,8 @@ from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.console_migration.execution import selected_scheduler_work
+
 from .outbox import claim_next_event, complete_event, fail_event
 from .projection import (
     emit_due_task_events,
@@ -39,6 +41,14 @@ _INTERVAL = {
     "task_due": 15,
     "qbr_snapshot": 300,
     "event_outbox": 2,
+}
+_WORKER_QUEUES = {
+    "account_projection": "main",
+    "health_evaluation": "health",
+    "renewal_projection": "renewal",
+    "task_due": "plan",
+    "qbr_snapshot": "plan",
+    "event_outbox": "main",
 }
 
 
@@ -95,19 +105,23 @@ def run_platform_customer_success_scheduler_once(
     if not 8 <= len(worker_id) <= 128:
         raise ApiError("platform.unavailable")
     current = _utc(now)
+    selected = selected_scheduler_work("platform-customer-success", _WORKER_QUEUES)
+    if not selected:
+        return False
     connection = _connect(config)
     job_code = None
     try:
         connection.execute("BEGIN IMMEDIATE")
         _require_schema(connection)
-        reconcile_accounts(connection, now=current)
+        if "account_projection" in selected:
+            reconcile_accounts(connection, now=current)
         stamp = _db_time(current)
         row = connection.execute(
-            """SELECT * FROM platform_customer_success_scheduler_state
-                WHERE next_run_at<=? AND(
+            f"""SELECT * FROM platform_customer_success_scheduler_state
+                WHERE job_code IN ({','.join('?' for _ in selected)}) AND next_run_at<=? AND(
                   status='pending' OR(status='leased' AND lease_expires_at<=?))
                 ORDER BY next_run_at,job_code,customer_success_scheduler_id LIMIT 1""",
-            (stamp, stamp),
+            (*selected, stamp, stamp),
         ).fetchone()
         if row is None or should_stop():
             connection.commit()

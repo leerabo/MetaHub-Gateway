@@ -9,16 +9,24 @@ import logging
 import secrets
 import sqlite3
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 from fastapi import FastAPI
-from metahub_shared.db.connection import connect_database, database_commit_guard
+from metahub_shared.db.connection import (
+    connect_database,
+    database_commit_guard,
+    database_request_scope,
+)
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
+from .execution import scheduler_queue_scope
 from .manifest import (
     SCHEDULER_BY_CODE,
     SCHEDULER_MANIFEST,
@@ -82,6 +90,8 @@ async def scheduler_coordinator_lifespan(
     app.state.scheduler_queue_leases = {}
     app.state.scheduler_active_contexts = ()
     app.state.scheduler_active_partitions = ()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scheduler-registry-db")
+    app.state.scheduler_database_executor = executor
     task = asyncio.create_task(
         _coordinator_loop(app, tuple(bindings), replica_code, stop),
         name="scheduler-lease-coordinator",
@@ -103,6 +113,9 @@ async def scheduler_coordinator_lifespan(
         except TimeoutError:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        finally:
+            app.state.scheduler_database_executor = None
+            await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
 
 
 async def _coordinator_loop(
@@ -136,6 +149,7 @@ async def _coordinator_loop(
             for binding in bindings:
                 if stop.is_set():
                     break
+                await _renew_active(app, replica_code, active, stats, lease_seconds)
                 queues = _queue_claim_order(binding.scheduler_code, replica_code)
                 if all((binding.scheduler_code, queue.code) in active for queue in queues):
                     continue
@@ -145,7 +159,8 @@ async def _coordinator_loop(
                     if key in active:
                         continue
                     try:
-                        lease = await asyncio.to_thread(
+                        lease = await _coordinator_database_call(
+                            app,
                             claim_scheduler_lease,
                             config,
                             scheduler_code=binding.scheduler_code,
@@ -164,13 +179,14 @@ async def _coordinator_loop(
                 leases = (lease,)
                 manager = binding.context_factory(app)
                 try:
-                    with database_commit_guard(
+                    with scheduler_queue_scope(lease), database_commit_guard(
                         _lease_commit_guard(config, leases)
                     ):
                         await manager.__aenter__()
                 except Exception:
                     stats.backend_failure_count += 1
-                    await asyncio.to_thread(
+                    await _coordinator_database_call(
+                        app,
                         release_scheduler_leases,
                         config,
                         leases,
@@ -187,16 +203,18 @@ async def _coordinator_loop(
                 stats.accepted_count += 1
                 stats.persisted_count += 1
             _publish_active_state(app, active)
-            await _observe(config, replica_code, active, stats)
+            await _observe(app, replica_code, active, stats)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=poll_seconds)
             except TimeoutError:
                 continue
     finally:
-        for key in reversed(tuple(active)):
-            await _stop_active(app, replica_code, active, key, stats)
+        await asyncio.gather(*(
+            _stop_active(app, replica_code, active, key, stats)
+            for key in reversed(tuple(active))
+        ))
         _publish_active_state(app, active)
-        await _observe(config, replica_code, active, stats)
+        await _observe(app, replica_code, active, stats)
 
 
 async def _renew_active(
@@ -206,16 +224,20 @@ async def _renew_active(
     stats: _CoordinatorStats,
     lease_seconds: float,
 ) -> None:
-    now = datetime.now(UTC)
-    for key, child in tuple(active.items()):
+    expired = []
+    for key, child in sorted(
+        tuple(active.items()),
+        key=lambda item: min(lease.deadline for lease in item[1].leases),
+    ):
         scheduler_code, _queue_code = key
         remaining = min(
-            (lease.deadline - now).total_seconds() for lease in child.leases
+            (lease.deadline - datetime.now(UTC)).total_seconds() for lease in child.leases
         )
         if remaining > lease_seconds / 2:
             continue
         try:
-            renewed = await asyncio.to_thread(
+            renewed = await _coordinator_database_call(
+                app,
                 renew_scheduler_leases,
                 app.state.config,
                 child.leases,
@@ -228,11 +250,14 @@ async def _renew_active(
             renewed = None
         if renewed is None:
             stats.dropped_count += 1
-            await _stop_active(app, replica_code, active, key, stats)
+            expired.append(key)
             continue
         child.leases = renewed
         stats.persisted_count += len(renewed)
     _publish_active_state(app, active)
+    await asyncio.gather(*(
+        _stop_active(app, replica_code, active, key, stats) for key in expired
+    ))
 
 
 async def _stop_active(
@@ -266,7 +291,8 @@ async def _stop_active(
         stats.backend_failure_count += 1
         error_code = "scheduler_shutdown_failed"
     try:
-        released = await asyncio.to_thread(
+        released = await _coordinator_database_call(
+            app,
             release_scheduler_leases,
             app.state.config,
             child.leases,
@@ -679,21 +705,35 @@ def _queue_definition(scheduler_code: str, queue_code: str | None):
 
 
 async def _observe(
-    config: AppConfig,
+    app: FastAPI,
     replica_code: str,
     active: dict[tuple[str, str], _ActiveContext],
     stats: _CoordinatorStats,
 ) -> None:
     try:
-        await asyncio.to_thread(
+        await _coordinator_database_call(
+            app,
             _write_observation,
-            config,
+            app.state.config,
             replica_code,
             stats,
             len(active),
         )
     except ApiError:
         stats.backend_failure_count += 1
+
+
+async def _coordinator_database_call(app: FastAPI, operation, *args, **kwargs):
+    executor = getattr(app.state, "scheduler_database_executor", None)
+    context = copy_context()
+    call = partial(context.run, _database_operation, operation, *args, **kwargs)
+    return await asyncio.get_running_loop().run_in_executor(executor, call)
+
+
+def _database_operation(operation, *args, **kwargs):
+    # Create the scope inside the worker thread, never around a child lifespan.
+    with database_request_scope(reuse_connections=True):
+        return operation(*args, **kwargs)
 
 
 def _write_observation(

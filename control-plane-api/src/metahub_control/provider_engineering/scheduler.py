@@ -12,6 +12,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.adapter_contracts.scheduler import run_adapter_contract_event_once
+from metahub_control.console_migration.execution import selected_scheduler_work
 from metahub_control.error_maps.scheduler import run_provider_error_map_event_once
 
 from .outbox import drain_provider_engineering_event_once
@@ -21,6 +22,13 @@ logger = logging.getLogger("metahub.control.provider_engineering.scheduler")
 WORKER_ID = f"provider-engineering-{uuid4().hex}"
 POLL_SECONDS = 2.0
 SHUTDOWN_TIMEOUT_SECONDS = 10.0
+_WORKER_QUEUES = {
+    "adapter_contract": "contract",
+    "error_catalog": "error-catalog",
+    "contract_command": "contract",
+    "compatibility": "compatibility",
+    "engineering_outbox": "main",
+}
 
 
 def install_platform_provider_engineering_scheduler(app: FastAPI) -> None:
@@ -57,16 +65,16 @@ async def _loop(config: AppConfig, stop: asyncio.Event) -> None:
 
 
 def run_provider_engineering_once(config: AppConfig) -> bool:
-    workers = (
-        lambda: run_adapter_contract_event_once(config),
-        lambda: run_provider_error_map_event_once(config),
-        lambda: run_next_contract_command(config),
-        lambda: refresh_compatibility_projections(config),
-        lambda: drain_provider_engineering_event_once(config, worker_id=WORKER_ID),
-    )
-    for worker in workers:
+    workers = {
+        "adapter_contract": lambda: run_adapter_contract_event_once(config),
+        "error_catalog": lambda: run_provider_error_map_event_once(config),
+        "contract_command": lambda: run_next_contract_command(config),
+        "compatibility": lambda: refresh_compatibility_projections(config),
+        "engineering_outbox": lambda: drain_provider_engineering_event_once(config, worker_id=WORKER_ID),
+    }
+    for worker_code in selected_scheduler_work("platform-provider-engineering", _WORKER_QUEUES):
         try:
-            if worker():
+            if workers[worker_code]():
                 return True
         except ApiError as exc:
             logger.warning(

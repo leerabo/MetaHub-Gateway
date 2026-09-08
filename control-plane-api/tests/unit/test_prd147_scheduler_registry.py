@@ -7,12 +7,15 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from metahub_control.console_migration import scheduler as scheduler_module
 from metahub_control.console_migration.frontend_manifest import (
     FRONTEND_PRODUCTION_ASSET_SET_DIGEST,
     FRONTEND_PRODUCTION_SURFACE_MANIFEST,
@@ -28,6 +31,7 @@ from metahub_control.console_migration.manifest import (
 )
 from metahub_control.console_migration.scheduler import (
     SchedulerContextBinding,
+    _database_operation,
     claim_scheduler_lease,
     claim_scheduler_leases,
     release_scheduler_lease,
@@ -38,6 +42,7 @@ from metahub_control.console_migration.scheduler import (
 )
 from metahub_control.platform_jobs.supervisor import install_platform_job_supervisor
 from metahub_shared.db import connect_database
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -54,6 +59,33 @@ def _config(database) -> SimpleNamespace:
         console_migration_scheduler_poll_seconds=0.05,
         console_migration_scheduler_shutdown_seconds=1.0,
     )
+
+
+def test_coordinator_database_lane_survives_saturated_default_executor(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    config = _config(_database(tmp_path))
+    app = FastAPI()
+    app.state.config = config
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        unblock = threading.Event()
+        occupied = loop.run_in_executor(None, unblock.wait)
+        manager = scheduler_coordinator_lifespan(app, (), replica_code="dedicated-db-lane")
+        await manager.__aenter__()
+        try:
+            thread_name = await asyncio.wait_for(scheduler_module._coordinator_database_call(
+                app, lambda: threading.current_thread().name), timeout=1)
+            assert thread_name.startswith("scheduler-registry-db")
+        finally:
+            unblock.set()
+            await occupied
+            await manager.__aexit__(None, None, None)
+        assert app.state.scheduler_database_executor is None
+
+    asyncio.run(scenario())
 
 
 def _database(tmp_path, scheduler_code: str = "status-publication"):
@@ -464,6 +496,39 @@ async def test_multi_queue_partitions_are_fairly_split_between_replicas(tmp_path
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("domain", ["console_experience", "commercial_accounting"])
+async def test_real_worker_loops_claim_each_work_item_only_in_its_queue(tmp_path, monkeypatch, domain):
+    from collections import Counter
+    from importlib import import_module
+
+    worker = import_module(f"metahub_control.{domain}.scheduler")
+    scheduler_code = domain.replace("_", "-")
+    config = _config(_database(tmp_path, scheduler_code))
+    config.control_background_schedulers_enabled = True
+    config.workspace_navigation_scheduler_enabled = True
+    app = FastAPI()
+    app.state.config = config
+    claimed = []
+    monkeypatch.setattr(worker, "_claim", lambda _config, kind: claimed.append(kind))
+    expected = list(worker._WORKER_KINDS)
+    if domain == "console_experience":
+        expected.extend(worker._NAVIGATION_WORKER_KINDS)
+        monkeypatch.setattr(worker, "_claim_navigation", lambda _config, kind: claimed.append(kind))
+
+    @asynccontextmanager
+    async def child(_app):
+        await asyncio.to_thread(getattr(worker, f"run_{domain}_once"), config)
+        yield
+
+    async with scheduler_coordinator_lifespan(
+        app, [SchedulerContextBinding(scheduler_code, child)], replica_code="replica-work-routing"
+    ):
+        await _wait_until(lambda: len(app.state.scheduler_active_partitions)
+                          == len(SCHEDULER_QUEUES_BY_SCHEDULER[scheduler_code]))
+        assert Counter(claimed) == Counter(expected)
+
+
+@pytest.mark.anyio
 async def test_child_transaction_is_fenced_after_queue_lease_takeover(tmp_path) -> None:
     database = _database(tmp_path)
     config = _config(database)
@@ -578,3 +643,96 @@ async def _wait_until(predicate, *, timeout: float = 3.0) -> None:
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError("timed out waiting for scheduler coordinator state")
         await asyncio.sleep(0.02)
+
+
+@pytest.mark.anyio
+async def test_coordinator_database_calls_reuse_handles_without_inheriting_request_scope(tmp_path):
+    database = _database(tmp_path)
+    config = _config(database)
+    handles = []
+    threads = []
+    main_thread = threading.get_ident()
+
+    def operation(*, fail=False):
+        connection = connect_database(config.database_url)
+        handles.append(connection._connection)
+        threads.append(threading.get_ident())
+        assert not connection.in_transaction
+        assert connection.execute("PRAGMA query_only").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM scheduler_commit_probes").fetchone()[0] == 0
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("INSERT INTO scheduler_commit_probes VALUES('uncommitted')")
+        connection.execute("PRAGMA query_only=ON")
+        connection.close()
+        if fail:
+            raise RuntimeError("controlled failure")
+        return "ok"
+
+    with database_request_scope(reuse_connections=True):
+        parent = connect_database(config.database_url)
+        assert await asyncio.to_thread(_database_operation, operation) == "ok"
+        with pytest.raises(RuntimeError, match="controlled failure"):
+            await asyncio.to_thread(_database_operation, operation, fail=True)
+        assert await asyncio.to_thread(_database_operation, operation) == "ok"
+        assert all(handle is handles[0] for handle in handles)
+        assert all(handle is not parent._connection for handle in handles)
+        assert all(thread != main_thread for thread in threads)
+        assert parent.execute("SELECT count(*) FROM scheduler_commit_probes").fetchone()[0] == 0
+
+
+@pytest.mark.anyio
+async def test_coordinator_checks_renewals_between_context_installations(monkeypatch):
+    events = []
+    app = FastAPI()
+    app.state.config = SimpleNamespace()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def renew(*_args):
+        events.append("renew")
+
+    def claim(_config, **kwargs):
+        events.append(kwargs["scheduler_code"])
+        if kwargs["scheduler_code"] == "admin-assistant":
+            loop.call_soon_threadsafe(stop.set)
+        return None
+
+    async def observe(*_args):
+        return None
+
+    monkeypatch.setattr(scheduler_module, "_renew_active", renew)
+    monkeypatch.setattr(scheduler_module, "claim_scheduler_lease", claim)
+    monkeypatch.setattr(scheduler_module, "_observe", observe)
+    await scheduler_module._coordinator_loop(app, (
+        SchedulerContextBinding("status-publication", None),
+        SchedulerContextBinding("admin-assistant", None),
+    ), "test-replica", stop)
+    assert events == ["renew", "renew", "status-publication", "renew", "admin-assistant"]
+
+
+@pytest.mark.anyio
+async def test_expired_context_cleanup_does_not_delay_other_lease_renewals(monkeypatch):
+    events = []
+    app = FastAPI()
+    app.state.config = SimpleNamespace()
+    deadline = datetime.now(UTC) + timedelta(seconds=1)
+    active = {}
+    for code in ("status-publication", "admin-assistant"):
+        queue = SCHEDULER_QUEUES_BY_SCHEDULER[code][0]
+        lease = SimpleNamespace(scheduler_code=code, queue_code=queue.code,
+            partition_code=queue.partition_code, deadline=deadline)
+        active[(code, queue.code)] = SimpleNamespace(leases=(lease,))
+
+    def renew(_config, leases, **_kwargs):
+        code = leases[0].scheduler_code
+        events.append(f"renew:{code}")
+        return None if code == "status-publication" else leases
+
+    async def stop(_app, _replica, _active, key, _stats):
+        events.append(f"stop:{key[0]}")
+
+    monkeypatch.setattr(scheduler_module, "renew_scheduler_leases", renew)
+    monkeypatch.setattr(scheduler_module, "_stop_active", stop)
+    await scheduler_module._renew_active(app, "test-replica", active,
+        scheduler_module._CoordinatorStats(), 15)
+    assert events == ["renew:status-publication", "renew:admin-assistant", "stop:status-publication"]

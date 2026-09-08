@@ -17,11 +17,5 @@ if ($env:METAHUB_DEBUG_STARTUP -eq "1") {
   Write-Host "Python=$Python"
 }
 
-# Avoid dozens of idle recovery loops in the single-process local profile.
-# An explicit value still wins; production retains AppConfig's enabled default.
-if (-not $env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED) {
-  $env:METAHUB_CONTROL_BACKGROUND_SCHEDULERS_ENABLED = "false"
-}
-
 # 由 Python 显式注入 sys.path，避免部分 Windows PowerShell 宿主静默清空 PYTHONPATH。
 & $Python -c "import runpy, sys; sys.path[:0] = [r'${Root}\shared-sdk\python', r'${Root}\gateway-data-plane\src', r'${Root}\control-plane-api\src']; runpy.run_module('metahub_control.main', run_name='__main__')"

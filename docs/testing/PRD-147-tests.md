@@ -635,3 +635,35 @@ Python E4/E7/E9/F/I 检查和 diff-check 通过；完整 Ruff 仍有 E501，未�
 本批独立敏感审计为 `prd-147-routing-evaluation-sensitive-audit.json`，覆盖精确暂存字节、
 原始报告、严格 UTF-8 和高置信凭据模式；不替代独立安全会签。用户明确调整为先交付可用版本、
 后做 72 小时长稳。长稳保持未完成但不前置阻止交付，其他未验证业务与发布状态不冒充已完成。
+
+## 2026-09-08 完整调度运行修复
+
+移除开发启动脚本的隐式 scheduler=false，示例配置明确开启完整后台和导航投影。提交 guard
+拒绝时立即回滚，失败时尽力关闭，保留原异常；仅 guard 工作器独占复用既有暖连接池。
+协调器优先续租、在安装之间检查期限、先续租其他任务再并发回收失效 context；数据库操作
+使用单个独立线程及线程内短 scope，避免默认业务线程池排队阻塞协调。
+
+真实业务循环红测确认 Console 的 15 个工作项各被重复领取 12 次，商业计费的 10 项各重复
+7 次。八个多队列域现以不可变 task-local lease 映射各自工作项，SQL 领取先过滤队列；
+平台任务使用自身 proof，不借用 app.state 中其他分区的主租约。原 manifest/DDL/权限不变。
+
+原始报告目录仍为 `.artifacts/g6-security-20260907/`，各轮独立，不能合并为一次通过：
+
+| 报告 | 结果 | 范围 |
+| --- | --- | --- |
+| `prd147-release-profile-r3.xml` | 5 passed | 配置默认值、显式禁用与启动覆盖 |
+| `prd147-fence-red-r1.xml` | 7 failed | 原 guard 拒绝保留事务的真实反例 |
+| `prd147-fence-r5.xml` | 35 passed | 拒绝回滚、暖连接、续租与回收顺序 |
+| `g6-fence-r1-f3e4cb42a00a462f9a63fee70c16c160-junit.xml` | 3 passed | 原生 PostgreSQL method/SQL/context 拒绝后第二连接可立即取得行锁 |
+| `prd147-queue-red-r1.xml` | 2 failed | 生产 Console/计费循环重复领取反例 |
+| `prd147-queue-r3.xml` | 54 passed | 八域映射、SQL 范围、线程继承、独立执行线程、双副本及提交 fence |
+| `prd147-queue-api-r2.xml` | 1 passed / 2 setup errors | Console 真实业务 API 与内层 CAS 通过；导航旧 fixture 仍断言迁移 0139，当前为 0143 |
+
+queue-api-r1 因旧 fixture 重复执行全量迁移并已出现两个 setup error 而中断，未生成完整 XML，
+不计通过。复用受保护基线的 Console 定向 API 已通过，未改写过时导航 fixture 的失败。
+所有测试进程已结束，原生实例在前轮正常停止。临时私有复制库撤销 lease 仅作诊断，不算长稳。
+
+实际完整配置在队列绑定后可启动 63 个 context，并恢复真实账号页业务读取；随后仍发生
+续租丢失，诊断发现默认线程池排队及 admin-assistant 回收后初始化失败。独立协调线程已补齐，
+管理助手全库 WAL 收束与子系统生命周期不匹配仍需独立修复；未声明完整 profile、G6/G8 或
+全目标完成。72 小时保持发布后任务，不能作为当前功能修复与交付的等待理由。

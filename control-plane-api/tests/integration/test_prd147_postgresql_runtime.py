@@ -6,7 +6,7 @@ import inspect
 import os
 import secrets
 import sqlite3
-from contextlib import closing
+from contextlib import closing, nullcontext
 from uuid import uuid4
 
 import pytest
@@ -25,6 +25,8 @@ from metahub_shared.db import (
     connect_database,
 )
 from metahub_shared.db.schema import foreign_key_violation_count, table_columns, table_exists
+from metahub_shared.db.connection import database_commit_guard
+from metahub_shared.runtime.errors import ApiError
 from test_prd147_console_migration import _config
 
 postgresql_database = native_migrations.postgresql_database
@@ -150,6 +152,35 @@ def test_postgresql_seed_and_scheduler_fencing(postgresql_database, monkeypatch)
     assert replacement.generation > renewed.generation
     assert not release_scheduler_lease(config, renewed, replica_code="native-a")
     assert release_scheduler_lease(config, replacement, replica_code="native-b")
+
+
+@pytest.mark.parametrize("method", ["commit", "sql", "context"])
+def test_postgresql_denied_commit_aborts_and_releases_writer(postgresql_database, method):
+    failure = ApiError("platform_job.lease_lost")
+
+    def reject(_connection):
+        raise failure
+
+    with closing(connect_database(postgresql_database)) as connection:
+        connection.execute("CREATE TABLE guard_probe(id INTEGER PRIMARY KEY,value INTEGER)")
+        connection.execute("INSERT INTO guard_probe VALUES(1,0)")
+        connection.commit()
+        with database_commit_guard(reject), pytest.raises(ApiError) as caught:
+            with connection if method == "context" else nullcontext():
+                connection.execute("BEGIN")
+                connection.execute("UPDATE guard_probe SET value=1 WHERE id=1")
+                if method == "commit":
+                    connection.commit()
+                elif method == "sql":
+                    connection.execute("COMMIT")
+        assert caught.value is failure
+        assert not connection.in_transaction
+        with closing(connect_database(postgresql_database)) as observer:
+            observer.execute("BEGIN")
+            observer.execute("SET LOCAL lock_timeout='100ms'")
+            assert observer.execute("SELECT value FROM guard_probe WHERE id=1 FOR UPDATE").fetchone()[0] == 0
+            observer.execute("UPDATE guard_probe SET value=2 WHERE id=1")
+            observer.commit()
 
 
 def _create_database(*, template=None):

@@ -13,6 +13,10 @@ from uuid import uuid4
 from fastapi import FastAPI
 from metahub_shared.runtime.errors import ApiError
 
+from metahub_control.console_migration.execution import (
+    scheduler_queue_proof,
+    selected_scheduler_work,
+)
 from metahub_control.console_migration.outbox import dispatch_console_migration_event_once
 from metahub_control.console_migration.scheduler import (
     SchedulerContextBinding,
@@ -24,6 +28,7 @@ from .runtime import PlatformJobOuterFence, fence_platform_worker, run_platform_
 logger = logging.getLogger("metahub.control.platform_jobs.supervisor")
 Installer = Callable[[FastAPI], None]
 WORKER_CODE = f"platform-job-worker-{uuid4().hex}"
+_WORKER_QUEUES = {"jobs": "jobs", "migration_outbox": "main"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,11 +174,7 @@ async def _worker_loop(app: FastAPI, stop_event: threading.Event) -> None:
     poll_seconds = float(getattr(config, "platform_job_poll_interval_seconds", 0.5))
     while not stop_event.is_set():
         registry_leases = getattr(app.state, "scheduler_registry_leases", None)
-        proof = (
-            None
-            if registry_leases is None
-            else registry_leases.get("platform-job-runtime")
-        )
+        proof = scheduler_queue_proof("platform-job-runtime")
         if registry_leases is not None and proof is None:
             await _wait(stop_event, poll_seconds)
             continue
@@ -189,14 +190,17 @@ async def _worker_loop(app: FastAPI, stop_event: threading.Event) -> None:
             )
         )
         try:
-            progressed = await asyncio.to_thread(
-                run_platform_job_once,
-                config,
-                worker_code=WORKER_CODE,
-                outer_fence=outer_fence,
-            )
+            selected = selected_scheduler_work("platform-job-runtime", _WORKER_QUEUES)
+            progressed = False
+            if "jobs" in selected:
+                progressed = await asyncio.to_thread(
+                    run_platform_job_once,
+                    config,
+                    worker_code=WORKER_CODE,
+                    outer_fence=outer_fence,
+                )
             sink = getattr(app.state, "console_migration_event_sink", None)
-            if not progressed and outer_fence is not None and callable(sink):
+            if "migration_outbox" in selected and not progressed and outer_fence is not None and callable(sink):
                 progressed = await asyncio.to_thread(
                     dispatch_console_migration_event_once,
                     config,
