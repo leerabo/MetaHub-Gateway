@@ -55,10 +55,10 @@ const LABELS = Object.freeze({
   unknown: "待确认",
 });
 
-export function renderConsoleExperience(state, { domain, view } = {}) {
+export function renderConsoleExperience(state, { domain, view, resolveCitationNavigation } = {}) {
   const domainLabel = domain === "platform" ? "平台" : "Workspace";
   if (view === "overview") return renderOverview(state, domainLabel);
-  if (view === "admin-assistant") return renderAssistant(state, domainLabel, domain);
+  if (view === "admin-assistant") return renderAssistant(state, domainLabel, domain, resolveCitationNavigation);
   if (view === "approvals") return renderApprovals(state, domainLabel);
   if (view === "deployment-summary" && domain === "workspace") return renderDeployments(state);
   return "";
@@ -141,7 +141,7 @@ function renderOverview(state, domainLabel) {
   `;
 }
 
-function renderAssistant(state, domainLabel, domain) {
+function renderAssistant(state, domainLabel, domain, resolveCitationNavigation = (value) => value) {
   const response = state?.assistant?.response;
   return `
     <header class="console-experience-heading">
@@ -172,12 +172,13 @@ function renderAssistant(state, domainLabel, domain) {
           `).join("") || '<div><dt>结果</dt><dd>没有可展示的聚合事实</dd></div>'}
         </dl>
         <nav class="console-experience-citations" aria-label="引用来源">
-          ${response.citations.map((citation) => `
-            <a href="#${encodeURIComponent(citation.navigation_id)}"
-              data-console-experience-citation="${escapeAttribute(citation.navigation_id)}">
-              ${escapeHtml(label(citation.label_code))}
-            </a>
-          `).join("")}
+          ${response.citations.map((citation) => {
+            const target = resolveCitationNavigation(citation.navigation_id);
+            const title = escapeHtml(label(citation.source_type));
+            return target
+              ? `<a href="#${encodeURIComponent(target)}" data-console-experience-citation="${escapeAttribute(target)}">${title}</a>`
+              : `<span>${title}</span>`;
+          }).join("")}
         </nav>
       </section>
     ` : ""}

@@ -531,3 +531,12 @@ PATCH 和 scheduler 使用相同 BEGIN IMMEDIATE 合同；不把审计拆到另�
 业务投影/出箱仍按原一至两秒节奏，失败仍按原错误重试，不延长工作器租约或跳过提交 fence。
 验证正常工作节奏不变、维护到期前不可领取、到期后可领取及完整检查仍实际执行；前端补齐
 真实来源标签和未知/XSS反例，更新两端发布摘要并实际核对桌面/移动画面。
+
+引用链复核一：真实助手结果已返回六条部署记录，但引用 label_code 未进入中文标签表，且
+navigation_id 仍是 PRD-145 的旧 source ID。来源名称使用相同 DTO 中的受控 source_type，
+Workspace 包装层使用 PRD-146 既有 source-route registry 解析引用；不在共享层硬编码新路由。
+
+引用链复核二：deployment-summary 对应现有 config-summary 来源，显式兼容这一旧别名。
+未知 Workspace 引用保留来源文字而不生成不可用链接，Platform 的原导航合同不变。映射不
+增加权限，最终仍由实时导航和页面/API 守卫裁剪；输入 DTO 不修改。验证八个 Workspace 来源、
+平台原路径、未知来源与输入不变，再在真实 Cookie 会话中点击引用核验目标页面。

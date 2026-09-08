@@ -211,3 +211,16 @@ Console lint 778 files、surface 262 modules / 276 sources、build 276 assets �
 实际完整后台仍有租约抖动，正在独立核对连接池的冷 schema 重解析；不能把本项绿色测试
 当作整版可用发布。用户最新指示优先于上述旧门禁顺序：先交付后做 72 小时长稳，长稳未开始。
 独立审计入口 `prd-145-release-overview-sensitive-audit.json`，不含用户未跟踪文档或 outputs。
+
+## 2026-09-08 助手引用与现行导航
+
+真实 Cookie 页面返回六条部署记录和零条探测记录，但两条引用均显示未识别事项，并指向旧
+hash。来源名称改用 DTO 的 source_type，Workspace 通过既有导航 registry 映射 source ID；
+deployment-summary 兼容到 config-summary，未映射来源只显示文字，Platform 路径不变。
+
+`prd145-citation-red-r1.xml` 为 2 failed / 2 passed；`prd145-citation-r2.xml` 为 11/11，
+覆盖八类引用、平台路径、未知引用与输入不变。全前端 `prd145-citation-regression-r3.xml`
+1817/1817，lint 778 files、surface 262 modules / 276 sources、build 276 assets 通过。
+实际资产摘要更新为 `2ccb9af17e2cb46dccd785f6d4160d62cede9bc13040ad0ea77980569c15fd0f`；
+首次 build 按预期拒绝旧摘要后，两端同步再构建通过。真实点击与视觉检查仍独立记录，
+不能用此次前端回归覆盖后台运行中后来出现的一次租约丢失。
