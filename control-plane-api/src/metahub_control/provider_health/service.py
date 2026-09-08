@@ -221,12 +221,13 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
     def __init__(self, target: _ValidatedProbeUrl) -> None:
         """建立仅服务单个已验证目标的连接池，禁止代理和跨目标复用。"""
 
-        super().__init__(trust_env=False)
+        ssl_context = httpx.create_ssl_context(verify=True, trust_env=False)
+        super().__init__(verify=ssl_context, trust_env=False)
         default_pool = self._pool
         # httpx 0.28 没有公开 resolver 参数；受控替换其 httpcore pool 可在 TCP 层固定 IP，
         # 同时请求 URL 仍保留原域名，因此 Host、SNI 与证书主机名校验不会被削弱。
         self._pool = httpcore.ConnectionPool(
-            ssl_context=httpx.create_ssl_context(verify=True, trust_env=False),
+            ssl_context=ssl_context,
             max_connections=1,
             max_keepalive_connections=0,
             keepalive_expiry=0,

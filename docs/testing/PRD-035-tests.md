@@ -38,3 +38,29 @@ python scripts\ci\check-comments.py
 - 运行态：周期调度把未在 SSRF 私网 allowlist 内的本地 `localhost:11434` Endpoint 标记为 `endpoint_blocked`，健康页显示固定错误分类且未泄露正文或 Key。
 - 视觉复验：1440、1100、720、390 宽度均正确显示 Provider 健康导航、五类摘要、筛选和状态行；DOM 检查无页面/行横向溢出，浏览器控制台无错误，截图人工检查无文字重叠或遮挡。
 - 安全清理：视觉验收临时管理员 Session、账号和页面事件已删除，临时浏览器依赖与含 Token 的会话文件已移除。
+
+## 2026-09-08 TLS 重复初始化修复
+
+每次固定 DNS 探测只创建一个标准验证上下文，默认池初始化和目标池共用它；不同探测
+仍独立创建上下文和连接池，不引入全局缓存。证书、主机名、SNI、代理与重定向策略不变。
+两轮编码前自审见本条设计末节。
+
+- `polling-init-red-r1.xml`：TLS 构造计数反证失败；15 个 SQLite fixture 因系统临时目录
+  权限错误未执行。r2 保留测试错误码断言误用造成的失败。r3 修正后 2 failed / 17 passed，
+  失败仅为 11 次结构查询和两次探测 4 个上下文。
+- `polling-init-green-r1.xml`：21 passed，包括本条 4 个新测试、现有 SSRF/DNS 边界与
+  PRD-136 结构检查。真实本地 TLS 验证成功、错误主机名、不可信证书三个分支均通过。
+- `polling-init-batch-r1.xml`：SQLite 同批 34 passed，516.64 秒；本条新 TLS 4 项、
+  原有健康 API/恢复/权限/SSRF/DNS 4 项通过。无新增付费模型调用。
+- Ruff：新增测试全规则通过；Provider service 原有 29 个 E501 与 HEAD 对照未变，
+  其他规则通过；`git diff --check` 通过。未声称整个旧文件全规则通过。
+
+已部署至本地 Control API。`prd147-polling-init-runtime-r1.json` 短时 6 个样本、18 次
+健康检查通过；不替代此前队列故障或长期验收。`prd147-polling-init-live-r1.json` 中
+反馈回放 8/8、日志和筛选 16/16 返回 200，但 Summary 2/8 成功、6/8 返回 503，组合
+验收失败。浏览器日志有 2 条既有 Kimi 记录及“已反馈”，汇总页同样 unavailable。
+数据核验仍为 2 request / 3 explanation / 1 feedback / 1 event，quick_check=ok、无 FK 违规。
+
+证据根目录为 `.artifacts/g6-security-20260907/`；独立审计
+`prd-035-polling-init-sensitive-audit-r1.json`。这两个重复开销修复不构成 Summary SLA、
+完整业务目标、G6/G7 或 72 小时稳定性通过。
