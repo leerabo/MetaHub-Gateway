@@ -104,3 +104,18 @@ PRD-099 原生回归在创建套餐时复现 `relation sqlite_schema does not ex
 订阅读取另依赖 SQLite 隐含 `rowid`，原生表未提供相应序列。该排序涉及同时间订单的真实先后，
 不能随意替换成随机 ID 或物理 tuple 地址。本次不声称原生完整订阅流程通过，也不通过注入已订阅
 前置数据绕过该缺口。原生验收限定套餐创建/查询和 schema 检查；完整订阅留待独立迁移修复。
+
+## 11. 原生订阅排序迁移设计与两轮自审
+
+本批原生 0150 为 `subscription_order_records` 增加 BIGINT GENERATED ALWAYS AS IDENTITY
+`rowid` 与唯一约束，保持应用既有 `created_at DESC,rowid DESC` 排序。SQLite 不变，不引入随机 ID
+或 ctid 排序。同一订阅的旧记录若 created_at 相同，原生库已无可证明的插入顺序，迁移拒绝猜测；
+无同时间冲突的旧记录保留完整字段，其新增 rowid 不影响原有第一排序键。
+
+第一轮自审：订单排序不要求密集编号，可以使用原生 identity；用量连续水位由 PRD-043 的事务计数器
+独立负责。新 rowid 禁止更新，不接受普通显式赋值；并发计划变更仍由订阅 CAS/事务控制，不改价格
+或权益。测试应覆盖同时间多订单、实际订阅创建/重放/变更及旧记录完整保留。
+
+第二轮自审：核对原生表列、约束和现有删除 manifest，新增列、约束与 trigger 后只刷新该表的准确
+签名；身份序列参数和归属另行校验，避免普通 default 冒充 identity。down 限 pristine，从未生成过
+订单序号才可移除排序列。必须先红测再迁移，不能在计量夹具中伪造已订阅结果规避 HTTP 失败。

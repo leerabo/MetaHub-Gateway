@@ -25,6 +25,8 @@ from metahub_control.workspace_access.constants import (
 )
 from metahub_control.workspace_access.routes import router as workspace_access_router
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.connection import database_backend
+from metahub_shared.db.schema import foreign_key_violation_count
 from metahub_shared.runtime.fastapi_app import create_service_app
 
 ORIGIN = "http://localhost:5173"
@@ -33,8 +35,8 @@ ADMIN_PASSWORD = "LocalAdmin!2026"
 GLOBAL_CSRF_COOKIE = "__Host-metahub-global-csrf"
 
 
-def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    database_url = f"sqlite:///{(tmp_path / 'saas-billing.sqlite3').as_posix()}"
+def _prepare(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, database_url: str | None = None):
+    database_url = database_url or f"sqlite:///{(tmp_path / 'saas-billing.sqlite3').as_posix()}"
     settings = {
         "METAHUB_ENV": "test",
         "METAHUB_DATABASE_URL": database_url,
@@ -285,8 +287,9 @@ async def test_catalog_subscription_idempotency_and_plan_change(
         assert connection.execute(
             "SELECT COUNT(*) FROM saas_subscription_events"
         ).fetchone()[0] == 3
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert foreign_key_violation_count(connection) == 0
+        if database_backend(database_url) == "sqlite":
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         connection.close()
 

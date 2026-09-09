@@ -1,5 +1,23 @@
 # PRD-098 测试记录
 
+## 2026-09-09 原生订阅排序增量
+
+新增 0150 原生订单 identity 与不可变保护，恢复既有同时间订单排序。测试通过真实 Workspace
+登录、套餐发布、订阅创建/重放/变更及到期流程；平台权限上下文仍为受控夹具，不是真实 MFA 验收。
+原生 green-r3 失败于共享测试末尾 SQLite 专用 PRAGMA；现改用共享真实外键检查，SQLite 仍保留
+完整性检查。`native-billing-sqlite-regression-r1.xml` 的 7 项回归全部通过（本项 1、PRD-099 6）。
+联合原生 batch-r1 的本项在 identity 更新拒绝的异常类型断言处失败，已按 PostgreSQL 实际错误
+修正；旧记录迁移案例的 teardown 及后续初始化出现连接超时，不能计作本项通过。
+旧记录无时间冲突时逐字段保留；同订阅同 created_at 的历史排序不明时拒绝迁移。
+
+联合终验 `prd147-feedback-native-native-billing-batch-r2-1c36ae3da1ec46499dfc85144417aafb.xml`
+为 52 passed / 0 failed / 0 errors / 0 skipped，1451.642 秒；本项新增订阅/迁移 7/7，相邻
+原生目录 2/2。真实同时间 create/upgrade 排序、到期、历史字段保留、歧义拒绝及双向漂移通过。
+历史迁移输入明确标为隔离的旧结构夹具，不冒充用户的原有订阅或真实付款；平台 MFA 不在本批范围。
+独立审计为 `prd-098-native-billing-sensitive-audit-r1.json`，精确凭据扫描为
+`prd098-native-billing-key-audit-r1.json`。原生实例正常停止，八份 SQL AST、定向 Ruff/compileall/
+diff check 通过。运行库原有空套餐/订阅/权益状态保持不变，不以测试通过补造商业事实。
+
 状态：实现、自动化门禁、真实浏览器验收与敏感审计均已完成。权威下一项为
 `PRD-099 - 平台计量归集与账单摘要`。`saas_incremental_roadmap_complete=false`，
 `all_108_prds_complete=false`。
