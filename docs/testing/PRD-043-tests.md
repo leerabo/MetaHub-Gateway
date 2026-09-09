@@ -1,5 +1,26 @@
 # PRD-043 用量 CSV 导出测试记录
 
+## 2026-09-09 原生计费链路增量
+
+新增原生 0149 和 `test_prd043_postgresql_usage_sequence.py`，覆盖真实 Usage 插入、全事务及
+SQL 故障 savepoint 回滚、序号和计数器不可变性、空库 down/up、两连接等待及迁移漂移。
+证据目录为 `.artifacts/g6-security-20260907`；原始 red-r1 的 NULL 序号失败保留。
+`prd147-feedback-native-native-billing-batch-r1-9b5ab028733443038834b5672eb9cfca.xml`
+中本项为 13 通过、1 失败；失败来自上游 PRD-085 首次成功事件的并发唯一键竞争，未伪造激活前置。
+该联合批次随后因隔离 PostgreSQL 子进程启动卡死而中断，不属于完整通过。
+0149/0150/0151 共六份 SQL 的 AST 生成一致性检查、受影响 Python Ruff 与 `git diff --check` 通过。
+`prd147-feedback-native-native-billing-first-call-r2-933512ba958e4d23b141c12b9d7701ac.xml`
+为 6 passed，242.585 秒；本项两种 Usage 竞争均通过，另四项属于 PRD-085。未预置首次成功事件。
+原生完整 CSV 浏览器、租户删除、吞吐及 72 小时验收不由本次测试推断。
+
+联合终验 `prd147-feedback-native-native-billing-batch-r2-1c36ae3da1ec46499dfc85144417aafb.xml`
+为 52 passed / 0 failed / 0 errors / 0 skipped，1451.642 秒；本项 14/14，包含空库往返、
+八项双向漂移拒绝、事务/savepoint 回滚、直接篡改拒绝和真实并发。0149..0152 八份 SQL 的 AST
+一致性、六个受影响 Python 文件的 Ruff/compileall、diff check 通过，受保护基线 SHA-256 不变。
+独立审计为 `prd-043-native-billing-sensitive-audit-r1.json`，精确凭据扫描为
+`prd043-native-billing-key-audit-r1.json`。独立提交属于同一业务批次，真实 Usage 链路还依赖同批
+0151/0152；不声称仅安装 0149 即完成原生 Gateway 全流程。现有 SQLite 试用库未迁移或重置。
+
 测试日期：2026-07-17
 
 当前状态：设计、两轮自审、实现、专项与全量拆分回归、运行库迁移、真实同步/异步 API 和桌面/中间宽度/移动浏览器验收全部通过，PRD-043 已完成。
