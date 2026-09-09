@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import faulthandler
 import gzip
 import hashlib
 import json
@@ -20,8 +21,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+SOURCE = Path(os.getenv("METAHUB_S1_SOURCE_ROOT", str(ROOT))).resolve(strict=True)
+if SOURCE != ROOT and not SOURCE.is_relative_to(ROOT / ".tmp"):
+    raise ValueError("S1 source must be the workspace or its isolated export")
+if os.getenv("METAHUB_S1_PRODUCTION", "false") not in {"true", "false"}:
+    raise ValueError("S1 production mode must be true or false")
+PRODUCTION = os.getenv("METAHUB_S1_PRODUCTION", "false") == "true"
+FRONTEND = SOURCE / "console-web" / "dist" if PRODUCTION else SOURCE / "console-web"
 sys.path[:0] = [
-    str(ROOT / part)
+    str(SOURCE / part)
     for part in (
         "shared-sdk/python",
         "control-plane-api/src",
@@ -53,6 +61,26 @@ def serve(app):
         time.sleep(0.05)
     assert server.started, "isolated service did not start"
     return server, thread, listener
+
+
+def create_browser_app(control):
+    """Serve public assets before API routing, as the trial frontend does."""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+    from starlette.staticfiles import StaticFiles
+
+    surface = json.loads(
+        (SOURCE / "console-web/production-surface-manifest.json").read_text(encoding="utf-8")
+    )
+    entrypoints = surface["html_entrypoints"]
+    assert all(Path(name).name == name and name.endswith(".html") for name in entrypoints)
+    static = StaticFiles(directory=FRONTEND, html=True)
+    return Starlette(routes=[
+        Mount("/src", app=StaticFiles(directory=FRONTEND / "src")),
+        Route("/", endpoint=static),
+        *(Route("/" + name, endpoint=static) for name in entrypoints),
+        Mount("/", app=control),
+    ])
 
 
 def main():
@@ -97,15 +125,17 @@ def main():
     from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
     from metahub_shared.db.connection import _close_idle_database_connections, close_database_pools
 
-    apply_migrations(settings["METAHUB_DATABASE_URL"], migrations_dir=ROOT / "infra/migrations")
+    apply_migrations(settings["METAHUB_DATABASE_URL"], migrations_dir=SOURCE / "infra/migrations")
     apply_seed_data(
         settings["METAHUB_DATABASE_URL"],
-        seed_file=ROOT / "infra/seeds/default_seed.json",
+        seed_file=SOURCE / "infra/seeds/default_seed.json",
     )
-    from fastapi.staticfiles import StaticFiles
     from metahub_control.app import app as control
     from metahub_control.identity import registration_policy
     from metahub_gateway.app import app as gateway
+
+    for module in ("metahub_control.app", "metahub_gateway.app", "metahub_shared.db"):
+        assert Path(sys.modules[module].__file__).resolve().is_relative_to(SOURCE)
 
     class CaptchaRandom:
         @staticmethod
@@ -116,14 +146,29 @@ def main():
 
     # Only this module's challenge generator is deterministic; tokens remain random.
     registration_policy.secrets = CaptchaRandom
-    control.mount("/", StaticFiles(directory=ROOT / "console-web", html=True))
     services = []
     result = {"status": "failed", "provider_calls": 0, "started_at": datetime.now(UTC).isoformat()}
     try:
-        services.append(serve(control))
+        services.append(serve(create_browser_app(control)))
         services.append(serve(gateway))
         origin = "http://s1.localhost:" + str(services[0][2].getsockname()[1])
         control.state.config = control.state.config.model_copy(update={"allowed_origins": [origin]})
+        if PRODUCTION:
+            import httpx
+
+            manifest = json.loads((FRONTEND / "production-assets.json").read_text(encoding="utf-8"))
+            with httpx.Client(
+                base_url="http://127.0.0.1:" + str(services[0][2].getsockname()[1]),
+                trust_env=False,
+                timeout=10,
+            ) as client:
+                for asset in manifest["assets"]:
+                    assert (FRONTEND / asset["path"]).resolve().is_relative_to(FRONTEND)
+                    response = client.get("/" + asset["path"])
+                    assert response.status_code == 200
+                    assert hashlib.sha256(response.content).hexdigest() == asset["sha256"]
+            result["verified_production_assets"] = len(manifest["assets"])
+            result["asset_set_sha256"] = manifest["asset_set_sha256"]
         with closing(connect_database(settings["METAHUB_DATABASE_URL"])) as db:
             initial = {
                 table: db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
@@ -138,15 +183,20 @@ def main():
         browser_tmp = work / "browser-tmp"
         browser_tmp.mkdir()
         env.update(TEMP=str(browser_tmp), TMP=str(browser_tmp))
-        completed = subprocess.run(
-            [node, str(ROOT / "scripts/acceptance/s1-organization-browser.mjs")],
-            env=env,
-            cwd=work,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=240,
-        )
+        with (artifacts / "server-stacks.txt").open("w", encoding="utf-8") as stacks:
+            faulthandler.dump_traceback_later(20, repeat=True, file=stacks)
+            try:
+                completed = subprocess.run(
+                    [node, str(ROOT / "scripts/acceptance/s1-organization-browser.mjs")],
+                    env=env,
+                    cwd=work,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=240,
+                )
+            finally:
+                faulthandler.cancel_dump_traceback_later()
         browser_report = json.loads((artifacts / "browser.json").read_text(encoding="utf-8"))
         result["browser"] = browser_report
         assert completed.returncode == 0, "browser_flow_failed"
@@ -195,7 +245,10 @@ def main():
             database.with_name(database.name + suffix).unlink(missing_ok=True)
         result["isolated_database_retained"] = database.exists()
         result["worker_lifespan"] = "disabled"
-        result["frontend_source"] = "console-web (unmodified HTTP source bytes)"
+        result["source_root"] = str(SOURCE)
+        result["frontend_source"] = str(FRONTEND)
+        result["production_build"] = PRODUCTION
+        result["static_dispatch"] = "public_assets_before_control"
         (artifacts / "acceptance.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(
             json.dumps(

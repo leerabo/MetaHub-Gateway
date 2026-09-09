@@ -12,15 +12,22 @@ const origin = process.env.S1_ORIGIN;
 const artifacts = process.env.S1_ARTIFACTS;
 assert.equal(new URL(origin).hostname, "s1.localhost");
 assert.equal(path.dirname(path.resolve(artifacts)), path.join(root, ".artifacts"));
-const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [] };
+const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [] };
+const pendingAssets = new Map();
+const pendingRequests = new Map();
 let stage = "launch";
 let browser;
 let currentPage;
 
 async function step(name, operation) {
   stage = name;
-  await operation();
-  report.steps.push(name);
+  const started = performance.now();
+  try {
+    await operation();
+    report.steps.push(name);
+  } finally {
+    report.stepTimings.push({ name, elapsedMs: Math.round(performance.now() - started) });
+  }
 }
 
 async function layout(page, name) {
@@ -33,7 +40,7 @@ async function layout(page, name) {
   }));
   report.viewports.push({ name, ...facts });
   assert.equal(facts.overflow, false);
-  assert.ok(facts.minInputPx >= 14);
+  assert.ok(facts.minInputPx >= 16);
   await page.screenshot({ path: path.join(artifacts, name + ".png") });
 }
 
@@ -56,10 +63,33 @@ try {
     currentPage = page;
     page.setDefaultTimeout(12_000);
     page.on("pageerror", () => { report.pageErrors += 1; });
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.origin === origin) pendingRequests.set(request, {
+        path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"),
+        started: performance.now(),
+      });
+      if (url.origin === origin && url.pathname.startsWith("/src/")) {
+        pendingAssets.set(request, { path: url.pathname, started: performance.now() });
+      }
+    });
+    page.on("requestfinished", (request) => {
+      pendingAssets.delete(request);
+      pendingRequests.delete(request);
+    });
+    page.on("requestfailed", (request) => {
+      const asset = pendingAssets.get(request);
+      if (asset) report.assetFailures.push({ path: asset.path, type: "requestfailed" });
+      pendingAssets.delete(request);
+      pendingRequests.delete(request);
+    });
     page.on("response", (response) => {
       const url = new URL(response.url());
       if (url.origin === origin && !url.pathname.startsWith("/src/") && !url.pathname.endsWith(".html")) {
         report.apiResponses.push({ path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() });
+      }
+      if (url.origin === origin && url.pathname.startsWith("/src/") && !response.ok()) {
+        report.assetFailures.push({ path: url.pathname, status: response.status() });
       }
     });
     page.on("dialog", (dialog) => dialog.accept());
@@ -170,8 +200,26 @@ try {
 } catch (error) {
   report.failedStage = stage;
   report.failureType = error.name;
+  report.actionability = ["element is not stable", "element is not visible",
+    "element is not enabled", "intercepts pointer events", "waiting for locator",
+    "waiting for scheduled navigations", "waiting until \"load\""].filter((reason) =>
+    String(error.message).includes(reason));
+  report.failureLocation = String(error.stack).split("\n")
+    .filter((line) => /s1-organization-browser\.mjs:\d+:\d+/u.test(line))
+    .map((line) => line.match(/s1-organization-browser\.mjs:\d+:\d+/u)[0]);
+  report.pendingAssets = [...pendingAssets.values()].map(({ path, started }) => ({
+    path, elapsedMs: Math.round(performance.now() - started),
+  }));
+  report.pendingRequests = [...pendingRequests.values()].map(({ path, started }) => ({
+    path, elapsedMs: Math.round(performance.now() - started),
+  }));
   if (currentPage && !currentPage.isClosed()) {
     report.failurePage = new URL(currentPage.url()).pathname;
+    report.documentState = await currentPage.evaluate(() => ({
+      readyState: document.readyState,
+      appChildren: document.querySelector("#app")?.childElementCount ?? null,
+      scripts: [...document.scripts].map((script) => new URL(script.src).pathname),
+    })).catch(() => null);
     await currentPage.screenshot({ path: path.join(artifacts, "failure-redacted.png"),
       mask: [currentPage.locator("input"), currentPage.locator(".one-time-secret")] }).catch(() => {});
   }
