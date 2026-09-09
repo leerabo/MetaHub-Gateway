@@ -114,3 +114,9 @@ ticket generation、owner、AbortSignal、navigation epoch、permission revision
 - 为五个 Workspace 新页面补 renderer 权限交集，修复伪造导航仍渲染审批筛选器的问题。
 - 修复三个 store 对回退响应保留 busy 的问题，并增加固定冲突态。
 - 补齐语言迁移面板中英文文案，避免英文 Console 出现中文操作入口。
+
+### 2026-09-09 现行迁移夹具复核
+
+第一轮：测试启动应核对当前 SQLite 迁移目录全部 version/checksum，不再把 max(version)
+写死为历史 0143；业务、授权和审计断言保持不变。第二轮：继续只复制可选测试基线到新的
+pytest 目录，在副本上补迁移和种子，原基线不能被写入。空轮询修复归 PRD-147 独立交付。

@@ -37,6 +37,7 @@ from metahub_control.workspace_access.service import (
     workspace_actor_permissions_in_transaction,
 )
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.migrate import _default_migrations_dir, _load_migration_files
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -116,9 +117,12 @@ def runtime(tmp_path_factory: pytest.TempPathFactory):
         seed = apply_seed_data(database_url)
     config = _config(database_url)
     with closing(connect_database(database_url)) as connection:
-        assert connection.execute(
-            "SELECT max(version) FROM schema_migrations WHERE status='applied'"
-        ).fetchone()[0] == "0143"
+        assert {tuple(row) for row in connection.execute(
+            "SELECT version,checksum FROM schema_migrations WHERE status='applied'"
+        )} == {
+            (migration.version, migration.checksum)
+            for migration in _load_migration_files(_default_migrations_dir())
+        }
         platform_account_id, operator_id = _insert_platform_owner(connection)
         owner = connection.execute(
             """SELECT membership.*,tenant.slug,tenant.name,user.email,user.display_name

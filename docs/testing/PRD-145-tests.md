@@ -224,3 +224,18 @@ deployment-summary 兼容到 config-summary，未映射来源只显示文字，P
 实际资产摘要更新为 `2ccb9af17e2cb46dccd785f6d4160d62cede9bc13040ad0ea77980569c15fd0f`；
 首次 build 按预期拒绝旧摘要后，两端同步再构建通过。真实点击与视觉检查仍独立记录，
 不能用此次前端回归覆盖后台运行中后来出现的一次租约丢失。
+# 2026-09-09 现行迁移夹具重验
+
+本次仅更新测试基线验证，不修改 PRD-145 业务实现。将历史 max(version)=0143
+断言替换为当前迁移目录全部 version/checksum 与实际已应用记录的精确相等检查。
+
+证据位于 `.artifacts/g6-security-20260907/`：初轮 `prd147-idle-claim-batch-r1.xml`
+为 60 passed / 21 setup errors，其中本 PRD 的 16 项均因实际 0145 不等于旧 0143
+而尚未进入业务断言。该失败完整保留。修正后的 `prd147-idle-claim-api-r2.xml`
+为 22 passed，其中 PRD-145 为 16 passed，PRD-146 为 6 passed，耗时 76.362 秒。
+原有权限、审计、投影、部署摘要、偏好、CAS 和 poison outbox 断言均未删减。
+
+重验复制初轮已完成迁移的未种子 PRD-146 测试库，再在新目录补迁移和种子。
+输入库前后 SHA256 均为 DB52801FDC6B2D0478F3E16DA432DB79F1E88C0FA81A176EA4251A0620CAFE99。
+Ruff 全规则通过。8 条既有 record_property/xunit2 兼容警告保留，不宣称 XML schema 验证通过。
+独立敏感审计见 `PRD-145-migration-fixture-sensitive-audit-20260909.md`。
