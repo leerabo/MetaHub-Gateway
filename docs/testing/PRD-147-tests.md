@@ -1159,3 +1159,36 @@ commercial-accounting 等后台 claim 和观测仍等待 BEGIN IMMEDIATE；采�
 两个本轮原生实例已正常停止，postmaster.pid 均不存在。生产模块与新增原生测试 Ruff 全规则、
 三项 Python 文件 compileall、git diff --check 通过；单元文件保留既有长行，仅忽略 E501 后
 其余 Ruff 规则通过，不宣称该历史文件全规则无误。独立敏感审计见同目录专门记录及其 JSON。
+
+## 2026-09-09 控制台空轮询只读准入
+
+控制台和导航领取增加不持有写锁的资格预检。读取游标和本次读事务在 BEGIN IMMEDIATE
+之前结束；写事务内仍重新取时间、读取资格并执行原 token/generation 条件更新。
+入口已有调用者事务时失败关闭，不回滚该事务。没有改变商业调度、租期或 Summary 250ms。
+
+证据均在 `.artifacts/g6-security-20260907/`：
+
+- `prd147-idle-claim-red-r1.xml`：22 项中 12 通过、10 失败。真实 SQLite 持锁使 8 个
+  空轮询失败，2 个用例证实旧代码会回滚调用者事务。未删失败证据。
+- `prd147-idle-claim-green-r1.xml`：22 项全部通过。覆盖不存在/禁用/冷却/占用、独立
+  写锁、并发禁用/延期/领取/删除、新时间/generation、精确到期边界及读取失败。
+- `prd147-idle-claim-batch-r1.xml`：81 项中 60 通过、21 个夹具错误，356.348 秒。
+  新测试与原 37 项协调器测试均通过。21 个 API 夹具仍要求历史迁移版本，尚未进入业务断言。
+- PRD-145/146 独立修正迁移夹具后，`prd147-idle-claim-api-r2.xml` 22 项全部通过，
+  76.362 秒。完整业务断言保留，8 条既有 record_property/xunit2 警告未抹去。
+- `prd147-feedback-native-idle-claim-r1-edac1ec5b3c94dca974ca838de40ad2b.xml`：2 项
+  PostgreSQL 实际已迁移库测试通过，149.859 秒。验证隐式读事务已结束、并发禁用重读拒绝、
+  成功领取与后续空轮询、原调用者事务不被回滚。隔离实例已退出，postmaster.pid 不存在。
+- `prd147-idle-claim-predeploy-r1.json`：旧进程 accepted=252、dropped=189、后台失败 48，
+  状态 failed，保留旧累计事实，不以进程重启清零替代稳定性证明。
+- `prd147-idle-claim-feedback-r1.json`：新进程 8 次已有反馈回放均 200 且同一反馈，
+  日志与 SavedFilter 均 200；Summary 5 次 200、3 次 503，整体 failed。仍为 2 请求、
+  3 解释、1 反馈、1 事件，反馈事实哈希前后一致，付费模型调用数为零。
+- `prd147-idle-claim-runtime-r1.json`：12 次采样、36 次健康 HTTP 全部通过，63 队列，
+  窗口内 dropped/backend_failure/shutdown_timeout 均为零，观测新鲜度符合原检查。
+  这是本地短窗口，不能覆盖失败回放或作为 72 小时证据；日志仍有慢续租与计量对账错误。
+
+本地仅通过原启动入口重启控制 API，PID 19220，日志 `.logs/control-api-idle-claim-r1.*.log`。
+主页/Gateway 没有重启。生产模块与本批四个测试文件 Ruff 全规则通过，git diff --check 通过。
+空轮询减少无效写锁请求已证明，但共享写锁的全部根因、Summary SLA、导航误提示、计量对账
+以及 G6/G8/72 小时仍未完成。独立审计见 `PRD-147-idle-claim-sensitive-audit-20260909.md`。

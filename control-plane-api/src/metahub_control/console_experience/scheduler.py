@@ -8,7 +8,7 @@ import hmac
 import json
 import logging
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -201,20 +201,23 @@ def _run_worker(config: AppConfig, worker_kind: str) -> bool:
 
 def _claim(config: AppConfig, worker_kind: str) -> _SchedulerLease | None:
     connection = _connect(config)
+    # A shared caller transaction is not owned by this claim or its cleanup.
+    if connection.in_transaction:
+        raise ApiError("platform.unavailable")
+    query = "SELECT * FROM console_experience_scheduler_state WHERE worker_kind=?"
     try:
+        with closing(connection.execute(query, (worker_kind,))) as cursor:
+            candidate = cursor.fetchone()
+        _rollback(connection)
+        if not _claim_is_due(candidate, _db_time(_now())):
+            return None
+        # End the read snapshot before requesting write authority and rechecking.
         connection.execute("BEGIN IMMEDIATE")
         now = _now()
         stamp = _db_time(now)
-        row = connection.execute(
-            "SELECT * FROM console_experience_scheduler_state WHERE worker_kind=?",
-            (worker_kind,),
-        ).fetchone()
-        if (
-            row is None
-            or not row["enabled"]
-            or row["next_attempt_at"] > stamp
-            or (row["lease_expires_at"] is not None and row["lease_expires_at"] > stamp)
-        ):
+        with closing(connection.execute(query, (worker_kind,))) as cursor:
+            row = cursor.fetchone()
+        if not _claim_is_due(row, stamp):
             connection.commit()
             return None
         generation = int(row["fence_generation"]) + 1
@@ -325,21 +328,21 @@ def _claim_navigation(
     queue_code: str,
 ) -> _SchedulerLease | None:
     connection = _connect(config)
+    if connection.in_transaction:
+        raise ApiError("platform.unavailable")
+    query = "SELECT * FROM workspace_navigation_scheduler_state WHERE queue_code=?"
     try:
+        with closing(connection.execute(query, (queue_code,))) as cursor:
+            candidate = cursor.fetchone()
+        _rollback(connection)
+        if not _claim_is_due(candidate, _db_time(_now())):
+            return None
         connection.execute("BEGIN IMMEDIATE")
         now = _now()
         stamp = _db_time(now)
-        row = connection.execute(
-            """SELECT * FROM workspace_navigation_scheduler_state
-               WHERE queue_code=?""",
-            (queue_code,),
-        ).fetchone()
-        if (
-            row is None
-            or not row["enabled"]
-            or row["next_attempt_at"] > stamp
-            or (row["lease_expires_at"] is not None and row["lease_expires_at"] > stamp)
-        ):
+        with closing(connection.execute(query, (queue_code,))) as cursor:
+            row = cursor.fetchone()
+        if not _claim_is_due(row, stamp):
             connection.commit()
             return None
         generation = int(row["fence_generation"]) + 1
@@ -373,6 +376,15 @@ def _claim_navigation(
         raise ApiError("platform.unavailable") from None
     finally:
         connection.close()
+
+
+def _claim_is_due(row: sqlite3.Row | None, stamp: str) -> bool:
+    return (
+        row is not None
+        and bool(row["enabled"])
+        and row["next_attempt_at"] <= stamp
+        and (row["lease_expires_at"] is None or row["lease_expires_at"] <= stamp)
+    )
 
 
 def _release_navigation(
