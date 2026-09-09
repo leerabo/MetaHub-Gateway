@@ -12,9 +12,10 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from time import monotonic
 
 from fastapi import FastAPI
 from metahub_shared.db.connection import (
@@ -39,6 +40,7 @@ ContextFactory = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 DEFAULT_LEASE_SECONDS = 15.0
 DEFAULT_POLL_SECONDS = 1.0
 DEFAULT_SHUTDOWN_SECONDS = 10.0
+SLOW_DATABASE_SECONDS = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +93,11 @@ async def scheduler_coordinator_lifespan(
     app.state.scheduler_active_contexts = ()
     app.state.scheduler_active_partitions = ()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scheduler-registry-db")
+    observation_executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="scheduler-observation-db",
+    )
     app.state.scheduler_database_executor = executor
+    app.state.scheduler_observation_executor = observation_executor
     task = asyncio.create_task(
         _coordinator_loop(app, tuple(bindings), replica_code, stop),
         name="scheduler-lease-coordinator",
@@ -115,7 +121,11 @@ async def scheduler_coordinator_lifespan(
             await asyncio.gather(task, return_exceptions=True)
         finally:
             app.state.scheduler_database_executor = None
-            await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
+            app.state.scheduler_observation_executor = None
+            await asyncio.gather(*(
+                asyncio.to_thread(worker.shutdown, wait=True, cancel_futures=True)
+                for worker in (executor, observation_executor)
+            ))
 
 
 async def _coordinator_loop(
@@ -143,6 +153,7 @@ async def _coordinator_loop(
     poll_seconds = min(max(0.05, poll_seconds), lease_seconds / 3)
     active: dict[tuple[str, str], _ActiveContext] = {}
     stats = _CoordinatorStats()
+    observation_task: asyncio.Task | None = None
     try:
         while not stop.is_set():
             await _renew_active(app, replica_code, active, stats, lease_seconds)
@@ -203,7 +214,15 @@ async def _coordinator_loop(
                 stats.accepted_count += 1
                 stats.persisted_count += 1
             _publish_active_state(app, active)
-            await _observe(app, replica_code, active, stats)
+            # Keep one snapshot in flight; telemetry must not delay lease renewal.
+            if observation_task is not None and observation_task.done():
+                observation_task.result()
+                observation_task = None
+            if observation_task is None:
+                observation_task = asyncio.create_task(
+                    _observe(app, replica_code, active, stats),
+                    name="scheduler-coordinator-observation",
+                )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=poll_seconds)
             except TimeoutError:
@@ -214,6 +233,8 @@ async def _coordinator_loop(
             for key in reversed(tuple(active))
         ))
         _publish_active_state(app, active)
+        if observation_task is not None:
+            await observation_task
         await _observe(app, replica_code, active, stats)
 
 
@@ -796,18 +817,38 @@ async def _observe(
             _write_observation,
             app.state.config,
             replica_code,
-            stats,
+            replace(stats),
             len(active),
+            observed_at=datetime.now(UTC),
         )
     except ApiError:
         stats.backend_failure_count += 1
 
 
 async def _coordinator_database_call(app: FastAPI, operation, *args, **kwargs):
-    executor = getattr(app.state, "scheduler_database_executor", None)
+    executor_name = (
+        "scheduler_observation_executor" if operation is _write_observation
+        else "scheduler_database_executor"
+    )
+    executor = getattr(app.state, executor_name, None)
     context = copy_context()
     call = partial(context.run, _database_operation, operation, *args, **kwargs)
-    return await asyncio.get_running_loop().run_in_executor(executor, call)
+    started = monotonic()
+    stage = "failed"
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(executor, call)
+        stage = "complete"
+        return result
+    except asyncio.CancelledError:
+        stage = "cancelled"
+        raise
+    finally:
+        elapsed = monotonic() - started
+        if elapsed >= SLOW_DATABASE_SECONDS:
+            _database_diagnostic(
+                "console_migration.scheduler_database_slow",
+                _database_operation_code(operation), stage, elapsed,
+            )
 
 
 def _database_operation(operation, *args, **kwargs):
@@ -821,14 +862,22 @@ def _write_observation(
     replica_code: str,
     stats: _CoordinatorStats,
     active_count: int,
+    *,
+    observed_at: datetime | None = None,
 ) -> None:
+    observed_at = datetime.now(UTC) if observed_at is None else observed_at
     replica = _secret_hmac(config, "replica", replica_code)
     observation_id = "rso_" + hashlib.sha256(
         f"prd147/coordinator/{replica}".encode("ascii")
     ).hexdigest()[:32]
-    connection = _connect(config)
+    connection = None
+    started = monotonic()
+    stage = "connect"
     try:
+        connection = _connect(config)
+        stage = "begin"
         connection.execute("BEGIN IMMEDIATE")
+        stage = "write"
         connection.execute(
             """INSERT INTO runtime_surface_observations(
                runtime_surface_observation_id,runtime_surface_code,replica_pseudonym,
@@ -852,15 +901,65 @@ def _write_observation(
                 stats.backend_failure_count,
                 active_count,
                 stats.shutdown_timeout_count,
-                _db_time(datetime.now(UTC)),
+                _db_time(observed_at),
             ),
         )
+        stage = "commit"
         connection.commit()
-    except (sqlite3.Error, DbError, TypeError, ValueError, KeyError):
-        _rollback(connection)
+    except ApiError as exc:
+        _database_diagnostic(
+            "console_migration.scheduler_observation_failed",
+            "observe", stage, monotonic() - started, exc,
+        )
+        if connection is not None:
+            _rollback(connection)
+        raise
+    except (sqlite3.Error, DbError, TypeError, ValueError, KeyError) as exc:
+        _database_diagnostic(
+            "console_migration.scheduler_observation_failed",
+            "observe", stage, monotonic() - started, exc,
+        )
+        if connection is not None:
+            _rollback(connection)
         raise ApiError("console_migration.dependency_unavailable") from None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
+
+
+def _database_operation_code(operation) -> str:
+    # Never inspect callable names or repr: a closure can contain credentials.
+    for known, code in (
+        (claim_scheduler_lease, "claim"),
+        (_renew_scheduler_lease_batch, "renew"),
+        (release_scheduler_leases, "release"),
+        (_write_observation, "observe"),
+    ):
+        if operation is known:
+            return code
+    return "other"
+
+
+def _database_diagnostic(
+    event: str, operation: str, stage: str, elapsed: float,
+    error: Exception | None = None,
+) -> None:
+    sqlite_code = getattr(error, "sqlite_errorcode", None)
+    logger.warning(
+        "scheduler coordinator database diagnostic",
+        extra={
+            "event": event,
+            "latency_ms": max(0, round(elapsed * 1000)),
+            "payload": {
+                "operation": operation,
+                "stage": stage,
+                "sqlite_errorcode": (
+                    sqlite_code if type(sqlite_code) is int
+                    and 0 <= sqlite_code <= 0x7FFFFFFF else None
+                ),
+            },
+        },
+    )
 
 
 def _validate_registry(connection: sqlite3.Connection, definition) -> int:

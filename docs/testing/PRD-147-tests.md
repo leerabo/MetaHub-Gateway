@@ -1109,3 +1109,53 @@ quick_check=ok、外键违规为零；本轮未消耗 Kimi 调用额度。
 反馈摘要及两条请求/三条解释/一条反馈/一个事件保持不变；汇总三次 200、五次 503，组合
 报告仍为 failed，无误撤销、无新增模型调用。最终短时 runtime-after-r2 仅证明所采窗口，
 不作为累计队列故障或 72 小时长稳的完成依据。
+
+## 2026-09-09 调度观测隔离与汇总联合复核
+
+本批保留调度租期、续租阈值、业务提交 fence 和 Summary 的 250ms 绝对预算。新增固定
+操作/阶段/整数 SQLite 错误码诊断，不记录异常正文或凭据；观测使用独立单线程，最多一个
+在途快照，统计按采样时刻冻结，关闭等待实际线程退出并按顺序写入零活动终态。
+
+证据均在 `.artifacts/g6-security-20260907/`，失败不被后续通过覆盖：
+
+- `prd147-scheduler-diagnostics-r2.xml`：33 项通过，含真实 BEGIN 锁冲突、写入触发器失败、
+  延迟外键提交失败、取消传播、线程排队耗时和日志敏感哨兵。
+- `prd147-observation-isolation-r1.xml`：36 项通过；r2 为 37 项通过，新增采样时间不被
+  完成时间替代。真实 SQLite 租约跨原到期点保持同 generation，慢观测不积压，终态为零。
+- `prd147-feedback-native-scheduler-observation-isolation-r1-6ec7a00a0fae414299d80f397be2c715.xml`：
+  原生 PostgreSQL 真实观测行锁、持续续租和最终零队列 1 项通过，实例已停止。
+- `prd147-reliability-batch-sqlite-r1.xml`：68 项中 67 通过、1 失败；失败为
+  `test_feedback_permission_read_failure_preserves_session[1]` 的故障消除后 Summary 仍 503。
+  会话保留与不可变事实断言已通过，不能把恢复请求失败改为通过或增加预算。
+- `scheduler-summary-diagnostic-feedback-r1.json`：8 次原反馈重放、日志、筛选和 Summary 均
+  200，反馈事实摘要一致。诊断进程后续 `scheduler-summary-pre-isolation-r1.json` 仍记录
+  accepted=189、dropped=126、backend_failure=30，报告 failed。
+- `scheduler-summary-isolation-runtime-r1.json`：24 次采样、72 次健康 HTTP 全部通过，
+  63 队列且零丢失/后台失败，只证明该短窗口。该版本随后补充观测采样时间的语义修正。
+- 最终版本 `scheduler-summary-isolation-runtime-r2.json`：12 次采样、36 次健康 HTTP，
+  后续 dropped=63、backend_failure=18，报告 failed；实际续租耗时捕获到 8,828ms。
+- `scheduler-summary-isolation-feedback-r2.json`：8 次反馈重放均 200 且同一反馈，日志和
+  SavedFilter 均 200；Summary 4 次 200、4 次 503，组合 failed，历史事实摘要不变。
+- `scheduler-summary-isolation-facts-r2.json`：仍为 2 请求、3 解释、1 反馈和 1 事件，
+  quick_check=ok、外键违规 0，无新增模型调用。
+
+浏览器直接打开 `/console.html#feedback-summary` 后可显示 1 条反馈、平均 5/5、采纳率
+100%，但页面仍有“当前角色不可访问该入口，已回到概览”的不正确提示，作为未完成问题保留。
+本轮未改变页面代码，也没有将浏览器一次成功认定为 Summary SLA 已通过。
+
+最终本地 Control PID 1948，日志 `.logs/control-api-scheduler-isolation-r2.*.log`，Gateway
+和主页服务未重启。30 秒非阻塞采样共 986 样本、1 次采样错误，原始
+`scheduler-isolation-contention-r2.speedscope.json` 及分析 r3 保留。console-experience、
+commercial-accounting 等后台 claim 和观测仍等待 BEGIN IMMEDIATE；采样未捕获租约实际
+失去的时刻，不能据此证明某单一工作者持锁导致全部故障。分析 r2 包含工作区标准库，r3
+已改用模块路径过滤，不将初版分析用于根因结论。
+
+本次隔离仅修复非权威观测拖延续租的执行依赖。共享写锁竞争、Summary 间歇 503、导航提示、
+历史计量 owner 错误及完整 G6/G8/72 小时证据仍未完成，完整目标保持进行中。
+
+原生联合结果 `prd147-feedback-native-scheduler-summary-batch-r1-196b60ab1b2e493f9c574d5dfe8c83b6.xml`
+为 23 项中 22 通过、1 失败，耗时 782.917 秒。最终采样时间/观测行锁隔离、原生租约 fence、
+分组续租原子性和等待期间到期拒绝均通过；失败为反馈创建/重放/跨域流程末段的 Summary 503。
+两个本轮原生实例已正常停止，postmaster.pid 均不存在。生产模块与新增原生测试 Ruff 全规则、
+三项 Python 文件 compileall、git diff --check 通过；单元文件保留既有长行，仅忽略 E501 后
+其余 Ruff 规则通过，不宣称该历史文件全规则无误。独立敏感审计见同目录专门记录及其 JSON。

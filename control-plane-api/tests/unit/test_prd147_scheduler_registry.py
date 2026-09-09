@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import threading
@@ -45,6 +46,7 @@ from metahub_control.platform_jobs.supervisor import install_platform_job_superv
 from metahub_shared.db import connect_database
 from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
+from metahub_shared.runtime.logging import JsonFormatter
 
 ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = ROOT / "infra" / "migrations" / "0139_console_domain_migration_governance.sql"
@@ -85,6 +87,7 @@ def test_coordinator_database_lane_survives_saturated_default_executor(tmp_path)
             await occupied
             await manager.__aexit__(None, None, None)
         assert app.state.scheduler_database_executor is None
+        assert app.state.scheduler_observation_executor is None
 
     asyncio.run(scenario())
 
@@ -684,6 +687,130 @@ async def test_coordinator_database_calls_reuse_handles_without_inheriting_reque
 
 
 @pytest.mark.anyio
+async def test_slow_observation_cannot_delay_renewal_or_accumulate_snapshots(tmp_path, monkeypatch):
+    config = _config(_database(tmp_path))
+    app = FastAPI()
+    app.state.config = config
+    started, release = threading.Event(), threading.Event()
+    original_write = scheduler_module._write_observation
+    snapshots = []
+    child_events = []
+
+    def slow_observation(*args, **kwargs):
+        snapshots.append((args[2].persisted_count, args[3], threading.current_thread().name))
+        if len(snapshots) == 1:
+            started.set()
+            if not release.wait(8):
+                raise AssertionError("observation was not released")
+            assert args[2].persisted_count == snapshots[0][0]
+        return original_write(*args, **kwargs)
+
+    @asynccontextmanager
+    async def child(_app):
+        child_events.append("start")
+        try:
+            yield
+        finally:
+            child_events.append("stop")
+
+    monkeypatch.setattr(scheduler_module, "_write_observation", slow_observation)
+    manager = scheduler_coordinator_lifespan(app, (
+        SchedulerContextBinding("status-publication", child),
+    ), replica_code="observation-isolation")
+    await manager.__aenter__()
+    try:
+        await _wait_until(started.is_set)
+        first = app.state.scheduler_registry_leases["status-publication"]
+        # Cross the original lease deadline while the observation is still pending.
+        await asyncio.sleep(3.2)
+        current = app.state.scheduler_registry_leases["status-publication"]
+        assert datetime.now(UTC) > first.deadline
+        assert current.deadline > datetime.now(UTC)
+        assert current.generation == first.generation
+        assert child_events == ["start"]
+        assert len(snapshots) == 1
+        assert snapshots[0][2].startswith("scheduler-observation-db")
+        with connect_database(config.database_url) as connection:
+            scheduler_module.require_scheduler_fences(connection, config, (current,))
+    finally:
+        release.set()
+        await manager.__aexit__(None, None, None)
+    assert child_events == ["start", "stop"]
+    assert snapshots[-1][1] == 0
+    with connect_database(config.database_url) as connection:
+        row = connection.execute("SELECT * FROM runtime_surface_observations").fetchone()
+        assert row["queued_count"] == row["dropped_count"] == row["backend_failure_count"] == 0
+        assert row["persisted_count"] > snapshots[0][0]
+
+
+@pytest.mark.anyio
+async def test_observation_failure_counts_once_without_mutating_worker_snapshot(monkeypatch):
+    app = FastAPI()
+    app.state.config = SimpleNamespace()
+    stats = scheduler_module._CoordinatorStats(accepted_count=2)
+
+    async def fail(_app, _operation, _config, _replica, snapshot, count, *, observed_at):
+        assert snapshot is not stats and count == 0
+        assert isinstance(observed_at, datetime)
+        stats.accepted_count += 1
+        assert snapshot.accepted_count == 2
+        raise ApiError("console_migration.dependency_unavailable")
+
+    monkeypatch.setattr(scheduler_module, "_coordinator_database_call", fail)
+    await scheduler_module._observe(app, "snapshot-owner", {}, stats)
+    assert stats.accepted_count == 3
+    assert stats.backend_failure_count == 1
+
+
+@pytest.mark.anyio
+async def test_shutdown_waits_for_cancelled_observation_worker(tmp_path, monkeypatch):
+    config = _config(_database(tmp_path))
+    config.console_migration_scheduler_shutdown_seconds = 0.05
+    app = FastAPI()
+    app.state.config = config
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def observe(*_args, **_kwargs):
+        started.set()
+        try:
+            if not release.wait(5):
+                raise AssertionError("observation was not released")
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(scheduler_module, "_write_observation", observe)
+    manager = scheduler_coordinator_lifespan(app, (), replica_code="cancel-observation")
+    await manager.__aenter__()
+    closing = None
+    try:
+        await _wait_until(started.is_set)
+        closing = asyncio.create_task(manager.__aexit__(None, None, None))
+        await asyncio.sleep(0.15)
+        assert not finished.is_set()
+        assert not closing.done()
+    finally:
+        release.set()
+        if closing is None:
+            closing = asyncio.create_task(manager.__aexit__(None, None, None))
+        await asyncio.wait_for(closing, timeout=2)
+    assert finished.is_set()
+    assert app.state.scheduler_database_executor is None
+    assert app.state.scheduler_observation_executor is None
+
+
+def test_observation_persists_sample_time_not_completion_time(tmp_path):
+    config = _config(_database(tmp_path))
+    sampled_at = datetime(2026, 9, 9, 0, 0, tzinfo=UTC)
+    scheduler_module._write_observation(
+        config, "delayed-snapshot", scheduler_module._CoordinatorStats(), 0,
+        observed_at=sampled_at,
+    )
+    with connect_database(config.database_url) as connection:
+        row = connection.execute("SELECT observed_at FROM runtime_surface_observations").fetchone()
+        assert row[0] == "2026-09-09T00:00:00Z"
+
+
+@pytest.mark.anyio
 async def test_coordinator_checks_renewals_between_context_installations(monkeypatch):
     events = []
     app = FastAPI()
@@ -778,6 +905,206 @@ async def test_full_coordinator_renewal_uses_one_write_transaction(tmp_path, mon
     assert (max(deadlines) - min(deadlines)).total_seconds() <= 1
     await scheduler_module._renew_active(app, "batch-owner", active, stats, 120)
     assert statements.count("BEGIN IMMEDIATE") == 1
+
+
+def _diagnostic_payloads(caplog):
+    formatter = JsonFormatter()
+    return [json.loads(formatter.format(record)) for record in caplog.records
+            if record.name == scheduler_module.logger.name]
+
+
+@pytest.mark.parametrize("stage,sqlite_code", [
+    ("write", sqlite3.SQLITE_CONSTRAINT_TRIGGER),
+    ("commit", sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY),
+])
+def test_observation_diagnostic_records_real_constraint_stage_without_details(
+    tmp_path, monkeypatch, caplog, stage, sqlite_code,
+):
+    database = _database(tmp_path)
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys=ON")
+    if stage == "write":
+        connection.executescript("""
+            CREATE TRIGGER observation_failure BEFORE INSERT ON runtime_surface_observations
+            BEGIN SELECT RAISE(ABORT, 'private-observation-error-sentinel'); END;
+        """)
+    else:
+        connection.executescript("""
+            CREATE TABLE diagnostic_parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE diagnostic_child(parent_id INTEGER REFERENCES diagnostic_parent(id)
+                DEFERRABLE INITIALLY DEFERRED);
+            CREATE TRIGGER observation_failure AFTER INSERT ON runtime_surface_observations
+            BEGIN INSERT INTO diagnostic_child VALUES(1); END;
+        """)
+    monkeypatch.setattr(scheduler_module, "_connect", lambda _config: connection)
+    with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+        with pytest.raises(ApiError) as error:
+            scheduler_module._write_observation(
+                _config(database), "private-replica-sentinel",
+                scheduler_module._CoordinatorStats(), 0,
+            )
+    assert error.value.code == "console_migration.dependency_unavailable"
+    entries = _diagnostic_payloads(caplog)
+    assert len(entries) == 1
+    assert entries[0]["payload"] == {
+        "operation": "observe", "stage": stage, "sqlite_errorcode": sqlite_code,
+    }
+    assert entries[0]["event"] == "console_migration.scheduler_observation_failed"
+    assert entries[0]["latency_ms"] >= 0
+    encoded = json.dumps(entries)
+    assert "private-" not in encoded
+    assert "INSERT" not in encoded and "TRIGGER" not in encoded
+    with sqlite3.connect(database) as check:
+        assert check.execute("SELECT count(*) FROM runtime_surface_observations").fetchone()[0] == 0
+        if stage == "commit":
+            assert check.execute("SELECT count(*) FROM diagnostic_child").fetchone()[0] == 0
+
+
+def test_observation_diagnostic_distinguishes_real_writer_wait(tmp_path, monkeypatch, caplog):
+    database = _database(tmp_path)
+    blocker = sqlite3.connect(database)
+    blocker.execute("BEGIN IMMEDIATE")
+    monkeypatch.setattr(scheduler_module, "_connect", lambda _config:
+                        sqlite3.connect(database, timeout=0.02))
+    try:
+        with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+            with pytest.raises(ApiError) as error:
+                scheduler_module._write_observation(
+                    _config(database), "private-replica-sentinel",
+                    scheduler_module._CoordinatorStats(), 0,
+                )
+        assert error.value.code == "console_migration.dependency_unavailable"
+        entry, = _diagnostic_payloads(caplog)
+        assert entry["payload"] == {
+            "operation": "observe", "stage": "begin",
+            "sqlite_errorcode": sqlite3.SQLITE_BUSY,
+        }
+        assert entry["latency_ms"] >= 10
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+
+@pytest.mark.parametrize("error", [
+    sqlite3.OperationalError("private-connect-error-sentinel"),
+    ApiError("console_migration.dependency_unavailable"),
+])
+def test_observation_connection_diagnostic_keeps_error_contract(monkeypatch, caplog, error):
+    def fail(_config):
+        raise error
+
+    monkeypatch.setattr(scheduler_module, "_connect", fail)
+    with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+        with pytest.raises(ApiError) as caught:
+            scheduler_module._write_observation(
+                SimpleNamespace(platform_session_secret="private-hmac-sentinel"),
+                "private-replica-sentinel", scheduler_module._CoordinatorStats(), 0,
+            )
+    assert caught.value.code == "console_migration.dependency_unavailable"
+    if isinstance(error, ApiError):
+        assert caught.value is error
+    entry, = _diagnostic_payloads(caplog)
+    assert entry["payload"] == {
+        "operation": "observe", "stage": "connect", "sqlite_errorcode": None,
+    }
+    assert "private-" not in json.dumps(entry)
+
+
+@pytest.mark.anyio
+async def test_coordinator_slow_diagnostic_includes_executor_queue_time(monkeypatch, caplog):
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop = asyncio.get_running_loop()
+    blocked = threading.Event()
+    entered = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
+    app = FastAPI()
+    app.state.scheduler_database_executor = executor
+    clock = [10.0]
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: clock[0])
+
+    def occupy():
+        entered.set()
+        blocked.wait(3)
+
+    occupied = loop.run_in_executor(executor, occupy)
+    assert await asyncio.to_thread(entered.wait, 1)
+    try:
+        with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+            pending = asyncio.create_task(scheduler_module._coordinator_database_call(
+                app, lambda: "private-result-sentinel"))
+            await asyncio.sleep(0)
+            assert not pending.done()
+            clock[0] = 10.75
+            blocked.set()
+            assert await pending == "private-result-sentinel"
+        entry, = _diagnostic_payloads(caplog)
+        assert entry["latency_ms"] == 750
+        assert entry["payload"] == {
+            "operation": "other", "stage": "complete", "sqlite_errorcode": None,
+        }
+        assert "private-" not in json.dumps(entry)
+    finally:
+        blocked.set()
+        await occupied
+        executor.shutdown(wait=True)
+
+
+@pytest.mark.anyio
+async def test_coordinator_diagnostic_preserves_operation_errors(monkeypatch, caplog):
+    app = FastAPI()
+    moments = iter((1.0, 2.0))
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: next(moments))
+    error = RuntimeError("private-operation-error-sentinel")
+
+    def operation():
+        raise error
+
+    with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+        with pytest.raises(RuntimeError) as caught:
+            await scheduler_module._coordinator_database_call(app, operation)
+    assert caught.value is error
+    entry, = _diagnostic_payloads(caplog)
+    assert entry["payload"]["stage"] == "failed"
+    assert "private-" not in json.dumps(entry)
+
+
+@pytest.mark.anyio
+async def test_coordinator_diagnostic_preserves_cancellation(monkeypatch, caplog):
+    app = FastAPI()
+    clock = [1.0]
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: clock[0])
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def operation():
+        entered.set()
+        release.wait(3)
+        finished.set()
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+            pending = asyncio.create_task(
+                scheduler_module._coordinator_database_call(app, operation))
+            assert await asyncio.to_thread(entered.wait, 1)
+            clock[0] = 2.0
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        entry, = _diagnostic_payloads(caplog)
+        assert entry["payload"]["stage"] == "cancelled"
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 1)
+
+
+@pytest.mark.anyio
+async def test_fast_coordinator_calls_do_not_emit_diagnostics(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler_module, "monotonic", lambda: 10.0)
+    with caplog.at_level(logging.WARNING, logger=scheduler_module.logger.name):
+        assert await scheduler_module._coordinator_database_call(FastAPI(), lambda: 1) == 1
+    assert _diagnostic_payloads(caplog) == []
 
 
 @pytest.mark.parametrize("invalid", ["owner", "token", "generation", "expired", "registry", "contract"])
