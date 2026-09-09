@@ -9536,7 +9536,7 @@ h3 {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .create-virtual-key-form input,
@@ -9548,6 +9548,7 @@ h3 {
   background: #ffffff;
   color: var(--text);
   font: inherit;
+  font-size: 16px;
 }
 
 .create-virtual-key-form input:focus,
@@ -9700,7 +9701,7 @@ h3 {
 
 .virtual-key-limit-summary {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.3;
 }
 
@@ -9715,18 +9716,18 @@ h3 {
   display: grid;
   gap: 3px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .virtual-key-limit-form input {
   min-width: 0;
-  min-height: 32px;
+  min-height: 40px;
   width: 100%;
   border: 1px solid var(--line);
   background: #ffffff;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .virtual-key-limit-form input:focus {
