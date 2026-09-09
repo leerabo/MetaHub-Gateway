@@ -1027,6 +1027,69 @@ test("organization creation prevents duplicate writes and restores failed drafts
   controller.destroy();
 });
 
+for (const scenario of ["ready", "permission-drift", "logout", "other-workspace"]) {
+  test(`organization console entry checks authorization before redirect: ${scenario}`, async () => {
+    const root = createRoot();
+    const navigationStarted = deferred();
+    const pendingNavigation = deferred();
+    let created = false;
+    let switched = false;
+    let redirected = 0;
+    let auxiliaryReads = 0;
+    const authorization = {
+      permission_codes: [], permission_revision: 1, membership_revision: 1,
+      permission_fingerprint: "f".repeat(64),
+    };
+    const navigation = {
+      ...authorization, groups: [],
+      permission_fingerprint: (scenario === "permission-drift" ? "a" : "f").repeat(64),
+    };
+    const controller = createIdentityPageController({
+      root, channelFactory: () => null,
+      onWorkspaceCreated: () => { redirected++; },
+      api: workingApi({
+        workspaces: async () => workspaceListPayload(created ? [workspace()] : []),
+        identityWorkspaces: async () => ({
+          workspaces: created ? [{ ...workspace(), role: "owner" }] : [],
+        }),
+        createWorkspace: async () => { created = true; return workspaceDetailPayload(); },
+        switchWorkspace: async () => { switched = true; return {}; },
+        workspaceSession: async () => {
+          if (!switched) throw new IdentityApiError({ status: 401 });
+          return {
+            context: { ...workspace(), role: "owner",
+              workspace_id: scenario === "other-workspace" ? "wsp_other" : WORKSPACE_ONE },
+            authorization,
+          };
+        },
+        memberships: async () => ({ memberships: [] }),
+        workspaceNavigation: async () => {
+          navigationStarted.resolve();
+          return scenario === "logout" ? pendingNavigation.promise : navigation;
+        },
+        notifications: async () => { auxiliaryReads++; return {}; },
+      }),
+    });
+    try {
+      await controller.mount();
+      controller.showWorkspaceCreate();
+      const creating = controller.createWorkspace({
+        kind: "organization", name: "Trial", slug: "trial-company",
+        region: "cn-north-1", serviceMode: "internal_only",
+      });
+      if (scenario === "logout") {
+        await navigationStarted.promise;
+        await controller.logout();
+        pendingNavigation.resolve(navigation);
+      }
+      assert.equal(await creating, scenario === "ready");
+      assert.equal(redirected, scenario === "ready" ? 1 : 0);
+      assert.equal(auxiliaryReads, 0);
+      if (scenario === "logout") assert.match(root.innerHTML, /data-identity-login-form/u);
+    } finally { controller.destroy(); }
+  });
+}
+
 function restoreProperty(name, descriptor) {
   if (descriptor) {
     Object.defineProperty(globalThis, name, descriptor);

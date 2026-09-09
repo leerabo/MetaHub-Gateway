@@ -28,7 +28,7 @@ export function createIdentityPageController({
   monotonicNow = defaultMonotonicNow,
   newIdempotencyKey = defaultIdempotencyKey,
   recordWorkspaceSwitch = () => {},
-  onWorkspaceCreated = () => {},
+  onWorkspaceCreated = null,
 } = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
@@ -916,8 +916,12 @@ export function createIdentityPageController({
         workspaceDraft = null;
         workspaceCreating = false;
         autoSwitchAttempted = false;
-        const loaded = await loadWorkspaceAccess(ticket, kind === "organization" ? "组织已创建。" : "空间已创建。", null);
-        if (isCurrent(ticket) && loaded && workspaceContext?.workspace_id === result.workspace.workspace_id) {
+        const loaded = await loadWorkspaceAccess(
+          ticket, kind === "organization" ? "组织已创建。" : "空间已创建。", null,
+          true, typeof onWorkspaceCreated === "function" ? result.workspace.workspace_id : null,
+        );
+        if (typeof onWorkspaceCreated === "function" && isCurrent(ticket)
+          && loaded && workspaceContext?.workspace_id === result.workspace.workspace_id) {
           onWorkspaceCreated();
         }
         return loaded;
@@ -3563,6 +3567,7 @@ export function createIdentityPageController({
     feedback,
     previousError,
     retryAuthorizationDrift = true,
+    createdWorkspaceId = null,
   ) {
     if (typeof api.identityWorkspaces !== "function") {
       workspaceChoices = workspaces.map((workspace) => ({
@@ -3666,6 +3671,7 @@ export function createIdentityPageController({
       feedback,
       previousError,
       retryAuthorizationDrift,
+      createdWorkspaceId,
     );
   }
 
@@ -3704,6 +3710,7 @@ export function createIdentityPageController({
     feedback,
     previousError,
     retryAuthorizationDrift = true,
+    createdWorkspaceId = null,
   ) {
     workspaceContext = sessionResult.context;
     if (
@@ -3775,6 +3782,8 @@ export function createIdentityPageController({
         onboardingError = null;
         applyOnboardingProjection(onboardingOutcome.value);
       }
+      // The destination console loads its own panels after this authorization check.
+      if (createdWorkspaceId === workspaceContext.workspace_id) return true;
       await Promise.all([
         loadWorkspaceBilling(ticket, null, "", { render: false }),
         loadWorkspaceInvoices(ticket, "", { render: false }),
