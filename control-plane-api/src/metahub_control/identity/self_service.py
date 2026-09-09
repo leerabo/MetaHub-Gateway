@@ -194,6 +194,73 @@ def begin_registration(
     return created.pending
 
 
+def register_local_account(
+    config: AppConfig, *, email: str, display_name: str, password: str,
+    consent_version: str, invitation_token: str | None, request_id: str, trace_id: str,
+    user_agent: str | None, client_host: str | None, device_token: str,
+) -> IssuedIdentitySession:
+    from .registration_policy import read_policy_in_transaction
+
+    if config.environment != "dev" or invitation_token:
+        raise ApiError("identity.local_registration_forbidden")
+    normalized_email = normalize_global_email(email)
+    if normalized_email is None:
+        raise ApiError("identity.registration_invalid")
+    name = _normalize_display_name(display_name)
+    consent = _normalize_consent_version(consent_version)
+    validate_global_password(password)
+    _consume_rate_limits(config, action="registration", primary_key=normalized_email,
+                         user_agent=user_agent, client_host=client_host, device_token=device_token)
+    password_hash = hash_password_argon2id(password)
+    connection = _connect(config)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if read_policy_in_transaction(connection, config)["email_verification"]:
+            raise ApiError("identity.local_registration_forbidden")
+        if connection.execute("SELECT 1 FROM global_accounts WHERE email_normalized=?",
+                              (normalized_email,)).fetchone():
+            raise ApiError("identity.registration_unavailable")
+        now = _utcnow()
+        timestamp = _db_time(now)
+        account_id, registration_id = f"gac_{uuid4().hex}", f"lrg_{uuid4().hex}"
+        connection.execute(
+            "INSERT INTO global_accounts(account_id,email_normalized,display_name,status,"
+            "login_enabled,credential_revision,session_revision,mfa_state,failed_login_count,"
+            "created_at,updated_at) VALUES(?,?,?,'active',1,1,1,'not_enrolled',0,?,?)",
+            (account_id, normalized_email, name, timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO account_credentials(credential_id,account_id,credential_type,algorithm,"
+            "secret_hash,status,version,created_at,updated_at)"
+            " VALUES(?,?,'password','argon2id',?,'active',1,?,?)",
+            (f"acr_{uuid4().hex}", account_id, password_hash, timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO local_registration_consents(registration_id,account_id,consent_version,"
+            "consented_at) VALUES(?,?,?,?)", (registration_id, account_id, consent, timestamp),
+        )
+        _write_lifecycle_event(
+            connection, account_id=account_id, source_intent_id=registration_id,
+            event_type="identity.registered", reason_code="local_unverified_registration",
+            request_id=request_id, trace_id=trace_id,
+            payload={"schema_version": 1, "email_verified": False}, now=now,
+        )
+        issued = issue_global_session_in_transaction(
+            connection, config, account_id=account_id, now=now,
+            user_agent=user_agent, client_host=client_host,
+        )
+        connection.commit()
+        return issued
+    except ApiError:
+        raise
+    except (sqlite3.Error, DbError, OSError, TypeError, ValueError):
+        raise ApiError("identity.unavailable") from None
+    finally:
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
+
+
 def resend_registration_verification(
     config: AppConfig,
     *,

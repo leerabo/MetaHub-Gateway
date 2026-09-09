@@ -96,11 +96,13 @@ export function renderIdentityRiskChallengePage(container, options = {}) {
 
 export function renderIdentityRegistrationPage(container, options = {}) {
   if (!container) return;
+  const busy = options.busy === true;
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-registration-title">
         ${renderAccessBrand("identity-registration-title", "创建账号")}
-        <form class="identity-login-form" data-identity-registration-form>
+        <form class="identity-login-form" data-identity-registration-form aria-busy="${busy}">
+          <fieldset class="identity-registration-fields" ${busy ? "disabled" : ""}>
           <label>
             <span>邮箱</span>
             <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
@@ -111,18 +113,24 @@ export function renderIdentityRegistrationPage(container, options = {}) {
           </label>
           <label>
             <span>密码</span>
-            <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+            ${registrationPassword("password", "密码")}
           </label>
           <label>
             <span>确认密码</span>
-            <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+            ${registrationPassword("confirmPassword", "确认密码")}
           </label>
           <label class="identity-consent">
             <input name="consent" type="checkbox" required />
-            <span>同意隐私条款</span>
+            <span>我已阅读并同意<a href="/privacy.html" target="_blank" rel="noopener">隐私条款</a></span>
           </label>
+          ${options.policy?.human_verification ? `<label><span>图形验证码</span><span class="identity-captcha-control">
+            <input name="captchaAnswer" aria-label="图形验证码" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{5}" maxlength="5" required />
+            <img ${options.captcha ? `src="${escapeAttribute(options.captcha.image)}"` : "hidden"} alt="五位数字验证码" width="180" height="64" />
+            <button type="button" data-identity-action="refresh-captcha" aria-label="刷新验证码" title="刷新验证码">${icon("rotate-cw")}</button>
+          </span></label>` : ""}
+          </fieldset>
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit">继续验证</button>
+          <button class="identity-primary" type="submit" ${busy || options.unavailable ? "disabled" : ""}><span>${busy ? (options.loading ? "正在加载" : "正在注册") : "注册"}</span>${icon("arrow-right")}</button>
           <div class="identity-access-actions is-single">
             <button type="button" data-identity-action="show-login">返回登录</button>
           </div>
@@ -130,6 +138,10 @@ export function renderIdentityRegistrationPage(container, options = {}) {
       </section>
     </div>
   `;
+}
+
+function registrationPassword(name, label) {
+  return `<span class="identity-password-control"><input name="${name}" aria-label="${label}" type="password" autocomplete="new-password" minlength="8" required /><button class="identity-password-toggle" type="button" data-password-toggle aria-label="显示${label}" title="显示${label}" aria-pressed="false">${icon("eye")}</button></span>`;
 }
 
 export function renderIdentityVerificationPage(container, options = {}) {

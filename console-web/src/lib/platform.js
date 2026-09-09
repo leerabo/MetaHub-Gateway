@@ -68,6 +68,16 @@ export function listPlatformOperators({ controlApiUrl, signal } = {}) {
   return request(controlApiUrl, "/platform/operators?limit=100&offset=0", { signal });
 }
 
+export function getPlatformRegistrationPolicy({ controlApiUrl, signal } = {}) {
+  return request(controlApiUrl, "/platform/registration-policy", { signal });
+}
+
+export function updatePlatformRegistrationPolicy({ controlApiUrl, policy, signal } = {}) {
+  return request(controlApiUrl, "/platform/registration-policy", {
+    method: "PUT", body: policy, csrf: PLATFORM_CSRF_COOKIE, signal,
+  });
+}
+
 export function listPlatformWorkspaces({
   controlApiUrl,
   filters = {},

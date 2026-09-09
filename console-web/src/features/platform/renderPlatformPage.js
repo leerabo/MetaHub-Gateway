@@ -2110,8 +2110,23 @@ function operatorsView(state, permissions) {
   const operators = state.operators?.operators ?? [];
   return `
     <header class="platform-page-heading"><div><p>Platform IAM</p><h1>操作员</h1></div><span>${operators.length} 个账号</span></header>
-    ${permissions.has("platform.operator.manage") ? operatorForm() : ""}
+    ${permissions.has("platform.operator.manage") ? registrationPolicyForm(state) + operatorForm() : ""}
     <section class="platform-band"><div class="platform-table-wrap"><table><thead><tr><th>操作员</th><th>角色</th><th>状态</th><th>Revision</th><th><span class="platform-visually-hidden">操作</span></th></tr></thead><tbody>${operators.map(operatorRow).join("") || emptyRow("暂无操作员")}</tbody></table></div></section>`;
+}
+
+function registrationPolicyForm(state) {
+  const policy = state.registrationPolicy;
+  if (!policy) return "";
+  return `<section class="platform-band platform-form-band">
+    <div class="platform-section-heading"><div><p>SaaS 平台</p><h2>注册验证设置</h2></div><span>修订 ${number(policy.revision)}</span></div>
+    <form class="platform-inline-form" data-platform-registration-policy-form>
+      <fieldset ${state.loading ? "disabled" : ""}><legend>验证要求</legend><div class="platform-role-grid">
+        <label><input name="emailVerification" type="checkbox" ${policy.email_verification ? "checked" : ""} /><span>邮箱验证</span></label>
+        <label><input name="humanVerification" type="checkbox" ${policy.human_verification ? "checked" : ""} /><span>基础图形验证码</span></label>
+      </div></fieldset>
+      <span>邮件服务：${policy.email_delivery_available ? "可用" : "未配置"}</span>
+      <button class="platform-primary" type="submit" ${state.loading ? "disabled" : ""}>保存设置</button>
+    </form></section>`;
 }
 
 function operatorForm() {

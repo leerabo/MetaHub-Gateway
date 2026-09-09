@@ -16,6 +16,8 @@ import {
   getSupportDiagnostics,
   listPlatformAudit,
   listPlatformOperators,
+  getPlatformRegistrationPolicy,
+  updatePlatformRegistrationPolicy,
   listPlatformSaasPlans,
   listPlatformWorkspaceEvents,
   listPlatformWorkspaces,
@@ -330,6 +332,8 @@ if (root) {
       removeWorkspaceRiskTag: (input) => removePlatformWorkspaceRiskTag({ controlApiUrl, ...input }),
       notifyWorkspaceOwner: (input) => createPlatformWorkspaceOwnerNotification({ controlApiUrl, ...input }),
       operators: (input) => listPlatformOperators({ controlApiUrl, ...input }),
+      registrationPolicy: (input) => getPlatformRegistrationPolicy({ controlApiUrl, ...input }),
+      updateRegistrationPolicy: (input) => updatePlatformRegistrationPolicy({ controlApiUrl, ...input }),
       plans: (input) => listPlatformSaasPlans({ controlApiUrl, ...input }),
       providerCatalog: (input) => getPlatformProviderCatalog({ controlApiUrl, ...input }),
       publishProviderCatalog: (input) => publishPlatformProviderCatalog({

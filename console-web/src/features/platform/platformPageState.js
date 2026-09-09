@@ -93,6 +93,7 @@ export function createPlatformPageController({
     session: null,
     navigation: [],
     operators: null,
+    registrationPolicy: null,
     plans: null,
     providerCatalog: null,
     providerCatalogPublishIntent: null,
@@ -2515,6 +2516,15 @@ export function createPlatformPageController({
     async createOperator(accountId, roles) {
       return write("操作员已创建。", () => api.createOperator({ accountId, roles }));
     },
+    async updateRegistrationPolicy(emailVerification, humanVerification) {
+      if (state.loading || !currentPermissions().has("platform.operator.manage")
+        || !state.registrationPolicy) return false;
+      return write("平台注册验证设置已保存。", () => api.updateRegistrationPolicy({ policy: {
+        email_verification: emailVerification,
+        human_verification: humanVerification,
+        revision: state.registrationPolicy.revision,
+      } }));
+    },
     async createPlan(plan) {
       return write("套餐版本已创建。", (signal) => api.createPlan({ plan, signal }));
     },
@@ -3184,6 +3194,7 @@ export function createPlatformPageController({
       const next = {
         navigation: normalizeNavigation(navigation.items),
         operators: null,
+        registrationPolicy: null,
         plans: null,
         providerCatalog: null,
         developerContracts: null,
@@ -3265,6 +3276,11 @@ export function createPlatformPageController({
       ]).has(state.view);
       if (!fleetOnly && permissions.has("platform.operator.manage")) {
         tasks.push(api.operators({ signal: ticket.signal }).then((value) => { next.operators = value; }));
+        if (typeof api.registrationPolicy === "function") {
+          tasks.push(api.registrationPolicy({ signal: ticket.signal }).then((value) => {
+            next.registrationPolicy = value;
+          }));
+        }
       }
       if (!fleetOnly && permissions.has("platform.catalog.read") && typeof api.plans === "function") {
         tasks.push(api.plans({ signal: ticket.signal }).then((value) => { next.plans = value; }));
@@ -5470,6 +5486,10 @@ export function createPlatformPageController({
         });
       }
       if (form.matches("[data-operator-form]")) controller.createOperator(data.get("accountId"), data.getAll("roles"));
+      if (form.matches("[data-platform-registration-policy-form]")) {
+        controller.updateRegistrationPolicy(data.get("emailVerification") === "on",
+          data.get("humanVerification") === "on");
+      }
       if (form.matches("[data-platform-plan-form]")) {
         controller.createPlan({
           plan_code: data.get("planCode"),
@@ -6605,6 +6625,7 @@ export function createPlatformPageController({
     consoleExperienceController.leave();
     consoleMigrationController.leave();
     state.operators = null;
+    state.registrationPolicy = null;
     state.plans = null;
     state.providerCatalog = null;
     state.providerCatalogPublishIntent = null;

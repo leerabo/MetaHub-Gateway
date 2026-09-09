@@ -4,6 +4,7 @@
     "index.html",
     "console.html",
     "identity.html",
+    "privacy.html",
     "partner.html",
     "platform.html",
     "status.html"
@@ -121,6 +122,6 @@
     "/user/preferences"
   ],
   "production_dockerfile": "../infra/docker/console.Dockerfile",
-  "production_asset_set_sha256": "a2b9d9eb0d4b029850e38ef8a307614f94cff559f8ad5481529cd6310e8c4453",
+  "production_asset_set_sha256": "6b8ddc5e1efcb1834a0b6dab1887ab1acb5c547839cc898a2387054bd50ccd3c",
   "output_directory": "dist"
 }

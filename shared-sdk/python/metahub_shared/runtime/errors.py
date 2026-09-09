@@ -381,6 +381,18 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         "Use a different password between 8 and 1024 UTF-8 bytes.",
         owner="identity",
     ),
+    "identity.captcha_invalid": ErrorSpec(
+        400, "图形验证码错误或已过期，请刷新后重试。", "Refresh the image challenge.",
+        owner="identity",
+    ),
+    "identity.local_registration_forbidden": ErrorSpec(
+        403, "免邮件验证注册仅用于本地开发，邀请加入仍需要验证邮箱。",
+        "Enable email verification for hosted registration and invitations.", owner="identity",
+    ),
+    "identity.registration_unavailable": ErrorSpec(
+        409, "无法使用这些信息注册，请检查邮箱或返回登录。",
+        "Use login or another email identifier.", owner="identity",
+    ),
     "identity.registration_invalid": ErrorSpec(
         422,
         "Registration request is invalid.",

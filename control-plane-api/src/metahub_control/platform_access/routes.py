@@ -234,6 +234,44 @@ async def update_operator(
     return result
 
 
+@router.get("/platform/registration-policy")
+async def get_registration_policy(request: Request, response: Response) -> dict:
+    from metahub_control.identity.registration_policy import platform_registration_policy
+
+    _platform_read_boundary(request)
+    if (_cookie_values(request, WORKSPACE_SESSION_COOKIE)
+            or _cookie_values(request, SUPPORT_SESSION_COOKIE)):
+        raise ApiError("platform.credential_conflict")
+    result = await _run(
+        platform_registration_policy, _config(request),
+        session_token=_required_platform_cookie(request),
+        request_id=_request_id(request), trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.put("/platform/registration-policy")
+async def update_registration_policy(request: Request, response: Response) -> dict:
+    from metahub_control.identity.registration_policy import platform_registration_policy
+
+    _platform_write_boundary(request)
+    if (_cookie_values(request, WORKSPACE_SESSION_COOKIE)
+            or _cookie_values(request, SUPPORT_SESSION_COOKIE)):
+        raise ApiError("platform.credential_conflict")
+    payload = await _strict_json(
+        request, required_fields=("email_verification", "human_verification", "revision"),
+    )
+    result = await _run(
+        platform_registration_policy, _config(request),
+        session_token=_required_platform_cookie(request),
+        csrf_token=_required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid"),
+        payload=payload, request_id=_request_id(request), trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
 @router.get("/platform/navigation", response_model=PlatformNavigationResponse)
 async def navigation(request: Request, response: Response) -> PlatformNavigationResponse:
     _platform_read_boundary(request)

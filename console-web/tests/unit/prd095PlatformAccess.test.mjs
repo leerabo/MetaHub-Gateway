@@ -19,6 +19,8 @@ import {
   createSupportSession,
   getPlatformNavigation,
   getPlatformSession,
+  getPlatformRegistrationPolicy,
+  updatePlatformRegistrationPolicy,
   getSupportDiagnostics,
   listPlatformAudit,
   listPlatformOperators,
@@ -37,6 +39,32 @@ const GLOBAL_CSRF = "G".repeat(43);
 const PLATFORM_CSRF = "P".repeat(43);
 const MFA_FACTOR_ID = `mfa_${"5".repeat(32)}`;
 const MFA_SECRET = "A".repeat(32);
+
+test("registration switches belong to platform operator management and use platform CSRF", async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = { cookie: `__Host-metahub-platform-csrf=${PLATFORM_CSRF}` };
+  const policy = { email_verification: false, human_verification: true, revision: 1,
+    environment: "dev", email_delivery_available: false,
+    request_id: "req_registration_policy", trace_id: "trc_registration_policy" };
+  const calls = installFetch(() => jsonResponse(policy));
+  try {
+    await getPlatformRegistrationPolicy({ controlApiUrl: CONTROL_URL });
+    await updatePlatformRegistrationPolicy({ controlApiUrl: CONTROL_URL,
+      policy: { email_verification: false, human_verification: false, revision: 1 } });
+    assert.equal(new URL(calls[1].url).pathname, "/platform/registration-policy");
+    assert.equal(calls[1].options.headers["X-CSRF-Token"], PLATFORM_CSRF);
+    assert.equal(calls[1].options.method, "PUT");
+    const root = createRoot();
+    const state = { ...pageState(), view: "operators", registrationPolicy: policy };
+    state.session.context.permissions = ["platform.operator.manage"];
+    renderPlatformWorkspace(root, state);
+    assert.match(root.innerHTML, /SaaS 平台/u);
+    assert.match(root.innerHTML, /data-platform-registration-policy-form/u);
+    state.session.context.permissions = [];
+    renderPlatformWorkspace(root, state);
+    assert.doesNotMatch(root.innerHTML, /data-platform-registration-policy-form/u);
+  } finally { globalThis.document = originalDocument; }
+});
 
 test("PRD-095 identity clients validate TOTP enrollment and platform entry projection", async () => {
   const originalDocument = globalThis.document;

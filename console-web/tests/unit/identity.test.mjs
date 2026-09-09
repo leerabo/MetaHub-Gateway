@@ -922,6 +922,51 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("registration exposes eyes, privacy, captcha and immediate duplicate-safe pending state", async () => {
+  const root = createRoot();
+  const pending = deferred();
+  let calls = 0;
+  const controller = createIdentityPageController({ root, api: workingApi({
+    registrationPolicy: async () => ({ human_verification: true, email_verification: false }),
+    registrationCaptcha: async () => ({ challenge_id: `cap_${"a".repeat(32)}`,
+      image: "data:image/png;base64,aGVsbG8=" }),
+    register: async (input) => {
+      calls++;
+      assert.equal(input.captchaAnswer, "23456");
+      return pending.promise;
+    },
+  }) });
+  await controller.showRegistration();
+  assert.equal((root.innerHTML.match(/data-password-toggle/gu) ?? []).length, 2);
+  assert.match(root.innerHTML, /href="\/privacy.html"/u);
+  assert.match(root.innerHTML, /刷新验证码/u);
+  const input = { email: "trial@example.test", displayName: "Trial", password: "TrialSecret!2026",
+    confirmPassword: "TrialSecret!2026", consent: true, captchaAnswer: "23456" };
+  const first = controller.registerAccount(input);
+  assert.match(root.innerHTML, /aria-busy="true"/u);
+  assert.match(root.innerHTML, /正在注册/u);
+  assert.doesNotMatch(root.innerHTML, /TrialSecret/u);
+  assert.equal(await controller.registerAccount(input), false);
+  pending.resolve(accountSessionPayload());
+  assert.equal(await first, true);
+  assert.equal(calls, 1);
+  assert.match(root.innerHTML, /注册成功/u);
+  assert.doesNotMatch(root.innerHTML, /邮箱已验证/u);
+});
+
+test("stale registration setup cannot replace login or restore captcha", async () => {
+  const root = createRoot();
+  const policy = deferred();
+  const controller = createIdentityPageController({ root, api: workingApi({
+    registrationPolicy: () => policy.promise,
+  }) });
+  const loading = controller.showRegistration();
+  controller.showLogin();
+  policy.resolve({ human_verification: false, email_verification: false });
+  assert.equal(await loading, false);
+  assert.match(root.innerHTML, /data-identity-login-form/u);
+});
+
 function restoreProperty(name, descriptor) {
   if (descriptor) {
     Object.defineProperty(globalThis, name, descriptor);

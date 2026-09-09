@@ -15,7 +15,7 @@ import {
 } from "./renderIdentityPage.js";
 import { createAccountPreferenceController } from "../account-preferences/accountPreferenceController.js";
 
-const CONSENT_VERSION = "privacy-2026-08";
+const CONSENT_VERSION = "privacy-local-2026-09-09";
 
 export function createIdentityPageController({
   root,
@@ -83,6 +83,9 @@ export function createIdentityPageController({
   let invitationSecretLink = null;
   let invitationSecretMail = null;
   let pendingChallenge = null;
+  let registrationPolicy = null;
+  let registrationCaptcha = null;
+  let registrationBusy = null;
   let riskChallenge = null;
   let riskChallengeIntent = null;
   let mfaEnrollment = null;
@@ -138,10 +141,11 @@ export function createIdentityPageController({
   });
 
   const controller = {
-    async mount() {
+    async mount({ registration = false } = {}) {
       destroyed = false;
       bindInteractions();
       bindContextChannel();
+      if (registration) return controller.showRegistration();
       return loadProtectedState();
     },
     async login({ email, password }) {
@@ -244,15 +248,55 @@ export function createIdentityPageController({
       clearToLogin();
       return true;
     },
-    showRegistration() {
-      beginRequest();
+    async showRegistration() {
+      const ticket = beginRequest();
       scrubSensitiveInputs();
       scrubProtectedState();
       pendingChallenge = null;
       riskChallenge = null;
       riskChallengeIntent = null;
-      renderIdentityRegistrationPage(root);
+      registrationPolicy = null;
+      registrationCaptcha = null;
+      if (typeof api.registrationPolicy !== "function") {
+        renderIdentityRegistrationPage(root);
+        return true;
+      }
+      renderIdentityRegistrationPage(root, { busy: true, loading: true });
+      try {
+        const policy = await api.registrationPolicy({ signal: ticket.signal });
+        if (!isCurrent(ticket)) return false;
+        registrationPolicy = policy;
+        if (registrationPolicy.human_verification) {
+          const captcha = await api.registrationCaptcha({ signal: ticket.signal });
+          if (!isCurrent(ticket)) return false;
+          registrationCaptcha = captcha;
+        }
+        renderIdentityRegistrationPage(root, { policy: registrationPolicy, captcha: registrationCaptcha });
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityRegistrationPage(root, { error: safePageError(error), unavailable: true });
+      }
       return true;
+    },
+    async refreshCaptcha() {
+      if (!registrationPolicy?.human_verification
+        || (registrationBusy && isCurrent(registrationBusy))) return false;
+      const ticket = beginRequest();
+      try {
+        const next = await api.registrationCaptcha({ signal: ticket.signal });
+        if (!isCurrent(ticket)) return false;
+        registrationCaptcha = next;
+        const image = root.querySelector?.(".identity-captcha-control img");
+        if (image) { image.src = next.image; image.hidden = false; }
+        const answer = root.querySelector?.('[name="captchaAnswer"]');
+        if (answer) answer.value = "";
+        return true;
+      } catch (error) {
+        if (!isCurrent(ticket) || isAbort(error)) return false;
+        renderIdentityRegistrationPage(root, { policy: registrationPolicy,
+          captcha: registrationCaptcha, error: safePageError(error) });
+        return false;
+      }
     },
     showReset() {
       beginRequest();
@@ -264,12 +308,14 @@ export function createIdentityPageController({
       renderIdentityResetRequestPage(root);
       return true;
     },
-    async registerAccount({ email, displayName, password, confirmPassword, consent }) {
+    async registerAccount({ email, displayName, password, confirmPassword, consent, captchaAnswer }) {
+      if (registrationBusy && isCurrent(registrationBusy)) return false;
       if (password !== confirmPassword || consent !== true) {
         scrubSensitiveInputs();
         renderIdentityRegistrationPage(root, {
           email,
           displayName,
+          policy: registrationPolicy, captcha: registrationCaptcha,
           error: {
             message: password !== confirmPassword ? "两次输入的密码不一致。" : "请先同意隐私条款。",
             requestId: "-",
@@ -278,7 +324,9 @@ export function createIdentityPageController({
         return false;
       }
       const ticket = beginRequest();
-      renderIdentityRegistrationPage(root, { email, displayName });
+      registrationBusy = ticket;
+      renderIdentityRegistrationPage(root, { email, displayName, busy: true,
+        policy: registrationPolicy, captcha: registrationCaptcha });
       try {
         const result = await queueWrite(() =>
           api.register({
@@ -287,23 +335,42 @@ export function createIdentityPageController({
             password,
             consentVersion: CONSENT_VERSION,
             invitationToken,
+            captchaId: registrationPolicy?.human_verification ? registrationCaptcha?.challenge_id : undefined,
+            captchaAnswer,
             signal: ticket.signal,
           }),
         );
         if (!isCurrent(ticket)) return false;
         scrubSensitiveInputs();
+        if (result.account) {
+          pendingChallenge = null;
+          applyIdentityResult(result);
+          await loadSessions(ticket, "注册成功。", null);
+          return true;
+        }
         pendingChallenge = { intentId: result.intent_id, purpose: result.purpose };
         renderIdentityVerificationPage(root, { feedback: "验证码已发送。" });
         return true;
       } catch (error) {
         scrubSensitiveInputs();
         if (!isCurrent(ticket) || isAbort(error)) return false;
+        if (registrationPolicy?.human_verification) {
+          try {
+            const captcha = await api.registrationCaptcha({ signal: ticket.signal });
+            if (!isCurrent(ticket)) return false;
+            registrationCaptcha = captcha;
+          } catch { if (isCurrent(ticket)) registrationCaptcha = null; }
+          if (!isCurrent(ticket)) return false;
+        }
         renderIdentityRegistrationPage(root, {
           email,
           displayName,
+          policy: registrationPolicy, captcha: registrationCaptcha,
           error: safePageError(error),
         });
         return false;
+      } finally {
+        if (registrationBusy === ticket) registrationBusy = null;
       }
     },
     async verifyRegistration({ code }) {
@@ -3971,6 +4038,7 @@ export function createIdentityPageController({
   function scrubSensitiveInputs() {
     for (const selector of [
       'input[type="password"]',
+      'input[autocomplete="new-password"]',
       'input[autocomplete="current-password"]',
       'input[name="code"]',
       'input[name="answer"]',
@@ -4052,6 +4120,7 @@ export function createIdentityPageController({
           password: fields.get("password"),
           confirmPassword: fields.get("confirmPassword"),
           consent: fields.get("consent") === "on",
+          captchaAnswer: fields.get("captchaAnswer"),
         });
       } else if (form?.matches?.("[data-identity-verification-form]")) {
         event.preventDefault();
@@ -4444,6 +4513,8 @@ export function createIdentityPageController({
         await controller.copyMachineCredential("client_secret");
       } else if (button.dataset.identityAction === "dismiss-machine-credential") {
         controller.dismissMachineCredential();
+      } else if (button.dataset.identityAction === "refresh-captcha") {
+        await controller.refreshCaptcha();
       } else if (button.dataset.identityAction === "show-register") {
         controller.showRegistration();
       } else if (button.dataset.identityAction === "show-reset") {
@@ -4588,7 +4659,7 @@ function scrubBusinessForm(form) {
 
 function scrubFormSecrets(form) {
   for (const input of form?.querySelectorAll?.(
-    'input[type="password"], input[autocomplete="one-time-code"]',
+    'input[type="password"], input[autocomplete="new-password"], input[autocomplete="one-time-code"]',
   ) ?? []) {
     input.value = "";
   }
@@ -4705,7 +4776,15 @@ function normalizeSessions(list, currentSession) {
 function safePageError(error) {
   if (error instanceof IdentityApiError || error instanceof PlatformApiError
     || error instanceof PrivacyApiError || error instanceof ComplianceApiError) {
-    return { message: error.message, requestId: error.requestId };
+    const messages = {
+      "identity.delivery_unavailable": "邮箱验证服务尚未配置，请联系平台管理员。",
+      "identity.registration_invalid": "注册信息不完整或格式不正确，请检查后重试。",
+      "identity.verification_invalid": "验证码错误或已过期，请重新获取。",
+      "identity.rate_limited": "操作过于频繁，请稍后重试。",
+      "identity.unavailable": "账号服务暂时不可用，请稍后重试。",
+      "risk.challenge_required": "当前请求触发安全限制，请稍后重试。",
+    };
+    return { message: messages[error.code] ?? error.message, requestId: error.requestId };
   }
   return { message: "账号请求未完成，请稍后重试。", requestId: "-" };
 }

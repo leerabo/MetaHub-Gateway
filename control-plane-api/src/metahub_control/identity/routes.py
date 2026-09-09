@@ -40,6 +40,11 @@ from .models import (
     TrustedDeviceResponse,
     UnifiedMfaEnrollmentResponse,
 )
+from .registration_policy import (
+    consume_registration_captcha,
+    create_registration_captcha,
+    public_registration_policy,
+)
 from .security_service import (
     begin_account_recovery,
     begin_webauthn_registration,
@@ -58,6 +63,7 @@ from .self_service import (
     begin_password_reset,
     begin_registration,
     confirm_password_reset,
+    register_local_account,
     resend_registration_verification,
     verify_registration,
 )
@@ -124,24 +130,58 @@ async def login(request: Request, response: Response) -> IdentitySessionResponse
     )
 
 
-@router.post("/registrations", response_model=IdentityPendingChallengeResponse)
+@router.get("/registration-policy")
+async def registration_policy(request: Request, response: Response) -> dict:
+    _reject_query(request, ())
+    response.headers["Cache-Control"] = "no-store"
+    return await _run_identity_operation(public_registration_policy, _config(request))
+
+
+@router.get("/registration-captcha")
+async def registration_captcha(request: Request, response: Response) -> dict:
+    _reject_query(request, ())
+    device = _identity_device_token(request)
+    result = await _run_identity_operation(
+        create_registration_captcha,
+        _config(request),
+        device_token=device,
+        client_host=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent"),
+    )
+    _set_identity_device_cookie(response, device)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post(
+    "/registrations", response_model=IdentityPendingChallengeResponse | IdentitySessionResponse
+)
 async def register(
     request: Request,
     response: Response,
-) -> IdentityPendingChallengeResponse:
+) -> IdentityPendingChallengeResponse | IdentitySessionResponse:
     _reject_legacy_authorization(request)
     _require_write_origin(request)
     _reject_query(request, ())
     payload = await _strict_json(
         request,
         required_fields=("email", "display_name", "password", "consent_version"),
-        optional_fields=("invitation_token",),
+        optional_fields=("invitation_token", "captcha_id", "captcha_answer"),
     )
     device_token = _identity_device_token(request)
     email = _required_string(payload, "email", minimum=3, maximum=320)
     await _risk_preflight(request, "registration", email, device_token=device_token)
+    policy = await _run_identity_operation(public_registration_policy, _config(request))
+    if policy["human_verification"]:
+        await _run_identity_operation(
+            consume_registration_captcha,
+            _config(request),
+            challenge_id=_required_string(payload, "captcha_id", minimum=36, maximum=36),
+            answer=_required_string(payload, "captcha_answer", minimum=1, maximum=16),
+            device_token=device_token,
+        )
     pending = await _run_identity_operation(
-        begin_registration,
+        begin_registration if policy["email_verification"] else register_local_account,
         _config(request),
         email=email,
         display_name=_required_string(payload, "display_name", minimum=1, maximum=120),
@@ -171,6 +211,14 @@ async def register(
         device_token=device_token,
     )
     _set_identity_device_cookie(response, device_token)
+    if not isinstance(pending, PendingIdentityChallenge):
+        _set_identity_cookies(response, _config(request), pending.session_token, pending.csrf_token)
+        return IdentitySessionResponse(
+            account=pending.account,
+            current_session=pending.current_session,
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+        )
     return _pending_response(pending, request)
 
 

@@ -18,6 +18,8 @@ import {
   loginIdentity,
   logoutIdentity,
   registerIdentity,
+  getRegistrationPolicy,
+  getRegistrationCaptcha,
   requestIdentityPasswordReset,
   resendIdentityVerification,
   revokeIdentityTrustedDevice,
@@ -139,6 +141,8 @@ if (root) {
     api: {
       login: (input) => loginIdentity({ controlApiUrl, ...input }),
       register: (input) => registerIdentity({ controlApiUrl, ...input }),
+      registrationPolicy: (input) => getRegistrationPolicy({ controlApiUrl, ...input }),
+      registrationCaptcha: (input) => getRegistrationCaptcha({ controlApiUrl, ...input }),
       verify: (input) => verifyIdentityRegistration({ controlApiUrl, ...input }),
       resend: (input) => resendIdentityVerification({ controlApiUrl, ...input }),
       requestReset: (input) => requestIdentityPasswordReset({ controlApiUrl, ...input }),
@@ -285,7 +289,12 @@ if (root) {
       completeRiskChallenge: (input) => completeRiskChallenge({ controlApiUrl, ...input }),
     },
   });
-  void publicBrandingReady.then(() => controller.mount()).then(() => {
+  void publicBrandingReady.then(() => {
+    if (!pendingRiskChallenge && new URLSearchParams(window.location.search).get("view") === "register") {
+      return controller.mount({ registration: true });
+    }
+    return controller.mount();
+  }).then(() => {
     if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
   });
   globalThis.window.addEventListener("pagehide", disposeAccessExperience, { once: true });

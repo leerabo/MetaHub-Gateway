@@ -40,6 +40,8 @@ export async function registerIdentity({
   password,
   consentVersion,
   invitationToken,
+  captchaId,
+  captchaAnswer,
   signal,
 } = {}) {
   const body = {
@@ -51,11 +53,27 @@ export async function registerIdentity({
   if (invitationToken !== undefined && invitationToken !== null && invitationToken !== "") {
     body.invitation_token = invitationToken;
   }
+  if (captchaId) {
+    body.captcha_id = captchaId;
+    body.captcha_answer = captchaAnswer;
+  }
   return identityRequest(controlApiUrl, "/identity/registrations", {
     method: "POST",
     body,
-    responseType: "pendingChallenge",
+    responseType: "registration",
     signal,
+  });
+}
+
+export function getRegistrationPolicy({ controlApiUrl, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/registration-policy", {
+    responseType: "registrationPolicy", signal,
+  });
+}
+
+export function getRegistrationCaptcha({ controlApiUrl, signal } = {}) {
+  return identityRequest(controlApiUrl, "/identity/registration-captcha", {
+    responseType: "registrationCaptcha", signal,
   });
 }
 
@@ -520,6 +538,26 @@ export function readIdentityCsrfCookie(cookieText = globalThis.document?.cookie 
 
 function validateResponse(payload, responseType) {
   requirePlainObject(payload, "response");
+  if (responseType === "registration") {
+    return validateResponse(payload, Object.hasOwn(payload, "account") ? "accountSession" : "pendingChallenge");
+  }
+  if (responseType === "registrationPolicy") {
+    requireExactKeys(payload, ["email_verification", "human_verification", "revision",
+      "email_delivery_available", "local_registration"], "response");
+    for (const key of ["email_verification", "human_verification", "email_delivery_available", "local_registration"]) {
+      if (typeof payload[key] !== "boolean") invalidResponse(key);
+    }
+    requireNonnegativeInteger(payload.revision, "revision");
+    return payload;
+  }
+  if (responseType === "registrationCaptcha") {
+    requireExactKeys(payload, ["challenge_id", "expires_at", "image"], "response");
+    if (!/^cap_[0-9a-f]{32}$/u.test(payload.challenge_id)
+      || typeof payload.image !== "string" || payload.image.length > 40000
+      || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/u.test(payload.image)
+      || !Number.isFinite(Date.parse(payload.expires_at))) invalidResponse("captcha");
+    return payload;
+  }
   if (responseType === "accountSession") {
     requireExactKeys(payload, ["account", "current_session", "request_id", "trace_id"], "response");
     return {
