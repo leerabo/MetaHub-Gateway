@@ -43,3 +43,10 @@
 入口修复与字号修复分别归 PRD-147/094 的独立设计、测试、敏感审计记录。浏览器由真实服务提供当前源码，不替换 fetch/API，也不复用用户 Cookie；worker lifespan 关闭，成功数据库副本已删除，服务和浏览器已退出。上方旧运行快照和“浏览器提交未验证”仅描述当时状态，以本节新增证据为准。
 
 上方用量/财务缺口后续增量已进入 S2 工作树，最新证据见 `S2-consumer-usage-accounting-batch-20260909.md` 与 `S2-internal-finance-budget-batch-20260909.md`；不能据此推断相关独立提交、完整模型调用、跨平台/多浏览器和长稳验收已完成。
+
+## 2026-09-10 补充证据
+
+- 原生 PostgreSQL 使用者验证 `.artifacts/s1-index-native-547deff2f27d4b3593683345d6c1f2ee/results.xml`：2 项通过，覆盖创建、轮换、停用、归属不可变及迁移保护。记录提交 `9c593a8`。隔离集群已正常关闭，现存库清单保留。
+- 原注册性能门槛 `.artifacts/s1-index-batch-1_q9glcz/results.xml`：1 项通过；注册/验证 p95 小于 500ms，滥用计数小于 30ms，未放宽阈值。
+- 动画响应性修复 `c3baa35` 后的独立构建浏览器 `.artifacts/s1-browser-jp9dqofw/acceptance.json` 通过桌面和手机十个阶段，验证 289 个生产资产及真实动态画布。详见 `PRD-092-access-animation-tests-20260910.md` 及独立敏感审计。
+- 当前本地聚合发布摘要为 `6b4ceb1d98733178c0676aaf1492b057534ce16886241bc5f3ae7bc79bf30ebe`。完整目标继续开放，以上补充不覆盖未完成业务域。
