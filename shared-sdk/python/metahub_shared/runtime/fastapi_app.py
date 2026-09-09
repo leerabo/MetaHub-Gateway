@@ -561,6 +561,9 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         response.headers["Cache-Control"] = "no-store, private"
     elif path == "/finops" or path.startswith("/finops/"):
         response.headers["Cache-Control"] = "no-store, private"
+    elif path == "/usage" or path.startswith("/usage/"):
+        # Usage and export ownership are private on success and every error path.
+        response.headers["Cache-Control"] = "no-store, private"
     elif path == "/feedback" or path.startswith("/feedback/"):
         response.headers["Cache-Control"] = "no-store, private"
     elif path == "/model-aliases" or path.startswith("/model-aliases/"):
