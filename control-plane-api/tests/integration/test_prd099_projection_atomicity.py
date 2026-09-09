@@ -9,10 +9,84 @@ import test_prd099_platform_billing as contracts
 from httpx import ASGITransport, AsyncClient
 from metahub_control.platform_billing import service
 from metahub_shared.db import connect_database
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
 from test_prd137_http_probes import migrated_baseline  # noqa: F401
 
 ANCHOR = datetime(2026, 8, 25, tzinfo=UTC)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["project", "close"])
+async def test_preflight_ends_snapshot_and_reloads_competing_real_work(
+    projection_subject, monkeypatch, operation,
+):
+    config, tenant_id, clock = projection_subject
+    _usage(config, tenant_id, ANCHOR + timedelta(days=1), enqueued_at=ANCHOR)
+    if operation == "close":
+        assert service.project_usage_once(config, worker_id="create-cycle")
+        clock[0] = ANCHOR + timedelta(days=15)
+    original_connect = service._connect
+    completed = []
+
+    def work():
+        return (service.project_usage_once(config, worker_id="competing-worker")
+                if operation == "project" else service.close_due_cycles(config))
+
+    class BeforeWrite:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def execute(self, sql, *args):
+            if sql == "BEGIN IMMEDIATE":
+                assert not self.connection.in_transaction
+                with monkeypatch.context() as change:
+                    change.setattr(service, "_connect", original_connect)
+                    with database_request_scope():
+                        assert work()
+                    completed.append(_facts(config))
+            return self.connection.execute(sql, *args)
+
+    monkeypatch.setattr(service, "_connect", lambda current: BeforeWrite(original_connect(current)))
+    with database_request_scope(reuse_connections=True):
+        assert not work()
+        assert not connect_database(config.database_url).in_transaction
+    assert len(completed) == 1
+    assert _facts(config) == completed[0]
+    with closing(connect_database(config.database_url)) as connection:
+        assert connection.execute("SELECT count(*) FROM platform_meter_readings").fetchone()[0] == 4
+        if operation == "close":
+            assert connection.execute(
+                "SELECT count(*) FROM platform_billing_summaries",
+            ).fetchone()[0] == 4
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["project", "close"])
+async def test_admission_preserves_existing_business_transaction(projection_subject, operation):
+    config, _tenant_id, _clock = projection_subject
+    before = _facts(config)
+    pending_stamp = service._db_time(ANCHOR + timedelta(seconds=17))
+    with database_request_scope(reuse_connections=True):
+        connection = connect_database(config.database_url)
+        connection.execute("BEGIN")
+        connection.execute("UPDATE platform_meter_checkpoints SET updated_at=?", (pending_stamp,))
+        with pytest.raises(ApiError) as error:
+            if operation == "project":
+                service.project_usage_once(config, worker_id="nested-worker")
+            else:
+                service.close_due_cycles(config)
+        assert error.value.code == ("platform_metering.unavailable" if operation == "project"
+                                    else "platform_billing.unavailable")
+        assert connection.in_transaction
+        assert connection.execute(
+            "SELECT updated_at FROM platform_meter_checkpoints",
+        ).fetchone()[0] == pending_stamp
+        connection.rollback()
+    assert _facts(config) == before
 
 
 @pytest.fixture

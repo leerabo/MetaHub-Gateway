@@ -122,3 +122,36 @@ CUA 浏览器首次刷新报 `feedback.unavailable`，request_id=`req_81608988d9
 成功分别保留，不能宣称 Summary 间歇故障已修复，也没有重做移动端验收。
 `prd098-099-postdeploy-runtime-r1.json` 只记录新进程短采样；上线前的后台计数失败不因此关闭。
 独立敏感审计：`prd-099-projection-sensitive-audit-r1.json`、`prd099-projection-key-audit-r1.json`。
+
+## 2026-09-09 空轮询只读准入与本地发布
+
+投影与关账先在自有只读事务检查工作，释放游标/快照后才申请写锁。写事务重新检查全部事实，
+调用者已有事务时拒绝操作但不提交、回滚或关闭调用者的连接。设计与两轮自审见第 11 节。
+以下证据均位于 `.artifacts/g6-security-20260907/`，各轮独立记录，不合并为一次通过结果。
+
+- `prd099-idle-admission-red-r1.xml`：5 passed / 9 failed，真实独立 SQLite 写锁复现无工作仍争锁。
+- `prd099-idle-admission-green-r1.xml`：14 passed，覆盖空、失败、序号缺口、缺失 outbox、状态冲突、
+  无到期周期、已有业务事务、并发状态/检查点/时间变动以及 schema 不可用。
+- `prd099-idle-admission-batch-r1.xml`：23 passed / 2 failed，269.298 秒。包含完整账单 API 成功；
+  两项新增集成测试准备数据时违反 checkpoint 的序号/事实 CHECK，尚未到达事务保留断言。
+- 测试改为更新合法 `updated_at`，仍检查预期错误码、未提交数据可见、自有事务存续及 rollback
+  恢复全部事实。`prd099-idle-admission-projection-r2.xml`：10 passed，78.889 秒，含原六项真实
+  订阅/权益/迟到投影合同及四项并发、事务保留增量。
+- `prd147-feedback-native-prd099-idle-admission-r1-46b2e43e9b8d4a28b48bd3d22cb65a9b.xml`：
+  原生 PostgreSQL 同十项合同 10 passed，267.667 秒，隔离实例正常停止且无 postmaster.pid。
+- 四个受影响 Python 文件 Ruff、compileall 及 `git diff --check` 通过。受保护基线与复用迁移
+  输入的 SHA256 均保持原值，未重新迁移或编辑运行数据库。
+
+本地 Control API 从已核验 PID 19220 更新为 PID 312，Gateway/Console 保持运行。
+`prd099-idle-admission-predeploy-r1.json` 与 `postdeploy-r1.json` 的 13 组事实计数/hash 相同，
+quick_check=ok、外键违规 0、三个 readiness 均为 200。历史 failed/pending 各一条、checkpoint=0
+继续保留。缺失历史权益仍需独立的对账依据，不能跳过失败记录或虚构套餐价格。
+
+`prd099-idle-admission-feedback-r1.json` 的八次已有反馈回放与十六次日志/过滤器读取均 200，
+反馈事实摘要不变；Summary 为七次 200、一次 503，整份报告仍为 failed，无付费模型调用。
+发布前四样本/十二次健康检查均 200，但旧进程已有 63 dropped、19 backend failure。
+发布后 `prd099-idle-admission-runtime-r1.json` 十二样本/三十六次健康检查均 200，63 队列，
+仍有 3 dropped，backend failure/shutdown timeout 为 0，报告仍为 failed。不以重启清零或
+本项空轮询修复宣称调度稳定、Summary SLA、全目标、G6/G8 或 72 小时验收通过。
+
+独立审计记录：`PRD-099-idle-admission-sensitive-audit-20260909.md`。

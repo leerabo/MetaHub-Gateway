@@ -28,3 +28,9 @@ test_projection_failure_rolls_back_new_cycle_and_allocations = (
 test_late_projection_failure_keeps_frozen_facts = (
     contracts.test_late_projection_failure_keeps_frozen_facts
 )
+test_preflight_ends_snapshot_and_reloads_competing_real_work = (
+    contracts.test_preflight_ends_snapshot_and_reloads_competing_real_work
+)
+test_admission_preserves_existing_business_transaction = (
+    contracts.test_admission_preserves_existing_business_transaction
+)

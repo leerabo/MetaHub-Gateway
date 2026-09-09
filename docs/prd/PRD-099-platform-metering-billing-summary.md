@@ -118,3 +118,19 @@ SQLite 六项投影断言已执行，但不等同于原生事务或真实平台�
 第一轮自审：序列回滚不得制造 checkpoint 空号；原生与 SQLite 同用严格 +1 检查和 savepoint 原子性。
 第二轮自审：原生 fixture 不预写订阅、权益或 Usage，不禁用源 trigger；保留原始失败记录，统一跑
 本批迁移、并发、订阅与计量流程。运行库历史缺失权益不由隔离测试补造。
+
+## 11. 空投影与无到期关账的写锁准入
+
+2026-09-09 实际运行仍为一个 owner_invalid 的 failed outbox、一个 pending 和 checkpoint=0。
+当前每次检查失败行、空投影及无到期周期均先申请 SQLite 写锁。本批在投影/关账入口增加
+自己拥有的只读事务预检，读游标与快照结束后，仅在存在可处理工作时申请原写事务。
+
+第一轮自审：预检必须在同一快照读取 checkpoint 与 canonical 下一条 Usage，保留严格连续序号、
+outbox 必需性、pending 状态和 failed 的 reconciliation_required。真正写入重新核对 schema、
+checkpoint、下一条事实及状态；不复用预检结果投影。关账同样按写锁获取后的当前时间重查。
+不跳过坏账、不编造历史权益，不改变 exactly-once、savepoint、调整或外层 commit fence。
+
+第二轮自审：SQLite 游标和 PostgreSQL 隐式读事务都须结束后才取写锁。调用者已有事务时失败
+关闭，不能回滚其业务工作；读库错误仍报告不可用，不伪装为空。真实持锁红绿测试覆盖空、失败、
+序号缺口和无到期周期，并以领取/关闭竞态检查二次查询；随后合并运行现有六项原子性流程、
+账单 API 和原生 PostgreSQL 同一业务合同。运行库事实只读对比，不因投影优化重写历史数据。

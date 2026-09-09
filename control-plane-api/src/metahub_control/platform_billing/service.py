@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import unicodedata
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -52,38 +53,21 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
     """Project exactly one canonical Usage fact and advance its checkpoint atomically."""
 
     connection = _connect(config)
+    if connection.in_transaction:
+        raise ApiError("platform_metering.unavailable")
     try:
+        connection.execute("BEGIN")
+        candidate = _pending_usage_projection(connection)
+        connection.rollback()
+        if candidate is None:
+            return False
+        # The read snapshot only admits work; writer-side state remains authoritative.
         connection.execute("BEGIN IMMEDIATE")
-        _require_schema(connection)
-        checkpoint = connection.execute(
-            "SELECT * FROM platform_meter_checkpoints WHERE projection_code='usage_ledger_v1'"
-        ).fetchone()
-        if checkpoint is None:
-            raise ApiError("platform_metering.unavailable")
-        row = connection.execute(
-            """
-            SELECT sequence.usage_export_sequence,outbox.*,usage.tenant_id,usage.request_id,
-              usage.input_tokens,usage.output_tokens,usage.total_tokens,
-              usage.created_at AS usage_created_at
-            FROM usage_export_ledger_sequences sequence
-            JOIN usage_ledger usage ON usage.usage_ledger_id=sequence.usage_ledger_id
-            LEFT JOIN platform_meter_outbox outbox
-              ON outbox.source_usage_ledger_id=usage.usage_ledger_id
-            WHERE sequence.usage_export_sequence>?
-            ORDER BY sequence.usage_export_sequence LIMIT 1
-            """,
-            (int(checkpoint["source_sequence"]),),
-        ).fetchone()
+        row = _pending_usage_projection(connection)
         if row is None:
             connection.commit()
             return False
         sequence = int(row["usage_export_sequence"])
-        if sequence != int(checkpoint["source_sequence"]) + 1 or row["meter_outbox_id"] is None:
-            raise ApiError("platform_metering.checkpoint_conflict")
-        if row["status"] == "failed":
-            raise ApiError("platform_metering.reconciliation_required")
-        if row["status"] != "pending":
-            raise ApiError("platform_metering.checkpoint_conflict")
         now = _utcnow()
         lease_token = secrets.token_hex(16)
         claimed = connection.execute(
@@ -155,11 +139,58 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
         connection.close()
 
 
+def _pending_usage_projection(connection: sqlite3.Connection) -> sqlite3.Row | None:
+    _require_schema(connection)
+    with closing(connection.execute(
+        "SELECT * FROM platform_meter_checkpoints WHERE projection_code='usage_ledger_v1'",
+    )) as cursor:
+        checkpoint = cursor.fetchone()
+    if checkpoint is None:
+        raise ApiError("platform_metering.unavailable")
+    with closing(connection.execute(
+        """
+        SELECT sequence.usage_export_sequence,outbox.*,usage.tenant_id,usage.request_id,
+          usage.input_tokens,usage.output_tokens,usage.total_tokens,
+          usage.created_at AS usage_created_at
+        FROM usage_export_ledger_sequences sequence
+        JOIN usage_ledger usage ON usage.usage_ledger_id=sequence.usage_ledger_id
+        LEFT JOIN platform_meter_outbox outbox
+          ON outbox.source_usage_ledger_id=usage.usage_ledger_id
+        WHERE sequence.usage_export_sequence>?
+        ORDER BY sequence.usage_export_sequence LIMIT 1
+        """,
+        (int(checkpoint["source_sequence"]),),
+    )) as cursor:
+        row = cursor.fetchone()
+    if row is not None:
+        if (int(row["usage_export_sequence"]) != int(checkpoint["source_sequence"]) + 1
+                or row["meter_outbox_id"] is None):
+            raise ApiError("platform_metering.checkpoint_conflict")
+        if row["status"] == "failed":
+            raise ApiError("platform_metering.reconciliation_required")
+        if row["status"] != "pending":
+            raise ApiError("platform_metering.checkpoint_conflict")
+    return row
+
+
 def close_due_cycles(config: AppConfig, *, limit: int = 50) -> int:
     if type(limit) is not int or not 1 <= limit <= 200:
         raise ApiError("platform_billing.request_invalid")
     connection = _connect(config)
+    if connection.in_transaction:
+        raise ApiError("platform_billing.unavailable")
     try:
+        connection.execute("BEGIN")
+        _require_schema(connection)
+        with closing(connection.execute(
+            "SELECT 1 FROM platform_billing_cycles "
+            "WHERE status='open' AND period_ends_at<=? LIMIT 1",
+            (_db_time(_utcnow()),),
+        )) as cursor:
+            candidate = cursor.fetchone()
+        connection.rollback()
+        if candidate is None:
+            return 0
         connection.execute("BEGIN IMMEDIATE")
         _require_schema(connection)
         now = _utcnow()
