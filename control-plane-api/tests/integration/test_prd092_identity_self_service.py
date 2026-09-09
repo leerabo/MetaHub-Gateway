@@ -7,6 +7,7 @@ import math
 import shutil
 import time
 from contextlib import AsyncExitStack
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -312,6 +313,8 @@ async def test_verified_invitation_records_binding_without_membership_or_consump
     raw_token = "I" * 43
     invitation_id = "inv_" + "1" * 32
     invited_email = "invited.owner@example.com"
+    invitation_created_at = datetime.now(UTC).replace(microsecond=0)
+    invitation_expires_at = invitation_created_at + timedelta(days=3)
     connection = connect_database(database_url)
     try:
         owner = connection.execute(
@@ -323,8 +326,7 @@ async def test_verified_invitation_records_binding_without_membership_or_consump
             INSERT INTO invitations(
               invitation_id,tenant_id,email,email_fingerprint,role_code,token_hash,status,
               invited_by,accepted_user_id,expires_at,accepted_at,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,'pending',?,NULL,'2026-08-24T00:00:00Z',NULL,
-              '2026-08-21T00:00:00Z','2026-08-21T00:00:00Z')
+            VALUES(?,?,?,?,?,?,'pending',?,NULL,?,NULL,?,?)
             """,
             (
                 invitation_id,
@@ -334,6 +336,9 @@ async def test_verified_invitation_records_binding_without_membership_or_consump
                 "developer",
                 hash_token(raw_token),
                 owner["user_id"],
+                invitation_expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                invitation_created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                invitation_created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
             ),
         )
         connection.commit()
@@ -932,7 +937,7 @@ async def test_warm_registration_verification_and_abuse_buckets_meet_latency_bud
                 AsyncClient(
                     transport=ASGITransport(
                         app=app,
-                        client=(f"127.0.0.{index + 10}", 443),
+                        client=(f"127.0.{index + 10}.1", 443),
                     ),
                     base_url="https://testserver",
                 )
@@ -942,7 +947,8 @@ async def test_warm_registration_verification_and_abuse_buckets_meet_latency_bud
         pending: list[tuple[str, str]] = []
         registration_samples: list[float] = []
         # 至少 20 个样本才能让 nearest-rank p95 不退化为最大值；单次调度抖动不应
-        # 冒充 p95 回归。四个独立客户端各采五次，避免把单设备滥用上限误测成服务 SLO；
+        # 冒充 p95 回归。四个独立 /24 客户端各采五次，预热使用另一个网段，
+        # 避免把设备或网段滥用上限误测成服务 SLO；
         # 持续出现两个及以上超预算样本仍会使本门禁失败。
         for index in range(20):
             started_at = time.perf_counter()
