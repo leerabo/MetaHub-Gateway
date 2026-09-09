@@ -223,6 +223,11 @@ export function renderIdentityResetConfirmPage(container, options = {}) {
 
 export function renderIdentitySecurityPage(container, state) {
   if (!container) return;
+  if (isNewOrganizationAccount(state) && !state.accountSecurityView
+      && (!state.error || state.workspaceView === "create")) {
+    renderOrganizationStart(container, state);
+    return;
+  }
   const account = state.account;
   const sessions = Array.isArray(state.sessions) ? state.sessions : [];
   const currentIndex = sessions.findIndex((session) => session.is_current);
@@ -349,6 +354,7 @@ function renderIdentityTopbar(state) {
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
+        ${isNewOrganizationAccount(state) ? '<button class="identity-quiet-command" type="button" data-identity-action="show-organization-start">返回组织开通</button>' : ""}
         ${available ? `<a class="identity-quiet-command" href="/console.html">进入控制台 ${icon("arrow-right")}</a>` : ""}
         <button
           class="identity-notification-button"
@@ -2356,6 +2362,33 @@ function statusLabel(status) {
   return { active: "启用", disabled: "停用", pending: "待激活" }[status] ?? "未知";
 }
 
+function isNewOrganizationAccount(state) {
+  return state.workspaceDirectoryReady === true && !state.workspaceContext
+    && !state.platformAccess && !state.hasPendingInvitation
+    && (state.workspaces?.length ?? 0) === 0 && (state.workspaceChoices?.length ?? 0) === 0;
+}
+
+function renderOrganizationStart(container, state) {
+  const creating = state.workspaceView === "create";
+  container.innerHTML = `
+    <div class="identity-organization-shell">
+      <header class="identity-organization-topbar">
+        <a class="identity-wordmark" href="/">${renderIdentityBrandMark()}<strong>${escapeHtml(publicBrand.product_name)}</strong></a>
+        <nav aria-label="账号操作">
+          <button class="identity-quiet-command" type="button" data-identity-action="show-account-security" ${state.workspaceCreating ? "disabled" : ""}>账号安全</button>
+          <button class="identity-quiet-command" type="button" data-identity-action="logout">退出登录</button>
+        </nav>
+      </header>
+      <main class="identity-organization-main" aria-labelledby="organization-start-title">
+        <p class="identity-organization-account">${escapeHtml(state.account.display_name || state.account.email)}</p>
+        <h1 id="organization-start-title">${creating ? "创建组织" : "你的组织，从这里开始"}</h1>
+        ${renderFeedback(state.feedback)}${renderError(state.error)}
+        ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { organizationOnly: true, busy: state.workspaceCreating })
+    : `<button class="identity-primary identity-organization-create" type="button" data-identity-action="show-workspace-create"><span>创建组织</span>${icon("arrow-right")}</button>`}
+      </main>
+    </div>`;
+}
+
 function renderWorkspaceSection(state) {
   const workspaces = Array.isArray(state.workspaces) ? state.workspaces : [];
   const creating = state.workspaceView === "create";
@@ -2372,7 +2405,7 @@ function renderWorkspaceSection(state) {
             : '<button class="identity-quiet-command" type="button" data-identity-action="show-workspace-create"><span aria-hidden="true">+</span> 创建空间</button>'
         }
       </div>
-      ${creating ? renderWorkspaceCreateForm(state.workspaceDraft) : renderWorkspaceList(workspaces)}
+      ${creating ? renderWorkspaceCreateForm(state.workspaceDraft, { busy: state.workspaceCreating }) : renderWorkspaceList(workspaces)}
     </section>
   `;
 }
@@ -2401,46 +2434,47 @@ function renderWorkspaceList(workspaces) {
     .join("")}</div>`;
 }
 
-function renderWorkspaceCreateForm(draft = {}) {
+function renderWorkspaceCreateForm(draft = {}, { organizationOnly = false, busy = false } = {}) {
   const kind = draft?.kind === "personal" ? "personal" : "organization";
+  const disabled = busy ? "disabled" : "";
   return `
-    <form class="identity-workspace-form" data-workspace-create-form>
+    <form class="identity-workspace-form" data-workspace-create-form aria-busy="${busy}">
       <input type="hidden" name="kind" value="${kind}" />
-      <div class="identity-workspace-kind" role="group" aria-label="空间类型">
-        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="personal" aria-pressed="${kind === "personal"}">个人</button>
-        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="organization" aria-pressed="${kind === "organization"}">企业</button>
-      </div>
+      ${organizationOnly ? "" : `<div class="identity-workspace-kind" role="group" aria-label="空间类型">
+        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="personal" aria-pressed="${kind === "personal"}" ${disabled}>个人</button>
+        <button type="button" data-identity-action="set-workspace-kind" data-workspace-kind="organization" aria-pressed="${kind === "organization"}" ${disabled}>企业</button>
+      </div>`}
       ${
         kind === "organization"
           ? `
             <label>
-              <span>企业名称</span>
-              <input name="name" type="text" maxlength="160" autocomplete="organization" value="${escapeAttribute(draft?.name ?? "")}" required autofocus />
+              <span>组织名称</span>
+              <input name="name" type="text" maxlength="160" autocomplete="organization" value="${escapeAttribute(draft?.name ?? "")}" required autofocus ${disabled} />
             </label>
             <label>
-              <span>空间标识</span>
-              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9\\-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required />
+              <span>组织标识</span>
+              <input name="slug" type="text" minlength="3" maxlength="48" pattern="[a-z0-9](?:[a-z0-9\\-]{1,46}[a-z0-9])" value="${escapeAttribute(draft?.slug ?? "")}" required ${disabled} />
             </label>
           `
           : ""
       }
       <label>
-        <span>Region</span>
-        <select name="region" required>
+        <span>服务区域</span>
+        <select name="region" required ${disabled}>
           ${renderOption("cn-north-1", "华北", draft?.region)}
           ${renderOption("cn-east-1", "华东", draft?.region)}
         </select>
       </label>
       <label>
         <span>服务模式</span>
-        <select name="serviceMode" required>
+        <select name="serviceMode" required ${disabled}>
           ${renderOption("internal_only", "内部服务", draft?.serviceMode)}
           ${renderOption("public_service", "公共服务", draft?.serviceMode)}
         </select>
       </label>
       <div class="identity-workspace-actions">
-        <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create">取消</button>
-        <button class="identity-primary" type="submit">创建</button>
+        <button class="identity-quiet-command" type="button" data-identity-action="cancel-workspace-create" ${disabled}>取消</button>
+        <button class="identity-primary" type="submit" ${disabled}>${busy ? "正在创建" : kind === "organization" ? "创建组织" : "创建空间"}</button>
       </div>
     </form>
   `;

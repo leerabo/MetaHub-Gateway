@@ -28,6 +28,7 @@ export function createIdentityPageController({
   monotonicNow = defaultMonotonicNow,
   newIdempotencyKey = defaultIdempotencyKey,
   recordWorkspaceSwitch = () => {},
+  onWorkspaceCreated = () => {},
 } = {}) {
   if (!root || !api) {
     throw new TypeError("identity page requires root and api");
@@ -39,6 +40,9 @@ export function createIdentityPageController({
   let sessions = [];
   let workspaces = [];
   let workspaceChoices = [];
+  let workspaceDirectoryReady = false;
+  let accountSecurityView = false;
+  let workspaceCreating = false;
   let workspaceContext = null;
   let memberships = [];
   let navigationItems = [];
@@ -826,6 +830,8 @@ export function createIdentityPageController({
       }
     },
     showWorkspaceCreate() {
+      if (workspaceCreating) return false;
+      accountSecurityView = false;
       clearInvitationSecret();
       invitationResult = null;
       workspaceView = "create";
@@ -842,7 +848,7 @@ export function createIdentityPageController({
       return true;
     },
     setWorkspaceKind(kind) {
-      if (workspaceView !== "create" || !new Set(["personal", "organization"]).has(kind)) {
+      if (workspaceCreating || workspaceView !== "create" || !new Set(["personal", "organization"]).has(kind)) {
         return false;
       }
       workspaceDraft = { ...workspaceDraft, kind };
@@ -850,13 +856,26 @@ export function createIdentityPageController({
       return true;
     },
     cancelWorkspaceCreate() {
+      if (workspaceCreating) return false;
       workspaceView = "summary";
       workspaceDraft = null;
       renderSecurity();
       return true;
     },
+    showAccountSecurity() {
+      if (workspaceCreating) return false;
+      accountSecurityView = true;
+      renderSecurity();
+      return true;
+    },
+    showOrganizationStart() {
+      if (workspaceCreating) return false;
+      accountSecurityView = false;
+      renderSecurity();
+      return true;
+    },
     async createWorkspace({ kind, name, slug, region, serviceMode }) {
-      if (workspaceView !== "create" || !workspaceDraft) return false;
+      if (workspaceCreating || workspaceView !== "create" || !workspaceDraft) return false;
       const input = {
         kind,
         name: kind === "organization" ? name : undefined,
@@ -876,6 +895,7 @@ export function createIdentityPageController({
         requestFingerprint: fingerprint,
       };
       const ticket = beginRequest();
+      workspaceCreating = true;
       renderSecurity();
       try {
         const result = await queueWrite(() =>
@@ -894,10 +914,16 @@ export function createIdentityPageController({
         ];
         workspaceView = "summary";
         workspaceDraft = null;
+        workspaceCreating = false;
         autoSwitchAttempted = false;
-        return loadWorkspaceAccess(ticket, "空间已创建。", null);
+        const loaded = await loadWorkspaceAccess(ticket, kind === "organization" ? "组织已创建。" : "空间已创建。", null);
+        if (isCurrent(ticket) && loaded && workspaceContext?.workspace_id === result.workspace.workspace_id) {
+          onWorkspaceCreated();
+        }
+        return loaded;
       } catch (error) {
         if (!isCurrent(ticket) || isAbort(error)) return false;
+        workspaceCreating = false;
         renderSecurity({ error: safePageError(error) });
         return false;
       }
@@ -2797,6 +2823,7 @@ export function createIdentityPageController({
   }
 
   async function loadWorkspaces(ticket, feedback, previousError, retryAuthorizationDrift = true) {
+    workspaceDirectoryReady = false;
     if (typeof api.workspaces !== "function") {
       workspaces = [];
       return loadWorkspaceAccess(ticket, feedback, previousError, retryAuthorizationDrift);
@@ -2805,6 +2832,7 @@ export function createIdentityPageController({
       const list = await api.workspaces({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       workspaces = Array.isArray(list.workspaces) ? list.workspaces : [];
+      workspaceDirectoryReady = Array.isArray(list.workspaces);
       return loadWorkspaceAccess(ticket, feedback, previousError, retryAuthorizationDrift);
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
@@ -3554,6 +3582,7 @@ export function createIdentityPageController({
       const result = await api.identityWorkspaces({ signal: ticket.signal });
       if (!isCurrent(ticket)) return false;
       workspaceChoices = Array.isArray(result.workspaces) ? result.workspaces : [];
+      workspaceDirectoryReady = Array.isArray(result.workspaces) && !previousError;
     } catch (error) {
       if (!isCurrent(ticket) || isAbort(error)) return false;
       if (isExpired(error)) {
@@ -3561,6 +3590,7 @@ export function createIdentityPageController({
         return false;
       }
       workspaceChoices = [];
+      workspaceDirectoryReady = false;
       scrubWorkspaceAuthorization();
       renderSecurity({ feedback, error: safePageError(error) });
       return false;
@@ -3920,6 +3950,10 @@ export function createIdentityPageController({
       notificationPage: notificationCursorHistory.length + 1,
       workspaceView,
       workspaceDraft,
+      workspaceDirectoryReady,
+      accountSecurityView,
+      workspaceCreating,
+      hasPendingInvitation: Boolean(invitationToken),
       invitationResult,
       hasInvitationSecret: Boolean(invitationSecretLink),
       mfaEnrollment,
@@ -3937,6 +3971,7 @@ export function createIdentityPageController({
   }
 
   function scrubProtectedState() {
+    accountSecurityView = false;
     account = null;
     currentSession = null;
     accountPreferenceController.leave();
@@ -3954,6 +3989,8 @@ export function createIdentityPageController({
   }
 
   function scrubWorkspaceScope({ clearChoices = false, clearRichWorkspaces = false } = {}) {
+    workspaceDirectoryReady = false;
+    workspaceCreating = false;
     if (clearChoices) workspaceChoices = [];
     if (clearRichWorkspaces) workspaces = [];
     scrubWorkspaceAuthorization();
@@ -4527,6 +4564,10 @@ export function createIdentityPageController({
         await controller.resendVerification();
       } else if (button.dataset.identityAction === "show-workspace-create") {
         controller.showWorkspaceCreate();
+      } else if (button.dataset.identityAction === "show-account-security") {
+        controller.showAccountSecurity();
+      } else if (button.dataset.identityAction === "show-organization-start") {
+        controller.showOrganizationStart();
       } else if (button.dataset.identityAction === "cancel-workspace-create") {
         controller.cancelWorkspaceCreate();
       } else if (button.dataset.identityAction === "set-workspace-kind") {

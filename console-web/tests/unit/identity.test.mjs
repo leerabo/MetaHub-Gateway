@@ -526,7 +526,7 @@ test("workspace controller reuses a key only for an identical failed body", asyn
     attempts.map((attempt) => attempt.idempotencyKey),
     ["workspace-key-one", "workspace-key-one", "workspace-key-two"],
   );
-  assert.match(root.innerHTML, /空间已创建/u);
+  assert.match(root.innerHTML, /组织已创建/u);
   assert.doesNotMatch(root.innerHTML, /workspace-key-(?:one|two)|wsp_1111/u);
 });
 
@@ -965,6 +965,66 @@ test("stale registration setup cannot replace login or restore captcha", async (
   policy.resolve({ human_verification: false, email_verification: false });
   assert.equal(await loading, false);
   assert.match(root.innerHTML, /data-identity-login-form/u);
+});
+
+test("new accounts start with organization creation and secondary account security", async () => {
+  const root = createRoot();
+  const controller = createIdentityPageController({ root, api: workingApi({
+    workspaces: async () => ({ workspaces: [] }),
+  }) });
+  await controller.mount();
+  assert.match(root.innerHTML, /identity-organization-main/u);
+  assert.match(root.innerHTML, /创建组织/u);
+  assert.doesNotMatch(root.innerHTML, /账号保护状态|通知中心|空间类型|我的空间/u);
+  controller.showAccountSecurity();
+  assert.match(root.innerHTML, /账号保护状态|返回组织开通/u);
+  controller.showOrganizationStart();
+  assert.match(root.innerHTML, /identity-organization-main/u);
+  controller.showWorkspaceCreate();
+  assert.match(root.innerHTML, /data-workspace-create-form/u);
+  assert.doesNotMatch(root.innerHTML, /data-workspace-kind="personal"/u);
+  controller.cancelWorkspaceCreate();
+  assert.doesNotMatch(root.innerHTML, /data-workspace-create-form/u);
+  controller.destroy();
+});
+
+test("failed workspace discovery never masquerades as an empty organization list", async () => {
+  const root = createRoot();
+  const controller = createIdentityPageController({ root, api: workingApi({
+    workspaces: async () => { throw new IdentityApiError({ code: "workspace.unavailable", message: "暂时不可用" }); },
+  }) });
+  await controller.mount();
+  assert.doesNotMatch(root.innerHTML, /identity-organization-main/u);
+  assert.match(root.innerHTML, /暂时不可用/u);
+  controller.destroy();
+});
+
+test("organization creation prevents duplicate writes and restores failed drafts", async () => {
+  const root = createRoot();
+  const pending = deferred();
+  let calls = 0;
+  const controller = createIdentityPageController({ root, api: workingApi({
+    workspaces: async () => ({ workspaces: [] }),
+    createWorkspace: async () => { calls++; await pending.promise; throw new IdentityApiError({
+      code: "workspace.unavailable", message: "稍后重试", requestId: "req-test",
+    }); },
+  }) });
+  await controller.mount();
+  controller.showWorkspaceCreate();
+  const fields = { kind: "organization", name: "<Trial>", slug: "trial-company",
+    region: "cn-north-1", serviceMode: "internal_only" };
+  const first = controller.createWorkspace(fields);
+  assert.match(root.innerHTML, /正在创建|aria-busy="true"/u);
+  assert.equal(await controller.createWorkspace(fields), false);
+  assert.equal(controller.cancelWorkspaceCreate(), false);
+  assert.equal(controller.showAccountSecurity(), false);
+  pending.resolve();
+  assert.equal(await first, false);
+  assert.equal(calls, 1);
+  assert.match(root.innerHTML, /data-workspace-create-form|稍后重试/u);
+  assert.match(root.innerHTML, /&lt;Trial&gt;/u);
+  assert.doesNotMatch(root.innerHTML, /<Trial>|aria-busy="true"/u);
+  controller.destroy();
 });
 
 function restoreProperty(name, descriptor) {

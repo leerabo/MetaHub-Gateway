@@ -135,6 +135,7 @@ if (root) {
     .catch(() => setIdentityPublicBranding(null, globalThis.document));
   const controller = createIdentityPageController({
     root,
+    onWorkspaceCreated: () => window.location.assign("/console.html"),
     recordWorkspaceSwitch: ({ durationMs }) => {
       globalThis.console?.debug?.(`workspace_switch_interactive_ms=${durationMs.toFixed(1)}`);
     },

@@ -90,7 +90,9 @@ def create_workspace(
             csrf_token=csrf_token,
             touch=False,
         )
-        _require_verified_account(connection, identity.account_id)
+        local_admission = _require_workspace_creation_identity(
+            connection, config, identity.account_id,
+        )
         existing = connection.execute(
             """
             SELECT request_sha256,workspace_id FROM workspace_creation_requests
@@ -192,6 +194,14 @@ def create_workspace(
             (_id("wtb"), workspace_id, tenant_id, stamp),
         )
         _initialize_operational_state(connection, workspace_id, tenant_id, stamp)
+        if local_admission is not None:
+            connection.execute(
+                "INSERT INTO local_workspace_creation_admissions("
+                "workspace_id,tenant_id,account_id,registration_id,policy_revision,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (workspace_id, tenant_id, identity.account_id,
+                 local_admission["registration_id"], local_admission["policy_revision"], stamp),
+            )
         connection.execute(
             """
             INSERT INTO workspace_regions(
@@ -431,7 +441,7 @@ def probe_workspace_creation_replay(
             csrf_token=csrf_token,
             touch=False,
         )
-        _require_verified_account(connection, identity.account_id)
+        _require_workspace_creation_identity(connection, config, identity.account_id)
         existing = connection.execute(
             """
             SELECT request_sha256,workspace_id FROM workspace_creation_requests
@@ -761,15 +771,29 @@ def _idempotency_hmac(config: AppConfig, value: str) -> str:
     ).hexdigest()
 
 
-def _require_verified_account(connection: sqlite3.Connection, account_id: str) -> None:
-    if (
-        connection.execute(
-            "SELECT 1 FROM account_verifications WHERE account_id=? LIMIT 1",
-            (account_id,),
-        ).fetchone()
-        is None
+def _require_workspace_creation_identity(connection, config, account_id):
+    from metahub_shared.db.schema import table_exists
+
+    from metahub_control.identity.registration_policy import read_policy_in_transaction
+
+    if connection.execute(
+        "SELECT 1 FROM account_verifications WHERE account_id=? LIMIT 1", (account_id,),
+    ).fetchone() is not None:
+        return None
+    # Local consent authorizes only an explicit dev creation, never mailbox ownership.
+    if config.environment == "dev" and table_exists(
+        connection, "local_workspace_creation_admissions",
     ):
-        raise ApiError("workspace.account_unverified")
+        policy = read_policy_in_transaction(connection, config)
+        if not policy["email_verification"]:
+            consent = connection.execute(
+                "SELECT registration_id FROM local_registration_consents WHERE account_id=? "
+                "ORDER BY consented_at,registration_id LIMIT 1", (account_id,),
+            ).fetchone()
+            if consent is not None:
+                return {"registration_id": consent["registration_id"],
+                        "policy_revision": policy["revision"]}
+    raise ApiError("workspace.account_unverified")
 
 
 def _verify_projection_claim_consumed(

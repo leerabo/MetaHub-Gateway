@@ -116,3 +116,23 @@
   .identity-captcha-control { grid-template-columns: minmax(64px,1fr) 118px 32px; gap: 4px; }
   .identity-captcha-control img { width: 118px; }
 }
+
+.identity-organization-shell { min-height: 100svh; background: #fafcfc; color: #202e33; }
+.identity-organization-topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 32px; border-bottom: 1px solid #e0e7e8; }
+.identity-organization-topbar nav { display: flex; flex-wrap: wrap; gap: 12px; }
+.identity-organization-topbar button { font-size: 15px; min-height: 44px; }
+.identity-organization-main { width: min(100%, 640px); margin: 0 auto; padding: 80px 28px 48px; }
+.identity-organization-account { font-size: 16px; line-height: 1.6; color: #53686e; overflow-wrap: anywhere; }
+.identity-organization-main h1 { font-size: 30px; line-height: 1.4; margin: 16px 0 32px; letter-spacing: 0; overflow-wrap: anywhere; }
+.identity-organization-create { display: inline-flex; align-items: center; gap: 12px; min-height: 48px; padding: 12px 24px; font-size: 16px; border-radius: 4px; }
+.identity-organization-main .identity-workspace-form { margin: 0; padding: 0; border: 0; background: transparent; }
+.identity-organization-main .identity-workspace-form label { font-size: 15px; }
+.identity-organization-main .identity-workspace-form input,
+.identity-organization-main .identity-workspace-form select { font-size: 16px; min-height: 48px; min-width: 0; }
+.identity-organization-main .identity-workspace-actions button { font-size: 16px; min-height: 44px; }
+.identity-workspace-form[aria-busy="true"] { cursor: wait; }
+@media (max-width: 600px) {
+  .identity-organization-topbar { padding: 16px 20px; }
+  .identity-organization-main { padding: 44px 20px 32px; }
+  .identity-organization-main h1 { font-size: 26px; }
+}
