@@ -181,3 +181,41 @@ SavedFilter 均 200，无 401、无新增反馈或模型调用，不用首轮成
 为 22 passed / 1 failed；失败在反馈创建/重放/跨域流程末段的 Summary 503。测试 PostgreSQL
 实例正常停止，未以通过的调度锁测试代替本条失败的汇总结果。独立敏感审计记录见
 `PRD-049-summary-reverification-sensitive-audit-20260909.md`，本条记录独立提交。
+
+## 13. 2026-09-09 冷启动及权限分阶段诊断
+
+本轮没有 PRD-049 生产变更，没有新增模型请求或反馈事实。独立诊断进程导入真实 app，
+使用正常 localhost 登录和 Workspace 切换，读取运行中的数据库但不启动 lifespan；
+运行服务仍有后台队列竞争。报告的 request_and_worker_join_ms 包含 worker 归还时间，
+并非生产服务器 HTTP SLA。旧失败原件保留。
+
+证据目录为 `.artifacts/g6-security-20260907/`：
+
+- `prd049-local-phases-cold-origin-r1.json`：首请求 503、1091ms；连接阶段在请求开始
+  769ms 后才进入，打开连接 2.24ms，空闲连接归还 313ms。后续请求 200、149-155ms。
+- `prd049-local-phases-cold-dispatch-r1.json`：首请求 cProfile 记录 633 次 validator
+  初始化和 597 次 get_dependant，定位到 FastAPI 惰性路由准备；profiler 开销未扣除。
+- `prd049-local-phases-json-prototype-r1.json`：扩展目录 JSON 聚合未形成实质收益，
+  不进入生产。原始 r1、r2 及 cold-open-r1 作为阶段定位证据保留。
+- `prd049-local-phases-dispatch-prepared-r1.json`：准备 540 条路由后仍四次 503，
+  首次 351ms；数据库首次读取仍超过预算。
+- `prd049-local-phases-dispatch-and-sqlite-prepared-r1.json`：加连接准备后，带 profiler
+  的四次请求仍 503；首请求 90ms 已在权限阶段失败，不能视为快速成功。
+- `prd049-local-phases-prepared-no-cprofile-r1.json`：关闭 profiler 的对照为
+  200/503/200/503，含 worker 归还的耗时 249/255/210/249ms，完整认证约 194-230ms。
+  准备原型不足以修复间歇不可用。
+
+诊断工具 `.tmp/profile_feedback_local_phases.py` 的 SHA-256 为
+`e99ff08ad4ae1d8798582b8d14831fad79b044d6d461cce779978b2f23bc5c1d`。
+九份报告分别记录自己的结果，不拼成通过批次；最早的 r1 未记录退出状态，不能追认
+清理通过，其余报告中 own_session_logout_status 均为 200。
+
+本地回放工具另补自己的会话 finally 注销，未来回放结果要求注销返回 200，异常类型
+只记录类别。没有撤销其他会话。权限目录、最新撤权、截止预算与财务历史事实不变；
+完整服务、G6/G7/G8 和 72 小时仍未通过。独立审计见本轮 local-phases 审计记录。
+
+清理修正后的 `prd049-local-phases-live-replay-r1.json` 为真实服务对照：8 次原反馈
+幂等重放与 16 次日志/筛选读取均 200，Summary 为 7 次 200、1 次 503。失败请求的
+HTTP 客户端时间为 11719ms，不能由 250ms 业务预算推断响应已及时发出。事实前后
+一致，own_session_logout_status=200，整轮仍为 failed。该真实运行与九份独立阶段
+诊断分开，不以成功的短样本覆盖尾延迟问题。
