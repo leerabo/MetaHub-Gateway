@@ -631,3 +631,20 @@ workspaceCookieApiOrigin；不放宽 Cookie Domain、不复制 Cookie、不回�
 第一轮：导航 API 夹具应比对当前 SQLite 迁移目录全部 version/checksum，不能继续要求
 最后新增迁移必须为 0139。第二轮：沿用 PRD-145 的可选测试基线复制方式，副本补迁移后
 严格验证完整目录，保留授权、投影、CAS、出站队列和租约丢失的所有原业务断言。
+
+### 2026-09-09 保留入口别名与导航提示生命周期
+
+真实 Console 的旧 `#feedback-summary` 被直接送入仅接受 canonical route code 的解析器，
+产生错误回退提示；随后合法侧栏导航复用 shell 时又继承上次的 warning/actionError。
+本轮只修正入口候选转换和提示归属，不改后端导航、权限、账务或退役处置。
+
+第一轮自审：先沿用既有 hash 语法解析，再通过当前 WORKSPACE_SOURCE_ROUTE_REGISTRY
+的自有属性把保留 source ID 转为 canonical route code。未知、六个退役、原型属性及
+畸形输入不能获得别名授权；候选仍必须与本次后端可见集合及高级工具状态求交。
+保留原 URL 与受控审批 hash query，不通过重写丢掉合法深链接参数，也不恢复 Legacy API。
+
+第二轮自审：解析拒绝不必然表示角色权限不足，fallback 也可能是偏好页或任务首页。
+提示应只说明入口不可用和已经切至可访问页面。用户点击当前 owner 的可见入口后，
+新投影清除旧导航 warning/actionError，保留本轮业务错误和当前真实鉴权失败；迟到
+owner 不得改路由、提示或发请求。验证执行生产解析、shell loader 和导航函数，并复核
+真实旧链接、合法菜单切换与非法入口回退；不以单次页面成功替代完整批次或稳定性门禁。

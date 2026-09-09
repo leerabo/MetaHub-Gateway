@@ -272,3 +272,40 @@ version/checksum 集合核对实际已应用记录，移除“最后新增版本
 基线输入库前后 SHA256 均为 DB52801FDC6B2D0478F3E16DA432DB79F1E88C0FA81A176EA4251A0620CAFE99。
 Ruff 全规则通过；联合报告的既有 xunit2 属性兼容警告保留。本记录不代表 G6/G8 或 72 小时验收。
 独立敏感审计见 `PRD-146-migration-fixture-sensitive-audit-20260909.md`。
+
+## 2026-09-09 保留入口别名与提示生命周期
+
+设计及两轮实施前自审见同名设计附录。只在原 hash 语法解析后将 registry 自有的保留
+source ID 转为 canonical 候选，仍与当前后端 allowed set 求交；不重写原始 URL 或审批
+query。未知与退休入口只提示不可用，不错误归因为角色，也不声称固定回概览。
+合法导航的新 shell 清除上次 warning/actionError，保留现有 owner fencing 和业务错误。
+
+独立原始证据位于 `.artifacts/g6-security-20260907/`：
+
+| 报告 | 结果与范围 |
+| --- | --- |
+| `prd146-navigation-notices-red-r1.xml` | 4 项，1 通过、3 产品断言失败，原件保留 |
+| `prd146-navigation-notices-green-r1.xml` | 147/147，入口、导航、owner、壳层、审批与主页回归 |
+| `prd146-navigation-notices-batch-r1.xml` | 完整前端 1866/1866，四并发一次运行；本轮只读复核 XML，不重复跑整套 |
+| `prd146-navigation-notices-manifest-r1.xml` | 前后端发布清单一致性 1/1，新 pytest 临时目录 |
+| `prd146-navigation-notices-browser-r1.json` | 真实本地浏览器 10/10；未知回退、旧链接、退休入口、合法切换及桌面/手机布局 |
+| `prd146-navigation-notices-replay-r1.json` | 原反馈 8 次幂等回放、日志/过滤器 16 次读取、Summary 8 次读取均 200；注销本脚本会话 200 |
+
+浏览器使用现有管理员会话，不退出或撤销用户会话；最终保留反馈页面并重置临时视口。
+桌面 1440x900 与手机 390x844 截图已查看，无横向溢出或本次提示遮挡。真实回退仍可采用
+已保存的反馈页；进入请求日志后旧提示清空，旧反馈链接无虚假拒绝提示。
+截图为 `prd146-navigation-notices-desktop-fallback-r1.png`、`desktop-retained-r1.png`、
+`mobile-r1.png`、`mobile-collapsed-r1.png`，后三个沿用相同前缀。
+
+首次生产构建因源码变化而检测到 asset-set 摘要漂移；同步两端摘要后构建通过，286 资产。
+当前 SHA256 为 `a2b9d9eb0d4b029850e38ef8a307614f94cff559f8ad5481529cd6310e8c4453`。
+lint 804 文件、269 production modules、286 shipped sources 及 diff-check 通过。
+
+`facts-before-r1.json` / `facts-after-r1.json`（同前缀）逐组比较 13 组计量/账务事实，
+行数和哈希均相同；SQLite quick_check=ok，外键错误 0，三个 readiness/主页入口均 200。
+原有 failed owner_invalid outbox、pending outbox 与 checkpoint=0 不修改。
+Summary 本轮 141..204ms；反馈 POST 1812..4360ms，保留为性能缺口，不能以全部 200
+宣称全流程延迟达标。没有新模型调用、新反馈或账务事实，没有重启服务。
+
+独立敏感审计见 `PRD-146-navigation-notices-sensitive-audit-20260909.md`。
+本增量不证明 64 项真实业务全部验收，也不替代全域 QA、独立会签或 72 小时稳定性门禁。

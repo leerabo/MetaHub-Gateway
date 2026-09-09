@@ -10,7 +10,9 @@ import { renderWorkspaceSessionPrompt } from "../../src/features/auth/renderLogi
 import { renderConsoleShell } from "../../src/features/console-shell/renderConsoleShell.js";
 import { createWorkspaceResourcePage } from "../../src/lib/workspaceResourcePage.js";
 import { createI18n } from "../../src/i18n/messages.js";
-import { WORKSPACE_ROUTE_REGISTRY } from "../../src/lib/workspaceNavigation.js";
+import { WORKSPACE_ROUTE_REGISTRY, WORKSPACE_SOURCE_ROUTE_REGISTRY,
+  projectWorkspaceNavigationForConsole, resolveWorkspaceNavigationRoute } from "../../src/lib/workspaceNavigation.js";
+import { parseNavigationHash } from "../../src/lib/consoleShell.js";
 import { workspaceCookieApiOrigin } from "../../src/lib/edgeManagement.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
@@ -536,4 +538,101 @@ test("PRD-146 production mobile toggle survives refresh without persisting deskt
   await api.refresh();
   await toggle({ closest: () => element }, current);
   assert.equal(element.dataset.sidebarCollapsed, "true");
+});
+
+function navigationHash(rawHash) {
+  return runInNewContext(`${section("function readNavigationHashState()",
+    "function readActiveNavigationHash()")}\nreadNavigationHashState();`, {
+    location: { hash: rawHash }, parseNavigationHash, WORKSPACE_SOURCE_ROUTE_REGISTRY,
+  });
+}
+
+test("PRD-146 retained source hashes resolve to canonical candidates without changing syntax policy", () => {
+  for (const [sourceId, routeCode] of Object.entries(WORKSPACE_SOURCE_ROUTE_REGISTRY)) {
+    assert.equal(navigationHash(`#${sourceId}`).value, routeCode, sourceId);
+    assert.equal(navigationHash(`#${encodeURIComponent(routeCode)}`).value, routeCode);
+    assert.equal(navigationHash(`#${sourceId}`).rejected, false);
+  }
+  assert.equal(navigationHash("#%66eedback-summary").value, "workspace.observability.feedback");
+  assert.equal(navigationHash(`#approvals?approval_id=apr_${"1".repeat(32)}`).value,
+    "workspace.home.approvals");
+  for (const hash of ["#%E0%A4%A", `#${"x".repeat(81)}`, "#%20", "#usage?token=test-only"]) {
+    assert.equal(navigationHash(hash).rejected, true, hash);
+    assert.equal(navigationHash(hash).value, undefined);
+  }
+});
+
+test("PRD-146 unknown and retired aliases cannot become authorized navigation", () => {
+  const navigation = {
+    groups: [{ items: [{ route_code: "workspace.home.overview" }] }],
+    detail_route_codes: [], developer_route_codes: [], account_action_codes: [],
+    preference: { last_primary_route_code: "workspace.home.overview" },
+  };
+  for (const sourceId of ["constructor", "__proto__", "toString", "unknown",
+    "growth-analytics", "customer-health", "partner-portal", "adapter-specs",
+    "adapter-contract-runs", "competitor-comparison", "feedback-summary", "error-maps"]) {
+    const hash = navigationHash(`#${sourceId}`);
+    assert.equal(typeof hash.value, "string");
+    assert.deepEqual(resolveWorkspaceNavigationRoute(navigation, hash.value), {
+      routeCode: "workspace.home.overview", rejected: true,
+    });
+  }
+});
+
+test("PRD-146 unavailable route fallback does not claim a role denial or a fixed overview", async () => {
+  const loaded = shell();
+  loaded.navigation = {
+    groups: [{ group_code: "observability", items: [{
+      route_code: "workspace.observability.feedback", label: "Feedback", order: 1,
+    }] }], detail_route_codes: [], developer_route_codes: [], account_action_codes: [],
+    preference: { last_primary_route_code: "workspace.observability.feedback", expanded_group_code: null },
+  };
+  let cleared = false;
+  const scope = { readNavigationHashState: () => navigationHash("#unknown"),
+    WORKSPACE_ROUTE_REGISTRY, resolveWorkspaceNavigationRoute, projectWorkspaceNavigationForConsole,
+    workspaceNavigationController: { loadNavigation: async () => ({ ...loaded, navigation: loaded.navigation }) },
+    replaceNavigationHash: (value) => { assert.equal(value, ""); cleared = true; },
+    consoleShellActionError: null, expandedConsoleGroupKey: null,
+  };
+  const load = runInNewContext(`${section("async function loadConsoleShellState(",
+    "async function switchConsoleNavigation(")}\nloadConsoleShellState;`, scope);
+  const result = await load();
+  assert.equal(result.state, "ok");
+  assert.equal(result.activeNavigationItemId, "feedback-summary");
+  assert.equal(cleared, true);
+  assert.match(result.warning, /入口.*不可用/);
+  assert.doesNotMatch(result.warning, /角色|权限|概览/);
+});
+
+test("PRD-146 successful visible navigation clears only the previous shell messages", async () => {
+  const { scope } = harness();
+  const current = shell();
+  current.warning = "previous-navigation-warning";
+  current.actionError = { message: "previous-navigation-error" };
+  scope.authSession = workspaceConsoleSessionFromShell(current);
+  const rendered = [];
+  Object.assign(scope, {
+    WORKSPACE_ROUTE_REGISTRY, WORKSPACE_SOURCE_ROUTE_REGISTRY, isConsoleNavigationOwnerCurrent,
+    gatewayDebugState: {}, providerStatusEventWarning: null, privateGatewayBrandingShellState: null,
+    workspaceCommercialNavigationItems: [], consoleShellActionError: current.actionError,
+    activeConsoleNavigationCount: 0, gatewayUrl: "http://gateway.test", controlApiUrl: "http://control.test",
+    consoleUrl: "http://console.test", publicBrandingDisplay: () => null,
+    replaceNavigationHash: (value) => { assert.equal(value, "workspace.home.overview"); },
+    renderConsoleNavigationTransition() {}, bindOutputSafetyDetailInteractions() {}, bindAuthenticatedEvents() {},
+    renderDeveloperStart: (_app, input) => rendered.push(input.consoleShellState),
+    loadAndRenderActiveNavigation: async (input) => rendered.push(input.consoleShellState),
+    scheduleConsoleNavigationSideEffects() {},
+  });
+  scope.workspaceNavigationController.changeRoute = () => {};
+  const navigate = runInNewContext(`${section("async function switchConsoleNavigation(",
+    "function cancelPendingConsoleNavigationSideEffects(")}\nswitchConsoleNavigation;`, scope);
+  await navigate({ dataset: { consoleNav: "overview", consoleRoute: "workspace.home.overview" } }, current);
+  assert.equal(rendered.length, 2);
+  for (const state of rendered) {
+    assert.equal(state.warning ?? null, null);
+    assert.equal(state.actionError ?? null, null);
+  }
+  assert.equal(current.warning, "previous-navigation-warning");
+  assert.equal(current.actionError.message, "previous-navigation-error");
+  assert.equal(scope.activeConsoleNavigationCount, 0);
 });

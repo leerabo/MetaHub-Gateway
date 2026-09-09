@@ -10583,7 +10583,7 @@ async function loadConsoleShellState(isCurrent = () => true) {
       activeRouteCode: resolution.routeCode,
       sidebarExpandedGroupKey: expandedConsoleGroupKey,
       ...(resolution.rejected
-        ? { warning: "当前角色不可访问该入口，已回到概览。" }
+        ? { warning: "该入口不可用，已切换至可访问页面。" }
         : {}),
       actionError: consoleShellActionError,
     };
@@ -10790,6 +10790,8 @@ async function switchConsoleNavigation(button, consoleShellState) {
   if (projectedNavigationItem) {
     authorizedProjectedState = {
       ...consoleShellState,
+      warning: null,
+      actionError: null,
       navigation: {
         ...consoleShellState.navigation,
         active_navigation_item_id: itemId,
@@ -11271,7 +11273,12 @@ function bindQuickstartCopyButtons() {
  * 从 location.hash 读取导航解析状态，保留非法非空值和无值之间的区别。
  */
 function readNavigationHashState() {
-  return parseNavigationHash(globalThis.location?.hash);
+  const parsed = parseNavigationHash(globalThis.location?.hash);
+  // Retained source links are candidates only; current backend visibility still decides access.
+  if (!parsed.rejected && Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, parsed.value)) {
+    return { ...parsed, value: WORKSPACE_SOURCE_ROUTE_REGISTRY[parsed.value] };
+  }
+  return parsed;
 }
 
 /**
