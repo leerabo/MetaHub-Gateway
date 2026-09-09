@@ -6,6 +6,7 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from starlette.concurrency import run_in_threadpool
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.platform_access.constants import (
@@ -37,9 +38,13 @@ from metahub_control.workspace_access.service import WorkspaceSessionContext
 from .models import (
     BillingAdjustmentRequest,
     BillingAdjustmentResponse,
+    MeteringStateResponse,
+    MeterRecoveryRequest,
+    MeterRecoveryResponse,
     PlatformBillingListResponse,
     WorkspaceBillingResponse,
 )
+from .recovery import get_metering_state, recover_meter_fact
 from .service import (
     create_adjustment,
     export_workspace_reconciliation_csv,
@@ -198,6 +203,43 @@ def _idempotency_key(request: Request) -> str:
     if len(values) != 1 or _IDEMPOTENCY_RE.fullmatch(values[0]) is None:
         raise ApiError("platform_billing.request_invalid")
     return values[0]
+
+
+@router.get("/platform/billing/metering-state", response_model=MeteringStateResponse)
+def get_platform_metering_state(
+    request: Request, response: Response,
+    _context: Annotated[PlatformContext, Depends(require_platform_billing)],
+) -> MeteringStateResponse:
+    _exact_query(request, set())
+    result = get_metering_state(
+        request.app.state.config,
+        session_token=_required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        request_id=_request_id(request), trace_id=_trace_id(request),
+    )
+    _private(response)
+    return result
+
+
+@router.post("/platform/billing/meter-recoveries", response_model=MeterRecoveryResponse)
+async def post_platform_meter_recovery(
+    request: Request, response: Response,
+    _context: Annotated[PlatformContext, Depends(require_platform_billing)],
+) -> MeterRecoveryResponse:
+    _exact_query(request, set())
+    try:
+        payload = MeterRecoveryRequest.model_validate(await _strict_json(request, "platform_billing.request_invalid"))
+    except ValueError:
+        raise ApiError("platform_billing.request_invalid") from None
+    result = await run_in_threadpool(
+        recover_meter_fact, request.app.state.config,
+        session_token=_required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        csrf_token=_required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid"),
+        payload=payload, idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request), trace_id=_trace_id(request),
+    )
+    response.status_code = 200 if result.idempotent_replay else 201
+    _private(response)
+    return result
 
 
 def _exact_query(request: Request, allowed: set[str]) -> None:

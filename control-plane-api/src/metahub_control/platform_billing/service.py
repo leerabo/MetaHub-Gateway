@@ -140,6 +140,16 @@ def project_usage_once(config: AppConfig, *, worker_id: str) -> bool:
 
 
 def _pending_usage_projection(connection: sqlite3.Connection) -> sqlite3.Row | None:
+    _checkpoint, row = _next_usage_projection(connection)
+    if row is not None:
+        if row["status"] == "failed":
+            raise ApiError("platform_metering.reconciliation_required")
+        if row["status"] != "pending":
+            raise ApiError("platform_metering.checkpoint_conflict")
+    return row
+
+
+def _next_usage_projection(connection: sqlite3.Connection):
     _require_schema(connection)
     with closing(connection.execute(
         "SELECT * FROM platform_meter_checkpoints WHERE projection_code='usage_ledger_v1'",
@@ -166,11 +176,7 @@ def _pending_usage_projection(connection: sqlite3.Connection) -> sqlite3.Row | N
         if (int(row["usage_export_sequence"]) != int(checkpoint["source_sequence"]) + 1
                 or row["meter_outbox_id"] is None):
             raise ApiError("platform_metering.checkpoint_conflict")
-        if row["status"] == "failed":
-            raise ApiError("platform_metering.reconciliation_required")
-        if row["status"] != "pending":
-            raise ApiError("platform_metering.checkpoint_conflict")
-    return row
+    return checkpoint, row
 
 
 def close_due_cycles(config: AppConfig, *, limit: int = 50) -> int:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class BillingModel(BaseModel):
@@ -84,5 +84,57 @@ class BillingAdjustmentInfo(BillingModel):
 class BillingAdjustmentResponse(BillingModel):
     adjustment: BillingAdjustmentInfo
     idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class MeterRecoveryRequest(BillingModel):
+    meter_outbox_id: str = Field(pattern=r"^pmo_[0-9a-f]{32}$")
+    source_sequence: int = Field(ge=1, le=9_007_199_254_740_991)
+    expected_attempt_count: int = Field(ge=1, le=2_147_483_647)
+    expected_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action: Literal["retry", "internal_cost_only"]
+    confirmed: Literal[True]
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def require_explicit_confirmation(cls, value):
+        if value is not True:
+            raise ValueError("confirmation must be true")
+        return value
+
+
+class MeterRecoveryInfo(BillingModel):
+    recovery_id: str
+    source_sequence: int
+    workspace_id: str
+    action: Literal["retry", "internal_cost_only"]
+    created_at: datetime
+
+
+class MeterRecoveryResponse(BillingModel):
+    recovery: MeterRecoveryInfo
+    idempotent_replay: bool = False
+    request_id: str
+    trace_id: str
+
+
+class MeterBlockedFact(BillingModel):
+    meter_outbox_id: str
+    source_sequence: int
+    attempt_count: int
+    source_sha256: str
+    workspace_id: str | None
+    occurred_at: datetime
+    error_code: str
+    can_archive_internal_cost: bool
+
+
+class MeteringStateResponse(BillingModel):
+    state: Literal["idle", "pending", "blocked"]
+    checkpoint: int
+    pending_count: int
+    blocked_fact: MeterBlockedFact | None = None
+    recent_recoveries: tuple[MeterRecoveryInfo, ...] = ()
     request_id: str
     trace_id: str
