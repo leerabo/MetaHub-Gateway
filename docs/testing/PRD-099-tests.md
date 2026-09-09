@@ -1,5 +1,31 @@
 # PRD-099 测试记录
 
+## 2026-09-09 原生真实 Usage 投影增量
+
+`test_prd099_postgresql_projection.py` 在完整原生迁移后复用六项计量合同，通过真实 Workspace
+登录、订阅创建及原样 Usage 触发器进入投影。平台目录鉴权仍使用受控上下文，不等于真实 Platform MFA。
+`prd147-feedback-native-native-billing-batch-r1-9b5ab028733443038834b5672eb9cfca.xml`
+中本项六项均通过：历史 Usage 时间、权益左右边界、新周期失败回滚、冻结账单的业务及真实 SQL 故障
+回滚和重试。联合批次其他模块后续发生产品竞态及基础设施失败，不宣称整批通过。
+`native-billing-sqlite-regression-r1.xml` 共 7 通过，其中本项同合同六项通过。
+运行库只读 `native-billing-runtime-readonly-r1.json` 与 `native-billing-post-restore-readonly-r1.json`
+均为三个 HTTP 200、quick_check=ok、外键违规 0，历史缺失权益、失败 outbox 与 checkpoint=0 未改写。
+`native-billing-pre-restore-runtime-r1.json` 记录服务退出及后台 dropped=1323、backend_failure=307；
+恢复入口不关闭这些历史失败，不构成 Summary SLA、稳定性或 72 小时验收。
+`native-billing-current-readiness-r1.json` 再次确认三个入口 HTTP 200、quick_check=ok、外键违规 0，
+失败和 pending outbox 各一条、checkpoint=0。`native-billing-current-runtime-r1.json` 为 failed：
+四样本/12 HTTP 均 200，但当前进程已有 accepted=315、dropped=252、backend_failure=76、queued=63。
+`native-billing-scheduler-stacks-r1.json` 是当前控制进程 30 秒非阻塞栈诊断，4768 样本、一次采样错误；
+不包含局部变量，不证明失租原因或业务修复。工作簿只读复核，未修改或导出原表。
+
+联合终验 `prd147-feedback-native-native-billing-batch-r2-1c36ae3da1ec46499dfc85144417aafb.xml`
+为 52 passed / 0 failed / 0 errors / 0 skipped，1451.642 秒；本项真实投影 6/6，相邻原生
+schema/空投影 2/2。六项与已有 SQLite 合同完全相同，包含原生真实 SQL 失败后的回滚及幂等恢复。
+隔离 PostgreSQL 正常停止；原生迁移只影响新的 PostgreSQL 部署，未重启或改写当前 SQLite 试用库。
+独立审计为 `prd-099-native-billing-sensitive-audit-r1.json`，精确凭据扫描为
+`prd099-native-billing-key-audit-r1.json`。本批测试/静态检查通过不关闭运行库缺失权益、历史 failed
+outbox、调度租约和 Summary 失败，不代表 G6/G8、公开 GA、全部目标或 72 小时已完成。
+
 状态：实现、自动化门禁、真实浏览器验收和最终候选审计已完成。权威下一项为
 `PRD-100 - 生产基础设施`。`saas_incremental_roadmap_complete=false`，`all_108_prds_complete=false`。
 
