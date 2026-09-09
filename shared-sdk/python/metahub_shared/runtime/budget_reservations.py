@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
 from uuid import uuid4
 
+from metahub_shared.db.schema import table_exists
+
 # 预留沿用六位 CNY 微元和十亿元日预算上限，避免控制面与数据面各自解释 NUMERIC。
 MICROS_PER_CNY = 1_000_000
 MAX_BUDGET_CNY_MICROS = 1_000_000_000 * MICROS_PER_CNY
@@ -89,7 +91,7 @@ def load_outstanding_reserved_cny_micros(
                 AND entry.status='posted'
             )
           )
-        ORDER BY r.rowid ASC
+        ORDER BY r.budget_reservation_id ASC
         """,
         (tenant_id, budget_rule_id, budget_date),
     )
@@ -102,13 +104,13 @@ def load_outstanding_reserved_cny_micros(
             raise ValueError("budget reservation total invalid")
     # 0067 is optional during mixed-version rollout. Once present, only unallocated hold balance
     # plus active/possible allocations count; original hold totals would double count settled work.
-    if _table_exists(connection, "batch_budget_holds"):
+    if table_exists(connection, "batch_budget_holds"):
         hold_rows = connection.execute(
             """
             SELECT remaining_cost_cny FROM batch_budget_holds
             WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
               AND status IN ('active','reconciliation')
-            ORDER BY rowid ASC
+            ORDER BY batch_budget_hold_id ASC
             """,
             (tenant_id, budget_rule_id, budget_date),
         )
@@ -117,13 +119,13 @@ def load_outstanding_reserved_cny_micros(
             if total > MAX_BUDGET_CNY_MICROS:
                 # 预算预留总额必须是有限非负值；无效账本状态立即拒绝，不能静默修正。
                 raise ValueError("budget reservation total invalid")
-    if _table_exists(connection, "batch_budget_allocations"):
+    if table_exists(connection, "batch_budget_allocations"):
         allocation_rows = connection.execute(
             """
             SELECT reserved_cost_cny FROM batch_budget_allocations
             WHERE tenant_id=? AND budget_rule_id=? AND budget_date=?
               AND status IN ('active','reconciliation')
-            ORDER BY rowid ASC
+            ORDER BY batch_budget_allocation_id ASC
             """,
             (tenant_id, budget_rule_id, budget_date),
         )
@@ -133,21 +135,6 @@ def load_outstanding_reserved_cny_micros(
                 # 预算预留总额必须是有限非负值；无效账本状态立即拒绝，不能静默修正。
                 raise ValueError("budget reservation total invalid")
     return total
-
-
-def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
-    """检查预算预留依赖表是否存在，仅用于兼容迁移期的关闭式能力探测。
-
-    Check an immutable internal table name without interpolating request data.
-    """
-
-    return (
-        connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?",
-            (table_name,),
-        ).fetchone()[0]
-        == 1
-    )
 
 
 def _reservation_cny_to_micros(value: object) -> int:

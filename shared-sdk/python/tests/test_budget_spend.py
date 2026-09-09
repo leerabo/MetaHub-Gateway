@@ -42,13 +42,14 @@ def _connection() -> sqlite3.Connection:
           created_at TEXT NOT NULL
         );
         CREATE TABLE budget_reservations (
+          budget_reservation_id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
           tenant_id TEXT NOT NULL,
           budget_rule_id TEXT NOT NULL,
           budget_date TEXT NOT NULL,
           request_id TEXT NOT NULL,
           reserved_cost_cny NUMERIC NOT NULL,
           outstanding_cost_cny NUMERIC NULL
-        );
+        ) WITHOUT ROWID;
         CREATE TABLE usage_ledger (
           tenant_id TEXT NOT NULL,
           request_id TEXT NOT NULL

@@ -237,35 +237,48 @@ def test_batch_config_rejects_cross_domain_secret_reuse(
 
 
 def test_budget_outstanding_counts_hold_balance_and_live_allocations_once() -> None:
-    """验证批处理场景。
-
-    定义：test_budget_outstanding_counts_hold_balance_and_live_allocations_once。
-    固定租户隔离、权限拒绝、失败追踪和回退边界。
-    """
+    """Real primary keys work without SQLite rowid; only matching live balances count."""
     connection = sqlite3.connect(":memory:")
     connection.executescript(
         """
         CREATE TABLE budget_reservations(
+          budget_reservation_id TEXT PRIMARY KEY,
           tenant_id TEXT, budget_rule_id TEXT, budget_date TEXT, request_id TEXT,
           reserved_cost_cny TEXT, outstanding_cost_cny TEXT
-        );
+        ) WITHOUT ROWID;
         CREATE TABLE finops_ledger_entries(
           tenant_id TEXT, source_request_id TEXT, entry_type TEXT, direction TEXT, status TEXT
         );
         CREATE TABLE batch_budget_holds(
+          batch_budget_hold_id TEXT PRIMARY KEY,
           tenant_id TEXT, budget_rule_id TEXT, budget_date TEXT,
           remaining_cost_cny TEXT, status TEXT
-        );
+        ) WITHOUT ROWID;
         CREATE TABLE batch_budget_allocations(
+          batch_budget_allocation_id TEXT PRIMARY KEY,
           tenant_id TEXT, budget_rule_id TEXT, budget_date TEXT,
           reserved_cost_cny TEXT, status TEXT
-        );
-        INSERT INTO budget_reservations VALUES('tenant_a','rule_a','2026-08-07','req_a','1',NULL);
-        INSERT INTO batch_budget_holds VALUES('tenant_a','rule_a','2026-08-07','2','active');
-        INSERT INTO batch_budget_allocations VALUES('tenant_a','rule_a','2026-08-07','3','active');
-        INSERT INTO batch_budget_allocations VALUES('tenant_a','rule_a','2026-08-07','4','posted');
+        ) WITHOUT ROWID;
+        INSERT INTO budget_reservations
+          VALUES('bres_a','tenant_a','rule_a','2026-08-07','req_a','1',NULL);
+        INSERT INTO batch_budget_holds
+          VALUES('hold_a','tenant_a','rule_a','2026-08-07','2','active');
+        INSERT INTO batch_budget_holds
+          VALUES('hold_b','tenant_a','rule_a','2026-08-07','0.000001','reconciliation');
+        INSERT INTO batch_budget_holds
+          VALUES('hold_c','tenant_a','rule_a','2026-08-07','9','released');
         INSERT INTO batch_budget_allocations
-          VALUES('tenant_a','rule_a','2026-08-07','5','reconciliation');
+          VALUES('allocation_c','tenant_a','rule_a','2026-08-07','3','active');
+        INSERT INTO batch_budget_allocations
+          VALUES('allocation_b','tenant_a','rule_a','2026-08-07','4','posted');
+        INSERT INTO batch_budget_allocations
+          VALUES('allocation_a','tenant_a','rule_a','2026-08-07','5','reconciliation');
+        INSERT INTO batch_budget_holds
+          VALUES('hold_other_tenant','tenant_b','rule_a','2026-08-07','99','active');
+        INSERT INTO batch_budget_allocations
+          VALUES('allocation_other_rule','tenant_a','rule_b','2026-08-07','99','active');
+        INSERT INTO batch_budget_allocations
+          VALUES('allocation_other_date','tenant_a','rule_a','2026-08-08','99','active');
         """
     )
     assert load_outstanding_reserved_cny_micros(
@@ -273,7 +286,7 @@ def test_budget_outstanding_counts_hold_balance_and_live_allocations_once() -> N
         tenant_id="tenant_a",
         budget_rule_id="rule_a",
         budget_date="2026-08-07",
-    ) == 11_000_000
+    ) == 11_000_001
 
 
 def test_batch_error_catalog_is_complete_and_fixed() -> None:
