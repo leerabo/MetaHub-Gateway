@@ -157,3 +157,27 @@ PRD-049 的设计、自审、实现、租户隔离、后端权限、统一错误
 `prd049-summary-isolation-key-audit-r1.json`。保存原有失败、用户文档及受保护 baseline。
 剩余间歇 Summary 超时、历史队列故障、计量 owner 错误、完整目标和 G6/G7/72 小时
 仍未通过；线程池隔离的局部正确性不等于这些目标完成。
+
+## 12. 2026-09-09 调度可靠性批次的独立汇总复核
+
+本次未改变 PRD-049 生产代码，继续使用中间件起算的 250ms deadline、实际 Workspace
+权限、新快照终态复核和同操作键幂等。PRD-147 的调度观测隔离不能代替本条汇总验收。
+
+`.artifacts/g6-security-20260907/scheduler-summary-diagnostic-feedback-r1.json` 中 8 次
+Summary 均 200，随后最终调度版本的 `scheduler-summary-isolation-feedback-r2.json`
+为 4 次 200、4 次 503，组合仍失败。两轮各 8 次原反馈重放均返回同一事实，日志和
+SavedFilter 均 200，无 401、无新增反馈或模型调用，不用首轮成功覆盖后续失败。
+
+联合 SQLite 证据 `prd147-reliability-batch-sqlite-r1.xml` 为 67 passed / 1 failed，失败
+在权限读取故障消除后的 Summary 恢复请求；此前的会话未撤销、Cookie 未清除及事实不变
+断言均通过。最终事实 `scheduler-summary-isolation-facts-r2.json` 仍为 2 request /
+3 explanation / 1 feedback / 1 event，quick_check=ok、外键违规 0。
+
+浏览器反馈报表可显示 1 条、平均 5/5、采纳率 100%，但仍有不正确的权限导航提示。
+该次浏览器成功不证明间歇 503 已修复。后续继续针对真实权限复核与共享数据库竞争定位，
+不更改统计口径、放宽预算或引入跨请求权限缓存。完整产品目标及 72 小时验收仍未完成。
+
+原生联合证据 `prd147-feedback-native-scheduler-summary-batch-r1-196b60ab1b2e493f9c574d5dfe8c83b6.xml`
+为 22 passed / 1 failed；失败在反馈创建/重放/跨域流程末段的 Summary 503。测试 PostgreSQL
+实例正常停止，未以通过的调度锁测试代替本条失败的汇总结果。独立敏感审计记录见
+`PRD-049-summary-reverification-sensitive-audit-20260909.md`，本条记录独立提交。
