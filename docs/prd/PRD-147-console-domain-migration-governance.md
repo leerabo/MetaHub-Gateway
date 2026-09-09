@@ -1296,3 +1296,21 @@ lease_expires_at 和 fence_generation 条件，以及原有 token/HMAC、提交�
 旧快照。入口若已存在调用者事务则失败关闭，不能提交、回滚或关闭该事务。数据库读取失败
 仍映射 platform.unavailable，不能变成无任务。验证采用实际 SQLite 持锁、SQL 轨迹、
 领取竞争与外部事务保留测试，再统一执行受影响控制台/导航 API 冒烟和原生 PostgreSQL 验证。
+
+### 2026-09-09 Control 路由启动准备与两轮自审
+
+PRD-049 独立诊断定位到 FastAPI 0.141.1 在首次请求中惰性生成 included router 的
+依赖和校验上下文。Control 的统一 supervisor 应在进入原 lifespan 和后台队列之前
+遍历框架提供的 iter_route_contexts，将结构性准备纳入启动，而非用户请求预算。
+此改动只消除已定位的框架冷启动部分；数据库冷读和运行争用仍需独立修复与验收。
+
+第一轮自审：只构建路由元数据，不发送内部 HTTP、不调用 endpoint/dependency，不触发
+鉴权、数据库或模型服务。包含嵌套路由、include_in_schema=False 与安装 supervisor 后
+注册的路由；不缓存权限结果、不修改 OpenAPI 或路由顺序。准备失败应使启动失败，不能
+先启动后台 worker 再忽略框架错误。每次 lifespan 进入均核对当前路由图。
+
+第二轮自审：通过能力检测兼容旧 FastAPI 的立即构建路径，不引入对新 API 的无条件
+import；测试不存在 iter_route_contexts 时的正常直接路由。测试还应在启动后禁止再次
+构建依赖，并经真实 ASGI 请求验证原鉴权拒绝、参数解析、隐藏路由与 OpenAPI 不变。
+与原 supervisor 逆序关闭及多队列执行测试联合运行；不修改 Summary 250ms 起算或
+队列租约，不据此宣称所有运行时 503 已解决。

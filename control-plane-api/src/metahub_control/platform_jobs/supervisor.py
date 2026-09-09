@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, routing
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.console_migration.execution import (
@@ -83,6 +83,12 @@ def install_platform_job_supervisor(
 
     @asynccontextmanager
     async def supervised_lifespan(current_app: FastAPI):
+        # Newer FastAPI lazily compiles included routers. Prepare metadata before
+        # workers and readiness, without calling dependencies or request handlers.
+        route_contexts = getattr(routing, "iter_route_contexts", None)
+        if route_contexts is not None:
+            for _context in route_contexts(current_app.routes):
+                pass
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(base_lifespan(current_app))
             if structured:
@@ -200,7 +206,10 @@ async def _worker_loop(app: FastAPI, stop_event: threading.Event) -> None:
                     outer_fence=outer_fence,
                 )
             sink = getattr(app.state, "console_migration_event_sink", None)
-            if "migration_outbox" in selected and not progressed and outer_fence is not None and callable(sink):
+            if (
+                "migration_outbox" in selected and not progressed
+                and outer_fence is not None and callable(sink)
+            ):
                 progressed = await asyncio.to_thread(
                     dispatch_console_migration_event_once,
                     config,

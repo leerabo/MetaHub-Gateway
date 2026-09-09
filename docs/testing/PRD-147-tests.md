@@ -1192,3 +1192,41 @@ commercial-accounting 等后台 claim 和观测仍等待 BEGIN IMMEDIATE；采�
 主页/Gateway 没有重启。生产模块与本批四个测试文件 Ruff 全规则通过，git diff --check 通过。
 空轮询减少无效写锁请求已证明，但共享写锁的全部根因、Summary SLA、导航误提示、计量对账
 以及 G6/G8/72 小时仍未完成。独立审计见 `PRD-147-idle-claim-sensitive-audit-20260909.md`。
+
+## 2026-09-09 Control 路由启动准备
+
+统一 supervisor 在原 lifespan 和队列启动前准备新 FastAPI 的惰性路由上下文；旧框架
+不存在该 API 时沿用立即构建路径。只遍历元数据，不调用 endpoint、鉴权依赖或数据库。
+生产差异限 supervisor，未改路由注册顺序、Summary 250ms、Cookie、权限或队列 fence。
+
+证据位于 `.artifacts/g6-security-20260907/`：
+
+- `prd147-route-preparation-red-r1.xml`：原实现 1 passed / 3 failed，验证没有启动准备、
+  准备错误不能阻断启动、后续生命周期未遍历当前图。失败原件保留。
+- `prd147-route-preparation-green-r1.xml`：路由准备与原调度注册/执行联合 61 passed。
+- `prd147-route-preparation-green-r2.xml`：增加实际 Control 完整图后 62 passed。
+  540 条路由上下文全部准备，随后禁止任何新依赖构建仍能生成 OpenAPI；未进入生产
+  lifespan。嵌套隐藏路由、真实 ASGI 403、422、参数解析和逆序关闭均通过。
+- `prd147-route-preparation-compat-r1.xml`：隔离目录安装 FastAPI 0.115.0 与 Starlette
+  0.38.6，实际旧版本嵌套及直接路由 2 passed / 2 deselected；保留 anyio 已导入的
+  pytest 重写警告。没有替换本地服务依赖，也不声称全版本兼容矩阵完成。
+- `prd147-route-preparation-runtime-before-r1.json`：旧进程短观察 failed，最新累计
+  dropped=129、backend_failure=17。进程重启不抹去这些历史错误。
+- `prd147-route-preparation-predeploy-r1.json` 与 postdeploy-r1：13 组账务事实行数和
+  SHA-256 完全一致，quick_check=ok，外键违规 0，三个 readiness/主页响应均 200。
+  仍有一条 owner_invalid failed outbox、一条 pending 和 checkpoint=0，未伪造补账。
+- `prd147-route-preparation-feedback-r1.json`：8 次原反馈幂等重放、16 次日志/筛选及
+  8 次 Summary 均 200，Summary 客户端耗时 140-172ms；事实未变，自己的会话注销
+  200，没有新增模型调用。单轮成功不能推翻 PRD-049 的历史间歇失败。
+- `prd147-route-preparation-runtime-r1.json`：12 个样本、36 次健康 HTTP 全部 200，
+  63 个队列，dropped/backend_failure/shutdown_timeout 均为 0，观察新鲜度通过。
+  这是一个短窗口，未声称 72 小时或全部业务稳定；report 的 working-tree 标记对应
+  本条独立暂存审计的源码字节，不是已认证的 GA revision。
+
+仅重启经 PID、创建时刻、路径和命令核对的本地 Control，新 PID 7044，启动时间
+2026-09-09 12:47:09。日志为 `.logs/control-api-route-preparation-r1.*.log`，确认 startup
+complete；Gateway、Console 与凭据配置不动。Ruff 全规则、compileall、diff check 通过。
+受保护 baseline 与复制输入哈希不变。独立敏感审计见本轮 route-preparation 记录。
+
+本轮只移除路由结构冷准备的请求开销，未修复全部数据库争用或证明关键页面 p75。
+完整 G6/G7/G8、真实跨域流程及交付后的独立 72 小时观察仍未完成。
