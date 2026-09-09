@@ -9,6 +9,7 @@ FRONTEND_PRODUCTION_SURFACE_MANIFEST = {
     "version": 1,
     "html_entrypoints": (
         "index.html",
+        "console.html",
         "identity.html",
         "partner.html",
         "platform.html",
@@ -16,6 +17,7 @@ FRONTEND_PRODUCTION_SURFACE_MANIFEST = {
     ),
     "entrypoints": (
         "src/app/main.js",
+        "src/features/public-home/main.js",
         "src/features/identity/main.js",
         "src/features/partner/main.js",
         "src/features/platform/main.js",
@@ -27,6 +29,8 @@ FRONTEND_PRODUCTION_SURFACE_MANIFEST = {
         "src/styles/console-migration.css",
         "src/styles/edge-operations.css",
         "src/styles/identity.css",
+        "src/styles/identity-access.css",
+        "src/styles/public-home.css",
         "src/styles/main.css",
         "src/styles/partner.css",
         "src/styles/platform.css",
@@ -125,7 +129,7 @@ FRONTEND_PRODUCTION_SURFACE_MANIFEST = {
     ),
     "production_dockerfile": "../infra/docker/console.Dockerfile",
     "production_asset_set_sha256": (
-        "cfcefcae1cb4e249db79d500aa5640661902c7ae9849680d8fbba51b1f5afc34"
+        "22349dbbeca56ea34bb4e0d47d9d100e8c3f626c4f7b55ee529ca64d488025ae"
     ),
     "output_directory": "dist",
 }

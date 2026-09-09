@@ -118,9 +118,11 @@ import {
 } from "../../lib/accountPreferences.js";
 import { createIdentityPageController } from "./identityPageState.js";
 import { setIdentityPublicBranding } from "./renderIdentityPage.js";
+import { installIdentityAccessExperience } from "./accessExperience.js";
 
 const root = globalThis.document?.querySelector("#identity-app");
 if (root) {
+  const disposeAccessExperience = installIdentityAccessExperience(root);
   const hostname = globalThis.window.location.hostname;
   const controlApiUrl = new Set(["localhost", "127.0.0.1", "::1"]).has(hostname)
     ? `${globalThis.window.location.protocol}//${hostname}:8001`
@@ -286,6 +288,7 @@ if (root) {
   void publicBrandingReady.then(() => controller.mount()).then(() => {
     if (pendingRiskChallenge) controller.showRiskChallenge(pendingRiskChallenge);
   });
+  globalThis.window.addEventListener("pagehide", disposeAccessExperience, { once: true });
   globalThis.window.addEventListener("pagehide", () => controller.destroy(), { once: true });
 }
 

@@ -1,0 +1,95 @@
+.identity-access-visual, .identity-access-home { display: none; }
+.identity-access-loading > p { color: #869187; font-size: 11px; }
+.identity-access-loading > h1 { font-size: 26px; font-weight: 500; }
+.identity-access-loading > span { display: block; color: #859082; font-size: 12px; margin: 20px 0 32px; }
+.identity-access-loading > i { display: block; height: 48px; border: 1px solid #e9ede5; background: #f8faf6; border-radius: 4px; margin-top: 22px; }
+.identity-is-access { min-width: 0; background: #fff; color: #28352d; }
+.identity-is-access .identity-access-visual { display: block; position: fixed; width: 53%; inset: 0 auto 0 0; background: #eff3ed; overflow: hidden; }
+.identity-access-wordmark { position: absolute; top: 43px; left: 56px; color: #293d30; text-decoration: none; font-size: 29px; font-weight: 650; max-width: calc(100% - 112px); overflow-wrap: anywhere; }
+.identity-access-copy { position: relative; z-index: 1; padding: 170px 56px 0; pointer-events: none; }
+.identity-access-copy > p:first-child { font: 9px/1.6 Consolas, monospace; color: #809180; margin: 0 0 24px; }
+.identity-access-copy h2 { margin: 0; font-size: 37px; line-height: 1.6; font-weight: 500; }
+.identity-access-copy h2 span { color: #778b75; }
+.identity-access-description { color: #81907e; font-size: 13px; line-height: 2; margin-top: 23px; }
+.identity-access-scene { position: absolute; inset: 355px -15% 95px; min-height: 220px; }
+.identity-access-scene canvas { display: block; width: 100%; height: 100%; }
+.identity-access-caption { position: absolute; bottom: 117px; inset-inline: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font: 8px Consolas, monospace; color: #8b9b89; }
+.identity-access-caption button { display: grid; place-items: center; height: 32px; width: 32px; padding: 0; background: transparent; color: #6f846e; border: 1px solid #cbd6c7; border-radius: 50%; cursor: pointer; }
+.identity-access-caption button[hidden] { display: none; }
+.identity-access-caption button svg { width: 13px; }
+.identity-access-footnote { display: flex; align-items: center; gap: 28px; position: absolute; bottom: 36px; inset-inline: 56px; border-top: 1px solid #d9e1d5; padding-top: 24px; font-size: 10px; color: #7d8c77; }
+.identity-is-access .identity-access-home { display: inline-flex; align-items: center; gap: 9px; position: absolute; right: 42px; top: 43px; font-size: 12px; color: #79847a; text-decoration: none; z-index: 2; }
+.identity-is-access .identity-access-home:hover { color: var(--identity-accent); }
+.identity-is-access .identity-app { margin-left: 53%; }
+.identity-is-access .identity-login-shell { padding: 110px 44px 64px; min-height: 100svh; }
+.identity-is-access .identity-login-panel { border: 0; border-radius: 0; box-shadow: none; width: min(360px, 100%); padding: 0; background: transparent; }
+.identity-is-access .identity-brand { gap: 0; margin-bottom: 10px; }
+.identity-is-access .identity-brand > .identity-brand-mark:not(.has-image) { display: none; }
+.identity-is-access .identity-brand > .has-image { margin-right: 14px; }
+.identity-is-access .identity-brand p { font-size: 11px; font-weight: 500; color: #869187; margin-bottom: 12px; }
+.identity-is-access .identity-brand h1 { font-size: 29px; line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
+.identity-login-welcome { font-size: 12px; color: #949c95; margin: 8px 0 35px; }
+.identity-is-access .identity-brand-message { margin: 16px 0; font-size: 12px; }
+.identity-is-access .identity-login-form { gap: 22px; }
+.identity-is-access .identity-login-form label { font-size: 12px; font-weight: 500; color: #657063; gap: 10px; }
+.identity-is-access .identity-login-form input { height: 48px; padding: 0 14px; border: 1px solid #dde3da; border-radius: 4px; background: #fafbf9; font-size: 13px; color: #354231; }
+.identity-is-access .identity-login-form input::placeholder { color: #a0a89b; font-size: 12px; }
+.identity-is-access .identity-login-form input:focus { border-color: var(--identity-accent); outline: 2px solid color-mix(in srgb, var(--identity-accent) 12%, transparent); outline-offset: 1px; background: #fff; }
+.identity-is-access .identity-login-form .identity-consent input { height: 18px; padding: 0; }
+.identity-is-access .identity-login-form .identity-primary { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 48px; border-radius: 4px; padding: 0 16px; background: #29392f; border-color: #29392f; font-size: 13px; font-weight: 500; margin-top: 4px; }
+.identity-is-access .identity-login-form .identity-primary:hover { background: var(--identity-accent); border-color: var(--identity-accent); }
+.identity-is-access .identity-login-form button:disabled { opacity: .55; cursor: wait; }
+.identity-is-access .identity-access-actions { margin-top: -6px; }
+.identity-is-access .identity-access-actions button { font-size: 11px; font-weight: 500; color: #7e8e7b; }
+.identity-is-access .identity-access-actions button:hover { color: var(--identity-accent); }
+.identity-password-control { position: relative; display: block; }
+.identity-is-access .identity-password-control input { padding-right: 48px; }
+.identity-password-toggle { display: grid; place-items: center; position: absolute; right: 4px; top: 4px; width: 40px; height: 40px; padding: 0; color: #83907f; background: transparent; border: 0; cursor: pointer; }
+.identity-password-toggle svg { width: 17px; height: 17px; }
+.identity-login-assurance { display: flex; align-items: center; justify-content: center; gap: 7px; border-top: 1px solid #edf0eb; margin: 34px 0 0; padding-top: 24px; color: #a0aaa0; font-size: 10px; }
+.identity-login-assurance svg { width: 13px; height: 13px; }
+.identity-access-static { position: absolute; inset: 30% auto auto 50%; translate: -50% 0; display: grid; place-items: center; width: 100px; height: 100px; border: 1px solid #a8bca3; background: #dde6d9; color: #4a6b47; font-size: 56px; transform: rotate(-15deg); }
+[data-access-scene][data-rendered="true"] .identity-access-static { display: none; }
+.identity-is-access a:focus-visible, .identity-is-access button:focus-visible { outline: 2px solid var(--identity-accent); outline-offset: 4px; }
+.identity-topbar-actions > a { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-size: 12px; }
+.identity-topbar-actions > a svg { width: 16px; height: 16px; }
+@media (max-width: 600px) {
+  .identity-topbar-actions:has(a[href="/console.html"]) { grid-column: 1 / -1; grid-row: 3; justify-content: space-between; flex-wrap: wrap; }
+}
+@media (min-height: 950px) { .identity-access-copy { padding-top: 220px; } .identity-access-scene { top: 420px; } }
+@media (max-height: 760px) and (min-width: 861px) { .identity-access-copy { padding-top: 120px; } .identity-access-copy h2 { font-size: 31px; } .identity-access-scene { top: 310px; bottom: 70px; } .identity-access-caption { bottom: 92px; } .identity-access-footnote { bottom: 24px; padding-top: 18px; } }
+@media (max-width: 1100px) {
+  .identity-is-access .identity-access-visual { width: 47%; }
+  .identity-is-access .identity-app { margin-left: 47%; }
+  .identity-access-copy { padding-left: 34px; padding-right: 34px; }
+  .identity-access-copy h2 { font-size: 30px; }
+  .identity-access-wordmark { left: 34px; }
+  .identity-access-caption, .identity-access-footnote { inset-inline: 34px; }
+}
+@media (max-width: 860px) {
+  .identity-is-access .identity-access-visual { position: absolute; width: 100%; height: 200px; }
+  .identity-access-wordmark { top: 28px; left: 28px; font-size: 27px; max-width: calc(100% - 160px); }
+  .identity-access-copy { padding: 95px 28px 0; }
+  .identity-access-copy > p:first-child, .identity-access-description, .identity-access-footnote, .identity-access-scene, .identity-access-caption { display: none; }
+  .identity-access-copy h2 { font-size: 21px; line-height: 1.6; }
+  .identity-access-copy h2 br { display: none; }
+  .identity-access-copy h2 span { margin-left: 8px; }
+  .identity-is-access .identity-access-home { right: 28px; top: 36px; font-size: 11px; }
+  .identity-is-access .identity-app { margin-left: 0; padding-top: 200px; }
+  .identity-is-access .identity-login-shell { min-height: calc(100svh - 200px); padding: 46px 28px; align-items: start; }
+  .identity-is-access .identity-login-panel { width: min(400px, 100%); }
+  .identity-is-access .identity-brand p { display: none; }
+  .identity-is-access .identity-brand h1 { font-size: 26px; }
+}
+@media (max-width: 440px) {
+  .identity-access-copy h2 { font-size: 19px; }
+  .identity-access-copy h2 br { display: block; }
+  .identity-access-copy h2 span { margin-left: 0; }
+  .identity-access-copy { padding-top: 83px; }
+  .identity-is-access .identity-access-visual { height: 182px; }
+  .identity-is-access .identity-app { padding-top: 182px; }
+  .identity-is-access .identity-login-shell { min-height: calc(100svh - 182px); padding: 36px 28px; }
+  .identity-login-welcome { margin-bottom: 26px; }
+  .identity-login-assurance { margin-top: 24px; padding-top: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .identity-is-access *, .identity-is-access *::before, .identity-is-access *::after { transition: none !important; animation: none !important; } }

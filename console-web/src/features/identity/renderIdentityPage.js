@@ -2,6 +2,7 @@
 import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
 import { renderAccountPreferences } from "../account-preferences/renderAccountPreferences.js";
+import { icon } from "../public-home/icons.js";
 
 const DEFAULT_PUBLIC_BRAND = Object.freeze({
   product_name: "MetaHub",
@@ -25,11 +26,16 @@ export function setIdentityPublicBranding(value, documentObject = globalThis.doc
   app?.setAttribute?.("aria-label", `${publicBrand.product_name} 账号安全`);
   const favicon = documentObject?.querySelector?.("link[rel='icon']");
   favicon?.setAttribute?.("href", publicBrand.favicon_path ?? "data:,");
+  const product = documentObject?.querySelector?.("[data-access-product]");
+  if (product) product.textContent = publicBrand.product_name;
+  const visual = documentObject?.querySelector?.(".identity-access-visual");
+  visual?.setAttribute?.("aria-label", publicBrand.product_name);
   return publicBrand;
 }
 
 export function renderIdentityLoginPage(container, options = {}) {
   if (!container) return;
+  const busy = options.busy === true;
   container.innerHTML = `
     <div class="identity-login-shell">
       <section class="identity-login-panel" aria-labelledby="identity-login-title">
@@ -41,22 +47,24 @@ export function renderIdentityLoginPage(container, options = {}) {
           </div>
         </header>
         ${publicBrand.login_message ? `<p class="identity-brand-message">${escapeHtml(publicBrand.login_message)}</p>` : ""}
-        <form class="identity-login-form" data-identity-login-form>
+        <p class="identity-login-welcome">欢迎回来</p>
+        <form class="identity-login-form" data-identity-login-form aria-busy="${busy}">
           <label>
             <span>邮箱</span>
-            <input name="email" type="email" autocomplete="username" inputmode="email" value="${escapeAttribute(options.email ?? "")}" required autofocus />
+            <input name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@company.com" value="${escapeAttribute(options.email ?? "")}" required autofocus ${busy ? "disabled" : ""} />
           </label>
           <label>
             <span>密码</span>
-            <input name="password" type="password" autocomplete="current-password" required />
+            <span class="identity-password-control"><input name="password" type="password" aria-label="密码" autocomplete="current-password" placeholder="输入你的密码" required ${busy ? "disabled" : ""} /><button class="identity-password-toggle" type="button" data-password-toggle aria-label="显示密码" title="显示密码" aria-pressed="false" ${busy ? "disabled" : ""}>${icon("eye")}</button></span>
           </label>
           ${renderError(options.error)}
-          <button class="identity-primary" type="submit">登录</button>
+          <button class="identity-primary" type="submit" ${busy ? "disabled" : ""}><span>${busy ? "正在登录" : "登录"}</span>${icon("arrow-right")}</button>
           <div class="identity-access-actions">
-            <button type="button" data-identity-action="show-register">创建账号</button>
-            <button type="button" data-identity-action="show-reset">忘记密码</button>
+            <button type="button" data-identity-action="show-register" ${busy ? "disabled" : ""}>创建账号</button>
+            <button type="button" data-identity-action="show-reset" ${busy ? "disabled" : ""}>忘记密码</button>
           </div>
         </form>
+        <p class="identity-login-assurance">${icon("shield-check")}安全连接，从这里开始。</p>
       </section>
     </div>
   `;
@@ -329,6 +337,7 @@ function renderIdentityTopbar(state) {
       </a>
       ${renderWorkspaceSelector(state)}
       <div class="identity-topbar-actions">
+        ${available ? `<a class="identity-quiet-command" href="/console.html">进入控制台 ${icon("arrow-right")}</a>` : ""}
         <button
           class="identity-notification-button"
           type="button"

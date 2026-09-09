@@ -149,7 +149,7 @@ export function createIdentityPageController({
       pendingChallenge = null;
       riskChallenge = null;
       riskChallengeIntent = null;
-      renderIdentityLoginPage(root, { email });
+      renderIdentityLoginPage(root, { email, busy: true });
       try {
         const result = await queueWrite(() => api.login({ email, password }));
         if (!isCurrent(ticket)) return false;
@@ -3971,6 +3971,7 @@ export function createIdentityPageController({
   function scrubSensitiveInputs() {
     for (const selector of [
       'input[type="password"]',
+      'input[autocomplete="current-password"]',
       'input[name="code"]',
       'input[name="answer"]',
       'input[autocomplete="one-time-code"]',

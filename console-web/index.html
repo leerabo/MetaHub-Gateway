@@ -4,15 +4,56 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <title>MetaHub AI Gateway</title>
+    <meta name="description" content="MetaHub 企业级 AI 网关。自带密钥、统一接入、策略路由，让安全、成本与每一次 AI 调用尽在掌控。" />
+    <title>MetaHub · AI 的统一入口</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/src/styles/main.css" />
-    <link rel="stylesheet" href="/src/styles/brand-domains.css" />
-    <link rel="stylesheet" href="/src/styles/edge-operations.css" />
-    <link rel="stylesheet" href="/src/styles/console-experience.css" />
+    <link rel="stylesheet" href="/src/styles/public-home.css" />
   </head>
   <body>
-    <main id="app" class="app-shell" aria-label="MetaHub AI Gateway 控制台"></main>
-    <script type="module" src="/src/app/main.js"></script>
+    <a class="home-skip" href="#main">跳到主要内容</a>
+    <header class="home-header">
+      <a class="home-wordmark" href="/" aria-label="MetaHub 首页"><span class="home-mark" aria-hidden="true">M</span>MetaHub<span class="home-wordmark-note">AI GATEWAY</span></a>
+      <nav aria-label="主导航">
+        <a href="#capabilities">产品能力</a>
+        <a href="/status.html">服务状态</a>
+      </nav>
+      <a class="home-nav-login" href="/identity.html">登录<span data-icon="arrow-right"></span></a>
+    </header>
+    <main id="main">
+      <section class="home-hero" aria-labelledby="home-title">
+        <div class="home-hero-copy">
+          <p class="home-eyebrow"><span></span> ONE GATEWAY. EVERY POSSIBILITY.</p>
+          <h1 id="home-title">MetaHub</h1>
+          <p class="home-hero-title">AI 的无限可能，<span>一个入口掌控。</span></p>
+          <p class="home-hero-description">连接你的模型与密钥，让路由、安全和成本井然有序。</p>
+          <div class="home-hero-actions">
+            <a class="home-button" href="/identity.html">登录 MetaHub<span data-icon="arrow-right"></span></a>
+            <a class="home-text-link" href="#capabilities">探索产品能力<span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <div class="home-scene" data-gateway-scene aria-hidden="true">
+          <div class="gateway-fallback"><span></span><span></span><span></span><strong>M</strong></div>
+        </div>
+        <div class="home-scene-labels" aria-hidden="true"><span>YOUR MODELS</span><span class="home-scene-center">CONNECTED THROUGH METAHUB</span><span>YOUR APPLICATIONS</span></div>
+        <button class="home-motion" type="button" data-motion-toggle aria-label="暂停动画" aria-pressed="false" title="暂停动画" hidden><span data-icon="pause"></span></button>
+        <div class="home-hero-bottom"><span>自带密钥，自由连接。</span><a href="#capabilities">认识 MetaHub <span aria-hidden="true">↓</span></a><span>BUILT FOR CONTROL.</span></div>
+      </section>
+      <section class="home-capabilities" id="capabilities" aria-labelledby="capabilities-title">
+        <div class="home-section-heading"><div><p class="home-eyebrow">CONNECTED. CONTROLLED.</p><h2 id="capabilities-title">接入自由，管理有度。</h2></div><p>从第一把 Key，到团队的每一次调用。<br />复杂的 AI 基础设施，清晰地统一管理。</p></div>
+        <div class="home-capability-grid">
+          <article><div class="home-capability-meta"><span data-icon="key-round"></span><span>01 / CONNECT</span></div><h3>你的 Key，你做主</h3><p>支持 BYOK，自带模型服务密钥，集中管理与轮换。</p><span class="home-feature-tag">BYOK</span></article>
+          <article><div class="home-capability-meta"><span data-icon="layers"></span><span>02 / UNIFY</span></div><h3>一把 Key，统一接入</h3><p>虚拟 Key 统一鉴权，按应用控制模型权限与调用额度。</p><span class="home-feature-tag">统一 KEY</span></article>
+          <article><div class="home-capability-meta"><span data-icon="git-branch"></span><span>03 / ROUTE</span></div><h3>让调用，各得其所</h3><p>策略分发、权重调度与故障回退，灵活选择模型路径。</p><span class="home-feature-tag">策略路由</span></article>
+          <article><div class="home-capability-meta"><span data-icon="shield-check"></span><span>04 / PROTECT</span></div><h3>敏感数据，有边界</h3><p>敏感内容检测与脱敏，配合访问策略和审计追踪。</p><span class="home-feature-tag">数据防护</span></article>
+          <article><div class="home-capability-meta"><span data-icon="chart-no-axes-combined"></span><span>05 / ACCOUNT</span></div><h3>每一笔成本，都清晰</h3><p>调用计量、成本归集、预算配额与账单对账。</p><span class="home-feature-tag">精细化财务</span></article>
+          <article><div class="home-capability-meta"><span data-icon="cpu"></span><span>06 / OPERATE</span></div><h3>边缘 Agent，集中管</h3><p>私有网关部署、健康检查、诊断与升级管理。</p><span class="home-feature-tag">边缘 AGENT</span></article>
+          <article><div class="home-capability-meta"><span data-icon="users"></span><span>07 / COLLABORATE</span></div><h3>团队协作，权责分明</h3><p>工作空间隔离、成员角色与企业身份管理。</p><span class="home-feature-tag">团队权限</span></article>
+          <article><div class="home-capability-meta"><span data-icon="activity"></span><span>08 / OBSERVE</span></div><h3>每一次调用，有迹可循</h3><p>请求日志、指标与告警，追踪链路、用量和异常。</p><span class="home-feature-tag">可观测性</span></article>
+        </div>
+      </section>
+      <section class="home-closing" id="approach" aria-labelledby="closing-title"><p class="home-eyebrow">YOUR AI. YOUR CONTROL.</p><h2 id="closing-title">把可能性交给 AI。<br /><span>把掌控权留给你。</span></h2><a class="home-button" href="/identity.html">进入 MetaHub<span data-icon="arrow-right"></span></a><div class="home-closing-line" aria-hidden="true"></div></section>
+    </main>
+    <footer class="home-footer"><a class="home-wordmark" href="/">MetaHub</a><span>AI 的统一入口</span><a href="/status.html">服务状态<span data-icon="arrow-right"></span></a></footer>
+    <script type="module" src="/src/features/public-home/main.js"></script>
   </body>
 </html>

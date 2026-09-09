@@ -7,9 +7,18 @@
     <title>MetaHub 账号安全</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/styles/identity.css" />
+    <link rel="stylesheet" href="/src/styles/identity-access.css" />
   </head>
-  <body>
-    <main id="identity-app" class="identity-app" aria-label="MetaHub 账号安全"></main>
+  <body class="identity-is-access">
+    <aside class="identity-access-visual" aria-label="MetaHub">
+      <a class="identity-access-wordmark" href="/" data-access-product>MetaHub</a>
+      <div class="identity-access-copy"><p>ONE GATEWAY. EVERY POSSIBILITY.</p><h2>让 AI 更自由。<br /><span>让管理更从容。</span></h2><p class="identity-access-description">你的模型、密钥与团队。<br />在一个入口，有序连接。</p></div>
+      <div class="identity-access-scene" data-access-scene aria-hidden="true"><div class="identity-access-static">M<span></span></div></div>
+      <div class="identity-access-caption"><span>YOUR AI. YOUR CONTROL.</span><button type="button" data-access-motion aria-label="暂停动画" aria-pressed="false" title="暂停动画" hidden></button></div>
+      <div class="identity-access-footnote"><span>BYOK</span><span>统一接入</span><span>安全与成本</span></div>
+    </aside>
+    <a class="identity-access-home" href="/"><span aria-hidden="true">←</span> 返回首页</a>
+    <main id="identity-app" class="identity-app" aria-label="MetaHub 账号安全"><div class="identity-login-shell"><section class="identity-login-panel identity-access-loading" aria-busy="true" aria-label="加载账号"><p>MetaHub</p><h1>连接你的工作空间</h1><span role="status">正在连接...</span><i></i><i></i></section></div></main>
     <script type="module" src="/src/features/identity/main.js"></script>
   </body>
 </html>
