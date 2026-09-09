@@ -1,5 +1,26 @@
 # PRD-085 产品使用埋点与激活漏斗测试记录
 
+## 2026-09-09 原生首次调用竞争
+
+联合原生回归复现两条真实成功 RequestLog 争抢 `uq_product_events_once_prd085`，第二个事务
+在首次成功事件处失败。原始失败保留在 `native-billing-batch-r1` JUnit 与 PostgreSQL 日志中。
+新增 0152，目标为只在既有 tenant/event 部分唯一索引上忽略重复，保留其他错误和所有归属校验。
+新测试覆盖 INSERT、failed 到 success UPDATE、提交/回滚交错、事件及 source outbox 恰好一次，
+并核对迁移回退、函数、索引和清单漂移。没有预置首次成功事件来规避竞争。
+`native-billing-first-call-r1` 在迁移时因基线格式清单兼容检查失败，尚未进入并发断言；证据保留。
+`prd147-feedback-native-native-billing-first-call-r2-933512ba958e4d23b141c12b9d7701ac.xml`
+为 6 passed / 0 failed / 0 errors / 0 skipped，242.585 秒。其中本项占四项 INSERT/UPDATE
+与提交/回滚竞争，另两项为 PRD-043 的真实 Usage 并发。0152 两份 SQL 的 AST 生成一致性检查通过。
+这轮只证明上述六项，完整迁移回退、漂移和同批订阅/账本验证仍以联合批次为准。
+不以本项的字段/SQL检查代替完整原生并发、浏览器或 SLO 验收。
+
+联合终验 `prd147-feedback-native-native-billing-batch-r2-1c36ae3da1ec46499dfc85144417aafb.xml`
+为 52 passed / 0 failed / 0 errors / 0 skipped，1451.642 秒；本项 11/11。四项真实竞争、
+空库 down/up 和六项函数/部分唯一索引/清单双向漂移检查通过。旧版失败证据全部保留。
+独立审计为 `prd-085-native-billing-sensitive-audit-r1.json`，精确凭据扫描为
+`prd085-native-billing-key-audit-r1.json`。0152 只校验和刷新设计列出的两个源触发器及对应清单，
+不宣称完整核验 RequestLog 的所有无关 schema 属性。现有 SQLite 运行库及其事件均未改写。
+
 日期：2026-08-17
 
 结论：PRD-085 的 0078、RBAC revision 20、七类 ProductEvent 来源、EVT-097、Control API、PAGE-117、
