@@ -1,4 +1,33 @@
 import { AuthApiError } from "./auth.js";
+import { IdentityApiError } from "./identity.js";
+import { getAccountWorkspace, updateAccountWorkspace, switchIdentityWorkspace } from "./workspaces.js";
+
+export function getWorkspaceProfile(input) {
+  return profileRequest(getAccountWorkspace, input);
+}
+
+export function updateWorkspaceProfile({ workspaceId, revision, kind, name, ...options }) {
+  if (!new Set(["organization", "personal"]).has(kind)) {
+    throw new AuthApiError({ status: 400, code: "workspace.update_invalid", message: "空间资料不可用。" });
+  }
+  return profileRequest(updateAccountWorkspace, {
+    ...options, workspaceId, revision, changes: { [kind === "organization" ? "name" : "display_label"]: name },
+  });
+}
+
+export function reenterWorkspaceProfile(input) {
+  return profileRequest(switchIdentityWorkspace, input);
+}
+
+async function profileRequest(request, { controlApiUrl, workspaceId, revision, changes, signal }) {
+  try {
+    return { state: "ok", ...await request({ controlApiUrl, workspaceId, revision, changes, signal }) };
+  } catch (error) {
+    if (!(error instanceof IdentityApiError)) throw error;
+    throw new AuthApiError({ status: error.status, code: error.code, message: error.message,
+      requestId: error.requestId, traceId: error.traceId });
+  }
+}
 
 /**
  * 读取当前登录上下文所属租户。
