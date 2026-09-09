@@ -258,3 +258,17 @@ asset-set 摘要为 `673c94f0608719f7dd1ef65572e32fa576fe7da6e9cbd435c41c1976cd8
 独立敏感审计 `prd-146-release-navigation-sensitive-audit.json` 对精确暂存文件及上述报告验证
 UTF-8、凭据高置信模式、暂存字节与受保护基线。未纳入本地凭据、数据库、用户文档或 outputs。
 全目标及发布仍在推进；72 小时检查按用户要求后置，不在此处等待或虚报通过。
+# 2026-09-09 现行迁移夹具重验
+
+本次仅更新测试夹具，不改动导航业务和权限实现。以当前 SQLite 迁移目录完整的
+version/checksum 集合核对实际已应用记录，移除“最后新增版本必须是 0139”的历史断言。
+可选基线使用 PRD-145 已有的复制模式，只在新 pytest 目录中的副本上迁移和种子初始化。
+
+证据位于 `.artifacts/g6-security-20260907/`：`prd147-idle-claim-batch-r1.xml`
+为 60 passed / 21 setup errors；本 PRD 中 1 项无夹具测试通过、5 项因实际迁移到 0145
+而在夹具处报错。原失败保留。修复后 `prd147-idle-claim-api-r2.xml` 为 22 passed，
+其中本 PRD 6 项全部通过，覆盖租约丢失、投影/队列/对账、导航目录、偏好 CAS 和故障回滚。
+
+基线输入库前后 SHA256 均为 DB52801FDC6B2D0478F3E16DA432DB79F1E88C0FA81A176EA4251A0620CAFE99。
+Ruff 全规则通过；联合报告的既有 xunit2 属性兼容警告保留。本记录不代表 G6/G8 或 72 小时验收。
+独立敏感审计见 `PRD-146-migration-fixture-sensitive-audit-20260909.md`。

@@ -625,3 +625,9 @@ workspaceCookieApiOrigin；不放宽 Cookie Domain、不复制 Cookie、不回�
 实施复核二：共用 owner 清理同时重置 drawer，避免空间/账号切换继承旧展开状态；每次完成
 认证后再把当前 drawer 值传给 shell。测试执行生产 toggle、refresh、cleanup，并保留原有
 390px 默认关闭断言，而不是修改原断言掩盖默认行为变化。
+
+### 2026-09-09 现行迁移夹具复核
+
+第一轮：导航 API 夹具应比对当前 SQLite 迁移目录全部 version/checksum，不能继续要求
+最后新增迁移必须为 0139。第二轮：沿用 PRD-145 的可选测试基线复制方式，副本补迁移后
+严格验证完整目录，保留授权、投影、CAS、出站队列和租约丢失的所有原业务断言。

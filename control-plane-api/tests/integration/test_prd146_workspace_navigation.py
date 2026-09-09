@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
+import shutil
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import metahub_control.workspace_access.service as workspace_access_service
 import pytest
@@ -42,6 +45,7 @@ from metahub_control.workspace_navigation.scheduler import (
     run_navigation_queue_once,
 )
 from metahub_shared.db import apply_migrations, apply_seed_data, connect_database
+from metahub_shared.db.migrate import _default_migrations_dir, _load_migration_files
 from metahub_shared.runtime.config import AppConfig, EnvironmentInfo
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import create_service_app
@@ -85,12 +89,21 @@ def _config(database_url: str) -> AppConfig:
 def runtime(tmp_path_factory: pytest.TempPathFactory):
     database = tmp_path_factory.mktemp("prd146-api") / "prd146.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0139"
+    supplied = os.environ.get("METAHUB_TEST_MIGRATED_BASELINE")
+    if supplied:
+        shutil.copyfile(Path(supplied).resolve(strict=True), database)
+    apply_migrations(database_url)
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("METAHUB_SEED_ADMIN_PASSWORD", secrets.token_urlsafe(32))
         seed = apply_seed_data(database_url)
     config = _config(database_url)
     with closing(connect_database(database_url)) as connection:
+        assert {tuple(row) for row in connection.execute(
+            "SELECT version,checksum FROM schema_migrations WHERE status='applied'"
+        )} == {
+            (migration.version, migration.checksum)
+            for migration in _load_migration_files(_default_migrations_dir())
+        }
         owner = connection.execute(
             """SELECT membership.*,tenant.slug,tenant.name,user.email,user.display_name
                FROM workspace_memberships membership
