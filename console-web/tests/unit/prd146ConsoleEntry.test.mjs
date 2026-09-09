@@ -501,6 +501,30 @@ for (const hostname of ["localhost", "127.0.0.1"]) {
   });
 }
 
+for (const origin of ["https://console.example.test", "https://console.example.test:8443", "http://s1.localhost:18940"]) {
+  test(`PRD-147 hosted Console keeps the identity Control origin ${origin}`, () => {
+    const location = new URL(origin);
+    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+      ({ controlApiUrl, workspaceControlApiUrl });`, {
+      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+    });
+    assert.equal(origins.controlApiUrl, origin);
+    assert.equal(origins.workspaceControlApiUrl, origin);
+  });
+}
+
+for (const [origin, expected] of [["http://[::1]:5173", "http://[::1]:8001"], ["https://localhost:5173", "https://localhost:8001"]]) {
+  test(`PRD-147 local Console preserves protocol and IPv6 ${origin}`, () => {
+    const location = new URL(origin);
+    const origins = runInNewContext(`${section("const localLoopback =", "const consoleUrl =")}
+      ({ controlApiUrl, workspaceControlApiUrl });`, {
+      window: { location }, workspaceCookieApiOrigin: (value) => workspaceCookieApiOrigin(value, location),
+    });
+    assert.equal(origins.controlApiUrl, expected);
+    assert.equal(origins.workspaceControlApiUrl, expected);
+  });
+}
+
 test("PRD-146 mobile drawer state is independent of desktop density", () => {
   const originalWindow = globalThis.window;
   globalThis.window = { innerWidth: 390 };

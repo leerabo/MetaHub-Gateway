@@ -743,7 +743,12 @@ const app = globalThis.document?.querySelector("#app") ?? null;
 // Gateway traffic has no Workspace Cookie; Control must retain the page's host.
 const localLoopback = globalThis.window?.location?.hostname === "localhost";
 const gatewayUrl = localLoopback ? "http://127.0.0.1:8000" : "http://localhost:8000";
-const controlApiUrl = workspaceCookieApiOrigin(localLoopback ? "http://127.0.0.1:8001" : "http://localhost:8001");
+const controlPage = globalThis.window?.location;
+const controlApiUrl = workspaceCookieApiOrigin(
+  !controlPage?.origin || new Set(["localhost", "127.0.0.1", "::1", "[::1]"]).has(controlPage.hostname)
+    ? `${controlPage?.protocol ?? "http:"}//${controlPage?.hostname ?? "localhost"}:8001`
+    : controlPage.origin,
+);
 const workspaceControlApiUrl = controlApiUrl;
 const consoleUrl = globalThis.window?.location?.origin ?? "";
 // 公开邀请 fragment 必须先于认证 Storage 读取同步截获并清除，避免既有 Session 污染 accept 请求。
