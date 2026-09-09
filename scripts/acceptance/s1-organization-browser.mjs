@@ -7,12 +7,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const { chromium, request } = createRequire(import.meta.url)("playwright");
+const { PNG } = createRequire(import.meta.url)("pngjs");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const origin = process.env.S1_ORIGIN;
 const artifacts = process.env.S1_ARTIFACTS;
 assert.equal(new URL(origin).hostname, "s1.localhost");
 assert.equal(path.dirname(path.resolve(artifacts)), path.join(root, ".artifacts"));
-const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [] };
+const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [], motion: [] };
 const pendingAssets = new Map();
 const pendingRequests = new Map();
 let stage = "launch";
@@ -42,6 +43,57 @@ async function layout(page, name) {
   assert.equal(facts.overflow, false);
   assert.ok(facts.minInputPx >= 16);
   await page.screenshot({ path: path.join(artifacts, name + ".png") });
+}
+
+async function verifyAccessMotion(page, width) {
+  const canvas = page.locator("[data-access-scene] canvas");
+  if (width < 860) {
+    assert.equal(await canvas.count(), 0);
+    report.motion.push({ width, hiddenCanvasAbsent: true });
+    return;
+  }
+  await page.locator('[data-access-scene][data-rendered="true"]').waitFor();
+  const bounds = await canvas.evaluate((element) => {
+    const canvasBounds = element.getBoundingClientRect();
+    const clip = element.closest(".identity-access-visual").getBoundingClientRect();
+    const left = Math.ceil(Math.max(0, canvasBounds.left, clip.left));
+    const top = Math.ceil(Math.max(0, canvasBounds.top, clip.top));
+    const right = Math.floor(Math.min(innerWidth, canvasBounds.right, clip.right));
+    const bottom = Math.floor(Math.min(innerHeight, canvasBounds.bottom, clip.bottom));
+    return { left, top, width: right - left, height: bottom - top };
+  });
+  assert.ok(bounds.width > 100 && bounds.height > 100);
+  const visibleCanvas = async () => {
+    const screenshot = PNG.sync.read(await page.screenshot());
+    const crop = new PNG({ width: bounds.width, height: bounds.height });
+    PNG.bitblt(screenshot, crop, bounds.left, bounds.top, bounds.width, bounds.height, 0, 0);
+    return crop;
+  };
+  // Negative CSS canvas coordinates must not become an invalid screenshot clip.
+  const first = await visibleCanvas();
+  await writeFile(path.join(artifacts, width + "-scene.png"), PNG.sync.write(first));
+  await page.waitForTimeout(350);
+  const next = await visibleCanvas();
+  assert.equal(first.width, next.width);
+  assert.equal(first.height, next.height);
+  let changed = 0;
+  const colors = new Set();
+  for (let offset = 0; offset < first.data.length; offset += 4) {
+    colors.add((first.data[offset] << 16) | (first.data[offset + 1] << 8) | first.data[offset + 2]);
+    if (Math.abs(first.data[offset] - next.data[offset])
+      + Math.abs(first.data[offset + 1] - next.data[offset + 1])
+      + Math.abs(first.data[offset + 2] - next.data[offset + 2]) > 12) changed += 1;
+  }
+  const motion = { width, colors: colors.size, changedPixels: changed, bounds, toggle: false };
+  report.motion.push(motion);
+  assert.ok(colors.size > 100, "3D canvas must contain a rendered scene");
+  assert.ok(changed > 100, "3D scene must move");
+  const toggle = page.locator("[data-access-motion]");
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-pressed"), "true");
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+  motion.toggle = true;
 }
 
 try {
@@ -105,6 +157,7 @@ try {
       await page.locator('img[alt="五位数字验证码"]').waitFor();
       await page.waitForFunction(() => document.querySelector('img[alt="五位数字验证码"]')?.naturalWidth === 180);
       assert.ok(await page.locator('img[alt="五位数字验证码"]').evaluate((image) => image.naturalWidth === 180));
+      await verifyAccessMotion(page, viewport.width);
       await layout(page, tag + "-registration");
       const popupReady = context.waitForEvent("page");
       await form.getByRole("link", { name: "隐私条款" }).click();
@@ -200,6 +253,9 @@ try {
 } catch (error) {
   report.failedStage = stage;
   report.failureType = error.name;
+  report.connectionFailures = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET",
+    "ETIMEDOUT", "socket hang up", "Timeout", "Target closed", "strict mode violation"]
+    .filter((reason) => String(error.message).includes(reason));
   report.actionability = ["element is not stable", "element is not visible",
     "element is not enabled", "intercepts pointer events", "waiting for locator",
     "waiting for scheduled navigations", "waiting until \"load\""].filter((reason) =>
