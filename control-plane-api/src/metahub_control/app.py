@@ -41,6 +41,7 @@ from .console_experience import install_console_experience_scheduler
 from .console_experience import router as console_experience_router
 from .console_migration import router as console_migration_router
 from .console_migration.manifest import configured_installer_definitions
+from .consumers.routes import router as consumers_router
 from .cost_anomalies import install_cost_anomaly_scheduler
 from .cost_anomalies import router as cost_anomalies_router
 from .customer_support.routes import router as customer_support_router
@@ -301,6 +302,7 @@ async def response_cache_private_cache_boundary(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(consumers_router)
 app.include_router(identity_router)
 app.include_router(privacy_center_router)
 app.include_router(compliance_center_router)

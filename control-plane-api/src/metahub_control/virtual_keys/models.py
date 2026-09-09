@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RateLimitRuleInfo(BaseModel):
@@ -46,6 +46,9 @@ class VirtualKeyInfo(BaseModel):
     project_name: str | None = None
     application_id: str | None = None
     application_name: str | None = None
+    consumer_id: str | None = None
+    consumer_status: str | None = None
+    credential_revision: int = 1
     status: str
     last_used_at: datetime | None
     created_at: datetime
@@ -93,6 +96,13 @@ class CreateVirtualKeyRequest(BaseModel):
     description: str | None = None
     project_id: str | None = None
     application_id: str | None = None
+    consumer_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class RotateVirtualKeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1, strict=True)
 
 
 class CreateVirtualKeyResponse(VirtualKeyResponse):
@@ -111,6 +121,8 @@ class UpdateVirtualKeyRequest(BaseModel):
     边界：该结构只保存脱敏业务字段，不应加入明文密钥、Token 或 Prompt 内容。
     """
 
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
     environment_id: str | None = None

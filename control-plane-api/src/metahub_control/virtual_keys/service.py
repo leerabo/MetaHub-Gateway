@@ -27,6 +27,7 @@ from metahub_control.audit import (
 )
 from metahub_control.auth import AuthContext
 from metahub_control.auth.resource_transactions import ResourceWriteTransaction
+from metahub_control.consumers.service import require_active_consumer
 from metahub_control.environments.service import resolve_environment_binding
 
 from .models import (
@@ -97,9 +98,14 @@ def list_virtual_keys(
           e.environment_id AS environment_id, e.name AS environment_name, e.status AS environment_status, vk.description,
           vk.project_id, p.name AS project_name, vk.application_id, a.name AS application_name,
           vk.status, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
+          kc.consumer_id, consumer.status AS consumer_status, vk.credential_revision,
           rlr.rate_limit_rule_id, rlr.rpm_limit, rlr.tpm_limit, rlr.concurrency_limit,
           rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at
         FROM virtual_keys vk
+        LEFT JOIN virtual_key_consumers kc
+          ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
+        LEFT JOIN workspace_consumers consumer
+          ON consumer.tenant_id=kc.tenant_id AND consumer.consumer_id=kc.consumer_id
         LEFT JOIN virtual_key_rate_limit_rules rlr
           ON rlr.tenant_id = vk.tenant_id AND rlr.virtual_key_id = vk.virtual_key_id
         LEFT JOIN projects p ON p.tenant_id = vk.tenant_id AND p.project_id = vk.project_id
@@ -156,6 +162,8 @@ def create_virtual_key(
             project_id, application_id = _resolve_project_binding(
                 connection, context.user.tenant_id, payload.project_id, payload.application_id
             )
+            if payload.consumer_id is not None:
+                require_active_consumer(connection, context, payload.consumer_id)
             now = _to_db_time(_utcnow())
             plain_value = _generate_virtual_key(environment_binding.code)
             virtual_key_id = str(uuid4())
@@ -186,6 +194,13 @@ def create_virtual_key(
                     ),
                 )
                 # 先用同一连接回读脱敏 DTO，再把业务行和审计行作为一个事务提交；明文只保留在响应变量中。
+                if payload.consumer_id is not None:
+                    connection.execute(
+                        """INSERT INTO virtual_key_consumers(
+                             virtual_key_id,tenant_id,consumer_id,created_at)
+                           VALUES(?,?,?,?)""",
+                        (virtual_key_id, context.user.tenant_id, payload.consumer_id, now),
+                    )
                 key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
                 audit_record = record_audit_log(
                     connection,
@@ -200,6 +215,8 @@ def create_virtual_key(
                     request_id=request_id,
                     trace_id=trace_id,
                 )
+                if payload.consumer_id is not None:
+                    require_active_consumer(connection, transaction.verify(), payload.consumer_id)
                 transaction.commit(commit_audited_transaction)
                 dispatch_audit_recorded(config, context, audit_record, request_id=request_id, trace_id=trace_id)
                 _log_created(context, key, request_id, trace_id)
@@ -219,6 +236,48 @@ def create_virtual_key(
                 raise
         # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
         raise ApiError("virtual_key.create_invalid")
+
+
+def rotate_virtual_key(
+    config, context, virtual_key_id, payload, *, audit_request_meta, request_id, trace_id
+):
+    with ResourceWriteTransaction(
+        _connect(config), config, context, "virtual_key.write"
+    ) as transaction:
+        connection, context = transaction.connection, transaction.context
+        before = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        if before.status != "active" or before.credential_revision != payload.expected_revision:
+            raise ApiError("virtual_key.rotate_conflict")
+        if before.consumer_id is not None:
+            require_active_consumer(connection, context, before.consumer_id)
+        plain_value = _generate_virtual_key(before.environment)
+        changed = connection.execute(
+            """UPDATE virtual_keys SET key_hash=?,key_prefix=?,updated_at=?,
+               credential_revision=credential_revision+1
+               WHERE tenant_id=? AND virtual_key_id=?
+                 AND credential_revision=? AND status='active'""",
+            (
+                hash_secret(plain_value), secret_prefix(plain_value), _to_db_time(_utcnow()),
+                context.user.tenant_id, virtual_key_id, payload.expected_revision,
+            ),
+        )
+        if changed.rowcount != 1:
+            raise ApiError("virtual_key.rotate_conflict")
+        key = _load_virtual_key(connection, context.user.tenant_id, virtual_key_id)
+        record = record_audit_log(
+            connection, context, action="virtual_key.rotated", object_type="virtual_key",
+            object_id=virtual_key_id, object_name=virtual_key_id,
+            before_summary=_virtual_key_audit_summary(before),
+            after_summary=_virtual_key_audit_summary(key),
+            request_meta=audit_request_meta, request_id=request_id, trace_id=trace_id,
+        )
+        if before.consumer_id is not None:
+            require_active_consumer(connection, transaction.verify(), before.consumer_id)
+        transaction.commit(commit_audited_transaction)
+        dispatch_audit_recorded(config, context, record, request_id=request_id, trace_id=trace_id)
+        return CreateVirtualKeyResponse(
+            virtual_key=key, plain_value=plain_value, request_id=request_id, trace_id=trace_id
+        )
 
 
 def update_virtual_key(
@@ -505,6 +564,8 @@ def _virtual_key_audit_summary(key: VirtualKeyInfo) -> dict[str, object]:
         "environment_id": key.environment_id,
         "project_id": key.project_id,
         "application_id": key.application_id,
+        "consumer_id": key.consumer_id,
+        "credential_revision": key.credential_revision,
         "description_hash": _audit_text_hash(key.description),
         "status": key.status,
         "rpm_limit": key.rate_limit_rule.rpm_limit if key.rate_limit_rule else None,
@@ -567,9 +628,14 @@ def _load_virtual_key(connection: sqlite3.Connection, tenant_id: str, virtual_ke
           e.environment_id AS environment_id, e.name AS environment_name, e.status AS environment_status, vk.description,
           vk.project_id, p.name AS project_name, vk.application_id, a.name AS application_name,
           vk.status, vk.last_used_at, vk.created_at, vk.updated_at, vk.disabled_at,
+          kc.consumer_id, consumer.status AS consumer_status, vk.credential_revision,
           rlr.rate_limit_rule_id, rlr.rpm_limit, rlr.tpm_limit, rlr.concurrency_limit,
           rlr.status AS rate_limit_status, rlr.updated_at AS rate_limit_updated_at
         FROM virtual_keys vk
+        LEFT JOIN virtual_key_consumers kc
+          ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
+        LEFT JOIN workspace_consumers consumer
+          ON consumer.tenant_id=kc.tenant_id AND consumer.consumer_id=kc.consumer_id
         LEFT JOIN virtual_key_rate_limit_rules rlr
           ON rlr.tenant_id = vk.tenant_id AND rlr.virtual_key_id = vk.virtual_key_id
         LEFT JOIN projects p ON p.tenant_id = vk.tenant_id AND p.project_id = vk.project_id
@@ -608,6 +674,9 @@ def _virtual_key_info(row: sqlite3.Row) -> VirtualKeyInfo:
         project_name=row["project_name"],
         application_id=row["application_id"],
         application_name=row["application_name"],
+        consumer_id=row["consumer_id"],
+        consumer_status=row["consumer_status"],
+        credential_revision=row["credential_revision"],
         status=row["status"],
         last_used_at=_parse_optional_db_time(row["last_used_at"]),
         created_at=_parse_db_time(row["created_at"]),

@@ -28,7 +28,7 @@ export async function listVirtualKeys({ controlApiUrl, authentication, token, si
  *
  * 后端只在创建响应中返回一次明文 Key；调用方必须立即展示给用户，不能写入缓存。
  */
-export async function createVirtualKey({ controlApiUrl, authentication, token, signal, name, environmentId, environment, description, projectId, applicationId }) {
+export async function createVirtualKey({ controlApiUrl, authentication, token, signal, name, environmentId, environment, description, projectId, applicationId, consumerId }) {
   return virtualKeysRequest(`${controlApiUrl}/virtual-keys`, {
     method: "POST",
     authentication, token, signal,
@@ -42,7 +42,16 @@ export async function createVirtualKey({ controlApiUrl, authentication, token, s
       description,
       project_id: emptyStringToNull(projectId),
       application_id: emptyStringToNull(applicationId),
+      ...(consumerId ? { consumer_id: consumerId } : {}),
     }),
+  });
+}
+
+export function rotateVirtualKey({ controlApiUrl, authentication, token, signal, virtualKeyId, expectedRevision }) {
+  return virtualKeysRequest(`${controlApiUrl}/virtual-keys/${encodeURIComponent(virtualKeyId)}/rotate`, {
+    method: "POST", authentication, token, signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_revision: expectedRevision }),
   });
 }
 

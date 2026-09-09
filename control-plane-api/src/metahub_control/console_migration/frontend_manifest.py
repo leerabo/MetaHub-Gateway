@@ -130,7 +130,7 @@ FRONTEND_PRODUCTION_SURFACE_MANIFEST = {
     ),
     "production_dockerfile": "../infra/docker/console.Dockerfile",
     "production_asset_set_sha256": (
-        "0a734f3358104a8e56dc3765ccb77f2f37f9aa587c656ef5bb59ee8e16515c48"
+        "dfd8ba2200027d6100f61caf5e4f997e989d6f6b98de19cf74451d1b7396d0f1"
     ),
     "output_directory": "dist",
 }

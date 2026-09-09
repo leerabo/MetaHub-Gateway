@@ -17,6 +17,7 @@ from metahub_control.auth import AuthContext, require_workspace_or_legacy_permis
 from .models import (
     CreateVirtualKeyRequest,
     CreateVirtualKeyResponse,
+    RotateVirtualKeyRequest,
     UpdateVirtualKeyLimitsRequest,
     UpdateVirtualKeyRequest,
     VirtualKeyListResponse,
@@ -26,6 +27,7 @@ from .service import (
     create_virtual_key,
     disable_virtual_key,
     list_virtual_keys,
+    rotate_virtual_key,
     update_virtual_key,
     update_virtual_key_limits,
 )
@@ -74,6 +76,26 @@ async def post_virtual_key(
     return create_virtual_key(
         request.app.state.config,
         context,
+        payload,
+        audit_request_meta=build_audit_request_meta(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+
+
+@router.post("/{virtual_key_id}/rotate", response_model=CreateVirtualKeyResponse)
+def post_virtual_key_rotation(
+    virtual_key_id: str,
+    payload: RotateVirtualKeyRequest,
+    request: Request,
+    context: Annotated[
+        AuthContext, Depends(require_workspace_or_legacy_permissions("virtual_key.write"))
+    ],
+) -> CreateVirtualKeyResponse:
+    return rotate_virtual_key(
+        request.app.state.config,
+        context,
+        virtual_key_id,
         payload,
         audit_request_meta=build_audit_request_meta(request),
         request_id=_request_id(request),

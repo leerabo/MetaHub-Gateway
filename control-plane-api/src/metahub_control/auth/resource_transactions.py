@@ -26,6 +26,7 @@ RESOURCE_PERMISSIONS = frozenset(
         "provider_catalog.read",
         "model.write",
         "virtual_key.write",
+        "virtual_key.read",
         "project.read",
         "environment.read",
         "model.read",

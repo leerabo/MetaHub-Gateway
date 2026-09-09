@@ -38,6 +38,7 @@ class GatewayAuthContext:
     environment_status: str = "active"
     project_id: str | None = None
     application_id: str | None = None
+    consumer_id: str | None = None
 
 
 def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> GatewayAuthContext:
@@ -59,8 +60,13 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
               e.status AS environment_status,
               binding.workspace_id,
               vk.project_id, vk.application_id,
+              kc.consumer_id, consumer.status AS consumer_status,
               vk.status, t.status AS tenant_status
             FROM virtual_keys vk
+            LEFT JOIN virtual_key_consumers kc
+              ON kc.tenant_id=vk.tenant_id AND kc.virtual_key_id=vk.virtual_key_id
+            LEFT JOIN workspace_consumers consumer
+              ON consumer.tenant_id=kc.tenant_id AND consumer.consumer_id=kc.consumer_id
             JOIN tenants t ON t.tenant_id = vk.tenant_id
             JOIN workspace_tenant_bindings binding
               ON binding.tenant_id=vk.tenant_id AND binding.status='active'
@@ -76,6 +82,8 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
         if not row or row["status"] != "active" or row["tenant_status"] != "active":
             # 关键异常统一映射为业务错误码，避免底层实现细节穿透到 API 响应。
             raise ApiError("gateway.auth_invalid")
+        if row["consumer_id"] is not None and row["consumer_status"] != "active":
+            raise ApiError("gateway.auth_invalid")
         _mark_last_used(connection, row["tenant_id"], row["virtual_key_id"])
         return GatewayAuthContext(
             tenant_id=row["tenant_id"],
@@ -88,6 +96,7 @@ def authenticate_virtual_key(config: AppConfig, authorization: str | None) -> Ga
             environment_status=row["environment_status"],
             project_id=row["project_id"],
             application_id=row["application_id"],
+            consumer_id=row["consumer_id"],
         )
     finally:
         # 每次模型调用和反馈提交都会鉴权；无论成功或拒绝都必须释放 SQLite 句柄，避免长期泄漏。

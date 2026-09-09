@@ -536,6 +536,10 @@ def _apply_path_cache_control(request: Request, response: Response) -> None:
         or path.startswith("/identity/")
         or path == "/workspaces"
         or path.startswith("/workspaces/")
+        or path == "/consumers"
+        or path.startswith("/consumers/")
+        or path == "/virtual-keys"
+        or path.startswith("/virtual-keys/")
     ):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"

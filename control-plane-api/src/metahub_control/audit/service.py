@@ -49,6 +49,9 @@ ACTION_OBJECT_TYPES = {
     "provider_key.updated": "provider_key",
     "virtual_key.created": "virtual_key",
     "virtual_key.updated": "virtual_key",
+    "virtual_key.rotated": "virtual_key",
+    "consumer.created": "consumer",
+    "consumer.updated": "consumer",
     "budget_rule.created": "budget_rule",
     "budget_rule.updated": "budget_rule",
     "dlp_rule.created": "dlp_rule",
@@ -187,6 +190,7 @@ CONFIG_TRANSFER_TOTAL_LIMIT = 5_000
 # 对象级字段白名单是审计入库的主要安全边界。新增领域字段必须在设计审查后显式加入，
 # 不能通过序列化数据库整行或请求 DTO 的方式自动扩展。
 SUMMARY_FIELDS: dict[str, frozenset[str]] = {
+    "consumer": frozenset({"consumer_id", "status", "revision"}),
     "mcp_network_policy": frozenset(
         {
             "mcp_server_id",
@@ -368,6 +372,8 @@ SUMMARY_FIELDS: dict[str, frozenset[str]] = {
     "provider_key": frozenset({"provider_id", "name", "key_prefix", "weight", "status"}),
     "virtual_key": frozenset(
         {
+            "consumer_id",
+            "credential_revision",
             "name",
             "key_prefix",
             "environment_id",

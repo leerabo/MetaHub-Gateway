@@ -9641,6 +9641,31 @@ h3 {
   overflow: hidden;
 }
 
+.consumer-directory { margin-block: 24px; padding-block: 16px; border-block: 1px solid var(--line); }
+.consumer-directory-heading, .consumer-pagination { display: flex; align-items: center; gap: 16px; }
+.consumer-directory-heading { justify-content: space-between; margin-bottom: 16px; }
+.consumer-directory h3 { margin: 0; font-size: 18px; }
+.consumer-form { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto; gap: 12px; align-items: end; }
+.consumer-form label { display: grid; gap: 6px; font-size: 15px; min-width: 0; }
+.consumer-form input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; min-width: 0; min-height: 42px; padding: 8px; font: inherit; font-size: 16px; color: var(--text); background: white; border: 1px solid var(--line); border-radius: 4px; }
+.consumer-form button, .consumer-pagination button { min-height: 42px; padding: 8px 14px; font: inherit; font-size: 15px; border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--text); cursor: pointer; }
+.consumer-form button:disabled, .consumer-pagination button:disabled { opacity: .5; cursor: default; }
+.consumer-list { margin-top: 20px; }
+.consumer-row { padding-block: 12px; border-top: 1px solid var(--line); grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto auto; }
+.consumer-form .consumer-status { display: flex; align-items: center; min-height: 42px; }
+.consumer-status input { width: 18px; height: 18px; }
+.consumer-key-count { font-size: 14px; line-height: 42px; white-space: nowrap; }
+.consumer-pagination { justify-content: end; margin-top: 16px; font-size: 15px; }
+.consumer-pagination button { width: 42px; height: 42px; padding: 10px; }
+.consumer-pagination button:first-child svg { transform: rotate(180deg); }
+.consumer-empty { font-size: 16px; color: var(--muted); }
+.virtual-key-row-actions [data-rotate-virtual-key] { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; padding: 0; }
+@media (max-width: 700px) {
+  .consumer-form, .consumer-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .consumer-key-count { line-height: 24px; }
+  .consumer-pagination { justify-content: space-between; }
+}
+
 .virtual-key-row {
   display: grid;
   grid-template-columns: minmax(160px, 1.1fr) 120px 72px 88px 132px minmax(300px, 1.8fr) 96px;

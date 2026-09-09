@@ -5,6 +5,8 @@
  */
 
 import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
+import { icon } from "../public-home/icons.js";
+import { renderConsumers, renderConsumerSelection } from "./renderConsumers.js";
 
 // 环境标签只用于展示和表单选项，提交值仍使用后端枚举。
 const ENVIRONMENT_LABELS = {
@@ -46,6 +48,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
 
   const keys = virtualKeysState.virtual_keys ?? [];
   const canWrite = hasPermission(authContext, PERMISSIONS.VIRTUAL_KEY_WRITE);
+  const directory = hasPermission(authContext, PERMISSIONS.USER_MANAGE) ? virtualKeysState.consumerDirectory : null;
   return `
     <div class="panel-heading virtual-keys-heading">
       <div>
@@ -56,6 +59,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
     </div>
     ${canWrite ? renderOneTimeSecret(virtualKeysState.created) : ""}
     ${renderActionError(virtualKeysState.actionError)}
+    ${renderConsumers(directory)}
     ${canWrite ? `<form class="create-virtual-key-form" id="create-virtual-key-form">
       <h3>创建 Virtual Key</h3>
       <label>
@@ -69,6 +73,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
         </select>
       </label>
       ${renderProjectBindingFields(projectState)}
+      ${renderConsumerSelection(directory)}
       <label>
         <span>备注</span>
         <input name="description" maxlength="240" placeholder="用途、系统或负责人" />
@@ -89,7 +94,7 @@ export function renderVirtualKeyPanel(virtualKeysState, authContext, projectStat
         <span>限制</span>
         <span>操作</span>
       </div>
-      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canWrite)).join("") : renderEmptyRow()}
+      ${keys.length ? keys.map((key) => renderVirtualKeyRow(key, canWrite, directory)).join("") : renderEmptyRow()}
     </div>
   `;
 }
@@ -176,7 +181,7 @@ function renderActionError(error) {
  * 渲染单条 Virtual Key。
  * 列表只展示 key_prefix、状态、环境、归属和最近使用时间，不展示明文 Key 或哈希。
  */
-function renderVirtualKeyRow(key, canWrite) {
+function renderVirtualKeyRow(key, canWrite, directory) {
   const nextStatus = key.status === "active" ? "disabled" : "active";
   const actionLabel = key.status === "active" ? "禁用" : "启用";
   return `
@@ -188,6 +193,7 @@ function renderVirtualKeyRow(key, canWrite) {
       <code>${escapeHtml(key.key_prefix)}</code>
       <span>${escapeHtml(key.environment_name ?? ENVIRONMENT_LABELS[key.environment] ?? key.environment)}</span>
       <span class="virtual-key-binding">
+        ${key.consumer_id ? `<strong>${escapeHtml(directory?.consumers?.find((item) => item.consumer_id === key.consumer_id)?.display_name ?? key.consumer_id)}</strong><em>${key.consumer_status === "active" ? "使用者已启用" : "使用者已停用"}</em>` : ""}
         <strong>${escapeHtml(key.project_name ?? key.project_id ?? "未绑定项目")}</strong>
         <em>${escapeHtml(key.application_name ?? key.application_id ?? "未绑定应用")}</em>
       </span>
@@ -203,6 +209,7 @@ function renderVirtualKeyRow(key, canWrite) {
         </form>` : ""}
       </div>
       <span class="virtual-key-row-actions">
+        ${canWrite && Number.isSafeInteger(key.credential_revision) && key.status === "active" && (!key.consumer_id || (directory && key.consumer_status === "active")) ? `<button type="button" data-rotate-virtual-key="${escapeAttribute(key.virtual_key_id)}" data-key-revision="${key.credential_revision}" title="轮换 KEY，旧 KEY 将立即失效" aria-label="轮换 ${escapeAttribute(key.name)}">${icon("rotate-cw")}</button>` : ""}
         ${canWrite ? `<form data-virtual-key-form data-virtual-key-id="${escapeAttribute(key.virtual_key_id)}">
           <input type="hidden" name="status" value="${escapeAttribute(nextStatus)}" />
           <button type="submit">${actionLabel}</button>

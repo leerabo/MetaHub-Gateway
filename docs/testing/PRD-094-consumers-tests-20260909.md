@@ -38,3 +38,17 @@
 同一次运行发现并验证了 KEY 字号修复，六个采样最小文字输入字号 16px，无页面横向溢出。已查看桌面和手机终态截图；用例由 `scripts/acceptance/s1-organization-browser.py` 启动隔离数据库、真实 Control/Gateway 和浏览器，成功副本已删除、服务已退出。报告只证明鉴权，不包含模型推理。
 
 上述“按人用量仍待验证”是较早状态；后续实现及限定证据见 S2 两份批次记录，不能据此推断所有财务、生产或长稳门禁完成。最新本地发布见 `S1-browser-local-release-20260909.md`；核心消费者代码的独立暂存仍需后续整理。
+
+## 独立暂存版本复核
+
+产品树 `6a556cf74e6318b047bc841b1cef19a62c5eae47` 导出至 `.tmp/s1-core-index-20260909`。本次只包含目录、不可变 KEY 归属、轮换、Gateway 停用和必要权限，不包含 S2 用量、预算、财务接线。
+
+- 消费者 SQLite 六项均通过，分布于 `.artifacts/s1-index-batch-f_0ej4rt/results.xml` 的三个功能用例和 `.artifacts/s1-index-batch-twdh0bqx/results.xml` 的迁移、并发轮换及审计保留三个用例。后续迁移先正常 down，再实际验证 0148 的 down/up，未删除迁移历史或跳过保护。
+- `.artifacts/g6-security-20260907/s1-consumer-index-frontend-20260909.xml`：47 项，0 failures/errors/skipped，覆盖 identity、WorkspaceAccess、使用者和 KEY。
+- 从该导出副本执行生产 surface 检查和实际构建：271 模块、289 资产，摘要 `dfd8ba2200027d6100f61caf5e4f997e989d6f6b98de19cf74451d1b7396d0f1`。隔离 HTTP 对这 289 项逐一校验状态和字节 SHA256，通过。
+- `.artifacts/s1-browser-61yzq7pg/acceptance.json` 仅通过桌面注册，组织创建与切换接口成功，但页面跳转等待其它面板导致超时，不计完整浏览器通过。该问题归 PRD-093 创建后的导航修复。
+- 组合 API 的 44 个唯一用例已有 43 项通过。注册性能用例第一次注册 p95 超 500ms；单独复测注册/验证达标，但限流计数 p95 30.016ms 超过 30ms，保持未通过。消费者功能通过不代表整个 S1 性能门禁通过。
+
+前两次隔离运行分别缺少种子和迁移绝对路径；已在验收运行器中显式配置。两次原生初始化分别被整批建库 SQL 的 30 秒超时和所选 Python 缺少 pglast 阻断，未进入业务用例，不计作原生通过。后续原生结果单独追加，原始失败证据保留。
+
+第三次原生运行 `.artifacts/s1-index-native-766686793b3044f6a3a1c44d26c012e5/results.xml`：两项组织用例通过；消费者两项在 CREATE DATABASE 副本阶段遇到磁盘耗尽，没有进入测试正文，清理也失败。隔离 PostgreSQL 已以 immediate 模式停止，保留待恢复现场，不影响试用实例。本次消费者独立提交不宣称原生补验、完整浏览器或 S1 性能门禁完成。

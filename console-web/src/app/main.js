@@ -648,9 +648,11 @@ import {
   createVirtualKey,
   disableVirtualKey,
   listVirtualKeys,
+  rotateVirtualKey,
   updateVirtualKey,
   updateVirtualKeyLimits,
 } from "../lib/virtualKeys.js";
+import { createConsumer, listConsumers, updateConsumer } from "../lib/consumers.js";
 import {
   budgetIdentitySnapshot,
   createBudgetMutationLifecycle,
@@ -1150,6 +1152,7 @@ const webhookPendingReplayKeys = new Map();
 const webhookDeadLetterPageState = createWebhookDeadLetterPageState();
 let virtualKeyCreatedSecret = null;
 let virtualKeyActionError = null;
+let consumerDirectoryOffset = 0;
 let virtualKeyFeedback = "";
 // SDK active language 使用模块级状态，保证 15 秒刷新和下载反馈后仍保留选择；进入登录页时统一重置为 Python。
 let activeSdkLanguage = "python";
@@ -2175,6 +2178,7 @@ function clearBasicResourceFeedback() {
   environmentActionError = projectActionError = providerActionError = modelActionError = virtualKeyActionError = null;
   environmentFeedback = projectFeedback = providerFeedback = modelFeedback = virtualKeyFeedback = "";
   providerLastTestResult = virtualKeyCreatedSecret = null;
+  consumerDirectoryOffset = 0;
   providerCatalogActiveTab = "catalog";
   providerCatalogFilters = { status: "", vendorCode: "", capabilityCode: "", regionCode: "" };
   providerCatalogCompatibilityByEntryCode = {};
@@ -2963,6 +2967,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         description: String(data.get("description") ?? ""),
         projectId: String(data.get("projectId") ?? ""),
         applicationId: String(data.get("applicationId") ?? ""),
+        consumerId: String(data.get("consumerId") ?? ""),
       });
       virtualKeyCreatedSecret = {
         plainValue: result.plain_value,
@@ -3009,6 +3014,56 @@ function bindAuthenticatedEvents(consoleShellState) {
         if (handleResourceMutationError(operation, error)) return;
         virtualKeyActionError = error;
         virtualKeyFeedback = "操作失败";
+        await refreshResourceMutation(operation);
+      }
+    });
+  }
+
+  for (const form of document.querySelectorAll("#create-consumer-form, [data-consumer-form]")) {
+    const binding = bindResourceElement(form, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE, PERMISSIONS.USER_MANAGE], "virtual-keys");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
+      form.querySelector("button[type='submit']").disabled = true;
+      const data = new FormData(form);
+      virtualKeyActionError = null;
+      try {
+        await resourceMutationRequest(operation, form.dataset.consumerId ? updateConsumer : createConsumer, {
+          controlApiUrl, consumerId: form.dataset.consumerId,
+          displayName: String(data.get("displayName") ?? ""), department: String(data.get("department") ?? ""),
+          status: data.has("active") ? "active" : "disabled", revision: Number(form.dataset.revision),
+        });
+        virtualKeyFeedback = form.dataset.consumerId ? "使用者已更新" : "使用者已添加";
+        await refreshResourceMutation(operation);
+      } catch (error) {
+        if (handleResourceMutationError(operation, error)) return;
+        virtualKeyActionError = error;
+        await refreshResourceMutation(operation);
+      }
+    });
+  }
+  for (const button of document.querySelectorAll("[data-consumer-page], [data-rotate-virtual-key]")) {
+    const binding = bindResourceElement(button, [PERMISSIONS.VIRTUAL_KEY_READ, PERMISSIONS.VIRTUAL_KEY_WRITE], "virtual-keys");
+    button.addEventListener("click", async () => {
+      const operation = resourcePageLifecycle.beginMutation(binding);
+      if (!operation) return;
+      button.disabled = true;
+      virtualKeyActionError = null;
+      try {
+        if (button.dataset.consumerPage !== undefined) {
+          consumerDirectoryOffset = Number(button.dataset.consumerPage);
+        } else {
+          const result = await resourceMutationRequest(operation, rotateVirtualKey, {
+            controlApiUrl, virtualKeyId: button.dataset.rotateVirtualKey, expectedRevision: Number(button.dataset.keyRevision),
+          });
+          virtualKeyCreatedSecret = { plainValue: result.plain_value, keyPrefix: result.virtual_key?.key_prefix };
+          virtualKeyFeedback = "KEY 已轮换";
+        }
+        await refreshResourceMutation(operation);
+      } catch (error) {
+        if (handleResourceMutationError(operation, error)) return;
+        virtualKeyActionError = error;
         await refreshResourceMutation(operation);
       }
     });
@@ -17716,7 +17771,16 @@ async function loadAuditLogsState(consoleShellState, refreshId) {
  */
 async function loadVirtualKeysState() {
   return loadResourceState("virtual-keys", [PERMISSIONS.VIRTUAL_KEY_READ],
-    (options) => listVirtualKeys(options),
+    async (options) => {
+      const keys = await listVirtualKeys(options);
+      if (!hasPermission(authSession?.context, PERMISSIONS.USER_MANAGE)) return keys;
+      try {
+        return { ...keys, consumerDirectory: await listConsumers({ ...options, offset: consumerDirectoryOffset }) };
+      } catch (error) {
+        if (isAbortError(error) || error.status === 401 || error.status === 403) throw error;
+        return { ...keys, consumerDirectory: { state: "error", message: authErrorMessage(error) } };
+      }
+    },
     (state) => ({ ...state, created: virtualKeyCreatedSecret,
       actionError: virtualKeyActionError, feedback: virtualKeyFeedback }));
 }

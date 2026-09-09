@@ -45,6 +45,18 @@ class ErrorSpec:
 
 # 统一错误码注册表是所有 API 响应的契约来源，message/suggestion 不能包含内部堆栈或密钥信息。
 ERROR_SPECS: dict[str, ErrorSpec] = {
+    "consumer.not_found": ErrorSpec(
+        404, "使用者不存在。", "请刷新当前组织的使用者列表。", owner="identity"
+    ),
+    "consumer.disabled": ErrorSpec(
+        409, "使用者已停用。", "请先启用使用者，再发放或轮换密钥。", owner="identity"
+    ),
+    "consumer.revision_conflict": ErrorSpec(
+        409, "使用者资料已更新。", "请刷新后重新编辑。", owner="identity"
+    ),
+    "virtual_key.rotate_conflict": ErrorSpec(
+        409, "密钥状态已变化。", "请刷新后重试轮换。", owner="identity"
+    ),
     "infra.config_missing": ErrorSpec(
         500,
         "Required configuration is missing.",
