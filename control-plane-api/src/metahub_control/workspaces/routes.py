@@ -8,12 +8,12 @@ import json
 import secrets
 import weakref
 from collections.abc import Iterable
-from functools import partial
 from typing import Any
 
 import anyio
 from fastapi import APIRouter, Request, Response, status
 from metahub_shared.abuse_risk import runtime_for
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.identity.service import (
@@ -370,8 +370,12 @@ def _workspace_creation_lock(
 
 
 async def _run(function, *args, **kwargs):
+    def run_in_request_scope():
+        with database_request_scope(reuse_connections=True):
+            return function(*args, **kwargs)
+
     return await anyio.to_thread.run_sync(
-        partial(function, *args, **kwargs),
+        run_in_request_scope,
         limiter=_WORK_LIMITER,
     )
 
