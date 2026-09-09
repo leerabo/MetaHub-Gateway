@@ -1,5 +1,24 @@
 # PRD-051 FinOps Ledger 正式账本测试记录
 
+## 2026-09-09 原生序号增量
+
+新增原生 0151，补齐真实 Usage 触发正式账本分录时缺失的序号分配。序号在事务内递增，不更改
+金额、归属、价格快照、人工调整和不可变合同。无 Gateway 原始快照的合成测试 Usage 必须保持
+`legacy_amount_only / finops_legacy_backfill / legacy-unversioned-v1`，不能误报为 `unpriced`。
+`test_prd051_postgresql_finops_sequence.py` 增加独立调整写入的并发、回滚、显式序号拒绝与漂移测试。
+原生 green-r1 的 NULL ledger_sequence 失败、green-r2 的 TRIM/btrim 结构误报、green-r3 的测试
+价格证据断言错误均保留在 `.artifacts/g6-security-20260907`，不改写为通过。
+修复保留基线 CHECK 原始表达式；六份账本/Usage/订阅 SQL 的 AST 一致性检查和 Ruff 已通过。
+没有付费调用、运行库财务调整或历史金额重算；不宣称完整原生财务流程验收。
+
+联合终验 `prd147-feedback-native-native-billing-batch-r2-1c36ae3da1ec46499dfc85144417aafb.xml`
+为 52 passed / 0 failed / 0 errors / 0 skipped，1451.642 秒；本项 10/10。真实 Usage 分录的
+归属、金额与价格证据保留，独立手工调整并发的提交/回滚顺序、显式序号拒绝和 SQL savepoint
+均通过，六项双向函数/清单/约束漂移拒绝通过。测试调整只在隔离数据库创建。
+独立审计为 `prd-051-native-billing-sensitive-audit-r1.json`，精确凭据扫描为
+`prd051-native-billing-key-audit-r1.json`。隔离实例正常退出，八份迁移 SQL 的 AST 检查及定向
+Ruff/compileall/diff check 通过，受保护基线不变；不将本项扩张为完整原生 FinOps API/浏览器验收。
+
 测试日期：2026-07-27
 
 当前状态：已完成。设计与两轮编码前自审、0041、实现、分层测试、开发库迁移、真实 Runtime/Browser、日志隐私、Session/spool 清理及停服终态审计均已通过。权威 Browser 批次为 `artifacts/prd051/20260727T043500-browser-success-02`。
