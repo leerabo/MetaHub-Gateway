@@ -1,5 +1,6 @@
 // 平台渲染器只消费严格安全 DTO；所有服务端字符串转义后进入 DOM，不展示内部地址、Provider 或签名。
 import { NOTIFICATION_EVENT_PARAMETERS } from "../../lib/notifications.js";
+import { icon } from "../public-home/icons.js";
 import { renderLaunchGates } from "../launch-gates/renderLaunchGates.js";
 import { renderChannelManagement } from "../channels/renderChannelManagement.js";
 import { renderBrandEditor } from "../brand-domains/renderBrandEditor.js";
@@ -2378,6 +2379,7 @@ function complianceView(state, permissions) {
   ]).has(item.report_outcome)).length;
   const failures = controls.filter((item) => Number(item.evidence?.failed_count ?? 0) > 0).length;
   const stale = controls.filter((item) => item.evidence?.freshness === "expired"
+    ${canReadBilling ? platformMetering(state, permissions) : ""}
     || item.report_outcome === "evidence_stale").length;
   return `
     <header class="platform-page-heading">
@@ -2385,6 +2387,53 @@ function complianceView(state, permissions) {
       <button class="platform-icon-button" type="button" data-platform-action="compliance-refresh"
         title="刷新控制证据" aria-label="刷新控制证据" ${state.loading ? "disabled" : ""}>&#8635;</button>
     </header>
+function platformMetering(state, permissions) {
+  const meter = state.metering;
+  const fact = meter?.blocked_fact;
+  const disabled = state.loading ? "disabled" : "";
+  const labels = { idle: "已处理完毕", pending: "待处理", blocked: "需要对账处理" };
+  const errors = {
+    "platform_metering.owner_invalid": "缺少可用的历史订阅归属",
+    "platform_metering.source_invalid": "原始用量不符合计量要求",
+    "platform_metering.meter_unknown": "计量定义不可用",
+    "platform_metering.checkpoint_conflict": "计量检查点冲突",
+    "platform_metering.unavailable": "计量服务暂不可用",
+  };
+  const canWrite = permissions.has("platform.billing.adjust") && fact?.workspace_id;
+  return `<section class="platform-band platform-metering" aria-labelledby="platform-metering-title">
+    <div class="platform-section-heading"><div><h2 id="platform-metering-title">计量与恢复</h2></div>
+      <button class="platform-icon-button" type="button" data-platform-action="metering-refresh"
+        title="刷新计量状态" aria-label="刷新计量状态" ${disabled}>${icon("rotate-cw")}</button></div>
+    ${meter ? `<dl class="platform-metering-summary">
+      <div><dt>状态</dt><dd>${labels[meter.state] ?? "状态未知"}</dd></div>
+      <div><dt>待处理事实</dt><dd>${number(meter.pending_count)}</dd></div>
+      <div><dt>已处理序号</dt><dd>${number(meter.checkpoint)}</dd></div></dl>`
+    : `<p role="status">${state.loading ? "正在读取计量状态" : "计量状态尚未加载"}</p>`}
+    ${fact ? `<dl class="platform-metering-fact">
+      <div><dt>组织</dt><dd>${escapeHtml(fact.workspace_id ?? "归属未确定")}</dd></div>
+      <div><dt>发生时间</dt><dd>${formatTime(fact.occurred_at)}</dd></div>
+      <div><dt>失败原因</dt><dd>${escapeHtml(errors[fact.error_code] ?? "需要核对计量事实")}</dd></div>
+      <div><dt>源序号 / 尝试次数</dt><dd>${number(fact.source_sequence)} / ${number(fact.attempt_count)}</dd></div></dl>` : ""}
+    ${canWrite ? `<form class="platform-meter-recovery-form" data-platform-meter-recovery-form autocomplete="off">
+      <input type="hidden" name="meterOutboxId" value="${escapeAttribute(fact.meter_outbox_id)}" />
+      <input type="hidden" name="sourceSequence" value="${escapeAttribute(fact.source_sequence)}" />
+      <input type="hidden" name="attemptCount" value="${escapeAttribute(fact.attempt_count)}" />
+      <input type="hidden" name="sourceSha256" value="${escapeAttribute(fact.source_sha256)}" />
+      <label><span>处理方式</span><select name="action" required ${disabled}>
+        <option value="">请选择处理方式</option><option value="retry">重新投影</option>
+        ${fact.can_archive_internal_cost ? '<option value="internal_cost_only">仅内部成本归档，不进入平台账单</option>' : ""}</select></label>
+      <label class="platform-check"><input name="confirmed" type="checkbox" required ${disabled} />
+        <span>已核对当前事实及处理方式；归档不生成平台应收</span></label>
+      <button class="platform-primary" type="submit" ${disabled}>${state.meterRecoveryIntent && state.loading ? "正在提交" : "提交处理"}</button>
+    </form>` : ""}
+    ${meter?.recent_recoveries?.length ? `<h3>最近处理记录</h3><div class="platform-table-wrap"><table>
+      <thead><tr><th>源序号</th><th>组织</th><th>处理方式</th><th>时间</th></tr></thead><tbody>
+      ${meter.recent_recoveries.map((item) => `<tr><td>${number(item.source_sequence)}</td>
+        <td>${escapeHtml(item.workspace_id)}</td><td>${item.action === "retry" ? "重新投影" : "仅内部成本归档"}</td>
+        <td>${formatTime(item.created_at)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+  </section>`;
+}
+
     <p class="platform-compliance-disclaimer">仅展示控制与证据事实，不代表外部认证结论。</p>
     <section class="platform-metrics platform-compliance-metrics" aria-label="控制证据摘要">
       ${metric("Controls", controls.length, response?.control_set_version ?? "not loaded")}

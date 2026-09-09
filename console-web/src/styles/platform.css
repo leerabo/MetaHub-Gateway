@@ -209,6 +209,19 @@ input, select { min-height: 40px; padding: 8px 10px; border: 1px solid #bfc8c0; 
 .platform-metrics span, .platform-metrics small { color: var(--muted); font-size: 12px; }
 .platform-metrics strong { margin: 8px 0; font-size: 32px; letter-spacing: 0; }
 .platform-band { min-width: 0; padding: 26px 0; border-bottom: 1px solid var(--line); }
+.platform-metering { font-size: 14px; }
+.platform-metering :is(label, dt, dd, th, td, h3) { font-size: 14px; }
+.platform-metering :is(dd, td) { overflow-wrap: anywhere; }
+.platform-metering :is(.platform-metering-summary, .platform-metering-fact) { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 18px; margin: 18px 0; }
+.platform-metering dt { color: var(--muted); margin-bottom: 6px; }
+.platform-metering dd { margin: 0; }
+.platform-meter-recovery-form { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; margin: 22px 0; }
+.platform-meter-recovery-form > label { min-width: 0; max-width: 100%; }
+.platform-meter-recovery-form select { width: 100%; max-width: 100%; }
+.platform-meter-recovery-form .platform-check { display: flex; align-items: center; flex: 1 1 240px; font-weight: 500; }
+.platform-meter-recovery-form input[type="checkbox"] { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; }
+.platform-metering .platform-icon-button { display: inline-grid; place-items: center; width: 40px; height: 40px; }
+.platform-metering .platform-icon-button svg { width: 18px; height: 18px; }
 .platform-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .platform-section-heading h2 { margin: 0; font-size: 17px; letter-spacing: 0; }
 .platform-chip-row { display: flex; flex-wrap: wrap; gap: 7px; }

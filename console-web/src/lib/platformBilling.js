@@ -5,6 +5,15 @@ const CYCLE_ID = /^pbc_[0-9a-f]{32}$/u;
 const WORKSPACE_ID = /^wsp_[0-9a-f]{32}$/u;
 const PLAN_VERSION_ID = /^spv_[0-9a-f]{32}$/u;
 const ADJUSTMENT_ID = /^pba_[0-9a-f]{32}$/u;
+const OUTBOX_ID = /^pmo_[0-9a-f]{32}$/u;
+const RECOVERY_ID = /^pmx_[0-9a-f]{32}$/u;
+const RECOVERY_ACTIONS = new Set(["retry", "internal_cost_only"]);
+const METER_ERRORS = new Set([
+  "platform_metering.owner_invalid", "platform_metering.source_invalid",
+  "platform_metering.meter_unknown", "platform_metering.checkpoint_conflict",
+  "platform_metering.unavailable", "platform_billing.reconciliation_required",
+  "platform_metering.reconciliation_required",
+]);
 const HASH = /^[0-9a-f]{64}$/u;
 const CURSOR = /^[A-Za-z0-9_-]{1,512}$/u;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/u;
@@ -91,6 +100,31 @@ export function listPlatformBillingSummary({
   );
 }
 
+export function getPlatformMeteringState({ controlApiUrl, signal } = {}) {
+  return jsonRequest(controlApiUrl, "/platform/billing/metering-state", { signal }, "platform");
+}
+
+export function recoverPlatformMeterFact({ controlApiUrl, recovery, idempotencyKey, signal } = {}) {
+  if (!plainObject(recovery) || !exactKeys(recovery, [
+    "meter_outbox_id", "source_sequence", "expected_attempt_count", "expected_source_sha256",
+    "action", "confirmed",
+  ]) || !OUTBOX_ID.test(recovery.meter_outbox_id) || !positiveInteger(recovery.source_sequence)
+    || !positiveInteger(recovery.expected_attempt_count) || recovery.expected_attempt_count > 2_147_483_647
+    || !HASH.test(recovery.expected_source_sha256) || !RECOVERY_ACTIONS.has(recovery.action)
+    || recovery.confirmed !== true || !IDEMPOTENCY_KEY.test(String(idempotencyKey ?? ""))) {
+    invalidRequest("platform");
+  }
+  return jsonRequest(controlApiUrl, "/platform/billing/meter-recoveries", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": readPlatformCsrfCookie(),
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(recovery), signal,
+  }, "platform");
+}
+
 export function createPlatformBillingAdjustment({
   controlApiUrl,
   adjustment,
@@ -141,6 +175,11 @@ async function rawRequest(controlApiUrl, path, options, domain) {
 
 function validResponse(payload, path) {
   if (!plainObject(payload) || !linkId(payload.request_id) || !linkId(payload.trace_id)) return false;
+  if (path === "/platform/billing/metering-state") return validMeteringState(payload);
+  if (path === "/platform/billing/meter-recoveries") {
+    return exactKeys(payload, ["recovery", "idempotent_replay", "request_id", "trace_id"])
+      && typeof payload.idempotent_replay === "boolean" && validRecovery(payload.recovery);
+  }
   if (path.startsWith("/billing/summary")) {
     return exactKeys(payload, ["cycle", "available_cycles", "request_id", "trace_id"])
       && Array.isArray(payload.available_cycles) && payload.available_cycles.length <= 24
@@ -158,6 +197,36 @@ function validResponse(payload, path) {
       && typeof payload.idempotent_replay === "boolean" && validAdjustmentResponse(payload.adjustment);
   }
   return false;
+}
+
+function validRecovery(value) {
+  return plainObject(value) && exactKeys(value, [
+    "recovery_id", "source_sequence", "workspace_id", "action", "created_at",
+  ]) && RECOVERY_ID.test(value.recovery_id) && positiveInteger(value.source_sequence)
+    && WORKSPACE_ID.test(value.workspace_id) && RECOVERY_ACTIONS.has(value.action)
+    && timestamp(value.created_at);
+}
+
+function validMeteringState(value) {
+  if (!exactKeys(value, [
+    "state", "checkpoint", "pending_count", "blocked_fact", "recent_recoveries", "request_id", "trace_id",
+  ]) || !nonnegativeInteger(value.checkpoint) || !nonnegativeInteger(value.pending_count)
+    || !Array.isArray(value.recent_recoveries) || value.recent_recoveries.length > 10
+    || !value.recent_recoveries.every(validRecovery)) return false;
+  if (value.state === "idle") return value.pending_count === 0 && value.blocked_fact === null;
+  if (value.state === "pending") return value.pending_count > 0 && value.blocked_fact === null;
+  const fact = value.blocked_fact;
+  return value.state === "blocked" && value.pending_count > 0 && plainObject(fact) && exactKeys(fact, [
+    "meter_outbox_id", "source_sequence", "attempt_count", "source_sha256", "workspace_id",
+    "occurred_at", "error_code", "can_archive_internal_cost",
+  ]) && OUTBOX_ID.test(fact.meter_outbox_id) && positiveInteger(fact.source_sequence)
+    && fact.source_sequence === value.checkpoint + 1 && positiveInteger(fact.attempt_count)
+    && fact.attempt_count <= 2_147_483_647 && HASH.test(fact.source_sha256)
+    && (fact.workspace_id === null || WORKSPACE_ID.test(fact.workspace_id))
+    && timestamp(fact.occurred_at) && METER_ERRORS.has(fact.error_code)
+    && typeof fact.can_archive_internal_cost === "boolean"
+    && (!fact.can_archive_internal_cost || (fact.workspace_id !== null
+      && fact.error_code === "platform_metering.owner_invalid"));
 }
 
 function validCycle(cycle, platform) {

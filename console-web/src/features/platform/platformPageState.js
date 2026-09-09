@@ -122,6 +122,8 @@ export function createPlatformPageController({
     consoleMigration: null,
     billing: null,
     billingStatus: "",
+    metering: null,
+    meterRecoveryIntent: null,
     billingCursor: null,
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
@@ -374,9 +376,10 @@ export function createPlatformPageController({
       bind();
       const ticket = begin();
       try {
-        state.session = await api.session({ signal: ticket.signal });
+        const session = await api.session({ signal: ticket.signal });
         if (!current(ticket)) return false;
         clearProtectedFacts();
+        state.session = session;
         return reload(ticket);
       } catch (error) {
         if (!current(ticket)) return false;
@@ -397,9 +400,10 @@ export function createPlatformPageController({
       state.error = null;
       renderPlatformGate(root, { loading: true });
       try {
-        state.session = await api.openSession({ totpCode, signal: ticket.signal });
+        const session = await api.openSession({ totpCode, signal: ticket.signal });
         if (!current(ticket)) return false;
         state.feedback = "平台身份已验证。";
+        state.session = session;
         return reload(ticket);
       } catch (error) {
         if (!current(ticket)) return false;
@@ -422,9 +426,10 @@ export function createPlatformPageController({
       state.error = null;
       render();
       try {
-        state.session = await api.session({ signal: ticket.signal });
+        const session = await api.session({ signal: ticket.signal });
         if (!current(ticket)) return false;
         const activeView = state.view;
+        state.session = session;
         clearProtectedFacts();
         state.view = activeView;
         return reload(ticket);
@@ -450,7 +455,7 @@ export function createPlatformPageController({
       const allowed = new Set((state.navigation ?? []).map((item) => item.id));
       const nextView = allowed.has(view) ? view : state.navigation[0]?.id ?? "overview";
       if (new Set([
-        "overview", "admin-assistant", "approvals",
+        "overview", "admin-assistant", "approvals", "billing",
         "console-migration",
         "job-runtime", "feature-rollouts", "config-distribution", "observability",
         "disaster-recovery", "status-incidents", "capacity", "data-residency", "abuse-risk",
@@ -464,7 +469,10 @@ export function createPlatformPageController({
         generation += 1;
         request?.abort();
         request = null;
-        if (state.view === "job-runtime") {
+        if (state.view === "billing") {
+          state.metering = null;
+          state.meterRecoveryIntent = null;
+        } else if (state.view === "job-runtime") {
           state.selectedJob = null;
           state.jobCommandIntent = null;
           state.jobTypeIntent = null;
@@ -569,6 +577,9 @@ export function createPlatformPageController({
       }
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
       if (state.view === "feature-rollouts" && !state.featureFlags) {
+      if (state.view === "billing" && !state.metering && typeof api.meteringState === "function") {
+        void loadBillingPage();
+      }
         void loadFeatureRollouts();
       }
       if (state.view === "config-distribution" && !state.configDistribution) {
@@ -2824,6 +2835,50 @@ export function createPlatformPageController({
         || (magnitudeQuantity === 0 && magnitudeAmount === "0.00")) return false;
       const sign = reasonCode === "manual_credit" ? -1 : reasonCode === "manual_debit" ? 1 : 0;
       if (sign === 0) return false;
+    async recoverMeterFact({ meterOutboxId, sourceSequence, attemptCount, sourceSha256, action, confirmed }) {
+      const fact = state.metering?.blocked_fact;
+      if (state.loading || state.view !== "billing" || confirmed !== true || !fact
+        || !currentPermissions().has("platform.billing.adjust")
+        || typeof api.recoverMeterFact !== "function"
+        || meterOutboxId !== fact.meter_outbox_id || sourceSequence !== fact.source_sequence
+        || attemptCount !== fact.attempt_count || sourceSha256 !== fact.source_sha256
+        || !fact.workspace_id || !new Set(["retry", "internal_cost_only"]).has(action)
+        || (action === "internal_cost_only" && !fact.can_archive_internal_cost)) return false;
+      const recovery = {
+        meter_outbox_id: meterOutboxId, source_sequence: sourceSequence,
+        expected_attempt_count: attemptCount, expected_source_sha256: sourceSha256,
+        action, confirmed: true,
+      };
+      const fingerprint = JSON.stringify(recovery);
+      const idempotencyKey = state.meterRecoveryIntent?.fingerprint === fingerprint
+        ? state.meterRecoveryIntent.idempotencyKey : newIdempotencyKey();
+      state.meterRecoveryIntent = { fingerprint, idempotencyKey };
+      const ticket = begin();
+      state.loading = true;
+      state.error = null;
+      state.feedback = "";
+      render();
+      try {
+        await api.recoverMeterFact({ recovery, idempotencyKey, signal: ticket.signal });
+        if (!current(ticket)) return false;
+        state.meterRecoveryIntent = null;
+        state.metering = null;
+        state.feedback = action === "retry" ? "已提交重新投影，结果以计量状态为准。"
+          : "已归档为仅内部成本，原用量与处理审计已保留。";
+        return reload(ticket);
+      } catch (error) {
+        if (!current(ticket)) return false;
+        if (!(error instanceof PlatformApiError) || ![0, 502, 503, 504].includes(error.status)) {
+          state.meterRecoveryIntent = null;
+          state.metering = null;
+        }
+        return fail(ticket, error);
+      }
+    },
+    async refreshMetering() {
+      if (state.loading || state.view !== "billing") return false;
+      return loadBillingPage();
+    },
       const adjustment = {
         workspace_id: target.cycle.workspace_id,
         billing_cycle_id: target.cycle.billing_cycle_id,
@@ -3148,6 +3203,7 @@ export function createPlatformPageController({
         fleetCompatibility: null,
         edgeLicenses: null,
         edgeBackups: null,
+        metering: null,
         offlineBundles: null,
         jobQueues: null,
         featureFlags: null,
@@ -3284,6 +3340,10 @@ export function createPlatformPageController({
         }).then((value) => { next.verification = value; }));
       }
       if (!fleetOnly && permissions.has("platform.notification_template.read")
+      if (state.view === "billing" && permissions.has("platform.billing.read")
+        && typeof api.meteringState === "function") {
+        tasks.push(api.meteringState({ signal: ticket.signal }).then((value) => { next.metering = value; }));
+      }
         && typeof api.notificationTemplates === "function") {
         tasks.push(api.notificationTemplates({ signal: ticket.signal }).then((value) => {
           next.notificationTemplates = value;
@@ -4543,6 +4603,8 @@ export function createPlatformPageController({
       return fail(ticket, error);
     }
   }
+    state.metering = null;
+    state.meterRecoveryIntent = null;
 
   async function loadRefundQueue() {
     if (typeof api.refunds !== "function") return false;
@@ -4551,7 +4613,12 @@ export function createPlatformPageController({
     state.error = null;
     render();
     try {
+      const metering = currentPermissions().has("platform.billing.read")
+        && typeof api.meteringState === "function"
+        ? await api.meteringState({ signal: ticket.signal }) : null;
+      if (!current(ticket)) return false;
       state.refunds = await api.refunds({
+      state.metering = metering;
         status: state.refundStatus,
         signal: ticket.signal,
       });
@@ -5681,6 +5748,16 @@ export function createPlatformPageController({
           reasonCode: data.get("reasonCode"),
           confirmed: data.get("confirmed") === "on",
         });
+      if (form.matches("[data-platform-meter-recovery-form]")) {
+        controller.recoverMeterFact({
+          meterOutboxId: data.get("meterOutboxId"),
+          sourceSequence: Number(data.get("sourceSequence")),
+          attemptCount: Number(data.get("attemptCount")),
+          sourceSha256: data.get("sourceSha256"),
+          action: data.get("action"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       }
       if (form.matches("[data-platform-reversal-review-form]")) {
         controller.reviewInvoiceReversal({
@@ -6256,6 +6333,7 @@ export function createPlatformPageController({
       }
       if (action === "verification-evidence-token") {
         controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
+      if (action === "metering-refresh") controller.refreshMetering();
       }
       if (action === "backup-refresh") controller.refreshBackup();
       if (action === "dr-refresh") controller.refreshDisasterRecovery();
@@ -6560,6 +6638,8 @@ export function createPlatformPageController({
     state.gatewayCells = null;
     state.edgeFleet = null;
     state.edgeFleetFilters = { status: "", region: "", health: "" };
+    state.metering = null;
+    state.meterRecoveryIntent = null;
     state.edgeFleetCursor = null;
     state.edgeFleetCursorHistory = [];
     state.edgeDiagnosticIntent = null;
