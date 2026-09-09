@@ -121,9 +121,9 @@ export function createPlatformPageController({
     consoleExperience: null,
     consoleMigration: null,
     billing: null,
-    billingStatus: "",
     metering: null,
     meterRecoveryIntent: null,
+    billingStatus: "",
     billingCursor: null,
     billingCursorHistory: [],
     billingAdjustmentIntent: null,
@@ -378,8 +378,8 @@ export function createPlatformPageController({
       try {
         const session = await api.session({ signal: ticket.signal });
         if (!current(ticket)) return false;
-        clearProtectedFacts();
         state.session = session;
+        clearProtectedFacts();
         return reload(ticket);
       } catch (error) {
         if (!current(ticket)) return false;
@@ -402,8 +402,8 @@ export function createPlatformPageController({
       try {
         const session = await api.openSession({ totpCode, signal: ticket.signal });
         if (!current(ticket)) return false;
-        state.feedback = "平台身份已验证。";
         state.session = session;
+        state.feedback = "平台身份已验证。";
         return reload(ticket);
       } catch (error) {
         if (!current(ticket)) return false;
@@ -428,8 +428,8 @@ export function createPlatformPageController({
       try {
         const session = await api.session({ signal: ticket.signal });
         if (!current(ticket)) return false;
-        const activeView = state.view;
         state.session = session;
+        const activeView = state.view;
         clearProtectedFacts();
         state.view = activeView;
         return reload(ticket);
@@ -576,10 +576,10 @@ export function createPlatformPageController({
         }
       }
       if (state.view === "job-runtime" && !state.jobQueues) void loadJobRuntime();
-      if (state.view === "feature-rollouts" && !state.featureFlags) {
       if (state.view === "billing" && !state.metering && typeof api.meteringState === "function") {
         void loadBillingPage();
       }
+      if (state.view === "feature-rollouts" && !state.featureFlags) {
         void loadFeatureRollouts();
       }
       if (state.view === "config-distribution" && !state.configDistribution) {
@@ -2825,16 +2825,6 @@ export function createPlatformPageController({
         return fail(ticket, error);
       }
     },
-    async createBillingAdjustment({ targetKey, reasonCode, quantity, amount }) {
-      const target = billingAdjustmentTarget(state.billing, targetKey);
-      if (!target || typeof api.createBillingAdjustment !== "function") return false;
-      const magnitudeQuantity = Number(quantity);
-      const magnitudeAmount = String(amount ?? "");
-      if (!Number.isSafeInteger(magnitudeQuantity) || magnitudeQuantity < 0
-        || !/^(?:0|[1-9][0-9]{0,10})\.[0-9]{2}$/u.test(magnitudeAmount)
-        || (magnitudeQuantity === 0 && magnitudeAmount === "0.00")) return false;
-      const sign = reasonCode === "manual_credit" ? -1 : reasonCode === "manual_debit" ? 1 : 0;
-      if (sign === 0) return false;
     async recoverMeterFact({ meterOutboxId, sourceSequence, attemptCount, sourceSha256, action, confirmed }) {
       const fact = state.metering?.blocked_fact;
       if (state.loading || state.view !== "billing" || confirmed !== true || !fact
@@ -2879,6 +2869,16 @@ export function createPlatformPageController({
       if (state.loading || state.view !== "billing") return false;
       return loadBillingPage();
     },
+    async createBillingAdjustment({ targetKey, reasonCode, quantity, amount }) {
+      const target = billingAdjustmentTarget(state.billing, targetKey);
+      if (!target || typeof api.createBillingAdjustment !== "function") return false;
+      const magnitudeQuantity = Number(quantity);
+      const magnitudeAmount = String(amount ?? "");
+      if (!Number.isSafeInteger(magnitudeQuantity) || magnitudeQuantity < 0
+        || !/^(?:0|[1-9][0-9]{0,10})\.[0-9]{2}$/u.test(magnitudeAmount)
+        || (magnitudeQuantity === 0 && magnitudeAmount === "0.00")) return false;
+      const sign = reasonCode === "manual_credit" ? -1 : reasonCode === "manual_debit" ? 1 : 0;
+      if (sign === 0) return false;
       const adjustment = {
         workspace_id: target.cycle.workspace_id,
         billing_cycle_id: target.cycle.billing_cycle_id,
@@ -3192,6 +3192,7 @@ export function createPlatformPageController({
         channels: null,
         channelStatements: null,
         billing: null,
+        metering: null,
         refunds: null,
         verification: null,
         notificationTemplates: null,
@@ -3203,7 +3204,6 @@ export function createPlatformPageController({
         fleetCompatibility: null,
         edgeLicenses: null,
         edgeBackups: null,
-        metering: null,
         offlineBundles: null,
         jobQueues: null,
         featureFlags: null,
@@ -3324,6 +3324,10 @@ export function createPlatformPageController({
           signal: ticket.signal,
         }).then((value) => { next.billing = value; }));
       }
+      if (state.view === "billing" && permissions.has("platform.billing.read")
+        && typeof api.meteringState === "function") {
+        tasks.push(api.meteringState({ signal: ticket.signal }).then((value) => { next.metering = value; }));
+      }
       if (!fleetOnly && permissions.has("platform.billing.read")
         && typeof api.refunds === "function") {
         tasks.push(api.refunds({
@@ -3340,10 +3344,6 @@ export function createPlatformPageController({
         }).then((value) => { next.verification = value; }));
       }
       if (!fleetOnly && permissions.has("platform.notification_template.read")
-      if (state.view === "billing" && permissions.has("platform.billing.read")
-        && typeof api.meteringState === "function") {
-        tasks.push(api.meteringState({ signal: ticket.signal }).then((value) => { next.metering = value; }));
-      }
         && typeof api.notificationTemplates === "function") {
         tasks.push(api.notificationTemplates({ signal: ticket.signal }).then((value) => {
           next.notificationTemplates = value;
@@ -4587,6 +4587,8 @@ export function createPlatformPageController({
     const ticket = begin();
     state.loading = true;
     state.error = null;
+    state.metering = null;
+    state.meterRecoveryIntent = null;
     render();
     try {
       const billing = await api.billingSummary({
@@ -4595,7 +4597,12 @@ export function createPlatformPageController({
         signal: ticket.signal,
       });
       if (!current(ticket)) return false;
+      const metering = currentPermissions().has("platform.billing.read")
+        && typeof api.meteringState === "function"
+        ? await api.meteringState({ signal: ticket.signal }) : null;
+      if (!current(ticket)) return false;
       state.billing = billing;
+      state.metering = metering;
       state.loading = false;
       render();
       return true;
@@ -4603,8 +4610,6 @@ export function createPlatformPageController({
       return fail(ticket, error);
     }
   }
-    state.metering = null;
-    state.meterRecoveryIntent = null;
 
   async function loadRefundQueue() {
     if (typeof api.refunds !== "function") return false;
@@ -4613,12 +4618,7 @@ export function createPlatformPageController({
     state.error = null;
     render();
     try {
-      const metering = currentPermissions().has("platform.billing.read")
-        && typeof api.meteringState === "function"
-        ? await api.meteringState({ signal: ticket.signal }) : null;
-      if (!current(ticket)) return false;
       state.refunds = await api.refunds({
-      state.metering = metering;
         status: state.refundStatus,
         signal: ticket.signal,
       });
@@ -5728,6 +5728,16 @@ export function createPlatformPageController({
       if (form.matches("[data-platform-billing-filter-form]")) {
         controller.filterBilling(data.get("status"));
       }
+      if (form.matches("[data-platform-meter-recovery-form]")) {
+        controller.recoverMeterFact({
+          meterOutboxId: data.get("meterOutboxId"),
+          sourceSequence: Number(data.get("sourceSequence")),
+          attemptCount: Number(data.get("attemptCount")),
+          sourceSha256: data.get("sourceSha256"),
+          action: data.get("action"),
+          confirmed: data.get("confirmed") === "on",
+        });
+      }
       if (form.matches("[data-platform-refund-filter-form]")) {
         controller.filterRefunds(data.get("status"));
       }
@@ -5748,16 +5758,6 @@ export function createPlatformPageController({
           reasonCode: data.get("reasonCode"),
           confirmed: data.get("confirmed") === "on",
         });
-      if (form.matches("[data-platform-meter-recovery-form]")) {
-        controller.recoverMeterFact({
-          meterOutboxId: data.get("meterOutboxId"),
-          sourceSequence: Number(data.get("sourceSequence")),
-          attemptCount: Number(data.get("attemptCount")),
-          sourceSha256: data.get("sourceSha256"),
-          action: data.get("action"),
-          confirmed: data.get("confirmed") === "on",
-        });
-      }
       }
       if (form.matches("[data-platform-reversal-review-form]")) {
         controller.reviewInvoiceReversal({
@@ -6313,6 +6313,7 @@ export function createPlatformPageController({
       if (action === "workspace-next") controller.nextWorkspacePage();
       if (action === "workspace-previous") controller.previousWorkspacePage();
       if (action === "billing-next") controller.nextBillingPage();
+      if (action === "metering-refresh") controller.refreshMetering();
       if (action === "billing-previous") controller.previousBillingPage();
       if (action === "edge-fleet-next") controller.nextEdgeFleetPage();
       if (action === "edge-fleet-previous") controller.previousEdgeFleetPage();
@@ -6333,7 +6334,6 @@ export function createPlatformPageController({
       }
       if (action === "verification-evidence-token") {
         controller.issueEvidenceToken(target.dataset.intentId, target.dataset.evidenceId);
-      if (action === "metering-refresh") controller.refreshMetering();
       }
       if (action === "backup-refresh") controller.refreshBackup();
       if (action === "dr-refresh") controller.refreshDisasterRecovery();
@@ -6617,6 +6617,8 @@ export function createPlatformPageController({
     state.launchIntent = null;
     clearChannelFacts();
     state.billing = null;
+    state.metering = null;
+    state.meterRecoveryIntent = null;
     state.billingStatus = "";
     state.billingCursor = null;
     state.billingCursorHistory = [];
@@ -6638,8 +6640,6 @@ export function createPlatformPageController({
     state.gatewayCells = null;
     state.edgeFleet = null;
     state.edgeFleetFilters = { status: "", region: "", health: "" };
-    state.metering = null;
-    state.meterRecoveryIntent = null;
     state.edgeFleetCursor = null;
     state.edgeFleetCursorHistory = [];
     state.edgeDiagnosticIntent = null;

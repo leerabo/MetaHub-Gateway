@@ -30,11 +30,11 @@ import {
 } from "../../lib/platform.js";
 import {
   createPlatformBillingAdjustment,
-  listPlatformBillingSummary,
-} from "../../lib/platformBilling.js";
   getPlatformMeteringState,
-import {
+  listPlatformBillingSummary,
   recoverPlatformMeterFact,
+} from "../../lib/platformBilling.js";
+import {
   listPlatformRefunds,
   reviewPlatformRefund,
 } from "../../lib/paymentCommerce.js";
@@ -362,12 +362,12 @@ if (root) {
         controlApiUrl, ...input,
       }),
       billingSummary: (input) => listPlatformBillingSummary({ controlApiUrl, ...input }),
+      meteringState: (input) => getPlatformMeteringState({ controlApiUrl, ...input }),
+      recoverMeterFact: (input) => recoverPlatformMeterFact({ controlApiUrl, ...input }),
       createBillingAdjustment: (input) => createPlatformBillingAdjustment({
         controlApiUrl,
         ...input,
       }),
-      meteringState: (input) => getPlatformMeteringState({ controlApiUrl, ...input }),
-      recoverMeterFact: (input) => recoverPlatformMeterFact({ controlApiUrl, ...input }),
       refunds: (input) => listPlatformRefunds({ controlApiUrl, ...input }),
       reviewRefund: (input) => reviewPlatformRefund({ controlApiUrl, ...input }),
       createReconciliation: (input) => createPlatformReconciliation({

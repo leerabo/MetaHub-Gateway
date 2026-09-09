@@ -2364,6 +2364,7 @@ function billingView(state, permissions) {
   })));
   return `
     <header class="platform-page-heading"><div><p>SaaS billing</p><h1>${canReadBilling ? "平台账单" : "套餐目录"}</h1></div><span>${canReadBilling ? `${number(state.billing?.cycles?.length ?? 0)} 个周期` : `${number(catalogs.length)} 个目录 · ${number(versions.length)} 个版本`}</span></header>
+    ${canReadBilling ? platformMetering(state, permissions) : ""}
     ${canReadBilling ? platformBillingCycles(state, permissions) : ""}
     ${canReadBilling ? platformRefundQueue(state, permissions) : ""}
     ${canReadBilling ? platformInvoiceReconciliation(state, permissions) : ""}
@@ -2371,22 +2372,6 @@ function billingView(state, permissions) {
   `;
 }
 
-function complianceView(state, permissions) {
-  const response = state.complianceControls;
-  const controls = Array.isArray(response?.controls) ? response.controls : [];
-  const gaps = controls.filter((item) => new Set([
-    "partially_implemented", "not_implemented", "evidence_stale",
-  ]).has(item.report_outcome)).length;
-  const failures = controls.filter((item) => Number(item.evidence?.failed_count ?? 0) > 0).length;
-  const stale = controls.filter((item) => item.evidence?.freshness === "expired"
-    ${canReadBilling ? platformMetering(state, permissions) : ""}
-    || item.report_outcome === "evidence_stale").length;
-  return `
-    <header class="platform-page-heading">
-      <div><p>Compliance evidence</p><h1>合规复核</h1></div>
-      <button class="platform-icon-button" type="button" data-platform-action="compliance-refresh"
-        title="刷新控制证据" aria-label="刷新控制证据" ${state.loading ? "disabled" : ""}>&#8635;</button>
-    </header>
 function platformMetering(state, permissions) {
   const meter = state.metering;
   const fact = meter?.blocked_fact;
@@ -2434,6 +2419,21 @@ function platformMetering(state, permissions) {
   </section>`;
 }
 
+function complianceView(state, permissions) {
+  const response = state.complianceControls;
+  const controls = Array.isArray(response?.controls) ? response.controls : [];
+  const gaps = controls.filter((item) => new Set([
+    "partially_implemented", "not_implemented", "evidence_stale",
+  ]).has(item.report_outcome)).length;
+  const failures = controls.filter((item) => Number(item.evidence?.failed_count ?? 0) > 0).length;
+  const stale = controls.filter((item) => item.evidence?.freshness === "expired"
+    || item.report_outcome === "evidence_stale").length;
+  return `
+    <header class="platform-page-heading">
+      <div><p>Compliance evidence</p><h1>合规复核</h1></div>
+      <button class="platform-icon-button" type="button" data-platform-action="compliance-refresh"
+        title="刷新控制证据" aria-label="刷新控制证据" ${state.loading ? "disabled" : ""}>&#8635;</button>
+    </header>
     <p class="platform-compliance-disclaimer">仅展示控制与证据事实，不代表外部认证结论。</p>
     <section class="platform-metrics platform-compliance-metrics" aria-label="控制证据摘要">
       ${metric("Controls", controls.length, response?.control_set_version ?? "not loaded")}
