@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.concurrency import run_in_threadpool
 from starlette.convertors import Convertor, register_url_convertor
 
 from metahub_control.identity.service import valid_opaque_value
@@ -119,7 +120,8 @@ def require_platform_catalog(request: Request) -> PlatformContext:
 async def get_catalog_plans(request: Request, response: Response) -> SaasPlanCatalogResponse:
     _reject_query(request, "saas_catalog.request_invalid")
     response.headers["Cache-Control"] = "public, max-age=60"
-    return list_public_plans(
+    return await run_in_threadpool(
+        list_public_plans,
         request.app.state.config,
         request_id=_request_id(request),
         trace_id=_trace_id(request),
@@ -134,7 +136,8 @@ async def get_subscription(
 ) -> SubscriptionResponse:
     _reject_query(request, "subscription.request_invalid")
     _private(response)
-    result = get_current_subscription(
+    result = await run_in_threadpool(
+        get_current_subscription,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -158,7 +161,8 @@ async def post_subscription(
         await _strict_json(request, "subscription.request_invalid"),
         SubscriptionCreateRequest,
     )
-    result = create_subscription(
+    result = await run_in_threadpool(
+        create_subscription,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -190,7 +194,8 @@ async def post_subscription_change(
         await _strict_json(request, "subscription.request_invalid"),
         SubscriptionChangeRequest,
     )
-    result = change_subscription_plan(
+    result = await run_in_threadpool(
+        change_subscription_plan,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -238,13 +243,16 @@ async def patch_subscription(
         "trace_id": _trace_id(request),
     }
     if payload.operation == "change_plan":
-        result = change_subscription_plan(
+        result = await run_in_threadpool(
+            change_subscription_plan,
             **common,
             payload=SubscriptionChangeRequest(plan_version_id=payload.plan_version_id),
             subscription_id=subscription_id,
         )
     else:
-        result = cancel_subscription(**common, subscription_id=subscription_id)
+        result = await run_in_threadpool(
+            cancel_subscription, **common, subscription_id=subscription_id,
+        )
     if result.subscription is not None:
         response.headers["ETag"] = _etag(result.subscription.state_revision)
     _private(response)
@@ -259,7 +267,8 @@ async def get_platform_plans(
 ) -> SaasPlanCatalogResponse:
     _reject_query(request, "saas_catalog.request_invalid")
     _private(response)
-    return list_platform_plans(
+    return await run_in_threadpool(
+        list_platform_plans,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -281,7 +290,8 @@ async def post_platform_plan(
         SaasPlanCreateRequest,
     )
     _private(response)
-    return create_platform_plan(
+    return await run_in_threadpool(
+        create_platform_plan,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
