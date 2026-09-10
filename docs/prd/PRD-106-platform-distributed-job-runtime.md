@@ -97,3 +97,14 @@ p95<10s、崩溃接管<60s。
   API、授权或 nullable-owner 表。`platform.job.*` 每请求动态校验，Workspace 主体同形拒绝。
 - 第二轮（迁移/依赖/失败策略）：0098 只 expand 平台事实，存在任何 job/attempt/lease/checkpoint/effect/dead-letter 即拒绝
   down；数据库是真值，Redis 仅唤醒，KMS/Redis 故障不会产生无围栏执行；106 只提供后续 PRD 的运行时，不反向依赖 107..113。
+
+## 9. 2026-09-10 执行修订
+
+编码前批次设计与两轮自审见 `S3-execution-evidence-correction-20260910.md`。
+补齐独立连接自动心跳、从 attempt 领取起算的目录超时、取消终态和迟到写入回滚。
+PostgreSQL 使用实时数据库时钟与行锁，领取采用 SKIP LOCKED，获得队列锁后重新读取并发计数；
+租约比较保留毫秒精度，外层 registry/lease 围栏在事务内受保护。业务回调异常必须显式回滚，
+不能把未完成事务留给复用连接上的失败处理。成功终态提交前再次检查租约和 attempt 时限。
+
+该修订不声称可以强杀任意进程内 Python handler。外部效果仍须通过独立可停止执行器和围栏控制。
+专项记录见 `docs/testing/PRD-106-execution-revision-20260910.md`；S3 整批退出门禁尚未完成。

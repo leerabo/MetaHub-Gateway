@@ -8,13 +8,21 @@ import json
 import re
 import secrets
 import sqlite3
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from metahub_shared.db.connection import connect_database, database_request_scope
+from metahub_shared.db.connection import (
+    connect_database,
+    database_backend,
+    database_operation_deadline,
+    database_request_scope,
+)
 from metahub_shared.db.errors import DbError
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
@@ -128,12 +136,14 @@ class PlatformJobContext:
                     _db_time(_database_now(connection)),
                 ),
             )
+            job = _live_lease(connection, self.config, self.lease)
+            _cancel_if_requested(connection, job, self.lease)
             connection.commit()
             return checkpoint_id
         except PlatformJobCancelled:
             _commit_if_open(connection)
             raise
-        except ApiError:
+        except (ApiError, PlatformJobFailure):
             _rollback(connection)
             raise
         except (sqlite3.Error, DbError, TypeError, ValueError):
@@ -186,17 +196,25 @@ class PlatformJobContext:
                     _db_time(_database_now(connection)),
                 ),
             )
+            job = _live_lease(connection, self.config, self.lease)
+            _cancel_if_requested(connection, job, self.lease)
             connection.commit()
             return True
         except PlatformJobCancelled:
-            _commit_if_open(connection)
+            _rollback(connection)
+            _fail_platform_job(
+                self.config, self.lease, "platform_job.cancelled", retryable=False
+            )
             raise
-        except ApiError:
+        except (ApiError, PlatformJobFailure):
             _rollback(connection)
             raise
         except (sqlite3.Error, DbError, TypeError, ValueError):
             _rollback(connection)
             raise ApiError("platform_job.unavailable") from None
+        except BaseException:
+            _rollback(connection)
+            raise
         finally:
             connection.close()
 
@@ -204,13 +222,11 @@ class PlatformJobContext:
         connection = _connect(self.config)
         try:
             connection.execute("BEGIN")
-            job = _live_lease(
-                connection, self.config, self.lease, require_unexpired=False
-            )
+            job = _live_lease(connection, self.config, self.lease)
             requested = job["status"] == "cancel_requested"
             connection.commit()
             return requested
-        except ApiError:
+        except (ApiError, PlatformJobFailure):
             _rollback(connection)
             raise
         except (sqlite3.Error, DbError, TypeError, ValueError):
@@ -241,28 +257,47 @@ def claim_platform_job(
         _recover_expired_leases(connection, now)
         job = connection.execute(
             """
-            SELECT job.* FROM platform_jobs job
+            SELECT job.*,type_record.timeout_seconds,queue.max_concurrency AS queue_max_concurrency
+            FROM platform_jobs job
             JOIN platform_job_types type_record ON type_record.type_code=job.type_code
             JOIN platform_work_queues queue ON queue.queue_code=job.queue_code
-            WHERE job.status='queued' AND unixepoch(job.scheduled_at)<=unixepoch(?)
+            WHERE job.status='queued' AND julianday(job.scheduled_at)<=julianday(?)
               AND job.attempt_count<20
               AND type_record.status='active'
               AND (SELECT COUNT(*) FROM platform_scheduler_leases active_lease
                    JOIN platform_jobs active_job
                      ON active_job.platform_job_id=active_lease.platform_job_id
                    WHERE active_lease.status='active'
-                     AND unixepoch(active_lease.expires_at)>unixepoch(?)
+                     AND julianday(active_lease.expires_at)>julianday(?)
                      AND active_job.queue_code=job.queue_code) < queue.max_concurrency
             ORDER BY job.scheduled_at,
               (job.priority + queue.priority_weight) DESC,
               job.created_at,job.platform_job_id
             LIMIT 1
-            """,
+            """ + (
+                " FOR UPDATE OF job, queue SKIP LOCKED"
+                if getattr(connection, "backend", "sqlite") == "postgresql" else ""
+            ),
             (_db_time(now), _db_time(now)),
         ).fetchone()
         if job is None:
             connection.commit()
             return None
+        if getattr(connection, "backend", "sqlite") == "postgresql":
+            # The queue lock can be acquired after the SELECT's original snapshot.
+            now = _database_now(connection)
+            active_count = connection.execute(
+                """SELECT COUNT(*) FROM platform_scheduler_leases active_lease
+                   JOIN platform_jobs active_job
+                     ON active_job.platform_job_id=active_lease.platform_job_id
+                   WHERE active_lease.status='active'
+                     AND julianday(active_lease.expires_at)>julianday(?)
+                     AND active_job.queue_code=?""",
+                (_db_time(now), job["queue_code"]),
+            ).fetchone()[0]
+            if int(active_count) >= int(job["queue_max_concurrency"]):
+                connection.commit()
+                return None
         if job["type_code"] == "console.domain.migrate" and outer_fence is None:
             raise ApiError("platform_job.lease_lost")
         generation = int(job["generation"]) + 1
@@ -270,7 +305,7 @@ def claim_platform_job(
         attempt_id = _id("pja_")
         lease_id = _id("pjl_")
         token = secrets.token_urlsafe(32)
-        expires = now + timedelta(seconds=ttl)
+        expires = now + timedelta(seconds=min(ttl, int(job["timeout_seconds"])))
         changed_at = _changed_time(now, job["updated_at"])
         updated = connection.execute(
             """
@@ -349,18 +384,30 @@ def claim_platform_job(
 
 
 def heartbeat_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
+    # Heartbeats must not borrow a handler's connection or retain its transaction.
+    with database_request_scope(), database_operation_deadline(time.monotonic() + 2.0):
+        try:
+            return _heartbeat_platform_job(config, lease)
+        except (ApiError, sqlite3.Error, DbError, TypeError, ValueError):
+            return False
+
+
+def _heartbeat_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
     connection = _connect(config)
     try:
+        if database_backend(config.database_url) == "sqlite":
+            connection.execute("PRAGMA busy_timeout = 1000")
         connection.execute("BEGIN IMMEDIATE")
         now = _database_now(connection)
-        _live_lease(connection, config, lease)
+        job = _live_lease(connection, config, lease)
+        _cancel_if_requested(connection, job, lease)
         ttl = int(getattr(config, "platform_job_lease_seconds", DEFAULT_LEASE_SECONDS))
         updated = connection.execute(
             """UPDATE platform_scheduler_leases SET expires_at=?
                WHERE platform_job_attempt_id=? AND status='active'
                  AND generation=? AND worker_code=? AND lease_token_hmac=?""",
             (
-                _db_time(now + timedelta(seconds=ttl)),
+                _db_time(min(now + timedelta(seconds=ttl), _attempt_deadline(job))),
                 lease.attempt_id,
                 lease.generation,
                 lease.worker_code,
@@ -369,6 +416,13 @@ def heartbeat_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
         ).rowcount
         connection.commit()
         return updated == 1
+    except PlatformJobCancelled:
+        _commit_if_open(connection)
+        return False
+    except PlatformJobFailure as exc:
+        _rollback(connection)
+        _fail_platform_job(config, lease, exc.code, retryable=False)
+        return False
     except ApiError:
         _rollback(connection)
         return False
@@ -377,6 +431,28 @@ def heartbeat_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
         return False
     finally:
         connection.close()
+
+
+@contextmanager
+def _renew_platform_job(config: AppConfig, lease: PlatformJobLease) -> Iterator[None]:
+    if not heartbeat_platform_job(config, lease):
+        raise ApiError("platform_job.lease_lost")
+    stopped = threading.Event()
+
+    def renew() -> None:
+        while not stopped.wait(1.0):
+            if not heartbeat_platform_job(config, lease):
+                return
+
+    worker = threading.Thread(
+        target=renew, name=f"platform-job-heartbeat-{lease.attempt_id}", daemon=True
+    )
+    worker.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        worker.join()
 
 
 def run_platform_job_once(
@@ -407,25 +483,26 @@ def _run_platform_job_once_scoped(
     if lease is None:
         return False
     try:
-        raw_input = decrypt_job_value(
-            config,
-            lease.input_envelope,
-            expected_sha256=lease.input_sha256,
-            kind="input",
-            owner_id=lease.job_id,
-            type_code=lease.type_code,
-        )
-        payload = validate_job_input(lease.type_code, raw_input)
-        definition = handler_definition(lease.type_code)
-        if definition is None:
-            raise PlatformJobFailure("platform_job.type_unavailable")
-        previous = _latest_checkpoint(config, lease)
-        if not _start_platform_job(config, lease):
-            return True
-        context = PlatformJobContext(config=config, lease=lease, previous_checkpoint=previous)
-        outcome = definition.handler(context, payload)
-        _valid_outcome(outcome)
-        _complete_platform_job(config, lease, outcome)
+        with _renew_platform_job(config, lease):
+            raw_input = decrypt_job_value(
+                config,
+                lease.input_envelope,
+                expected_sha256=lease.input_sha256,
+                kind="input",
+                owner_id=lease.job_id,
+                type_code=lease.type_code,
+            )
+            payload = validate_job_input(lease.type_code, raw_input)
+            definition = handler_definition(lease.type_code)
+            if definition is None:
+                raise PlatformJobFailure("platform_job.type_unavailable")
+            previous = _latest_checkpoint(config, lease)
+            if not _start_platform_job(config, lease):
+                return True
+            context = PlatformJobContext(config=config, lease=lease, previous_checkpoint=previous)
+            outcome = definition.handler(context, payload)
+            _valid_outcome(outcome)
+            _complete_platform_job(config, lease, outcome)
     except PlatformJobCancelled:
         pass
     except PlatformJobRetry as exc:
@@ -500,7 +577,7 @@ def _start_platform_job(config: AppConfig, lease: PlatformJobLease) -> bool:
     except PlatformJobCancelled:
         _commit_if_open(connection)
         return False
-    except ApiError:
+    except (ApiError, PlatformJobFailure):
         _rollback(connection)
         raise
     except (sqlite3.Error, DbError, TypeError, ValueError):
@@ -535,11 +612,14 @@ def _complete_platform_job(config: AppConfig, lease: PlatformJobLease, outcome: 
             "SELECT * FROM platform_jobs WHERE platform_job_id=?", (lease.job_id,)
         ).fetchone()
         _event(connection, current, lease.attempt_id, "platform_job.completed", outcome, now)
+        if lease.outer_fence is not None:
+            _live_outer_fence(connection, config, lease.outer_fence)
+        _require_attempt_time(job, _database_now(connection))
         connection.commit()
     except PlatformJobCancelled:
         _commit_if_open(connection)
         raise
-    except ApiError:
+    except (ApiError, PlatformJobFailure):
         _rollback(connection)
         raise
     except (sqlite3.Error, DbError, TypeError, ValueError):
@@ -564,6 +644,9 @@ def _fail_platform_job(
         if job["status"] == "cancel_requested":
             _cancel_if_requested(connection, job, lease)
         now = _database_now(connection)
+        if _attempt_deadline(job) <= now:
+            outcome = "platform_job.timeout"
+            retryable = False
         connection.execute(
             """UPDATE platform_job_attempts SET status='failed',safe_outcome_code=?,
                  completed_at=? WHERE platform_job_attempt_id=?
@@ -615,13 +698,23 @@ def _fail_platform_job(
 
 def _recover_expired_leases(connection, now: datetime) -> None:
     rows = connection.execute(
-        """SELECT lease.*,job.*,job.status AS job_status FROM platform_scheduler_leases lease
+        """SELECT lease.*,job.*,job.status AS job_status,
+                  attempt.leased_at AS attempt_leased_at,type_record.timeout_seconds
+           FROM platform_scheduler_leases lease
            JOIN platform_jobs job ON job.platform_job_id=lease.platform_job_id
-           WHERE lease.status='active' AND unixepoch(lease.expires_at)<=unixepoch(?)
-           ORDER BY lease.expires_at,lease.platform_scheduler_lease_id LIMIT ?""",
+           JOIN platform_job_attempts attempt
+             ON attempt.platform_job_attempt_id=lease.platform_job_attempt_id
+           JOIN platform_job_types type_record ON type_record.type_code=job.type_code
+           WHERE lease.status='active' AND julianday(lease.expires_at)<=julianday(?)
+           ORDER BY lease.expires_at,lease.platform_scheduler_lease_id LIMIT ?""" + (
+            " FOR UPDATE OF job, lease SKIP LOCKED"
+            if getattr(connection, "backend", "sqlite") == "postgresql" else ""
+        ),
         (_db_time(now), MAX_EXPIRED_RECOVERY),
     ).fetchall()
     for row in rows:
+        timed_out = _attempt_deadline(row) <= now
+        outcome = "platform_job.timeout" if timed_out else "platform_job.lease_expired"
         lease = PlatformJobLease(
             job_id=str(row["platform_job_id"]),
             attempt_id=str(row["platform_job_attempt_id"]),
@@ -634,22 +727,30 @@ def _recover_expired_leases(connection, now: datetime) -> None:
             input_envelope="",
             input_sha256="",
         )
+        changed_at = _changed_time(now, row["updated_at"])
+        if row["job_status"] == "cancel_requested":
+            _cancel_job(connection, row, lease, now, changed_at)
+            continue
         connection.execute(
             "UPDATE platform_scheduler_leases SET status='expired',released_at=? "
             "WHERE platform_job_attempt_id=? AND status='active'",
             (_db_time(now), lease.attempt_id),
         )
         connection.execute(
-            """UPDATE platform_job_attempts SET status='stale',
-                 safe_outcome_code='platform_job.lease_expired',completed_at=?
+            """UPDATE platform_job_attempts SET status=?,
+                 safe_outcome_code=?,completed_at=?
                WHERE platform_job_attempt_id=? AND status IN('leased','running')""",
-            (_db_time(now), lease.attempt_id),
+            ("failed" if timed_out else "stale", outcome, _db_time(now), lease.attempt_id),
         )
-        outcome = "platform_job.lease_expired"
         _event(connection, row, lease.attempt_id, "platform_job.failed", outcome, now)
-        changed_at = _changed_time(now, row["updated_at"])
-        if row["job_status"] == "cancel_requested":
-            _cancel_job(connection, row, lease, now, changed_at)
+        if timed_out:
+            connection.execute(
+                """UPDATE platform_jobs SET status='failed',revision=revision+1,
+                     safe_outcome_code=?,completed_at=?,updated_at=?
+                   WHERE platform_job_id=? AND generation=?
+                     AND status IN('leased','running')""",
+                (outcome, _db_time(now), _db_time(changed_at), lease.job_id, lease.generation),
+            )
         elif int(row["attempt_count"]) >= int(row["max_attempts"]):
             _dead_letter(connection, row, lease, outcome, now, changed_at)
         else:
@@ -783,13 +884,21 @@ def _live_lease(
     if lease.outer_fence is not None:
         _live_outer_fence(connection, config, lease.outer_fence)
     row = connection.execute(
-        """SELECT job.*,active_lease.expires_at FROM platform_jobs job
+        """SELECT job.*,active_lease.expires_at,
+                  attempt.leased_at AS attempt_leased_at,type_record.timeout_seconds
+           FROM platform_jobs job
            JOIN platform_scheduler_leases active_lease
              ON active_lease.platform_job_id=job.platform_job_id
+           JOIN platform_job_attempts attempt
+             ON attempt.platform_job_attempt_id=active_lease.platform_job_attempt_id
+           JOIN platform_job_types type_record ON type_record.type_code=job.type_code
            WHERE job.platform_job_id=? AND job.generation=?
              AND active_lease.platform_job_attempt_id=?
              AND active_lease.generation=? AND active_lease.worker_code=?
-             AND active_lease.lease_token_hmac=? AND active_lease.status='active'""",
+             AND active_lease.lease_token_hmac=? AND active_lease.status='active'""" + (
+            " FOR UPDATE OF job, active_lease"
+            if getattr(connection, "backend", "sqlite") == "postgresql" else ""
+        ),
         (
             lease.job_id,
             lease.generation,
@@ -801,11 +910,22 @@ def _live_lease(
     ).fetchone()
     if row is None:
         raise ApiError("platform_job.lease_lost")
-    if require_unexpired and _time(row["expires_at"]) <= _database_now(connection):
-        raise ApiError("platform_job.lease_lost")
     if row["status"] not in {"leased", "running", "cancel_requested"}:
         raise ApiError("platform_job.lease_lost")
+    if require_unexpired:
+        _require_attempt_time(row, _database_now(connection))
     return row
+
+
+def _require_attempt_time(job, now: datetime) -> None:
+    if _attempt_deadline(job) <= now:
+        raise PlatformJobFailure("platform_job.timeout")
+    if _time(job["expires_at"]) <= now:
+        raise ApiError("platform_job.lease_lost")
+
+
+def _attempt_deadline(job) -> datetime:
+    return _time(job["attempt_leased_at"]) + timedelta(seconds=int(job["timeout_seconds"]))
 
 
 def _live_outer_fence(
@@ -817,12 +937,16 @@ def _live_outer_fence(
 ) -> None:
     current = now or _database_now(connection)
     row = connection.execute(
-        """SELECT lease.fencing_generation,head.generation registry_generation
+        """SELECT lease.fencing_generation,lease.lease_deadline_at,
+                  head.generation registry_generation
            FROM scheduler_leases lease
            JOIN scheduler_registry_heads head ON head.head_key='production'
            WHERE lease.scheduler_code=? AND lease.partition_code=?
              AND lease.fencing_generation=? AND lease.lease_token_hmac=?
-             AND unixepoch(lease.lease_deadline_at)>unixepoch(?)""",
+             AND julianday(lease.lease_deadline_at)>julianday(?)""" + (
+            " FOR SHARE OF lease, head"
+            if getattr(connection, "backend", "sqlite") == "postgresql" else ""
+        ),
         (
             fence.scheduler_code,
             fence.partition_code,
@@ -831,7 +955,10 @@ def _live_outer_fence(
             _db_time(current),
         ),
     ).fetchone()
-    if row is None or int(row["registry_generation"]) != fence.registry_generation:
+    if (
+        row is None or int(row["registry_generation"]) != fence.registry_generation
+        or _time(row["lease_deadline_at"]) <= _database_now(connection)
+    ):
         raise ApiError("platform_job.lease_lost")
 
 
@@ -926,10 +1053,17 @@ def _connect(config: AppConfig):
 
 
 def _database_now(connection) -> datetime:
-    return _time(connection.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+    # PostgreSQL CURRENT_TIMESTAMP is frozen at BEGIN, including a slow effect callback.
+    query = (
+        "SELECT clock_timestamp()"
+        if getattr(connection, "backend", "sqlite") == "postgresql"
+        else "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+    )
+    return _time(connection.execute(query).fetchone()[0])
 
 
 def _changed_time(now: datetime, previous: object) -> datetime:
+    now = now.replace(microsecond=now.microsecond // 1000 * 1000)
     prior = _time(previous)
     return now if now > prior else prior + timedelta(milliseconds=1)
 
