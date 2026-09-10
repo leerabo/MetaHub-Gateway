@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -365,13 +367,48 @@ async def test_capture_replay_dunning_refund_and_sensitive_zero_match(
         signature_body=capture,
     )
     assert tampered.status_code == 400
-    accepted = await _webhook(transport, body=capture, clock=clock[0])
-    assert accepted.status_code == 202, accepted.text
+    first_receipts = await asyncio.gather(
+        *[_webhook(transport, body=capture, clock=clock[0]) for _ in range(8)]
+    )
+    assert Counter(item.status_code for item in first_receipts) == {202: 1, 200: 7}
+    assert len({item.json()["receipt_id"] for item in first_receipts}) == 1
+
+    # 已持久回调不得为只读重放申请写锁，其他事务存在时也不能造成重复入账或 503。
+    original_connect = payment_service._connect
+
+    def short_lock_wait(config):
+        connection = original_connect(config)
+        connection.execute("PRAGMA busy_timeout=100")
+        return connection
+
+    writer = connect_database(database_url)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        with monkeypatch.context() as locked_replay:
+            locked_replay.setattr(payment_service, "_connect", short_lock_wait)
+            while_locked = await _webhook(transport, body=capture, clock=clock[0])
+        assert while_locked.status_code == 200, while_locked.text
+        assert while_locked.json()["idempotent_replay"] is True
+    finally:
+        writer.rollback()
+        writer.close()
+    rollback_errors = []
+    original_rollback = payment_service._rollback
+
+    def record_rollback(connection):
+        error = sys.exception()
+        rollback_errors.append((type(error).__name__, getattr(error, "sqlite_errorname", None)))
+        original_rollback(connection)
+
+    monkeypatch.setattr(payment_service, "_rollback", record_rollback)
     # 一百次网络重放只能命中同一个 receipt，不能复制 attempt、权益或商业效果。
     repeated = await asyncio.gather(
         *[_webhook(transport, body=capture, clock=clock[0]) for _ in range(100)]
     )
-    assert all(item.status_code == 200 for item in repeated)
+    assert all(item.status_code == 200 for item in repeated), {
+        "responses": Counter((item.status_code, item.json().get("code")) for item in repeated),
+        "rollback_errors": Counter(rollback_errors),
+    }
     assert payment_service.process_payment_receipts(
         app.state.config, worker_id="prd103-test-worker"
     ) == 1
@@ -455,7 +492,9 @@ async def test_capture_replay_dunning_refund_and_sensitive_zero_match(
         await _enter_workspace(workspace)
         dunning = await workspace.get("/billing/orders")
         assert dunning.json()["dunning_cases"][0]["status"] == "open"
-        assert dunning.json()["orders"][0]["status"] == "past_due"
+        order_statuses = {item["order_id"]: item["status"] for item in dunning.json()["orders"]}
+        assert order_statuses[second_order["order_id"]] == "past_due"
+        assert order_statuses[first_order["order_id"]] == "fulfilled"
 
     recovered = _event_body(
         event_id="evt-prd103-recovered-0001",
@@ -580,3 +619,19 @@ async def test_capture_replay_dunning_refund_and_sensitive_zero_match(
     assert len(encrypted_objects) == 5
     assert all(client_token.encode() not in path.read_bytes() for path in encrypted_objects)
     assert all(canary not in caplog.text for canary in (*pci_canaries, client_token, second_token))
+
+    # 同一 event ID 的不同合法签名正文仍走写事务冲突，不会命中只读重放。
+    conflict = await _webhook(transport, body=capture + b" ", clock=clock[0])
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["code"] == "payment.webhook_conflict"
+    with connect_database(database_url) as connection:
+        assert connection.execute(
+            "SELECT status FROM payment_webhook_receipts WHERE provider_event_id=?",
+            ("evt-prd103-capture-0001",),
+        ).fetchone()[0] == "conflict"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM payment_webhook_receipts",
+        ).fetchone()[0] == 5
+        assert connection.execute(
+            "SELECT COUNT(*) FROM commercial_effects WHERE effect_type='capture_fulfilled'",
+        ).fetchone()[0] == 2

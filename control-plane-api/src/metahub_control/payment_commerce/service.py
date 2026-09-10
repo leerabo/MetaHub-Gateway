@@ -271,8 +271,23 @@ def persist_webhook_receipt(
     raw_sha256 = hashlib.sha256(body).hexdigest()
     connection = _connect(config)
     try:
-        connection.execute("BEGIN IMMEDIATE")
         _require_schema(connection)
+        # 已持久化的相同回调只读返回；新事件和摘要冲突仍须取得写锁后重新核对。
+        existing = connection.execute(
+            "SELECT * FROM payment_webhook_receipts WHERE provider=? AND provider_event_id=?",
+            (provider, event["event_id"]),
+        ).fetchone()
+        if existing is not None and hmac.compare_digest(
+            str(existing["raw_body_sha256"]), raw_sha256,
+        ):
+            return PaymentWebhookReceiptResponse(
+                receipt_id=str(existing["receipt_id"]),
+                status=existing["status"],
+                idempotent_replay=True,
+                request_id=request_id,
+                trace_id=trace_id,
+            )
+        connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
             "SELECT * FROM payment_webhook_receipts WHERE provider=? AND provider_event_id=?",
             (provider, event["event_id"]),

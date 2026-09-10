@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.identity.service import valid_opaque_value
 from metahub_control.platform_access.constants import (
@@ -114,7 +115,8 @@ async def get_billing_orders(
 
     _reject_query(request, "payment.request_invalid")
     _private(response)
-    return list_billing_orders(
+    return await run_in_threadpool(
+        list_billing_orders,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -138,7 +140,8 @@ async def post_payment_intent(
         PaymentIntentCreateRequest,
         "payment.request_invalid",
     )
-    result = create_payment_intent(
+    result = await run_in_threadpool(
+        create_payment_intent,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -172,7 +175,8 @@ async def post_refund(
         RefundCreateRequest,
         "refund.request_invalid",
     )
-    result = request_refund(
+    result = await run_in_threadpool(
+        request_refund,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -214,7 +218,8 @@ async def post_payment_webhook(
     version_text = _single_header(request, b"x-metahub-payment-key-version")
     if timestamp is None or signature is None or version_text is None or not version_text.isdigit():
         raise ApiError("payment.webhook_invalid")
-    result = persist_webhook_receipt(
+    result = await run_in_threadpool(
+        persist_webhook_receipt,
         request.app.state.config,
         provider=provider,
         timestamp=timestamp,
@@ -245,7 +250,8 @@ async def post_platform_refund_review(
         PlatformRefundDecisionRequest,
         "refund.request_invalid",
     )
-    result = review_refund(
+    result = await run_in_threadpool(
+        review_refund,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -274,7 +280,8 @@ async def get_platform_refunds(
     if len(items) != 1 or items[0][0] != "status":
         raise ApiError("refund.request_invalid")
     _private(response)
-    return list_platform_refunds(
+    return await run_in_threadpool(
+        list_platform_refunds,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
