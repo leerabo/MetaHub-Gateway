@@ -360,7 +360,7 @@ import {
 } from "../lib/webhooks.js";
 import { getServiceStatuses } from "../lib/serviceStatus.js";
 import { getSystemHealth } from "../lib/systemHealth.js";
-import { getCurrentTenant, updateCurrentTenant } from "../lib/tenant.js";
+import { getCurrentTenant, updateCurrentTenant, getWorkspaceProfile, updateWorkspaceProfile, reenterWorkspaceProfile } from "../lib/tenant.js";
 import {
   createTenantDataIdempotencyKey,
   createTenantExport,
@@ -772,7 +772,7 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
     else if ([403, 409, 412].includes(error?.status)) void refresh();
   },
 });
-const RESOURCE_NAVIGATION_IDS = new Set(["users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
+const RESOURCE_NAVIGATION_IDS = new Set(["sdk-examples", "tenant", "users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
   "model-aliases", "routing-policies", "model-quality-scores", "experiments",
   "request-logs", "request-explanations", "output-safety", "audit-logs", "feedback-summary"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
@@ -997,6 +997,9 @@ let tenantDataDeletionTrigger = null;
 let activeConsoleNavigationCount = 0;
 // 定时器在同步调用 refresh 前写入一次性标记；performRefresh 立即消费，显式刷新不继承该 DOM 保留策略。
 let nextRefreshIsBackground = false;
+let workspaceProfileState = null;
+let workspaceProfileMutation = null;
+let workspaceProfileRecovery = null;
 let usageFilters = { limit: 20, offset: 0 };
 let usageActionError = null;
 // CSV 导出状态只驻留当前认证会话内存；controller 和 generation 防止离页后的旧轮询覆盖新会话页面。
@@ -1502,6 +1505,9 @@ async function performRefresh(options = {}) {
   clearDeveloperContractSecurityLoad();
   const isBackgroundRefresh = nextRefreshIsBackground;
   nextRefreshIsBackground = false;
+  // Profile revision changes invalidate the old session until explicit reentry completes.
+  if ((workspaceProfileMutation && resourcePageLifecycle.isMutationCurrent(workspaceProfileMutation))
+    || (workspaceProfileRecovery && resourcePageLifecycle.isBindingCurrent(workspaceProfileRecovery.binding))) return;
   let refreshSession = authSession;
   const refreshOwnerCurrent = () => isConsoleRefreshOwnerCurrent(
     { generation: refreshId, session: refreshSession },
@@ -2158,6 +2164,7 @@ function renderLogin(error, requestId) {
 }
 
 function clearBasicResourceFeedback() {
+  workspaceProfileState = workspaceProfileMutation = workspaceProfileRecovery = null;
   clearRequestLogSessionState();
   clearRequestExplanationSessionState();
   clearRequestFeedbackSummarySessionState();
@@ -2651,6 +2658,7 @@ function bindAuthenticatedEvents(consoleShellState) {
   void ownWorkspacePageVisitAfterRender(consoleShellState);
 
   const tenantForm = document.querySelector("#tenant-form");
+  bindWorkspaceProfileInteractions();
   tenantForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const token = authSession.token;
@@ -9410,6 +9418,22 @@ async function loadSdkExampleStates(consoleShellState) {
   if (consoleShellState?.activeNavigationItemId !== "sdk-examples") {
     return null;
   }
+  if (hasWorkspaceConsoleSession(authSession)) {
+    const result = await loadResourceState("sdk-examples", [PERMISSIONS.DEVELOPER_PORTAL_READ],
+      async (input, current) => {
+        const states = {};
+        for (const [language, request] of [["python", getPythonSdkExample], ["javascript", getJavascriptSdkExample]]) {
+          if (!current()) throw new DOMException("Cancelled", "AbortError");
+          try { states[language] = await request(input); }
+          catch (error) {
+            if (!current() || isAbortError(error) || [401, 403].includes(error?.status)) throw error;
+            states[language] = sdkExampleErrorState(error);
+          }
+        }
+        return states;
+      }, (states) => states);
+    return result?.state === "error" ? { python: result, javascript: result } : result;
+  }
   // 前端权限判断只是减少无效请求，直接调用仍必须由后端 developer_portal.read 守卫拒绝。
   if (!hasPermission(authSession.context, PERMISSIONS.DEVELOPER_PORTAL_READ)) {
     return null;
@@ -11375,6 +11399,12 @@ function currentNavigationPath(itemId) {
  * 边界：不得在前端伪造权限结果或展示未脱敏的密钥、Token、Prompt。
  */
 async function loadTenantState() {
+  if (hasWorkspaceConsoleSession(authSession)) {
+    const workspaceId = authSession.owner.workspaceId;
+    return loadResourceState("tenant", [PERMISSIONS.TENANT_SETTINGS_READ],
+      (options) => getWorkspaceProfile({ ...options, workspaceId }),
+      (state) => { workspaceProfileState = state; return state; });
+  }
   // 租户设置页面只消费后端 tenant.settings.read，不能因所有用户都已登录而自动预取。
   if (!hasPermission(authSession.context, PERMISSIONS.TENANT_SETTINGS_READ)) {
     return null;
@@ -11396,6 +11426,55 @@ async function loadTenantState() {
       requestId: error?.requestId ?? "-",
     };
   }
+}
+
+function bindWorkspaceProfileInteractions() {
+  const form = document.querySelector("#workspace-profile-form");
+  const binding = bindResourceElement(form, [PERMISSIONS.TENANT_SETTINGS_READ], "tenant");
+  const profile = workspaceProfileState?.workspace;
+  if (!form || !binding || profile?.status !== "active" || authSession.owner?.role !== "owner") return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const operation = resourcePageLifecycle.beginMutation(binding);
+    if (!operation) return;
+    workspaceProfileMutation = operation;
+    const current = () => resourcePageLifecycle.isMutationCurrent(operation);
+    const button = form.querySelector('button[type="submit"]');
+    const name = form.querySelector('[name="workspaceName"]');
+    const feedback = form.querySelector(".tenant-feedback");
+    button.disabled = true;
+    feedback.textContent = workspaceProfileRecovery ? "正在重新进入组织" : "正在保存";
+    try {
+      if (!workspaceProfileRecovery) {
+        await resourceMutationRequest(operation, updateWorkspaceProfile, {
+          controlApiUrl, workspaceId: profile.workspace_id, revision: profile.revision,
+          kind: profile.kind, name: name.value,
+        });
+        if (!current()) return;
+        workspaceProfileRecovery = { binding, workspaceId: profile.workspace_id };
+        name.disabled = true;
+      }
+      await resourceMutationRequest(operation, reenterWorkspaceProfile, {
+        controlApiUrl, workspaceId: workspaceProfileRecovery.workspaceId,
+      });
+      if (!current()) return;
+      workspaceProfileRecovery = null;
+      workspaceProfileMutation = null;
+      await refreshResourceMutation(operation);
+    } catch (error) {
+      if (!current() || isAbortError(error)) return;
+      if (workspaceProfileRecovery) {
+        feedback.textContent = `资料已保存，暂时无法重新进入组织。request_id: ${error?.requestId ?? "-"}`;
+        button.textContent = "重新进入组织";
+      } else if (!handleResourceMutationError(operation, error)) {
+        feedback.textContent = `${authErrorMessage(error)} request_id: ${error?.requestId ?? "-"}`;
+      }
+      if (current()) button.disabled = false;
+    } finally {
+      if (workspaceProfileMutation === operation) workspaceProfileMutation = null;
+      resourcePageLifecycle.finishMutation(operation);
+    }
+  });
 }
 
 /** Load admin-only onboarding facts; backend user.manage remains authoritative. */
@@ -14599,6 +14678,10 @@ const SDK_EXAMPLE_DOWNLOADERS = Object.freeze({
  */
 function bindSdkExampleDownloads() {
   for (const button of document.querySelectorAll("[data-download-sdk-language]")) {
+    if (hasWorkspaceConsoleSession(authSession)) {
+      bindWorkspaceSdkDownload(button);
+      continue;
+    }
     button.addEventListener("click", async () => {
       const language = normalizeSdkLanguage(button.dataset.downloadSdkLanguage);
       const downloader = SDK_EXAMPLE_DOWNLOADERS[language];
@@ -14644,6 +14727,30 @@ function bindSdkExampleDownloads() {
       }
     });
   }
+}
+
+function bindWorkspaceSdkDownload(button) {
+  const binding = bindResourceElement(button, [PERMISSIONS.DEVELOPER_PORTAL_READ], "sdk-examples");
+  button.addEventListener("click", async () => {
+    const operation = resourcePageLifecycle.beginMutation(binding);
+    if (!operation) return;
+    const downloader = SDK_EXAMPLE_DOWNLOADERS[button.dataset.downloadSdkLanguage];
+    const feedback = button.closest("[data-sdk-language-panel]")?.querySelector("[data-sdk-feedback]");
+    button.disabled = true;
+    try {
+      if (!downloader) return;
+      if (feedback) feedback.textContent = "正在准备下载";
+      const result = await resourceMutationRequest(operation, downloader, { controlApiUrl });
+      triggerSdkArchiveDownload(result);
+      if (feedback) feedback.textContent = `已下载 ${result.filename}`;
+    } catch (error) {
+      if (handleResourceMutationError(operation, error)) return;
+      if (feedback) feedback.textContent = `${authErrorMessage(error)} request_id: ${error?.requestId ?? "-"}`;
+    } finally {
+      if (resourcePageLifecycle.isMutationCurrent(operation)) button.disabled = false;
+      resourcePageLifecycle.finishMutation(operation);
+    }
+  });
 }
 
 /**

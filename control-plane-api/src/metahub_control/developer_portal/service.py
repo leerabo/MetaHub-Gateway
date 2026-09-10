@@ -24,6 +24,7 @@ from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     JavaScriptSDKExampleResponse,
@@ -231,17 +232,7 @@ def get_python_sdk_example_metadata(
         artifact_spec,
         error_code="developer.sdk_example_unavailable",
     )
-    try:
-        connection = _connect(config)
-        aliases = _select_sdk_model_aliases(
-            connection,
-            context.user.tenant_id,
-            config.environment,
-        )
-    # 数据库连接或模型目录查询失败时统一收敛为 SDK 元数据不可用，禁止泄露底层位置与 SQL。
-    except (ApiError, sqlite3.Error) as exc:
-        # 模型目录不可读时不能猜测其他租户数据，也不能把 SQL 或数据库路径返回给客户端。
-        raise ApiError("developer.sdk_example_unavailable") from exc
+    aliases = _sdk_model_aliases(config, context)
 
     gateway_base_url = _gateway_base_url(config)
     return PythonSDKExampleResponse(
@@ -293,17 +284,7 @@ def get_javascript_sdk_example_metadata(
         artifact_spec,
         error_code="developer.sdk_example_unavailable",
     )
-    try:
-        connection = _connect(config)
-        aliases = _select_sdk_model_aliases(
-            connection,
-            context.user.tenant_id,
-            config.environment,
-        )
-    # 数据库连接与租户模型目录异常统一折叠，禁止向响应泄露 SQL 或数据库绝对路径。
-    except (ApiError, sqlite3.Error) as exc:
-        # 失败时不回退读取其他租户模型；前端只得到可重试的公开制品不可用错误。
-        raise ApiError("developer.sdk_example_unavailable") from exc
+    aliases = _sdk_model_aliases(config, context)
 
     gateway_base_url = _gateway_base_url(config)
     return JavaScriptSDKExampleResponse(
@@ -353,6 +334,7 @@ def download_python_sdk_example(
 
     artifact_spec = _python_sdk_artifact_spec()
     archive = _build_sdk_example_archive(artifact_spec)
+    _verify_sdk_download_access(config, context)
     _record_sdk_download_event_fail_open(
         config=config,
         context=context,
@@ -378,6 +360,7 @@ def download_javascript_sdk_example(
 
     artifact_spec = _javascript_sdk_artifact_spec()
     archive = _build_sdk_example_archive(artifact_spec)
+    _verify_sdk_download_access(config, context)
     _record_sdk_download_event_fail_open(
         config=config,
         context=context,
@@ -386,6 +369,30 @@ def download_javascript_sdk_example(
         artifact_spec=artifact_spec,
     )
     return archive
+
+
+def _sdk_model_aliases(config: AppConfig, context: AuthContext) -> SDKModelAliases:
+    try:
+        with ResourceWriteTransaction(
+            _connect(config), config, context, "developer_portal.read", read_only=True,
+        ) as transaction:
+            aliases = _select_sdk_model_aliases(
+                transaction.connection, transaction.context.user.tenant_id, config.environment,
+            )
+            # Reopen the read snapshot so a concurrent revocation is not hidden by MVCC.
+            transaction.connection.rollback()
+            transaction.begin()
+            return aliases
+    except (DbError, sqlite3.Error) as exc:
+        raise ApiError("developer.sdk_example_unavailable") from exc
+
+
+def _verify_sdk_download_access(config: AppConfig, context: AuthContext) -> None:
+    # Artifact generation and optional analytics must not bypass current authorization.
+    with ResourceWriteTransaction(
+        _connect(config), config, context, "developer_portal.read", read_only=True,
+    ):
+        pass
 
 
 def _select_sdk_model_aliases(
@@ -872,7 +879,10 @@ def _record_sdk_example_downloaded(
                 f"dpe_{uuid4().hex}",
                 context.user.tenant_id,
                 context.user.user_id,
-                context.session.session_id,
+                (
+                    None if context.session.session_id.startswith("wss_")
+                    else context.session.session_id
+                ),
                 artifact_spec.example_id,
                 "/#sdk-examples",
                 request_id,
@@ -892,6 +902,10 @@ def _record_sdk_example_downloaded(
                 # 数据库健康检查负责报告不可回滚连接；下载流程仍返回已完成的 ZIP。
                 pass
         raise
+
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _safe_sdk_download_event_payload(

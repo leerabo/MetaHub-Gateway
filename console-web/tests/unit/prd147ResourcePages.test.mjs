@@ -589,3 +589,113 @@ for (const outcome of ["success", "401", "403", "503"]) {
     assert.equal(h.effects.includes("login"), false);
   });
 }
+
+function sdkHarness() {
+  const h = harness("sdk-examples", "[data-download-sdk-language]");
+  h.scope.RESOURCE_NAVIGATION_IDS.add("sdk-examples");
+  const feedback = { textContent: "" };
+  h.element.dataset.downloadSdkLanguage = "python";
+  h.element.closest = () => ({ querySelector: () => feedback });
+  for (const language of ["Python", "Javascript"]) {
+    h.scope[`get${language}SdkExample`] = async (input) => {
+      h.calls.push({ language, input });
+      return h.pending.promise;
+    };
+  }
+  h.scope.SDK_EXAMPLE_DOWNLOADERS = { python: async (input) => {
+    h.calls.push({ language: "python", input });
+    return h.pending.promise;
+  } };
+  h.scope.triggerSdkArchiveDownload = (result) => { h.effects.push("download"); h.downloaded = result; };
+  Object.assign(h.functions, runInNewContext(["sdkExampleErrorState", "loadSdkExampleStates",
+    "bindWorkspaceSdkDownload", "bindSdkExampleDownloads"].map(production).join("\n")
+    + "\n({loadSdkExampleStates, bindWorkspaceSdkDownload, bindSdkExampleDownloads})", h.scope));
+  return { ...h, feedback };
+}
+
+test("PRD-147 production SDK reads both languages under the current Workspace", async () => {
+  const h = sdkHarness();
+  const operation = h.functions.loadSdkExampleStates(h.scope.resourcePageShellState);
+  assert.equal(h.calls.length, 1);
+  h.pending.resolve({ state: "ok" });
+  const result = await operation;
+  assert.equal(h.calls.length, 2);
+  for (const call of h.calls) {
+    assert.equal(call.input.authentication, "workspace");
+    assert.equal(Object.hasOwn(call.input, "token"), false);
+    assert.ok(call.input.signal instanceof AbortSignal);
+  }
+  assert.equal(result.python.state, "ok");
+  assert.equal(result.javascript.state, "ok");
+  h.scope.hash = "projects";
+  assert.equal(await h.functions.loadSdkExampleStates(h.scope.resourcePageShellState), null);
+  assert.equal(h.calls.length, 2);
+});
+
+for (const outcome of ["success", "401", "403", "503"]) {
+  test(`PRD-147 production SDK drops late metadata ${outcome} and stops the sequence`, async () => {
+    const h = sdkHarness();
+    const operation = h.functions.loadSdkExampleStates(h.scope.resourcePageShellState);
+    h.switchOwner();
+    assert.equal(h.calls[0].input.signal.aborted, true);
+    if (outcome === "success") h.pending.resolve({ state: "ok" });
+    else h.pending.reject(new AuthApiError({ status: Number(outcome), code: "auth.permission_denied" }));
+    assert.equal(await operation, null);
+    assert.equal(h.calls.length, 1);
+    assert.deepEqual(h.effects, []);
+  });
+  test(`PRD-147 production SDK drops late download ${outcome} without creating a Blob URL`, async () => {
+    const h = sdkHarness();
+    h.functions.bindSdkExampleDownloads();
+    const operation = h.element.fire("click");
+    await h.element.fire("click");
+    assert.equal(h.calls.length, 1);
+    h.switchOwner();
+    assert.equal(h.calls[0].input.signal.aborted, true);
+    const feedback = h.feedback.textContent;
+    if (outcome === "success") h.pending.resolve({ blob: new Blob(["test"]), filename: "test.zip" });
+    else h.pending.reject(new AuthApiError({ status: Number(outcome), code: "auth.permission_denied" }));
+    await operation;
+    assert.deepEqual(h.effects, []);
+    assert.equal(h.feedback.textContent, feedback);
+  });
+}
+
+for (const status of [401, 403]) {
+  test(`PRD-147 production SDK current ${status} stops subsequent metadata`, async () => {
+    const h = sdkHarness();
+    const operation = h.functions.loadSdkExampleStates(h.scope.resourcePageShellState);
+    h.pending.reject(new AuthApiError({ status, code: "auth.permission_denied" }));
+    assert.equal(await operation, null);
+    assert.equal(h.calls.length, 1);
+    assert.ok(h.effects.includes(status === 401 ? "login" : "clear-dom"));
+  });
+}
+
+test("PRD-147 production SDK language-local failure preserves the other language", async () => {
+  const h = sdkHarness();
+  h.scope.getJavascriptSdkExample = async () => ({ state: "ok" });
+  const operation = h.functions.loadSdkExampleStates(h.scope.resourcePageShellState);
+  h.pending.reject(new AuthApiError({ status: 503, requestId: "req_sdk_failure" }));
+  const result = await operation;
+  assert.equal(result.python.state, "error");
+  assert.equal(result.python.requestId, "req_sdk_failure");
+  assert.equal(result.javascript.state, "ok");
+  assert.deepEqual(h.effects, []);
+});
+
+test("PRD-147 production SDK current download completes once and releases the busy state", async () => {
+  const h = sdkHarness();
+  h.functions.bindSdkExampleDownloads();
+  const operation = h.element.fire("click");
+  await h.element.fire("click");
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].input.authentication, "workspace");
+  assert.equal(Object.hasOwn(h.calls[0].input, "token"), false);
+  h.pending.resolve({ blob: new Blob(["test"]), filename: "test.zip" });
+  await operation;
+  assert.deepEqual(h.effects, ["download"]);
+  assert.equal(h.element.disabled, false);
+  assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  assert.match(h.feedback.textContent, /test.zip/);
+});

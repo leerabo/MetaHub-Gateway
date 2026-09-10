@@ -52,6 +52,7 @@ def serve(app):
             access_log=False,
             log_level="critical",
             proxy_headers=False,
+            timeout_graceful_shutdown=5,
         )
     )
     thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
@@ -184,7 +185,7 @@ def main():
         browser_tmp.mkdir()
         env.update(TEMP=str(browser_tmp), TMP=str(browser_tmp))
         with (artifacts / "server-stacks.txt").open("w", encoding="utf-8") as stacks:
-            faulthandler.dump_traceback_later(20, repeat=True, file=stacks)
+            faulthandler.enable(file=stacks)
             try:
                 completed = subprocess.run(
                     [node, str(ROOT / "scripts/acceptance/s1-organization-browser.mjs")],
@@ -195,8 +196,11 @@ def main():
                     encoding="utf-8",
                     timeout=240,
                 )
+            except subprocess.TimeoutExpired:
+                faulthandler.dump_traceback(file=stacks)
+                raise
             finally:
-                faulthandler.cancel_dump_traceback_later()
+                faulthandler.disable()
         browser_report = json.loads((artifacts / "browser.json").read_text(encoding="utf-8"))
         result["browser"] = browser_report
         assert completed.returncode == 0, "browser_flow_failed"

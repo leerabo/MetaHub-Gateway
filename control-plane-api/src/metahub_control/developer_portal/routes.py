@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 
 from metahub_control.auth import AuthContext, require_developer_portal_reader
+from metahub_control.auth.dependencies import require_workspace_or_legacy_permissions
 
 from .models import JavaScriptSDKExampleResponse, PythonSDKExampleResponse, QuickstartDataResponse
 from .service import (
@@ -24,6 +25,7 @@ from .service import (
 )
 
 router = APIRouter(prefix="/developer", tags=["developer-portal"])
+require_sdk_examples_reader = require_workspace_or_legacy_permissions("developer_portal.read")
 
 
 @router.get("/quickstart-data", response_model=QuickstartDataResponse)
@@ -47,11 +49,11 @@ async def get_quickstart_data_route(
 @router.get("/sdk-examples/python", response_model=PythonSDKExampleResponse)
 async def get_python_sdk_example_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_developer_portal_reader)],
+    context: Annotated[AuthContext, Depends(require_sdk_examples_reader)],
 ) -> PythonSDKExampleResponse:
     """读取当前认证租户的 Python 示例元数据。
 
-    ``require_developer_portal_reader`` 在后端限定 admin/developer；接口不接收 ``tenant_id``、
+    ``require_sdk_examples_reader`` 在后端复核读取权限；接口不接收 ``tenant_id``、
     源码路径或任何密钥字段，viewer 即使绕过前端隐藏按钮也会得到统一权限错误。
     """
 
@@ -66,7 +68,7 @@ async def get_python_sdk_example_route(
 @router.get("/sdk-examples/python/download", response_class=Response)
 async def download_python_sdk_example_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_developer_portal_reader)],
+    context: Annotated[AuthContext, Depends(require_sdk_examples_reader)],
 ) -> Response:
     """下载由固定白名单构建的 Python 示例 ZIP。
 
@@ -94,7 +96,7 @@ async def download_python_sdk_example_route(
 @router.get("/sdk-examples/javascript", response_model=JavaScriptSDKExampleResponse)
 async def get_javascript_sdk_example_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_developer_portal_reader)],
+    context: Annotated[AuthContext, Depends(require_sdk_examples_reader)],
 ) -> JavaScriptSDKExampleResponse:
     """读取当前认证租户的 JavaScript/Node 示例元数据。
 
@@ -113,7 +115,7 @@ async def get_javascript_sdk_example_route(
 @router.get("/sdk-examples/javascript/download", response_class=Response)
 async def download_javascript_sdk_example_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_developer_portal_reader)],
+    context: Annotated[AuthContext, Depends(require_sdk_examples_reader)],
 ) -> Response:
     """下载由固定 JavaScript 白名单构建的受控 ZIP。
 

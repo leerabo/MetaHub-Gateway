@@ -283,7 +283,7 @@ function renderActiveContent(activeItemId, options, statuses) {
   switch (activeItemId) {
     case "tenant":
       // 租户状态或租户筛选是隔离边界，命中异常时必须立即截断。
-      return `<section class="panel tenant-panel" aria-labelledby="tenant-title">${renderTenantPanel(options.tenantState, options.authContext)}</section>`;
+      return `<section class="panel tenant-panel" aria-labelledby="tenant-title">${renderTenantPanel(options.tenantState, options.authContext, options.consoleShellState?.workspaceContext)}</section>`;
     case "users":
       // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
       return renderUsersSection(

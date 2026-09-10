@@ -6,7 +6,8 @@ import { hasPermission, PERMISSIONS } from "../../lib/permissions.js";
  * 所有展示数据来自登录 Session 对应 tenant_id；只读用户可以查看，写入动作仍由后端
  * 校验 admin 权限。
  */
-export function renderTenantPanel(tenantState, authContext) {
+export function renderTenantPanel(tenantState, authContext, workspaceContext) {
+  if (workspaceContext) return renderWorkspaceProfile(tenantState, authContext, workspaceContext);
   // 未登录时保留登录占位；已登录但授权快照缺失或失权时必须清空 DOM，不能伪装成认证等待态。
   if (!authContext?.user) {
     return `
@@ -78,6 +79,33 @@ export function renderTenantPanel(tenantState, authContext) {
       </div>
     </form>
   `;
+}
+
+function renderWorkspaceProfile(state, authContext, context) {
+  if (!hasPermission(authContext, PERMISSIONS.TENANT_SETTINGS_READ)) return "";
+  const title = context.kind === "personal" ? "空间资料" : "组织资料";
+  const heading = `<div class="panel-heading tenant-heading"><h2 id="tenant-title">${title}</h2></div>`;
+  if (state?.state === "error") {
+    return `${heading}<p class="error-state" role="alert">${escapeHtml(state.message)} <small>request_id: ${escapeHtml(state.requestId ?? "-")}</small></p>`;
+  }
+  if (!state?.workspace) return `${heading}<p role="status">正在读取资料。</p>`;
+  const workspace = state.workspace;
+  const canEdit = context.role === "owner" && workspace.status === "active";
+  return `${heading}
+    <form class="tenant-form" id="workspace-profile-form">
+      <dl class="tenant-meta">
+        ${renderMeta("类型", workspace.kind === "organization" ? "组织" : "个人空间")}
+        ${renderMeta("区域", workspace.region)}
+        ${renderMeta("服务模式", workspace.service_mode === "internal_only" ? "内部使用" : "对外服务")}
+        ${renderMeta("开发环境", workspace.environment?.code ?? "-")}
+        ${renderMeta("资料状态", workspace.profile_state === "confirmed" ? "已确认" : "待确认")}
+      </dl>
+      <label><span>名称</span><input name="workspaceName" value="${escapeAttribute(workspace.name)}" maxlength="${workspace.kind === "personal" ? 120 : 160}" required ${canEdit ? "" : "disabled"} /></label>
+      <div class="tenant-actions">
+        ${canEdit ? '<button type="submit">保存资料</button>' : ""}
+        <span class="tenant-feedback" role="status">${canEdit ? "" : "仅组织所有者可修改资料"}</span>
+      </div>
+    </form>`;
 }
 
 /**

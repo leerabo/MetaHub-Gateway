@@ -3950,6 +3950,27 @@ h3 {
   font-size: 13px;
 }
 
+#workspace-profile-form label,
+#workspace-profile-form .tenant-meta dd {
+  font-size: 16px;
+}
+
+#workspace-profile-form input {
+  min-width: 0;
+  width: 100%;
+  font-size: 16px;
+}
+
+#workspace-profile-form .tenant-meta dt,
+#workspace-profile-form .tenant-feedback {
+  font-size: 14px;
+}
+
+#workspace-profile-form .tenant-meta dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .users-heading {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;

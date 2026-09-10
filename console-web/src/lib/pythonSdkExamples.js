@@ -1,9 +1,10 @@
 /**
  * 模块职责：读取 Python 与 JavaScript SDK 示例元数据，并下载对应的受控 ZIP 制品。
- * 维护边界：请求只携带登录 Token；tenant_id、源码目录和归档成员必须由控制面后端恢复与校验。
+ * 维护边界：使用独立的组织 Cookie 或旧登录 Token；tenant_id、源码目录和归档成员由后端恢复与校验。
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 两种语言分别使用固定 ASCII 兜底文件名，避免异常响应头导致路径注入或下载错误语言的文件名。
 const DEFAULT_ARCHIVE_NAMES = Object.freeze({
@@ -15,42 +16,42 @@ const DEFAULT_ARCHIVE_NAMES = Object.freeze({
  * 读取当前租户可见的 Python SDK 示例元数据。
  * 前端不能拼接 tenant_id 或任意目录参数，后端会从认证上下文选择模型别名并返回固定下载地址。
  */
-export async function getPythonSdkExample({ controlApiUrl, token }) {
-  return getSdkExampleMetadata({ controlApiUrl, token, language: "python" });
+export async function getPythonSdkExample(input) {
+  return getSdkExampleMetadata({ ...input, language: "python" });
 }
 
 /**
  * 读取当前租户可见的 JavaScript/Node SDK 示例元数据。
  * 浏览器只展示服务端 Node 示例说明，不接收 Virtual Key，也不会生成浏览器直连 Gateway 的代码。
  */
-export async function getJavascriptSdkExample({ controlApiUrl, token }) {
-  return getSdkExampleMetadata({ controlApiUrl, token, language: "javascript" });
+export async function getJavascriptSdkExample(input) {
+  return getSdkExampleMetadata({ ...input, language: "javascript" });
 }
 
 /**
  * 下载当前版本的 Python 示例 ZIP，并返回 Blob、可信文件名及链路标识。
  * 调用方负责在用户手势内创建临时对象 URL；本函数不会把二进制内容写入页面状态或日志。
  */
-export async function downloadPythonSdkExample({ controlApiUrl, token }) {
-  return downloadSdkExample({ controlApiUrl, token, language: "python" });
+export async function downloadPythonSdkExample(input) {
+  return downloadSdkExample({ ...input, language: "python" });
 }
 
 /**
  * 下载当前版本的 JavaScript/Node 示例 ZIP，并返回 Blob、可信文件名及链路标识。
- * 下载继续使用 Bearer Token，禁止退化为会把认证信息放入 URL 的普通链接跳转。
+ * 下载保留当前认证域，禁止把认证信息放入 URL。
  */
-export async function downloadJavascriptSdkExample({ controlApiUrl, token }) {
-  return downloadSdkExample({ controlApiUrl, token, language: "javascript" });
+export async function downloadJavascriptSdkExample(input) {
+  return downloadSdkExample({ ...input, language: "javascript" });
 }
 
 /**
  * 按固定语言路径读取 SDK 示例元数据，并给成功状态补充统一的 state 标识。
  * language 只来自模块内两个公开包装函数，不能由页面或 URL 参数直接透传到请求路径。
  */
-async function getSdkExampleMetadata({ controlApiUrl, token, language }) {
+async function getSdkExampleMetadata({ controlApiUrl, authentication, token, signal, language }) {
   const response = await sdkExampleRequest(
     `${controlApiUrl}/developer/sdk-examples/${language}`,
-    token,
+    { authentication, token, signal },
     language,
   );
   return { state: "ok", ...(await response.json()) };
@@ -60,10 +61,10 @@ async function getSdkExampleMetadata({ controlApiUrl, token, language }) {
  * 按固定语言路径下载 SDK ZIP，并统一提取 Blob、安全文件名和请求链路标识。
  * 文件名即使来自受信后端也要经过前端白名单复核，代理或网关注入异常响应头时会使用语言专属兜底。
  */
-async function downloadSdkExample({ controlApiUrl, token, language }) {
+async function downloadSdkExample({ controlApiUrl, authentication, token, signal, language }) {
   const response = await sdkExampleRequest(
     `${controlApiUrl}/developer/sdk-examples/${language}/download`,
-    token,
+    { authentication, token, signal },
     language,
   );
   const contentDisposition = response.headers.get("Content-Disposition") ?? "";
@@ -79,10 +80,10 @@ async function downloadSdkExample({ controlApiUrl, token, language }) {
  * 执行带控制面认证的 SDK 示例请求，并把 JSON 错误体归一为 AuthApiError。
  * 成功响应保持原始 Response，供元数据和二进制下载分别消费；错误消息不得回显响应原文或堆栈。
  */
-async function sdkExampleRequest(url, token, language) {
-  const response = await fetch(url, {
+async function sdkExampleRequest(url, { authentication, token, signal }, language) {
+  const response = await authenticatedResourceFetch(url, {
+    authentication, token, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": `console_${language}_sdk_${Date.now()}`,
     },
   });

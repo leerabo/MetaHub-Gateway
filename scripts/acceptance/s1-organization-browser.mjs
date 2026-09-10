@@ -12,13 +12,23 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const origin = process.env.S1_ORIGIN;
 const artifacts = process.env.S1_ARTIFACTS;
 assert.equal(new URL(origin).hostname, "s1.localhost");
+const loopbackOrigin = new URL(origin);
+loopbackOrigin.hostname = "127.0.0.1";
 assert.equal(path.dirname(path.resolve(artifacts)), path.join(root, ".artifacts"));
-const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [], motion: [] };
+const report = { status: "failed", steps: [], blockedExternalRequests: 0, pageErrors: 0, viewports: [], apiResponses: [], assetFailures: [], stepTimings: [], motion: [], onboardingDestinations: [] };
 const pendingAssets = new Map();
 const pendingRequests = new Map();
 let stage = "launch";
 let browser;
 let currentPage;
+
+async function browserJson(page, pathname) {
+  assert.ok(pathname.startsWith("/") && !pathname.startsWith("//"));
+  return page.evaluate(async (pathname) => {
+    const response = await fetch(pathname, { credentials: "include", cache: "no-store", redirect: "error" });
+    return { status: response.status, body: await response.json() };
+  }, pathname);
+}
 
 async function step(name, operation) {
   stage = name;
@@ -32,16 +42,23 @@ async function step(name, operation) {
 }
 
 async function layout(page, name) {
-  const facts = await page.evaluate(() => ({
-    width: innerWidth,
-    overflow: document.documentElement.scrollWidth > innerWidth + 1,
-    minInputPx: Math.min(...[...document.querySelectorAll("input:not([type=hidden]):not([type=checkbox]):not([type=radio]),select")]
+  const facts = await page.evaluate(() => {
+    const minimumFont = (selector) => Math.min(...[...document.querySelectorAll(selector)]
       .filter((element) => element.getBoundingClientRect().width)
-      .map((element) => parseFloat(getComputedStyle(element).fontSize))),
-  }));
+      .map((element) => parseFloat(getComputedStyle(element).fontSize)));
+    return {
+      width: innerWidth,
+      overflow: document.documentElement.scrollWidth > innerWidth + 1,
+      minInputPx: minimumFont("input:not([type=hidden]):not([type=checkbox]):not([type=radio]),select,textarea"),
+      minOnboardingPrimaryPx: minimumFont(".identity-onboarding-step-copy strong,.identity-onboarding-facts dd"),
+      minOnboardingSecondaryPx: minimumFont(".identity-onboarding-step-copy small,.identity-onboarding-facts dt,.identity-onboarding-state"),
+    };
+  });
   report.viewports.push({ name, ...facts });
   assert.equal(facts.overflow, false);
   assert.ok(facts.minInputPx >= 16);
+  assert.ok(facts.minOnboardingPrimaryPx >= 16);
+  assert.ok(facts.minOnboardingSecondaryPx >= 14);
   await page.screenshot({ path: path.join(artifacts, name + ".png") });
 }
 
@@ -106,6 +123,7 @@ try {
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
     const tag = String(viewport.width);
     const context = await browser.newContext({ viewport, serviceWorkers: "block" });
+    context.setDefaultTimeout(12_000);
     await context.route("**/*", (route) => {
       if (new URL(route.request().url()).origin === origin) return route.continue();
       report.blockedExternalRequests += 1;
@@ -188,10 +206,10 @@ try {
       await page.waitForURL("**/console.html*");
       await page.goto(origin + "/console.html#virtual-keys");
       await page.locator("#create-consumer-form").waitFor();
-      const session = await context.request.get(origin + "/workspace/session");
-      assert.equal(session.status(), 200);
-      assert.equal((await session.json()).context.role, "owner");
-      assert.ok([400, 401, 403].includes((await context.request.get(origin + "/platform/registration-policy")).status()));
+      const session = await browserJson(page, "/workspace/session");
+      assert.equal(session.status, 200);
+      assert.equal(session.body.context.role, "owner");
+      assert.ok([400, 401, 403].includes((await browserJson(page, "/platform/registration-policy")).status));
       assert.equal(await page.locator("[data-platform-registration-policy-form]").count(), 0);
     });
     await step(tag + ".consumers", async () => {
@@ -219,7 +237,8 @@ try {
       assert.ok(firstKey);
       const anonymous = await request.newContext();
       try {
-        const denied = await anonymous.get(origin + "/consumers", { headers: { Authorization: "Bearer " + firstKey } });
+        const denied = await anonymous.get(new URL("/consumers", loopbackOrigin).href,
+          { headers: { Authorization: "Bearer " + firstKey } });
         assert.equal(denied.status(), 401);
         const valid = await anonymous.post(process.env.S1_GATEWAY_ORIGIN + "/feedback", { headers: { Authorization: "Bearer " + firstKey }, data: {} });
         assert.equal(valid.status(), 422);
@@ -244,6 +263,93 @@ try {
         assert.equal((await feedback(rotatedKey)).status(), 401);
       } finally { await anonymous.dispose(); }
       await layout(page, tag + "-completed");
+    });
+    await step(tag + ".onboarding-navigation", async () => {
+      await page.goto(origin + "/identity.html");
+      const panel = page.locator("[data-onboarding-step-panel]");
+      await panel.waitFor();
+      for (const index of [0, 1]) {
+        await page.locator(`[data-onboarding-step-index="${index}"]`).click();
+        await panel.locator('[data-identity-action="confirm-onboarding-step"]').click();
+        await panel.locator('[data-identity-action="reopen-onboarding-step"]:enabled').waitFor();
+      }
+      const destinations = [
+        ["tenant", "#workspace-profile-form"], ["environments", "#create-environment-form"],
+        ["providers", "#providers-title"], ["models", "#create-model-form"],
+        ["model-aliases", "#create-model-alias-form"], ["projects", "#create-project-form"],
+        ["virtual-keys", "#create-consumer-form"], ["sdk-examples", "#sdk-examples-title"],
+      ];
+      for (const [index, [sourceId, ready]] of destinations.entries()) {
+        await page.locator(`[data-onboarding-step-index="${index}"]`).click();
+        const link = panel.locator(".identity-onboarding-link");
+        assert.equal(await link.getAttribute("href"), "/console.html#" + sourceId);
+        const opened = context.waitForEvent("page");
+        await link.click({ modifiers: ["Control"] });
+        const destination = await opened;
+        currentPage = destination;
+        stage = tag + ".onboarding-navigation." + sourceId;
+        const check = { width: viewport.width, sourceId, status: "opened", responses: [] };
+        report.onboardingDestinations.push(check);
+        destination.on("pageerror", () => { report.pageErrors += 1; });
+        destination.on("response", (response) => {
+          const url = new URL(response.url());
+          if (url.origin === origin && !url.pathname.startsWith("/src/") && !url.pathname.endsWith(".html")) {
+            check.responses.push({ path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() });
+          }
+        });
+        await destination.waitForURL(origin + "/console.html#" + sourceId);
+        await destination.locator(ready).waitFor();
+        if (sourceId === "tenant") {
+          const name = "Profile saved " + tag;
+          const form = destination.locator(ready);
+          await form.locator('[name="workspaceName"]').fill(name);
+          const saved = destination.waitForResponse((response) => response.request().method() === "PATCH"
+            && new URL(response.url()).pathname.startsWith("/workspaces/"));
+          const reentered = destination.waitForResponse((response) => response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/identity/workspace-switches");
+          await form.locator('button[type="submit"]').click();
+          assert.equal((await saved).status(), 200);
+          assert.equal((await reentered).status(), 200);
+          await destination.waitForFunction((expected) => {
+            const input = document.querySelector('#workspace-profile-form [name="workspaceName"]');
+            return input?.value === expected && !input.disabled;
+          }, name);
+          const session = await browserJson(destination, "/workspace/session");
+          assert.equal(session.status, 200);
+          assert.equal(session.body.context.name, name);
+          await destination.reload();
+          await destination.locator(ready).waitFor();
+          assert.equal(await form.locator('[name="workspaceName"]').inputValue(), name);
+          await layout(destination, tag + "-profile-saved");
+          check.profileSaved = true;
+          await page.reload();
+          await panel.waitFor();
+        }
+        if (sourceId === "sdk-examples") {
+          check.downloads = [];
+          for (const language of ["python", "javascript"]) {
+            await destination.locator(`[data-sdk-language-tab="${language}"]`).click();
+            const received = destination.waitForEvent("download");
+            await destination.locator(`[data-download-sdk-language="${language}"]`).click();
+            const download = await received;
+            assert.equal(await download.failure(), null);
+            const filename = download.suggestedFilename();
+            assert.match(filename, new RegExp(`^metahub-${language}-examples(?:-[0-9.]+)?\\.zip$`));
+            const stream = await download.createReadStream();
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            const archive = Buffer.concat(chunks);
+            assert.ok(archive.length > 100);
+            assert.equal(archive.subarray(0, 4).toString("hex"), "504b0304");
+            check.downloads.push({ language, filename, bytes: archive.length, zipSignature: true });
+          }
+        }
+        assert.equal(await destination.locator('[role="alert"]').count(), 0);
+        check.status = "passed";
+        await destination.close();
+        currentPage = page;
+      }
+      await layout(page, tag + "-onboarding");
     });
     await context.close();
   }
