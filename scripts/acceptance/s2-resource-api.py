@@ -11,16 +11,41 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_SHA256 = "062ae8e3a8024030efb712a5120793483203b86d552fcfd86a46e9bf804f4c2a"
+COMMERCIAL_MODULES = (
+    "test_prd098_saas_billing", "test_prd099_platform_billing",
+    "test_prd102_business_verification", "test_prd103_payment_commerce",
+    "test_prd104_invoice_reconciliation", "test_prd105_notifications",
+)
+
+
+def prepare_commercial_database(database_url, *, work, baseline, migrations_dir):
+    """Copy the verified empty schema only into a new test-owned SQLite target."""
+    from metahub_shared.db import apply_migrations
+
+    parsed = urlparse(database_url)
+    if parsed.scheme != "sqlite" or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Commercial tests require a local SQLite database")
+    raw_path = parsed.path
+    if os.name == "nt" and len(raw_path) > 3 and raw_path[0] == "/" and raw_path[2] == ":":
+        raw_path = raw_path[1:]
+    target = Path(raw_path).resolve()
+    if not target.is_relative_to(work.resolve() / "tests"):
+        raise ValueError("Database target must belong to this test run")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("xb") as destination, baseline.open("rb") as source:
+        shutil.copyfileobj(source, destination)
+    return apply_migrations(database_url, migrations_dir=migrations_dir)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, default=ROOT)
     parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("--flow", choices=("usage", "finance", "all"), default="all")
+    parser.add_argument("--flow", choices=("usage", "finance", "commerce", "all"), default="all")
     options, pytest_arguments = parser.parse_known_args()
     source = options.source.resolve(strict=True)
     baseline = options.baseline.resolve(strict=True)
@@ -67,14 +92,25 @@ def main():
     def migrated_database():
         return database
 
-    flows = ("usage", "finance") if options.flow == "all" else (options.flow,)
+    flows = ("usage", "finance", "commerce") if options.flow == "all" else (options.flow,)
     targets = []
     for flow in flows:
-        module = importlib.import_module("test_workspace_" + flow)
-        if not Path(module.__file__).resolve().is_relative_to(source):
-            raise ValueError("Imported tests do not belong to the selected source")
-        module.migrated_database = migrated_database
-        targets.append(str(Path(module.__file__).resolve()))
+        names = COMMERCIAL_MODULES if flow == "commerce" else ("test_workspace_" + flow,)
+        for name in names:
+            module = importlib.import_module(name)
+            if not Path(module.__file__).resolve().is_relative_to(source):
+                raise ValueError("Imported tests do not belong to the selected source")
+            if flow == "commerce":
+                def prepare(database_url):
+                    return prepare_commercial_database(
+                        database_url, work=work, baseline=database,
+                        migrations_dir=source / "infra/migrations",
+                    )
+
+                module.apply_migrations = prepare
+            else:
+                module.migrated_database = migrated_database
+            targets.append(str(Path(module.__file__).resolve()))
     report = {
         "source": str(source),
         "flow": options.flow,
