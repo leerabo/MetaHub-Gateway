@@ -1,13 +1,15 @@
-"""Pure fixed-catalog execution engine shared by runner HTTP and test loopback."""
+"""Fixed-catalog validation and explicitly synthetic test-loopback results."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 from fastapi import HTTPException
 
-from .contracts import CapacityPermitClaims, CapacityRunnerResult
+from .contracts import (
+    CapacityPermitClaims,
+    CapacityRunnerResult,
+    execution_digest,
+    result_digest,
+)
 
 SCENARIOS = {
     "gateway-release": (
@@ -85,7 +87,7 @@ FAULTS = {
 }
 
 
-def simulate_capacity_run(claims: CapacityPermitClaims) -> CapacityRunnerResult:
+def validate_capacity_scope(claims: CapacityPermitClaims) -> None:
     if claims.operation == "load_test":
         scenario = SCENARIOS.get(claims.scenario_code or "")
         if scenario is None:
@@ -99,12 +101,37 @@ def simulate_capacity_run(claims: CapacityPermitClaims) -> CapacityRunnerResult:
             or claims.manifest_sha256 != manifest
         ):
             raise HTTPException(status_code=422, detail="runner.scenario_invalid")
+        return
+    fault = FAULTS.get(claims.fault_code or "")
+    if fault is None:
+        raise HTTPException(status_code=422, detail="runner.fault_invalid")
+    service, max_tenants, max_duration, manifest = fault
+    if (
+        (service != "shared" and claims.service_code != service)
+        or claims.synthetic_tenant_count > max_tenants
+        or claims.duration_seconds > max_duration
+        or claims.manifest_sha256 != manifest
+    ):
+        raise HTTPException(status_code=422, detail="runner.fault_invalid")
+
+
+def simulate_capacity_run(claims: CapacityPermitClaims) -> CapacityRunnerResult:
+    validate_capacity_scope(claims)
+    binding = {
+        "contract_version": 2,
+        "evidence_kind": "simulation",
+        "execution_sha256": execution_digest(claims),
+        "manifest_sha256": claims.manifest_sha256,
+        "operation": claims.operation,
+        "object_id": claims.object_id,
+    }
+    if claims.operation == "load_test":
         p50 = 35 + claims.target_rps // 1000
         p95 = p50 * 2
         p99 = p95 + max(10, p50 // 2)
         aggregate = {
-            "operation": claims.operation,
-            "object_id": claims.object_id,
+            **binding,
+            "safe_outcome_code": "runner.load_completed",
             "sample_count": max(
                 100, min(1_000_000, claims.target_rps * claims.duration_seconds)
             ),
@@ -122,39 +149,21 @@ def simulate_capacity_run(claims: CapacityPermitClaims) -> CapacityRunnerResult:
         }
         return CapacityRunnerResult(
             **aggregate,
-            safe_outcome_code="runner.load_completed",
-            result_sha256=_digest(aggregate),
+            result_sha256=result_digest(aggregate),
         )
-    fault = FAULTS.get(claims.fault_code or "")
-    if fault is None:
-        raise HTTPException(status_code=422, detail="runner.fault_invalid")
-    service, max_tenants, max_duration, manifest = fault
-    if (
-        (service != "shared" and claims.service_code != service)
-        or claims.synthetic_tenant_count > max_tenants
-        or claims.duration_seconds > max_duration
-        or claims.manifest_sha256 != manifest
-    ):
-        raise HTTPException(status_code=422, detail="runner.fault_invalid")
     observed_p95 = max(1, claims.objective_p95_ms * 9 // 10)
     observed_error = max(0, claims.objective_error_rate_bps * 9 // 10)
     aggregate = {
-        "operation": claims.operation,
-        "object_id": claims.object_id,
+        **binding,
+        "safe_outcome_code": "runner.chaos_objective_met",
         "observed_p95_ms": observed_p95,
         "observed_error_rate_bps": observed_error,
         "objective_met": True,
     }
     return CapacityRunnerResult(
         **aggregate,
-        safe_outcome_code="runner.chaos_objective_met",
-        result_sha256=_digest(aggregate),
+        result_sha256=result_digest(aggregate),
     )
 
 
-def _digest(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(payload.encode("ascii")).hexdigest()
-
-
-__all__ = ["FAULTS", "SCENARIOS", "simulate_capacity_run"]
+__all__ = ["FAULTS", "SCENARIOS", "simulate_capacity_run", "validate_capacity_scope"]

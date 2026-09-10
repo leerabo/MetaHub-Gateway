@@ -17,7 +17,7 @@ from .contracts import (
     CapacityRunnerResult,
     decode_signed,
 )
-from .engine import simulate_capacity_run
+from .engine import validate_capacity_scope
 
 _KILL_FENCES: dict[str, int] = {}
 _LOCK = threading.RLock()
@@ -51,11 +51,9 @@ def run_capacity(
     with _LOCK:
         if _KILL_FENCES.get(claims.object_id, 0) > claims.kill_generation:
             raise HTTPException(status_code=409, detail="runner.killed")
-    result = simulate_capacity_run(claims)
-    with _LOCK:
-        if _KILL_FENCES.get(claims.object_id, 0) > claims.kill_generation:
-            raise HTTPException(status_code=409, detail="runner.killed")
-    return result
+    validate_capacity_scope(claims)
+    # Until an actual isolated executor is connected, never manufacture measurements.
+    raise HTTPException(status_code=503, detail="runner.executor_unavailable")
 
 
 @app.post(
@@ -114,4 +112,4 @@ def _authorize(value: str | None, token: str) -> None:
         value[len(prefix) :], token
     ):
         raise HTTPException(status_code=401, detail="runner.unauthorized")
-__all__ = ["app", "simulate_capacity_run"]
+__all__ = ["app"]

@@ -95,3 +95,19 @@ KMS/object/region 混沌、性能回归阻断、预测误差、单位成本守�
 - 专项结果：Migration `4 passed`，Capacity API/导航 `6 passed`，Runner `5 passed`，配置与部署 `15 passed`，PRD-107
   rollout `7 passed`，历史当前头兼容 `8 passed`，Console PRD-109..113 `25 passed`，Console lint `353 files`；完整命令、
   边界和未执行项见 `docs/testing/PRD-113-tests.md`。
+
+## 10. 2026-09-10 结果真实性修订
+
+重新核对后发现，上一节的 HTTP runner 仍调用模拟器，不能证明真实负载或混沌执行。
+编码前批次设计与两轮自审见 `S3-execution-evidence-correction-20260910.md`。
+HTTP 路径不再返回模拟成功，未接通真实执行器时返回固定 `runner.executor_unavailable`。
+模拟器仅保留于显式 test 环境的 test_loopback 路径，结果带 simulation 标识。
+
+v2 结果绑定 operation、object、场景 manifest 与稳定参数摘要，并校验完整结果摘要、
+百分位顺序、非空采样和固定 outcome。短期 permit 续期不改变执行参数绑定。
+Control 拒绝 HTTP 模拟结果、旧格式、跨执行结果及篡改结果；拒绝结果不能触发基线完成。
+HTTP 禁用环境代理和重定向，停止回执须绑定目标及不小于请求的 kill generation。
+接收回执不等于已证明外部负载停止，持久执行与停止/恢复证明仍需后续实现。
+
+专项记录见 `docs/testing/PRD-113-result-integrity-20260910.md`。本修订是防止错误验收，
+不代表真实压测、100+租户公平性、故障恢复或 72 小时长稳已交付。

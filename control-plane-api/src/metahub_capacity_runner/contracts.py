@@ -68,6 +68,10 @@ class CapacityRunnerRequest(RunnerModel):
 
 
 class CapacityRunnerResult(RunnerModel):
+    contract_version: Literal[2]
+    evidence_kind: Literal["measured", "simulation"]
+    execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     operation: Literal["load_test", "chaos"]
     object_id: str = Field(pattern=r"^(?:ltr|che)_[0-9a-f]{32}$")
     safe_outcome_code: str = Field(min_length=3, max_length=96)
@@ -119,6 +123,25 @@ class CapacityRunnerResult(RunnerModel):
             or any(value is not None for value in load_fields)
         ):
             raise ValueError("chaos result is invalid")
+        if self.operation == "load_test" and (
+            not self.object_id.startswith("ltr_")
+            or self.safe_outcome_code != "runner.load_completed"
+            or self.sample_count < 1
+            or not self.p50_ms <= self.p95_ms <= self.p99_ms
+        ):
+            raise ValueError("load result is inconsistent")
+        if self.operation == "chaos" and (
+            not self.object_id.startswith("che_")
+            or self.safe_outcome_code != (
+                "runner.chaos_objective_met"
+                if self.objective_met else "runner.chaos_objective_missed"
+            )
+        ):
+            raise ValueError("chaos result is inconsistent")
+        if not hmac.compare_digest(
+            self.result_sha256, result_digest(self.model_dump(mode="json", exclude_none=True))
+        ):
+            raise ValueError("result digest is invalid")
         return self
 
 
@@ -146,6 +169,26 @@ class CapacityKillResponse(RunnerModel):
     accepted: Literal[True]
     experiment_id: str = Field(pattern=r"^che_[0-9a-f]{32}$")
     kill_generation: int = Field(ge=1)
+
+
+def execution_digest(claims: CapacityPermitClaims) -> str:
+    return _digest(claims.model_dump(
+        mode="json", exclude={"issued_at", "expires_at"}, exclude_none=True
+    ))
+
+
+def result_digest(value: dict[str, object]) -> str:
+    return _digest({
+        key: item for key, item in value.items()
+        if key != "result_sha256" and item is not None
+    })
+
+
+def _digest(value: object) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def encode_signed(value: BaseModel, secret: str, *, domain: str) -> str:
@@ -185,4 +228,6 @@ __all__ = [
     "CapacityRunnerResult",
     "decode_signed",
     "encode_signed",
+    "execution_digest",
+    "result_digest",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -10,10 +11,12 @@ import httpx
 from metahub_capacity_runner.contracts import (
     CapacityKillClaims,
     CapacityKillRequest,
+    CapacityKillResponse,
     CapacityPermitClaims,
     CapacityRunnerRequest,
     CapacityRunnerResult,
     encode_signed,
+    execution_digest,
 )
 from metahub_capacity_runner.engine import simulate_capacity_run
 from metahub_shared.runtime.config import AppConfig
@@ -36,10 +39,21 @@ def execute_capacity_run(
             headers={"Authorization": f"Bearer {token}"},
             json=CapacityRunnerRequest(permit=permit).model_dump(mode="json"),
             timeout=float(getattr(config, "capacity_runner_http_timeout_seconds", 30)),
+            trust_env=False,
+            follow_redirects=False,
         )
         if response.status_code != 200:
             raise ApiError("capacity.runner_unavailable")
-        return CapacityRunnerResult.model_validate(response.json())
+        result = CapacityRunnerResult.model_validate(response.json())
+        if (
+            result.evidence_kind != "measured"
+            or result.operation != claims.operation
+            or not hmac.compare_digest(result.object_id, claims.object_id)
+            or not hmac.compare_digest(result.manifest_sha256, claims.manifest_sha256)
+            or not hmac.compare_digest(result.execution_sha256, execution_digest(claims))
+        ):
+            raise ApiError("capacity.runner_unavailable")
+        return result
     except ApiError:
         raise
     except (httpx.HTTPError, TypeError, ValueError):
@@ -65,8 +79,13 @@ def signal_capacity_kill(config: AppConfig, *, experiment_id: str, generation: i
             headers={"Authorization": f"Bearer {token}"},
             json=CapacityKillRequest(permit=permit).model_dump(mode="json"),
             timeout=min(5.0, float(getattr(config, "capacity_runner_http_timeout_seconds", 30))),
+            trust_env=False,
+            follow_redirects=False,
         )
         if response.status_code != 200:
+            raise ApiError("capacity.runner_unavailable")
+        accepted = CapacityKillResponse.model_validate(response.json())
+        if accepted.experiment_id != experiment_id or accepted.kill_generation < generation:
             raise ApiError("capacity.runner_unavailable")
     except ApiError:
         raise

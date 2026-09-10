@@ -154,7 +154,7 @@ async def test_runner_rejects_expired_future_and_unknown_catalog_permits() -> No
 
 
 @pytest.mark.anyio
-async def test_runner_returns_only_aggregate_metrics() -> None:
+async def test_runner_does_not_report_simulated_measurements_as_execution() -> None:
     claims = _claims("ltr_" + "5" * 32)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://runner"
@@ -164,16 +164,8 @@ async def test_runner_returns_only_aggregate_metrics() -> None:
             headers=_headers(),
             json={"permit": encode_signed(claims, SECRET, domain="run-permit")},
         )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["operation"] == "load_test"
-    assert payload["object_id"] == claims.object_id
-    assert payload["sample_count"] >= 100
-    assert payload["open_connection_delta"] == 0
-    assert payload["result_sha256"]
-    serialized = response.text.lower()
-    for forbidden in ("tenant_id", "url", "header", "body", "secret", "command"):
-        assert forbidden not in serialized
+    assert response.status_code == 503, response.text
+    assert response.json() == {"detail": "runner.executor_unavailable"}
 
 
 @pytest.mark.anyio
