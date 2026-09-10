@@ -198,7 +198,10 @@ def test_native_current_schema_real_backup_and_restore(native, cluster, store, m
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     configured = native.model_copy(update={"database_url": cluster + name})
     result = apply_migrations(configured.database_url, migrations_dir=ROOT / "infra/migrations")
-    assert result.applied[-1] == "0160"
+    assert result.applied[-1] == "0161"
+    rollback_last_migration(
+        configured.database_url, migrations_dir=ROOT / "infra/migrations", expected_version="0161"
+    )
     rollback_last_migration(
         configured.database_url, migrations_dir=ROOT / "infra/migrations", expected_version="0160"
     )
@@ -215,6 +218,9 @@ def test_native_current_schema_real_backup_and_restore(native, cluster, store, m
             "SET search_path TO pg_catalog, public"
         )
     apply_migrations(configured.database_url, migrations_dir=ROOT / "infra/migrations")
+    rollback_last_migration(
+        configured.database_url, migrations_dir=ROOT / "infra/migrations", expected_version="0161"
+    )
     rollback_last_migration(
         configured.database_url, migrations_dir=ROOT / "infra/migrations", expected_version="0160"
     )
@@ -233,7 +239,7 @@ def test_native_current_schema_real_backup_and_restore(native, cluster, store, m
     apply_seed_data(configured.database_url, seed_file=ROOT / "infra/seeds/default_seed.json")
     artifact = b.create_snapshot(configured, backup_type="full")
     proof = base.restore(configured, artifact)
-    assert proof.schema_head == "0160"
+    assert proof.schema_head == "0161"
     assert proof.consistency == artifact.consistency
     assert len(proof.consistency) > 50
     assert proof.tenant_owner_sample_count > 0

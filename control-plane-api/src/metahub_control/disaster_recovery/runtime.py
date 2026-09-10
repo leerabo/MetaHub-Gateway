@@ -84,8 +84,13 @@ def _run_handler(context: PlatformJobContext, payload: DisasterRecoveryRunInput)
             context.commit_effect(
                 "dr.failure",
                 {"run_id": payload.run_id, "outcome_code": outcome_code},
-                lambda connection: fail_run_in_transaction(
-                    connection, run_id=payload.run_id, outcome_code=outcome_code
+                lambda connection: _owned_effect(
+                    connection,
+                    context.lease.job_id,
+                    payload.run_id,
+                    lambda owned: fail_run_in_transaction(
+                        owned, run_id=payload.run_id, outcome_code=outcome_code
+                    ),
                 ),
             )
         except ApiError:
@@ -112,8 +117,21 @@ def _phase(
             "expected_epoch": payload.expected_epoch,
             "plan_manifest_sha256": payload.plan_manifest_sha256,
         },
-        apply,
+        lambda connection: _owned_effect(connection, context.lease.job_id, payload.run_id, apply),
     )
+
+
+def _owned_effect(connection, job_id: str, run_id: str, apply):
+    if (
+        connection.execute(
+            "SELECT 1 FROM disaster_recovery_runs "
+            "WHERE disaster_recovery_run_id=? AND platform_job_id=?",
+            (run_id, job_id),
+        ).fetchone()
+        is None
+    ):
+        raise ApiError("dr.run_conflict")
+    return apply(connection)
 
 
 register_job_handler(

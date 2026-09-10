@@ -42,6 +42,14 @@ from .models import (
     RegionInfo,
     RestoreEvidenceInfo,
 )
+from .recovery_binding import (
+    VERIFIED_BACKUP_SELECT,
+    bind_recovery_in_transaction,
+    bound_recovery_in_transaction,
+    latest_platform_backup,
+    require_recoverable_backup,
+    source_age,
+)
 
 _REGION_ID_RE = re.compile(r"^reg_[0-9a-f]{32}$")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
@@ -91,9 +99,7 @@ def get_dr_status(
                 control_rto_seconds=7200,
                 gateway_rto_seconds=600,
                 latest_recovery_age_seconds=age,
-                recovery_ready=age is not None
-                and age <= 900
-                and str(latest["schema_head"]) == "0103",
+                recovery_ready=age is not None and age <= 900,
             ),
             request_id=request_id,
             trace_id=trace_id,
@@ -122,7 +128,7 @@ def list_recovery_points(
         _require(actor, "platform.dr.read")
         now = _database_now(connection)
         rows = connection.execute(
-            _VERIFIED_BACKUP_SELECT
+            VERIFIED_BACKUP_SELECT
             + " ORDER BY backup.completed_at DESC,backup.backup_id DESC LIMIT 100"
         ).fetchall()
         items = tuple(_backup_projection(row, now) for row in rows)
@@ -211,7 +217,9 @@ def cast_dr_vote(
         if run_kind == "failover" and str(plan["source_region_id"]) != region_id:
             raise ApiError("dr.plan_not_found")
         source = connection.execute(
-            "SELECT * FROM platform_regions WHERE region_id=?", (plan["source_region_id"],)
+            "SELECT * FROM platform_regions WHERE region_id=?"
+            + (" FOR UPDATE" if getattr(connection, "backend", "sqlite") == "postgresql" else ""),
+            (plan["source_region_id"],),
         ).fetchone()
         target = connection.execute(
             "SELECT * FROM platform_regions WHERE region_id=?", (plan["target_region_id"],)
@@ -272,7 +280,7 @@ def cast_dr_vote(
                 is not None
             ):
                 raise ApiError("dr.run_conflict")
-            _persist_latest_recovery_point(connection, plan, now)
+            recovery = _persist_latest_recovery_point(connection, plan, now)
             run_id = str(active["disaster_recovery_run_id"])
             _approval(
                 connection, run_id, actor, "security_review", str(plan["manifest_sha256"]), now
@@ -295,6 +303,13 @@ def cast_dr_vote(
                 idempotency_key=f"dr-run:{run_id}:{active['fencing_epoch']}",
                 request_id=request_id,
                 trace_id=trace_id,
+            )
+            bind_recovery_in_transaction(
+                connection,
+                run={**dict(active), "rpo_seconds": int(plan["rpo_seconds"])},
+                recovery=recovery,
+                job_id=job_id,
+                now=now,
             )
             changed = _changed_time(now, active["updated_at"])
             updated = connection.execute(
@@ -399,15 +414,9 @@ def precheck_run_in_transaction(
     if source is None or target is None:
         raise ApiError("dr.region_not_found")
     _validate_plan_regions(row, source, target, expected_epoch)
-    recovery = connection.execute(
-        "SELECT * FROM recovery_points ORDER BY source_created_at DESC LIMIT 1"
-    ).fetchone()
+    recovery = bound_recovery_in_transaction(connection, run=row)
     now = _database_now(connection)
-    if (
-        recovery is None
-        or str(recovery["schema_head"]) != "0103"
-        or _age_seconds(recovery["source_created_at"], now) > int(row["rpo_seconds"])
-    ):
+    if source_age(recovery["source_created_at"], now) > int(row["rpo_seconds"]):
         raise ApiError("dr.recovery_point_unavailable")
     _transition_run(connection, row, "prechecking", now, started_at=now)
 
@@ -416,6 +425,7 @@ def quiesce_run_in_transaction(connection, *, run_id: str) -> None:
     row = _runtime_row(connection, run_id)
     if str(row["status"]) != "prechecking":
         raise ApiError("dr.run_conflict")
+    bound_recovery_in_transaction(connection, run=row)
     _transition_run(connection, row, "running", _database_now(connection))
 
 
@@ -423,17 +433,15 @@ def validate_restore_in_transaction(connection, *, run_id: str) -> None:
     row = _runtime_row(connection, run_id)
     if str(row["status"]) != "running":
         raise ApiError("dr.run_conflict")
-    recovery = connection.execute(
-        "SELECT * FROM recovery_points ORDER BY source_created_at DESC LIMIT 1"
-    ).fetchone()
-    if recovery is None or str(recovery["integrity_status"]) != "verified":
-        raise ApiError("dr.recovery_point_unavailable")
+    bound_recovery_in_transaction(connection, run=row)
 
 
 def route_run_in_transaction(connection, config: AppConfig, *, run_id: str) -> None:
     row = _runtime_row(connection, run_id)
     if str(row["status"]) != "running":
         raise ApiError("dr.run_conflict")
+    bound_recovery_in_transaction(connection, run=row)
+    _revalidate_approvals(connection, run_id, str(row["plan_manifest_sha256"]))
     if str(row["run_kind"]) == "drill":
         return
     source = connection.execute(
@@ -466,9 +474,7 @@ def route_run_in_transaction(connection, config: AppConfig, *, run_id: str) -> N
              AND failover_cell.region_code=?""",
         (source["region_code"], target["region_code"]),
     ).fetchall()
-    target_group = residency_group_for_region_in_transaction(
-        connection, str(target["region_code"])
-    )
+    target_group = residency_group_for_region_in_transaction(connection, str(target["region_code"]))
     for placement in placements:
         policy = active_governance_policy_in_transaction(
             connection,
@@ -534,11 +540,7 @@ def verify_run_in_transaction(connection, *, run_id: str) -> None:
     row = _runtime_row(connection, run_id)
     if str(row["status"]) != "running":
         raise ApiError("dr.run_conflict")
-    recovery = connection.execute(
-        "SELECT * FROM recovery_points ORDER BY source_created_at DESC LIMIT 1"
-    ).fetchone()
-    if recovery is None:
-        raise ApiError("dr.recovery_point_unavailable")
+    recovery = bound_recovery_in_transaction(connection, run=row)
     now = _database_now(connection)
     started = _time(row["started_at"])
     duration = max(0, int((now - started).total_seconds()))
@@ -592,6 +594,7 @@ def complete_run_in_transaction(connection, *, run_id: str) -> None:
     row = _runtime_row(connection, run_id)
     if str(row["status"]) != "verifying":
         raise ApiError("dr.run_conflict")
+    bound_recovery_in_transaction(connection, run=row)
     now = _database_now(connection)
     _transition_run(
         connection,
@@ -686,12 +689,7 @@ def fail_run_in_transaction(connection, *, run_id: str, outcome_code: str) -> No
 
 def _persist_latest_recovery_point(connection, plan, now: datetime):
     backup = _latest_verified_backup(connection)
-    if (
-        backup is None
-        or str(backup["schema_head"]) != "0103"
-        or _backup_age(backup, now) > int(plan["rpo_seconds"])
-    ):
-        raise ApiError("dr.recovery_point_unavailable")
+    require_recoverable_backup(connection, backup, now=now, rpo_seconds=int(plan["rpo_seconds"]))
     existing = connection.execute(
         "SELECT * FROM recovery_points WHERE backup_id=?", (backup["backup_id"],)
     ).fetchone()
@@ -714,7 +712,7 @@ def _persist_latest_recovery_point(connection, plan, now: datetime):
             backup["manifest_sha256"],
             _digest_text(str(backup["kms_key_version"])),
             backup["schema_head"],
-            backup["completed_at"],
+            backup["created_at"],
             _db_time(now),
         ),
     )
@@ -1053,20 +1051,17 @@ def _backup_projection(row, now: datetime) -> RecoveryPointInfo:
         schema_head=row["schema_head"],
         integrity_status="verified",
         manifest_sha256=row["manifest_sha256"],
-        source_created_at=_time(row["completed_at"]),
+        source_created_at=_time(row["created_at"]),
         age_seconds=_backup_age(row, now),
     )
 
 
 def _latest_verified_backup(connection):
-    return connection.execute(
-        _VERIFIED_BACKUP_SELECT
-        + " AND backup.scope_kind='platform' ORDER BY backup.completed_at DESC LIMIT 1"
-    ).fetchone()
+    return latest_platform_backup(connection)
 
 
 def _backup_age(row, now: datetime) -> int:
-    return _age_seconds(row["completed_at"], now)
+    return source_age(row["created_at"], now)
 
 
 def _age_seconds(value: object, now: datetime) -> int:
@@ -1161,16 +1156,6 @@ JOIN failover_plans plan ON plan.failover_plan_id=run.failover_plan_id
 JOIN platform_regions source ON source.region_id=run.source_region_id
 JOIN platform_regions target ON target.region_id=run.target_region_id
 """
-
-_VERIFIED_BACKUP_SELECT = """
-SELECT backup.* FROM backup_sets backup
-JOIN backup_restore_verifications verification ON verification.backup_id=backup.backup_id
-  AND verification.status='passed' AND verification.integrity_status='ok'
-  AND verification.manifest_sha256=backup.manifest_sha256
-WHERE backup.status='ready' AND backup.manifest_sha256 IS NOT NULL
-  AND backup.kms_key_version IS NOT NULL AND backup.schema_head IS NOT NULL
-"""
-
 
 __all__ = [
     "cast_dr_vote",
