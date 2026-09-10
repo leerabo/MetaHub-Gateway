@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +13,7 @@ from metahub_capacity_runner.contracts import (
     CapacityPermitClaims,
     encode_signed,
 )
+from metahub_capacity_runner.store import RunnerStore
 
 TOKEN = "runner-token-" + "t" * 32
 SECRET = "runner-permit-" + "s" * 32
@@ -67,12 +69,8 @@ async def test_runner_requires_independent_credentials_and_valid_permit(
 ) -> None:
     object_id = "ltr_" + "1" * 32
     permit = encode_signed(_claims(object_id), SECRET, domain="run-permit")
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://runner"
-    ) as client:
-        unauthorized = await client.post(
-            "/internal/capacity/runs", json={"permit": permit}
-        )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
+        unauthorized = await client.post("/internal/capacity/runs", json={"permit": permit})
         assert unauthorized.status_code == 401
         assert unauthorized.json()["detail"] == "runner.unauthorized"
 
@@ -114,16 +112,12 @@ async def test_runner_rejects_expired_future_and_unknown_catalog_permits() -> No
             expires_at=now + timedelta(minutes=5),
         ),
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://runner"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
         for claims in cases:
             response = await client.post(
                 "/internal/capacity/runs",
                 headers=_headers(),
-                json={
-                    "permit": encode_signed(claims, SECRET, domain="run-permit")
-                },
+                json={"permit": encode_signed(claims, SECRET, domain="run-permit")},
             )
             assert response.status_code == 401
             assert response.json()["detail"] == "runner.permit_invalid"
@@ -143,11 +137,7 @@ async def test_runner_rejects_expired_future_and_unknown_catalog_permits() -> No
         response = await client.post(
             "/internal/capacity/runs",
             headers=_headers(),
-            json={
-                "permit": encode_signed(
-                    mismatched_manifest, SECRET, domain="run-permit"
-                )
-            },
+            json={"permit": encode_signed(mismatched_manifest, SECRET, domain="run-permit")},
         )
         assert response.status_code == 422
         assert response.json()["detail"] == "runner.scenario_invalid"
@@ -156,9 +146,7 @@ async def test_runner_rejects_expired_future_and_unknown_catalog_permits() -> No
 @pytest.mark.anyio
 async def test_runner_does_not_report_simulated_measurements_as_execution() -> None:
     claims = _claims("ltr_" + "5" * 32)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://runner"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
         response = await client.post(
             "/internal/capacity/runs",
             headers=_headers(),
@@ -169,7 +157,10 @@ async def test_runner_does_not_report_simulated_measurements_as_execution() -> N
 
 
 @pytest.mark.anyio
-async def test_kill_generation_is_idempotent_and_fences_old_permits() -> None:
+async def test_kill_generation_is_idempotent_and_fences_old_permits(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        app.state, "executor", SimpleNamespace(store=RunnerStore(tmp_path)), raising=False
+    )
     experiment_id = "che_" + "6" * 32
     run_claims = _claims(
         experiment_id,
@@ -186,9 +177,7 @@ async def test_kill_generation_is_idempotent_and_fences_old_permits() -> None:
     )
     run_permit = encode_signed(run_claims, SECRET, domain="run-permit")
     kill_permit = encode_signed(kill_claims, SECRET, domain="kill-permit")
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://runner"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
         first = await client.post(
             f"/internal/capacity/runs/{experiment_id}/kill",
             headers=_headers(),
@@ -221,15 +210,11 @@ async def test_kill_permit_is_bound_to_path_scope() -> None:
         issued_at=now,
         expires_at=now + timedelta(seconds=30),
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://runner"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
         response = await client.post(
             f"/internal/capacity/runs/{path_id}/kill",
             headers=_headers(),
-            json={
-                "permit": encode_signed(claims, SECRET, domain="kill-permit")
-            },
+            json={"permit": encode_signed(claims, SECRET, domain="kill-permit")},
         )
     assert response.status_code == 409
     assert response.json()["detail"] == "runner.scope_conflict"

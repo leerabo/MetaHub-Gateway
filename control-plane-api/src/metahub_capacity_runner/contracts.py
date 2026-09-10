@@ -41,7 +41,9 @@ class CapacityPermitClaims(RunnerModel):
     @model_validator(mode="after")
     def validate_operation(self) -> CapacityPermitClaims:
         if (
-            self.expires_at <= self.issued_at
+            self.issued_at.utcoffset() is None
+            or self.expires_at.utcoffset() is None
+            or self.expires_at <= self.issued_at
             or self.expires_at - self.issued_at > timedelta(hours=1)
         ):
             raise ValueError("permit expiry is invalid")
@@ -132,9 +134,11 @@ class CapacityRunnerResult(RunnerModel):
             raise ValueError("load result is inconsistent")
         if self.operation == "chaos" and (
             not self.object_id.startswith("che_")
-            or self.safe_outcome_code != (
+            or self.safe_outcome_code
+            != (
                 "runner.chaos_objective_met"
-                if self.objective_met else "runner.chaos_objective_missed"
+                if self.objective_met
+                else "runner.chaos_objective_missed"
             )
         ):
             raise ValueError("chaos result is inconsistent")
@@ -154,11 +158,52 @@ class CapacityKillClaims(RunnerModel):
     @model_validator(mode="after")
     def validate_expiry(self) -> CapacityKillClaims:
         if (
-            self.expires_at <= self.issued_at
+            self.issued_at.utcoffset() is None
+            or self.expires_at.utcoffset() is None
+            or self.expires_at <= self.issued_at
             or self.expires_at - self.issued_at > timedelta(seconds=60)
         ):
             raise ValueError("kill permit expiry is invalid")
         return self
+
+
+class CapacityExecutionInfo(RunnerModel):
+    object_id: str = Field(pattern=r"^(?:ltr|che)_[0-9a-f]{32}$")
+    execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: Literal[
+        "queued", "running", "stopping", "succeeded", "failed", "cancelled", "interrupted"
+    ]
+    safe_outcome_code: str = Field(pattern=r"^runner\.[a-z0-9_]{2,80}$")
+    sample_count: int = Field(ge=0)
+    elapsed_ms: int = Field(ge=0)
+    stop_scope: Literal["runner_requests"] = "runner_requests"
+    result: CapacityRunnerResult | None = None
+
+    @model_validator(mode="after")
+    def validate_terminal(self):
+        if (self.state == "succeeded") != (self.result is not None):
+            raise ValueError("execution result state is invalid")
+        if self.result is not None and (
+            self.result.object_id != self.object_id
+            or self.result.execution_sha256 != self.execution_sha256
+            or self.result.evidence_kind != "measured"
+            or (
+                self.result.operation == "load_test"
+                and self.result.sample_count != self.sample_count
+            )
+        ):
+            raise ValueError("execution result binding is invalid")
+        return self
+
+
+class CapacityResourceSample(RunnerModel):
+    process_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sampled_at: datetime
+    cpu_time_ms: int = Field(ge=0)
+    memory_rss_bytes: int = Field(ge=0)
+    open_connections: int = Field(ge=0)
+    handle_count: int = Field(ge=0)
+    processor_count: int = Field(ge=1, le=4096)
 
 
 class CapacityKillRequest(RunnerModel):
@@ -172,16 +217,15 @@ class CapacityKillResponse(RunnerModel):
 
 
 def execution_digest(claims: CapacityPermitClaims) -> str:
-    return _digest(claims.model_dump(
-        mode="json", exclude={"issued_at", "expires_at"}, exclude_none=True
-    ))
+    return _digest(
+        claims.model_dump(mode="json", exclude={"issued_at", "expires_at"}, exclude_none=True)
+    )
 
 
 def result_digest(value: dict[str, object]) -> str:
-    return _digest({
-        key: item for key, item in value.items()
-        if key != "result_sha256" and item is not None
-    })
+    return _digest(
+        {key: item for key, item in value.items() if key != "result_sha256" and item is not None}
+    )
 
 
 def _digest(value: object) -> str:

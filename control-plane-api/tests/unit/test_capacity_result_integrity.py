@@ -78,12 +78,15 @@ def test_bound_result_roundtrip_and_explicit_network_policy(monkeypatch, claims,
     assert result.execution_sha256 == execution_digest(claims)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("object_id", "ltr_" + "b" * 32),
-    ("manifest_sha256", "f" * 64),
-    ("execution_sha256", "f" * 64),
-    ("evidence_kind", "simulation"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("object_id", "ltr_" + "b" * 32),
+        ("manifest_sha256", "f" * 64),
+        ("execution_sha256", "f" * 64),
+        ("evidence_kind", "simulation"),
+    ],
+)
 def test_control_rejects_other_execution_even_with_valid_digest(
     monkeypatch, claims, config, field, value
 ):
@@ -96,16 +99,19 @@ def test_control_rejects_other_execution_even_with_valid_digest(
     assert rejected.value.code == "capacity.runner_unavailable"
 
 
-@pytest.mark.parametrize("field,value", [
-    ("p50_ms", 9999),
-    ("p95_ms", 9999),
-    ("sample_count", 0),
-    ("sample_count", True),
-    ("error_rate_bps", 10001),
-    ("safe_outcome_code", "runner.arbitrary_text"),
-    ("object_id", "che_" + "a" * 32),
-    ("contract_version", 1),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("p50_ms", 9999),
+        ("p95_ms", 9999),
+        ("sample_count", 0),
+        ("sample_count", True),
+        ("error_rate_bps", 10001),
+        ("safe_outcome_code", "runner.arbitrary_text"),
+        ("object_id", "che_" + "a" * 32),
+        ("contract_version", 1),
+    ],
+)
 def test_result_invariants_are_checked_even_with_valid_digest(claims, field, value):
     payload = _fixture_result(claims)
     payload[field] = value
@@ -114,10 +120,17 @@ def test_result_invariants_are_checked_even_with_valid_digest(claims, field, val
         CapacityRunnerResult.model_validate(payload)
 
 
-@pytest.mark.parametrize("field", [
-    "p95_ms", "sample_count", "safe_outcome_code", "execution_sha256", "evidence_kind",
-    "result_sha256",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "p95_ms",
+        "sample_count",
+        "safe_outcome_code",
+        "execution_sha256",
+        "evidence_kind",
+        "result_sha256",
+    ],
+)
 def test_result_checksum_covers_metrics_outcome_and_provenance(claims, field):
     payload = _fixture_result(claims)
     payload[field] = payload[field] + 1 if isinstance(payload[field], int) else "f" * 64
@@ -125,9 +138,16 @@ def test_result_checksum_covers_metrics_outcome_and_provenance(claims, field):
         CapacityRunnerResult.model_validate(payload)
 
 
-@pytest.mark.parametrize("field", [
-    "contract_version", "evidence_kind", "execution_sha256", "manifest_sha256", "result_sha256",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "contract_version",
+        "evidence_kind",
+        "execution_sha256",
+        "manifest_sha256",
+        "result_sha256",
+    ],
+)
 def test_legacy_or_incomplete_result_is_not_accepted(monkeypatch, claims, config, field):
     payload = _fixture_result(claims)
     del payload[field]
@@ -137,20 +157,30 @@ def test_legacy_or_incomplete_result_is_not_accepted(monkeypatch, claims, config
     assert rejected.value.code == "capacity.runner_unavailable"
 
 
-@pytest.mark.parametrize("field,value", [
-    ("target_rps", 101), ("duration_seconds", 20), ("environment_class", "production"),
-    ("region_code", "cn-south-1"), ("kill_generation", 1), ("synthetic_tenant_count", 99),
-    ("scenario_code", "gateway-soak"), ("manifest_sha256", "f" * 64),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("target_rps", 101),
+        ("duration_seconds", 20),
+        ("environment_class", "production"),
+        ("region_code", "cn-south-1"),
+        ("kill_generation", 1),
+        ("synthetic_tenant_count", 99),
+        ("scenario_code", "gateway-soak"),
+        ("manifest_sha256", "f" * 64),
+    ],
+)
 def test_execution_binding_covers_effective_parameters(claims, field, value):
     assert execution_digest(claims) != execution_digest(claims.model_copy(update={field: value}))
 
 
 def test_execution_binding_survives_permit_renewal(claims):
-    renewed = claims.model_copy(update={
-        "issued_at": claims.issued_at + timedelta(seconds=30),
-        "expires_at": claims.expires_at + timedelta(seconds=30),
-    })
+    renewed = claims.model_copy(
+        update={
+            "issued_at": claims.issued_at + timedelta(seconds=30),
+            "expires_at": claims.expires_at + timedelta(seconds=30),
+        }
+    )
     assert execution_digest(claims) == execution_digest(renewed)
 
 
@@ -170,12 +200,15 @@ def test_test_loopback_is_explicitly_marked(claims, config):
     assert result.result_sha256 == result_digest(result.model_dump(mode="json"))
 
 
-@pytest.mark.parametrize("payload", [
-    {},
-    {"accepted": False, "experiment_id": "che_" + "a" * 32, "kill_generation": 2},
-    {"accepted": True, "experiment_id": "che_" + "b" * 32, "kill_generation": 2},
-    {"accepted": True, "experiment_id": "che_" + "a" * 32, "kill_generation": 1},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"accepted": False, "experiment_id": "che_" + "a" * 32, "kill_generation": 2},
+        {"accepted": True, "experiment_id": "che_" + "b" * 32, "kill_generation": 2},
+        {"accepted": True, "experiment_id": "che_" + "a" * 32, "kill_generation": 1},
+    ],
+)
 def test_kill_requires_bound_positive_current_acknowledgement(monkeypatch, config, payload):
     _http_result(monkeypatch, payload)
     with pytest.raises(ApiError) as rejected:
@@ -184,9 +217,14 @@ def test_kill_requires_bound_positive_current_acknowledgement(monkeypatch, confi
 
 
 def test_kill_accepts_current_or_newer_fence(monkeypatch, config):
-    _http_result(monkeypatch, {
-        "accepted": True, "experiment_id": "che_" + "a" * 32, "kill_generation": 3,
-    })
+    _http_result(
+        monkeypatch,
+        {
+            "accepted": True,
+            "experiment_id": "che_" + "a" * 32,
+            "kill_generation": 3,
+        },
+    )
     runner_client.signal_capacity_kill(config, experiment_id="che_" + "a" * 32, generation=2)
 
 
@@ -207,7 +245,8 @@ def test_rejected_result_never_reaches_baseline_or_rollout_completion(
     monkeypatch.setattr(runtime, "_load_claims", lambda *_args: claims)
     monkeypatch.setattr(runtime, "start_load_test_in_transaction", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        runtime, "fail_load_test_in_transaction",
+        runtime,
+        "fail_load_test_in_transaction",
         lambda *_args, **kwargs: failures.append(kwargs["outcome_code"]),
     )
 
@@ -228,3 +267,97 @@ def test_rejected_result_never_reaches_baseline_or_rollout_completion(
         runtime._capacity_handler(context, job)
     assert effects == ["capacity.load.start", "capacity.load_test.failure"]
     assert failures == ["capacity.runner_unavailable"]
+
+
+def _execution_info(claims, *, state="running", result=None):
+    return {
+        "object_id": claims.object_id,
+        "execution_sha256": execution_digest(claims),
+        "state": state,
+        "safe_outcome_code": f"runner.{state}",
+        "sample_count": result["sample_count"] if result is not None else 0,
+        "elapsed_ms": 10000 if result is not None else 0,
+        "result": result,
+    }
+
+
+@pytest.mark.parametrize(
+    "action,state,status",
+    [
+        ("submit", "queued", 202),
+        ("submit", "running", 202),
+        ("status", "running", 200),
+        ("status", "interrupted", 200),
+        ("status", "failed", 200),
+        ("cancel", "stopping", 200),
+        ("cancel", "cancelled", 200),
+    ],
+)
+def test_async_client_preserves_pending_and_terminal_states(
+    claims, config, monkeypatch, action, state, status
+):
+    payload = _execution_info(claims, state=state)
+    _http_result(monkeypatch, payload, status=status)
+    info = runner_client.capacity_execution(config, claims, action=action)
+    assert info.state == state
+    assert info.result is None
+
+
+@pytest.mark.parametrize(
+    "action,state,status",
+    [
+        ("submit", "running", 200),
+        ("submit", "failed", 202),
+        ("status", "running", 202),
+        ("cancel", "running", 200),
+        ("cancel", "queued", 200),
+    ],
+)
+def test_async_client_rejects_contradictory_http_or_cancel_state(
+    claims, config, monkeypatch, action, state, status
+):
+    _http_result(monkeypatch, _execution_info(claims, state=state), status=status)
+    with pytest.raises(ApiError) as rejected:
+        runner_client.capacity_execution(config, claims, action=action)
+    assert rejected.value.code == "capacity.runner_unavailable"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("object_id", "ltr_" + "b" * 32),
+        ("execution_sha256", "f" * 64),
+        ("result", {"unexpected": "body"}),
+        ("state", "succeeded"),
+        ("elapsed_ms", -1),
+        ("sample_count", True),
+    ],
+)
+def test_async_status_is_bound_and_strict(claims, config, monkeypatch, field, value):
+    payload = _execution_info(claims)
+    payload[field] = value
+    _http_result(monkeypatch, payload)
+    with pytest.raises(ApiError) as rejected:
+        runner_client.capacity_execution(config, claims, action="status")
+    assert rejected.value.code == "capacity.runner_unavailable"
+
+
+def test_async_result_envelope_checks_checksum_and_counts(claims, config, monkeypatch):
+    result = _fixture_result(claims)
+    payload = _execution_info(claims, state="succeeded", result=result)
+    _http_result(monkeypatch, payload)
+    info = runner_client.capacity_execution(config, claims, action="status")
+    assert info.result.result_sha256 == result["result_sha256"]
+    payload["sample_count"] -= 1
+    _http_result(monkeypatch, payload)
+    with pytest.raises(ApiError) as rejected:
+        runner_client.capacity_execution(config, claims, action="status")
+    assert rejected.value.code == "capacity.runner_unavailable"
+
+
+@pytest.mark.parametrize("action", ["status", "cancel"])
+def test_async_status_or_cancel_rejects_bare_result(claims, config, monkeypatch, action):
+    _http_result(monkeypatch, _fixture_result(claims))
+    with pytest.raises(ApiError) as rejected:
+        runner_client.capacity_execution(config, claims, action=action)
+    assert rejected.value.code == "capacity.runner_unavailable"

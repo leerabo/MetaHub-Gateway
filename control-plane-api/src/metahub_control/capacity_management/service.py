@@ -731,14 +731,29 @@ def complete_load_test_in_transaction(
         (row["service_code"], row["scenario_code"], row["environment_class"]),
     ).fetchone()
     sample_count = int(result["sample_count"])
+    service = connection.execute(
+        "SELECT slo_p95_ms FROM capacity_service_states WHERE service_code=? AND region_code=?",
+        (row["service_code"], row["region_code"]),
+    ).fetchone()
+    healthy = (
+        service is not None
+        and int(result["p95_ms"]) <= int(service["slo_p95_ms"])
+        and int(result["error_rate_bps"]) <= 100
+        and int(result["throughput_rps_milli"]) * 100 >= int(row["target_rps"]) * 1000 * 80
+        and int(result["fairness_jain_millionths"]) >= 950_000
+        and result["controlled_degradation"] is True
+    )
     if baseline is None:
-        regression = "no_baseline" if sample_count >= 100 else "insufficient_confidence"
+        regression = (
+            "no_baseline" if sample_count >= 100 and healthy else "insufficient_confidence"
+        )
     elif sample_count < 100:
         regression = "insufficient_confidence"
     else:
         regression = (
             "regressed"
-            if int(result["p95_ms"]) * 100 > int(baseline["p95_ms"]) * 120
+            if not healthy
+            or int(result["p95_ms"]) * 100 > int(baseline["p95_ms"]) * 120
             or int(result["error_rate_bps"]) > int(baseline["error_rate_bps"]) + 100
             or int(result["throughput_rps_milli"]) * 100
             < int(baseline["throughput_rps_milli"]) * 80
@@ -784,7 +799,7 @@ def complete_load_test_in_transaction(
             run_id,
         ),
     )
-    if baseline is None and sample_count >= 100:
+    if regression == "no_baseline":
         baseline_id = _id("pbl_")
         connection.execute(
             """INSERT INTO performance_baselines(

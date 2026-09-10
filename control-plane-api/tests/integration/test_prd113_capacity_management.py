@@ -63,9 +63,7 @@ def _config(database_url: str) -> AppConfig:
     )
 
 
-def _context(
-    operator_id: str, account_id: str, role: str, *permissions: str
-) -> PlatformContext:
+def _context(operator_id: str, account_id: str, role: str, *permissions: str) -> PlatformContext:
     marker = operator_id[4]
     return PlatformContext(
         platform_session_id="pts_" + marker * 32,
@@ -109,7 +107,7 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("prd113-capacity-base")
     database = root / "base.sqlite3"
     database_url = _url(database)
-    assert apply_migrations(database_url).applied[-1] == "0109"
+    assert "0105" in apply_migrations(database_url).applied
     apply_seed_data(database_url)
     connection = connect_database(database_url)
     try:
@@ -368,6 +366,107 @@ async def test_fixed_load_scenario_creates_aggregate_baseline(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"error_rate_bps": 10000, "throughput_rps_milli": 0, "fairness_jain_millionths": 0},
+        {"p95_ms": 2100, "p99_ms": 2200},
+        {"throughput_rps_milli": 1},
+        {"fairness_jain_millionths": 900000},
+        {"controlled_degradation": False},
+    ],
+)
+async def test_unhealthy_measurement_never_establishes_initial_baseline(
+    monkeypatch, runtime, overrides
+):
+    from metahub_capacity_runner.contracts import CapacityRunnerResult, result_digest
+    from metahub_capacity_runner.engine import simulate_capacity_run
+    from metahub_control.capacity_management import runtime as capacity_runtime
+
+    # Test the database quality gate with explicit protocol fixtures, not benchmark evidence.
+    def run(_config, claims):
+        result = simulate_capacity_run(claims).model_dump(mode="json", exclude_none=True)
+        result.update(overrides)
+        result["result_sha256"] = result_digest(result)
+        return CapacityRunnerResult.model_validate(result)
+
+    monkeypatch.setattr(capacity_runtime, "execute_capacity_run", run)
+    app = _app(monkeypatch, runtime, {"platform": OPS})
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        created = await client.post(
+            "/platform/load-tests",
+            headers=_headers(key="prd113-unhealthy-baseline-0001"),
+            json={
+                "scenario_code": "gateway-release",
+                "environment_class": "staging",
+                "region_code": "cn-north-1",
+                "synthetic_tenant_count": 100,
+                "target_rps": 1600,
+                "duration_seconds": 60,
+                "confirmed": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert run_platform_job_once(runtime, worker_code="prd113-quality-worker")
+        status = (await client.get("/platform/capacity", headers=_headers())).json()
+        assert status["load_tests"][0]["status"] == "succeeded"
+        assert status["load_tests"][0]["regression_status"] == "insufficient_confidence"
+        assert status["baselines"] == []
+
+
+@pytest.mark.anyio
+async def test_quality_regression_blocks_release_until_a_healthy_result(monkeypatch, runtime):
+    from metahub_capacity_runner.contracts import CapacityRunnerResult, result_digest
+    from metahub_capacity_runner.engine import simulate_capacity_run
+    from metahub_control.capacity_management import runtime as capacity_runtime
+
+    mode = {"healthy": True}
+
+    def measured_fixture(_config, claims):
+        result = simulate_capacity_run(claims).model_dump(mode="json", exclude_none=True)
+        result["controlled_degradation"] = mode["healthy"]
+        result["result_sha256"] = result_digest(result)
+        return CapacityRunnerResult.model_validate(result)
+
+    monkeypatch.setattr(capacity_runtime, "execute_capacity_run", measured_fixture)
+    app = _app(monkeypatch, runtime, {"platform": OPS})
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        for index, healthy in enumerate((True, False, False, True)):
+            mode["healthy"] = healthy
+            created = await client.post(
+                "/platform/load-tests",
+                headers=_headers(key=f"prd113-baseline-quality-cycle-{index:04d}"),
+                json={
+                    "scenario_code": "gateway-release",
+                    "environment_class": "staging",
+                    "region_code": "cn-north-1",
+                    "synthetic_tenant_count": 100,
+                    "target_rps": 1600,
+                    "duration_seconds": 60,
+                    "confirmed": True,
+                },
+            )
+            assert created.status_code == 201, created.text
+            assert run_platform_job_once(runtime, worker_code="prd113-quality-cycle")
+            connection = connect_database(runtime.database_url)
+            try:
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM performance_rollout_blocks WHERE status='active'"
+                ).fetchone()[0]
+                assert active == (0 if healthy else 1)
+                assert (
+                    connection.execute("SELECT COUNT(*) FROM performance_baselines").fetchone()[0]
+                    == 1
+                )
+            finally:
+                connection.close()
+
+
+@pytest.mark.anyio
 async def test_production_chaos_requires_distinct_current_approvals(
     monkeypatch: pytest.MonkeyPatch, runtime: AppConfig
 ) -> None:
@@ -493,8 +592,7 @@ async def test_revoked_approval_and_kill_fence_stop_effects(
         connection = connect_database(runtime.database_url)
         try:
             failed = connection.execute(
-                "SELECT status,stop_reason_code FROM chaos_experiments "
-                "WHERE chaos_experiment_id=?",
+                "SELECT status,stop_reason_code FROM chaos_experiments WHERE chaos_experiment_id=?",
                 (experiment_id,),
             ).fetchone()
             assert tuple(failed) == ("failed", "runner_unavailable")

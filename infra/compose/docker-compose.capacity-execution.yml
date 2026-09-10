@@ -1,0 +1,28 @@
+# Enable only with a reviewed isolated target configuration and the durable Control poller.
+services:
+  capacity-runner:
+    environment:
+      METAHUB_CAPACITY_RUNNER_SETTINGS_FILE: /run/metahub-capacity/settings.json
+    volumes:
+      - capacity-execution-state:/var/lib/metahub-capacity
+      - type: bind
+        source: ${METAHUB_CAPACITY_CONFIGURATION_DIRECTORY:?set an isolated capacity configuration directory}
+        target: /run/metahub-capacity
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - capacity-test-targets
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/ready', timeout=3).read()"
+
+volumes:
+  capacity-execution-state:
+
+networks:
+  capacity-test-targets:
+    internal: true
