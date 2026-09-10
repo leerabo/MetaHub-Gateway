@@ -240,7 +240,7 @@ def test_result_rejects_contradictory_status_proof_and_stop(config, store, tmp_p
         ("stop_confirmed", False),
         ("coherent_failure", None),
         ("missing_result", None),
-        ("invalid_json", "sensitive-journal-corruption"),
+        pytest.param("invalid_json", "sensitive-journal-corruption", id="invalid-json"),
     ],
 )
 def test_corrupted_result_is_rejected_on_read_replay_and_cancel(

@@ -214,3 +214,30 @@ def test_native_cancel_during_pg_restore_stops_child_and_database_backend(
     assert result.status == "cancelled" and result.stop_confirmed and result.proof is None
     assert len(children) == 1 and children[0].poll() is not None
     assert inspect_target(cluster, "mh_restore_" + request.execution_id[4:]) == (False, 0)
+
+
+def test_native_registration_creates_no_database_until_dispatch(native, cluster, store, tmp_path):
+    request, _ = base.prepare(native, store)
+    executor = e.RestoreExecutor(tmp_path / "registered")
+    assert executor.register(native, request, postgres_admin_url=cluster + "postgres") is None
+    assert inspect_target(cluster, "mh_restore_" + request.execution_id[4:]) is None
+    restarted = e.RestoreExecutor(executor.directory)
+    result = restarted.execute(native, request, postgres_admin_url=cluster + "postgres")
+    assert result.status == "verified"
+    assert inspect_target(cluster, "mh_restore_" + request.execution_id[4:]) == (False, 0)
+
+
+def test_native_cancelled_registration_never_connects_to_target(
+    native, cluster, store, tmp_path, monkeypatch
+):
+    request, _ = base.prepare(native, store)
+    executor = e.RestoreExecutor(tmp_path / "registered")
+    unreachable = "postgresql://s3_restore@127.0.0.1:1/postgres"
+    monkeypatch.setattr(
+        PostgresRestoreTarget, "__enter__", lambda *_: pytest.fail("Cancelled target connection")
+    )
+    executor.register(native, request, postgres_admin_url=unreachable, cancel_requested=True)
+    restarted = e.RestoreExecutor(executor.directory)
+    result = restarted.execute(native, request, postgres_admin_url=unreachable)
+    assert result.status == "cancelled" and result.stop_confirmed and result.proof is None
+    assert inspect_target(cluster, "mh_restore_" + request.execution_id[4:]) is None

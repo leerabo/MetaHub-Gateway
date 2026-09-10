@@ -120,6 +120,7 @@ def _read_result(row, request: RestoreRequest) -> RestoreResult | None:
         or result.target_sha256 != row["target_sha256"]
         or result.status != row["status"]
         or (row["cancel_requested"] and result.status not in {"cancelled", "stop_pending"})
+        or (not row["started"] and result.status != "cancelled")
     ):
         raise BackupRuntimeError("backup.restore_binding_changed")
     if result.proof is not None:
@@ -160,6 +161,29 @@ class RestoreExecutor:
                 BEFORE DELETE ON restore_executions
                 BEGIN SELECT RAISE(ABORT,'restore_fact_retained'); END;
             """)
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(restore_executions)")
+            }
+            if "started" not in columns:
+                # Legacy running rows may already have external effects; never replay them.
+                connection.execute(
+                    "ALTER TABLE restore_executions ADD COLUMN started INTEGER NOT NULL "
+                    "DEFAULT 1 CHECK(started IN (0,1))"
+                )
+            connection.execute("""
+                CREATE TRIGGER IF NOT EXISTS restore_start_monotonic
+                BEFORE UPDATE ON restore_executions
+                WHEN NEW.started<OLD.started OR (OLD.started=0 AND NEW.started=1 AND
+                  (OLD.status!='running' OR OLD.cancel_requested=1))
+                BEGIN SELECT RAISE(ABORT,'restore_start_invalid'); END
+            """)
+            connection.execute("""
+                CREATE TRIGGER IF NOT EXISTS restore_cancellation_monotonic
+                BEFORE UPDATE ON restore_executions
+                WHEN NEW.cancel_requested<OLD.cancel_requested
+                BEGIN SELECT RAISE(ABORT,'restore_cancellation_immutable'); END
+            """)
 
     @contextmanager
     def _connect(self):
@@ -173,6 +197,7 @@ class RestoreExecutor:
 
     def cancel(self, request: RestoreRequest) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = self._row(connection, request)
             if row["status"] not in _TERMINAL:
                 connection.execute(
@@ -208,20 +233,9 @@ class RestoreExecutor:
     ) -> RestoreResult:
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 7200:
             raise BackupRuntimeError("backup.request_invalid")
-        backend = database_backend(config.database_url)
-        request_hash = _digest(request.model_dump())
-        target_path = self.targets / (request.execution_id + ".sqlite3")
-        if backend == "postgresql":
-            if not postgres_admin_url:
-                raise BackupRuntimeError("backup.restore_target_missing")
-            target = PostgresRestoreTarget(postgres_admin_url, request.execution_id, request_hash)
-            parsed = urlparse(target.database_url)
-            target_hash = _digest([backend, parsed.hostname, parsed.port or 5432, parsed.path])
-        elif backend == "sqlite":
-            target = None
-            target_hash = _digest([backend, str(target_path)])
-        else:
-            raise BackupRuntimeError("backup.database_unavailable")
+        backend, target_hash, target, target_path = self._target(
+            config, request, postgres_admin_url
+        )
         lock = FileLock(self.directory / (request.execution_id + ".lock"), timeout=0)
         try:
             with lock:
@@ -238,29 +252,85 @@ class RestoreExecutor:
         except Timeout:
             raise BackupRuntimeError("backup.restore_execution_busy") from None
 
+    def register(
+        self,
+        config: AppConfig,
+        request: RestoreRequest,
+        *,
+        postgres_admin_url: str | None = None,
+        cancel_requested: bool = False,
+    ) -> RestoreResult | None:
+        """Persist admission or a cancellation tombstone before dispatching a worker."""
+        if type(cancel_requested) is not bool:
+            raise BackupRuntimeError("backup.request_invalid")
+        backend, target_hash, _, _ = self._target(config, request, postgres_admin_url)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._register(connection, request, backend, target_hash, cancel_requested)
+            return _read_result(row, request)
+
+    def _target(self, config, request, postgres_admin_url):
+        backend = database_backend(config.database_url)
+        request_hash = _digest(request.model_dump())
+        target_path = self.targets / (request.execution_id + ".sqlite3")
+        if backend == "postgresql":
+            if not postgres_admin_url:
+                raise BackupRuntimeError("backup.restore_target_missing")
+            target = PostgresRestoreTarget(postgres_admin_url, request.execution_id, request_hash)
+            parsed = urlparse(target.database_url)
+            target_hash = _digest([backend, parsed.hostname, parsed.port or 5432, parsed.path])
+        elif backend == "sqlite":
+            target = None
+            target_hash = _digest([backend, str(target_path)])
+        else:
+            raise BackupRuntimeError("backup.database_unavailable")
+        return backend, target_hash, target, target_path
+
+    def _register(self, connection, request, backend, target_hash, cancel_requested=False):
+        now = datetime.now(UTC).isoformat()
+        connection.execute(
+            """INSERT INTO restore_executions(execution_id,request_sha256,target_sha256,backend,
+                 status,started,cancel_requested,created_at,updated_at)
+               VALUES(?,?,?,?,'running',0,?,?,?) ON CONFLICT(execution_id) DO NOTHING""",
+            (
+                request.execution_id,
+                _digest(request.model_dump()),
+                target_hash,
+                backend,
+                int(cancel_requested),
+                now,
+                now,
+            ),
+        )
+        row = self._row(connection, request)
+        if row["target_sha256"] != target_hash or row["backend"] != backend:
+            raise BackupRuntimeError("backup.restore_binding_changed")
+        if cancel_requested and row["status"] not in _TERMINAL:
+            connection.execute(
+                "UPDATE restore_executions SET cancel_requested=1,updated_at=? "
+                "WHERE execution_id=?",
+                (now, request.execution_id),
+            )
+            row = self._row(connection, request)
+        return row
+
     def _execute_locked(
         self, config, request, backend, target_hash, target, target_path, stopping, timeout_seconds
     ):
-        now = datetime.now(UTC).isoformat()
         with self._connect() as connection:
-            inserted = connection.execute(
-                """INSERT INTO restore_executions(execution_id,request_sha256,target_sha256,backend,
-                     status,created_at,updated_at) VALUES(?,?,?,?,'running',?,?)
-                   ON CONFLICT(execution_id) DO NOTHING""",
-                (
-                    request.execution_id,
-                    _digest(request.model_dump()),
-                    target_hash,
-                    backend,
-                    now,
-                    now,
-                ),
-            ).rowcount
-            row = self._row(connection, request)
-            if row["target_sha256"] != target_hash or row["backend"] != backend:
-                raise BackupRuntimeError("backup.restore_binding_changed")
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._register(connection, request, backend, target_hash)
             if row["status"] in _TERMINAL:
                 return _read_result(row, request)
+            admitted = not row["started"]
+            cancelled_before_start = admitted and row["cancel_requested"]
+            if admitted and not cancelled_before_start:
+                connection.execute(
+                    "UPDATE restore_executions SET started=1,updated_at=? WHERE execution_id=?",
+                    (datetime.now(UTC).isoformat(), request.execution_id),
+                )
+        if cancelled_before_start:
+            return self._finish(request, target_hash, "cancelled", "backup.restore_cancelled", None)
 
         def should_stop():
             with self._connect() as connection:
@@ -272,7 +342,7 @@ class RestoreExecutor:
             with target if target is not None else nullcontext():
                 if target is not None:
                     self._bind_server(request, target)
-                if inserted:
+                if admitted:
                     try:
                         control.check()
                         if target is not None:
