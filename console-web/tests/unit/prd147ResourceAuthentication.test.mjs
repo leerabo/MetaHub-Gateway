@@ -26,6 +26,23 @@ test.afterEach(() => {
   else globalThis.document = originalDocument;
 });
 
+test("CSRF-protected Workspace GET sends origin-only referrer without changing other requests", async () => {
+  const calls = [];
+  globalThis.document = { cookie: `__Host-metahub-workspace-csrf=${CSRF}` };
+  globalThis.fetch = async (_url, options) => { calls.push(options); return new Response("{}"); };
+  await authenticatedResourceFetch(BASE + "/usage/export.csv", {
+    authentication: "workspace", csrfRequired: true, referrerPolicy: "unsafe-url",
+  });
+  await authenticatedResourceFetch(BASE + "/usage/summary", { authentication: "workspace" });
+  await authenticatedResourceFetch(BASE + "/budgets", { authentication: "workspace", method: "POST" });
+  await authenticatedResourceFetch(BASE + "/usage/export.csv", { authentication: "legacy", token: "test-token", csrfRequired: true });
+  assert.equal(calls[0].referrerPolicy, "origin");
+  assert.equal(calls[0].headers["X-CSRF-Token"], CSRF);
+  assert.equal(calls[0].headers.Origin, undefined);
+  assert.equal(calls[0].headers.Referer, undefined);
+  for (const call of calls.slice(1)) assert.equal(call.referrerPolicy, undefined);
+});
+
 const operations = [
   [aliases.listModelAliases, {}, "GET", "/model-aliases"],
   [aliases.createModelAlias, { alias: "sample", defaultModelId: "model_sample" }, "POST", "/model-aliases"],

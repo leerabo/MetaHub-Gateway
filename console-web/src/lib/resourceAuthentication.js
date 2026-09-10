@@ -45,6 +45,8 @@ export function authenticatedResourceFetch(url, {
     credentials: workspace ? "include" : "omit",
     cache: "no-store",
     redirect: "error",
+    // Same-origin GET omits Origin; send only the origin for CSRF-protected exports.
+    ...(workspace && verb === "GET" && csrfRequired ? { referrerPolicy: "origin" } : {}),
   });
 }
 

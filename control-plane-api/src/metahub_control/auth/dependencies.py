@@ -10,6 +10,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Header, Request
 from metahub_shared.feedback import FEEDBACK_SUMMARY_ENDPOINT_DEADLINE_SECONDS
@@ -296,6 +297,30 @@ def _require_workspace_origin(request: Request) -> None:
         for raw_name, raw_value in request.scope.get("headers", ())
         if raw_name.lower() == b"sec-fetch-site"
     ]
+    # Browsers omit Origin for same-origin GET exports; CSRF remains mandatory.
+    if not origins and request.method == "GET" and sites == ["same-origin"]:
+        referrers = [
+            raw_value.decode("latin-1")
+            for raw_name, raw_value in request.scope.get("headers", ())
+            if raw_name.lower() == b"referer"
+        ]
+        if len(referrers) == 1:
+            referrer = referrers[0]
+            try:
+                parsed = urlsplit(referrer)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                if (
+                    parsed.scheme in {"http", "https"}
+                    and parsed.hostname
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not parsed.fragment
+                    and not any(ord(char) <= 32 or ord(char) == 127 for char in referrer)
+                    and origin in request.app.state.config.allowed_origins
+                ):
+                    return
+            except ValueError:
+                pass
     if (
         len(origins) != 1
         or "," in origins[0]
