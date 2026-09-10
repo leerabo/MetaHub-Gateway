@@ -42,6 +42,12 @@ RESOURCE_PERMISSIONS = frozenset(
         "request_explanation.read",
         "audit.read",
         "audit.export",
+        "billing.usage.read",
+        "billing.usage.export",
+        "billing.finops.read",
+        "billing.finops.write",
+        "billing.budget.read",
+        "billing.budget.write",
     }
 )
 

@@ -43,6 +43,14 @@ class UsageDaySummary(BaseModel):
     estimated_records: int
 
 
+class UsageConsumerSummary(UsageTotals):
+    """Stable usage identity only; financial access does not grant directory access."""
+
+    consumer_id: str | None
+    consumer_name: str | None = None
+    consumer_department: str | None = None
+
+
 class UsageModelSummary(BaseModel):
     """按模型聚合的用量对象，用于定位高成本模型和价格版本影响范围。"""
 
@@ -128,6 +136,7 @@ class UsageSummaryResponse(BaseModel):
     by_day: list[UsageDaySummary]
     by_model: list[UsageModelSummary]
     by_virtual_key: list[UsageVirtualKeySummary]
+    by_consumer: list[UsageConsumerSummary] = []
     by_environment: list[UsageEnvironmentSummary] = []
     by_project: list[UsageProjectSummary] = []
     by_application: list[UsageApplicationSummary] = []
@@ -143,6 +152,7 @@ class UsageRecordInfo(BaseModel):
     """
 
     usage_ledger_id: str
+    consumer_id: str | None = None
     tenant_id: str
     request_id: str
     trace_id: str | None

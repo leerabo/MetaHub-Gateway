@@ -10,11 +10,12 @@ import json
 from typing import Annotated, Any, TypeVar
 
 from fastapi import APIRouter, Depends, Request, Response
+from metahub_shared.runtime.errors import ApiError
 from pydantic import BaseModel, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_budget_reader, require_budget_writer
-from metahub_shared.runtime.errors import ApiError
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     BudgetRuleListResponse,
@@ -33,6 +34,12 @@ from .service import (
 )
 
 router = APIRouter(tags=["budgets"])
+BudgetReader = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.budget.read"))
+]
+BudgetWriter = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.budget.write"))
+]
 
 # 预算查询和写请求采用显式白名单与硬上限，避免未知字段进入 SQL、审计或内存消耗面。
 ALLOWED_BUDGET_LIST_QUERY_FIELDS = frozenset(
@@ -96,10 +103,10 @@ class _DuplicateJsonKey(ValueError):
 
 
 @router.get("/budgets", response_model=BudgetRuleListResponse)
-async def get_budgets_route(
+def get_budgets_route(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_budget_reader)],
+    context: BudgetReader,
 ) -> BudgetRuleListResponse:
     """读取当前租户预算规则与同快照今日状态。"""
 
@@ -126,7 +133,7 @@ async def get_budgets_route(
 async def post_budget_route(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_budget_writer)],
+    context: BudgetWriter,
 ) -> BudgetRuleResponse:
     """仅管理员 create-only 创建预算规则，重复 scope 返回稳定 409。"""
 
@@ -137,7 +144,8 @@ async def post_budget_route(
         error_code="budget.rule_invalid",
     )
     response.headers["Cache-Control"] = "no-store"
-    return create_budget_rule(
+    return await run_in_threadpool(
+        create_budget_rule,
         request.app.state.config,
         context,
         payload,
@@ -155,7 +163,7 @@ async def post_budget_route(
 async def patch_budget_route(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_budget_writer)],
+    context: BudgetWriter,
 ) -> BudgetRuleResponse:
     """兼容既有 upsert 语义更新或创建当前租户预算规则。"""
 
@@ -166,7 +174,8 @@ async def patch_budget_route(
         error_code="budget.rule_invalid",
     )
     response.headers["Cache-Control"] = "no-store"
-    return upsert_budget_rule(
+    return await run_in_threadpool(
+        upsert_budget_rule,
         request.app.state.config,
         context,
         payload,
@@ -185,7 +194,7 @@ async def patch_budget_mode_route(
     budget_rule_id: str,
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_budget_writer)],
+    context: BudgetWriter,
 ) -> BudgetRuleResponse:
     """仅管理员可按当前租户规则 ID 切换硬阻断或仅告警模式。"""
 
@@ -196,7 +205,8 @@ async def patch_budget_mode_route(
         error_code="budget.mode_invalid",
     )
     response.headers["Cache-Control"] = "no-store"
-    return update_budget_mode(
+    return await run_in_threadpool(
+        update_budget_mode,
         request.app.state.config,
         context,
         budget_rule_id,
@@ -208,10 +218,10 @@ async def patch_budget_mode_route(
 
 
 @router.get("/budget-status", response_model=BudgetStatusResponse)
-async def get_budget_status_route(
+def get_budget_status_route(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_budget_reader)],
+    context: BudgetReader,
 ) -> BudgetStatusResponse:
     """读取可信 Project/Application/Key 归属链对应的今日预算聚合状态。"""
 

@@ -18,9 +18,13 @@ from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.usage import sanitize_provider_usage
 
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
+from metahub_control.auth.service import require_permission
+from metahub_control.consumers.service import require_consumer_admin
 
 from .models import (
     UsageApplicationSummary,
+    UsageConsumerSummary,
     UsageDaySummary,
     UsageEnvironmentSummary,
     UsageModelSummary,
@@ -46,6 +50,7 @@ def get_usage_summary(
     end_date: str | None,
     model_id: str | None,
     virtual_key_id: str | None,
+    consumer_id: str | None = None,
     environment_id: str | None,
     provider_id: str | None,
     project_id: str | None,
@@ -66,6 +71,7 @@ def get_usage_summary(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         provider_id=provider_id,
         project_id=project_id,
@@ -77,17 +83,29 @@ def get_usage_summary(
     where_sql, params = build_usage_filters(context.user.tenant_id, filters)
     connection = _connect(config)
     try:
-        return UsageSummaryResponse(
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.usage.read", read_only=True
+        )
+        transaction.begin()
+        response = UsageSummaryResponse(
             totals=_load_totals(connection, where_sql, params),
             by_day=_load_by_day(connection, where_sql, params),
             by_model=_load_by_model(connection, where_sql, params),
             by_virtual_key=_load_by_virtual_key(connection, where_sql, params),
+            by_consumer=_load_by_consumer(connection, where_sql, params, transaction.context),
             by_environment=_load_by_environment(connection, where_sql, params),
             by_project=_load_by_project(connection, where_sql, params),
             by_application=_load_by_application(connection, where_sql, params),
             request_id=request_id,
             trace_id=trace_id,
         )
+        # A new snapshot observes revocation committed while the report was read.
+        connection.rollback()
+        transaction.begin()
+        if any(item.consumer_name is not None for item in response.by_consumer):
+            require_consumer_admin(transaction.context)
+            require_permission(transaction.context, "virtual_key.read")
+        return response
     finally:
         connection.close()
 
@@ -100,6 +118,7 @@ def list_usage_records(
     end_date: str | None,
     model_id: str | None,
     virtual_key_id: str | None,
+    consumer_id: str | None = None,
     environment_id: str | None,
     provider_id: str | None,
     project_id: str | None,
@@ -122,6 +141,7 @@ def list_usage_records(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         provider_id=provider_id,
         project_id=project_id,
@@ -135,6 +155,10 @@ def list_usage_records(
     where_sql, params = build_usage_filters(context.user.tenant_id, filters)
     connection = _connect(config)
     try:
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.usage.read", read_only=True
+        )
+        transaction.begin()
         total_row = connection.execute(
             f"SELECT COUNT(*) AS total FROM usage_ledger ul LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id {where_sql}",
             params,
@@ -143,6 +167,9 @@ def list_usage_records(
             f"""
         SELECT
           ul.usage_ledger_id, ul.tenant_id, ul.request_id, rl.trace_id,
+          (SELECT kc.consumer_id FROM virtual_key_consumers kc
+            WHERE kc.tenant_id=ul.tenant_id
+              AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)) AS consumer_id,
           COALESCE(ul.virtual_key_id, rl.virtual_key_id) AS virtual_key_id,
           vk.key_prefix AS virtual_key_prefix,
           COALESCE(ul.environment_id, rl.environment_id) AS environment_id,
@@ -174,7 +201,7 @@ def list_usage_records(
         """,
             [*params, normalized_limit, normalized_offset],
         ).fetchall()
-        return UsageRecordListResponse(
+        response = UsageRecordListResponse(
             usage_records=[_usage_record_info(row) for row in rows],
             total=int(total_row["total"] if total_row else 0),
             limit=normalized_limit,
@@ -182,6 +209,9 @@ def list_usage_records(
             request_id=request_id,
             trace_id=trace_id,
         )
+        connection.rollback()
+        transaction.begin()
+        return response
     finally:
         connection.close()
 
@@ -192,6 +222,7 @@ def normalize_usage_filters(
     end_date: str | None,
     model_id: str | None,
     virtual_key_id: str | None,
+    consumer_id: str | None = None,
     environment_id: str | None,
     provider_id: str | None,
     project_id: str | None,
@@ -203,7 +234,7 @@ def normalize_usage_filters(
     """归一化用量查询筛选条件，集中处理日期、布尔值和字符串长度边界。"""
 
     start_bound, end_bound = _normalize_date_range(start_date, end_date)
-    return {
+    filters = {
         "start_bound": start_bound,
         "end_bound": end_bound,
         "model_id": _normalize_optional_filter(model_id),
@@ -216,6 +247,11 @@ def normalize_usage_filters(
         "request_id_filter": _normalize_optional_filter(request_id_filter),
         "trace_id_filter": _normalize_optional_filter(trace_id_filter),
     }
+    normalized_consumer = _normalize_optional_filter(consumer_id)
+    # Keep existing export fingerprints unchanged when the new filter is absent.
+    if normalized_consumer is not None:
+        filters["consumer_id"] = normalized_consumer
+    return filters
 
 
 def build_usage_filters(
@@ -255,6 +291,14 @@ def build_usage_filters(
     if filters["virtual_key_id"]:
         clauses.append("COALESCE(ul.virtual_key_id, rl.virtual_key_id)=?")
         params.append(filters["virtual_key_id"])
+    if filters.get("consumer_id"):
+        clauses.append(
+            "EXISTS (SELECT 1 FROM virtual_key_consumers kc "
+            "WHERE kc.tenant_id=ul.tenant_id "
+            "AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id) "
+            "AND kc.consumer_id=?)"
+        )
+        params.append(filters["consumer_id"])
     if filters["environment_id"]:
         clauses.append("COALESCE(ul.environment_id, rl.environment_id)=?")
         params.append(filters["environment_id"])
@@ -419,10 +463,6 @@ def _load_by_virtual_key(
         SELECT
           COALESCE(ul.virtual_key_id, rl.virtual_key_id) AS virtual_key_id,
           vk.key_prefix AS virtual_key_prefix,
-          COALESCE(ul.project_id, rl.project_id) AS project_id,
-          p.name AS project_name,
-          COALESCE(ul.application_id, rl.application_id) AS application_id,
-          a.name AS application_name,
           COUNT(*) AS request_count,
           COALESCE(SUM(ul.input_tokens), 0) AS input_tokens,
           COALESCE(SUM(ul.output_tokens), 0) AS output_tokens,
@@ -434,8 +474,6 @@ def _load_by_virtual_key(
         FROM usage_ledger ul
         LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
         LEFT JOIN virtual_keys vk ON vk.tenant_id=ul.tenant_id AND vk.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)
-        LEFT JOIN projects p ON p.tenant_id=ul.tenant_id AND p.project_id=COALESCE(ul.project_id, rl.project_id)
-        LEFT JOIN applications a ON a.tenant_id=ul.tenant_id AND a.application_id=COALESCE(ul.application_id, rl.application_id)
         {where_sql}
         GROUP BY COALESCE(ul.virtual_key_id, rl.virtual_key_id), vk.key_prefix
         ORDER BY total_tokens DESC, request_count DESC
@@ -458,6 +496,48 @@ def _load_by_virtual_key(
         )
         for row in rows
     ]
+
+
+def _load_by_consumer(
+    connection: sqlite3.Connection, where_sql: str, params: list[object], context: AuthContext
+) -> list[UsageConsumerSummary]:
+    labels = False
+    try:
+        require_consumer_admin(context)
+        require_permission(context, "virtual_key.read")
+        labels = True
+    except ApiError as exc:
+        if exc.code != "auth.permission_denied":
+            raise
+    label_sql = "c.display_name AS consumer_name, c.department AS consumer_department," if labels else ""
+    label_join = (
+        "LEFT JOIN workspace_consumers c ON c.tenant_id=kc.tenant_id AND c.consumer_id=kc.consumer_id"
+        if labels else ""
+    )
+    label_group = ", c.display_name, c.department" if labels else ""
+    rows = connection.execute(
+        f"""
+        SELECT kc.consumer_id, {label_sql} COUNT(*) AS request_count,
+          COALESCE(SUM(ul.input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(ul.output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(ul.total_tokens), 0) AS total_tokens,
+          COALESCE(SUM(ul.cache_tokens), 0) AS cache_tokens,
+          COALESCE(SUM(ul.cost_cny), 0) AS cost_cny,
+          COALESCE(SUM(ul.cost_usd), 0) AS cost_usd,
+          COALESCE(SUM(CASE WHEN ul.estimated=1 THEN 1 ELSE 0 END), 0) AS estimated_records,
+          COALESCE(SUM(CASE WHEN ul.estimated=0 THEN 1 ELSE 0 END), 0) AS real_usage_records
+        FROM usage_ledger ul
+        LEFT JOIN request_logs rl ON rl.tenant_id=ul.tenant_id AND rl.request_id=ul.request_id
+        LEFT JOIN virtual_key_consumers kc ON kc.tenant_id=ul.tenant_id
+          AND kc.virtual_key_id=COALESCE(ul.virtual_key_id, rl.virtual_key_id)
+        {label_join}
+        {where_sql}
+        GROUP BY kc.consumer_id{label_group}
+        ORDER BY total_tokens DESC, kc.consumer_id
+        """,
+        params,
+    ).fetchall()
+    return [UsageConsumerSummary(**dict(row)) for row in rows]
 
 
 def _load_by_environment(
@@ -620,6 +700,7 @@ def _usage_record_info(row: sqlite3.Row) -> UsageRecordInfo:
         total_tokens = _int_value(row["input_tokens"]) + _int_value(row["output_tokens"])
     return UsageRecordInfo(
         usage_ledger_id=row["usage_ledger_id"],
+        consumer_id=row["consumer_id"],
         tenant_id=row["tenant_id"],
         request_id=row["request_id"],
         trace_id=row["trace_id"],

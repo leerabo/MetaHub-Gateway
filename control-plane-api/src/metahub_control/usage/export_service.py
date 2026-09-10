@@ -34,6 +34,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import UsageExportJobInfo, UsageExportStatusResponse
 from .service import build_usage_filters, normalize_usage_filters
@@ -146,6 +147,7 @@ def request_usage_export(
     end_date: str | None,
     model_id: str | None,
     virtual_key_id: str | None,
+    consumer_id: str | None = None,
     environment_id: str | None,
     project_id: str | None,
     application_id: str | None,
@@ -169,6 +171,7 @@ def request_usage_export(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         provider_id=provider_id,
         project_id=project_id,
@@ -180,17 +183,27 @@ def request_usage_export(
     filters_json = _json_text(filters)
     fingerprint = hashlib.sha256(filters_json.encode("utf-8")).hexdigest()
     connection = _connect(config)
-    existing = _load_job_by_request_id(connection, context.user.tenant_id, request_id)
-    if existing is not None:
-        try:
-            return _replay_existing_export(
+    read_transaction = ResourceWriteTransaction(
+        connection, config, context, "billing.usage.export", read_only=True
+    )
+    try:
+        read_transaction.begin()
+        existing = _load_job_by_request_id(connection, context.user.tenant_id, request_id)
+        if existing is not None:
+            _require_job_owner(existing, context)
+            result = _replay_existing_export(
                 existing,
                 requested_fingerprint=fingerprint,
                 request_id=request_id,
                 trace_id=trace_id,
             )
-        finally:
+            connection.rollback()
+            read_transaction.begin()
             connection.close()
+            return result
+    except BaseException:
+        connection.close()
+        raise
 
     snapshot_at = _to_snapshot_time(_utcnow())
     try:
@@ -256,11 +269,17 @@ def request_usage_export(
     now = _utcnow()
     expires_at = now + timedelta(hours=config.usage_export_retention_hours)
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        read_transaction.verify()
+        connection.rollback()
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.usage.export"
+        )
+        transaction.begin()
         # 并发相同 X-Request-ID 在写锁内再次回读，只有一个调用能创建任务、事件和审计。
         existing = _load_job_by_request_id(connection, context.user.tenant_id, request_id)
         if existing is not None:
-            connection.commit()
+            _require_job_owner(existing, context)
+            transaction.verify()
             try:
                 return _replay_existing_export(
                     existing,
@@ -335,7 +354,7 @@ def request_usage_export(
                 request_id=request_id,
                 trace_id=trace_id,
             )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 审计或事件层产生的统一业务异常需要回滚整个短事务，防止任务与审计不一致。
     except ApiError:
         connection.rollback()
@@ -379,15 +398,18 @@ def get_usage_export_status(
     normalized_job_id = _normalize_job_id(job_id)
     connection = _connect(config)
     try:
-        # 状态查询只能推进当前租户当前 job；全局保留期清理由 scheduler 承担。
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.usage.export", read_only=True
+        )
+        transaction.begin()
         row = _load_job(connection, context.user.tenant_id, normalized_job_id)
-        if row is None:
-            # 不存在和跨租户任务统一返回 404，避免通过状态接口枚举其他租户 ID。
-            raise ApiError("usage.export_not_found")
-        row = _expire_row_if_due(connection, row)
-        connection.commit()
-        return _status_response(_job_info(row), request_id=request_id, trace_id=trace_id)
+        _require_job_owner(row, context)
+        job = _job_info(row)
+        if _job_is_due(row):
+            job = job.model_copy(update={"status": "expired"})
+        connection.rollback()
+        transaction.begin()
+        return _status_response(job, request_id=request_id, trace_id=trace_id)
     # 已归一化状态错误只回滚本次读取事务，保留 404/410 等对外合同。
     except ApiError:
         connection.rollback()
@@ -415,11 +437,12 @@ def download_usage_export(
     connection = _connect(config)
     audit_record: AuditRecord | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.usage.export"
+        )
+        transaction.begin()
         row = _load_job(connection, context.user.tenant_id, normalized_job_id)
-        if row is None:
-            # 下载同样隐藏跨租户任务是否存在，避免通过制品接口形成租户侧信道。
-            raise ApiError("usage.export_not_found")
+        _require_job_owner(row, context)
         row = _expire_row_if_due(connection, row)
         _ensure_downloadable(row)
         content = bytes(row["csv_content"])
@@ -452,7 +475,7 @@ def download_usage_export(
             request_id=request_id,
             trace_id=trace_id,
         )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 下载状态、完整性或审计业务错误必须回滚计数，不能记录一次未实际交付的下载。
     except ApiError:
         connection.rollback()
@@ -1104,12 +1127,25 @@ def _ensure_downloadable(row: sqlite3.Row) -> None:
     if status in {"pending", "processing"}:
         # 排队或处理中任务尚无可信完整制品，对外统一返回可重试的未就绪错误。
         raise ApiError("usage.export_not_ready")
-    if status == "expired":
+    if status == "expired" or _job_is_due(row):
         # 过期任务只保留安全元数据，正文已经清除，必须返回明确的 410 合同。
         raise ApiError("usage.export_expired")
     if status != "completed" or row["csv_content"] is None:
         # failed 或状态/正文矛盾都不可下载，避免泄露内部失败和存储细节。
         raise ApiError("usage.export_unavailable")
+
+
+def _require_job_owner(row: sqlite3.Row | None, context: AuthContext) -> None:
+    if row is None or row["requested_by"] != context.user.user_id:
+        raise ApiError("usage.export_not_found")
+
+
+def _job_is_due(row: sqlite3.Row) -> bool:
+    return bool(
+        row["status"] in {"completed", "failed"}
+        and row["expires_at"]
+        and _parse_db_time(row["expires_at"]) <= _utcnow()
+    )
 
 
 def _expire_row_if_due(connection: sqlite3.Connection, row: sqlite3.Row) -> sqlite3.Row:

@@ -12,13 +12,23 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_usage_exporter, require_usage_reader
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .export_service import download_usage_export, get_usage_export_status, request_usage_export
 from .models import UsageExportStatusResponse, UsageRecordListResponse, UsageSummaryResponse
 from .service import DEFAULT_LIMIT, get_usage_summary, list_usage_records
 
 router = APIRouter(prefix="/usage", tags=["usage"])
+UsageReader = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.usage.read"))
+]
+UsageExporter = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.usage.export"))
+]
+UsageExportWriter = Annotated[
+    AuthContext,
+    Depends(require_workspace_or_legacy_permissions("billing.usage.export", csrf_required=True)),
+]
 
 # GET 创建任务是 Excel 固定合同，因此只接受明确白名单参数，禁止代理或前端夹带 tenant/path/format。
 USAGE_EXPORT_QUERY_FIELDS = frozenset(
@@ -27,6 +37,7 @@ USAGE_EXPORT_QUERY_FIELDS = frozenset(
         "end_date",
         "model_id",
         "virtual_key_id",
+        "consumer_id",
         "environment_id",
         "project_id",
         "application_id",
@@ -39,13 +50,14 @@ USAGE_EXPORT_QUERY_FIELDS = frozenset(
 
 
 @router.get("/summary", response_model=UsageSummaryResponse)
-async def get_usage_summary_route(
+def get_usage_summary_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_usage_reader)],
+    context: UsageReader,
     start_date: str | None = None,
     end_date: str | None = None,
     model_id: str | None = None,
     virtual_key_id: str | None = None,
+    consumer_id: str | None = None,
     environment_id: str | None = None,
     project_id: str | None = None,
     application_id: str | None = None,
@@ -63,6 +75,7 @@ async def get_usage_summary_route(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         project_id=project_id,
         application_id=application_id,
@@ -76,13 +89,14 @@ async def get_usage_summary_route(
 
 
 @router.get("/records", response_model=UsageRecordListResponse)
-async def get_usage_records_route(
+def get_usage_records_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_usage_reader)],
+    context: UsageReader,
     start_date: str | None = None,
     end_date: str | None = None,
     model_id: str | None = None,
     virtual_key_id: str | None = None,
+    consumer_id: str | None = None,
     environment_id: str | None = None,
     project_id: str | None = None,
     application_id: str | None = None,
@@ -102,6 +116,7 @@ async def get_usage_records_route(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         project_id=project_id,
         application_id=application_id,
@@ -117,13 +132,14 @@ async def get_usage_records_route(
 
 
 @router.get("/export.csv")
-async def export_usage_csv_route(
+def export_usage_csv_route(
     request: Request,
-    context: Annotated[AuthContext, Depends(require_usage_exporter)],
+    context: UsageExportWriter,
     start_date: str | None = None,
     end_date: str | None = None,
     model_id: str | None = None,
     virtual_key_id: str | None = None,
+    consumer_id: str | None = None,
     environment_id: str | None = None,
     project_id: str | None = None,
     application_id: str | None = None,
@@ -147,6 +163,7 @@ async def export_usage_csv_route(
         end_date=end_date,
         model_id=model_id,
         virtual_key_id=virtual_key_id,
+        consumer_id=consumer_id,
         environment_id=environment_id,
         project_id=project_id,
         application_id=application_id,
@@ -168,10 +185,10 @@ async def export_usage_csv_route(
 
 
 @router.get("/exports/{usage_export_job_id}", response_model=UsageExportStatusResponse)
-async def get_usage_export_status_route(
+def get_usage_export_status_route(
     usage_export_job_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_usage_exporter)],
+    context: UsageExporter,
 ) -> UsageExportStatusResponse:
     """读取当前租户异步任务状态，不返回 BLOB、lease 或对象路径。"""
 
@@ -185,10 +202,10 @@ async def get_usage_export_status_route(
 
 
 @router.get("/exports/{usage_export_job_id}/download")
-async def download_usage_export_route(
+def download_usage_export_route(
     usage_export_job_id: str,
     request: Request,
-    context: Annotated[AuthContext, Depends(require_usage_exporter)],
+    context: UsageExportWriter,
 ) -> Response:
     """下载当前租户 completed CSV，并在释放正文前原子记录下载审计。"""
 

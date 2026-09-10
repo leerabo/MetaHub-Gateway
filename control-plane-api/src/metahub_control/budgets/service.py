@@ -11,19 +11,16 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from metahub_control.audit import (
-    AuditRequestMeta,
-    commit_audited_transaction,
-    dispatch_audit_recorded,
-    record_audit_log,
-)
-from metahub_control.auth import AuthContext
-from metahub_control.environments.service import EnvironmentBinding, resolve_environment_binding
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.errors import DbError
+from metahub_shared.runtime.budget_blocks import (
+    BudgetBlockRecord,
+    get_active_budget_block,
+    release_active_budget_blocks,
+)
 from metahub_shared.runtime.budget_scopes import (
     BUDGET_SCOPE_PRIORITIES,
     budget_scope_priority,
@@ -35,13 +32,18 @@ from metahub_shared.runtime.budget_spend import (
     BudgetSpendUnavailableError,
     load_budget_spend_amounts,
 )
-from metahub_shared.runtime.budget_blocks import (
-    BudgetBlockRecord,
-    get_active_budget_block,
-    release_active_budget_blocks,
-)
 from metahub_shared.runtime.config import AppConfig
 from metahub_shared.runtime.errors import ApiError
+
+from metahub_control.audit import (
+    AuditRequestMeta,
+    commit_audited_transaction,
+    dispatch_audit_recorded,
+    record_audit_log,
+)
+from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
+from metahub_control.environments.service import EnvironmentBinding, resolve_environment_binding
 
 from .models import (
     BudgetAggregateInfo,
@@ -58,6 +60,7 @@ from .models import (
     UpdateBudgetModeRequest,
     UpdateBudgetRuleRequest,
 )
+
 logger = logging.getLogger("metahub.control.budgets")
 
 # 预算规则的时区、金额精度、阈值和可编辑字段集中定义，确保成本治理判断口径一致。
@@ -109,6 +112,10 @@ def list_budget_rules(
     connection = _connect(config)
     try:
         _begin_read_transaction(connection)
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.budget.read", read_only=True
+        )
+        context = transaction.verify()
         clauses = ["br.tenant_id=?"]
         params: list[object] = [context.user.tenant_id]
         if normalized_scope:
@@ -154,7 +161,8 @@ def list_budget_rules(
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        connection.rollback()
+        transaction.begin()
         return result
     # 列表业务错误只回滚并保留统一错误码，不能改写为基础设施故障。
     except ApiError:
@@ -239,6 +247,10 @@ def _write_budget_rule(
     release_reason: str | None = None
     try:
         _begin_write_transaction(connection)
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.budget.write"
+        )
+        context = transaction.verify()
         derived_environment_id: str | None = None
         if (
             scope_type == "virtual_key"
@@ -363,12 +375,16 @@ def _write_budget_rule(
         )
         # DTO 也在同一事务快照内物化；状态异常时先回滚，不能提交后才返回 503。
         response_rule = _budget_rule_info(connection, row)
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     except sqlite3.IntegrityError as exc:
         _rollback_safely(connection)
         if create_only and identity is not None:
             environment_id, conflict_scope_type, conflict_scope_id = identity
             try:
+                recovery = ResourceWriteTransaction(
+                    connection, config, context, "billing.budget.write", read_only=True
+                )
+                recovery.begin()
                 conflict = _load_existing_rule(
                     connection,
                     context.user.tenant_id,
@@ -376,6 +392,8 @@ def _write_budget_rule(
                     conflict_scope_type,
                     conflict_scope_id,
                 )
+                connection.rollback()
+                recovery.begin()
             # 冲突恢复查询失败时不能泄露 SQLite 文本，只能退回统一不可用错误。
             except sqlite3.Error:
                 conflict = None
@@ -438,6 +456,10 @@ def update_budget_mode(
     released_blocks: list[BudgetBlockRecord] = []
     try:
         _begin_write_transaction(connection)
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.budget.write"
+        )
+        context = transaction.verify()
         row = _load_rule_by_id(connection, context.user.tenant_id, rule_id)
         if row is None:
             # 跨租户和不存在规则使用同一 404，不能通过响应差异枚举其他租户预算配置。
@@ -479,7 +501,7 @@ def update_budget_mode(
             trace_id=trace_id,
         )
         response_rule = _budget_rule_info(connection, updated)
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 规则不存在或模式非法时回滚同事务 block 释放，并保留业务错误码。
     except ApiError:
         _rollback_safely(connection)
@@ -525,6 +547,10 @@ def get_budget_status(
     connection = _connect(config)
     try:
         _begin_read_transaction(connection)
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.budget.read", read_only=True
+        )
+        context = transaction.verify()
         binding = _resolve_scope_chain(
             connection,
             context.user.tenant_id,
@@ -575,7 +601,8 @@ def get_budget_status(
             request_id=request_id,
             trace_id=trace_id,
         )
-        connection.commit()
+        connection.rollback()
+        transaction.begin()
         return result
     # 作用域 404/409 属于稳定业务结论，回滚快照后必须保留原错误码。
     except ApiError:
@@ -624,7 +651,11 @@ def _connect(config: AppConfig) -> sqlite3.Connection:
 def _begin_read_transaction(connection: sqlite3.Connection) -> None:
     """开启单一只读快照，防止列表规则、账本金额和摘要来自不同提交时刻。"""
 
-    # 独享连接设为 query_only，后续辅助函数若意外写入会由 SQLite 立即拒绝。
+    if getattr(connection, "backend", "sqlite") == "postgresql":
+        connection.execute("BEGIN")
+        connection.execute("SET TRANSACTION READ ONLY")
+        return
+    # SQLite query_only is reset by the connection pool on release.
     connection.execute("PRAGMA query_only = ON")
     connection.execute("BEGIN")
 
