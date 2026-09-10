@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.identity.service import valid_opaque_value
 from metahub_control.platform_access.constants import (
@@ -114,7 +115,8 @@ async def get_billing_statements(
 ) -> BillingStatementsResponse:
     _reject_query(request, "invoice.request_invalid")
     _private(response)
-    return list_billing_statements(
+    return await run_in_threadpool(
+        list_billing_statements,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -136,7 +138,8 @@ async def post_invoice(
         InvoiceCreateRequest,
         "invoice.request_invalid",
     )
-    result = create_invoice(
+    result = await run_in_threadpool(
+        create_invoice,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -162,7 +165,8 @@ async def read_invoice(
     _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_invoice)],
 ) -> InvoiceResponse:
     _reject_query(request, "invoice.request_invalid")
-    result = get_invoice(
+    result = await run_in_threadpool(
+        get_invoice,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -190,7 +194,8 @@ async def post_invoice_download_token(
     _reject_query(request, "invoice.request_invalid")
     if await _strict_json(request, "invoice.request_invalid"):
         raise ApiError("invoice.request_invalid")
-    result = issue_invoice_download_token(
+    result = await run_in_threadpool(
+        issue_invoice_download_token,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -214,7 +219,8 @@ async def get_invoice_download(
     tokens = _raw_headers(request, b"x-metahub-invoice-download-token")
     if len(tokens) != 1:
         raise ApiError("invoice.download_invalid")
-    artifact = consume_invoice_download(
+    artifact = await run_in_threadpool(
+        consume_invoice_download,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -240,7 +246,8 @@ async def post_reconciliation(
         ReconciliationCreateRequest,
         "reconciliation.request_invalid",
     )
-    result = create_reconciliation(
+    result = await run_in_threadpool(
+        create_reconciliation,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -267,7 +274,8 @@ async def get_reconciliation_differences(
     cursor: str | None = None,
 ) -> ReconciliationDifferencesResponse:
     _exact_query(request, {"limit", "cursor"}, "reconciliation.request_invalid")
-    result = list_reconciliation_differences(
+    result = await run_in_threadpool(
+        list_reconciliation_differences,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -299,7 +307,8 @@ async def post_invoice_reversal(
         InvoiceReversalCreateRequest,
         "invoice.request_invalid",
     )
-    result = create_invoice_reversal(
+    result = await run_in_threadpool(
+        create_invoice_reversal,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -334,7 +343,8 @@ async def post_invoice_reversal_approval(
         InvoiceReversalApprovalRequest,
         "invoice.request_invalid",
     )
-    result = approve_invoice_reversal(
+    result = await run_in_threadpool(
+        approve_invoice_reversal,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
