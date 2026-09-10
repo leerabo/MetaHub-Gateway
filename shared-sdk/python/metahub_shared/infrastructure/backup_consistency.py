@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import math
+from collections.abc import Callable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,7 +71,9 @@ def _component(name: str) -> str | None:
     return None
 
 
-def fingerprint_database(connection, *, backend: str) -> tuple[TableFingerprint, ...]:
+def fingerprint_database(
+    connection, *, backend: str, check: Callable[[], None] | None = None
+) -> tuple[TableFingerprint, ...]:
     """Caller owns a stable read transaction or an isolated, immutable snapshot."""
     if backend == "sqlite":
         names = [
@@ -90,6 +93,8 @@ def fingerprint_database(connection, *, backend: str) -> tuple[TableFingerprint,
         raise ValueError("Unsupported recovery backend.")
     result = []
     for name in sorted(names):
+        if check is not None:
+            check()
         component = _component(name)
         if component is None:
             continue
@@ -113,6 +118,8 @@ def fingerprint_database(connection, *, backend: str) -> tuple[TableFingerprint,
         count = 0
         last = None
         while True:
+            if check is not None:
+                check()
             parameters = () if last is None else last
             where = (
                 "" if last is None else (f" WHERE ({keys}) > ({','.join('?' for _ in primary)})")

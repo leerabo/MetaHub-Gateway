@@ -21,6 +21,7 @@ from metahub_shared.db import connect_database, database_backend
 from metahub_shared.runtime.config import AppConfig
 
 from .backup_consistency import TableFingerprint, fingerprint_database
+from .restore_control import RestoreControl, RestoreStopped
 
 _MAX_BACKUP_BYTES = 10 * 1024**4
 
@@ -131,8 +132,14 @@ def restore_and_verify(
     backup_id: str,
     object_key: str,
     expected_manifest_sha256: str,
+    control: RestoreControl | None = None,
+    sqlite_target: Path | None = None,
 ) -> RestoreVerification:
+    if control is not None:
+        control.check()
     envelope_bytes = _s3_get(config, object_key=object_key)
+    if control is not None:
+        control.check()
     envelope = _strict_object(envelope_bytes)
     if (
         set(envelope)
@@ -221,6 +228,8 @@ def restore_and_verify(
         raise BackupRuntimeError("backup.decrypt_failed") from None
     finally:
         data_key = b""
+    if control is not None:
+        control.check()
     if len(payload) != manifest.get("size_bytes") or not _same(
         hashlib.sha256(payload).hexdigest(), str(manifest.get("content_sha256"))
     ):
@@ -228,7 +237,10 @@ def restore_and_verify(
     backend = database_backend(config.database_url)
     if backend == "sqlite":
         schema_head, samples, consistency = _verify_sqlite_restore(
-            payload, expected_consistency=expected_consistency
+            payload,
+            expected_consistency=expected_consistency,
+            target=sqlite_target,
+            control=control,
         )
     elif backend == "postgresql":
         if version == 2 and source_identity is None:
@@ -238,6 +250,7 @@ def restore_and_verify(
             payload,
             expected_consistency=expected_consistency,
             source_database_identity_sha256=source_identity,
+            control=control,
         )
     else:
         raise BackupRuntimeError("backup.database_unavailable")
@@ -245,6 +258,8 @@ def restore_and_verify(
         raise BackupRuntimeError("backup.schema_head_invalid")
     if samples != manifest.get("tenant_owner_sample_count"):
         raise BackupRuntimeError("backup.restore_owner_failed")
+    if control is not None:
+        control.check()
     return RestoreVerification(
         schema_head=schema_head,
         manifest_sha256=actual_manifest_sha256,
@@ -483,14 +498,39 @@ def _boto_client(config: AppConfig, service: str):
 
 
 def _verify_sqlite_restore(
-    payload: bytes, *, expected_consistency: tuple[TableFingerprint, ...] | None = None
+    payload: bytes,
+    *,
+    expected_consistency: tuple[TableFingerprint, ...] | None = None,
+    target: Path | None = None,
+    control: RestoreControl | None = None,
 ) -> tuple[str, int, tuple[TableFingerprint, ...] | None]:
-    handle = tempfile.NamedTemporaryFile(prefix="metahub-restore-", suffix=".sqlite3", delete=False)
+    handle = (
+        tempfile.NamedTemporaryFile(prefix="metahub-restore-", suffix=".sqlite3", delete=False)
+        if target is None
+        else target.open("xb")
+    )
     path = Path(handle.name)
     try:
-        handle.write(payload)
+        for start in range(0, len(payload), 1024 * 1024):
+            if control is not None:
+                control.check()
+            handle.write(payload[start : start + 1024 * 1024])
+        handle.flush()
+        os.fsync(handle.fileno())
         handle.close()
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        stopped = []
+        if control is not None:
+
+            def progress():
+                try:
+                    control.check()
+                    return 0
+                except Exception as exc:
+                    stopped.append(exc)
+                    return 1
+
+            connection.set_progress_handler(progress, 1000)
         try:
             if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise BackupRuntimeError("backup.restore_integrity_failed")
@@ -502,10 +542,12 @@ def _verify_sqlite_restore(
                     "ORDER BY version DESC LIMIT 1"
                 ).fetchone()[0]
             )
-            consistency = _verify_consistency(connection, "sqlite", expected_consistency)
+            consistency = _verify_consistency(connection, "sqlite", expected_consistency, control)
             return schema_head, _sqlite_owner_samples(connection), consistency
         finally:
             connection.close()
+            if stopped:
+                raise stopped[0]
     except BackupRuntimeError:
         raise
     except (OSError, sqlite3.Error, IndexError, TypeError):
@@ -515,7 +557,8 @@ def _verify_sqlite_restore(
             handle.close()
         except OSError:
             pass
-        path.unlink(missing_ok=True)
+        if target is None:
+            path.unlink(missing_ok=True)
 
 
 def _verify_postgres_restore(
@@ -524,6 +567,7 @@ def _verify_postgres_restore(
     *,
     expected_consistency: tuple[TableFingerprint, ...] | None = None,
     source_database_identity_sha256: str | None = None,
+    control: RestoreControl | None = None,
 ) -> tuple[str, int, tuple[TableFingerprint, ...] | None]:
     if not config.backup_restore_database_url:
         raise BackupRuntimeError("backup.restore_target_missing")
@@ -573,24 +617,27 @@ def _verify_postgres_restore(
             handle.write(payload)
         finally:
             handle.close()
-        result = subprocess.run(
-            [
-                "pg_restore",
-                "--dbname=" + process_environment["PGDATABASE"],
-                "--single-transaction",
-                "--exit-on-error",
-                "--no-owner",
-                "--no-privileges",
-                str(path),
-            ],
-            env=process_environment,
-            check=False,
-            capture_output=True,
-            timeout=7200,
-        )
-        if result.returncode != 0:
-            raise BackupRuntimeError("backup.restore_failed")
+        arguments = [
+            "pg_restore",
+            "--dbname=" + process_environment["PGDATABASE"],
+            "--single-transaction",
+            "--exit-on-error",
+            "--no-owner",
+            "--no-privileges",
+            str(path),
+        ]
+        if control is None:
+            result = subprocess.run(
+                arguments, env=process_environment, check=False, capture_output=True, timeout=7200
+            )
+            if result.returncode != 0:
+                raise BackupRuntimeError("backup.restore_failed")
+        else:
+            control.run(arguments, env=process_environment)
         connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        if control is not None:
+            control.check()
+            connection.execute("SET LOCAL statement_timeout='30s'")
         invalid = int(
             connection.execute(
                 "SELECT COUNT(*) FROM pg_constraint WHERE NOT convalidated"
@@ -609,10 +656,10 @@ def _verify_postgres_restore(
                 "SELECT COUNT(*) FROM (SELECT 1 FROM workspace_tenant_bindings LIMIT 100) owners"
             ).fetchone()[0]
         )
-        consistency = _verify_consistency(connection, "postgresql", expected_consistency)
+        consistency = _verify_consistency(connection, "postgresql", expected_consistency, control)
         connection.commit()
         return schema_head, samples, consistency
-    except BackupRuntimeError:
+    except (BackupRuntimeError, RestoreStopped):
         raise
     except Exception:
         raise BackupRuntimeError("backup.restore_failed") from None
@@ -630,11 +677,17 @@ def _verify_postgres_restore(
             path.unlink(missing_ok=True)
 
 
-def _verify_consistency(connection, backend, expected):
+def _verify_consistency(connection, backend, expected, control=None):
     if expected is None:
         return None
     try:
-        actual = fingerprint_database(connection, backend=backend)
+        actual = (
+            fingerprint_database(connection, backend=backend)
+            if control is None
+            else fingerprint_database(connection, backend=backend, check=control.check)
+        )
+    except RestoreStopped:
+        raise
     except Exception:
         raise BackupRuntimeError("backup.restore_consistency_failed") from None
     if actual != expected:
