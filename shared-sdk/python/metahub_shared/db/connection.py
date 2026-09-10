@@ -550,6 +550,19 @@ _DATABASE_REQUEST_SCOPE: ContextVar[_DatabaseRequestScope | None] = ContextVar(
     "metahub_database_request_scope",
     default=None,
 )
+_DATABASE_CONNECTION_POOL_SCOPE: ContextVar[bool] = ContextVar(
+    "metahub_database_connection_pool_scope", default=False,
+)
+
+
+@contextmanager
+def database_connection_pool_scope() -> Iterator[None]:
+    """Reuse closed physical handles without sharing a transaction or close lifetime."""
+    token = _DATABASE_CONNECTION_POOL_SCOPE.set(True)
+    try:
+        yield
+    finally:
+        _DATABASE_CONNECTION_POOL_SCOPE.reset(token)
 
 
 @contextmanager
@@ -636,8 +649,13 @@ def connect_database(
         database = path
 
     try:
-        # 默认保持 sqlite3 的线程 owner；只有显式受 admission 串行保护的 runtime
-        # 连接才允许跨 worker 复用。
+        # Default callers retain sqlite3 thread ownership. Explicit pooling loans each
+        # physical handle to one owner until close, without sharing live transactions.
+        if _DATABASE_CONNECTION_POOL_SCOPE.get() and database != ":memory:":
+            return _GuardedWorkerConnection(
+                _IDLE_CONNECTION_POOL.acquire(database),
+                lambda connection: _IDLE_CONNECTION_POOL.release(database, connection),
+            )
         scope = _DATABASE_REQUEST_SCOPE.get()
         if scope is not None and database != ":memory:":
             if scope.reuse_connections:

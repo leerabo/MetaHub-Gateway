@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -193,7 +195,7 @@ class InMemoryRateLimitStore:
             self._values.pop(key, None)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class RedisConnectionConfig:
     """Redis 连接配置。
 
@@ -205,6 +207,7 @@ class RedisConnectionConfig:
     db: int
     username: str | None
     password: str | None
+    use_tls: bool
 
 
 class RedisRateLimitStore:
@@ -214,16 +217,28 @@ class RedisRateLimitStore:
     后续高吞吐版本可以替换为连接池而不改变上层限流服务接口。
     """
 
-    def __init__(self, redis_url: str) -> None:
+    def __init__(
+        self,
+        redis_url: str,
+        *,
+        command_timeout_seconds: float = 0.5,
+        close_timeout_seconds: float = 0.1,
+    ) -> None:
         """解析 Redis URL，密码仅保存在进程内用于 AUTH。"""
 
         self.redis_url = redis_url
         self._config = _parse_redis_url(redis_url)
+        self._command_timeout_seconds = _bounded_timeout(command_timeout_seconds)
+        self._close_timeout_seconds = _bounded_timeout(close_timeout_seconds)
+        try:
+            self._ssl_context = ssl.create_default_context() if self._config.use_tls else None
+        except Exception:
+            raise RateLimitStoreUnavailable("redis command failed") from None
 
     async def increment_window(self, key: str, amount: int, ttl_seconds: int) -> int:
         """使用 INCRBY 递增固定窗口计数器，并在首次创建时设置 TTL。"""
 
-        value = int(await self._command("INCRBY", key, str(amount)))
+        value = _counter_value(await self._command("INCRBY", key, str(amount)))
         if value == amount:
             await self._command("EXPIRE", key, str(ttl_seconds))
         return value
@@ -231,7 +246,7 @@ class RedisRateLimitStore:
     async def acquire_concurrency(self, key: str, limit: int, ttl_seconds: int) -> tuple[bool, int]:
         """使用 INCR 占用并发槽位，超限时用 DECR 回滚。"""
 
-        value = int(await self._command("INCR", key))
+        value = _counter_value(await self._command("INCR", key))
         if value == 1:
             await self._command("EXPIRE", key, str(ttl_seconds))
         if value > limit:
@@ -243,7 +258,7 @@ class RedisRateLimitStore:
     async def release_concurrency(self, key: str) -> None:
         """使用 DECR 释放并发槽位，非正数时删除键。"""
 
-        value = int(await self._command("DECR", key))
+        value = _counter_value(await self._command("DECR", key))
         if value <= 0:
             await self._command("DEL", key)
 
@@ -312,7 +327,9 @@ class RedisRateLimitStore:
         """用 PING 验证 Redis 连接、认证和 DB 选择是否可用。"""
 
         response = await self._command("PING")
-        return str(response).upper() == "PONG"
+        if response != "PONG":
+            raise RateLimitStoreUnavailable("redis command failed")
+        return True
 
     async def _command(self, *parts: str) -> object:
         """发送一个 Redis 命令并解析 RESP 响应。
@@ -321,18 +338,40 @@ class RedisRateLimitStore:
         密码或底层异常传播给调用方。
         """
 
+        writer: asyncio.StreamWriter | None = None
         try:
-            reader, writer = await asyncio.open_connection(self._config.host, self._config.port)
-            try:
+            # One deadline covers authentication and the entire reply, including slow fragments.
+            async with asyncio.timeout(self._command_timeout_seconds):
+                reader, writer = await asyncio.open_connection(
+                    self._config.host,
+                    self._config.port,
+                    ssl=self._ssl_context,
+                    server_hostname=self._config.host if self._config.use_tls else None,
+                    ssl_handshake_timeout=(
+                        self._command_timeout_seconds if self._config.use_tls else None
+                    ),
+                    ssl_shutdown_timeout=(
+                        self._close_timeout_seconds if self._config.use_tls else None
+                    ),
+                )
                 await self._authenticate(reader, writer)
                 writer.write(_encode_command(parts))
                 await writer.drain()
                 return await _read_response(reader)
-            finally:
-                writer.close()
-                await writer.wait_closed()
-        except Exception as exc:
-            raise RateLimitStoreUnavailable("redis command failed") from exc
+        except Exception:
+            raise RateLimitStoreUnavailable("redis command failed") from None
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    async with asyncio.timeout(self._close_timeout_seconds):
+                        await writer.wait_closed()
+                except asyncio.CancelledError:
+                    writer.transport.abort()
+                    raise
+                except Exception:
+                    # Cleanup cannot extend the request indefinitely or hide its original outcome.
+                    writer.transport.abort()
 
     async def _authenticate(
         self,
@@ -354,33 +393,62 @@ class RedisRateLimitStore:
             else:
                 writer.write(_encode_command(("AUTH", self._config.password)))
             await writer.drain()
-            await _read_response(reader)
+            if await _read_response(reader) != "OK":
+                raise RateLimitStoreUnavailable("redis command failed")
         if self._config.db:
             writer.write(_encode_command(("SELECT", str(self._config.db))))
             await writer.drain()
-            await _read_response(reader)
+            if await _read_response(reader) != "OK":
+                raise RateLimitStoreUnavailable("redis command failed")
 
 
 def _parse_redis_url(redis_url: str) -> RedisConnectionConfig:
     """解析 Redis URL 为连接配置，并拒绝不支持的协议或非法数据库编号。"""
 
-    parsed = urlparse(redis_url)
-    if parsed.scheme != "redis":
-        raise RateLimitStoreUnavailable("unsupported redis scheme")
-    db_text = parsed.path.lstrip("/") or "0"
     try:
+        if type(redis_url) is not str:
+            raise ValueError
+        parsed = urlparse(redis_url)
+        port = parsed.port
+        if port is None:
+            port = 6380 if parsed.scheme == "rediss" else 6379
+        if (
+            parsed.scheme not in {"redis", "rediss"}
+            or not parsed.hostname
+            or parsed.query
+            or parsed.fragment
+            or not 1 <= port <= 65535
+            or (parsed.username is not None and not parsed.password)
+        ):
+            raise ValueError
+        db_text = parsed.path.removeprefix("/") or "0"
+        if not re.fullmatch(r"[0-9]{1,3}", db_text):
+            raise ValueError
         db = int(db_text)
-    # 输入解析异常统一映射为业务错误，避免无结构异常穿透 API。
-    except ValueError as exc:
-        # Redis 数据库编号必须是整数，配置错误时提前失败，避免请求期才出现隐性绕过。
-        raise RateLimitStoreUnavailable("invalid redis db") from exc
+        if db > 255:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise RateLimitStoreUnavailable("redis command failed") from None
     return RedisConnectionConfig(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 6379,
+        host=parsed.hostname,
+        port=port,
         db=db,
         username=unquote(parsed.username) if parsed.username else None,
         password=unquote(parsed.password) if parsed.password else None,
+        use_tls=parsed.scheme == "rediss",
     )
+
+
+def _bounded_timeout(value: float) -> float:
+    if type(value) not in {int, float} or not 0.05 <= value <= 10:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return float(value)
+
+
+def _counter_value(value: object) -> int:
+    if type(value) is not int:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return value
 
 
 def _encode_command(parts: tuple[str, ...] | list[str]) -> bytes:
@@ -395,34 +463,68 @@ def _encode_command(parts: tuple[str, ...] | list[str]) -> bytes:
     return b"".join(payload)
 
 
-async def _read_response(reader: asyncio.StreamReader) -> object:
+@dataclass
+class _ResponseBudget:
+    bytes_left: int = 65536
+    values_left: int = 128
+
+
+async def _read_response(
+    reader: asyncio.StreamReader, *, depth: int = 0, budget: _ResponseBudget | None = None
+) -> object:
     """读取一个 RESP 响应。
 
-    PRD-022 只需要简单字符串、整数、Bulk String 和错误响应；数组留给后续扩展。
+    单维计数使用简单字符串与整数，Batch Lua 使用数组；所有响应共享大小和递归预算。
     """
 
+    budget = budget or _ResponseBudget()
+    budget.values_left -= 1
+    if depth > 4 or budget.values_left < 0:
+        raise RateLimitStoreUnavailable("redis command failed")
     prefix = await reader.readexactly(1)
     line = await reader.readline()
+    budget.bytes_left -= 1 + len(line)
+    if budget.bytes_left < 0 or len(line) > 1024 or not line.endswith(b"\r\n"):
+        raise RateLimitStoreUnavailable("redis command failed")
+    body = line[:-2]
     if prefix == b"+":
-        return line.rstrip(b"\r\n").decode("utf-8")
+        return body.decode("utf-8")
     if prefix == b":":
-        return int(line.rstrip(b"\r\n"))
+        return _resp_integer(body)
     if prefix == b"$":
-        length = int(line.rstrip(b"\r\n"))
-        if length < 0:
+        length = _resp_integer(body)
+        if length == -1:
             return None
+        if length < 0 or length + 2 > budget.bytes_left:
+            raise RateLimitStoreUnavailable("redis command failed")
+        budget.bytes_left -= length + 2
         data = await reader.readexactly(length)
-        await reader.readexactly(2)
+        if await reader.readexactly(2) != b"\r\n":
+            raise RateLimitStoreUnavailable("redis command failed")
         return data.decode("utf-8")
     if prefix == b"*":
-        length = int(line.rstrip(b"\r\n"))
-        if length < 0:
+        length = _resp_integer(body)
+        if length == -1:
             return None
-        return [await _read_response(reader) for _index in range(length)]
+        if length < 0 or length > budget.values_left:
+            raise RateLimitStoreUnavailable("redis command failed")
+        return [
+            await _read_response(reader, depth=depth + 1, budget=budget)
+            for _index in range(length)
+        ]
     if prefix == b"-":
         # Redis 返回错误响应时把底层细节折叠为限流存储不可用，避免泄露服务端信息。
         raise RateLimitStoreUnavailable("redis returned error")
     raise RateLimitStoreUnavailable("unsupported redis response")
+
+
+def _resp_integer(value: bytes) -> int:
+    if re.fullmatch(rb"-?(?:0|[1-9][0-9]{0,18})", value) is None:
+        raise RateLimitStoreUnavailable("redis command failed")
+    number = int(value)
+    if not -(2**63) <= number < 2**63:
+        raise RateLimitStoreUnavailable("redis command failed")
+    return number
 
 
 def _validate_batch_dimensions(
