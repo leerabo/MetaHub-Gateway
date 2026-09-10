@@ -13,7 +13,6 @@ from metahub_capacity_runner.contracts import (
 )
 from metahub_capacity_runner.engine import SCENARIOS, simulate_capacity_run
 from metahub_control.capacity_management import runner_client, runtime
-from metahub_control.platform_jobs.runtime import PlatformJobFailure
 from metahub_shared.runtime.errors import ApiError
 from pydantic import ValidationError
 
@@ -73,7 +72,7 @@ def _http_result(monkeypatch, payload, *, status=200):
 def test_bound_result_roundtrip_and_explicit_network_policy(monkeypatch, claims, config):
     payload = _fixture_result(claims)
     _http_result(monkeypatch, payload)
-    result = runner_client.execute_capacity_run(config, claims)
+    result = runner_client.capacity_execution(config, claims, action="submit")
     assert result.result_sha256 == payload["result_sha256"]
     assert result.execution_sha256 == execution_digest(claims)
 
@@ -95,7 +94,7 @@ def test_control_rejects_other_execution_even_with_valid_digest(
     payload["result_sha256"] = result_digest(payload)
     _http_result(monkeypatch, payload)
     with pytest.raises(ApiError) as rejected:
-        runner_client.execute_capacity_run(config, claims)
+        runner_client.capacity_execution(config, claims, action="submit")
     assert rejected.value.code == "capacity.runner_unavailable"
 
 
@@ -153,7 +152,7 @@ def test_legacy_or_incomplete_result_is_not_accepted(monkeypatch, claims, config
     del payload[field]
     _http_result(monkeypatch, payload)
     with pytest.raises(ApiError) as rejected:
-        runner_client.execute_capacity_run(config, claims)
+        runner_client.capacity_execution(config, claims, action="submit")
     assert rejected.value.code == "capacity.runner_unavailable"
 
 
@@ -240,33 +239,31 @@ def test_rejected_result_never_reaches_baseline_or_rollout_completion(
     elif invalid_kind == "legacy":
         del payload["evidence_kind"]
     _http_result(monkeypatch, payload, status=503 if invalid_kind == "unavailable" else 200)
-    effects = []
-    failures = []
-    monkeypatch.setattr(runtime, "_load_claims", lambda *_args: claims)
-    monkeypatch.setattr(runtime, "start_load_test_in_transaction", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        runtime,
-        "fail_load_test_in_transaction",
-        lambda *_args, **kwargs: failures.append(kwargs["outcome_code"]),
-    )
+    deferred = []
 
     def forbidden_completion(*_args, **_kwargs):
         pytest.fail("unverified evidence reached baseline/rollout completion")
 
     monkeypatch.setattr(runtime, "complete_load_test_in_transaction", forbidden_completion)
 
-    def commit_effect(key, _value, apply):
-        effects.append(key)
-        apply(None)
-
-    context = SimpleNamespace(config=config, checkpoint=lambda _: None, commit_effect=commit_effect)
-    job = runtime.CapacityRunInput(
-        operation="load_test", object_id=claims.object_id, manifest_sha256=claims.manifest_sha256
+    context = SimpleNamespace(
+        config=config,
+        lease=SimpleNamespace(acknowledged=False),
+        stop_reason=lambda: None,
+        defer=lambda **kwargs: deferred.append(kwargs),
+        finish=forbidden_completion,
     )
-    with pytest.raises(PlatformJobFailure, match="capacity.runner_unavailable"):
-        runtime._capacity_handler(context, job)
-    assert effects == ["capacity.load.start", "capacity.load_test.failure"]
-    assert failures == ["capacity.runner_unavailable"]
+    runtime._capacity_external_handler(context, claims.model_dump(mode="json"))
+    assert deferred == [{"outcome": "capacity.runner_unavailable"}]
+
+
+def test_synchronous_adapter_never_starts_unmanaged_external_work(monkeypatch, claims, config):
+    monkeypatch.setattr(
+        runner_client.httpx, "post", lambda *_args, **_kwargs: pytest.fail("unmanaged HTTP")
+    )
+    with pytest.raises(ApiError) as error:
+        runner_client.execute_capacity_run(config, claims)
+    assert error.value.code == "capacity.runner_unavailable"
 
 
 def _execution_info(claims, *, state="running", result=None):

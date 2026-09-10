@@ -20,6 +20,9 @@ from metahub_control.platform_access.service import (
     authenticate_platform_session_in_transaction,
 )
 from metahub_control.platform_jobs.service import (
+    _event as record_platform_job_event,
+)
+from metahub_control.platform_jobs.service import (
     enqueue_prepared_platform_job_in_transaction,
     prepare_platform_job,
 )
@@ -44,7 +47,6 @@ from .models import (
     UnitEconomicsInfo,
     UnitEconomicsResponse,
 )
-from .runner_client import signal_capacity_kill
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 
@@ -468,12 +470,6 @@ def command_chaos_experiment(
                 trace_id=trace_id,
             )
             connection.commit()
-            if payload.action == "kill":
-                signal_capacity_kill(
-                    config,
-                    experiment_id=response.experiment.chaos_experiment_id,
-                    generation=response.experiment.kill_generation,
-                )
             return response
         now = _database_now(connection)
         if payload.action == "create":
@@ -549,12 +545,6 @@ def command_chaos_experiment(
             trace_id=trace_id,
         )
         connection.commit()
-        if payload.action == "kill":
-            signal_capacity_kill(
-                config,
-                experiment_id=response.experiment.chaos_experiment_id,
-                generation=response.experiment.kill_generation,
-            )
         return response
     except ApiError:
         _rollback(connection)
@@ -882,6 +872,38 @@ def fail_load_test_in_transaction(connection, *, run_id: str, outcome_code: str)
     )
 
 
+def stop_capacity_in_transaction(
+    connection, *, job_id: str, operation: str, object_id: str,
+    cancelled: bool, outcome_code: str,
+) -> None:
+    load = operation == "load_test"
+    row = _load_row(connection, object_id) if load else _chaos_row(connection, object_id)
+    if row["platform_job_id"] != job_id or row["status"] != "running":
+        raise ApiError("capacity.runtime_conflict")
+    if not cancelled:
+        if load:
+            fail_load_test_in_transaction(connection, run_id=object_id, outcome_code=outcome_code)
+        else:
+            fail_chaos_in_transaction(
+                connection, experiment_id=object_id, outcome_code=outcome_code
+            )
+        return
+    stamp = _db_time(_changed_time(_database_now(connection), row["updated_at"]))
+    if load:
+        connection.execute(
+            "UPDATE load_test_runs SET status='stopped',safe_outcome_code=?,"
+            "completed_at=?,updated_at=?,revision=revision+1 WHERE load_test_run_id=?",
+            (_safe_code(outcome_code), stamp, stamp, object_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE chaos_experiments SET status='killed',stop_reason_code='operator_kill',"
+            "objective_met=0,completed_at=?,updated_at=?,revision=revision+1 "
+            "WHERE chaos_experiment_id=?",
+            (stamp, stamp, object_id),
+        )
+
+
 def start_chaos_in_transaction(connection, *, experiment_id: str, manifest_sha256: str):
     row = _chaos_row(connection, experiment_id)
     if row["status"] != "queued" or not hmac.compare_digest(
@@ -1141,19 +1163,45 @@ def _kill_chaos(
     now: datetime,
 ) -> None:
     row = _chaos_row(connection, experiment_id)
+    job = None
+    if row["platform_job_id"] is not None:
+        # Match the worker's root-job-first lock order before locking the domain record.
+        job = connection.execute(
+            "SELECT * FROM platform_jobs WHERE platform_job_id=?"
+            + (" FOR UPDATE" if getattr(connection, "backend", "sqlite") == "postgresql" else ""),
+            (row["platform_job_id"],),
+        ).fetchone()
+        row = _chaos_row(connection, experiment_id)
     if int(row["revision"]) != expected_revision:
         raise ApiError("capacity.revision_conflict")
     if row["status"] not in {"pending_approval", "queued", "running"}:
         raise ApiError("capacity.chaos_conflict")
+    if row["stop_reason_code"] == "operator_kill":
+        raise ApiError("capacity.chaos_conflict")
     stamp = _db_time(_changed_time(now, row["updated_at"]))
+    pending_stop = job is not None and job["status"] in {"leased", "running", "cancel_requested"}
     updated = connection.execute(
-        """UPDATE chaos_experiments SET status='killed',kill_generation=kill_generation+1,
+        """UPDATE chaos_experiments SET status=?,kill_generation=kill_generation+1,
              stop_reason_code='operator_kill',revision=revision+1,completed_at=?,updated_at=?
            WHERE chaos_experiment_id=? AND revision=?""",
-        (stamp, stamp, experiment_id, expected_revision),
+        (row["status"] if pending_stop else "killed", None if pending_stop else stamp,
+         stamp, experiment_id, expected_revision),
     ).rowcount
     if updated != 1:
         raise ApiError("capacity.revision_conflict")
+    if job is not None and job["status"] in {"queued", "leased", "running"}:
+        terminal = job["status"] == "queued"
+        connection.execute(
+            "UPDATE platform_jobs SET status=?,safe_outcome_code=?,completed_at=?,"
+            "revision=revision+1,updated_at=? WHERE platform_job_id=?",
+            ("cancelled" if terminal else "cancel_requested",
+             "platform_job.cancelled" if terminal else None, _db_time(now) if terminal else None,
+             _db_time(_changed_time(now, job["updated_at"])), job["platform_job_id"]),
+        )
+        if terminal:
+            record_platform_job_event(
+                connection, job, "platform_job.completed", "platform_job.cancelled", now=now
+            )
 
 
 def _chaos_approval(

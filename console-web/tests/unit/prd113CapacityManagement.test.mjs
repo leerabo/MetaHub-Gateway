@@ -19,6 +19,18 @@ const RUN_ID = `ltr_${"2".repeat(32)}`;
 const EXPERIMENT_ID = `che_${"3".repeat(32)}`;
 const JOB_ID = `pjob_${"4".repeat(32)}`;
 
+test("chaos stop intent remains pending and cannot be submitted twice", () => {
+  const state = platformState(["platform.capacity.read", "platform.capacity.chaos"]);
+  state.capacity.chaos_experiments = [{
+    ...chaosExperiment(), status: "running", stop_reason_code: "operator_kill", kill_generation: 1,
+  }];
+  const root = { innerHTML: "" };
+  renderPlatformWorkspace(root, state);
+  assert.match(root.innerHTML, /Awaiting stop confirmation/u);
+  assert.doesNotMatch(root.innerHTML, /name="action" value="kill"/u);
+  assert.doesNotMatch(root.innerHTML, />Terminal</u);
+});
+
 test("capacity clients enforce closed projections, CSRF, CAS, and fixed commands", async () => {
   const originalFetch = globalThis.fetch;
   const originalDocument = globalThis.document;

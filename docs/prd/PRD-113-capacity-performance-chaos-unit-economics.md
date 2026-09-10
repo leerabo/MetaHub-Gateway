@@ -125,3 +125,21 @@ Control 客户端已具备单次异步协议，根任务的持久等待、取消
 独立设计和两轮自审见 `S3-measured-runner-execution-20260910.md`。
 专项记录见 `docs/testing/PRD-113-durable-execution-20260910.md`，敏感审计单独保存。
 121 项相关测试通过，不等同于真实 Gateway 多租户或 72 小时验收通过。
+
+## 12. 2026-09-10 原任务外部等待接入
+
+按 `S3-external-wait-runtime-20260910.md` 的补充设计和两轮编码前自审实施。
+真实 load/chaos 由原 capacity.run 原子登记领域 start 和加密续接 claims 后释放普通租约。
+恢复者提交、查询或取消同一执行，保留原 attempt、generation 和领域 job_id。
+未知提交结果保留原 permit，只有 status/cancel 续签时间；过期未确认提交先持久取消。
+pending 不消耗普通重试，终态结果经外部恢复 fence 与领域 owner 核对后原子提交。
+
+混沌 kill 改为持久取消意图：正在执行的领域保持非终态，前端显示停止待确认，
+不再依赖请求返回前一次性的 HTTP kill。只有 runner 终态才能结束原任务及领域记录。
+SQLite 0152 / PostgreSQL 0159 把原任务的取消和失败投影到尚未结束的容量领域记录，
+覆盖 handler 尚未执行、启动事务回滚和 lease 失效场景。已有业务事实时拒绝 down。
+根任务等待期间的终态 SQL 保护仍由 PRD-106 0151 / 0158 执行。
+
+旧同步适配器只允许显式 test_loopback，不再发起真实 HTTP 执行。
+专项测试、未执行门禁与发布边界见 `docs/testing/PRD-113-external-runtime-20260910.md`。
+当前只更新源代码，不升级正在试用的 schema 0150，不宣称整批或长稳验收完成。

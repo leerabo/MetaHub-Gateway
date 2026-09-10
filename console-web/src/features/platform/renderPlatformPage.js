@@ -512,18 +512,19 @@ function capacityView(state, permissions) {
 }
 
 function capacityChaosRow(item, access) {
+  const stopping = ["queued", "running"].includes(item.status) && item.stop_reason_code === "operator_kill";
   const canApprove = access.canChaos && item.status === "pending_approval";
-  const canKill = access.canChaos && new Set(["pending_approval", "queued", "running"]).has(item.status);
+  const canKill = access.canChaos && !stopping && new Set(["pending_approval", "queued", "running"]).has(item.status);
   const approvalForm = canApprove ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
     <input type="hidden" name="action" value="approve" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><input type="hidden" name="reasonCode" value="release_validation" /><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm approval</span></label><button type="submit" ${access.loading ? "disabled" : ""}>Approve</button></form>` : "";
   const killForm = canKill ? `<form data-platform-capacity-chaos-form class="platform-capacity-inline-command">
     <input type="hidden" name="action" value="kill" /><input type="hidden" name="experimentId" value="${escapeAttribute(item.chaos_experiment_id)}" /><input type="hidden" name="revision" value="${number(item.revision)}" /><select name="reasonCode" aria-label="Kill reason"><option value="operator_containment">Operator containment</option><option value="slo_containment">SLO containment</option></select><label class="platform-check"><input type="checkbox" name="confirmed" required /><span>Confirm kill</span></label><button class="platform-danger" type="submit" ${access.loading ? "disabled" : ""}>Kill</button></form>` : "";
   return `<tr>
-    <td data-label="Fault / scope"><strong>${escapeHtml(item.fault_code)}</strong><small>${escapeHtml(item.service_code)} · ${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)} · ${number(item.blast_tenant_count)} synthetic</small>${status(item.status)}</td>
+    <td data-label="Fault / scope"><strong>${escapeHtml(item.fault_code)}</strong><small>${escapeHtml(item.service_code)} · ${escapeHtml(item.environment_class)} · ${escapeHtml(item.region_code)} · ${number(item.blast_tenant_count)} synthetic</small>${status(stopping ? "stopping" : item.status)}</td>
     <td data-label="Objective"><strong>p95 ${number(item.objective_p95_ms)} ms</strong><small>error ${basisPoints(item.objective_error_rate_bps)} · stop ${basisPoints(item.stop_error_rate_bps)}</small></td>
     <td data-label="Approvals"><strong>${number(item.approvals.length)} / ${item.environment_class === "production" ? 2 : 0}</strong><small>distinct current authority</small></td>
     <td data-label="Checkpoint"><strong>generation ${number(item.kill_generation)}</strong><small>${escapeHtml(item.stop_reason_code ?? "pending")} · ${item.objective_met === null ? "pending" : item.objective_met ? "objective met" : "objective missed"}</small></td>
-    <td data-label="Controls">${approvalForm}${killForm || (!approvalForm ? '<span class="platform-restricted">Terminal</span>' : "")}</td>
+    <td data-label="Controls">${approvalForm}${killForm || (!approvalForm ? `<span class="platform-restricted">${stopping ? "Awaiting stop confirmation" : "Terminal"}</span>` : "")}</td>
   </tr>`;
 }
 

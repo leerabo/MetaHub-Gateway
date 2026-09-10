@@ -29,14 +29,7 @@ def execute_capacity_run(config: AppConfig, claims: CapacityPermitClaims) -> Cap
     mode = str(getattr(config, "capacity_runner_mode", "disabled"))
     if mode == "test_loopback" and config.environment == "test":
         return simulate_capacity_run(claims)
-    if mode != "isolated_http":
-        raise ApiError("capacity.runner_unavailable")
-    response = capacity_execution(config, claims, action="submit")
-    if isinstance(response, CapacityRunnerResult):
-        return response
-    if response.result is not None:
-        return response.result
-    # This synchronous adapter cannot own an external execution's polling lifecycle.
+    # Real submissions require the durable external-wait owner, even for immediate results.
     raise ApiError("capacity.runner_unavailable")
 
 
