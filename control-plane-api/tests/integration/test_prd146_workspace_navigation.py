@@ -690,6 +690,11 @@ async def test_navigation_preference_cas_and_exact_replay(
             "sidebar_collapsed": not nav["preference"]["sidebar_collapsed"],
         }
         initial_revision = nav["preference"]["revision"]
+        with closing(connect_database(runtime["config"].database_url)) as connection:
+            navigation_events_before = connection.execute(
+                """SELECT count(*) FROM workspace_navigation_events
+                   WHERE event_type='workspace_navigation.changed'"""
+            ).fetchone()[0]
         key = "prd146-navigation-preference-0001"
         headers = _identity_headers(
             runtime,
@@ -749,7 +754,7 @@ async def test_navigation_preference_cas_and_exact_replay(
                 """SELECT count(*) FROM workspace_navigation_events
                WHERE event_type='workspace_navigation.changed'"""
             ).fetchone()[0]
-            == 1
+            == navigation_events_before
         )
         contract = connection.execute(
             """SELECT snapshot.* FROM workspace_navigation_contract_heads head
