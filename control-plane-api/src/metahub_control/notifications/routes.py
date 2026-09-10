@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request, Response
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.identity.service import valid_opaque_value
 from metahub_control.platform_access.constants import (
@@ -109,7 +110,8 @@ async def get_notifications(
 ) -> NotificationListResponse:
     _exact_query(request, {"unread_only", "limit", "cursor"})
     _private(response)
-    return list_notifications(
+    return await run_in_threadpool(
+        list_notifications,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -132,7 +134,8 @@ async def patch_notification_read(
     _reject_query(request)
     if await _strict_json(request):
         raise ApiError("notification.request_invalid")
-    result = mark_notification_read(
+    result = await run_in_threadpool(
+        mark_notification_read,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -153,7 +156,8 @@ async def get_preferences(
     _context: Annotated[WorkspaceSessionContext, Depends(require_workspace_notification)],
 ) -> NotificationPreferencesResponse:
     _reject_query(request)
-    result = get_notification_preferences(
+    result = await run_in_threadpool(
+        get_notification_preferences,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -174,7 +178,8 @@ async def patch_preferences(
 ) -> NotificationPreferencesResponse:
     _reject_query(request)
     payload = _model(await _strict_json(request), NotificationPreferencesPatchRequest)
-    result = update_notification_preferences(
+    result = await run_in_threadpool(
+        update_notification_preferences,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -199,7 +204,8 @@ async def get_platform_notification_templates(
     _context: Annotated[PlatformContext, Depends(require_platform_notification)],
 ) -> NotificationTemplateListResponse:
     _reject_query(request)
-    result = list_notification_templates(
+    result = await run_in_threadpool(
+        list_notification_templates,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -224,7 +230,8 @@ async def post_platform_notification_template(
 ) -> NotificationTemplateResponse:
     _reject_query(request)
     payload = _model(await _strict_json(request), NotificationTemplateCreateRequest)
-    result = create_notification_template(
+    result = await run_in_threadpool(
+        create_notification_template,
         request.app.state.config,
         platform_session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
