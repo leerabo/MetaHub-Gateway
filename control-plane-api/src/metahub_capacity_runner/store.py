@@ -28,7 +28,7 @@ class RunnerStore:
         with self.connection() as connection:
             application_id = connection.execute("PRAGMA application_id").fetchone()[0]
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, 1}:
+            if version not in {0, 1, 2}:
                 raise ValueError("runner.state_invalid")
             if application_id not in {0, _APPLICATION_ID}:
                 raise ValueError("runner.state_invalid")
@@ -55,6 +55,7 @@ class RunnerStore:
                     elapsed_ms INTEGER NOT NULL DEFAULT 0,
                     metrics_json TEXT,
                     result_json TEXT,
+                    stop_scope TEXT NOT NULL DEFAULT 'runner_requests',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     CHECK((state='succeeded')=(result_json IS NOT NULL))
@@ -63,13 +64,49 @@ class RunnerStore:
                     object_id TEXT PRIMARY KEY,
                     generation INTEGER NOT NULL CHECK(generation>=1)
                 );
-                PRAGMA user_version=1;
+            """)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(executions)")}
+            if "stop_scope" not in columns:
+                connection.execute(
+                    "ALTER TABLE executions ADD COLUMN stop_scope TEXT NOT NULL "
+                    "DEFAULT 'runner_requests'"
+                )
+            connection.executescript("""
+                CREATE TABLE IF NOT EXISTS fault_effects(
+                    object_id TEXT PRIMARY KEY REFERENCES executions(object_id),
+                    generation INTEGER NOT NULL,
+                    binding_json TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN('prepared','reversed')),
+                    terminal_state TEXT NOT NULL DEFAULT 'interrupted'
+                        CHECK(terminal_state IN('cancelled','failed','interrupted')),
+                    terminal_outcome TEXT NOT NULL DEFAULT 'runner.interrupted',
+                    reversal_json TEXT,
+                    CHECK((state='reversed')=(reversal_json IS NOT NULL))
+                );
+                CREATE TRIGGER IF NOT EXISTS fault_effect_owner_insert
+                BEFORE INSERT ON fault_effects
+                WHEN NOT EXISTS(SELECT 1 FROM executions WHERE object_id=NEW.object_id
+                    AND generation=NEW.generation AND state='running')
+                BEGIN SELECT RAISE(ABORT,'fault effect owner invalid'); END;
+                CREATE TRIGGER IF NOT EXISTS fault_effect_immutable_owner
+                BEFORE UPDATE OF object_id,generation,binding_json ON fault_effects
+                WHEN NEW.object_id<>OLD.object_id OR NEW.generation<>OLD.generation
+                    OR NEW.binding_json<>OLD.binding_json
+                BEGIN SELECT RAISE(ABORT,'fault effect owner immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS fault_effect_terminal_guard
+                BEFORE UPDATE OF state ON executions
+                WHEN NEW.state IN('succeeded','failed','cancelled','interrupted')
+                    AND EXISTS(SELECT 1 FROM fault_effects WHERE object_id=NEW.object_id
+                        AND state<>'reversed')
+                BEGIN SELECT RAISE(ABORT,'fault reversal unconfirmed'); END;
+                PRAGMA user_version=2;
             """)
 
     @contextmanager
     def connection(self):
         connection = sqlite3.connect(self.path, timeout=2)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
         try:
             yield connection
         except BaseException:
@@ -143,13 +180,16 @@ class RunnerStore:
                 # Cancel may overtake a timed-out submit on a different connection.
                 connection.execute(
                     """INSERT INTO executions(
-                    object_id,execution_sha256,target_sha256,claims_json,state,safe_outcome_code)
-                    VALUES(?,?,?,?,'cancelled','runner.cancelled')""",
+                    object_id,execution_sha256,target_sha256,claims_json,state,safe_outcome_code,
+                    stop_scope) VALUES(?,?,?,?,'cancelled','runner.cancelled',?)""",
                     (
                         claims.object_id,
                         execution_digest(claims),
                         "0" * 64,
                         claims.model_dump_json(),
+                        "runner_requests_and_fault"
+                        if claims.operation == "chaos"
+                        else "runner_requests",
                     ),
                 )
                 current = connection.execute(
@@ -195,7 +235,9 @@ class RunnerStore:
             if claims.expires_at <= datetime.now(UTC):
                 connection.execute(
                     """UPDATE executions SET state='failed',
-                    safe_outcome_code='runner.permit_expired',updated_at=CURRENT_TIMESTAMP
+                    safe_outcome_code='runner.permit_expired',updated_at=CURRENT_TIMESTAMP,
+                    stop_scope=CASE WHEN object_id LIKE 'che_%' THEN 'runner_requests_and_fault'
+                        ELSE 'runner_requests' END
                     WHERE object_id=?""",
                     (claims.object_id,),
                 )
@@ -217,9 +259,38 @@ class RunnerStore:
     def interrupted(self) -> None:
         # Only the process owning executor.lock may recover abandoned executions.
         with self.connection() as connection:
-            connection.execute("""UPDATE executions SET state='interrupted',generation=generation+1,
-                safe_outcome_code='runner.interrupted',updated_at=CURRENT_TIMESTAMP
-                WHERE state IN('running','stopping')""")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("""UPDATE fault_effects SET
+                terminal_state=CASE WHEN (SELECT safe_outcome_code FROM executions
+                    WHERE executions.object_id=fault_effects.object_id)='runner.stop_requested'
+                    OR terminal_state='cancelled'
+                    THEN 'cancelled' ELSE 'interrupted' END,
+                terminal_outcome=CASE WHEN (SELECT safe_outcome_code FROM executions
+                    WHERE executions.object_id=fault_effects.object_id)='runner.stop_requested'
+                    OR terminal_state='cancelled'
+                    THEN 'runner.cancelled' ELSE 'runner.interrupted' END
+                WHERE state='prepared' AND object_id IN(
+                    SELECT object_id FROM executions WHERE state IN('running','stopping'))""")
+            connection.execute("""UPDATE executions SET
+                state=CASE WHEN safe_outcome_code='runner.stop_requested' OR EXISTS(
+                    SELECT 1 FROM fault_effects WHERE fault_effects.object_id=executions.object_id
+                        AND terminal_state='cancelled') THEN 'cancelled' ELSE 'interrupted' END,
+                generation=generation+1,
+                safe_outcome_code=CASE WHEN safe_outcome_code='runner.stop_requested' OR EXISTS(
+                    SELECT 1 FROM fault_effects WHERE fault_effects.object_id=executions.object_id
+                        AND terminal_state='cancelled')
+                    THEN 'runner.cancelled' ELSE 'runner.interrupted' END,
+                updated_at=CURRENT_TIMESTAMP,
+                stop_scope=CASE WHEN object_id LIKE 'che_%' THEN 'runner_requests_and_fault'
+                    ELSE 'runner_requests' END
+                WHERE state IN('running','stopping') AND NOT EXISTS(
+                    SELECT 1 FROM fault_effects WHERE fault_effects.object_id=executions.object_id
+                    AND state='prepared')""")
+            connection.execute("""UPDATE executions SET state='stopping',generation=generation+1,
+                safe_outcome_code='runner.fault_stop_pending',updated_at=CURRENT_TIMESTAMP
+                WHERE state IN('running','stopping') AND EXISTS(
+                    SELECT 1 FROM fault_effects WHERE fault_effects.object_id=executions.object_id
+                    AND state='prepared')""")
             connection.commit()
 
     def stopping(self, object_id: str, generation: int) -> bool:
@@ -259,8 +330,19 @@ class RunnerStore:
             ).fetchone()
             if current is None or current["state"] not in {"running", "stopping"}:
                 raise ValueError("runner.execution_fenced")
-            if current["state"] == "stopping":
+            if (
+                current["state"] == "stopping"
+                and current["safe_outcome_code"] == "runner.stop_requested"
+            ):
                 state, outcome, result = "cancelled", "runner.cancelled", None
+            fault = connection.execute(
+                "SELECT state,reversal_json FROM fault_effects WHERE object_id=?",
+                (object_id,),
+            ).fetchone()
+            if fault is not None and fault["state"] != "reversed":
+                raise ValueError("runner.fault_stop_unconfirmed")
+            if fault is not None:
+                metrics = dict(metrics, fault_reversal=json.loads(fault["reversal_json"]))
             if result is not None and (
                 result.object_id != object_id
                 or result.execution_sha256 != current["execution_sha256"]
@@ -269,12 +351,16 @@ class RunnerStore:
                 raise ValueError("runner.scope_conflict")
             connection.execute(
                 """UPDATE executions SET state=?,safe_outcome_code=?,metrics_json=?,
-                result_json=?,updated_at=CURRENT_TIMESTAMP WHERE object_id=? AND generation=?""",
+                result_json=?,stop_scope=?,updated_at=CURRENT_TIMESTAMP
+                WHERE object_id=? AND generation=?""",
                 (
                     state,
                     outcome,
                     json.dumps(metrics, separators=(",", ":")),
                     result.model_dump_json() if result else None,
+                    "runner_requests_and_fault"
+                    if object_id.startswith("che_")
+                    else "runner_requests",
                     object_id,
                     generation,
                 ),
@@ -287,8 +373,15 @@ class RunnerStore:
             """UPDATE executions SET
             state=CASE WHEN state='queued' THEN 'cancelled' ELSE 'stopping' END,
             safe_outcome_code=CASE WHEN state='queued' THEN 'runner.cancelled'
-                ELSE 'runner.stop_requested' END,updated_at=CURRENT_TIMESTAMP
-            WHERE object_id=? AND state IN('queued','running')""",
+                ELSE 'runner.stop_requested' END,updated_at=CURRENT_TIMESTAMP,
+            stop_scope=CASE WHEN state='queued' AND object_id LIKE 'che_%'
+                THEN 'runner_requests_and_fault' ELSE stop_scope END
+            WHERE object_id=? AND state IN('queued','running','stopping')""",
+            (object_id,),
+        )
+        connection.execute(
+            """UPDATE fault_effects SET terminal_state='cancelled',
+            terminal_outcome='runner.cancelled' WHERE object_id=? AND state='prepared'""",
             (object_id,),
         )
 
@@ -306,6 +399,7 @@ class RunnerStore:
             safe_outcome_code=row["safe_outcome_code"],
             sample_count=row["sample_count"],
             elapsed_ms=row["elapsed_ms"],
+            stop_scope=row["stop_scope"],
             result=CapacityRunnerResult.model_validate_json(row["result_json"])
             if row["result_json"]
             else None,

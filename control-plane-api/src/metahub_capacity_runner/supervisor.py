@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 
 from filelock import FileLock, Timeout
 
+from .chaos_measurement import measure_chaos
+from .fault_execution import FaultExecutionStore
 from .measurement import measure_load
 from .settings import CapacityRunnerSettings
 from .store import RunnerStore
@@ -18,11 +20,14 @@ class CapacityExecutor:
     def __init__(self, settings: CapacityRunnerSettings):
         self.settings = settings
         self.store = RunnerStore(settings.state_directory, max_queued_runs=settings.max_queued_runs)
+        self.effects = FaultExecutionStore(self.store)
         self.stopped = threading.Event()
         self.worker: threading.Thread | None = None
         self.lock = FileLock(self.store.lock_path, timeout=0, thread_local=False)
 
     def start(self):
+        if self.worker is not None or self.lock.is_locked:
+            raise ValueError("runner.executor_busy")
         try:
             self.lock.acquire()
         except Timeout:
@@ -50,12 +55,16 @@ class CapacityExecutor:
                 raise
         if self.worker is None or not self.worker.is_alive() or self.stopped.is_set():
             raise ValueError("runner.executor_unavailable")
-        target = self.settings.target(claims)
-        return self.store.submit(claims, target.digest())
+        return self.store.submit(claims, self.settings.execution_target_digest(claims))
 
     def run(self):
         while not self.stopped.is_set():
             try:
+                pending = self.effects.pending()
+                if pending is not None:
+                    if not asyncio.run(self.effects.reconcile(pending)):
+                        self.stopped.wait(0.5)
+                    continue
                 claimed = self.store.claim()
             except sqlite3.Error:
                 self.stopped.wait(0.5)
@@ -67,9 +76,10 @@ class CapacityExecutor:
                 self.stopped.wait(0.1)
                 continue
             claims, generation, target_sha256 = claimed
+            measured = None
             try:
                 target = self.settings.target(claims)
-                if target.digest() != target_sha256:
+                if self.settings.execution_target_digest(claims) != target_sha256:
                     raise ValueError("runner.target_changed")
                 if claims.expires_at <= datetime.now(UTC):
                     self.store.finish(
@@ -81,18 +91,27 @@ class CapacityExecutor:
                         metrics={},
                     )
                     continue
+
+                def stopping(owner=claims.object_id, revision=generation):
+                    return self.stopped.is_set() or self.store.stopping(owner, revision)
+
+                def progress(count, elapsed, owner=claims.object_id, revision=generation):
+                    self.store.progress(owner, revision, count, elapsed)
+
                 outcome = asyncio.run(
-                    measure_load(
+                    measure_chaos(
                         claims,
                         target,
-                        lambda owner=claims.object_id, revision=generation: (
-                            self.stopped.is_set() or self.store.stopping(owner, revision)
-                        ),
-                        lambda count, elapsed, owner=claims.object_id, revision=generation: (
-                            self.store.progress(owner, revision, count, elapsed)
-                        ),
+                        self.settings.fault(claims),
+                        self.effects,
+                        generation,
+                        stopping,
+                        progress,
                     )
+                    if claims.operation == "chaos"
+                    else measure_load(claims, target, stopping, progress)
                 )
+                measured = outcome
                 self.store.finish(
                     claims.object_id,
                     generation,
@@ -109,8 +128,24 @@ class CapacityExecutor:
                         result=None,
                         state="failed",
                         outcome="runner.execution_failed",
-                        metrics={},
+                        metrics=measured.metrics if measured is not None else {},
                     )
-                except (sqlite3.Error, ValueError):
+                except ValueError as exc:
+                    if str(exc) == "runner.fault_stop_unconfirmed":
+                        try:
+                            self.effects.defer(
+                                claims.object_id,
+                                generation,
+                                state="interrupted" if self.stopped.is_set() else "failed",
+                                outcome="runner.interrupted"
+                                if self.stopped.is_set()
+                                else "runner.fault_stop_unconfirmed",
+                                metrics=measured.metrics if measured is not None else {},
+                            )
+                        except (sqlite3.Error, ValueError):
+                            self.stopped.set()
+                    else:
+                        self.stopped.set()
+                except sqlite3.Error:
                     # Never take another job while ownership of this one is unresolved.
                     self.stopped.set()

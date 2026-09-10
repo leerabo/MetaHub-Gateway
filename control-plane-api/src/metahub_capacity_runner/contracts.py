@@ -69,6 +69,28 @@ class CapacityRunnerRequest(RunnerModel):
     permit: str = Field(min_length=80, max_length=8192)
 
 
+class ChaosExecutionEvidence(RunnerModel):
+    baseline_sample_count: int = Field(ge=1)
+    fault_sample_count: int = Field(ge=1)
+    recovery_sample_count: int = Field(ge=1)
+    reset_connections: int = Field(ge=0)
+    withheld_bytes: int = Field(ge=0)
+    injected_duration_ms: int = Field(ge=1)
+    recovery_duration_ms: int = Field(ge=0)
+    fault_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fault_state: Literal["released", "expired"]
+    requests_stopped: Literal[True]
+    fault_reversed: Literal[True]
+    target_recovered: Literal[True]
+
+    @model_validator(mode="after")
+    def validate_observation(self):
+        if self.reset_connections + self.withheld_bytes < 1:
+            raise ValueError("chaos fault was not observed")
+        return self
+
+
 class CapacityRunnerResult(RunnerModel):
     contract_version: Literal[2]
     evidence_kind: Literal["measured", "simulation"]
@@ -92,6 +114,7 @@ class CapacityRunnerResult(RunnerModel):
     observed_p95_ms: int | None = Field(default=None, ge=0)
     observed_error_rate_bps: int | None = Field(default=None, ge=0, le=10_000)
     objective_met: bool | None = None
+    chaos_evidence: ChaosExecutionEvidence | None = None
     result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -142,6 +165,14 @@ class CapacityRunnerResult(RunnerModel):
             )
         ):
             raise ValueError("chaos result is inconsistent")
+        if self.operation == "load_test" and self.chaos_evidence is not None:
+            raise ValueError("load result includes chaos evidence")
+        if (
+            self.operation == "chaos"
+            and self.evidence_kind == "measured"
+            and self.chaos_evidence is None
+        ):
+            raise ValueError("measured chaos evidence is missing")
         if not hmac.compare_digest(
             self.result_sha256, result_digest(self.model_dump(mode="json", exclude_none=True))
         ):
@@ -176,11 +207,17 @@ class CapacityExecutionInfo(RunnerModel):
     safe_outcome_code: str = Field(pattern=r"^runner\.[a-z0-9_]{2,80}$")
     sample_count: int = Field(ge=0)
     elapsed_ms: int = Field(ge=0)
-    stop_scope: Literal["runner_requests"] = "runner_requests"
+    stop_scope: Literal["runner_requests", "runner_requests_and_fault"] = "runner_requests"
     result: CapacityRunnerResult | None = None
 
     @model_validator(mode="after")
     def validate_terminal(self):
+        if (
+            self.object_id.startswith("che_")
+            and self.state not in {"queued", "running", "stopping"}
+            and self.stop_scope != "runner_requests_and_fault"
+        ):
+            raise ValueError("chaos fault stop is unconfirmed")
         if (self.state == "succeeded") != (self.result is not None):
             raise ValueError("execution result state is invalid")
         if self.result is not None and (

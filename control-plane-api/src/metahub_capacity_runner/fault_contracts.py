@@ -126,10 +126,24 @@ class FaultLeaseCommand(RunnerModel):
 
 
 class FaultLeaseInfo(RunnerModel):
+    protocol_version: Literal[3]
     object_id: str = Field(pattern=r"^che_[0-9a-f]{32}$")
     execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     binding_code: str
     state: Literal["active", "released", "expired", "interrupted"]
-    sequence: int
+    sequence: int = Field(ge=1, le=2_147_483_647)
     lease_until: datetime
     end_at: datetime
+    reset_connections: int = Field(ge=0)
+    withheld_bytes: int = Field(ge=0)
+    active_connections: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_times(self):
+        if (
+            self.lease_until.utcoffset() is None
+            or self.end_at.utcoffset() is None
+            or self.lease_until > self.end_at
+        ):
+            raise ValueError("fault.lease_time_invalid")
+        return self

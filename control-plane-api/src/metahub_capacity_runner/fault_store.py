@@ -29,7 +29,7 @@ class FaultLeaseStore:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if (
                 app_id not in {0, _APPLICATION_ID}
-                or version not in {0, 1}
+                or version not in {0, 1, 2, 3}
                 or (
                     app_id == 0
                     and connection.execute(
@@ -56,8 +56,23 @@ class FaultLeaseStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS fault_binding_owner
                     ON fault_leases(binding_code) WHERE state='active';
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS fault_observations(
+                    object_id TEXT PRIMARY KEY REFERENCES fault_leases(object_id),
+                    reset_connections INTEGER NOT NULL DEFAULT 0 CHECK(reset_connections>=0),
+                    withheld_bytes INTEGER NOT NULL DEFAULT 0 CHECK(withheld_bytes>=0),
+                    active_connections INTEGER NOT NULL DEFAULT 0 CHECK(active_connections>=0)
+                );
             """)
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(fault_observations)")
+            }
+            if "active_connections" not in columns:
+                connection.execute(
+                    "ALTER TABLE fault_observations ADD COLUMN active_connections "
+                    "INTEGER NOT NULL DEFAULT 0 CHECK(active_connections>=0)"
+                )
+            connection.execute("PRAGMA user_version=3")
+            connection.commit()
 
     @contextmanager
     def connection(self):
@@ -75,6 +90,7 @@ class FaultLeaseStore:
         # Called only by the lifetime-lock owner, before listeners open/after they close.
         with self.mutex, self.connection() as connection:
             connection.execute("UPDATE fault_leases SET state='interrupted' WHERE state='active'")
+            connection.execute("UPDATE fault_observations SET active_connections=0")
             connection.commit()
             self.deadlines.clear()
             self.end_deadlines.clear()
@@ -128,17 +144,17 @@ class FaultLeaseStore:
                 if command.action == "status":
                     connection.commit()
                     self._prune(connection)
-                    return self._info(row)
+                    return self._info(row, connection)
                 if command.sequence == row["sequence"] and fingerprint == row["command_sha256"]:
                     connection.commit()
                     self._prune(connection)
-                    return self._info(row)
+                    return self._info(row, connection)
                 if command.sequence <= row["sequence"]:
                     raise ValueError("fault.sequence_conflict")
                 if row["state"] != "active":
                     connection.commit()
                     self._prune(connection)
-                    return self._info(row)
+                    return self._info(row, connection)
                 if object_id not in self.end_deadlines:
                     raise ValueError("fault.recovery_required")
                 if command.action == "apply":
@@ -192,9 +208,13 @@ class FaultLeaseStore:
                     time.monotonic() + max(0, lease_until - time.time()),
                 )
             self._prune(connection)
-            return self._info(row)
+            return self._info(row, connection)
 
     def active_fault(self, binding_code: str) -> str | None:
+        effect = self.active_effect(binding_code)
+        return effect[1] if effect else None
+
+    def active_effect(self, binding_code: str) -> tuple[str, str] | None:
         with self.mutex, self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, time.time())
@@ -208,11 +228,69 @@ class FaultLeaseStore:
                 raise ValueError("fault.recovery_required")
             connection.commit()
             self._prune(connection)
-            return row["fault_code"] if row else None
+            return (row["object_id"], row["fault_code"]) if row else None
+
+    def observe_effect(self, object_id: str, *, reset: bool, withheld: int = 0):
+        if not 0 <= withheld <= 65536 or (reset and withheld):
+            raise ValueError("fault.observation_invalid")
+        with self.mutex, self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire(connection, time.time())
+            row = connection.execute(
+                "SELECT 1 FROM fault_leases WHERE object_id=? AND state='active'",
+                (object_id,),
+            ).fetchone()
+            if row is not None:
+                connection.execute(
+                    """INSERT INTO fault_observations(object_id,reset_connections,withheld_bytes)
+                    VALUES(?,?,?)
+                    ON CONFLICT(object_id) DO UPDATE SET
+                    reset_connections=reset_connections+excluded.reset_connections,
+                    withheld_bytes=withheld_bytes+excluded.withheld_bytes""",
+                    (object_id, int(reset), withheld),
+                )
+            connection.commit()
+            self._prune(connection)
+
+    def attach_effect(self, object_id: str, *, reset: bool) -> bool:
+        with self.mutex, self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._expire(connection, time.time())
+            active = connection.execute(
+                "SELECT 1 FROM fault_leases WHERE object_id=? AND state='active'",
+                (object_id,),
+            ).fetchone()
+            if active:
+                connection.execute(
+                    """INSERT INTO fault_observations(
+                    object_id,reset_connections,active_connections) VALUES(?,?,1)
+                    ON CONFLICT(object_id) DO UPDATE SET active_connections=active_connections+1,
+                    reset_connections=reset_connections+excluded.reset_connections""",
+                    (object_id, int(reset)),
+                )
+            connection.commit()
+            self._prune(connection)
+            return active is not None
+
+    def detach_effects(self, object_ids):
+        with self.mutex, self.connection() as connection:
+            connection.executemany(
+                """UPDATE fault_observations
+                SET active_connections=active_connections-1
+                WHERE object_id=? AND active_connections>0""",
+                [(item,) for item in object_ids],
+            )
+            connection.commit()
 
     @staticmethod
-    def _info(row) -> FaultLeaseInfo:
+    def _info(row, connection) -> FaultLeaseInfo:
+        observed = connection.execute(
+            "SELECT reset_connections,withheld_bytes,active_connections "
+            "FROM fault_observations WHERE object_id=?",
+            (row["object_id"],),
+        ).fetchone()
         return FaultLeaseInfo(
+            protocol_version=3,
             object_id=row["object_id"],
             execution_sha256=row["execution_sha256"],
             binding_code=row["binding_code"],
@@ -220,4 +298,7 @@ class FaultLeaseStore:
             sequence=row["sequence"],
             lease_until=datetime.fromtimestamp(row["lease_until"], UTC),
             end_at=datetime.fromtimestamp(row["end_at"], UTC),
+            reset_connections=observed[0] if observed else 0,
+            withheld_bytes=observed[1] if observed else 0,
+            active_connections=observed[2] if observed else 0,
         )

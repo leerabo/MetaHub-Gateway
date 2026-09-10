@@ -97,6 +97,24 @@ def _validate_result(result: CapacityRunnerResult, claims: CapacityPermitClaims)
         or not hmac.compare_digest(result.execution_sha256, execution_digest(claims))
     ):
         raise ApiError("capacity.runner_unavailable")
+    if claims.operation == "chaos":
+        evidence = result.chaos_evidence
+        if (
+            evidence is None
+            or evidence.baseline_sample_count < claims.synthetic_tenant_count
+            or evidence.fault_sample_count < claims.synthetic_tenant_count
+            or evidence.recovery_sample_count < claims.synthetic_tenant_count * 3
+            or evidence.injected_duration_ms < claims.duration_seconds * 1000 - 1000
+            or evidence.injected_duration_ms > claims.duration_seconds * 1000 + 1000
+            or (claims.fault_code == "dependency-timeout" and evidence.withheld_bytes < 1)
+            or (claims.fault_code != "dependency-timeout" and evidence.reset_connections < 1)
+            or result.objective_met
+            != (
+                result.observed_p95_ms <= claims.objective_p95_ms
+                and result.observed_error_rate_bps <= claims.objective_error_rate_bps
+            )
+        ):
+            raise ApiError("capacity.runner_unavailable")
     return result
 
 

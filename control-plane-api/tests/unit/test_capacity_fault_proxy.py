@@ -6,6 +6,7 @@ import asyncio
 import multiprocessing
 import socket
 import sqlite3
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from metahub_capacity_runner.fault_contracts import (
     FaultProxySettings,
     private_host,
 )
-from metahub_capacity_runner.fault_proxy import FaultProxy
+from metahub_capacity_runner.fault_proxy import FaultProxy, _confirm_closed
 from metahub_capacity_runner.fault_store import FaultLeaseStore
 
 
@@ -194,7 +195,7 @@ def test_expired_start_window_and_binding_mismatch(tmp_path):
 
 
 @asynccontextmanager
-async def network(tmp_path):
+async def network(tmp_path, *, received=None):
     peers = set()
 
     async def echo(reader, writer):
@@ -202,6 +203,8 @@ async def network(tmp_path):
         peers.add(task)
         try:
             while chunk := await reader.read(65536):
+                if received is not None:
+                    received.extend(chunk)
                 writer.write(chunk)
                 await writer.drain()
         except (OSError, asyncio.CancelledError):
@@ -242,11 +245,21 @@ async def close(writer):
     await writer.wait_closed()
 
 
+async def drained(proxy, run):
+    async with asyncio.timeout(3):
+        while True:
+            info = proxy.command(command(run, action="status"))
+            if info.active_connections == 0:
+                return info
+            await asyncio.sleep(0.02)
+
+
 @pytest.mark.anyio
-async def test_real_timeout_release_resumes_existing_connection_without_payload_persistence(
+async def test_real_timeout_release_discards_buffered_request_without_payload_persistence(
     tmp_path,
 ):
-    async with network(tmp_path) as (proxy, target):
+    received = bytearray()
+    async with network(tmp_path, received=received) as (proxy, target):
         reader, writer = await connect(target)
         writer.write(b"synthetic-before")
         await writer.drain()
@@ -257,9 +270,18 @@ async def test_real_timeout_release_resumes_existing_connection_without_payload_
         await writer.drain()
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(reader.readexactly(16), 0.25)
-        proxy.store.command(command(run, action="release", sequence=2), target)
-        assert await asyncio.wait_for(reader.readexactly(16), 2) == b"synthetic-during"
+        releasing = proxy.command(command(run, action="release", sequence=2))
+        assert releasing.active_connections == 1
+        assert releasing.withheld_bytes == 16
+        assert await asyncio.wait_for(reader.read(), 2) == b""
         await close(writer)
+        assert (await drained(proxy, run)).state == "released"
+        reader, writer = await connect(target)
+        writer.write(b"synthetic-after")
+        await writer.drain()
+        assert await asyncio.wait_for(reader.readexactly(15), 2) == b"synthetic-after"
+        await close(writer)
+        assert received == b"synthetic-beforesynthetic-after"
     with proxy.store.connection() as connection:
         rows = [tuple(row) for row in connection.execute("SELECT * FROM fault_leases")]
         assert "synthetic-during" not in str(rows)
@@ -267,7 +289,8 @@ async def test_real_timeout_release_resumes_existing_connection_without_payload_
 
 @pytest.mark.anyio
 async def test_real_timeout_expires_without_runner_heartbeat(tmp_path):
-    async with network(tmp_path) as (proxy, target):
+    received = bytearray()
+    async with network(tmp_path, received=received) as (proxy, target):
         run = execution()
         proxy.store.command(command(run, seconds=0.45), target)
         reader, writer = await connect(target)
@@ -275,8 +298,14 @@ async def test_real_timeout_expires_without_runner_heartbeat(tmp_path):
         await writer.drain()
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(reader.readexactly(5), 0.15)
-        assert await asyncio.wait_for(reader.readexactly(5), 2) == b"probe"
-        assert proxy.store.command(command(run, action="status"), target).state == "expired"
+        assert await asyncio.wait_for(reader.read(), 2) == b""
+        assert (await drained(proxy, run)).state == "expired"
+        assert received == b""
+        await close(writer)
+        reader, writer = await connect(target)
+        writer.write(b"fresh")
+        await writer.drain()
+        assert await asyncio.wait_for(reader.readexactly(5), 2) == b"fresh"
         await close(writer)
 
 
@@ -292,6 +321,7 @@ async def test_real_reset_closes_idle_connection_and_new_connection_recovers(tmp
         assert await asyncio.wait_for(reader.read(), 2) == b""
         await close(writer)
         proxy.store.command(command(run, action="release", sequence=2), target)
+        assert (await drained(proxy, run)).reset_connections == 1
         reader, writer = await connect(target)
         writer.write(b"recovered")
         await writer.drain()
@@ -372,7 +402,7 @@ async def test_api_auth_signature_scope_and_validation_redact_input(tmp_path, mo
             def unavailable(_binding):
                 raise sqlite3.OperationalError("private-database-path")
 
-            monkeypatch.setattr(proxy.store, "active_fault", unavailable)
+            monkeypatch.setattr(proxy.store, "active_effect", unavailable)
             unavailable_response = await client.get("/ready")
             assert unavailable_response.status_code == 503
             assert "private-database-path" not in unavailable_response.text
@@ -473,7 +503,7 @@ async def test_store_failure_closes_real_connection(tmp_path, monkeypatch):
         def unavailable(_binding):
             raise sqlite3.OperationalError("synthetic-store-unavailable")
 
-        monkeypatch.setattr(proxy.store, "active_fault", unavailable)
+        monkeypatch.setattr(proxy.store, "active_effect", unavailable)
         assert await asyncio.wait_for(reader.read(), 2) == b""
         await close(writer)
 
@@ -623,3 +653,105 @@ async def test_service_lifespan_loads_deployment_files_and_closes_listeners(tmp_
         with pytest.raises(ValueError, match="^fault.configuration_invalid$"):
             async with app.router.lifespan_context(app):
                 pytest.fail("reused internal credential started a fault proxy")
+
+
+@pytest.mark.anyio
+async def test_detach_failure_cannot_report_zero_before_lock_owner_restart(tmp_path, monkeypatch):
+    async with network(tmp_path) as (proxy, target):
+        run = execution()
+        proxy.command(command(run))
+        reader, writer = await connect(target)
+        writer.write(b"held-request")
+        await writer.drain()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(reader.read(), 0.2)
+
+        def unavailable(_effects):
+            raise sqlite3.OperationalError("synthetic-detach-failure")
+
+        monkeypatch.setattr(proxy.store, "detach_effects", unavailable)
+        assert proxy.command(command(run, action="release", sequence=2)).active_connections == 1
+        assert await asyncio.wait_for(reader.read(), 2) == b""
+        await close(writer)
+        async with asyncio.timeout(3):
+            while proxy.connections[target.binding_code]:
+                await asyncio.sleep(0.02)
+        assert proxy.command(command(run, action="status")).active_connections == 1
+        await proxy.close()
+        recovered = FaultProxy(proxy.settings)
+        await recovered.start()
+        try:
+            info = recovered.command(command(run, action="status"))
+            assert info.state == "released" and info.active_connections == 0
+        finally:
+            await recovered.close()
+
+
+@pytest.mark.anyio
+async def test_cancelled_attachment_keeps_durable_ownership_until_detached(tmp_path, monkeypatch):
+    proxy = FaultProxy(configuration(tmp_path, binding()))
+    run = execution()
+    proxy.store.command(command(run), binding())
+    attach = proxy.store.attach_effect
+    entered, complete = threading.Event(), threading.Event()
+
+    def delayed(object_id, *, reset):
+        accepted = attach(object_id, reset=reset)
+        entered.set()
+        assert complete.wait(3), "attachment synchronization timed out"
+        return accepted
+
+    monkeypatch.setattr(proxy.store, "attach_effect", delayed)
+    seen = set()
+    task = asyncio.create_task(proxy._attach(run.object_id, False, seen, asyncio.Lock()))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+    finally:
+        complete.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert seen == {run.object_id}
+    assert proxy.store.command(command(run, action="status"), binding()).active_connections == 1
+    proxy.store.detach_effects(seen)
+    assert proxy.store.command(command(run, action="status"), binding()).active_connections == 0
+
+
+def test_observation_journal_upgrade_preserves_prior_counters(tmp_path):
+    store, run, target = FaultLeaseStore(tmp_path), execution(), binding()
+    store.command(command(run), target)
+    store.observe_effect(run.object_id, reset=False, withheld=32)
+    with store.connection() as connection:
+        connection.execute("ALTER TABLE fault_observations DROP COLUMN active_connections")
+        connection.execute("PRAGMA user_version=2")
+        connection.commit()
+    upgraded = FaultLeaseStore(tmp_path)
+    upgraded.interrupt()
+    info = upgraded.command(command(run, action="status"), target)
+    assert info.withheld_bytes == 32 and info.active_connections == 0
+    assert info.state == "interrupted" and info.protocol_version == 3
+    with upgraded.connection() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("abort_closes", [False, True])
+async def test_slow_socket_close_requires_confirmed_abort(abort_closes):
+    class SlowStream:
+        def __init__(self):
+            self.transport = self
+            self.closed = asyncio.Event()
+            self.aborts = 0
+
+        async def wait_closed(self):
+            await self.closed.wait()
+
+        def abort(self):
+            self.aborts += 1
+            if abort_closes:
+                self.closed.set()
+
+    stream = SlowStream()
+    assert await _confirm_closed(stream) is abort_closes
+    assert stream.aborts >= 1

@@ -181,6 +181,47 @@ async def _resource(client: httpx.AsyncClient, target: CapacityTarget, token: st
             return CapacityResourceSample.model_validate_json(chunks)
 
 
+async def probe_request(client: httpx.AsyncClient, target: CapacityTarget, key: str | None) -> str:
+    headers = {}
+    body = None
+    if target.service_code == "gateway":
+        method, path = "POST", "/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {key}"
+        body = {
+            "model": target.model_name,
+            "stream": False,
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": "MetaHub synthetic capacity probe."}],
+        }
+    elif target.service_code == "control":
+        method, path = "GET", "/workspace/session"
+        headers["Cookie"] = f"__Host-metahub-workspace-session={key}"
+    else:
+        method, path = "GET", "/public/status"
+    try:
+        async with asyncio.timeout(target.request_timeout_seconds):
+            async with client.stream(
+                method, target.origin + path, headers=headers, json=body
+            ) as response:
+                category = (
+                    "success"
+                    if 200 <= response.status_code < 300
+                    else "limited"
+                    if response.status_code == 429
+                    else "unavailable"
+                    if response.status_code == 503
+                    else "unexpected"
+                )
+                size = 0
+                async for chunk in response.aiter_raw():
+                    size += len(chunk)
+                    if size > 131_072:
+                        return "unexpected"
+                return category
+    except (httpx.HTTPError, TimeoutError):
+        return "unexpected"
+
+
 async def measure_load(
     claims: CapacityPermitClaims,
     target: CapacityTarget,
@@ -247,50 +288,7 @@ async def measure_load(
                         subject, queued_at = await queue.get()
                         category = "unexpected"
                         try:
-                            headers = {}
-                            body = None
-                            if target.service_code == "gateway":
-                                method, path = "POST", "/v1/chat/completions"
-                                headers["Authorization"] = f"Bearer {keys[subject]}"
-                                body = {
-                                    "model": target.model_name,
-                                    "stream": False,
-                                    "max_tokens": 8,
-                                    "messages": [
-                                        {
-                                            "role": "user",
-                                            "content": "MetaHub synthetic capacity probe.",
-                                        }
-                                    ],
-                                }
-                            elif target.service_code == "control":
-                                method, path = "GET", "/workspace/session"
-                                headers["Cookie"] = (
-                                    f"__Host-metahub-workspace-session={keys[subject]}"
-                                )
-                            else:
-                                method, path = "GET", "/public/status"
-                            async with asyncio.timeout(target.request_timeout_seconds):
-                                async with client.stream(
-                                    method, target.origin + path, headers=headers, json=body
-                                ) as response:
-                                    category = (
-                                        "success"
-                                        if 200 <= response.status_code < 300
-                                        else "limited"
-                                        if response.status_code == 429
-                                        else "unavailable"
-                                        if response.status_code == 503
-                                        else "unexpected"
-                                    )
-                                    size = 0
-                                    async for chunk in response.aiter_raw():
-                                        size += len(chunk)
-                                        if size > 131_072:
-                                            category = "unexpected"
-                                            break
-                        except (httpx.HTTPError, TimeoutError):
-                            category = "unexpected"
+                            category = await probe_request(client, target, keys[subject])
                         except asyncio.CancelledError:
                             aggregates.statuses["cancelled"] += 1
                             raise

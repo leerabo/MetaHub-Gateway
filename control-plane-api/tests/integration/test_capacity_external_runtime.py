@@ -136,6 +136,11 @@ def observation(claims, state="running"):
         safe_outcome_code=f"runner.{state}",
         sample_count=0,
         elapsed_ms=0,
+        stop_scope=(
+            "runner_requests_and_fault"
+            if claims.operation == "chaos" and state not in {"queued", "running", "stopping"}
+            else "runner_requests"
+        ),
     )
 
 
