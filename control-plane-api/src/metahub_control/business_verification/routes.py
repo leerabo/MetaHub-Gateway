@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from metahub_shared.runtime.errors import ApiError
 from metahub_shared.runtime.fastapi_app import clear_workspace_cookies_on_error
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
@@ -146,7 +147,8 @@ async def post_business_verification(
     # DTO 校验错误只返回固定码，不能回显法定名称、证号或对象引用。
     except ValueError:
         raise ApiError("business_verification.request_invalid") from None
-    result = submit_business_verification(
+    result = await run_in_threadpool(
+        submit_business_verification,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -179,7 +181,8 @@ async def get_business_verification(
     """返回当前主体、认证、合同和开票资料的脱敏 Workspace 摘要。"""
 
     _reject_query(request)
-    result = get_workspace_business_verification(
+    result = await run_in_threadpool(
+        get_workspace_business_verification,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -215,7 +218,8 @@ async def patch_billing_profile(
     # DTO 错误不能回显税号、银行账号或地址等开票明文。
     except ValueError:
         raise ApiError("business_verification.request_invalid") from None
-    result = update_workspace_billing_profile(
+    result = await run_in_threadpool(
+        update_workspace_billing_profile,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -253,7 +257,8 @@ async def get_platform_business_verifications(
     # 队列状态只能使用后端冻结枚举，未知文本不得进入查询或错误详情。
     if status_filter is not None and status_filter not in _QUEUE_STATUSES:
         raise ApiError("business_verification.request_invalid")
-    result = list_platform_business_verifications(
+    result = await run_in_threadpool(
+        list_platform_business_verifications,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -289,7 +294,8 @@ async def post_platform_business_verification_review(
     # 审核决定校验失败只返回固定码，禁止形成自由原因或客户资料回显通道。
     except ValueError:
         raise ApiError("business_verification.request_invalid") from None
-    result = review_business_verification(
+    result = await run_in_threadpool(
+        review_business_verification,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -326,7 +332,8 @@ async def post_evidence_download_token(
     # 下载授权端点不接受任何客户端 owner 或对象存储参数，非空正文一律拒绝。
     if payload:
         raise ApiError("business_verification.request_invalid")
-    result = issue_evidence_download_token(
+    result = await run_in_threadpool(
+        issue_evidence_download_token,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
