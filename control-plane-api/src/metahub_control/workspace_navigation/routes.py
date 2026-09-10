@@ -14,6 +14,7 @@ from metahub_shared.runtime.fastapi_app import (
     clear_workspace_cookies_on_error,
 )
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
 from metahub_control.identity.service import (
@@ -138,7 +139,8 @@ async def workspace_navigation_route(
     ],
 ) -> WorkspaceNavigationResponse:
     _reject_query(request, "workspace_session.request_invalid")
-    result = get_workspace_navigation(
+    result = await run_in_threadpool(
+        get_workspace_navigation,
         request.app.state.config,
         session_token=_workspace_token(request),
         request_id=_request_id(request),
@@ -164,7 +166,8 @@ async def workspace_getting_started_route(
     ],
 ) -> GettingStartedResponse:
     _reject_query(request, "workspace_session.request_invalid")
-    result = get_workspace_getting_started(
+    result = await run_in_threadpool(
+        get_workspace_getting_started,
         request.app.state.config,
         session_token=_workspace_token(request),
         request_id=_request_id(request),
@@ -198,7 +201,8 @@ async def patch_navigation_preference_route(
         NavigationPreferencePatch,
         "identity.request_invalid",
     )
-    result = change_navigation_preference(
+    result = await run_in_threadpool(
+        change_navigation_preference,
         request.app.state.config,
         session_token=_identity_token(request),
         csrf_token=_identity_csrf(request),
@@ -223,7 +227,8 @@ async def workspace_advanced_tools_route(
     ],
 ) -> AdvancedToolsResponse:
     _reject_query(request, "workspace_session.request_invalid")
-    result = get_workspace_advanced_tools(
+    result = await run_in_threadpool(
+        get_workspace_advanced_tools,
         request.app.state.config,
         session_token=_workspace_token(request),
         request_id=_request_id(request),
@@ -256,7 +261,8 @@ async def open_workspace_advanced_tool_route(
     await _reject_body(request, "workspace_session.request_invalid")
     if _TOOL_CODE.fullmatch(tool_code) is None or tool_code not in _KNOWN_TOOL_CODES:
         raise ApiError("workspace_session.request_invalid")
-    result = open_workspace_advanced_tool(
+    result = await run_in_threadpool(
+        open_workspace_advanced_tool,
         request.app.state.config,
         session_token=_workspace_token(request),
         tool_code=tool_code,
@@ -285,7 +291,8 @@ async def workspace_page_visit_route(
 ) -> WorkspacePageVisitResponse:
     _reject_query(request, "workspace_session.request_invalid")
     payload = await _model(request, WorkspacePageVisitRequest, "workspace_session.request_invalid")
-    result = record_workspace_page_visit(
+    result = await run_in_threadpool(
+        record_workspace_page_visit,
         request.app.state.config,
         session_token=_workspace_token(request),
         payload=payload,
