@@ -157,3 +157,98 @@ def test_postgresql_external_down_refuses_retained_facts(config, monkeypatch):
         )
     finally:
         connection.close()
+
+
+def phase_probe(config):
+    connection = connect_database(config.database_url)
+    try:
+        connection.execute("CREATE TABLE IF NOT EXISTS s3_external_phase_probe(job_id TEXT UNIQUE)")
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_postgresql_external_phase_concurrent_replay_commits_once(config, monkeypatch):
+    phase_probe(config)
+    job_id = begin(config, monkeypatch)
+    lease = external.claim_external_job(config, worker_code="pg-phase-owner")
+    assert lease.job_id == job_id
+    barrier = threading.Barrier(2)
+
+    def commit(_):
+        context = external.ExternalJobContext(config, lease)
+        barrier.wait(timeout=5)
+        return context.commit_effect(
+            "dr.restore",
+            {"proof": "private-native-proof-marker"},
+            lambda connection: connection.execute(
+                "INSERT INTO s3_external_phase_probe VALUES(?)", (job_id,)
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(commit, range(2)))
+    assert sorted(results) == [False, True]
+    assert (
+        base.read(config, "SELECT COUNT(*) FROM s3_external_phase_probe WHERE job_id=?", (job_id,))[
+            0
+        ][0]
+        == 1
+    )
+    assert tuple(
+        base.read(
+            config,
+            "SELECT status,attempt_count FROM platform_jobs WHERE platform_job_id=?",
+            (job_id,),
+        )[0]
+    ) == ("running", 1)
+    assert (
+        base.read(
+            config,
+            "SELECT COUNT(*) FROM platform_job_effects "
+            "WHERE platform_job_id=? AND effect_key='dr.restore'",
+            (job_id,),
+        )[0][0]
+        == 1
+    )
+    finish(external.ExternalJobContext(config, lease))
+
+
+def test_postgresql_external_phase_wall_clock_expiry_rolls_back(config, monkeypatch):
+    phase_probe(config)
+    job_id = begin(config, monkeypatch)
+    monkeypatch.setattr(external, "RESUMPTION_SECONDS", 0.15)
+    lease = external.claim_external_job(config, worker_code="pg-phase-expired")
+    assert lease.job_id == job_id
+    context = external.ExternalJobContext(config, lease)
+
+    def apply(connection):
+        connection.execute("INSERT INTO s3_external_phase_probe VALUES(?)", (job_id,))
+        connection.execute("SELECT pg_sleep(0.3)")
+
+    with pytest.raises(ApiError) as rejected:
+        context.commit_effect("dr.restore", {"proof": "bound"}, apply)
+    assert rejected.value.code == "platform_job.lease_lost"
+    assert (
+        base.read(config, "SELECT COUNT(*) FROM s3_external_phase_probe WHERE job_id=?", (job_id,))[
+            0
+        ][0]
+        == 0
+    )
+    assert (
+        base.read(
+            config, "SELECT COUNT(*) FROM platform_job_effects WHERE platform_job_id=?", (job_id,)
+        )[0][0]
+        == 0
+    )
+    assert (
+        base.read(config, "SELECT status FROM platform_jobs WHERE platform_job_id=?", (job_id,))[0][
+            0
+        ]
+        == "running"
+    )
+    monkeypatch.setattr(external, "RESUMPTION_SECONDS", 45)
+    replacement = external.claim_external_job(config, worker_code="pg-phase-replacement")
+    assert replacement.job_id == job_id
+    assert replacement.resume_generation == lease.resume_generation + 1
+    finish(external.ExternalJobContext(config, replacement))

@@ -183,38 +183,18 @@ class PlatformJobContext:
             connection.execute("BEGIN IMMEDIATE")
             job = _live_lease(connection, self.config, self.lease)
             _cancel_if_requested(connection, job, self.lease)
-            existing = connection.execute(
-                "SELECT effect_sha256 FROM platform_job_effects "
-                "WHERE platform_job_id=? AND effect_key=?",
-                (self.lease.job_id, effect_key),
-            ).fetchone()
-            if existing is not None:
-                if not hmac.compare_digest(str(existing[0]), digest):
-                    raise ApiError("platform_job.effect_conflict")
-                connection.commit()
-                return False
-            if apply is not None:
-                apply(connection)
-            connection.execute(
-                """
-                INSERT INTO platform_job_effects(
-                  platform_job_effect_id,platform_job_id,generation,effect_key,
-                  effect_sha256,committed_at)
-                VALUES(?,?,?,?,?,?)
-                """,
-                (
-                    _id("pje_"),
-                    self.lease.job_id,
-                    self.lease.generation,
-                    effect_key,
-                    digest,
-                    _db_time(_database_now(connection)),
-                ),
+            committed = _commit_effect_in_transaction(
+                connection,
+                job_id=self.lease.job_id,
+                generation=self.lease.generation,
+                effect_key=effect_key,
+                digest=digest,
+                apply=apply,
             )
             job = _live_lease(connection, self.config, self.lease)
             _cancel_if_requested(connection, job, self.lease)
             connection.commit()
-            return True
+            return committed
         except PlatformJobCancelled:
             _rollback(connection)
             _fail_platform_job(
@@ -249,6 +229,35 @@ class PlatformJobContext:
             raise ApiError("platform_job.unavailable") from None
         finally:
             connection.close()
+
+
+def _commit_effect_in_transaction(
+    connection,
+    *,
+    job_id: str,
+    generation: int,
+    effect_key: str,
+    digest: str,
+    apply: Callable[[Any], None] | None,
+) -> bool:
+    """Caller holds the job lock and rechecks its own lease and stop fence before commit."""
+    existing = connection.execute(
+        "SELECT effect_sha256 FROM platform_job_effects WHERE platform_job_id=? AND effect_key=?",
+        (job_id, effect_key),
+    ).fetchone()
+    if existing is not None:
+        if not hmac.compare_digest(str(existing[0]), digest):
+            raise ApiError("platform_job.effect_conflict")
+        return False
+    if apply is not None:
+        apply(connection)
+    connection.execute(
+        """INSERT INTO platform_job_effects(
+             platform_job_effect_id,platform_job_id,generation,effect_key,
+             effect_sha256,committed_at) VALUES(?,?,?,?,?,?)""",
+        (_id("pje_"), job_id, generation, effect_key, digest, _db_time(_database_now(connection))),
+    )
+    return True
 
 
 def claim_platform_job(

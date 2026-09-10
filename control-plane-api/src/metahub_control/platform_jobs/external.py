@@ -341,6 +341,41 @@ class ExternalJobContext:
             r._rollback(connection)
             connection.close()
 
+    def commit_effect(
+        self,
+        effect_key: str,
+        value: object,
+        apply: Callable[[Any], None] | None = None,
+    ) -> bool:
+        """Commit one short database phase without ending or releasing the external wait."""
+        if r._EFFECT_RE.fullmatch(effect_key) is None:
+            raise ApiError("platform_job.input_invalid")
+        digest = r._digest(value)
+        connection = r._connect(self.config)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = _live(connection, self.config, self.lease)
+            reason = _stop_reason(row, r._database_now(connection))
+            if reason is not None:
+                raise ApiError(reason)
+            committed = r._commit_effect_in_transaction(
+                connection,
+                job_id=self.lease.job_id,
+                generation=self.lease.job_generation,
+                effect_key=effect_key,
+                digest=digest,
+                apply=apply,
+            )
+            row = _live(connection, self.config, self.lease)
+            reason = _stop_reason(row, r._database_now(connection))
+            if reason is not None:
+                raise ApiError(reason)
+            connection.commit()
+            return committed
+        finally:
+            r._rollback(connection)
+            connection.close()
+
     def defer(self, *, acknowledged: bool = False, outcome: str | None = None) -> str:
         if outcome is not None:
             r._valid_outcome(outcome)
