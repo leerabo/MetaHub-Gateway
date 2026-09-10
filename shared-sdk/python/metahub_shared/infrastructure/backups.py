@@ -6,18 +6,21 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from metahub_shared.db import connect_database, database_backend
 from metahub_shared.runtime.config import AppConfig
+
+from .backup_consistency import TableFingerprint, fingerprint_database
 
 _MAX_BACKUP_BYTES = 10 * 1024**4
 
@@ -28,6 +31,8 @@ class BackupArtifact:
     source_watermark: str
     schema_head: str
     tenant_owner_sample_count: int
+    consistency: tuple[TableFingerprint, ...] | None = None
+    source_database_identity_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +49,9 @@ class RestoreVerification:
     schema_head: str
     manifest_sha256: str
     tenant_owner_sample_count: int
+    consistency: tuple[TableFingerprint, ...] | None = None
+    source_watermark: str = ""
+    content_sha256: str = ""
 
 
 class BackupRuntimeError(Exception):
@@ -81,8 +89,11 @@ def store_backup(
         "size_bytes": len(artifact.payload),
         "source_watermark": artifact.source_watermark,
         "tenant_owner_sample_count": artifact.tenant_owner_sample_count,
-        "version": 1,
+        "version": 1 if artifact.consistency is None else 2,
     }
+    if artifact.consistency is not None:
+        manifest["consistency"] = [item.model_dump() for item in artifact.consistency]
+        manifest["source_database_identity_sha256"] = artifact.source_database_identity_sha256
     manifest_bytes = _canonical(manifest)
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     data_key, wrapped_key, key_version = _generate_data_key(config, backup_id=backup_id)
@@ -123,18 +134,23 @@ def restore_and_verify(
 ) -> RestoreVerification:
     envelope_bytes = _s3_get(config, object_key=object_key)
     envelope = _strict_object(envelope_bytes)
-    if set(envelope) != {
-        "ciphertext",
-        "key_provider",
-        "manifest",
-        "manifest_sha256",
-        "nonce",
-        "version",
-        "wrapped_data_key",
-    } or envelope.get("version") != 1 or envelope.get("key_provider") != config.kms_provider:
+    if (
+        set(envelope)
+        != {
+            "ciphertext",
+            "key_provider",
+            "manifest",
+            "manifest_sha256",
+            "nonce",
+            "version",
+            "wrapped_data_key",
+        }
+        or envelope.get("version") != 1
+        or envelope.get("key_provider") != config.kms_provider
+    ):
         raise BackupRuntimeError("backup.envelope_invalid")
     manifest = envelope.get("manifest")
-    if type(manifest) is not dict or set(manifest) != {
+    fields = {
         "backup_id",
         "content_sha256",
         "schema_head",
@@ -142,11 +158,16 @@ def restore_and_verify(
         "source_watermark",
         "tenant_owner_sample_count",
         "version",
-    }:
+    }
+    if type(manifest) is not dict or type(manifest.get("version")) is not int:
+        raise BackupRuntimeError("backup.manifest_invalid")
+    version = manifest["version"]
+    if version not in {1, 2} or set(manifest) != fields | (
+        {"consistency", "source_database_identity_sha256"} if version == 2 else set()
+    ):
         raise BackupRuntimeError("backup.manifest_invalid")
     if (
-        manifest.get("version") != 1
-        or type(manifest.get("size_bytes")) is not int
+        type(manifest.get("size_bytes")) is not int
         or not 0 <= manifest["size_bytes"] <= _MAX_BACKUP_BYTES
         or type(manifest.get("tenant_owner_sample_count")) is not int
         or not 0 <= manifest["tenant_owner_sample_count"] <= 10_000
@@ -158,6 +179,25 @@ def restore_and_verify(
         or len(manifest["content_sha256"]) != 64
     ):
         raise BackupRuntimeError("backup.manifest_invalid")
+    expected_consistency = None
+    source_identity = None
+    if version == 2:
+        try:
+            source_identity = manifest["source_database_identity_sha256"]
+            if source_identity is not None and (
+                type(source_identity) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", source_identity) is None
+            ):
+                raise ValueError
+            values = manifest["consistency"]
+            if type(values) is not list or not 4 <= len(values) <= 1024:
+                raise ValueError
+            expected_consistency = tuple(TableFingerprint.model_validate(value) for value in values)
+            names = [value.table_name for value in expected_consistency]
+            if names != sorted(set(names)):
+                raise ValueError
+        except ValueError:
+            raise BackupRuntimeError("backup.manifest_invalid") from None
     manifest_bytes = _canonical(manifest)
     actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     if (
@@ -181,16 +221,24 @@ def restore_and_verify(
         raise BackupRuntimeError("backup.decrypt_failed") from None
     finally:
         data_key = b""
-    if (
-        len(payload) != manifest.get("size_bytes")
-        or not _same(hashlib.sha256(payload).hexdigest(), str(manifest.get("content_sha256")))
+    if len(payload) != manifest.get("size_bytes") or not _same(
+        hashlib.sha256(payload).hexdigest(), str(manifest.get("content_sha256"))
     ):
         raise BackupRuntimeError("backup.content_hash_invalid")
     backend = database_backend(config.database_url)
     if backend == "sqlite":
-        schema_head, samples = _verify_sqlite_restore(payload)
+        schema_head, samples, consistency = _verify_sqlite_restore(
+            payload, expected_consistency=expected_consistency
+        )
     elif backend == "postgresql":
-        schema_head, samples = _verify_postgres_restore(config, payload)
+        if version == 2 and source_identity is None:
+            raise BackupRuntimeError("backup.manifest_invalid")
+        schema_head, samples, consistency = _verify_postgres_restore(
+            config,
+            payload,
+            expected_consistency=expected_consistency,
+            source_database_identity_sha256=source_identity,
+        )
     else:
         raise BackupRuntimeError("backup.database_unavailable")
     if schema_head != manifest.get("schema_head"):
@@ -201,6 +249,9 @@ def restore_and_verify(
         schema_head=schema_head,
         manifest_sha256=actual_manifest_sha256,
         tenant_owner_sample_count=samples,
+        consistency=consistency,
+        source_watermark=str(manifest["source_watermark"]),
+        content_sha256=str(manifest["content_sha256"]),
     )
 
 
@@ -221,6 +272,7 @@ def _sqlite_snapshot(config: AppConfig) -> BackupArtifact:
         )
         watermark = str(destination.execute("PRAGMA data_version").fetchone()[0])
         samples = _sqlite_owner_samples(destination)
+        consistency = fingerprint_database(destination, backend="sqlite")
         destination.close()
         payload = target_path.read_bytes()
         return BackupArtifact(
@@ -228,8 +280,9 @@ def _sqlite_snapshot(config: AppConfig) -> BackupArtifact:
             source_watermark=f"sqlite-data-version:{watermark}",
             schema_head=schema_head,
             tenant_owner_sample_count=samples,
+            consistency=consistency,
         )
-    except (sqlite3.Error, OSError, IndexError, TypeError):
+    except (sqlite3.Error, OSError, IndexError, TypeError, ValueError):
         raise BackupRuntimeError("backup.snapshot_failed") from None
     finally:
         source.close()
@@ -243,8 +296,20 @@ def _sqlite_snapshot(config: AppConfig) -> BackupArtifact:
 def _postgres_snapshot(config: AppConfig, *, backup_type: str) -> BackupArtifact:
     if backup_type != "full":
         raise BackupRuntimeError("backup.incremental_unsupported")
-    connection = connect_database(config.database_url)
+    _validate_postgres_url(config.database_url)
+    connection = None
+    path = None
+    process_environment = _postgres_environment(config.database_url)
     try:
+        connection = connect_database(config.database_url)
+        handle = tempfile.NamedTemporaryFile(prefix="metahub-backup-", suffix=".dump", delete=False)
+        path = Path(handle.name)
+        handle.close()
+        connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        source_identity = _database_identity_digest(connection)
+        snapshot = str(connection.execute("SELECT pg_export_snapshot()").fetchone()[0])
+        if re.fullmatch(r"[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+", snapshot) is None:
+            raise BackupRuntimeError("backup.snapshot_failed")
         watermark = str(connection.execute("SELECT pg_current_wal_lsn()").fetchone()[0])
         schema_head = str(
             connection.execute(
@@ -257,17 +322,7 @@ def _postgres_snapshot(config: AppConfig, *, backup_type: str) -> BackupArtifact
                 "SELECT COUNT(*) FROM (SELECT 1 FROM workspace_tenant_bindings LIMIT 100) owners"
             ).fetchone()[0]
         )
-        connection.commit()
-    except Exception:
-        raise BackupRuntimeError("backup.snapshot_failed") from None
-    finally:
-        connection.close()
-    handle = tempfile.NamedTemporaryFile(prefix="metahub-backup-", suffix=".dump", delete=False)
-    path = Path(handle.name)
-    handle.close()
-    process_environment = os.environ.copy()
-    process_environment["PGDATABASE"] = config.database_url or ""
-    try:
+        consistency = fingerprint_database(connection, backend="postgresql")
         result = subprocess.run(
             [
                 "pg_dump",
@@ -275,6 +330,7 @@ def _postgres_snapshot(config: AppConfig, *, backup_type: str) -> BackupArtifact
                 "--compress=6",
                 "--no-owner",
                 "--no-privileges",
+                f"--snapshot={snapshot}",
                 f"--file={path}",
             ],
             env=process_environment,
@@ -284,18 +340,28 @@ def _postgres_snapshot(config: AppConfig, *, backup_type: str) -> BackupArtifact
         )
         if result.returncode != 0:
             raise BackupRuntimeError("backup.snapshot_failed")
+        connection.commit()
         payload = path.read_bytes()
         return BackupArtifact(
             payload=payload,
             source_watermark=f"postgresql-lsn:{watermark}",
             schema_head=schema_head,
             tenant_owner_sample_count=samples,
+            consistency=consistency,
+            source_database_identity_sha256=source_identity,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except BackupRuntimeError:
+        raise
+    except Exception:
         raise BackupRuntimeError("backup.snapshot_failed") from None
     finally:
-        process_environment["PGDATABASE"] = ""
-        path.unlink(missing_ok=True)
+        process_environment.clear()
+        try:
+            if connection is not None:
+                connection.close()
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
 
 
 def _generate_data_key(config: AppConfig, *, backup_id: str) -> tuple[bytes, bytes, str]:
@@ -318,9 +384,12 @@ def _generate_data_key(config: AppConfig, *, backup_id: str) -> tuple[bytes, byt
         )
         data_key = bytes(result["Plaintext"])
         wrapped = bytes(result["CiphertextBlob"])
-        key_version = "kmsv_" + hashlib.sha256(
-            str(result.get("KeyId") or config.kms_key_id).encode("utf-8")
-        ).hexdigest()[:24]
+        key_version = (
+            "kmsv_"
+            + hashlib.sha256(
+                str(result.get("KeyId") or config.kms_key_id).encode("utf-8")
+            ).hexdigest()[:24]
+        )
         if len(data_key) != 32 or not wrapped:
             raise ValueError
         return data_key, wrapped, key_version
@@ -354,9 +423,7 @@ def _decrypt_data_key(config: AppConfig, *, backup_id: str, wrapped_key: bytes) 
         raise BackupRuntimeError("backup.kms_unavailable") from None
 
 
-def _s3_put(
-    config: AppConfig, *, object_key: str, payload: bytes, content_sha256: str
-) -> None:
+def _s3_put(config: AppConfig, *, object_key: str, payload: bytes, content_sha256: str) -> None:
     if not config.object_store_bucket:
         raise BackupRuntimeError("backup.object_store_unavailable")
     try:
@@ -378,8 +445,10 @@ def _s3_get(config: AppConfig, *, object_key: str) -> bytes:
         body = _boto_client(config, "s3").get_object(
             Bucket=config.object_store_bucket, Key=object_key
         )["Body"]
-        payload = body.read(_MAX_BACKUP_BYTES + 1)
-        body.close()
+        try:
+            payload = body.read(_MAX_BACKUP_BYTES + 1)
+        finally:
+            body.close()
         if len(payload) > _MAX_BACKUP_BYTES:
             raise ValueError
         return bytes(payload)
@@ -400,9 +469,7 @@ def _boto_client(config: AppConfig, service: str):
             read_timeout=max(10, config.infrastructure_probe_timeout_seconds),
             retries={"max_attempts": 2, "mode": "standard"},
             s3={
-                "addressing_style": (
-                    "path" if config.object_store_force_path_style else "virtual"
-                )
+                "addressing_style": ("path" if config.object_store_force_path_style else "virtual")
             },
         ),
     }
@@ -415,7 +482,9 @@ def _boto_client(config: AppConfig, service: str):
     return boto3.client(service, **options)
 
 
-def _verify_sqlite_restore(payload: bytes) -> tuple[str, int]:
+def _verify_sqlite_restore(
+    payload: bytes, *, expected_consistency: tuple[TableFingerprint, ...] | None = None
+) -> tuple[str, int, tuple[TableFingerprint, ...] | None]:
     handle = tempfile.NamedTemporaryFile(prefix="metahub-restore-", suffix=".sqlite3", delete=False)
     path = Path(handle.name)
     try:
@@ -433,7 +502,8 @@ def _verify_sqlite_restore(payload: bytes) -> tuple[str, int]:
                     "ORDER BY version DESC LIMIT 1"
                 ).fetchone()[0]
             )
-            return schema_head, _sqlite_owner_samples(connection)
+            consistency = _verify_consistency(connection, "sqlite", expected_consistency)
+            return schema_head, _sqlite_owner_samples(connection), consistency
         finally:
             connection.close()
     except BackupRuntimeError:
@@ -448,28 +518,69 @@ def _verify_sqlite_restore(payload: bytes) -> tuple[str, int]:
         path.unlink(missing_ok=True)
 
 
-def _verify_postgres_restore(config: AppConfig, payload: bytes) -> tuple[str, int]:
+def _verify_postgres_restore(
+    config: AppConfig,
+    payload: bytes,
+    *,
+    expected_consistency: tuple[TableFingerprint, ...] | None = None,
+    source_database_identity_sha256: str | None = None,
+) -> tuple[str, int, tuple[TableFingerprint, ...] | None]:
     if not config.backup_restore_database_url:
         raise BackupRuntimeError("backup.restore_target_missing")
+    _validate_postgres_url(config.database_url)
+    _validate_postgres_url(config.backup_restore_database_url)
     if _database_identity(config.database_url) == _database_identity(
         config.backup_restore_database_url
     ):
         raise BackupRuntimeError("backup.restore_target_unsafe")
-    handle = tempfile.NamedTemporaryFile(prefix="metahub-restore-", suffix=".dump", delete=False)
-    path = Path(handle.name)
-    handle.write(payload)
-    handle.close()
-    process_environment = os.environ.copy()
-    process_environment["PGDATABASE"] = config.backup_restore_database_url
+    path = None
+    connection = None
+    locked = False
+    process_environment = _postgres_environment(config.backup_restore_database_url)
     try:
+        if source_database_identity_sha256 is None:
+            # Legacy manifests lack an immutable source identity and require live validation.
+            source = connect_database(config.database_url)
+            try:
+                source_database_identity_sha256 = _database_identity_digest(source)
+            finally:
+                source.close()
+        connection = connect_database(config.backup_restore_database_url)
+        if _database_identity_digest(connection) == source_database_identity_sha256:
+            raise BackupRuntimeError("backup.restore_target_unsafe")
+        # Session lock spans pg_restore and verification, excluding other restore workers.
+        locked = bool(connection.execute("SELECT pg_try_advisory_lock(111,100)").fetchone()[0])
+        if not locked:
+            raise BackupRuntimeError("backup.restore_target_busy")
+        if connection.execute(
+            """SELECT EXISTS(
+                 SELECT 1 FROM pg_catalog.pg_class c
+                 JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                 WHERE n.nspname NOT IN('pg_catalog','information_schema')
+                   AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
+                 UNION ALL
+                 SELECT 1 FROM pg_catalog.pg_proc p
+                 JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+                 WHERE n.nspname NOT IN('pg_catalog','information_schema'))"""
+        ).fetchone()[0]:
+            raise BackupRuntimeError("backup.restore_target_not_empty")
+        connection.commit()
+        handle = tempfile.NamedTemporaryFile(
+            prefix="metahub-restore-", suffix=".dump", delete=False
+        )
+        path = Path(handle.name)
+        try:
+            handle.write(payload)
+        finally:
+            handle.close()
         result = subprocess.run(
             [
                 "pg_restore",
-                "--clean",
-                "--if-exists",
+                "--dbname=" + process_environment["PGDATABASE"],
+                "--single-transaction",
+                "--exit-on-error",
                 "--no-owner",
                 "--no-privileges",
-                f"--jobs={max(1, min(config.database_pool_max_size, 8))}",
                 str(path),
             ],
             env=process_environment,
@@ -479,38 +590,109 @@ def _verify_postgres_restore(config: AppConfig, payload: bytes) -> tuple[str, in
         )
         if result.returncode != 0:
             raise BackupRuntimeError("backup.restore_failed")
-        connection = connect_database(config.backup_restore_database_url)
-        try:
-            invalid = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM pg_constraint WHERE NOT convalidated"
-                ).fetchone()[0]
-            )
-            if invalid:
-                raise BackupRuntimeError("backup.restore_integrity_failed")
-            schema_head = str(
-                connection.execute(
-                    "SELECT version FROM schema_migrations WHERE status='applied' "
-                    "ORDER BY version DESC LIMIT 1"
-                ).fetchone()[0]
-            )
-            samples = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM "
-                    "(SELECT 1 FROM workspace_tenant_bindings LIMIT 100) owners"
-                ).fetchone()[0]
-            )
-            connection.commit()
-            return schema_head, samples
-        finally:
-            connection.close()
+        connection.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        invalid = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM pg_constraint WHERE NOT convalidated"
+            ).fetchone()[0]
+        )
+        if invalid:
+            raise BackupRuntimeError("backup.restore_integrity_failed")
+        schema_head = str(
+            connection.execute(
+                "SELECT version FROM schema_migrations WHERE status='applied' "
+                "ORDER BY version DESC LIMIT 1"
+            ).fetchone()[0]
+        )
+        samples = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM workspace_tenant_bindings LIMIT 100) owners"
+            ).fetchone()[0]
+        )
+        consistency = _verify_consistency(connection, "postgresql", expected_consistency)
+        connection.commit()
+        return schema_head, samples, consistency
     except BackupRuntimeError:
         raise
-    except (OSError, subprocess.TimeoutExpired, IndexError, TypeError, ValueError):
+    except Exception:
         raise BackupRuntimeError("backup.restore_failed") from None
     finally:
-        process_environment["PGDATABASE"] = ""
-        path.unlink(missing_ok=True)
+        process_environment.clear()
+        if connection is not None:
+            try:
+                connection.rollback()
+                if locked:
+                    connection.execute("SELECT pg_advisory_unlock(111,100)")
+                    connection.commit()
+            finally:
+                connection.close()
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+
+def _verify_consistency(connection, backend, expected):
+    if expected is None:
+        return None
+    try:
+        actual = fingerprint_database(connection, backend=backend)
+    except Exception:
+        raise BackupRuntimeError("backup.restore_consistency_failed") from None
+    if actual != expected:
+        raise BackupRuntimeError("backup.restore_consistency_failed")
+    return actual
+
+
+def _validate_postgres_url(url: str | None) -> None:
+    try:
+        parsed = urlparse(url or "")
+        allowed = {"sslmode", "sslcert", "sslkey", "sslrootcert", "sslcrl", "connect_timeout"}
+        query = parse_qsl(parsed.query, strict_parsing=True)
+        if (
+            parsed.scheme not in {"postgres", "postgresql"}
+            or not parsed.hostname
+            or re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}", unquote(parsed.path[1:])) is None
+            or parsed.fragment
+            or any(key not in allowed for key, _value in query)
+            or len({key for key, _value in query}) != len(query)
+        ):
+            raise ValueError
+        _ = parsed.port
+    except ValueError:
+        raise BackupRuntimeError("backup.database_url_unsafe") from None
+
+
+def _postgres_environment(url: str | None) -> dict[str, str]:
+    # libpq variables must not override the explicitly validated source/target.
+    _validate_postgres_url(url)
+    parsed = urlparse(url or "")
+    values = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("PG", "METAHUB_"))
+    }
+    values["PGDATABASE"] = unquote(parsed.path[1:])
+    values["PGHOST"] = parsed.hostname or ""
+    values["PGPORT"] = str(parsed.port or 5432)
+    if parsed.username is not None:
+        values["PGUSER"] = unquote(parsed.username)
+    if parsed.password is not None:
+        values["PGPASSWORD"] = unquote(parsed.password)
+    for name, value in parse_qsl(parsed.query, strict_parsing=True):
+        values["PG" + name.upper()] = value
+    values["PGCONNECT_TIMEOUT"] = "10"
+    return values
+
+
+def _server_database_identity(connection) -> tuple:
+    return tuple(
+        connection.execute(
+            "SELECT inet_server_addr()::text,inet_server_port(),current_database()"
+        ).fetchone()
+    )
+
+
+def _database_identity_digest(connection) -> str:
+    return hashlib.sha256(_canonical(_server_database_identity(connection))).hexdigest()
 
 
 def _sqlite_owner_samples(connection: sqlite3.Connection) -> int:
@@ -547,9 +729,9 @@ def _strict_object(payload: bytes) -> dict[str, object]:
 
 
 def _canonical(value: object) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-    ).encode("ascii")
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode(
+        "ascii"
+    )
 
 
 def _aad(backup_id: str, manifest_sha256: str) -> bytes:
@@ -568,7 +750,10 @@ def _same(left: str, right: str) -> bool:
 
 def _database_identity(database_url: str | None) -> tuple[str, str, int | None, str]:
     parsed = urlparse(database_url or "")
-    return parsed.scheme.lower(), parsed.hostname or "", parsed.port, parsed.path
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        host = "loopback"
+    return "postgresql", host, parsed.port or 5432, unquote(parsed.path)
 
 
 __all__ = [
