@@ -46,6 +46,10 @@ class PlatformJobCancelled(Exception):
     """Stop a handler after the durable cancellation fence has closed."""
 
 
+class PlatformJobDeferred(Exception):
+    """The root attempt was atomically handed to the external-work observer."""
+
+
 class PlatformJobRetry(Exception):
     """Request a bounded retry using a public, fixed outcome code."""
 
@@ -95,6 +99,17 @@ class PlatformJobContext:
     config: AppConfig
     lease: PlatformJobLease
     previous_checkpoint: object | None = None
+
+    def defer_external(
+        self,
+        value: object,
+        *,
+        timeout_seconds: int,
+        apply: Callable[[Any], None] | None = None,
+    ) -> None:
+        from .external import defer_platform_job
+
+        defer_platform_job(self, value, timeout_seconds=timeout_seconds, apply=apply)
 
     def checkpoint(self, value: object) -> str:
         prepared = encrypt_job_value(
@@ -269,6 +284,11 @@ def claim_platform_job(
                      ON active_job.platform_job_id=active_lease.platform_job_id
                    WHERE active_lease.status='active'
                      AND julianday(active_lease.expires_at)>julianday(?)
+                     AND active_job.queue_code=job.queue_code)
+                + (SELECT COUNT(*) FROM platform_job_resumption_leases resume
+                   JOIN platform_jobs active_job
+                     ON active_job.platform_job_id=resume.platform_job_id
+                   WHERE resume.status='active' AND julianday(resume.expires_at)>julianday(?)
                      AND active_job.queue_code=job.queue_code) < queue.max_concurrency
             ORDER BY job.scheduled_at,
               (job.priority + queue.priority_weight) DESC,
@@ -278,7 +298,7 @@ def claim_platform_job(
                 " FOR UPDATE OF job, queue SKIP LOCKED"
                 if getattr(connection, "backend", "sqlite") == "postgresql" else ""
             ),
-            (_db_time(now), _db_time(now)),
+            (_db_time(now), _db_time(now), _db_time(now)),
         ).fetchone()
         if job is None:
             connection.commit()
@@ -295,7 +315,14 @@ def claim_platform_job(
                      AND active_job.queue_code=?""",
                 (_db_time(now), job["queue_code"]),
             ).fetchone()[0]
-            if int(active_count) >= int(job["queue_max_concurrency"]):
+            resume_count = connection.execute(
+                """SELECT COUNT(*) FROM platform_job_resumption_leases lease
+                   JOIN platform_jobs job ON job.platform_job_id=lease.platform_job_id
+                   WHERE lease.status='active' AND julianday(lease.expires_at)>julianday(?)
+                     AND job.queue_code=?""",
+                (_db_time(now), job["queue_code"]),
+            ).fetchone()[0]
+            if int(active_count) + int(resume_count) >= int(job["queue_max_concurrency"]):
                 connection.commit()
                 return None
         if job["type_code"] == "console.domain.migrate" and outer_fence is None:
@@ -475,6 +502,10 @@ def _run_platform_job_once_scoped(
     worker_code: str,
     outer_fence: PlatformJobOuterFence | None,
 ) -> bool:
+    from .external import run_external_job_once
+
+    if run_external_job_once(config, worker_code=worker_code, outer_fence=outer_fence):
+        return True
     lease = claim_platform_job(
         config,
         worker_code=worker_code,
@@ -503,7 +534,7 @@ def _run_platform_job_once_scoped(
             outcome = definition.handler(context, payload)
             _valid_outcome(outcome)
             _complete_platform_job(config, lease, outcome)
-    except PlatformJobCancelled:
+    except (PlatformJobCancelled, PlatformJobDeferred):
         pass
     except PlatformJobRetry as exc:
         _fail_platform_job(config, lease, exc.code, retryable=True)
@@ -524,6 +555,8 @@ def fence_platform_worker(config: AppConfig, *, worker_code: str) -> int:
 
     if _WORKER_RE.fullmatch(worker_code) is None:
         raise ApiError("platform_job.request_invalid")
+    from .external import fence_external_worker_in_transaction
+
     connection = _connect(config)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -534,6 +567,9 @@ def fence_platform_worker(config: AppConfig, *, worker_code: str) -> int:
             (_db_time(now), worker_code),
         ).rowcount
         _recover_expired_leases(connection, now)
+        updated += fence_external_worker_in_transaction(
+            connection, worker_code=worker_code, now=now
+        )
         connection.commit()
         return int(updated)
     except (sqlite3.Error, DbError, TypeError, ValueError):

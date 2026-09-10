@@ -21,6 +21,10 @@ class JobHandler(Protocol):
     def __call__(self, context: Any, payload: BaseModel) -> str: ...
 
 
+class ExternalJobHandler(Protocol):
+    def __call__(self, context: Any, continuation: object) -> str: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JobHandlerDefinition:
     type_code: str
@@ -28,6 +32,7 @@ class JobHandlerDefinition:
     artifact_sha256: str
     input_model: type[BaseModel]
     handler: JobHandler
+    external_handler: ExternalJobHandler | None = None
 
 
 ARTIFACTS = {
@@ -59,6 +64,7 @@ def register_job_handler(
     input_model: type[BaseModel],
     handler: JobHandler,
     contract_version: int = 1,
+    external_handler: ExternalJobHandler | None = None,
 ) -> None:
     artifact = ARTIFACTS.get(type_code)
     if artifact is None or contract_version != 1:
@@ -69,6 +75,7 @@ def register_job_handler(
         artifact_sha256=artifact,
         input_model=input_model,
         handler=handler,
+        external_handler=external_handler,
     )
     with _LOCK:
         existing = _HANDLERS.get(type_code)

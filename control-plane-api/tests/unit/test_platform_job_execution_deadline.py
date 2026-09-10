@@ -39,6 +39,11 @@ def config(tmp_path):
         connection.executescript(
             (ROOT / "infra/migrations/0098_platform_job_runtime.sql").read_text(encoding="utf-8")
         )
+        connection.executescript(
+            (ROOT / "infra/migrations/0151_platform_job_external_waits.sql").read_text(
+                encoding="utf-8"
+            )
+        )
     return AppConfig(
         service_name="control-plane-api",
         environment="test",
@@ -62,6 +67,7 @@ def config(tmp_path):
 def db_clock(monkeypatch):
     clock = SimpleNamespace(now=datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1))
     monkeypatch.setattr(runtime, "_database_now", lambda _connection: clock.now)
+    monkeypatch.setattr(service, "_utcnow", lambda: clock.now)
     return clock
 
 
@@ -362,7 +368,7 @@ def test_automatic_heartbeat_closes_execution_while_handler_is_waiting(
         return "platform_job.probe_completed"
 
     set_handler(monkeypatch, handler)
-    runtime.run_platform_job_once(config, worker_code="waiting-worker")
+    assert runtime.run_platform_job_once(config, worker_code="waiting-worker")
     assert closed.is_set()
     assert_terminal(
         config, "failed" if reason == "timeout" else "cancelled", f"platform_job.{reason}"

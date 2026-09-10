@@ -29,6 +29,7 @@ from .models import (
     PlatformJobAttemptInfo,
     PlatformJobCheckpointInfo,
     PlatformJobDetailResponse,
+    PlatformJobExternalWaitInfo,
     PlatformJobQueueResponse,
     PlatformJobSummary,
     PlatformJobTypeCommandRequest,
@@ -272,13 +273,27 @@ def list_platform_job_queues(
                 (row["queue_code"], _db_time(now)),
             ).fetchone()[0]
             oldest = _optional_time(counts["oldest"])
+            resumes = connection.execute(
+                """SELECT COUNT(*) FROM platform_job_resumption_leases lease
+                   JOIN platform_jobs job ON job.platform_job_id=lease.platform_job_id
+                   WHERE job.queue_code=? AND lease.status='active'
+                     AND julianday(lease.expires_at)>julianday(?)""",
+                (row["queue_code"], _db_time(now)),
+            ).fetchone()[0]
+            external_waits = connection.execute(
+                """SELECT COUNT(*) FROM platform_job_external_waits w
+                   JOIN platform_jobs job ON job.platform_job_id=w.platform_job_id
+                   WHERE job.queue_code=? AND w.status!='completed'""",
+                (row["queue_code"],),
+            ).fetchone()[0]
             queues.append(
                 PlatformWorkQueueInfo(
                     queue_code=row["queue_code"],
                     priority_weight=int(row["priority_weight"]),
                     max_concurrency=int(row["max_concurrency"]),
                     queued_count=int(counts["queued_count"] or 0),
-                    active_lease_count=int(active),
+                    active_lease_count=int(active) + int(resumes),
+                    external_wait_count=int(external_waits),
                     dead_letter_count=int(counts["dead_letter_count"] or 0),
                     oldest_wait_seconds=(
                         max(0, int((now - oldest).total_seconds())) if oldest else None
@@ -345,6 +360,7 @@ def get_platform_job(
             job=_job_info(row),
             attempts=tuple(_attempt_info(item) for item in attempts),
             checkpoints=tuple(_checkpoint_info(item) for item in checkpoints),
+            external_wait=_external_wait_info(connection, job_id),
             request_id=request_id,
             trace_id=trace_id,
         )
@@ -430,6 +446,10 @@ def update_platform_job(
                 raise ApiError("platform_job.conflict")
         else:
             if row["status"] not in {"failed", "dead_lettered"}:
+                raise ApiError("platform_job.conflict")
+            if connection.execute(
+                "SELECT 1 FROM platform_job_external_waits WHERE platform_job_id=?", (job_id,)
+            ).fetchone() is not None:
                 raise ApiError("platform_job.conflict")
             if int(row["attempt_count"]) >= 20:
                 raise ApiError("platform_job.conflict")
@@ -619,6 +639,21 @@ def update_platform_job_type(
         raise ApiError("platform_job.unavailable") from None
     finally:
         connection.close()
+
+
+def _external_wait_info(connection, job_id: str) -> PlatformJobExternalWaitInfo | None:
+    row = connection.execute(
+        "SELECT * FROM platform_job_external_waits WHERE platform_job_id=?", (job_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return PlatformJobExternalWaitInfo(
+        status=row["status"], resume_generation=int(row["resume_generation"]),
+        acknowledged=bool(row["acknowledged"]), observation_count=int(row["observation_count"]),
+        failure_count=int(row["failure_count"]), safe_outcome_code=row["safe_outcome_code"],
+        deadline_at=_time(row["deadline_at"]), next_poll_at=_time(row["next_poll_at"]),
+        updated_at=_time(row["updated_at"]), completed_at=_optional_time(row["completed_at"]),
+    )
 
 
 def _command_replay(

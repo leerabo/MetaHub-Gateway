@@ -108,6 +108,54 @@ test("job tables collapse to labeled rows on the 390px viewport", async () => {
   assert.match(css, /content: attr\(data-label\)/u);
 });
 
+test("external observation DTO accepts only safe, coherent lifecycle fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const payload = { ...detailResponse(), external_wait: externalWait() };
+  payload.job = { ...payload.job, status: "running", completed_at: null };
+  try {
+    globalThis.fetch = async () => jsonResponse(payload);
+    assert.equal((await getPlatformJob({ controlApiUrl: CONTROL_URL, jobId: JOB_ID }))
+      .external_wait.observation_count, 25);
+    for (const mutation of [
+      { lease_token: "forbidden" }, { continuation_envelope: "forbidden" },
+      { observation_count: -1 }, { acknowledged: "yes" }, { status: "completed" },
+    ]) {
+      globalThis.fetch = async () => jsonResponse({
+        ...payload, external_wait: { ...payload.external_wait, ...mutation },
+      });
+      await assert.rejects(getPlatformJob({ controlApiUrl: CONTROL_URL, jobId: JOB_ID }),
+        (error) => error.code === "platform_job.response_invalid");
+    }
+    globalThis.fetch = async () => jsonResponse({
+      ...queueResponse(), queues: queueResponse().queues.map((q) => ({ ...q, external_wait_count: 3 })),
+    });
+    assert.equal((await listPlatformJobQueues({ controlApiUrl: CONTROL_URL })).queues[0].external_wait_count, 3);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("external wait renders stopping and prevents terminal execution replay", () => {
+  const state = platformState(["platform.job.read", "platform.job.manage"]);
+  state.selectedJob.external_wait = externalWait();
+  state.selectedJob.job.status = "cancel_requested";
+  const root = { innerHTML: "" };
+  renderPlatformWorkspace(root, state);
+  assert.match(root.innerHTML, /等待停止确认/u);
+  assert.doesNotMatch(root.innerHTML, /data-platform-job-command-form/u);
+  state.selectedJob.job.status = "failed";
+  state.selectedJob.external_wait = { ...externalWait(), status: "completed", completed_at: NOW };
+  renderPlatformWorkspace(root, state);
+  assert.match(root.innerHTML, /执行已结束/u);
+  assert.doesNotMatch(root.innerHTML, /data-platform-job-command-form/u);
+});
+
+function externalWait() {
+  return {
+    status: "waiting", resume_generation: 25, acknowledged: true, observation_count: 25,
+    failure_count: 0, safe_outcome_code: null, deadline_at: NOW, next_poll_at: NOW,
+    updated_at: NOW, completed_at: null,
+  };
+}
+
 function platformState(permissions) {
   return {
     session: {

@@ -174,10 +174,26 @@ function validQueueResponse(value) {
 function validDetailResponse(value) {
   return plainObject(value) && exactKeys(value, [
     "job", "attempts", "checkpoints", "request_id", "trace_id",
+    ...(Object.hasOwn(value, "external_wait") ? ["external_wait"] : []),
   ]) && validJob(value.job) && Array.isArray(value.attempts) && value.attempts.length <= 20
     && value.attempts.every(validAttempt) && Array.isArray(value.checkpoints)
     && value.checkpoints.length <= 1000 && value.checkpoints.every(validCheckpoint)
+    && (value.external_wait == null || validExternalWait(value.external_wait, value.job))
     && links(value);
+}
+
+function validExternalWait(value, job) {
+  return plainObject(value) && exactKeys(value, [
+    "status", "resume_generation", "acknowledged", "observation_count", "failure_count",
+    "safe_outcome_code", "deadline_at", "next_poll_at", "updated_at", "completed_at",
+  ]) && new Set(["waiting", "leased", "completed"]).has(value.status)
+    && integer(value.resume_generation, 0) && typeof value.acknowledged === "boolean"
+    && integer(value.observation_count, 0) && integer(value.failure_count, 0)
+    && optionalCode(value.safe_outcome_code) && timestamp(value.deadline_at)
+    && timestamp(value.next_poll_at) && timestamp(value.updated_at)
+    && optionalTime(value.completed_at)
+    && ((value.status === "completed") === (value.completed_at !== null))
+    && ((value.status === "completed") === new Set(["succeeded", "failed", "cancelled"]).has(job.status));
 }
 
 function validActionResponse(value) {
@@ -197,9 +213,11 @@ function validQueue(value) {
   return plainObject(value) && exactKeys(value, [
     "queue_code", "priority_weight", "max_concurrency", "queued_count",
     "active_lease_count", "dead_letter_count", "oldest_wait_seconds",
+    ...(Object.hasOwn(value, "external_wait_count") ? ["external_wait_count"] : []),
   ]) && new Set(["critical", "standard", "bulk"]).has(value.queue_code)
     && integer(value.priority_weight, 1, 100) && integer(value.max_concurrency, 1, 1000)
     && integer(value.queued_count, 0) && integer(value.active_lease_count, 0)
+    && (!Object.hasOwn(value, "external_wait_count") || integer(value.external_wait_count, 0))
     && integer(value.dead_letter_count, 0)
     && (value.oldest_wait_seconds === null || integer(value.oldest_wait_seconds, 0));
 }

@@ -888,6 +888,7 @@ function jobQueueSummary(queue) {
     <span>${escapeHtml(queueLabel(queue.queue_code))}</span>
     <strong>${number(queue.queued_count)}</strong>
     <small>运行 ${number(queue.active_lease_count)} · 死信 ${number(queue.dead_letter_count)}</small>
+    ${queue.external_wait_count ? `<small>外部执行 ${number(queue.external_wait_count)}</small>` : ""}
     <small>最久 ${queue.oldest_wait_seconds === null ? "-" : `${number(queue.oldest_wait_seconds)}s`}</small>
   </div>`;
 }
@@ -907,7 +908,7 @@ function jobDetailView(detail, canManage, loading) {
   const job = detail.job;
   const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
   const checkpoints = Array.isArray(detail.checkpoints) ? detail.checkpoints : [];
-  const retryable = new Set(["failed", "dead_lettered"]).has(job.status);
+  const retryable = !detail.external_wait && new Set(["failed", "dead_lettered"]).has(job.status);
   const cancellable = new Set(["queued", "leased", "running"]).has(job.status);
   return `<section class="platform-band platform-job-detail">
     <div class="platform-section-heading">
@@ -915,6 +916,7 @@ function jobDetailView(detail, canManage, loading) {
       <button class="platform-icon-button" type="button" data-platform-action="close-job" title="关闭" aria-label="关闭">×</button>
     </div>
     <div class="platform-job-detail-grid">
+      ${detail.external_wait ? jobExternalWait(detail.external_wait, job.status) : ""}
       <div>
         <h3>Attempt 时间线</h3>
         <ol class="platform-job-timeline">${attempts.map(jobAttempt).join("") || "<li>暂无 Attempt</li>"}</ol>
@@ -935,6 +937,22 @@ function jobDetailView(detail, canManage, loading) {
       <button class="${retryable ? "platform-primary" : "platform-danger"}" type="submit" ${loading ? "disabled" : ""}>${retryable ? "重试" : "取消任务"}</button>
     </form>` : ""}
   </section>`;
+}
+
+function jobExternalWait(wait, jobStatus) {
+  const label = wait.status === "completed" ? "执行已结束"
+    : jobStatus === "cancel_requested" ? "等待停止确认"
+    : wait.failure_count && wait.safe_outcome_code ? "连接中断，等待重试"
+    : wait.status === "leased" ? "正在查询执行结果" : "等待执行结果";
+  return `<div data-platform-external-wait>
+    <h3>外部执行</h3><p role="status">${label}</p>
+    <dl>
+      <dt>结果查询</dt><dd>${number(wait.observation_count)} 次</dd>
+      <dt>恢复次数</dt><dd>${number(wait.failure_count)}</dd>
+      <dt>最近更新</dt><dd>${formatTime(wait.updated_at)}</dd>
+      ${wait.status !== "completed" ? `<dt>下次查询</dt><dd>${formatTime(wait.next_poll_at)}</dd>` : ""}
+    </dl>
+  </div>`;
 }
 
 function jobAttempt(attempt) {

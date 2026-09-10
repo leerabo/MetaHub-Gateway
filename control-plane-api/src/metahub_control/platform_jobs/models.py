@@ -77,6 +77,7 @@ class PlatformWorkQueueInfo(PlatformJobModel):
     max_concurrency: int = Field(ge=1, le=1000)
     queued_count: int = Field(ge=0)
     active_lease_count: int = Field(ge=0)
+    external_wait_count: int = Field(default=0, ge=0)
     dead_letter_count: int = Field(ge=0)
     oldest_wait_seconds: int | None = Field(default=None, ge=0)
 
@@ -89,10 +90,24 @@ class PlatformJobQueueResponse(PlatformJobModel):
     trace_id: str
 
 
+class PlatformJobExternalWaitInfo(PlatformJobModel):
+    status: Literal["waiting", "leased", "completed"]
+    resume_generation: int = Field(ge=0)
+    acknowledged: bool
+    observation_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    safe_outcome_code: str | None = None
+    deadline_at: datetime
+    next_poll_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
 class PlatformJobDetailResponse(PlatformJobModel):
     job: PlatformJobSummary
     attempts: tuple[PlatformJobAttemptInfo, ...]
     checkpoints: tuple[PlatformJobCheckpointInfo, ...]
+    external_wait: PlatformJobExternalWaitInfo | None = None
     request_id: str
     trace_id: str
 
