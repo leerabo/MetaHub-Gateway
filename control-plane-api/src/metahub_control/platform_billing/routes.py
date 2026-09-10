@@ -6,8 +6,8 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from starlette.concurrency import run_in_threadpool
 from metahub_shared.runtime.errors import ApiError
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.platform_access.constants import (
     PLATFORM_CSRF_COOKIE,
@@ -89,7 +89,8 @@ async def get_billing_summary(
 ) -> WorkspaceBillingResponse:
     _exact_query(request, {"cycle_id"})
     _private(response)
-    return get_workspace_billing(
+    return await run_in_threadpool(
+        get_workspace_billing,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -109,7 +110,8 @@ async def get_billing_usage(
 ) -> WorkspaceBillingResponse:
     _exact_query(request, {"cycle_id"})
     _private(response)
-    return get_workspace_billing(
+    return await run_in_threadpool(
+        get_workspace_billing,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -127,7 +129,8 @@ async def get_billing_reconciliation_export(
     cycle_id: str,
 ) -> Response:
     _exact_query(request, {"cycle_id"})
-    content, filename = export_workspace_reconciliation_csv(
+    content, filename = await run_in_threadpool(
+        export_workspace_reconciliation_csv,
         request.app.state.config,
         session_token=_required_cookie(
             request, WORKSPACE_SESSION_COOKIE, "workspace_session.required"
@@ -157,7 +160,8 @@ async def get_platform_billing_summary(
 ) -> PlatformBillingListResponse:
     _exact_query(request, {"status", "limit", "cursor"})
     _private(response)
-    return list_platform_billing(
+    return await run_in_threadpool(
+        list_platform_billing,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -183,7 +187,8 @@ async def post_platform_billing_adjustment(
         )
     except ValueError:
         raise ApiError("platform_billing.request_invalid") from None
-    result = create_adjustment(
+    result = await run_in_threadpool(
+        create_adjustment,
         request.app.state.config,
         session_token=_required_cookie(
             request, PLATFORM_SESSION_COOKIE, "platform.session_required"
@@ -213,7 +218,9 @@ def get_platform_metering_state(
     _exact_query(request, set())
     result = get_metering_state(
         request.app.state.config,
-        session_token=_required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        session_token=_required_cookie(
+            request, PLATFORM_SESSION_COOKIE, "platform.session_required",
+        ),
         request_id=_request_id(request), trace_id=_trace_id(request),
     )
     _private(response)
@@ -227,12 +234,16 @@ async def post_platform_meter_recovery(
 ) -> MeterRecoveryResponse:
     _exact_query(request, set())
     try:
-        payload = MeterRecoveryRequest.model_validate(await _strict_json(request, "platform_billing.request_invalid"))
+        payload = MeterRecoveryRequest.model_validate(
+            await _strict_json(request, "platform_billing.request_invalid"),
+        )
     except ValueError:
         raise ApiError("platform_billing.request_invalid") from None
     result = await run_in_threadpool(
         recover_meter_fact, request.app.state.config,
-        session_token=_required_cookie(request, PLATFORM_SESSION_COOKIE, "platform.session_required"),
+        session_token=_required_cookie(
+            request, PLATFORM_SESSION_COOKIE, "platform.session_required",
+        ),
         csrf_token=_required_csrf(request, PLATFORM_CSRF_COOKIE, "platform.csrf_invalid"),
         payload=payload, idempotency_key=_idempotency_key(request),
         request_id=_request_id(request), trace_id=_trace_id(request),
