@@ -109,6 +109,11 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
     database_url = _url(database)
     assert "0105" in apply_migrations(database_url).applied
     apply_seed_data(database_url)
+    seed_operators(database_url)
+    return database
+
+
+def seed_operators(database_url: str) -> None:
     connection = connect_database(database_url)
     try:
         source = connection.execute(
@@ -156,7 +161,6 @@ def base_database(tmp_path_factory: pytest.TempPathFactory) -> Path:
         connection.commit()
     finally:
         connection.close()
-    return database
 
 
 @pytest.fixture

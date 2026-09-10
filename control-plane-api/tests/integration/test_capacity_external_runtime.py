@@ -20,6 +20,7 @@ from metahub_control.capacity_management.models import ChaosCommandRequest, Load
 from metahub_control.platform_jobs import runtime as jobs
 from metahub_control.platform_jobs import service as job_service
 from metahub_shared.db import connect_database
+from metahub_shared.db.schema import foreign_key_violation_count
 from metahub_shared.runtime.errors import ApiError
 
 base_database = base.base_database
@@ -178,7 +179,8 @@ def test_atomic_start_precedes_network_and_pending_never_spends_attempts(setup, 
     assert [action for action, _ in calls] == ["submit"] + ["status"] * 25
     assert len({execution_digest(claims) for _, claims in calls}) == 1
     assert row(setup, "SELECT COUNT(*) FROM performance_baselines")[0] == 1
-    assert row(setup, "SELECT COUNT(*) FROM pragma_foreign_key_check")[0] == 0
+    with closing(connect_database(setup.config.database_url)) as connection:
+        assert foreign_key_violation_count(connection) == 0
 
 
 def test_uncertain_delivery_replays_original_permit_then_renews_only_observation(
@@ -373,6 +375,9 @@ def test_domain_and_root_completion_roll_back_together(setup, monkeypatch):
     assert_root(setup, "running")
     assert row(setup, "SELECT status FROM load_test_runs")[0] == "running"
     assert row(setup, "SELECT COUNT(*) FROM performance_baselines")[0] == 0
+    assert row(setup, "SELECT COUNT(*) FROM platform_job_effects")[0] == 0
+    assert row(setup, "SELECT status FROM platform_job_attempts")[0] == "running"
+    assert row(setup, "SELECT status FROM platform_job_external_waits")[0] == "waiting"
     assert (
         row(setup, "SELECT safe_outcome_code FROM platform_job_external_waits")[0]
         == "platform_job.external_unavailable"
