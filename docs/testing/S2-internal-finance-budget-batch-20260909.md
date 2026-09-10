@@ -48,5 +48,5 @@ HTTP 每个读接口采样 30 次：`/budgets` p95 239.833 ms，`/budget-status`
 
 - 整个 PRD-074 扩展测试仍有权限数量 64/80 与配置错误码 missing/invalid 两个旧断言待核实，不能称整个文件通过。
 - DbError 异常与 contextlib 的兼容问题需独立修复；本批未修改共享异常类。
-- 本地平台计量调度器持续返回 `platform_metering.reconciliation_required`，需核对权威 checkpoint 与账本事实，禁止跳过异常或改账以消除告警。
-- PRD 全范围的支付/应收、争议、容量、Linux、多浏览器、真实 IdP/支付依赖及 72 小时观察未由本次窄批次证明。独立提交仍需按先前 S1/S2 依赖整理，不能将混合工作区整体提交。
+- 本地平台计量调度器持续返回 `platform_metering.reconciliation_required`。只读定位结果：checkpoint=0，首条序列=1 的 outbox 为 failed/owner_invalid、attempt_count=1；Token 总量一致，组织绑定数量=1，但用量发生时间对应的历史权益快照数量=0。总计 2 条未投影事实（1 failed、1 pending）。旧 `control-usage-20260909-175327.err.log` 已有同样告警，早于本批重启和测试。禁止跳过异常、改账或按当前套餐价格追溯计费；后续需补历史用量对账与受控恢复合同。
+- PRD 全范围的支付/应收、争议、容量、Linux、多浏览器、真实 IdP/支付依赖及 72 小时观察未由本次窄批次证明。PRD-099 的预算预留数据库兼容修复已独立提交 `11cc552`；其余提交仍需按先前 S1/S2 依赖整理，不能将混合工作区整体提交。

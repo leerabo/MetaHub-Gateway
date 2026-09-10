@@ -33,6 +33,7 @@ from metahub_control.audit import (
     record_audit_log,
 )
 from metahub_control.auth import AuthContext
+from metahub_control.auth.resource_transactions import ResourceWriteTransaction
 
 from .models import (
     FinOpsActorInfo,
@@ -173,7 +174,11 @@ def list_finops_ledger(
     )
     connection = _connect(config)
     try:
-        connection.execute("BEGIN DEFERRED")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.finops.read", read_only=True
+        )
+        transaction.begin()
+        context = transaction.context
         if cursor_state is None:
             maximum = connection.execute(
                 """
@@ -258,6 +263,7 @@ def list_finops_ledger(
             [*params, before_sequence, limit + 1],
         ).fetchall()
         connection.rollback()
+        transaction.begin()
     # 领域错误保留原错误码，但仍需回滚读事务，避免连接残留未结束的事务状态。
     except ApiError:
         _safe_rollback(connection)
@@ -320,7 +326,11 @@ def create_finops_adjustment(
     connection = _connect(config)
     result: FinOpsAdjustmentWriteResult | None = None
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        transaction = ResourceWriteTransaction(
+            connection, config, context, "billing.finops.write"
+        )
+        transaction.begin()
+        context = transaction.context
         result = write_finops_adjustment_in_transaction(
             connection,
             context,
@@ -331,6 +341,7 @@ def create_finops_adjustment(
             trace_id=normalized_trace_id,
         )
         if result.idempotent_replay:
+            transaction.verify()
             connection.rollback()
             return FinOpsAdjustmentResponse(
                 adjustment=result.adjustment,
@@ -339,7 +350,7 @@ def create_finops_adjustment(
                 request_id=normalized_request_id,
                 trace_id=normalized_trace_id,
             )
-        commit_audited_transaction(connection)
+        transaction.commit(commit_audited_transaction)
     # 所有领域失败都先回滚整笔调整事务，避免留下半条账本或孤立审计记录。
     except ApiError as exc:
         _safe_rollback(connection)
@@ -768,15 +779,9 @@ def _derive_adjustment_entry(
         ) == 0:
             # 冲正分录及零金额事实不能再次冲正，避免形成循环或无意义链路。
             raise ApiError("finops.reversal_not_allowed")
-        reversed_row = connection.execute(
-            """
-            SELECT COALESCE(SUM(amount_micros), 0)
-            FROM finops_ledger_entries
-            WHERE tenant_id=? AND entry_type='reversal' AND reversal_of_entry_id=?
-            """,
-            (context.user.tenant_id, adjustment.reversal_of_entry_id),
-        ).fetchone()
-        reversed_micros = _non_negative_integer(reversed_row[0] if reversed_row else 0)
+        reversed_micros = _load_reversal_total(
+            connection, context.user.tenant_id, adjustment.reversal_of_entry_id
+        )
         target_amount = _non_negative_integer(target["amount_micros"])
         # 已冲正总额超过原金额表示持久事实损坏，禁止继续追加新分录。
         if reversed_micros > target_amount:
@@ -1477,6 +1482,20 @@ def _positive_integer(value: object) -> int:
     if type(value) is not int or value < 1 or value > 9_223_372_036_854_775_807:
         raise ValueError("finops positive integer invalid")
     return value
+
+
+def _load_reversal_total(connection, tenant_id: str, target_id: str) -> int:
+    # PostgreSQL SUM(bigint) returns NUMERIC; validate integer facts before accumulating.
+    rows = connection.execute(
+        """SELECT amount_micros FROM finops_ledger_entries
+           WHERE tenant_id=? AND entry_type='reversal' AND reversal_of_entry_id=?
+           ORDER BY ledger_sequence""",
+        (tenant_id, target_id),
+    )
+    total = 0
+    for row in rows:
+        total = _non_negative_integer(total + _non_negative_integer(row[0]))
+    return total
 
 
 def _non_negative_integer(value: object) -> int:

@@ -11,9 +11,10 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from metahub_shared.runtime.errors import ApiError
+from starlette.concurrency import run_in_threadpool
 
 from metahub_control.audit import build_audit_request_meta
-from metahub_control.auth import AuthContext, require_finops_reader, require_finops_writer
+from metahub_control.auth import AuthContext, require_workspace_or_legacy_permissions
 
 from .models import (
     FinOpsAdjustmentRequest,
@@ -23,6 +24,12 @@ from .models import (
 from .service import create_finops_adjustment, list_finops_ledger
 
 router = APIRouter(prefix="/finops", tags=["finops"])
+FinOpsReader = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.finops.read"))
+]
+FinOpsWriter = Annotated[
+    AuthContext, Depends(require_workspace_or_legacy_permissions("billing.finops.write"))
+]
 
 # 查询和正文均采用明确白名单与硬上限，避免未知字段扩大 SQL、审计或内存消耗面。
 ALLOWED_LEDGER_QUERY_FIELDS = frozenset(
@@ -59,10 +66,10 @@ class _DuplicateJsonKey(ValueError):
 
 
 @router.get("/ledger", response_model=FinOpsLedgerListResponse)
-async def get_finops_ledger(
+def get_finops_ledger(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_finops_reader)],
+    context: FinOpsReader,
 ) -> FinOpsLedgerListResponse:
     """按当前管理员租户读取不可变正式账本和同快照汇总。"""
 
@@ -89,13 +96,14 @@ async def get_finops_ledger(
 async def post_finops_adjustment(
     request: Request,
     response: Response,
-    context: Annotated[AuthContext, Depends(require_finops_writer)],
+    context: FinOpsWriter,
 ) -> FinOpsAdjustmentResponse:
     """创建人工调整或按租户幂等键恢复既有提交结果。"""
 
     idempotency_key = _read_idempotency_key(request)
     payload = await _read_adjustment_payload(request)
-    result = create_finops_adjustment(
+    result = await run_in_threadpool(
+        create_finops_adjustment,
         request.app.state.config,
         context,
         payload,
