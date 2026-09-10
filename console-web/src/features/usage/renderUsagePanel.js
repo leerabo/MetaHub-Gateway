@@ -47,7 +47,6 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
     <div class="panel-heading usage-heading">
       <div>
         <h2 id="usage-title">Token 用量与成本</h2>
-        <p>按天、模型、Virtual Key、Project 和 Application 追踪用量；真实 usage 与本地估算会明确区分。</p>
       </div>
       <div class="usage-heading-actions">
         <span class="usage-count">${escapeHtml(records.length)} / ${escapeHtml(usageState.records?.total ?? 0)}</span>
@@ -55,7 +54,7 @@ export function renderUsagePanel(usageState, authContext, budgetState) {
       </div>
     </div>
     ${renderActionError(usageState.actionError)}
-    ${renderFilterForm(usageState.filters ?? {})}
+    ${renderFilterForm(usageState.filters ?? {}, summary.by_consumer ?? [])}
     ${renderUsageExportFeedback(canExport, exportState)}
     ${renderTotals(summary.totals)}
     ${renderBudgetOverview(budgetState)}
@@ -158,9 +157,16 @@ function renderErrorPanel(state) {
 /**
  * 渲染用量筛选表单，字段名与后端 Query 参数保持一一对应。
  */
-function renderFilterForm(filters) {
+function renderFilterForm(filters, consumers) {
   return `
     <form class="usage-filter-form" id="usage-filter-form">
+      <label>
+        <span>使用者</span>
+        <input name="consumerId" list="usage-consumer-options" value="${escapeAttribute(filters.consumerId ?? "")}" />
+        <datalist id="usage-consumer-options">
+          ${consumers.filter((row) => row.consumer_id).map((row) => `<option value="${escapeAttribute(row.consumer_id)}">${escapeHtml(row.consumer_name ?? row.consumer_id)}</option>`).join("")}
+        </datalist>
+      </label>
       <label>
         <span>开始日期</span>
         <input type="date" name="startDate" value="${escapeAttribute(filters.startDate ?? "")}" />
@@ -248,6 +254,7 @@ function renderMetric(label, value, unit) {
 function renderSummaryTables(summary = {}) {
   return `
     <div class="usage-summary-grid">
+      ${renderConsumerSummary(summary.by_consumer ?? [])}
       ${renderDaySummary(summary.by_day ?? [])}
       ${renderModelSummary(summary.by_model ?? [])}
       ${renderKeySummary(summary.by_virtual_key ?? [])}
@@ -261,6 +268,20 @@ function renderSummaryTables(summary = {}) {
 /**
  * 渲染按天聚合表，展示趋势所需的核心字段。
  */
+function renderConsumerSummary(rows) {
+  return `
+    <section class="usage-summary-block">
+      <h3>按使用者</h3>
+      <div class="usage-mini-table" role="table" aria-label="按使用者用量">
+        <div class="usage-mini-row usage-mini-head" role="row">
+          <span>使用者</span><span>请求</span><span>Token</span><span>成本</span>
+        </div>
+        ${rows.length ? rows.map((row) => renderMiniRow(row.consumer_name ? `${row.consumer_name}${row.consumer_department ? ` / ${row.consumer_department}` : ""}` : row.consumer_id ?? "未绑定使用者", row.request_count, row.total_tokens, formatDualCost(row))).join("") : renderMiniEmpty()}
+      </div>
+    </section>
+  `;
+}
+
 function renderDaySummary(rows) {
   return `
     <section class="usage-summary-block">
@@ -417,9 +438,9 @@ function renderMiniRow(label, requestCount, totalTokens, cost) {
   return `
     <div class="usage-mini-row" role="row">
       <span title="${escapeAttribute(label)}">${escapeHtml(label)}</span>
-      <span>${escapeHtml(requestCount ?? 0)}</span>
-      <span>${escapeHtml(totalTokens ?? 0)}</span>
-      <span>${escapeHtml(cost)}</span>
+      <span data-label="请求">${escapeHtml(requestCount ?? 0)}</span>
+      <span data-label="Token">${escapeHtml(totalTokens ?? 0)}</span>
+      <span data-label="成本">${escapeHtml(cost)}</span>
     </div>
   `;
 }
@@ -470,6 +491,7 @@ function renderRecordRow(item) {
       <span data-label="Provider">${escapeHtml(item.provider_code ?? "-")}</span>
       <span data-label="Key">${escapeHtml(item.virtual_key_prefix ?? item.virtual_key_id ?? "-")}</span>
       <span class="usage-record-scope" data-label="归属">
+        <em>${escapeHtml(item.consumer_id ?? "未绑定使用者")}</em>
         <strong>${escapeHtml(item.project_name ?? item.project_id ?? "未绑定项目")}</strong>
         <em>${escapeHtml(item.application_name ?? item.application_id ?? "未绑定应用")}</em>
       </span>

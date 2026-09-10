@@ -1,4 +1,5 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 导出制品和任务状态使用固定白名单，避免服务端异常响应把任意路径、文件类型或状态带入浏览器流程。
 const DEFAULT_USAGE_EXPORT_FILENAME = "metahub-usage-export.csv";
@@ -14,6 +15,9 @@ const DEFAULT_EXPORT_POLL_INTERVAL_MS = 2000;
 export async function getUsageSummary({
   controlApiUrl,
   token,
+  authentication,
+  signal,
+  consumerId,
   startDate,
   endDate,
   modelId,
@@ -28,6 +32,7 @@ export async function getUsageSummary({
 }) {
   const url = new URL(`${controlApiUrl}/usage/summary`);
   appendUsageFilters(url, {
+    consumerId,
     startDate,
     endDate,
     modelId,
@@ -42,7 +47,7 @@ export async function getUsageSummary({
   });
   // 用量和成本分支直接影响账本追踪，异常值要在这里归一化。
   return usageRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -53,6 +58,9 @@ export async function getUsageSummary({
 export async function listUsageRecords({
   controlApiUrl,
   token,
+  authentication,
+  signal,
+  consumerId,
   startDate,
   endDate,
   modelId,
@@ -69,6 +77,7 @@ export async function listUsageRecords({
 }) {
   const url = new URL(`${controlApiUrl}/usage/records`);
   appendUsageFilters(url, {
+    consumerId,
     startDate,
     endDate,
     modelId,
@@ -85,7 +94,7 @@ export async function listUsageRecords({
   url.searchParams.set("offset", String(offset));
   // 用量和成本分支直接影响账本追踪，异常值要在这里归一化。
   return usageRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    authentication, token, signal,
   });
 }
 
@@ -97,6 +106,8 @@ export async function listUsageRecords({
 export async function requestUsageCsvExport({
   controlApiUrl,
   token,
+  authentication,
+  consumerId,
   startDate,
   endDate,
   modelId,
@@ -114,6 +125,7 @@ export async function requestUsageCsvExport({
 }) {
   const url = new URL(`${controlApiUrl}/usage/export.csv`);
   appendUsageFilters(url, {
+    consumerId,
     startDate,
     endDate,
     modelId,
@@ -126,11 +138,11 @@ export async function requestUsageCsvExport({
     requestId,
     traceId,
   });
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedResourceFetch(url.toString(), {
+    authentication, token, csrfRequired: true,
     signal,
     headers: {
       Accept: "text/csv, application/json",
-      Authorization: `Bearer ${token}`,
       // GET 导出会创建任务，独立请求标识是服务端 tenant_id + request_id 幂等键的一部分。
       "X-Request-ID": exportRequestId || createUsageExportRequestId(),
       // create、status 和 download 复用同一 trace，跨三段 HTTP 请求仍可在控制面日志中串联。
@@ -161,13 +173,13 @@ export async function requestUsageCsvExport({
  * 查询当前租户异步导出任务状态。
  * URL 只由受校验的 job ID 和固定控制面根地址构造，不使用服务端返回的任意 URL，避免 Bearer Token 被带到其他源。
  */
-export async function getUsageExportStatus({ controlApiUrl, token, usageExportJobId, traceId, signal }) {
+export async function getUsageExportStatus({ controlApiUrl, token, authentication, usageExportJobId, traceId, signal }) {
   const jobId = requireUsageExportJobId(usageExportJobId);
-  const response = await fetch(`${controlApiUrl}/usage/exports/${encodeURIComponent(jobId)}`, {
+  const response = await authenticatedResourceFetch(`${controlApiUrl}/usage/exports/${encodeURIComponent(jobId)}`, {
+    authentication, token,
     signal,
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": createUsageExportRequestId("status"),
       ...(traceId ? { "X-Trace-ID": traceId } : {}),
     },
@@ -191,13 +203,13 @@ export async function getUsageExportStatus({ controlApiUrl, token, usageExportJo
  * 下载已经完成的异步 CSV 制品。
  * 下载继续携带 Bearer Token；job ID 只进入固定同源路径，Token、tenant_id 和筛选不会进入 URL。
  */
-export async function downloadUsageExport({ controlApiUrl, token, usageExportJobId, traceId, signal }) {
+export async function downloadUsageExport({ controlApiUrl, token, authentication, usageExportJobId, traceId, signal }) {
   const jobId = requireUsageExportJobId(usageExportJobId);
-  const response = await fetch(`${controlApiUrl}/usage/exports/${encodeURIComponent(jobId)}/download`, {
+  const response = await authenticatedResourceFetch(`${controlApiUrl}/usage/exports/${encodeURIComponent(jobId)}/download`, {
+    authentication, token, csrfRequired: true,
     signal,
     headers: {
       Accept: "text/csv",
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": createUsageExportRequestId("download"),
       ...(traceId ? { "X-Trace-ID": traceId } : {}),
     },
@@ -213,6 +225,7 @@ export async function downloadUsageExport({ controlApiUrl, token, usageExportJob
 export async function pollUsageExportUntilReady({
   controlApiUrl,
   token,
+  authentication,
   usageExportJobId,
   traceId,
   signal,
@@ -225,12 +238,12 @@ export async function pollUsageExportUntilReady({
   let lastResult = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     throwIfAborted(signal);
-    lastResult = await getUsageExportStatus({ controlApiUrl, token, usageExportJobId, traceId, signal });
+    lastResult = await getUsageExportStatus({ controlApiUrl, token, authentication, usageExportJobId, traceId, signal });
     onStatus?.(lastResult);
     const status = lastResult.exportJob.status;
     if (status === "completed") {
       // completed 仅代表制品可领取，实际下载仍需单独携带 Bearer 并接受后端二次权限校验。
-      return downloadUsageExport({ controlApiUrl, token, usageExportJobId, traceId, signal });
+      return downloadUsageExport({ controlApiUrl, token, authentication, usageExportJobId, traceId, signal });
     }
     if (status === "failed") {
       // 任务失败只展示后端固定 error_code，不读取 worker 内部异常或制品正文。
@@ -297,6 +310,7 @@ export function triggerUsageCsvDownload(result, environment = globalThis) {
  * 该白名单是前端防误传边界；真实租户隔离、未知参数拒绝和资源归属仍由后端执行。
  */
 function appendUsageFilters(url, filters) {
+  setOptionalParam(url, "consumer_id", filters.consumerId);
   setOptionalParam(url, "start_date", filters.startDate);
   setOptionalParam(url, "end_date", filters.endDate);
   setOptionalParam(url, "model_id", filters.modelId);
@@ -325,7 +339,7 @@ function setOptionalParam(url, name, value) {
  * 这里不读取或输出任何敏感头，只保留 request_id/trace_id 便于排障。
  */
 async function usageRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_usage_${Date.now()}`,
@@ -496,7 +510,8 @@ function abortError() {
 async function readJson(response) {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return {};
   }
 }

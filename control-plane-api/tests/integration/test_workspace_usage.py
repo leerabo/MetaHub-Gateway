@@ -11,7 +11,7 @@ from metahub_control.usage import export_service
 from metahub_control.usage import service as usage_service
 from metahub_control.usage.routes import router as usage_router
 from metahub_shared.db import connect_database
-from metahub_shared.db.connection import database_connection_pool_scope
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.db.security import hash_password
 from metahub_shared.runtime.errors import ApiError
 from test_prd095_platform_iam import WORKSPACE_CSRF_COOKIE, _csrf
@@ -314,7 +314,10 @@ async def test_usage_export_reauthenticates_after_generation_and_rejects_mixed_c
         def revoke_after_generation(*args, **kwargs):
             generated = original(*args, **kwargs)
             # A separate lease models another request, not the export's own transaction.
-            with database_connection_pool_scope(), connect_database(database) as connection:
+            with (
+                database_request_scope(reuse_connections=True),
+                connect_database(database) as connection,
+            ):
                 connection.execute(
                     """UPDATE workspace_sessions SET status='revoked',
                         revoked_at='2026-09-09T00:00:00Z',revoked_reason='workspace_switched',
@@ -353,7 +356,10 @@ async def test_usage_summary_reauthenticates_after_read_snapshot(
 
         def revoke_after_read(*args, **kwargs):
             result = original(*args, **kwargs)
-            with database_connection_pool_scope(), connect_database(database) as connection:
+            with (
+                database_request_scope(reuse_connections=True),
+                connect_database(database) as connection,
+            ):
                 connection.execute(
                     """UPDATE workspace_sessions SET status='revoked',
                         revoked_at='2026-09-09T00:00:00Z',revoked_reason='workspace_switched',

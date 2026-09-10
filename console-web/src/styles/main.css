@@ -12208,7 +12208,7 @@ h3 {
 .budget-rule-form span,
 .budget-rule-row em {
   color: #64748b;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
 }
 
@@ -12920,6 +12920,7 @@ h3 {
   background: #ffffff;
   color: #0f172a;
   font: inherit;
+  font-size: 16px;
 }
 
 .budget-block-label {
@@ -14080,7 +14081,7 @@ h3 {
 
 .usage-filter-form span {
   color: #64748b;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
 }
 
@@ -14088,7 +14089,8 @@ h3 {
 .usage-filter-form select {
   width: 100%;
   min-width: 0;
-  height: 36px;
+  height: 40px;
+  font-size: 16px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   padding: 0 10px;
@@ -14098,8 +14100,15 @@ h3 {
 
 .usage-filter-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.usage-filter-actions button {
+  min-height: 40px;
+  font: inherit;
+  font-size: 16px;
 }
 
 .usage-total-grid {
@@ -14205,7 +14214,7 @@ h3 {
 .usage-metric em {
   display: block;
   color: #64748b;
-  font-size: 12px;
+  font-size: 14px;
   font-style: normal;
   font-weight: 800;
 }
@@ -14233,7 +14242,7 @@ h3 {
 .usage-summary-block h3 {
   margin: 0 0 8px;
   color: #0f172a;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .usage-mini-table,
@@ -14259,7 +14268,7 @@ h3 {
   padding: 9px 12px;
   border-top: 1px solid #e2e8f0;
   background: #ffffff;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .usage-mini-row {
@@ -14277,7 +14286,7 @@ h3 {
   border-top: 0;
   background: #f8fafc;
   color: #475569;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
 }
 
@@ -14296,11 +14305,29 @@ h3 {
   white-space: nowrap;
 }
 
+.usage-mini-row span:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .usage-mini-head { display: none; }
+  .usage-mini-row:not(.usage-mini-head) > span[data-label] {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .usage-mini-row:not(.usage-mini-head) > span[data-label]::before {
+    content: attr(data-label);
+    color: #64748b;
+  }
+}
+
 .usage-record-id em,
 .usage-record-model em {
   overflow: hidden;
   color: #64748b;
-  font-size: 12px;
+  font-size: 14px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -18255,7 +18282,7 @@ h3 {
 .finops-adjustment-dialog label > span,
 .finops-target-entry > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -18272,6 +18299,14 @@ h3 {
   background: #ffffff;
   color: var(--text);
   font: inherit;
+  font-size: 16px;
+}
+
+.workspace-commercial-accounting input,
+.workspace-commercial-accounting select,
+.workspace-commercial-accounting textarea {
+  font: inherit;
+  font-size: 16px;
 }
 
 .finops-filter-form input,
@@ -18330,7 +18365,7 @@ h3 {
 .finops-summary-item span,
 .finops-summary-item em {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   font-style: normal;
 }
 
@@ -18373,7 +18408,7 @@ h3 {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: #ffffff;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .finops-ledger-row:last-child {
@@ -18389,7 +18424,7 @@ h3 {
   min-height: 36px;
   background: #f8fafc;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -18403,7 +18438,7 @@ h3 {
 .finops-target-entry code {
   overflow-wrap: anywhere;
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .finops-ledger-row [data-label="类型"] {
@@ -18424,7 +18459,7 @@ h3 {
   border-radius: 4px;
   background: #f1f5f9;
   color: #475569;
-  font-size: 11px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
@@ -18541,7 +18576,7 @@ h3 {
 .finops-detail-list dt {
   margin-bottom: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -18549,7 +18584,7 @@ h3 {
   min-width: 0;
   margin: 0;
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .finops-evidence-warning {
@@ -18573,7 +18608,7 @@ h3 {
 .finops-pager span {
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   text-align: center;
 }
 
@@ -18686,7 +18721,7 @@ h3 {
   .finops-ledger-row > [data-label]::before {
     content: attr(data-label);
     color: var(--muted);
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 700;
   }
 

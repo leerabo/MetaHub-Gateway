@@ -656,7 +656,6 @@ import { createConsumer, listConsumers, updateConsumer } from "../lib/consumers.
 import {
   budgetIdentitySnapshot,
   createBudgetMutationLifecycle,
-  isBudgetRefreshOwnerCurrent,
   selectBudgetScopeOption,
 } from "../features/budgets/budgetPageLifecycle.js";
 import {
@@ -774,7 +773,8 @@ const workspacePageVisitTracker = createWorkspacePageVisitTracker({
 });
 const RESOURCE_NAVIGATION_IDS = new Set(["sdk-examples", "tenant", "users", "environments", "projects", "providers", "models", "virtual-keys", "files", "provider-health",
   "model-aliases", "routing-policies", "model-quality-scores", "experiments",
-  "request-logs", "request-explanations", "output-safety", "audit-logs", "feedback-summary"]);
+  "request-logs", "request-explanations", "output-safety", "audit-logs", "feedback-summary", "usage",
+  "budgets", "internal-finops"]);
 const resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
   session: authSession, shell: resourcePageShellState, hash: readActiveNavigationHash(),
   refreshGeneration: refreshSequence,
@@ -1631,7 +1631,7 @@ async function performRefresh(options = {}) {
     clearAuditExportSessionState();
   }
   // 正式账本 cursor、详情和调整原因只属于后端确认的 admin 页面，离页立即销毁全部内存事实。
-  if (consoleShellState?.activeNavigationItemId !== "finops-ledger") {
+  if (consoleShellState?.activeNavigationItemId !== "internal-finops") {
     finOpsPageState.clear();
   }
   // PAGE-077/078 只属于后端确认的 admin 导航；离页立即取消 GET/PATCH 并销毁 cursor 与处置草稿。
@@ -1907,6 +1907,9 @@ async function loadAndRenderActiveNavigation({
       });
       state.workspaceCommercialAccountingState =
         workspaceCommercialAccountingController.snapshot();
+      if (activeNavigationId === "internal-finops") {
+        await load("finOpsState", () => loadFinOpsState(consoleShellState, refreshId));
+      }
       break;
     case "finops-ledger":
       await load("finOpsState", () => loadFinOpsState(consoleShellState, refreshId));
@@ -2165,6 +2168,11 @@ function renderLogin(error, requestId) {
 
 function clearBasicResourceFeedback() {
   workspaceProfileState = workspaceProfileMutation = workspaceProfileRecovery = null;
+  clearBudgetSessionState();
+  finOpsPageState.clear();
+  clearUsageExportSessionState();
+  usageFilters = { limit: 20, offset: 0 };
+  usageActionError = null;
   clearRequestLogSessionState();
   clearRequestExplanationSessionState();
   clearRequestFeedbackSummarySessionState();
@@ -3568,7 +3576,10 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const budgetScopeChainKey = document.querySelector("#budget-scope-chain-key");
+  const budgetScopeChainBinding = bindResourceElement(budgetScopeChainKey,
+    [PERMISSIONS.BILLING_BUDGET_READ], "budgets");
   budgetScopeChainKey?.addEventListener("change", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(budgetScopeChainBinding)) return;
     // 只保存不透明 Key ID；后端 GET 会再次恢复并验证完整归属链。
     selectedBudgetVirtualKeyId = budgetScopeChainKey.value;
     budgetActionError = null;
@@ -3577,6 +3588,8 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const budgetRuleForm = document.querySelector("#budget-rule-form");
+  const budgetRuleBinding = bindResourceElement(budgetRuleForm,
+    [PERMISSIONS.BILLING_BUDGET_READ, PERMISSIONS.BILLING_BUDGET_WRITE], "budgets");
   const budgetScopeTypeControl = budgetRuleForm?.querySelector("[name='scopeType']");
   const budgetScopeIdControl = budgetRuleForm?.querySelector("[name='scopeId']");
   const budgetEnvironmentControl = budgetRuleForm?.querySelector("[name='environmentId']");
@@ -3586,7 +3599,8 @@ function bindAuthenticatedEvents(consoleShellState) {
    * 这只是输入约束；后端仍会执行 tenant-qualified 归属校验。
    */
   function syncBudgetScopeOptions() {
-    if (!budgetScopeTypeControl || !budgetScopeIdControl) {
+    if (!resourcePageLifecycle.isBindingCurrent(budgetRuleBinding)
+      || !budgetScopeTypeControl || !budgetScopeIdControl) {
       return;
     }
     const scopeType = budgetScopeTypeControl.value;
@@ -3628,19 +3642,11 @@ function bindAuthenticatedEvents(consoleShellState) {
 
   budgetRuleForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const token = authSession.token;
-    // 预算写入会影响网关阻断策略，必须依赖后端 RBAC；前端只负责提交当前表单字段。
-    if (!token) {
-      renderLogin();
-      return;
-    }
-    const operation = budgetMutationLifecycle.begin({
-      identity: budgetIdentitySnapshot(authSession.context),
-      navigation: currentRenderedNavigation(),
-      refreshGeneration: refreshSequence,
-    });
+    const ticket = resourcePageLifecycle.beginMutation(budgetRuleBinding);
+    if (!ticket) return;
+    const operation = budgetMutationLifecycle.begin(currentBudgetMutationOwner());
     if (!operation) {
-      // 不完整身份或已离开预算页时失败关闭，不能发送失去 owner 的写请求。
+      resourcePageLifecycle.finishMutation(ticket);
       return;
     }
     const button = budgetRuleForm.querySelector("button[type='submit']");
@@ -3654,9 +3660,8 @@ function bindAuthenticatedEvents(consoleShellState) {
     budgetActionError = null;
     budgetFeedback = exists ? "预算更新中" : "预算创建中";
     try {
-      await writeRule({
+      await resourceMutationRequest(ticket, writeRule, {
         controlApiUrl,
-        token,
         scopeType,
         scopeId,
         environmentId,
@@ -3667,83 +3672,62 @@ function bindAuthenticatedEvents(consoleShellState) {
         status: String(data.get("status") ?? "active"),
       });
       if (!isCurrentBudgetMutation(operation)) {
-        budgetMutationLifecycle.finish(operation);
         return;
       }
       budgetFeedback = exists ? "预算已更新" : "预算已创建";
       budgetMutationLifecycle.finish(operation);
-      await refresh();
+      await refreshResourceMutation(ticket);
     } catch (error) {
-      if (!isCurrentBudgetMutation(operation)) {
-        budgetMutationLifecycle.finish(operation);
-        return;
-      }
-      // 认证过期会改变前端会话边界，必须立即清理本地登录态并回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearBudgetSessionState();
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (!isCurrentBudgetMutation(operation) || handleResourceMutationError(ticket, error)) return;
       // 409 必须保留后端 code/message/request_id，并通过 refresh 获取并发创建后的最新规则。
       budgetActionError = error;
       budgetFeedback = error instanceof AuthApiError && error.status === 409 ? "预算规则已变化" : "预算保存失败";
       budgetMutationLifecycle.finish(operation);
-      await refresh();
+      await refreshResourceMutation(ticket);
+    } finally {
+      budgetMutationLifecycle.finish(operation);
+      resourcePageLifecycle.finishMutation(ticket);
     }
   });
   document.querySelectorAll("[data-budget-mode-rule-id]").forEach((control) => {
+    const binding = bindResourceElement(control,
+      [PERMISSIONS.BILLING_BUDGET_READ, PERMISSIONS.BILLING_BUDGET_WRITE], "budgets");
     control.addEventListener("change", async () => {
-      const token = authSession.token;
+      if (!resourcePageLifecycle.isBindingCurrent(binding)) return;
       const budgetRuleId = control.dataset.budgetModeRuleId;
-      // 快捷切换会直接改变网关准入行为，缺少会话或规则 ID 时不能发送不完整请求。
-      if (!token || !budgetRuleId) {
-        renderLogin();
-        return;
-      }
-      const operation = budgetMutationLifecycle.begin({
-        identity: budgetIdentitySnapshot(authSession.context),
-        navigation: currentRenderedNavigation(),
-        refreshGeneration: refreshSequence,
-      });
+      if (!budgetRuleId) return;
+      const ticket = resourcePageLifecycle.beginMutation(binding);
+      if (!ticket) return;
+      const operation = budgetMutationLifecycle.begin(currentBudgetMutationOwner());
       if (!operation) {
-        // 页面或身份 owner 不完整时不能改变 Gateway 的预算耗尽动作。
+        resourcePageLifecycle.finishMutation(ticket);
         return;
       }
+      const mode = control.value;
       control.disabled = true;
       budgetActionError = null;
       budgetFeedback = "预算模式更新中";
       try {
-        await updateBudgetMode({
+        await resourceMutationRequest(ticket, updateBudgetMode, {
           controlApiUrl,
-          token,
           budgetRuleId,
-          mode: control.value,
+          mode,
         });
         if (!isCurrentBudgetMutation(operation)) {
-          budgetMutationLifecycle.finish(operation);
           return;
         }
-        budgetFeedback = control.value === "block" ? "预算耗尽后将阻断请求" : "已切换为仅告警，阻断已解除";
+        budgetFeedback = mode === "block" ? "预算耗尽后将阻断请求" : "已切换为仅告警，阻断已解除";
         budgetMutationLifecycle.finish(operation);
-        await refresh();
+        await refreshResourceMutation(ticket);
       } catch (error) {
-        if (!isCurrentBudgetMutation(operation)) {
-          budgetMutationLifecycle.finish(operation);
-          return;
-        }
-        // 认证失效时必须清理本地会话；其他统一错误保留 request_id 回显。
-        if (error instanceof AuthApiError && error.status === 401) {
-          clearAuthSession();
-          authSession = { token: null, context: null };
-          renderLogin(authErrorMessage(error), error.requestId);
-          return;
-        }
+        if (!isCurrentBudgetMutation(operation) || handleResourceMutationError(ticket, error)) return;
         budgetActionError = error;
         budgetFeedback = "预算模式更新失败";
         budgetMutationLifecycle.finish(operation);
-        await refresh();
+        await refreshResourceMutation(ticket);
+      } finally {
+        budgetMutationLifecycle.finish(operation);
+        resourcePageLifecycle.finishMutation(ticket);
       }
     });
   });
@@ -4465,12 +4449,15 @@ function bindAuthenticatedEvents(consoleShellState) {
   }
 
   const usageFilterForm = document.querySelector("#usage-filter-form");
+  const usageFilterBinding = bindResourceElement(usageFilterForm, [PERMISSIONS.BILLING_USAGE_READ], "usage");
   usageFilterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!resourcePageLifecycle.isBindingCurrent(usageFilterBinding)) return;
     // 筛选变化会改变导出快照；先取消旧任务轮询，避免旧 CSV 完成后覆盖新筛选页面反馈。
     clearUsageExportSessionState();
     const data = new FormData(usageFilterForm);
     usageFilters = {
+      consumerId: optionalText(data.get("consumerId")),
       startDate: optionalText(data.get("startDate")),
       endDate: optionalText(data.get("endDate")),
       environmentId: optionalText(data.get("environmentId")),
@@ -4489,7 +4476,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usageFilterReset = document.querySelector("#usage-filter-reset");
+  const usageResetBinding = bindResourceElement(usageFilterReset, [PERMISSIONS.BILLING_USAGE_READ], "usage");
   usageFilterReset?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(usageResetBinding)) return;
     clearUsageExportSessionState();
     usageFilters = { limit: 20, offset: 0 };
     usageActionError = null;
@@ -4497,7 +4486,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usagePrev = document.querySelector("#usage-prev");
+  const usagePrevBinding = bindResourceElement(usagePrev, [PERMISSIONS.BILLING_USAGE_READ], "usage");
   usagePrev?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(usagePrevBinding)) return;
     usageFilters = {
       ...usageFilters,
       offset: Math.max(Number(usageFilters.offset ?? 0) - Number(usageFilters.limit ?? 20), 0),
@@ -4506,7 +4497,9 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usageNext = document.querySelector("#usage-next");
+  const usageNextBinding = bindResourceElement(usageNext, [PERMISSIONS.BILLING_USAGE_READ], "usage");
   usageNext?.addEventListener("click", async () => {
+    if (!resourcePageLifecycle.isBindingCurrent(usageNextBinding)) return;
     usageFilters = {
       ...usageFilters,
       offset: Number(usageFilters.offset ?? 0) + Number(usageFilters.limit ?? 20),
@@ -4515,20 +4508,16 @@ function bindAuthenticatedEvents(consoleShellState) {
   });
 
   const usageExportButton = document.querySelector("#usage-export-csv");
+  const usageExportBinding = bindResourceElement(usageExportButton,
+    [PERMISSIONS.BILLING_USAGE_READ, PERMISSIONS.BILLING_USAGE_EXPORT], "usage");
   usageExportButton?.addEventListener("click", async () => {
-    const token = authSession.token;
-    // 前端权限判断只避免误操作；DOM 被篡改时后端仍会校验 billing.usage.export。
-    if (!token || !hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_EXPORT)) {
-      if (!token) {
-        renderLogin();
-      }
-      return;
-    }
     // controller 存在表示创建、轮询或下载仍在进行，重复点击不能创建第二个财务任务。
     if (usageExportController) {
       return;
     }
-    const controller = new AbortController();
+    const operation = resourcePageLifecycle.beginMutation(usageExportBinding);
+    if (!operation) return;
+    const controller = operation.controller;
     const generation = ++usageExportGeneration;
     usageExportController = controller;
     let activeJobId = usageExportState.jobId ?? null;
@@ -4549,7 +4538,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (!activeJobId) {
         const initial = await requestUsageCsvExport({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           ...usageFilters,
           exportRequestId: operationRequestId,
           exportTraceId: operationTraceId,
@@ -4585,7 +4574,7 @@ function bindAuthenticatedEvents(consoleShellState) {
       if (activeJobId) {
         download = await pollUsageExportUntilReady({
           controlApiUrl,
-          token,
+          authentication: "workspace",
           usageExportJobId: activeJobId,
           traceId: operationTraceId,
           signal: controller.signal,
@@ -4628,12 +4617,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         return;
       }
       // 401 表示会话边界已经失效，必须清空 Token 和导出状态后回到登录页。
-      if (error instanceof AuthApiError && error.status === 401) {
-        clearAuthSession();
-        authSession = { token: null, context: null };
-        renderLogin(authErrorMessage(error), error.requestId);
-        return;
-      }
+      if (handleResourceMutationError(operation, error)) return;
       setUsageExportState({
         status: "error",
         jobId: activeJobId,
@@ -4644,6 +4628,7 @@ function bindAuthenticatedEvents(consoleShellState) {
         message: `${authErrorMessage(error)} · code: ${error?.code ?? "usage.export_unavailable"} · request_id: ${error?.requestId ?? "-"}${activeJobId ? ` · job_id: ${activeJobId}` : ""}`,
       });
     } finally {
+      resourcePageLifecycle.finishMutation(operation);
       // 旧代次的 finally 不能清掉新会话 controller；只有所有权仍匹配时才释放按钮。
       if (ownsUsageExportGeneration(generation, controller)) {
         usageExportController = null;
@@ -8897,7 +8882,13 @@ function bindWorkspaceConsoleExperiencePageInteractions(
 }
 
 function bindFinOpsInteractions(consoleShellState) {
+  const binding = bindResourceElement(document.querySelector(".finops-ledger-panel"),
+    [PERMISSIONS.BILLING_FINOPS_READ], "internal-finops");
+  const writeBinding = bindResourceElement(document.querySelector("#finops-adjustment-form"),
+    [PERMISSIONS.BILLING_FINOPS_READ, PERMISSIONS.BILLING_FINOPS_WRITE], "internal-finops");
   bindFinOpsLedgerInteractions({
+    isCurrent: () => resourcePageLifecycle.isBindingCurrent(binding),
+    isWriteCurrent: () => resourcePageLifecycle.isBindingCurrent(writeBinding),
     // 新筛选会使旧签名 cursor 失效，状态机同步清除 cursor 栈与选中详情。
     async onFilter(filters) {
       finOpsPageState.setFilters(filters);
@@ -8966,11 +8957,12 @@ function bindFinOpsInteractions(consoleShellState) {
       const targetEntryId = finOpsPageState.snapshot().dialog?.targetEntryId ?? null;
       finOpsPageState.closeDialog();
       await refresh();
-      restoreFinOpsAdjustmentFocus(targetEntryId);
+      if (sameWorkspaceConsoleSession(authSession, workspaceConsoleSessionFromShell(consoleShellState))
+        && currentRenderedNavigation() === "internal-finops") restoreFinOpsAdjustmentFocus(targetEntryId);
     },
     // 提交路径由独立函数维护认证 owner、双击门禁和统一错误。
     async onSubmitAdjustment(values) {
-      await submitFinOpsAdjustment(values);
+      await submitFinOpsAdjustment(values, writeBinding);
     },
   });
 }
@@ -8981,51 +8973,29 @@ function bindFinOpsInteractions(consoleShellState) {
  * 状态机在 fetch 前进入 submitting 并冻结幂等键；网络失败保留同一键供安全重试，
  * 成功后先销毁 reason 再重新读取第一页，避免正文停留在 DOM 或后续错误状态。
  */
-async function submitFinOpsAdjustment(values) {
-  const token = authSession.token;
-  // 财务写入必须同时绑定当前 Session 与 billing.finops.write；任一缺失都不能保留或提交调整草稿。
-  if (!token || !hasPermission(authSession.context, PERMISSIONS.BILLING_FINOPS_WRITE)) {
-    if (!token) {
-      finOpsPageState.clear();
-      renderLogin();
-    }
-    return;
-  }
+async function submitFinOpsAdjustment(values, binding) {
+  const operation = resourcePageLifecycle.beginMutation(binding);
+  if (!operation) return;
   const payload = finOpsPageState.beginSubmit(values);
   if (!payload) {
+    resourcePageLifecycle.finishMutation(operation);
     return;
   }
   setFinOpsSubmittingDom();
   try {
-    const result = await createFinOpsAdjustment({
+    const result = await resourceMutationRequest(operation, createFinOpsAdjustment, {
       controlApiUrl,
-      token,
       ...payload,
     });
-    // 登出、换 Session 或降权期间完成的旧响应不得进入新身份页面内存。
-    if (authSession.token !== token || !hasPermission(authSession.context, PERMISSIONS.BILLING_FINOPS_WRITE)) {
-      finOpsPageState.clear();
-      return;
-    }
     finOpsPageState.acceptAdjustment(result);
-    await refresh();
+    await refreshResourceMutation(operation);
   } catch (error) {
-    // 请求期间发生登出或换 Session 时，旧身份的失败响应也不得进入新页面状态。
-    if (authSession.token !== token) {
-      finOpsPageState.clear();
-      return;
-    }
-    // 服务端确认 Session 失效后必须销毁本地财务状态和认证上下文，避免继续展示旧租户分录。
-    if (error instanceof AuthApiError && error.status === 401) {
-      finOpsPageState.clear();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return;
-    }
+    if (handleResourceMutationError(operation, error)) return;
     // 统一错误对象只包含固定 code/message/request_id；reason 和请求 body 不进入反馈。
     finOpsPageState.rejectAdjustment(error);
-    await refresh();
+    await refreshResourceMutation(operation);
+  } finally {
+    resourcePageLifecycle.finishMutation(operation);
   }
 }
 
@@ -14916,69 +14886,19 @@ async function loadProjectState() {
  * 管理员/开发者才会调用控制面 API；viewer 返回 null 只是界面优化，真实权限仍由后端 /usage 校验。
  */
 async function loadUsageState() {
-  // 用量账本属于成本治理数据，缺少 billing.usage.read 时不触发请求，后端仍会二次校验。
-  if (!hasPermission(authSession.context, PERMISSIONS.BILLING_USAGE_READ)) {
-    return null;
-  }
-  try {
-    const [summary, records] = await Promise.all([
-      getUsageSummary({
-        controlApiUrl,
-        token: authSession.token,
-        environmentId: usageFilters.environmentId,
-        startDate: usageFilters.startDate,
-        endDate: usageFilters.endDate,
-        modelId: usageFilters.modelId,
-        virtualKeyId: usageFilters.virtualKeyId,
-        projectId: usageFilters.projectId,
-        applicationId: usageFilters.applicationId,
-        providerId: usageFilters.providerId,
-        estimated: usageFilters.estimated,
-        requestId: usageFilters.requestId,
-      }),
-      listUsageRecords({
-        controlApiUrl,
-        token: authSession.token,
-        environmentId: usageFilters.environmentId,
-        startDate: usageFilters.startDate,
-        endDate: usageFilters.endDate,
-        modelId: usageFilters.modelId,
-        virtualKeyId: usageFilters.virtualKeyId,
-        projectId: usageFilters.projectId,
-        applicationId: usageFilters.applicationId,
-        providerId: usageFilters.providerId,
-        estimated: usageFilters.estimated,
-        requestId: usageFilters.requestId,
-        limit: usageFilters.limit ?? 20,
-        offset: usageFilters.offset ?? 0,
-      }),
-    ]);
-    return {
-      state: "ok",
-      summary,
-      records,
-      filters: usageFilters,
-      actionError: usageActionError,
-      exportState: usageExportState,
-    };
-  } catch (error) {
-    // 认证令牌属于访问边界，失效或缺失时必须走统一错误。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-    };
-  }
+  const filters = { ...usageFilters };
+  return loadResourceState("usage", [PERMISSIONS.BILLING_USAGE_READ],
+    (options) => Promise.all([
+      getUsageSummary({ ...options, ...filters }),
+      listUsageRecords({ ...options, ...filters }),
+    ]), ([summary, records]) => ({
+      state: "ok", summary, records, filters,
+      actionError: usageActionError, exportState: usageExportState,
+    }));
 }
 
 /**
- * 只在 admin 且后端导航确认当前项为 finops-ledger 时读取正式账本。
+ * 只在具有读权限且后端导航确认当前项为 internal-finops 时读取正式账本。
  *
  * hash 只能作为“仍在当前页”的附加条件，不能代替后端角色化导航；否则手写 hash
  * 会在未授权页面后台预取财务数据。opaque cursor 只由 FinOps 页面内存提供。
@@ -14988,48 +14908,15 @@ async function loadFinOpsState(consoleShellState, refreshId) {
   if (
     refreshId !== refreshSequence
     || !hasPermission(authSession.context, PERMISSIONS.BILLING_FINOPS_READ)
-    || consoleShellState?.activeNavigationItemId !== "finops-ledger"
-    || (hashNavigation && hashNavigation !== "finops-ledger")
+    || consoleShellState?.activeNavigationItemId !== "internal-finops"
+    || (hashNavigation && hashNavigation !== "internal-finops")
   ) {
     return null;
   }
-  try {
-    const state = await listFinOpsLedger({
-      controlApiUrl,
-      token: authSession.token,
-      ...finOpsPageState.query(),
-    });
-    // 列表响应到达时再次确认刷新 owner，旧 Session 或离页响应不能进入页面内存。
-    const responseHashNavigation = readActiveNavigationHash();
-    if (
-      refreshId !== refreshSequence
-      || !hasPermission(authSession.context, PERMISSIONS.BILLING_FINOPS_READ)
-      || (responseHashNavigation && responseHashNavigation !== "finops-ledger")
-    ) {
-      return null;
-    }
-    return finOpsPageState.acceptPage(state);
-  } catch (error) {
-    if (refreshId !== refreshSequence) {
-      return null;
-    }
-    // 401 已改变认证边界，必须先销毁 cursor、reason 和幂等键，再清除登录态。
-    if (error instanceof AuthApiError && error.status === 401) {
-      finOpsPageState.clear();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    const memory = finOpsPageState.snapshot();
-    return {
-      state: "error",
-      code: error?.code ?? "finops.ledger_unavailable",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      filters: memory.filters,
-    };
-  }
+  return loadResourceState("internal-finops", [PERMISSIONS.BILLING_FINOPS_READ],
+    (options) => listFinOpsLedger({ ...options, ...finOpsPageState.query() }),
+    (state) => finOpsPageState.acceptPage(state),
+    { filters: finOpsPageState.snapshot().filters });
 }
 /**
  * 只在 admin 且后端导航确认 PAGE-077/078 激活时读取成本异常。
@@ -16031,7 +15918,7 @@ function clearBudgetStateOnIdentityChange(previousContext, currentContext) {
  */
 function currentBudgetMutationOwner() {
   return {
-    identity: budgetIdentitySnapshot(authSession.context),
+    identity: currentEvaluationPageIdentity("budgets", PERMISSIONS.BILLING_BUDGET_WRITE),
     navigation: currentRenderedNavigation(),
     refreshGeneration: refreshSequence,
   };
@@ -16052,13 +15939,10 @@ function isCurrentBudgetMutation(operation) {
  * tenant_id 与权威资源绑定校验。
  */
 function budgetRuleAlreadyExists(environmentId, scopeType, scopeId) {
-  const effectiveScopeId = scopeType === "tenant"
-    ? authSession.context?.user?.tenant_id
-    : scopeId;
   return budgetRulesSnapshot.some((rule) => (
     rule.environment_id === environmentId
     && rule.scope_type === scopeType
-    && rule.scope_id === effectiveScopeId
+    && (scopeType === "tenant" || rule.scope_id === scopeId)
   ));
 }
 
@@ -16067,81 +15951,28 @@ function budgetRuleAlreadyExists(environmentId, scopeType, scopeId) {
  * 管理员/开发者才会调用控制面 API；只有 tenant/user/refresh owner 未变化时才接纳响应。
  */
 async function loadBudgetState(virtualKeysState, consoleShellState, refreshId) {
-  if (!hasPermission(authSession.context, PERMISSIONS.BILLING_BUDGET_READ)) {
+  if (refreshId !== refreshSequence
+    || consoleShellState?.activeNavigationItemId !== "budgets"
+    || !currentEvaluationPageIdentity("budgets", PERMISSIONS.BILLING_BUDGET_READ)) {
     return null;
   }
-  const identity = budgetIdentitySnapshot(authSession.context);
-  const refreshOwner = Object.freeze({ identity, refreshGeneration: refreshId });
-  if (!isBudgetRefreshOwnerCurrent(refreshOwner, {
-    identity: budgetIdentitySnapshot(authSession.context),
-    refreshGeneration: refreshSequence,
-  })) {
-    return null;
-  }
-  // Token 只冻结在请求闭包中，不进入 owner、DOM、错误或日志。
-  const token = authSession.token;
   const virtualKeyIds = (virtualKeysState?.virtual_keys ?? []).map((item) => item.virtual_key_id);
-  const isBudgetPage = consoleShellState?.activeNavigationItemId === "budgets";
-  if (isBudgetPage && !virtualKeyIds.includes(selectedBudgetVirtualKeyId)) {
+  if (!virtualKeyIds.includes(selectedBudgetVirtualKeyId)) {
     selectedBudgetVirtualKeyId = virtualKeyIds[0] ?? "";
   }
-  const scopeChainKeyId = isBudgetPage ? selectedBudgetVirtualKeyId : "";
-  try {
-    const [rules, status] = await Promise.all([
-      listBudgets({
-        controlApiUrl,
-        token,
-      }),
-      getBudgetStatus({
-        controlApiUrl,
-        token,
-        virtualKeyId: scopeChainKeyId || undefined,
-      }),
-    ]);
-    // GET 完成后必须再次比较完整身份和主刷新代次，最终 DOM 门禁不能保护提前写入的模块状态。
-    if (!isBudgetRefreshOwnerCurrent(refreshOwner, {
-      identity: budgetIdentitySnapshot(authSession.context),
-      refreshGeneration: refreshSequence,
-    })) {
-      return null;
-    }
-    // 只有 PAGE-076 需要规则存在性快照；其他页面只消费只读状态摘要。
-    budgetRulesSnapshot = isBudgetPage ? (rules.budget_rules ?? []) : [];
-    return {
-      state: "ok",
-      rules,
-      scanScopeFilter: dlpScanScopeFilter,
-      status,
-      selectedVirtualKeyId: selectedBudgetVirtualKeyId,
-      actionError: budgetActionError,
-      feedback: budgetFeedback,
-    };
-  } catch (error) {
-    // 迟到异常不能清空新身份快照、跳转登录页、覆盖反馈或触发额外刷新。
-    if (!isBudgetRefreshOwnerCurrent(refreshOwner, {
-      identity: budgetIdentitySnapshot(authSession.context),
-      refreshGeneration: refreshSequence,
-    })) {
-      return null;
-    }
-    budgetRulesSnapshot = [];
-    // 当前 owner 收到 401 时必须先清预算会话，再销毁认证状态，避免旧快照进入下一次登录。
-    if (error instanceof AuthApiError && error.status === 401) {
-      clearBudgetSessionState();
-      clearAuthSession();
-      authSession = { token: null, context: null };
-      renderLogin(authErrorMessage(error), error.requestId);
-      return null;
-    }
-    return {
-      state: "error",
-      message: authErrorMessage(error),
-      requestId: error?.requestId ?? "-",
-      // POST create-only 的 409 是独立操作证据；刷新失败不能覆盖其 message/request_id。
-      actionError: budgetActionError,
-      feedback: budgetFeedback,
-    };
-  }
+  const scopeChainKeyId = selectedBudgetVirtualKeyId;
+  budgetRulesSnapshot = [];
+  return loadResourceState("budgets", [PERMISSIONS.BILLING_BUDGET_READ],
+    (options) => Promise.all([
+      listBudgets(options),
+      getBudgetStatus({ ...options, virtualKeyId: scopeChainKeyId || undefined }),
+    ]),
+    ([rules, status]) => {
+      budgetRulesSnapshot = rules.budget_rules ?? [];
+      return { state: "ok", rules, status, selectedVirtualKeyId: scopeChainKeyId,
+        actionError: budgetActionError, feedback: budgetFeedback };
+    },
+    { actionError: budgetActionError, feedback: budgetFeedback });
 }
 /**
  * 读取当前租户 DLP 规则。

@@ -11,6 +11,7 @@ import os
 import secrets
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,9 @@ if SOURCE != ROOT and not SOURCE.is_relative_to(ROOT / ".tmp"):
 if os.getenv("METAHUB_S1_PRODUCTION", "false") not in {"true", "false"}:
     raise ValueError("S1 production mode must be true or false")
 PRODUCTION = os.getenv("METAHUB_S1_PRODUCTION", "false") == "true"
+FLOW = os.getenv("METAHUB_S1_FLOW", "organization")
+if FLOW not in {"organization", "finance"}:
+    raise ValueError("S1 flow must be organization or finance")
 FRONTEND = SOURCE / "console-web" / "dist" if PRODUCTION else SOURCE / "console-web"
 sys.path[:0] = [
     str(SOURCE / part)
@@ -64,7 +68,7 @@ def serve(app):
     return server, thread, listener
 
 
-def create_browser_app(control):
+def create_browser_app(control, usage_fixture=None):
     """Serve public assets before API routing, as the trial frontend does."""
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
@@ -80,8 +84,34 @@ def create_browser_app(control):
         Mount("/src", app=StaticFiles(directory=FRONTEND / "src")),
         Route("/", endpoint=static),
         *(Route("/" + name, endpoint=static) for name in entrypoints),
+        *([Route("/__acceptance/usage", endpoint=usage_fixture, methods=["POST"])]
+          if usage_fixture is not None else []),
         Mount("/", app=control),
     ])
+
+
+def navigation_diagnostics(operation, failures):
+    """Record handled database failures without retaining SQL, arguments or credentials."""
+    def call(*args, **kwargs):
+        previous = sys.gettrace()
+
+        def trace(frame, event, value):
+            if frame.f_code.co_filename != operation.__code__.co_filename:
+                return None
+            if event == "exception" and isinstance(value[1], sqlite3.Error):
+                if len(failures) < 20:
+                    failures.append({"function": frame.f_code.co_name,
+                                     "type": type(value[1]).__name__,
+                                     "sqlite_code": getattr(value[1], "sqlite_errorname", None)})
+            return trace
+
+        sys.settrace(trace)
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            sys.settrace(previous)
+
+    return call
 
 
 def main():
@@ -133,7 +163,14 @@ def main():
     )
     from metahub_control.app import app as control
     from metahub_control.identity import registration_policy
+    from metahub_control.workspace_navigation import routes as navigation_routes
     from metahub_gateway.app import app as gateway
+
+    navigation_failures = []
+    for operation in ("get_workspace_navigation", "record_workspace_page_visit"):
+        setattr(navigation_routes, operation, navigation_diagnostics(
+            getattr(navigation_routes, operation), navigation_failures,
+        ))
 
     for module in ("metahub_control.app", "metahub_gateway.app", "metahub_shared.db"):
         assert Path(sys.modules[module].__file__).resolve().is_relative_to(SOURCE)
@@ -148,9 +185,16 @@ def main():
     # Only this module's challenge generator is deterministic; tokens remain random.
     registration_policy.secrets = CaptchaRandom
     services = []
-    result = {"status": "failed", "provider_calls": 0, "started_at": datetime.now(UTC).isoformat()}
+    fixture_token = secrets.token_urlsafe(48)
+    usage_fixture = None
+    if FLOW == "finance":
+        from s2_usage_fixture import create_usage_fixture
+
+        usage_fixture = create_usage_fixture(database, SOURCE, fixture_token)
+    result = {"status": "failed", "provider_calls": 0, "flow": FLOW,
+              "started_at": datetime.now(UTC).isoformat()}
     try:
-        services.append(serve(create_browser_app(control)))
+        services.append(serve(create_browser_app(control, usage_fixture)))
         services.append(serve(gateway))
         origin = "http://s1.localhost:" + str(services[0][2].getsockname()[1])
         control.state.config = control.state.config.model_copy(update={"allowed_origins": [origin]})
@@ -180,6 +224,9 @@ def main():
             S1_ORIGIN=origin,
             S1_ARTIFACTS=str(artifacts),
             S1_GATEWAY_ORIGIN="http://127.0.0.1:" + str(services[1][2].getsockname()[1]),
+            S1_FLOW=FLOW,
+            S1_FIXTURE_TOKEN=fixture_token,
+            S1_PYTHON=sys.executable,
         )
         browser_tmp = work / "browser-tmp"
         browser_tmp.mkdir()
@@ -194,7 +241,7 @@ def main():
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
-                    timeout=240,
+                    timeout=360 if FLOW == "finance" else 240,
                 )
             except subprocess.TimeoutExpired:
                 faulthandler.dump_traceback(file=stacks)
@@ -209,10 +256,12 @@ def main():
                 table: db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] - count
                 for table, count in initial.items()
             }
-            assert delta == {"global_accounts": 2, "users": 2, "workspace_memberships": 2}, delta
+            organizations = 3 if FLOW == "finance" else 2
+            assert delta == {table: organizations for table in initial}, delta
             result["identity_count_delta"] = delta
-            assert db.execute("SELECT COUNT(*) FROM workspace_consumers").fetchone()[0] == 4
-            assert db.execute("SELECT COUNT(*) FROM virtual_key_consumers").fetchone()[0] == 4
+            for table in ("workspace_consumers", "virtual_key_consumers"):
+                count = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                assert count == organizations * 2
             assert (
                 db.execute(
                     "SELECT COUNT(*) FROM account_verifications v JOIN global_accounts a "
@@ -253,6 +302,7 @@ def main():
         result["frontend_source"] = str(FRONTEND)
         result["production_build"] = PRODUCTION
         result["static_dispatch"] = "public_assets_before_control"
+        result["navigation_database_failures"] = navigation_failures
         (artifacts / "acceptance.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(
             json.dumps(

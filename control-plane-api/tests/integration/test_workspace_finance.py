@@ -10,7 +10,7 @@ from metahub_control.budgets.routes import router as budget_router
 from metahub_control.finops import service as finops
 from metahub_control.finops.routes import router as finops_router
 from metahub_shared.db import connect_database
-from metahub_shared.db.connection import database_connection_pool_scope
+from metahub_shared.db.connection import database_request_scope
 from metahub_shared.runtime.budget_blocks import ensure_budget_block
 from metahub_shared.runtime.errors import ApiError
 from test_prd095_platform_iam import GLOBAL_CSRF_COOKIE, WORKSPACE_CSRF_COOKIE, _csrf
@@ -74,7 +74,9 @@ async def test_workspace_finance_role_and_foreign_cookie_matrix(
                 before = _counts(database)
                 for path in READS:
                     response = await actors.member.get(path)
-                    assert response.status_code == (200 if allowed else 403), (role, path, response.text)
+                    assert response.status_code == (200 if allowed else 403), (
+                        role, path, response.text,
+                    )
                 headers = {
                     **subject_headers(actors.member),
                     "Idempotency-Key": "finance-role-matrix-" + role,
@@ -88,7 +90,9 @@ async def test_workspace_finance_role_and_foreign_cookie_matrix(
                 if not allowed:
                     assert _counts(database) == before
             before = _counts(database)
-            for cookie_name in ("__Host-metahub-platform-session", "__Host-metahub-support-session"):
+            for cookie_name in (
+                "__Host-metahub-platform-session", "__Host-metahub-support-session",
+            ):
                 headers = {
                     **subject_headers(actors.source, attack=True),
                     "Idempotency-Key": "finance-foreign-cookie",
@@ -99,7 +103,9 @@ async def test_workspace_finance_role_and_foreign_cookie_matrix(
                     ("PATCH", "/budgets", RULE),
                     ("POST", "/finops/adjustments", ADJUSTMENT),
                 ):
-                    response = await actors.anonymous.request(method, path, json=body, headers=headers)
+                    response = await actors.anonymous.request(
+                        method, path, json=body, headers=headers,
+                    )
                     assert response.status_code == 400, response.text
                     assert response.json()["code"] == "workspace_session.credential_conflict"
             assert _counts(database) == before
@@ -130,7 +136,7 @@ def _counts(database):
 
 
 def _revoke(database):
-    with database_connection_pool_scope(), connect_database(database) as connection:
+    with database_request_scope(reuse_connections=True), connect_database(database) as connection:
         connection.execute("""UPDATE workspace_sessions SET status='revoked',
             revoked_at='2026-09-09T00:00:00Z', revoked_reason='workspace_switched',
             updated_at='2026-09-09T00:00:00Z' WHERE status='active'""")

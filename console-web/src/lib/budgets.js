@@ -1,16 +1,17 @@
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 /**
  * 查询当前租户可见的预算规则列表。
  * 前端只传 scope/status 筛选条件，不传 tenant_id；租户隔离和角色校验必须由控制面预算 API 完成。
  */
-export async function listBudgets({ controlApiUrl, token, scopeType, environmentId, status }) {
+export async function listBudgets({ controlApiUrl, token, authentication, signal, scopeType, environmentId, status }) {
   const url = new URL(`${controlApiUrl}/budgets`);
   setOptionalParam(url, "scope_type", scopeType);
   setOptionalParam(url, "environment_id", environmentId);
   setOptionalParam(url, "status", status);
   return budgetRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication, signal,
   });
 }
 
@@ -18,14 +19,14 @@ export async function listBudgets({ controlApiUrl, token, scopeType, environment
  * 查询租户级和可选 Virtual Key 级的当日预算状态。
  * 该接口用于控制台概览和预算设置页，只返回成本摘要与策略动作，不返回任何 Key 明文。
  */
-export async function getBudgetStatus({ controlApiUrl, token, virtualKeyId, environmentId, projectId, applicationId }) {
+export async function getBudgetStatus({ controlApiUrl, token, authentication, signal, virtualKeyId, environmentId, projectId, applicationId }) {
   const url = new URL(`${controlApiUrl}/budget-status`);
   setOptionalParam(url, "virtual_key_id", virtualKeyId);
   setOptionalParam(url, "environment_id", environmentId);
   setOptionalParam(url, "project_id", projectId);
   setOptionalParam(url, "application_id", applicationId);
   return budgetRequest(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    token, authentication, signal,
   });
 }
 
@@ -46,6 +47,8 @@ export async function createBudgetRule(options) {
 export async function updateBudgetRule({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   scopeType,
   scopeId,
   environmentId,
@@ -58,6 +61,8 @@ export async function updateBudgetRule({
   return writeBudgetRule({
     controlApiUrl,
     token,
+    authentication,
+    signal,
     scopeType,
     scopeId,
     environmentId,
@@ -77,6 +82,8 @@ export async function updateBudgetRule({
 async function writeBudgetRule({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   scopeType,
   scopeId,
   environmentId,
@@ -98,8 +105,8 @@ async function writeBudgetRule({
   });
   return budgetRequest(`${controlApiUrl}/budgets`, {
     method,
+    token, authentication, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -110,11 +117,11 @@ async function writeBudgetRule({
  * 按预算规则 ID 切换耗尽模式。
  * 路径只携带规则 ID，tenant_id 和 admin 权限由控制面登录态恢复并校验。
  */
-export async function updateBudgetMode({ controlApiUrl, token, budgetRuleId, mode }) {
+export async function updateBudgetMode({ controlApiUrl, token, authentication, signal, budgetRuleId, mode }) {
   return budgetRequest(`${controlApiUrl}/budgets/${encodeURIComponent(budgetRuleId)}/mode`, {
     method: "PATCH",
+    token, authentication, signal,
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ mode }),
@@ -145,7 +152,7 @@ function compactPayload(payload) {
  * 错误对象只携带 code/request_id/trace_id 等排障元数据，不输出底层 SQL 或密钥相关内容。
  */
 async function budgetRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await authenticatedResourceFetch(url, {
     ...options,
     headers: {
       "X-Request-ID": `console_budgets_${Date.now()}`,

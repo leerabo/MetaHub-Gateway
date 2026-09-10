@@ -5,6 +5,7 @@
  */
 
 import { AuthApiError } from "./auth.js";
+import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 // 调整类型与服务端稳定枚举保持一致，前端拒绝未知值只用于减少误提交，不能替代后端校验。
 const ADJUSTMENT_TYPES = new Set([
@@ -31,6 +32,8 @@ const MAX_AMOUNT_MICROS = 1_000_000_000_000_000n;
 export async function listFinOpsLedger({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   startDate,
   endDate,
   entryType,
@@ -56,10 +59,10 @@ export async function listFinOpsLedger({
   url.searchParams.set("limit", String(limit));
   setOptionalParam(url, "cursor", cursor);
 
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedResourceFetch(url.toString(), {
+    token, authentication, signal,
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "X-Request-ID": operationRequestId || createFinOpsRequestId("ledger"),
       "X-Trace-ID": operationTraceId || createFinOpsTraceId(),
     },
@@ -81,6 +84,8 @@ export async function listFinOpsLedger({
 export async function createFinOpsAdjustment({
   controlApiUrl,
   token,
+  authentication,
+  signal,
   adjustmentType,
   amount,
   reversalOfEntryId,
@@ -98,12 +103,12 @@ export async function createFinOpsAdjustment({
     reason,
   });
   const safeIdempotencyKey = requireIdempotencyKey(idempotencyKey);
-  const response = await fetch(`${controlApiUrl}/finops/adjustments`, {
+  const response = await authenticatedResourceFetch(`${controlApiUrl}/finops/adjustments`, {
+    token, authentication, signal,
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
       "Idempotency-Key": safeIdempotencyKey,
       "X-Request-ID": operationRequestId || createFinOpsRequestId("adjustment"),
       "X-Trace-ID": operationTraceId || createFinOpsTraceId(),

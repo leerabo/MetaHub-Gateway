@@ -11,40 +11,50 @@
  * @param {Document|Element} root 可查询当前页面节点的根对象，默认浏览器 document。
  */
 export function bindFinOpsLedgerInteractions(handlers, root = document) {
+  const isCurrent = () => handlers.isCurrent?.() !== false;
   const filterForm = root.querySelector("#finops-filter-form");
   filterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!isCurrent()) return;
     await handlers.onFilter?.(readFilterValues(filterForm));
   });
   root.querySelector("#finops-filter-reset")?.addEventListener("click", async () => {
+    if (!isCurrent()) return;
     await handlers.onResetFilters?.();
   });
   root.querySelector("#finops-prev")?.addEventListener("click", async () => {
+    if (!isCurrent()) return;
     await handlers.onPreviousPage?.();
   });
   root.querySelector("#finops-next")?.addEventListener("click", async () => {
+    if (!isCurrent()) return;
     await handlers.onNextPage?.();
   });
 
   for (const button of root.querySelectorAll("[data-finops-entry-id]")) {
     button.addEventListener("click", async () => {
+      if (!isCurrent()) return;
       await handlers.onSelectEntry?.(button.dataset.finopsEntryId);
     });
   }
   for (const button of root.querySelectorAll("[data-finops-reverse-entry-id]")) {
     button.addEventListener("click", async () => {
+      if (!isCurrent()) return;
       await handlers.onOpenAdjustment?.(button.dataset.finopsReverseEntryId);
     });
   }
   for (const button of root.querySelectorAll("[data-finops-request-id]")) {
     button.addEventListener("click", async () => {
+      if (!isCurrent()) return;
       await handlers.onOpenRequest?.(button.dataset.finopsRequestId);
     });
   }
   root.querySelector("#finops-close-detail")?.addEventListener("click", async () => {
+    if (!isCurrent()) return;
     await handlers.onCloseDetail?.();
   });
   root.querySelector("#finops-open-adjustment")?.addEventListener("click", async () => {
+    if (!isCurrent()) return;
     await handlers.onOpenAdjustment?.(null);
   });
 
@@ -52,7 +62,9 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
   /**
    * 统一关闭入口并交由页面状态机销毁原因和幂等状态，禁止 DOM 自行保留财务草稿。
    */
-  const closeDialog = async () => handlers.onCloseAdjustment?.();
+  const closeDialog = async () => {
+    if (isCurrent()) await handlers.onCloseAdjustment?.();
+  };
   root.querySelector("#finops-close-adjustment")?.addEventListener("click", closeDialog);
   root.querySelector("#finops-cancel-adjustment")?.addEventListener("click", closeDialog);
   dialog?.addEventListener("cancel", async (event) => {
@@ -70,6 +82,7 @@ export function bindFinOpsLedgerInteractions(handlers, root = document) {
   const adjustmentForm = root.querySelector("#finops-adjustment-form");
   adjustmentForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!isCurrent() || handlers.isWriteCurrent?.() === false) return;
     await handlers.onSubmitAdjustment?.(readAdjustmentValues(adjustmentForm));
   });
 

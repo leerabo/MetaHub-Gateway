@@ -5,12 +5,14 @@ import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyUsageAfterDisable, verifyWorkspaceFinance } from "./s2-workspace-finance-browser.mjs";
 
 const { chromium, request } = createRequire(import.meta.url)("playwright");
 const { PNG } = createRequire(import.meta.url)("pngjs");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const origin = process.env.S1_ORIGIN;
 const artifacts = process.env.S1_ARTIFACTS;
+const financeFlow = process.env.S1_FLOW === "finance";
 assert.equal(new URL(origin).hostname, "s1.localhost");
 const loopbackOrigin = new URL(origin);
 loopbackOrigin.hostname = "127.0.0.1";
@@ -50,6 +52,10 @@ async function layout(page, name) {
       width: innerWidth,
       overflow: document.documentElement.scrollWidth > innerWidth + 1,
       minInputPx: minimumFont("input:not([type=hidden]):not([type=checkbox]):not([type=radio]),select,textarea"),
+      smallInputs: [...document.querySelectorAll("input:not([type=hidden]):not([type=checkbox]):not([type=radio]),select,textarea")]
+        .filter((element) => element.getBoundingClientRect().width && parseFloat(getComputedStyle(element).fontSize) < 16)
+        .map((element) => ({ tag: element.tagName, name: element.name, id: element.id,
+          fontSize: getComputedStyle(element).fontSize })),
       minOnboardingPrimaryPx: minimumFont(".identity-onboarding-step-copy strong,.identity-onboarding-facts dd"),
       minOnboardingSecondaryPx: minimumFont(".identity-onboarding-step-copy small,.identity-onboarding-facts dt,.identity-onboarding-state"),
     };
@@ -120,7 +126,9 @@ try {
     args: ["--host-resolver-rules=MAP s1.localhost 127.0.0.1", "--no-proxy-server",
       "--disk-cache-size=1048576", "--disable-application-cache"],
   });
-  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  const viewports = [{ width: 1280, height: 900 }, { width: 390, height: 844 }];
+  if (financeFlow) viewports.push({ width: 1440, height: 900 });
+  for (const viewport of viewports) {
     const tag = String(viewport.width);
     const context = await browser.newContext({ viewport, serviceWorkers: "block" });
     context.setDefaultTimeout(12_000);
@@ -153,10 +161,15 @@ try {
       pendingAssets.delete(request);
       pendingRequests.delete(request);
     });
-    page.on("response", (response) => {
+    page.on("response", async (response) => {
       const url = new URL(response.url());
       if (url.origin === origin && !url.pathname.startsWith("/src/") && !url.pathname.endsWith(".html")) {
-        report.apiResponses.push({ path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() });
+        const entry = { path: url.pathname.replace(/[0-9a-f]{32,}/gu, "id"), status: response.status() };
+        report.apiResponses.push(entry);
+        if (response.status() >= 400) {
+          const body = await response.json().catch(() => null);
+          if (/^[a-z][a-z0-9_.]{0,100}$/u.test(body?.code ?? "")) entry.code = body.code;
+        }
       }
       if (url.origin === origin && url.pathname.startsWith("/src/") && !response.ok()) {
         report.assetFailures.push({ path: url.pathname, status: response.status() });
@@ -167,6 +180,7 @@ try {
     const password = randomUUID() + "!Aa9";
     let firstKey;
     let rotatedKey;
+    let usageFixture;
     await step(tag + ".registration", async () => {
       await page.goto(origin + "/identity.html");
       await page.locator('[data-identity-action="show-register"]').click();
@@ -175,7 +189,7 @@ try {
       await page.locator('img[alt="五位数字验证码"]').waitFor();
       await page.waitForFunction(() => document.querySelector('img[alt="五位数字验证码"]')?.naturalWidth === 180);
       assert.ok(await page.locator('img[alt="五位数字验证码"]').evaluate((image) => image.naturalWidth === 180));
-      await verifyAccessMotion(page, viewport.width);
+      if (!financeFlow) await verifyAccessMotion(page, viewport.width);
       await layout(page, tag + "-registration");
       const popupReady = context.waitForEvent("page");
       await form.getByRole("link", { name: "隐私条款" }).click();
@@ -245,6 +259,9 @@ try {
       } finally { await anonymous.dispose(); }
       assert.equal(await page.evaluate((secret) => [...Object.values(localStorage), ...Object.values(sessionStorage)].some((value) => value.includes(secret)), firstKey), false);
     });
+    if (financeFlow) {
+      usageFixture = await verifyWorkspaceFinance({ page, origin, tag, report, step, layout, browserJson });
+    }
     await step(tag + ".rotation-disable", async () => {
       await page.getByRole("button", { name: "轮换 Employee tool 1", exact: true }).click();
       await page.locator(".one-time-secret code").waitFor();
@@ -264,7 +281,12 @@ try {
       } finally { await anonymous.dispose(); }
       await layout(page, tag + "-completed");
     });
-    await step(tag + ".onboarding-navigation", async () => {
+    if (financeFlow) {
+      await step(tag + ".finance-historical-attribution", () => verifyUsageAfterDisable({
+        page, origin, fixture: usageFixture, browserJson,
+      }));
+    }
+    if (!financeFlow) await step(tag + ".onboarding-navigation", async () => {
       await page.goto(origin + "/identity.html");
       const panel = page.locator("[data-onboarding-step-panel]");
       await panel.waitFor();
@@ -355,6 +377,10 @@ try {
   }
   assert.equal(report.blockedExternalRequests, 0);
   assert.equal(report.pageErrors, 0);
+  assert.equal(report.assetFailures.length, 0);
+  assert.equal(report.apiResponses.filter((response) => response.status >= 500).length, 0);
+  assert.equal(report.onboardingDestinations.flatMap((item) => item.responses)
+    .filter((response) => response.status >= 500).length, 0);
   report.status = "passed";
 } catch (error) {
   report.failedStage = stage;
@@ -367,8 +393,8 @@ try {
     "waiting for scheduled navigations", "waiting until \"load\""].filter((reason) =>
     String(error.message).includes(reason));
   report.failureLocation = String(error.stack).split("\n")
-    .filter((line) => /s1-organization-browser\.mjs:\d+:\d+/u.test(line))
-    .map((line) => line.match(/s1-organization-browser\.mjs:\d+:\d+/u)[0]);
+    .filter((line) => /s[12]-[a-z-]+\.mjs:\d+:\d+/u.test(line))
+    .map((line) => line.match(/s[12]-[a-z-]+\.mjs:\d+:\d+/u)[0]);
   report.pendingAssets = [...pendingAssets.values()].map(({ path, started }) => ({
     path, elapsedMs: Math.round(performance.now() - started),
   }));
@@ -383,7 +409,7 @@ try {
       scripts: [...document.scripts].map((script) => new URL(script.src).pathname),
     })).catch(() => null);
     await currentPage.screenshot({ path: path.join(artifacts, "failure-redacted.png"),
-      mask: [currentPage.locator("input"), currentPage.locator(".one-time-secret")] }).catch(() => {});
+      mask: [currentPage.locator("input,textarea"), currentPage.locator(".one-time-secret")] }).catch(() => {});
   }
 } finally {
   await browser?.close();

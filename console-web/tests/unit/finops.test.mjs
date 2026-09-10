@@ -69,6 +69,20 @@ const ledgerPayload = {
   trace_id: "trc_query_finops",
 };
 
+test("adjustment type never offers a filter-only all option and reversal is explicit", () => {
+  for (const [type, targetEntryId] of [["manual_credit", null], ["reversal", ledgerEntry.finops_ledger_entry_id]]) {
+    const html = renderFinOpsLedger({
+      state: "ok", ...ledgerPayload,
+      dialog: { open: true, adjustmentType: type, targetEntryId },
+    }, finOpsContext());
+    const select = html.match(/<select name="adjustmentType"[^>]*>([\s\S]*?)<\/select>/u);
+    assert.ok(select);
+    assert.doesNotMatch(select[1], /value=""|全部/u);
+    assert.match(select[1], new RegExp(`value="${type}" selected`, "u"));
+    if (type === "reversal") assert.match(select[1], />冲正<\/option>/u);
+  }
+});
+
 test("finops list client sends only whitelisted filters and opaque cursor", async () => {
   const calls = [];
   globalThis.fetch = async (url, options) => {
@@ -150,7 +164,7 @@ test("finops adjustment keeps decimal string and omits authority fields", async 
   const body = JSON.parse(calls[0].options.body);
   assert.equal(result.idempotent_replay, false);
   assert.equal(calls[0].options.method, "POST");
-  assert.equal(calls[0].options.headers["Idempotency-Key"], "finops_test_key_123456");
+  assert.equal(new Headers(calls[0].options.headers).get("Idempotency-Key"), "finops_test_key_123456");
   assert.deepEqual(body, {
     adjustment_type: "manual_credit",
     amount: "0.000001",
@@ -283,7 +297,8 @@ test("finops renderer shows exact amounts, detail evidence and escaped reason", 
 
   assert.match(html, /FinOps 正式账本/);
   assert.match(html, /12\.345678/);
-  assert.match(html, /PAGE-075/);
+  assert.match(html, /id="finops-detail-title">分录详情/);
+  assert.doesNotMatch(html, /PAGE-075/);
   assert.match(html, /fadj|人工贷记/);
   assert.match(html, /财务管理员/);
   assert.doesNotMatch(html, /不应优先的旧操作者/);

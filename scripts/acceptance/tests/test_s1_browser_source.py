@@ -15,6 +15,7 @@ def isolated_import(monkeypatch):
     monkeypatch.setattr(sys, "path", list(sys.path))
     monkeypatch.delenv("METAHUB_S1_SOURCE_ROOT", raising=False)
     monkeypatch.delenv("METAHUB_S1_PRODUCTION", raising=False)
+    monkeypatch.delenv("METAHUB_S1_FLOW", raising=False)
 
 
 def test_default_browser_source_is_unchanged(isolated_import):
@@ -22,6 +23,7 @@ def test_default_browser_source_is_unchanged(isolated_import):
     assert config["SOURCE"] == ROOT
     assert config["FRONTEND"] == ROOT / "console-web"
     assert config["PRODUCTION"] is False
+    assert config["FLOW"] == "organization"
 
 
 def test_production_mode_serves_the_selected_dist(monkeypatch, isolated_import):
@@ -42,6 +44,12 @@ def test_source_outside_workspace_is_rejected(monkeypatch, isolated_import):
 def test_malformed_mode_cannot_silently_test_source(monkeypatch, isolated_import):
     monkeypatch.setenv("METAHUB_S1_PRODUCTION", "tru")
     with pytest.raises(ValueError, match="true or false"):
+        runpy.run_path(str(HARNESS))
+
+
+def test_unknown_flow_cannot_silently_test_a_different_business(monkeypatch, isolated_import):
+    monkeypatch.setenv("METAHUB_S1_FLOW", "finances")
+    with pytest.raises(ValueError, match="organization or finance"):
         runpy.run_path(str(HARNESS))
 
 
@@ -91,9 +99,27 @@ def test_private_and_unknown_routes_still_reach_control(isolated_import):
             ("GET", "/platform/registration-policy"),
             ("GET", "/unknown.html"),
             ("GET", "/.env"),
+            ("POST", "/__acceptance/usage"),
         ):
             response = client.request(method, url)
             assert response.status_code == 401
             assert response.json() == {"code": "test.unauthorized"}
             assert visited[-1] == (method, url)
-        assert len(visited) == 6
+        assert len(visited) == 7
+
+
+def test_navigation_diagnostics_restore_trace_and_omit_error_details(isolated_import):
+    import sqlite3
+
+    config = runpy.run_path(str(HARNESS))
+    failures = []
+    previous = sys.gettrace()
+
+    def operation():
+        raise sqlite3.OperationalError("Private SQL and credential canary")
+
+    wrapped = config["navigation_diagnostics"](operation, failures)
+    with pytest.raises(sqlite3.OperationalError):
+        wrapped()
+    assert sys.gettrace() is previous
+    assert failures == [{"function": "operation", "type": "OperationalError", "sqlite_code": None}]

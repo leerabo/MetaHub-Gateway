@@ -362,7 +362,8 @@ function renderActiveContent(activeItemId, options, statuses) {
     case "workspace-subscription":
       return renderWorkspaceSubscription(options.workspaceCommercialAccountingState);
     case "internal-finops":
-      return renderWorkspaceInternalFinOps(
+      return renderFinOpsSection(options.finOpsState, options.authContext)
+        + renderWorkspaceInternalFinOps(
         options.workspaceCommercialAccountingState,
         options.consoleShellState?.navigation?.navigation_items,
       );

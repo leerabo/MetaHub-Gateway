@@ -11,6 +11,9 @@ import { createWorkspaceResourcePage, workspaceResourcePageOwner } from "../../s
 import { createFilePageState, filePageOwner, isFileAbortError } from "../../src/features/files/filePageState.js";
 import { bindFileInteractions } from "../../src/features/files/bindFiles.js";
 import { renderVirtualKeyPanel } from "../../src/features/virtual-keys/renderVirtualKeyPanel.js";
+import { createBudgetMutationLifecycle, selectBudgetScopeOption } from "../../src/features/budgets/budgetPageLifecycle.js";
+import { createFinOpsPageState } from "../../src/features/finops-ledger/finOpsPageState.js";
+import { bindFinOpsLedgerInteractions } from "../../src/features/finops-ledger/bindFinOpsLedger.js";
 
 const source = await readFile(new URL("../../src/app/main.js", import.meta.url), "utf8");
 const allPermissions = Object.values(PERMISSIONS);
@@ -51,6 +54,8 @@ class Element {
       virtualKeyId: "vkey_sample", modelId: "model_sample", entryCode: "sample", providerTab: "providers",
       providerProbe: "provider_sample", providerStatusOffset: "50", modelAliasId: "alias_sample", routingPolicyVersion: "1",
       membershipId: `wmb_${"1".repeat(32)}`, membershipRevision: "4", membershipRole: "admin", membershipStatus: "active" };
+    this.dataset.budgetModeRuleId = "budget_sample";
+    this.value = "alert_only";
     this.values = { name: "Sample", status: "disabled", confirmed: "on", entryCode: "sample", version: "2026.09.08.1",
       regionCode: "cn-east", capabilityCodes: "chat", providerCode: "sample", timeoutSeconds: "5", role: "auditor" };
     this.button = { disabled: false };
@@ -58,7 +63,9 @@ class Element {
   addEventListener(event, handler) {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), handler]);
   }
-  querySelector() { return this.button; }
+  querySelector(selector) { return selector?.startsWith("[name=") ? null : this.button; }
+  querySelectorAll() { return []; }
+  setAttribute() {}
   closest() { return { replaceChildren: () => { this.cleared = true; } }; }
   fire(event) { return Promise.all((this.listeners.get(event) ?? []).map((handler) => handler({ preventDefault() {}, currentTarget: this }))); }
 }
@@ -68,7 +75,9 @@ const helpers = ["clearBasicResourceFeedback", "clearBasicResourceSessionState",
   "loadResourceState", "loadModelsState", "loadEnvironmentState", "loadProjectState", "loadVirtualKeysState", "loadProvidersState",
   "currentFileReadOwner", "currentFileWriteOwner", "bindFilesPageInteractions", "submitFileUpload", "loadFilesState",
   "loadAndRenderActiveNavigation", "loadProviderHealthState", "loadProviderStatusState", "runProviderProbe",
-  "loadModelAliasesState",
+  "loadModelAliasesState", "loadUsageState",
+  "currentEvaluationPageIdentity", "currentBudgetMutationOwner", "isCurrentBudgetMutation", "budgetRuleAlreadyExists",
+  "clearBudgetSessionState", "loadBudgetState", "loadFinOpsState", "bindFinOpsInteractions", "submitFinOpsAdjustment", "setFinOpsSubmittingDom",
   "bindWorkspaceMemberInteractions", "loadUsersState",
   "ownProviderStatusVisitAfterRender"];
 const payload = { state: "ok", providers: [{ provider_id: "provider_sample" }], projects: [], applications: [], models: [],
@@ -80,17 +89,23 @@ const clients = ["createEnvironment", "updateEnvironment", "createProject", "cre
   "createModel", "updateModel", "listEnvironments", "listProjects", "listApplications", "listVirtualKeys", "listProviders",
   "listProviderKeys", "listProviderCatalog", "listModels", "listFiles", "uploadFile", "listProviderStatuses", "probeProvider",
   "createModelAlias", "updateModelAlias", "updateFallbackPolicy", "listModelAliases",
-  "listWorkspaceMembers", "updateWorkspaceMember"];
+  "listWorkspaceMembers", "updateWorkspaceMember", "getUsageSummary", "listUsageRecords"];
+clients.push("listBudgets", "getBudgetStatus", "createBudgetRule", "updateBudgetRule", "updateBudgetMode",
+  "listFinOpsLedger", "createFinOpsAdjustment");
 
 function harness(navigation, selector) {
   const element = new Element();
   const calls = [], effects = [], scheduled = [];
   const pending = deferred();
   const scope = { AuthApiError, DOMException, AbortController, PERMISSIONS, hasPermission, filePageOwner, isFileAbortError,
+    workspaceResourcePageOwner,
     hasWorkspaceConsoleSession, gatewayUrl: "https://gateway.example.test", consoleUrl: "https://console.example.test",
     currentI18n: null, gatewayDebugState: {}, policyDryRunState: {},
+    budgetMutationLifecycle: createBudgetMutationLifecycle(), selectBudgetScopeOption,
+    finOpsPageState: createFinOpsPageState(), bindFinOpsLedgerInteractions,
     workspaceConsoleExperienceView: () => null,
     workspaceConsoleExperienceController: { leave() {}, snapshot: () => ({}) },
+    workspaceCommercialAccountingController: { close() {}, open: async () => {}, snapshot: () => ({}) },
     enterpriseChatPageState: { snapshot: () => ({}) }, invitationPageState: { snapshot: () => ({}) },
     publicBrandingDisplay: () => null, renderDeveloperStart: (_app, state) => { effects.push("render"); scope.rendered = state; },
     bindOutputSafetyDetailInteractions() {}, bindAuthenticatedEvents() {},
@@ -98,8 +113,9 @@ function harness(navigation, selector) {
     filePageState: createFilePageState(), controlApiUrl: "https://control.example.test", refreshSequence: 1, hash: navigation,
     providerStatusPageState: { clear() {} }, providerStatusVisitTracker: { leave() {} },
     clearRoutingPolicySessionState() {}, clearModelQualityScoreSessionState() {}, experimentPageState: { clear() {} },
-    clearRequestLogSessionState() {}, clearAuditExportSessionState() {}, auditLogFilters: {},
+    clearRequestLogSessionState() {}, clearAuditExportSessionState() {}, clearUsageExportSessionState() {}, auditLogFilters: {},
     clearRequestFeedbackSummarySessionState() {},
+    usageExportState: { status: "idle", message: "" },
     clearRequestExplanationSessionState() {},
     workspacePageVisitTracker: { leave() {} }, workspacePageVisitShellState: null,
     providerHealthRequestGeneration: 0, providerHealthController: null,
@@ -125,6 +141,8 @@ function harness(navigation, selector) {
   };
   scope.authSession = workspaceConsoleSessionFromShell(scope.resourcePageShellState);
   scope.readActiveNavigationHash = () => scope.hash;
+  scope.bindFinOpsLedgerInteractions = (handlers) => bindFinOpsLedgerInteractions(handlers, scope.document);
+  scope.currentRenderedNavigation = () => scope.hash;
   scope.resourcePageLifecycle = createWorkspaceResourcePage({ current: () => ({
     session: scope.authSession, shell: scope.resourcePageShellState, hash: scope.hash, refreshGeneration: scope.refreshSequence,
   }) });
@@ -135,8 +153,9 @@ function harness(navigation, selector) {
   const fallbackEnd = source.indexOf('  const usageFilterForm = document.querySelector(', fallbackStart);
   const secretStart = source.indexOf('  const dismissSecretButton = document.querySelector(');
   const secretEnd = source.indexOf('  const budgetScopeChainKey = document.querySelector(', secretStart);
+  const budgetEnd = source.indexOf('  const dlpRuleFilters = document.querySelector(', secretEnd);
   const functions = runInNewContext(`${helpers.map(production).join("\n")}
-    function bindActualResourceHandlers() { bindWorkspaceMemberInteractions(); ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} }
+    function bindActualResourceHandlers() { bindWorkspaceMemberInteractions(); ${source.slice(start, end)} ${source.slice(fallbackStart, fallbackEnd)} ${source.slice(secretEnd, budgetEnd)} }
     function bindActualSecretHandlers() { ${source.slice(secretStart, secretEnd)} }
     ({ ${helpers.join(",")}, bindActualResourceHandlers, bindActualSecretHandlers });`, scope);
   Object.assign(scope, functions);
@@ -170,6 +189,8 @@ test("PRD-147 membership save requires an actual change and clears when reverted
 });
 
 const forms = [
+  ["budgets", "#budget-rule-form", "createBudgetRule"],
+  ["budgets", "[data-budget-mode-rule-id]", "updateBudgetMode", "change"],
   ["users", "[data-workspace-member-form]", "updateWorkspaceMember"],
   ["model-aliases", "#create-model-alias-form", "createModelAlias"],
   ["model-aliases", "[data-model-alias-status-form]", "updateModelAlias"],
@@ -194,6 +215,139 @@ const forms = [
   ["models", "#create-model-form", "createModel"],
   ["models", "[data-model-status-form]", "updateModel"],
 ];
+
+for (const navigation of ["budgets", "internal-finops"]) {
+  const load = (h) => navigation === "budgets"
+    ? h.functions.loadBudgetState(payload, h.scope.resourcePageShellState, 1)
+    : h.functions.loadFinOpsState(h.scope.resourcePageShellState, 1);
+  for (const outcome of ["success", "401", "403", "503"]) {
+    test(`finance ${navigation} drops late ${outcome} without changing the next Workspace`, async () => {
+      const h = harness(navigation);
+      const operation = load(h);
+      assert.equal(h.calls.length, navigation === "budgets" ? 2 : 1);
+      for (const call of h.calls) {
+        assert.equal(call.input.authentication, "workspace");
+        assert.equal(Object.hasOwn(call.input, "token"), false);
+      }
+      h.switchOwner();
+      assert.ok(h.calls.every((call) => call.input.signal.aborted));
+      if (outcome === "success") h.pending.resolve(payload);
+      else h.pending.reject(new AuthApiError({ status: Number(outcome) }));
+      assert.equal(await operation, null);
+      assert.deepEqual(h.effects, []);
+      assert.equal(h.scope.budgetRulesSnapshot.length, 0);
+      assert.equal(h.scope.finOpsPageState.snapshot().ledger_entries.length, 0);
+    });
+  }
+  test(`finance ${navigation} accepts current read and rejects hidden navigation`, async () => {
+    const h = harness(navigation);
+    const operation = load(h);
+    h.pending.resolve({ ...payload, budget_rules: [{ budget_rule_id: "rule_test" }] });
+    assert.equal((await operation).state, "ok");
+    const count = h.calls.length;
+    h.scope.hash = "projects";
+    assert.equal(await load(h), null);
+    assert.equal(h.calls.length, count);
+  });
+}
+
+test("budget update recognizes tenant rules without a legacy user or tenant ID", async () => {
+  const h = harness("budgets", "#budget-rule-form");
+  h.element.values = { scopeType: "tenant", environmentId: "env_test", dailyBudgetCny: "0.000001" };
+  h.scope.budgetRulesSnapshot = [{ scope_type: "tenant", scope_id: "private_tenant_id", environment_id: "env_test" }];
+  assert.equal(h.scope.authSession.context.user, undefined);
+  h.functions.bindActualResourceHandlers();
+  const operation = h.element.fire("submit");
+  assert.equal(h.calls[0].client, "updateBudgetRule");
+  assert.equal(h.calls[0].input.scopeId, "");
+  assert.equal(h.calls[0].input.dailyBudgetCny, "0.000001");
+  h.pending.resolve(payload);
+  await operation;
+  assert.equal(h.scope.budgetMutationLifecycle.isBusy(), false);
+});
+
+test("budget 409 preserves operation evidence and releases both mutation locks", async () => {
+  const h = harness("budgets", "#budget-rule-form");
+  h.functions.bindActualResourceHandlers();
+  const operation = h.element.fire("submit");
+  const error = new AuthApiError({ status: 409, code: "budget.rule_conflict", requestId: "req_budget_conflict" });
+  h.pending.reject(error);
+  await operation;
+  assert.equal(h.scope.budgetActionError, error);
+  assert.equal(h.scope.budgetMutationLifecycle.isBusy(), false);
+  assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  assert.equal(h.effects.filter((effect) => effect === "refresh").length, 1);
+});
+
+const financeValues = { adjustmentType: "manual_credit", amount: "0.000001", reason: "Private test draft" };
+test("canonical internal-finops dispatcher loads ledger alongside independently owned cost rates", async () => {
+  const h = harness("internal-finops");
+  const session = h.scope.authSession;
+  const operation = h.functions.loadAndRenderActiveNavigation({ consoleShellState: h.scope.resourcePageShellState,
+    refreshId: 1, isBackgroundRefresh: false, refreshOwnerCurrent: () => session === h.scope.authSession });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].client, "listFinOpsLedger");
+  h.pending.resolve(payload);
+  await operation;
+  assert.equal(h.scope.rendered.finOpsState.state, "ok");
+  assert.ok(h.scope.rendered.workspaceCommercialAccountingState);
+});
+
+test("retired finops-ledger navigation cannot be forged into a Workspace resource owner", async () => {
+  const h = harness("finops-ledger");
+  assert.equal(h.scope.resourcePageLifecycle.enter().valid, false);
+  assert.equal(await h.functions.loadFinOpsState(h.scope.resourcePageShellState, 1), null);
+  assert.equal(h.calls.length, 0);
+});
+for (const outcome of ["success", "401", "403", "503"]) {
+  test(`finance adjustment ${outcome} cannot overwrite a new Workspace draft`, async () => {
+    const h = harness("internal-finops", "#finops-adjustment-form");
+    h.scope.finOpsPageState.openDialog({ idempotencyKey: "finance-test-0001" });
+    const binding = h.functions.bindResourceElement(h.element, [PERMISSIONS.BILLING_FINOPS_WRITE], "internal-finops");
+    const operation = h.functions.submitFinOpsAdjustment(financeValues, binding);
+    await h.functions.submitFinOpsAdjustment(financeValues, binding);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].input.authentication, "workspace");
+    h.switchOwner();
+    h.scope.finOpsPageState.openDialog({ idempotencyKey: "new-workspace-draft" });
+    assert.equal(h.calls[0].input.signal.aborted, true);
+    if (outcome === "success") h.pending.resolve({ idempotent_replay: false });
+    else h.pending.reject(new AuthApiError({ status: Number(outcome) }));
+    await operation;
+    assert.equal(h.scope.finOpsPageState.snapshot().dialog.open, true);
+    assert.equal(h.scope.finOpsPageState.snapshot().dialog.reason, "");
+    assert.equal(h.effects.includes("refresh"), false);
+  });
+}
+
+test("finance failed adjustment retries with the same idempotency key and exact amount", async () => {
+  const h = harness("internal-finops", "#finops-adjustment-form");
+  h.scope.finOpsPageState.openDialog({ idempotencyKey: "finance-retry-0001" });
+  const binding = h.functions.bindResourceElement(h.element, [PERMISSIONS.BILLING_FINOPS_WRITE], "internal-finops");
+  const operation = h.functions.submitFinOpsAdjustment(financeValues, binding);
+  h.pending.reject(new AuthApiError({ status: 503 }));
+  await operation;
+  assert.equal(h.scope.finOpsPageState.snapshot().dialog.reason, financeValues.reason);
+  assert.equal(h.scope.resourcePageLifecycle.blocksReplacement(false), false);
+  await h.functions.submitFinOpsAdjustment(financeValues, binding);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0].input.idempotencyKey, h.calls[1].input.idempotencyKey);
+  assert.equal(h.calls[1].input.amount, "0.000001");
+});
+
+for (const selector of ["#finops-filter-form", "#finops-adjustment-form", "[data-finops-entry-id]",
+  "[data-finops-reverse-entry-id]", "#finops-close-adjustment", "#finops-next"]) {
+  test(`finance detached ${selector} is rejected before private DOM reads or callbacks`, async () => {
+    const h = harness("internal-finops", selector);
+    h.scope.document.querySelector = (value) => [selector, ".finops-ledger-panel"].includes(value) ? h.element : null;
+    h.functions.bindFinOpsInteractions(h.scope.resourcePageShellState);
+    h.element.isConnected = false;
+    await h.element.fire(selector.endsWith("form") ? "submit" : "click");
+    assert.deepEqual(h.effects, []);
+    assert.equal(h.calls.length, 0);
+  });
+}
 for (const [navigation, selector, client, event = "submit", status] of forms) {
   test(`PRD-147 actual ${client} handler uses Cookie, blocks duplicate submission and refreshes once`, async () => {
     const h = harness(navigation, selector);
@@ -251,7 +405,7 @@ for (const [navigation, selector, client, event = "submit", status] of forms) {
 
 const loaders = [["environments", "loadEnvironmentState"], ["projects", "loadProjectState"],
   ["providers", "loadProvidersState"], ["models", "loadModelsState"], ["virtual-keys", "loadVirtualKeysState"], ["files", "loadFilesState"],
-  ["provider-health", "loadProviderHealthState"], ["model-aliases", "loadModelAliasesState"]];
+  ["provider-health", "loadProviderHealthState"], ["model-aliases", "loadModelAliasesState"], ["usage", "loadUsageState"]];
 for (const [navigation, loader] of loaders) {
   test(`PRD-147 actual ${navigation} dispatcher supplies Workspace reads and renders the accepted state`, async () => {
     const h = harness(navigation);

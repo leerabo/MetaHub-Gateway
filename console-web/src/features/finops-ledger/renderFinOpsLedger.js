@@ -240,7 +240,7 @@ function renderDetailPanel(entry) {
   return `
     <aside class="finops-detail-panel" aria-labelledby="finops-detail-title">
       <div class="finops-detail-heading">
-        <div><span>PAGE-075</span><h3 id="finops-detail-title">分录详情</h3></div>
+        <div><h3 id="finops-detail-title">分录详情</h3></div>
         <button type="button" id="finops-close-detail" class="finops-icon-button" aria-label="关闭详情" title="关闭详情">×</button>
       </div>
       ${legacyWarning}
@@ -363,7 +363,7 @@ function renderAdjustmentDialog(dialog) {
         <label>
           <span>调整类型</span>
           <select name="adjustmentType" ${reversal ? "disabled" : ""}>
-            ${renderOptions(["manual_debit", "manual_credit", "gift_credit", "trial_credit"], type, ENTRY_TYPE_LABELS)}
+            ${renderOptions(reversal ? ["reversal"] : ["manual_debit", "manual_credit", "gift_credit", "trial_credit"], type, ENTRY_TYPE_LABELS, false)}
           </select>
         </label>
         ${reversal ? `<div class="finops-target-entry"><span>目标分录</span><code>${escapeHtml(dialog.targetEntryId ?? "-")}</code></div>` : ""}
@@ -434,8 +434,8 @@ function renderEvidenceBadge(status) {
 /**
  * 渲染带“全部”占位的固定枚举选项。
  */
-function renderOptions(values, selectedValue, labels = {}) {
-  return ["", ...values]
+function renderOptions(values, selectedValue, labels = {}, includeAll = true) {
+  return (includeAll ? ["", ...values] : values)
     .map((value) => {
       const selected = value === (selectedValue ?? "") ? " selected" : "";
       return `<option value="${escapeAttribute(value)}"${selected}>${escapeHtml(value ? labels[value] ?? value : "全部")}</option>`;

@@ -335,7 +335,7 @@ test("usage csv client downloads 200 response with current filters and safe requ
   assert.equal(result.requestId, "req_export_sync");
   assert.equal(calls[0].options.headers.Authorization, "Bearer admin-token");
   assert.equal(calls[0].options.headers["X-Request-ID"], "console_usage_export_fixed");
-  assert.equal(calls[0].options.headers["X-Trace-ID"], "trc_console_usage_export_fixed");
+  assert.equal(new Headers(calls[0].options.headers).get("X-Trace-ID"), "trc_console_usage_export_fixed");
   assert.match(calls[0].url, /start_date=2026-07-09/);
   assert.match(calls[0].url, /project_id=prj_1/);
   assert.match(calls[0].url, /request_id=req_filter/);
@@ -377,7 +377,7 @@ test("usage csv create accepts stable request and trace ids across an ambiguous 
 
   assert.equal(retried.usageExportJobId, "uex_retry_1");
   assert.equal(calls[0].options.headers["X-Request-ID"], calls[1].options.headers["X-Request-ID"]);
-  assert.equal(calls[0].options.headers["X-Trace-ID"], calls[1].options.headers["X-Trace-ID"]);
+  assert.equal(new Headers(calls[0].options.headers).get("X-Trace-ID"), new Headers(calls[1].options.headers).get("X-Trace-ID"));
 });
 
 test("usage csv client polls 202 job finitely and downloads completed artifact with bearer", async () => {
@@ -457,7 +457,7 @@ test("usage csv client polls 202 job finitely and downloads completed artifact w
   assert.equal(calls.length, 4);
   for (const call of calls) {
     assert.equal(call.options.headers.Authorization, "Bearer admin-token");
-    assert.equal(call.options.headers["X-Trace-ID"], "trc_console_usage_export_async_fixed");
+    assert.equal(new Headers(call.options.headers).get("X-Trace-ID"), "trc_console_usage_export_async_fixed");
     assert.doesNotMatch(call.url, /admin-token|tenant_id/);
   }
 });

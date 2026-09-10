@@ -26,21 +26,21 @@ const entry = {
 
 const navigation = {
   navigation: {
-    active_navigation_item_id: "finops-ledger",
+    active_navigation_item_id: "internal-finops",
     navigation_items: [{
-      id: "finops-ledger",
+      id: "internal-finops",
       label: "FinOps 账本",
       group: "调用与成本",
-      target_section: "finops-ledger",
+      target_section: "internal-finops",
       description: "正式成本账本",
       empty_state_hint: "暂无正式分录",
       order: 76,
     }],
   },
-  activeNavigationItemId: "finops-ledger",
+  activeNavigationItemId: "internal-finops",
 };
 
-test("developer start mounts PAGE-074 and PAGE-075 only with FinOps read permission", () => {
+test("canonical internal FinOps mounts ledger and cost rates only with the matching permissions", () => {
   const finOpsState = {
     state: "ok",
     ledger_entries: [entry],
@@ -59,7 +59,7 @@ test("developer start mounts PAGE-074 and PAGE-075 only with FinOps read permiss
       { user: { role: "finance_admin", display_name: "FinanceAdmin" }, tenant: { name: "Tenant" } },
       [PERMISSIONS.BILLING_FINOPS_READ, PERMISSIONS.BILLING_FINOPS_WRITE],
     ),
-    consoleShellState: navigation,
+    consoleShellState: { ...navigation, activeNavigationItemId: "internal-finops" },
     finOpsState,
   });
   renderDeveloperStart(developerContainer, {
@@ -67,12 +67,13 @@ test("developer start mounts PAGE-074 and PAGE-075 only with FinOps read permiss
       { user: { role: "developer", display_name: "Dev" }, tenant: { name: "Tenant" } },
       [PERMISSIONS.CONSOLE_BASIC_READ],
     ),
-    consoleShellState: navigation,
+    consoleShellState: { ...navigation, activeNavigationItemId: "internal-finops" },
     finOpsState,
   });
 
   assert.match(financeContainer.innerHTML, /finops-ledger-panel/);
-  assert.match(financeContainer.innerHTML, /PAGE-075/);
+  assert.match(financeContainer.innerHTML, /data-workspace-commercial-root="internal-finops"/);
+  assert.match(financeContainer.innerHTML, /id="finops-detail-title">分录详情/);
   assert.match(financeContainer.innerHTML, /data-finops-request-id="req_integration_051"/);
   assert.doesNotMatch(developerContainer.innerHTML, /finops-ledger-panel/);
   assert.doesNotMatch(developerContainer.innerHTML, /req_integration_051/);
@@ -83,14 +84,14 @@ test("main loader requires FinOps read permission, backend navigation, current h
 
   assert.match(source, /async function loadFinOpsState\(consoleShellState, refreshId\)/);
   assert.match(source, /!hasPermission\(authSession\.context, PERMISSIONS\.BILLING_FINOPS_READ\)/);
-  assert.match(source, /consoleShellState\?\.activeNavigationItemId !== "finops-ledger"/);
-  assert.match(source, /hashNavigation && hashNavigation !== "finops-ledger"/);
-  assert.match(source, /responseHashNavigation && responseHashNavigation !== "finops-ledger"/);
+  assert.match(source, /consoleShellState\?\.activeNavigationItemId !== "internal-finops"/);
+  assert.match(source, /hashNavigation && hashNavigation !== "internal-finops"/);
+  assert.match(source, /loadResourceState\("internal-finops", \[PERMISSIONS.BILLING_FINOPS_READ\]/);
   assert.doesNotMatch(source, /readActiveNavigationHash\(\) !== "finops-ledger"/);
   assert.match(source, /refreshId !== refreshSequence/);
   assert.match(source, /function clearConsoleSessionState\([\s\S]*?finOpsPageState\.clear\(\)/);
   assert.match(source, /finOpsPageState\.clear\(\)/);
-  assert.match(source, /createFinOpsAdjustment\(\{/);
+  assert.match(source, /resourceMutationRequest\(operation, createFinOpsAdjustment, \{/);
   assert.match(source, /Idempotency|idempotencyKey/);
   assert.match(source, /bindFinOpsInteractions\(consoleShellState\)/);
 });
