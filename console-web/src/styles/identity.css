@@ -42,6 +42,31 @@ a {
   min-height: 100vh;
 }
 
+.identity-app :is(input, select, textarea) {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.identity-app :is(
+  .identity-account-preference-form label,
+  .identity-account-preference-note,
+  .identity-membership-row label,
+  .identity-membership-form label,
+  .identity-onboarding-heading p,
+  .identity-onboarding-heading > div > span,
+  .identity-onboarding-panel-heading > div > span,
+  .identity-onboarding-step-number,
+  .identity-onboarding-step-copy small,
+  .identity-onboarding-state,
+  .identity-onboarding-facts dt
+) {
+  font-size: 0.875rem;
+}
+
+.identity-app :is(.identity-onboarding-step-copy strong, .identity-onboarding-facts dd) {
+  font-size: 1rem;
+}
+
 .identity-login-shell {
   display: grid;
   min-height: 100vh;

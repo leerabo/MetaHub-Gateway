@@ -264,3 +264,17 @@ Platform/Support/Global/混合凭据负矩阵、CSRF/Origin、迟到响应/动�
   closure 内存、Storage 零调用和证据白名单；验收只保存状态、计数、request hash 和截图安全摘要。
 
 两轮修正已写回本设计，编码不得弱化这些边界。
+
+## 18. 2026-09-10 初始化配置导航修订
+
+现状证据：后端和前端合同使用八个 `#workspace-*` 步骤标识，而渲染器直接拼接 `/${navigation_target}`。主页已是公开介绍页，且控制台注册表没有这些 source ID，因此链接无法进入对应配置。修订只解决步骤到实际页面的映射，不改已有 API、迁移、事实求值或权限。
+
+第一轮自审（业务与兼容）：八步保持原 ID、顺序与后端 `navigation_target` 合同。在前端已有步骤定义中增加实际控制台 source ID，依次对应 tenant、environments、providers、models、model-aliases、projects、virtual-keys、sdk-examples。使用 `/console.html#...` 显式跳转，首次调用指向现有 SDK 示例，不执行模型请求，也不虚构成功状态。保留个人和组织差异及已有用户资源。
+
+第二轮自审（安全与验证）：仅允许准确匹配步骤 ID 与合同标识的映射，且 source ID 必须存在于 Workspace 导航注册表。未知、外部地址、脚本协议、错配步骤不得生成链接。链接不授予权限，目的页仍经 Workspace 导航与 API 逐次鉴权。单测覆盖全部八步和拒绝分支，隔离浏览器通过真实 Owner 点击八个配置链接并检查目标页面；不复制用户 Cookie，不在测试中调用收费模型。
+
+### 浏览器暴露的资料页迁接缺口
+
+首轮独立构建验收 `.artifacts/s1-browser-09m8qxbi` 在第一个资料页等待 `#tenant-form` 失败，注册、使用者及两项初始化确认已成功。源码核对发现 `tenant.js` 仍发送 `Bearer ${token}`，主应用读取失败后转旧登录，提交前还直接要求 token。虽然后端 `/tenant/current` 已允许 Workspace guard，服务内部未按资源事务重新鉴权，更新只写 Tenant 并在日志里输出前后名称；PRD-093 的组织名称则由 `organization_profiles` 和 Workspace revision 管理。因此仅修改链接或 fetch 不足以交付资料页。
+
+资料读写、名称权威来源、CAS、动态撤权、无敏感正文审计和页面离开/切组织清理需要作为同批迁接补充设计并验证。不恢复旧登录，也不改成跳到不相关页面以使导航测试通过。当前导航修复保持未发布，其他七个目的页尚未由该失败运行验证。后续失败报告增加具体目标及脱敏状态码，并将截图对象切换到实际目的页。

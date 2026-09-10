@@ -6,7 +6,9 @@ import {
   getWorkspaceOnboarding,
   recheckWorkspaceOnboarding,
   updateWorkspaceOnboardingStep,
+  workspaceOnboardingHref,
 } from "../../src/lib/workspaces.js";
+import { WORKSPACE_SOURCE_ROUTE_REGISTRY } from "../../src/lib/workspaceNavigation.js";
 import { createIdentityPageController } from "../../src/features/identity/identityPageState.js";
 import { renderIdentitySecurityPage } from "../../src/features/identity/renderIdentityPage.js";
 
@@ -159,7 +161,42 @@ test("PRD-097 renderer hides organization profile mutations from developers", ()
   renderIdentitySecurityPage(root, state);
   const panel = root.innerHTML.slice(root.innerHTML.indexOf("data-onboarding-step-panel"));
   assert.doesNotMatch(panel.split("</div>\n    </div>", 1)[0], /confirm-onboarding-step|defer-onboarding-step/u);
-  assert.match(panel, /href="\/#workspace-profile"/u);
+  assert.match(panel, /href="\/console\.html#tenant"/u);
+});
+
+test("PRD-097 all onboarding links resolve to registered console pages", () => {
+  const sources = ["tenant", "environments", "providers", "models", "model-aliases",
+    "projects", "virtual-keys", "sdk-examples"];
+  const onboarding = onboardingPayload();
+  for (const [index, step] of onboarding.steps.entries()) {
+    const href = `/console.html#${sources[index]}`;
+    assert.ok(Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, sources[index]));
+    assert.equal(workspaceOnboardingHref(step), href);
+    const root = createRoot();
+    step.action = "view";
+    renderIdentitySecurityPage(root, {
+      ...securityState({ onboarding }), onboardingSelectedStepId: step.id,
+    });
+    assert.ok(root.innerHTML.includes(`class="identity-quiet-command identity-onboarding-link" href="${href}"`));
+    assert.doesNotMatch(root.innerHTML, /href="\/#workspace-/u);
+  }
+});
+
+test("PRD-097 unknown and mismatched onboarding destinations cannot become links", () => {
+  for (const navigation_target of ["https://example.test", "//example.test", "javascript:alert(1)",
+    "#workspace-models", "#workspace-providers\" onclick=\"alert(1)"]) {
+    const onboarding = onboardingPayload();
+    const step = onboarding.steps[2];
+    step.navigation_target = navigation_target;
+    assert.equal(workspaceOnboardingHref(step), null);
+    const root = createRoot();
+    renderIdentitySecurityPage(root, {
+      ...securityState({ onboarding }), onboardingSelectedStepId: step.id,
+    });
+    assert.doesNotMatch(root.innerHTML, /identity-onboarding-link/u);
+  }
+  assert.equal(workspaceOnboardingHref({ id: "unknown", navigation_target: "#workspace-providers" }), null);
+  assert.equal(workspaceOnboardingHref(null), null);
 });
 
 test("PRD-097 destroy aborts onboarding load and fences its late projection", async () => {

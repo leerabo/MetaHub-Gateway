@@ -1,5 +1,5 @@
 import { IdentityApiError, readIdentityCsrfCookie } from "./identity.js";
-import { getWorkspaceNavigation } from "./workspaceNavigation.js";
+import { getWorkspaceNavigation, WORKSPACE_SOURCE_ROUTE_REGISTRY } from "./workspaceNavigation.js";
 
 const WORKSPACE_KEYS = Object.freeze([
   "environment",
@@ -30,14 +30,14 @@ const DELEGABLE_WORKSPACE_ROLES = Object.freeze(
   WORKSPACE_ROLES.filter((role) => !new Set(["owner", "service_account"]).has(role)),
 );
 const ONBOARDING_STEPS = Object.freeze([
-  ["workspace_profile", "confirm", "#workspace-profile"],
-  ["environment", "confirm", "#workspace-environments"],
-  ["provider", "configure", "#workspace-providers"],
-  ["model", "configure", "#workspace-models"],
-  ["model_alias", "configure", "#workspace-model-aliases"],
-  ["project_application", "configure", "#workspace-projects"],
-  ["virtual_key", "configure", "#workspace-virtual-keys"],
-  ["first_call", "recheck", "#workspace-first-call"],
+  ["workspace_profile", "confirm", "#workspace-profile", "tenant"],
+  ["environment", "confirm", "#workspace-environments", "environments"],
+  ["provider", "configure", "#workspace-providers", "providers"],
+  ["model", "configure", "#workspace-models", "models"],
+  ["model_alias", "configure", "#workspace-model-aliases", "model-aliases"],
+  ["project_application", "configure", "#workspace-projects", "projects"],
+  ["virtual_key", "configure", "#workspace-virtual-keys", "virtual-keys"],
+  ["first_call", "recheck", "#workspace-first-call", "sdk-examples"],
 ]);
 const ONBOARDING_STEP_IDS = Object.freeze(ONBOARDING_STEPS.map(([id]) => id));
 const ONBOARDING_MUTATIONS = Object.freeze({
@@ -45,6 +45,15 @@ const ONBOARDING_MUTATIONS = Object.freeze({
   defer: "do_later",
   reopen: null,
 });
+
+export function workspaceOnboardingHref(step) {
+  const definition = ONBOARDING_STEPS.find(([id, , target]) => (
+    id === step?.id && target === step?.navigation_target
+  ));
+  const sourceId = definition?.[3];
+  return Object.hasOwn(WORKSPACE_SOURCE_ROUTE_REGISTRY, sourceId)
+    ? `/console.html#${sourceId}` : null;
+}
 
 export async function listIdentityWorkspaces({ controlApiUrl, signal } = {}) {
   return workspaceAccessRequest(controlApiUrl, "/identity/workspaces", {

@@ -3,6 +3,7 @@ import { renderPrivacyCenter } from "./renderPrivacyCenter.js";
 import { renderComplianceCenter } from "./renderComplianceCenter.js";
 import { renderAccountPreferences } from "../account-preferences/renderAccountPreferences.js";
 import { icon } from "../public-home/icons.js";
+import { workspaceOnboardingHref } from "../../lib/workspaces.js";
 
 const DEFAULT_PUBLIC_BRAND = Object.freeze({
   product_name: "MetaHub",
@@ -873,6 +874,7 @@ function renderOnboardingStepPanel(step, context, busy, error) {
     && step.source === "user_confirmed"
     && new Set(["workspace_profile", "environment"]).has(step.id);
   const showNavigation = new Set(["configure", "view", "recheck"]).has(step.action) || !canMutate;
+  const navigationHref = workspaceOnboardingHref(step);
   return `
     <div class="identity-onboarding-panel" tabindex="-1" data-onboarding-step-panel>
       <div class="identity-onboarding-panel-heading">
@@ -892,7 +894,7 @@ function renderOnboardingStepPanel(step, context, busy, error) {
         ${canConfirm ? `<button class="identity-primary" type="button" data-identity-action="confirm-onboarding-step" ${busy ? "disabled" : ""}>确认完成</button>` : ""}
         ${canDefer ? `<button class="identity-quiet-command" type="button" data-identity-action="defer-onboarding-step" ${busy ? "disabled" : ""}>稍后处理</button>` : ""}
         ${canReopen ? `<button class="identity-quiet-command" type="button" data-identity-action="reopen-onboarding-step" ${busy ? "disabled" : ""}>重新配置</button>` : ""}
-        ${showNavigation ? `<a class="identity-quiet-command identity-onboarding-link" href="/${escapeAttribute(step.navigation_target)}">${step.status === "complete" ? "查看" : "打开配置"}</a>` : ""}
+        ${showNavigation && navigationHref ? `<a class="identity-quiet-command identity-onboarding-link" href="${escapeAttribute(navigationHref)}">${step.status === "complete" ? "查看" : "打开配置"}</a>` : ""}
       </div>
     </div>
   `;
