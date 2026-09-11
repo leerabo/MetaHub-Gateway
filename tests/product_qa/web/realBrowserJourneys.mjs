@@ -70,12 +70,13 @@ async function collapseSidebar(page) {
   }
 }
 
-async function assertAllNavigationGroupsCollapsed(page) {
+async function assertCurrentNavigationGroupExpanded(page) {
   assert.equal(
     await page.locator("[data-sidebar-group-toggle][aria-expanded='true']").count(),
-    0,
-    "sidebar_groups_should_start_collapsed",
+    1,
+    "only_the_current_navigation_group_should_be_expanded",
   );
+  await page.locator('.sidebar-link[aria-current="page"]').waitFor({ state: "visible" });
 }
 
 async function expandNavigationGroup(page, navigationId) {
@@ -121,6 +122,9 @@ async function expandNavigationGroup(page, navigationId) {
 
 async function openNavigation(page, navigationId, responsePaths) {
   const { groupKey, navigation } = await expandNavigationGroup(page, navigationId);
+  if (await navigation.getAttribute("aria-current") === "page") {
+    return { groupKey, elapsedMs: 0 };
+  }
   const responses = Promise.all(responsePaths.map(async (expectedPath) => {
     try {
       await page.waitForResponse((response) => {
@@ -279,6 +283,16 @@ async function establishScopedSessions(page, email, password) {
   await page.goto(`${consoleUrl}identity.html`, { waitUntil: "domcontentloaded" });
   const form = page.locator("[data-identity-login-form]");
   await form.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(await form.evaluate((element) => element.checkValidity()), false);
+  assert.equal(await form.locator("input[name='email']").getAttribute("required"), "");
+  assert.equal(await form.locator("input[name='password']").getAttribute("required"), "");
+  assert.equal(await page.locator("input[name='tenantSlug']").count(), 0);
+  await humanClick(page, page.getByLabel("邮箱", { exact: true }));
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), "password");
+  await page.keyboard.press("Tab");
+  assert.equal(await page.getByRole("button", { name: "显示密码", exact: true }).evaluate(
+    (element) => element === document.activeElement), true);
   const workspaceSessionResponse = page.waitForResponse((response) => {
     let responsePath = "";
     try { responsePath = new URL(response.url()).pathname; } catch { return false; }
@@ -290,38 +304,14 @@ async function establishScopedSessions(page, email, password) {
   await typeField(page, "邮箱", email);
   await typeField(page, "密码", password);
   await humanClick(page, form.getByRole("button", { name: "登录", exact: true }));
-  await Promise.all([
-    workspaceSessionResponse,
-    page.locator(".identity-workspace-selector strong").waitFor({
-      state: "visible",
-      timeout: 25_000,
-    }),
-  ]);
+  await workspaceSessionResponse;
+  // Each isolated fixture has one organization. The modern account entry must
+  // take the user directly into it without an extra tenant login or selector.
+  await page.waitForURL(/console\.html(?:[?#]|$)/u, { timeout: 25_000 });
 }
 
 async function login(runtime, email, password, locale) {
   const { page } = runtime;
-  await establishScopedSessions(page, email, password);
-  assert.deepEqual(runtime.finishAuthProbes(), ["/identity/me", "/workspace/session"]);
-  await page.goto(consoleUrl, { waitUntil: "domcontentloaded" });
-  const form = page.locator("#login-form");
-  assert.equal(await form.evaluate((element) => element.checkValidity()), false);
-  assert.equal(await page.locator("input[name='tenantSlug']").getAttribute("required"), null);
-  assert.equal(await page.locator("input[name='email']").getAttribute("required"), "");
-  assert.equal(await page.locator("input[name='password']").getAttribute("required"), "");
-
-  const tenantField = page.getByLabel("租户标识", { exact: true });
-  await humanClick(page, tenantField);
-  await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), "email");
-  await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("name")), "password");
-  await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("type")), "submit");
-
-  await typeField(page, "租户标识", "default");
-  await typeField(page, "邮箱", email);
-  await typeField(page, "密码", password);
   const navigationResponse = page.waitForResponse((response) => {
     let responsePath = "";
     try { responsePath = new URL(response.url()).pathname; } catch { return false; }
@@ -329,8 +319,9 @@ async function login(runtime, email, password, locale) {
       && responsePath === "/workspace/navigation"
       && response.status() >= 200
       && response.status() < 300;
-  }, { timeout: 20_000 });
-  await humanClick(page, page.getByRole("button", { name: "登录", exact: true }));
+  }, { timeout: 35_000 });
+  await establishScopedSessions(page, email, password);
+  assert.deepEqual(runtime.finishAuthProbes(), ["/identity/me", "/workspace/session"]);
   try {
     await page.locator("#console-sidebar").waitFor({ state: "visible", timeout: 20_000 });
   } catch {
@@ -408,6 +399,7 @@ async function assertProductSurface(page) {
       && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1)
     ));
     let overlaps = 0;
+    const overlapPairs = [];
     for (let leftIndex = 0; leftIndex < visible.length; leftIndex += 1) {
       const left = visible[leftIndex];
       const leftRect = left.getBoundingClientRect();
@@ -417,27 +409,31 @@ async function assertProductSurface(page) {
         const rightRect = right.getBoundingClientRect();
         const overlapWidth = Math.min(leftRect.right, rightRect.right) - Math.max(leftRect.left, rightRect.left);
         const overlapHeight = Math.min(leftRect.bottom, rightRect.bottom) - Math.max(leftRect.top, rightRect.top);
-        if (overlapWidth > 2 && overlapHeight > 2) overlaps += 1;
+        if (overlapWidth > 2 && overlapHeight > 2) {
+          overlaps += 1;
+          if (overlapPairs.length < 12) {
+            const describe = (element) => ({
+              tag: element.tagName,
+              id: element.id,
+              text: String(element.textContent || "").trim().replace(/\s+/gu, " ").slice(0, 80),
+            });
+            overlapPairs.push([describe(left), describe(right)]);
+          }
+        }
       }
     }
-    return { clipped_control_count: clipped.length, interactive_overlap_count: overlaps };
+    return { clipped_control_count: clipped.length, interactive_overlap_count: overlaps, overlap_pairs: overlapPairs };
   });
   assert.equal(layout.clipped_control_count, 0, "clipped_interactive_control");
-  assert.equal(layout.interactive_overlap_count, 0, "overlapping_interactive_controls");
+  assert.equal(layout.interactive_overlap_count, 0, `overlapping_interactive_controls:${JSON.stringify(layout.overlap_pairs)}`);
   return { horizontal_overflow_px: Math.max(0, overflow), ...layout };
 }
 
 async function logout(page) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (await page.locator("#login-form").isVisible()) return;
-    await humanClick(page, page.locator("#logout-button"));
-    try {
-      await page.locator("#login-form").waitFor({ state: "visible", timeout: 5_000 });
-      return;
-    } catch {
-      if (attempt === 2) throw new Error("logout_failed");
-    }
-  }
+  await humanClick(page, page.locator("#logout-button"));
+  await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
+  await page.getByRole("heading", { name: "MetaHub", exact: true }).waitFor({ state: "visible" });
+  assert.equal(await page.locator("#console-sidebar, #login-form").count(), 0);
 }
 
 async function verifyServiceRecovery(runtime) {
@@ -541,7 +537,7 @@ try {
     email: process.env.METAHUB_QA_ADMIN_EMAIL,
     password: process.env.METAHUB_QA_ADMIN_PASSWORD,
     async execute(page, runtime) {
-      await assertAllNavigationGroupsCollapsed(page);
+      await assertCurrentNavigationGroupExpanded(page);
       const taskHome = await openNavigation(
         page,
         "quickstart",
@@ -598,7 +594,7 @@ try {
     email: process.env.METAHUB_QA_DEVELOPER_EMAIL,
     password: process.env.METAHUB_QA_DEVELOPER_PASSWORD,
     async execute(page) {
-      await assertAllNavigationGroupsCollapsed(page);
+      await assertCurrentNavigationGroupExpanded(page);
       const projects = await openNavigation(page, "projects", ["/projects"]);
       const virtualKeys = await openNavigation(
         page,
