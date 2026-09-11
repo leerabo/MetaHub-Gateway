@@ -177,6 +177,9 @@ class GaGateListResponse(GaModel):
     gates: tuple[GaGateSummary, ...]
     candidate: CandidateSummary | None
     launch: GaLaunchSummary | None
+    # GA evidence is collected before ga_launches exists; expose the candidate's
+    # immutable evidence projection so the UI can advance one gate at a time.
+    evidence: tuple[GaEvidenceSummary, ...] = ()
     request_id: str
     trace_id: str
 

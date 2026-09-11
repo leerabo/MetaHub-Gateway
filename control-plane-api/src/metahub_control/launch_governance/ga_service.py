@@ -69,9 +69,27 @@ def list_ga_gates(config, *, platform_session_token: str, request_id: str, trace
         connection = _connect(config)
         try:
             connection.execute("BEGIN")
-            launch = connection.execute(
-                "SELECT ga_launch_id FROM ga_launches ORDER BY updated_at DESC LIMIT 1"
-            ).fetchone()
+            # GA facts belong to the candidate selected by the RC gate response.  A
+            # global "latest launch" lookup could leak another candidate's release
+            # into this page when candidates are created close together.
+            candidate_id = getattr(base.candidate, "launch_candidate_id", None)
+            launch = (
+                connection.execute(
+                    "SELECT ga_launch_id FROM ga_launches "
+                    "WHERE launch_candidate_id=? ORDER BY updated_at DESC LIMIT 1",
+                    (candidate_id,),
+                ).fetchone()
+                if candidate_id
+                else None
+            )
+            evidence = tuple(
+                _ga_evidence_summary(connection, row["ga_evidence_id"])
+                for row in connection.execute(
+                    "SELECT ga_evidence_id FROM ga_evidence "
+                    "WHERE launch_candidate_id=? ORDER BY created_at, ga_evidence_id",
+                    (candidate_id,),
+                ).fetchall()
+            ) if candidate_id else ()
             result = GaGateListResponse(
                 gates=tuple(
                     GaGateSummary.model_validate(
@@ -89,6 +107,7 @@ def list_ga_gates(config, *, platform_session_token: str, request_id: str, trace
                     for gate in base.gates
                 ),
                 candidate=base.candidate,
+                evidence=evidence,
                 launch=_ga_launch_summary(connection, launch["ga_launch_id"]) if launch else None,
                 request_id=request_id,
                 trace_id=trace_id,
