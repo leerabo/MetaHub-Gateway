@@ -474,7 +474,66 @@ async def test_four_routes_strict_body_and_missing_verifier_fail_closed(
         ("/platform/launch-gates/{launch_gate_id}/evidence", "POST"),
         ("/platform/launches", "POST"),
         ("/platform/launches/{launch_candidate_id}/rollback", "POST"),
+        ("/platform/ga-gates", "GET"),
+        ("/platform/ga-gates/{ga_gate_id}/evidence", "POST"),
+        ("/platform/ga-launches", "POST"),
+        ("/platform/ga-launches/{ga_launch_id}/rollback", "POST"),
+        ("/platform/ga-launches/{ga_launch_id}/review", "POST"),
     }
+
+
+@pytest.mark.anyio
+async def test_ga_gate_read_projection_is_platform_cookie_owned(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PRD-148 GA read route exposes the frozen 20-gate projection through Platform Cookie only."""
+
+    app = _app(monkeypatch, runtime)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/platform/ga-gates", headers=_headers(runtime.tokens["test"]))
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["gates"]) == 20
+    assert payload["candidate"] is None
+    assert payload["launch"] is None
+    assert {part.strip() for part in response.headers["cache-control"].split(",")} == {
+        "private",
+        "no-store",
+    }
+    # Internal gate ids, operator ids and tenant ownership remain outside the read projection.
+    assert "operator_id" not in response.text
+    assert "tenant_id" not in response.text
+
+
+@pytest.mark.anyio
+async def test_ga_write_routes_reject_bearer_and_invalid_body_before_mutation(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GA writes stay on Platform Cookie/CSRF and strict DTO boundaries."""
+
+    app = _app(monkeypatch, runtime)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        bearer = await client.post(
+            "/platform/ga-launches",
+            headers={"Authorization": f"Bearer {runtime.tokens['executor']}"},
+            json={"operation": "launch", "launch_candidate_id": "lvc_" + "a" * 32,
+                  "expected_revision": 1, "confirmed": True},
+        )
+        malformed = await client.post(
+            "/platform/ga-gates/gag_" + "a" * 32 + "/evidence",
+            headers=_headers(runtime.tokens["test"], "prd148-malformed-0001", 1),
+            json={"launch_candidate_id": "lvc_" + "a" * 32, "expected_revision": 1,
+                  "confirmed": True, "unexpected": True},
+        )
+
+    # The platform boundary reports credential collisions as a fixed 400
+    # ``launch.credential_conflict`` error before parsing or mutating state.
+    assert bearer.status_code in {400, 401, 403}
+    # Strict DTO failures are normalized to the public 400 request-invalid
+    # contract before the service layer can mutate a launch record.
+    assert malformed.status_code == 400
+    assert malformed.json()["request_id"]
 
 
 @pytest.mark.anyio

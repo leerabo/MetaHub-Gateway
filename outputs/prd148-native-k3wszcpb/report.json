@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "migration": "0162",
+  "checks": [
+    "full_native_migration_chain",
+    "migration_replay_noop",
+    "twenty_policies",
+    "empty_down",
+    "policy_preserving_up_after_down",
+    "immutable_policies",
+    "command_only_down_rejected_without_data_loss"
+  ],
+  "cluster_stopped": true,
+  "elapsed_seconds": 99.34
+}

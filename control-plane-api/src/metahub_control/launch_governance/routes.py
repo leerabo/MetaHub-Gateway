@@ -26,6 +26,24 @@ from metahub_control.saas_billing.routes import (
 )
 from metahub_control.workspace_access.constants import WORKSPACE_SESSION_COOKIE
 
+from .ga_models import (
+    GaEvidenceCommand,
+    GaEvidenceResponse,
+    GaGateListResponse,
+    GaLaunchCommand,
+    GaLaunchResponse,
+    GaReviewCommand,
+    GaReviewResponse,
+    GaRollbackCommand,
+    GaRollbackResponse,
+)
+from .ga_service import (
+    apply_ga_rollback,
+    list_ga_gates,
+    promote_ga,
+    record_ga_review,
+    submit_ga_evidence,
+)
 from .models import (
     EvidenceCommand,
     EvidenceResponse,
@@ -156,6 +174,146 @@ async def post_launch_rollback(
     if result.idempotent_replay:
         response.status_code = status.HTTP_200_OK
     response.headers["ETag"] = f'"{result.candidate.revision}"'
+    _private(response)
+    return result
+
+
+@router.get("/platform/ga-gates", response_model=GaGateListResponse)
+async def get_ga_gates(request: Request, response: Response) -> GaGateListResponse:
+    token, _csrf = _platform_credentials(request, write=False)
+    _reject_query_and_body(request)
+    result = await run_in_threadpool(
+        list_ga_gates,
+        request.app.state.config,
+        platform_session_token=token,
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.candidate is not None:
+        response.headers["ETag"] = f'"{result.candidate.revision}"'
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/ga-gates/{ga_gate_id}/evidence",
+    response_model=GaEvidenceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_ga_evidence(
+    ga_gate_id: str, request: Request, response: Response
+) -> GaEvidenceResponse:
+    token, csrf = _platform_credentials(request, write=True)
+    _reject_query(request)
+    command = _model(await _strict_json(request, "launch.request_invalid"), GaEvidenceCommand)
+    if _if_match(request) != command.expected_revision:
+        raise ApiError("launch.revision_conflict")
+    result = await run_in_threadpool(
+        submit_ga_evidence,
+        request.app.state.config,
+        ga_gate_id,
+        command,
+        platform_session_token=token,
+        platform_csrf_token=csrf,
+        step_up_grant=_step_up_grant(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    response.headers["ETag"] = f'"{command.expected_revision}"'
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/ga-launches",
+    response_model=GaLaunchResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_ga_launch(request: Request, response: Response) -> GaLaunchResponse:
+    token, csrf = _platform_credentials(request, write=True)
+    _reject_query(request)
+    command = _model(await _strict_json(request, "launch.request_invalid"), GaLaunchCommand)
+    if _if_match(request) != command.expected_revision:
+        raise ApiError("launch.revision_conflict")
+    result = await run_in_threadpool(
+        promote_ga,
+        request.app.state.config,
+        command,
+        platform_session_token=token,
+        platform_csrf_token=csrf,
+        step_up_grant=_step_up_grant(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.launch.revision}"'
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/ga-launches/{ga_launch_id}/rollback",
+    response_model=GaRollbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_ga_rollback(
+    ga_launch_id: str, request: Request, response: Response
+) -> GaRollbackResponse:
+    token, csrf = _platform_credentials(request, write=True)
+    _reject_query(request)
+    command = _model(await _strict_json(request, "launch.request_invalid"), GaRollbackCommand)
+    if _if_match(request) != command.expected_revision:
+        raise ApiError("launch.revision_conflict")
+    result = await run_in_threadpool(
+        apply_ga_rollback,
+        request.app.state.config,
+        ga_launch_id,
+        command,
+        platform_session_token=token,
+        platform_csrf_token=csrf,
+        step_up_grant=_step_up_grant(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.launch.revision}"'
+    _private(response)
+    return result
+
+
+@router.post(
+    "/platform/ga-launches/{ga_launch_id}/review",
+    response_model=GaReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_ga_review(
+    ga_launch_id: str, request: Request, response: Response
+) -> GaReviewResponse:
+    token, csrf = _platform_credentials(request, write=True)
+    _reject_query(request)
+    command = _model(await _strict_json(request, "launch.request_invalid"), GaReviewCommand)
+    if _if_match(request) != command.expected_revision:
+        raise ApiError("launch.revision_conflict")
+    result = await run_in_threadpool(
+        record_ga_review,
+        request.app.state.config,
+        ga_launch_id,
+        command,
+        platform_session_token=token,
+        platform_csrf_token=csrf,
+        step_up_grant=_step_up_grant(request),
+        idempotency_key=_idempotency_key(request),
+        request_id=_request_id(request),
+        trace_id=_trace_id(request),
+    )
+    if result.idempotent_replay:
+        response.status_code = status.HTTP_200_OK
+    response.headers["ETag"] = f'"{result.launch.revision}"'
     _private(response)
     return result
 

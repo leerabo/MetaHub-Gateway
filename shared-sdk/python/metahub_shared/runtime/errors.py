@@ -3239,6 +3239,43 @@ ERROR_SPECS: dict[str, ErrorSpec] = {
         retryable=True,
         owner="launch_governance",
     ),
+    "ga.candidate_not_ready": ErrorSpec(
+        409,
+        "The release candidate is not ready for GA.",
+        "Complete every current gate, six independent approvals, and the 72-hour stability proof.",
+        owner="launch_governance",
+    ),
+    "ga.gate_blocked": ErrorSpec(
+        409,
+        "A GA gate is missing or blocked.",
+        "Refresh the GA gates and submit a fresh verified result for the blocking gate.",
+        owner="launch_governance",
+    ),
+    "ga.launch_not_found": ErrorSpec(
+        404,
+        "GA launch was not found.",
+        "Refresh the formal release view and use the current launch identifier.",
+        owner="launch_governance",
+    ),
+    "ga.rollback_not_found": ErrorSpec(
+        404,
+        "GA rollback was not found.",
+        "Refresh the formal release view and use the pending rollback identifier.",
+        owner="launch_governance",
+    ),
+    "ga.rollback_conflict": ErrorSpec(
+        409,
+        "GA rollback cannot advance from the current state.",
+        "Use one pending rollback and a distinct verifier with the current revision.",
+        owner="launch_governance",
+    ),
+    "ga.unavailable": ErrorSpec(
+        503,
+        "GA release governance is unavailable.",
+        "Retry after the GA database and release governance worker recover.",
+        retryable=True,
+        owner="launch_governance",
+    ),
     "channel.request_invalid": ErrorSpec(
         422,
         "Channel management request is invalid.",

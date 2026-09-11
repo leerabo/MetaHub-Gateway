@@ -317,5 +317,6 @@ def test_0130_down_guard_rejects_candidate_fact(
 
 def test_fresh_schema_installs_prd138_head(tmp_path: Path) -> None:
     database_url = _url(tmp_path / "fresh.sqlite3")
-    assert apply_migrations(database_url).applied[-1] == "0130"
+    # The full schema now includes the GA launch layer added after PRD-138.
+    assert apply_migrations(database_url).applied[-1] == "0154"
     _healthy(database_url)
