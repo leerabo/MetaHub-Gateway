@@ -137,6 +137,11 @@ DEFAULT_CONFIG: dict[str, str] = {
     "METAHUB_SUPPORT_SESSION_TTL_SECONDS": "900",
     "METAHUB_LAUNCH_EVIDENCE_TRUST_BUNDLE_PATH": "",
     "METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH": "",
+    # Optional deployment sink for GA release events. Keep disabled unless a
+    # deployment explicitly supplies an allowlisted HTTP(S) endpoint.
+    "METAHUB_GA_EVENT_SINK_URL": "",
+    "METAHUB_GA_EVENT_SINK_TOKEN": "",
+    "METAHUB_GA_EVENT_SINK_TIMEOUT_SECONDS": "5",
     "METAHUB_IDENTITY_MFA_ENCRYPTION_SECRET": DEFAULT_IDENTITY_MFA_ENCRYPTION_SECRET,
     "METAHUB_PLATFORM_BOOTSTRAP_ENABLED": "false",
     "METAHUB_PLATFORM_BOOTSTRAP_RECOVERY_SECRET": DEFAULT_PLATFORM_BOOTSTRAP_RECOVERY_SECRET,
@@ -569,6 +574,9 @@ class AppConfig(BaseModel):
     config_items: list[ConfigItemSummary] = Field(default_factory=list)
     launch_evidence_trust_bundle_path: str | None = Field(default=None, exclude=True, repr=False)
     assurance_receipt_trust_bundle_path: str | None = Field(default=None, exclude=True, repr=False)
+    ga_event_sink_url: str | None = None
+    ga_event_sink_token: str | None = Field(default=None, exclude=True, repr=False)
+    ga_event_sink_timeout_seconds: float = 5.0
     warnings: list[str] = Field(default_factory=list)
     sensitive_keys_masked: bool = True
     database_url: str | None = Field(default=None, exclude=True, repr=False)
@@ -2517,6 +2525,14 @@ def load_app_config(service_name: str) -> AppConfig:
         assurance_receipt_trust_bundle_path=_optional_value(
             values, "METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH"
         ),
+        ga_event_sink_url=_optional_value(values, "METAHUB_GA_EVENT_SINK_URL"),
+        ga_event_sink_token=_raw_optional_value(values, "METAHUB_GA_EVENT_SINK_TOKEN"),
+        ga_event_sink_timeout_seconds=_bounded_float(
+            values,
+            "METAHUB_GA_EVENT_SINK_TIMEOUT_SECONDS",
+            minimum=0.5,
+            maximum=30.0,
+        ),
         features={
             "business_api_enabled": False,
             "database_required": bool(_value(values, "METAHUB_DATABASE_URL")),
@@ -3980,6 +3996,11 @@ def _build_config_items(values: dict[str, ConfigValue]) -> list[ConfigItemSummar
         "METAHUB_PAYMENT_WEBHOOK_TOLERANCE_SECONDS",
         "METAHUB_PAYMENT_WEBHOOK_MAX_BODY_BYTES",
         "METAHUB_PAYMENT_WORKER_POLL_INTERVAL_SECONDS",
+        "METAHUB_LAUNCH_EVIDENCE_TRUST_BUNDLE_PATH",
+        "METAHUB_ASSURANCE_RECEIPT_TRUST_BUNDLE_PATH",
+        "METAHUB_GA_EVENT_SINK_URL",
+        "METAHUB_GA_EVENT_SINK_TOKEN",
+        "METAHUB_GA_EVENT_SINK_TIMEOUT_SECONDS",
         "METAHUB_DATABASE_URL",
         "METAHUB_REDIS_URL",
         "METAHUB_DATABASE_POOL_MIN_SIZE",

@@ -12,8 +12,10 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 from uuid import uuid4
 
+import httpx
 from metahub_shared.db.connection import connect_database
 from metahub_shared.db.schema import table_exists
 from metahub_shared.runtime.config import AppConfig
@@ -586,6 +588,61 @@ def process_launch_governance_once(config: AppConfig, *, worker_id: str) -> int:
                     _db_time(now),
                     _next_stamp(row["updated_at"], now),
                     row["launch_event_outbox_id"],
+                ),
+            )
+            changed += 1
+        # GA promotion writes its own outbox.  Drain it in the same fenced
+        # scheduler so a restart cannot leave a published event permanently
+        # pending.  Delivery is deliberately isolated per row: a transient
+        # dispatcher failure records a bounded retry schedule and does not
+        # prevent other release events from being recovered.
+        ga_pending = []
+        # The scheduler is also used by databases upgrading from the RC
+        # migration.  Keep that lifecycle healthy until the GA migration is
+        # applied; once both tables exist, recovery is enabled automatically.
+        if table_exists(connection, "ga_event_outbox") and table_exists(connection, "ga_events"):
+            ga_pending = connection.execute(
+                """SELECT outbox.ga_event_outbox_id,outbox.ga_event_id,
+                          outbox.attempt_count,outbox.updated_at,
+                          event.event_type,event.payload_sha256,event.occurred_at
+                     FROM ga_event_outbox outbox
+                     JOIN ga_events event ON event.ga_event_id=outbox.ga_event_id
+                    WHERE outbox.status IN('pending','failed')
+                      AND outbox.next_attempt_at<=?
+                    ORDER BY outbox.created_at,outbox.ga_event_outbox_id
+                    LIMIT 100""",
+                (_db_time(now),),
+            ).fetchall()
+        for row in ga_pending:
+            attempt_count = int(row["attempt_count"] or 0) + 1
+            try:
+                _deliver_ga_event(config, row)
+            except Exception:
+                # Keep the error surface fixed; the scheduler log only reports
+                # its stable error code and the row remains recoverable.
+                delay_seconds = min(300, 2 ** min(attempt_count, 8))
+                connection.execute(
+                    """UPDATE ga_event_outbox
+                          SET status='failed',attempt_count=?,next_attempt_at=?,updated_at=?
+                        WHERE ga_event_outbox_id=?""",
+                    (
+                        attempt_count,
+                        _db_time(now + timedelta(seconds=delay_seconds)),
+                        _next_stamp(row["updated_at"], now),
+                        row["ga_event_outbox_id"],
+                    ),
+                )
+                changed += 1
+                continue
+            connection.execute(
+                """UPDATE ga_event_outbox
+                      SET status='delivered',attempt_count=?,delivered_at=?,updated_at=?
+                    WHERE ga_event_outbox_id=?""",
+                (
+                    attempt_count,
+                    _db_time(now),
+                    _next_stamp(row["updated_at"], now),
+                    row["ga_event_outbox_id"],
                 ),
             )
             changed += 1
@@ -1828,6 +1885,42 @@ def _emit_event(
         VALUES(?,?,?,?,'pending',0,?,NULL,?,?)""",
         (_id("leo_"), event_id, workspace_id, tenant_id, stamp, stamp, stamp),
     )
+
+
+def _deliver_ga_event(config: AppConfig, event: sqlite3.Row) -> None:
+    """Deliver one GA event through the configured event sink.
+
+    Deployments opt in with ``ga_event_sink_url``. The wire envelope is
+    deliberately limited to the stable event id/type, digest and timestamp;
+    tenant/workspace identifiers and event bodies never leave the control
+    plane. A non-2xx response or transport failure raises so the caller keeps
+    the outbox row retryable with its bounded backoff.
+    """
+    sink_url = str(getattr(config, "ga_event_sink_url", None) or "").strip()
+    if not sink_url:
+        return
+    parsed = urlsplit(sink_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("launch.event_sink_url_invalid")
+    payload = {
+        "event_id": str(event["ga_event_id"]),
+        "event_type": str(event["event_type"]),
+        "payload_sha256": str(event["payload_sha256"]),
+        "occurred_at": str(event["occurred_at"]),
+    }
+    headers = {"content-type": "application/json"}
+    token = str(getattr(config, "ga_event_sink_token", None) or "").strip()
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    timeout_seconds = float(getattr(config, "ga_event_sink_timeout_seconds", 5.0) or 5.0)
+    timeout_seconds = min(30.0, max(0.5, timeout_seconds))
+    with httpx.Client(
+        timeout=httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds)),
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        response = client.post(sink_url, json=payload, headers=headers)
+        response.raise_for_status()
 
 
 def _launch_action_code(operation: str) -> str:

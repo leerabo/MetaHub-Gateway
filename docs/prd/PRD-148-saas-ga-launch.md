@@ -35,6 +35,15 @@
 
 回滚采用 request/verify 两阶段，并强制请求人与验证人不同。发布、批准和回滚事件进入事件表及 outbox，敏感原文不入库，仅保存摘要哈希。
 
+### 部署事件 sink
+
+部署可通过 `METAHUB_GA_EVENT_SINK_URL` 启用 GA 事件投递，并以独立的
+`METAHUB_GA_EVENT_SINK_TOKEN`（可选）进行 Bearer 认证；连接超时由
+`METAHUB_GA_EVENT_SINK_TIMEOUT_SECONDS` 控制（0.5–30 秒）。每次请求只发送
+`event_id`、`event_type`、`payload_sha256` 和 `occurred_at` 四个字段，不包含租户、工作区、
+会签人或事件正文。sink 返回非 2xx、超时或连接错误时，outbox 保持 `failed` 并按既有有界
+指数退避重试；未配置 URL 时保持本地 durable outbox 行为，便于开发环境运行。
+
 ## 2026-09-11 增量设计与两轮编码前自审
 
 计划依据：SaaS Excel `01_PRD总表` 第 60 行、`08_里程碑门禁` 第 10 行。仍需全域 QA、最终迁移对账、真实长稳和发布事实，接口注册或 RC 测试不能替代 GA 验收。
