@@ -9,11 +9,12 @@ from pathlib import Path
 
 import httpcore
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from metahub_control.auth.routes import router as auth_router
 from metahub_control.provider_health.routes import router as health_router
 from metahub_control.provider_health.service import (
     _PinnedNetworkBackend,
+    _read_model_catalog,
     _validated_probe_url,
     _ValidatedProbeUrl,
 )
@@ -183,6 +184,26 @@ async def test_provider_health_permissions_and_strict_probe_body(
     assert viewer_list.json()["code"] == "auth.permission_denied"
     assert invalid_body.status_code == 422
     assert invalid_body.json()["request_id"]
+
+
+def test_model_catalog_reader_deduplicates_and_bounds_ids() -> None:
+    """OpenAI-compatible catalog exposes only validated, bounded model IDs."""
+
+    response = Response(
+        200,
+        json={"data": [{"id": "kimi-k2.7"}, {"id": "kimi-k2.7"}, {"id": "kimi-k3"}]},
+    )
+    ids, truncated = _read_model_catalog(response)
+    assert ids == ("kimi-k2.7", "kimi-k3")
+    assert truncated is False
+
+
+def test_model_catalog_reader_rejects_invalid_items() -> None:
+    """Malformed upstream data must fail closed instead of entering the model form."""
+
+    response = Response(200, json={"data": [{"id": "bad\nmodel"}]})
+    with pytest.raises(ValueError):
+        _read_model_catalog(response)
 
 
 def test_provider_probe_ssrf_policy_blocks_local_and_accepts_public_dns(monkeypatch) -> None:

@@ -3,6 +3,21 @@ import { authenticatedResourceFetch } from "./resourceAuthentication.js";
 
 const FILTER_KEYS = ["provider_id", "provider_type", "health_status", "provider_status", "limit", "offset"];
 
+/** 选择与 KeyPool 聚合结论一致的代表性探测尝试，避免首把失效 Key 的 401 覆盖后续成功。 */
+export function selectRepresentativeProbeAttempt(result) {
+  const attempts = Array.isArray(result?.attempts) ? result.attempts : [];
+  const preferred = result?.result_status === "success"
+    ? ["success", "inconclusive", "failed"]
+    : result?.result_status === "inconclusive"
+      ? ["inconclusive", "failed", "success"]
+      : ["failed", "inconclusive", "success"];
+  for (const status of preferred) {
+    const attempt = attempts.find((item) => item?.result_status === status);
+    if (attempt) return attempt;
+  }
+  return attempts[0] ?? null;
+}
+
 /**
  * 查询当前租户 Provider 健康列表。
  * 边界：tenant_id 从实际会话恢复，调用方不能提交 Header 或任意探测 URL。
@@ -32,6 +47,15 @@ export async function probeProvider({ controlApiUrl, authentication, token, prov
       },
       body: "{}",
     },
+  );
+}
+
+/** 读取厂家模型目录；仅发送已保存的服务 ID，凭据始终由服务端读取。 */
+export async function discoverProviderModels({ controlApiUrl, authentication, token, providerId, signal }) {
+  return providerHealthRequest(
+    `${controlApiUrl}/providers/${encodeURIComponent(providerId)}/discover-models`,
+    { method: "POST", authentication, token, signal,
+      headers: { "Content-Type": "application/json" }, body: "{}" },
   );
 }
 

@@ -14,6 +14,7 @@ import {
   updateProvider,
   updateProviderKey,
 } from "../../src/lib/providers.js";
+import { selectRepresentativeProbeAttempt } from "../../src/lib/providerHealth.js";
 import { PERMISSIONS, withPermissionSnapshot } from "./permissionTestContext.mjs";
 
 const providersPayload = {
@@ -39,6 +40,45 @@ const providersPayload = {
   request_id: "req_provider",
   trace_id: "trc_provider",
 };
+
+test("disabled providers are folded after active providers without changing the source order", () => {
+  const providers = [
+    { ...providersPayload.providers[0], provider_id: "disabled_1", name: "Retired Service", status: "disabled" },
+    { ...providersPayload.providers[0], name: "Current Service" },
+  ];
+  const html = renderProviderPanel({ state: "ok", providers }, withPermissionSnapshot(
+    { user: { role: "ops_admin" } }, [PERMISSIONS.PROVIDER_READ, PERMISSIONS.PROVIDER_WRITE],
+  ));
+  assert.ok(html.indexOf("Current Service") < html.indexOf("Retired Service"));
+  assert.match(html, /<details class="provider-disabled-services">/u);
+  assert.match(html, /已停用服务 \(1\)/u);
+  assert.equal(providers[0].provider_id, "disabled_1");
+});
+
+for (const reason of ["setup", "error", "engineering"]) {
+  test(`disabled provider remains visible for current work or errors: ${reason}`, () => {
+    const provider = { ...providersPayload.providers[0], status: "disabled" };
+    const html = renderProviderPanel({ state: "ok", providers: [provider],
+      setupProviderId: reason === "setup" ? provider.provider_id : null,
+      providerEngineering: reason === "engineering" ? { providerId: provider.provider_id } : null,
+      providerKeysByProviderId: reason === "error" ? { provider_1: { state: "error", message: "Test error" } } : {},
+    }, withPermissionSnapshot({ user: { role: "ops_admin" } }, [PERMISSIONS.PROVIDER_READ,
+      PERMISSIONS.PROVIDER_WRITE, PERMISSIONS.WORKSPACE_PROVIDER_ERROR_OVERRIDE_READ]));
+    assert.match(html, /<details class="provider-disabled-services" open>/u);
+    assert.match(html, /暂无启用中的模型服务/u);
+    if (reason === "error") {
+      assert.match(html, /密钥列表暂不可用/u);
+      assert.doesNotMatch(html, /Test error/u);
+    }
+  });
+}
+
+test("disabled provider grouping does not expose write controls to a read-only role", () => {
+  const html = renderProviderPanel({ state: "ok", providers: [{ ...providersPayload.providers[0], status: "disabled" }] },
+    withPermissionSnapshot({ user: { role: "viewer" } }, [PERMISSIONS.PROVIDER_READ]));
+  assert.match(html, /已停用服务/u);
+  assert.doesNotMatch(html, /data-provider-key-open|data-provider-status-form|data-provider-key-create-form/u);
+});
 
 const providerKeysPayload = {
   provider_keys: [
@@ -207,6 +247,28 @@ test("providers client returns structured errors", async () => {
   );
 });
 
+test("provider probe diagnostics use the successful KeyPool attempt", () => {
+  const result = {
+    result_status: "success",
+    attempts: [
+      { result_status: "failed", http_status: 401 },
+      { result_status: "success", http_status: 200 },
+    ],
+  };
+  assert.equal(selectRepresentativeProbeAttempt(result)?.http_status, 200);
+  assert.equal(selectRepresentativeProbeAttempt({
+    result_status: "failed",
+    attempts: [{ result_status: "inconclusive" }, { result_status: "failed", http_status: 401 }],
+  })?.http_status, 401);
+  assert.equal(selectRepresentativeProbeAttempt({
+    result_status: "inconclusive",
+    attempts: [
+      { result_status: "failed", http_status: 401 },
+      { result_status: "inconclusive", http_status: 429 },
+    ],
+  })?.http_status, 429);
+});
+
 test("renderProviderPanel displays admin controls and escapes unsafe values", () => {
   const html = renderProviderPanel(
     {
@@ -260,6 +322,18 @@ test("renderProviderPanel hides provider management for non-admin roles", () => 
 
   assert.equal(developerHtml, "");
   assert.equal(viewerHtml, "");
+});
+
+test("a rejected provider credential gives a readable next action with diagnostics collapsed", () => {
+  const html = renderProviderPanel({ state: "ok", providers: [], lastTestResult: {
+    providerName: "Kimi", status: "failed", httpStatus: 401, message: "<diagnostic>",
+  } }, withPermissionSnapshot({}, [PERMISSIONS.PROVIDER_READ]));
+  assert.match(html, /Kimi · 连接未通过/u);
+  assert.match(html, /厂家 API KEY 未通过验证/u);
+  assert.match(html, /管理 API KEY/u);
+  assert.match(html, /<details class="provider-result-details">/u);
+  assert.match(html, /&lt;diagnostic&gt;/u);
+  assert.doesNotMatch(html, /连接成功/u);
 });
 
 test("renderDeveloperStart renders providers for admin but not developer", () => {
